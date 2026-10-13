@@ -16,16 +16,21 @@ pub mod control;
 pub mod gpu;
 pub mod icons;
 pub mod panels;
+pub mod results;
+pub mod results_panel;
 pub mod scene;
 pub mod theme;
 pub mod toolbar;
 pub mod viewport;
 
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
 use modelcraft_engine::Session;
 use modelcraft_engine::catalogue::{self, Tab};
 use modelcraft_render::{Camera, DisplayMesh, Scene, StandardView};
+use modelcraft_solver::StepResult;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -97,6 +102,15 @@ pub struct Viewport {
     pub gpu_errors: gpu::GpuErrors,
 }
 
+/// A probed node: its values as lines of text, for the step and mode they were read from.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Probe {
+    pub node: u32,
+    pub step: String,
+    pub mode: usize,
+    pub lines: Vec<String>,
+}
+
 /// A screenshot asked for over the control channel.
 struct Shot {
     token: u64,
@@ -124,6 +138,12 @@ pub struct ModelApp {
     /// Bumped whenever the model may have changed.
     revision: u64,
     display: (Option<u64>, DisplayMesh),
+    /// The results plot and its key.
+    plot: (Option<u64>, Option<Arc<results::Plot>>),
+    /// The node probed last (a click on a results plot).
+    pub probe: Option<Probe>,
+    /// The reaction sums asked for last in the results panel.
+    pub reactions: Option<Value>,
     /// The built scene and its key.
     scene: (Option<u64>, Scene),
     /// The theme last applied to the context.
@@ -155,6 +175,9 @@ impl ModelApp {
             gpu_info: None,
             revision: 0,
             display: (None, DisplayMesh::default()),
+            plot: (None, None),
+            probe: None,
+            reactions: None,
             scene: (None, Scene::default()),
             styled: None,
             synthetic: Vec::new(),
@@ -196,8 +219,10 @@ impl ModelApp {
         if changed {
             self.model_changed();
         }
+        // The results display commands reply with what is shown, which the viewport shows.
+        let display = id.starts_with("results.") && id != "results.reactions";
         match &r {
-            Ok(v) if v.is_null() || changed => self.set_status(format!("{label} done"), false),
+            Ok(v) if v.is_null() || changed || display => self.set_status(format!("{label} done"), false),
             Ok(v) => self.set_status(format!("{label}: {v}"), false),
             Err(e) => self.set_status(format!("{label}: {e}"), true),
         }
@@ -249,12 +274,19 @@ impl ModelApp {
         }
     }
 
-    /// Run the open parameter form; it closes when the command succeeds.
+    /// Run the open parameter form; it closes when the command succeeds. A solve started from
+    /// the form shows its result.
     pub fn run_dialog(&mut self) -> Result<Value, String> {
         let Some(d) = self.dialog.clone() else { return Err("no command form is open".into()) };
         let r = serde_json::from_str::<Value>(&d.text).map_err(|e| format!("the parameters are not JSON: {e}")).and_then(|p| self.run(d.command, p));
         match &r {
-            Ok(_) => self.dialog = None,
+            Ok(v) => {
+                self.dialog = None;
+                if let ("solve.static" | "solve.frequency", Some(step)) = (d.command, v.get("step").and_then(Value::as_str)) {
+                    // A failure shows in the status bar; the solve itself succeeded.
+                    let _ = self.show_result(step);
+                }
+            }
             Err(e) => {
                 if let Some(open) = self.dialog.as_mut() {
                     open.error = Some(e.clone());
@@ -262,6 +294,61 @@ impl ModelApp {
             }
         }
         r
+    }
+
+    /// Show a solved step: a static step deformed with von Mises contours, a frequency step's
+    /// first mode with displacement contours; the toolbar switches to the Results tab.
+    pub fn show_result(&mut self, step: &str) -> Result<(), String> {
+        let frequency = matches!(self.session.latest_result(step).map(|(r, _)| r.as_ref()), Some(StepResult::Frequency(_)));
+        if frequency {
+            self.run("results.modes", json!({"step": step, "mode": 1}))?;
+            self.run("results.contour", json!({"step": step, "field": "displacement"}))?;
+        } else {
+            self.run("results.deformed", json!({"step": step}))?;
+            self.run("results.contour", json!({"step": step, "field": "von_mises"}))?;
+        }
+        self.ui.tab = Tab::Results;
+        self.set_status(format!("Showing the results of step {step}"), false);
+        Ok(())
+    }
+
+    /// Probe a node of the results shown (`solve.probe`) and keep its values for the viewport.
+    pub fn probe_node(&mut self, node: u32) -> Result<(), String> {
+        let Some(view) = self.session.results_view.clone() else { return Err("no results are shown".into()) };
+        let reply = match self.run("solve.probe", json!({"step": view.step, "nodes": [node], "mode": view.mode})) {
+            Ok(v) => v,
+            Err(e) => {
+                self.probe = None;
+                return Err(e);
+            }
+        };
+        let at = reply.pointer("/nodes/0").cloned().unwrap_or(Value::Null);
+        let vector = |key: &str| at.get(key).and_then(|v| serde_json::from_value::<[f64; 3]>(v.clone()).ok());
+        let triple = |v: [f64; 3]| format!("{}, {}, {}", results::number(v[0]), results::number(v[1]), results::number(v[2]));
+        let mut lines = vec![format!("Node {node}")];
+        if let Some(u) = vector("displacement") {
+            lines.push(format!("U {}  |U| {}", triple(u), results::number(modelcraft_engine::results::magnitude(u))));
+        }
+        if let Some(rf) = vector("reaction").filter(|r| r.iter().any(|c| *c != 0.0)) {
+            lines.push(format!("RF {}", triple(rf)));
+        }
+        if let Some(m) = at.get("von_mises").and_then(Value::as_f64) {
+            lines.push(format!("Von Mises {}", results::number(m)));
+        }
+        if let Some(shape) = vector("shape") {
+            lines.push(format!("Mode {} shape {}", view.mode, triple(shape)));
+        }
+        let contour = self.plot().and_then(|p| {
+            let field = p.legend.as_ref()?.field;
+            let i = p.result.nodes().binary_search(&node).ok()?;
+            Some((field, *p.values.as_ref()?.get(i)?))
+        });
+        if let Some((field, v)) = contour.filter(|(f, _)| *f != modelcraft_engine::results::Field::VonMises) {
+            lines.push(format!("{} {}", field.label(), results::number(v)));
+        }
+        self.set_status(lines.join("   "), false);
+        self.probe = Some(Probe { node, step: view.step, mode: view.mode, lines });
+        Ok(())
     }
 
     pub fn set_status(&mut self, text: impl Into<String>, error: bool) {
@@ -310,22 +397,56 @@ impl ModelApp {
         &self.display.1
     }
 
-    /// The key of the current scene: the model revision and every setting the scene depends on.
+    /// The key of the current scene: the model revision, every setting the scene depends on and
+    /// the results plot's key.
     pub fn scene_key(&self) -> u64 {
-        let style = Style::ALL.iter().position(|s| *s == self.ui.style).unwrap_or(0) as u64;
-        (self.revision << 4) | (style << 2) | (u64::from(self.ui.show_nodes) << 1) | u64::from(self.ui.dark)
+        let mut h = std::hash::DefaultHasher::new();
+        (self.revision, self.ui.style, self.ui.show_nodes, self.ui.dark, self.plot_key()).hash(&mut h);
+        h.finish()
+    }
+
+    /// The key of the results plot: the result, its view and the animation frame; `None` when
+    /// no results are shown.
+    fn plot_key(&self) -> Option<u64> {
+        let (view, result, current) = results::shown(&self.session)?;
+        let mut h = std::hash::DefaultHasher::new();
+        (self.revision, Arc::as_ptr(result) as usize, current, results::frame(view, self.now)).hash(&mut h);
+        serde_json::to_string(view).unwrap_or_default().hash(&mut h);
+        Some(h.finish())
+    }
+
+    /// The results plot the viewport draws, rebuilt when its key changes; `None` shows the model.
+    pub fn plot(&mut self) -> Option<Arc<results::Plot>> {
+        let key = self.plot_key();
+        if self.plot.0 != key {
+            self.display();
+            let frame = self.session.results_view.as_ref().and_then(|v| results::frame(v, self.now));
+            let p = key.and_then(|_| results::plot(&self.session, &self.display.1, frame));
+            self.plot = (key, p.map(Arc::new));
+        }
+        self.plot.1.clone()
     }
 
     /// The scene the viewport draws, rebuilt when its key changes; its radius fits the camera.
     pub fn scene(&mut self) -> (u64, &Scene) {
         let key = self.scene_key();
+        self.display();
+        self.plot();
         if self.scene.0 != Some(key) {
             let t = theme::Tokens::get(self.ui.dark);
             let (style, nodes) = (self.ui.style, self.ui.show_nodes);
-            let s = scene::build(self.display(), style, nodes, &t);
+            let s = match &self.plot.1 {
+                Some(p) => results::scene(p, style, nodes, &t),
+                None => scene::build(&self.display.1, style, nodes, &t),
+            };
             self.scene = (Some(key), s);
         }
-        self.scene.1.radius = scene::radius(&self.display.1, &self.cam);
+        let mut bounds = self.display.1.bounds;
+        if let Some(p) = &self.plot.1 {
+            bounds.add(p.display.bounds.min);
+            bounds.add(p.display.bounds.max);
+        }
+        self.scene.1.radius = scene::radius(&bounds, &self.cam);
         (key, &self.scene.1)
     }
 
@@ -358,6 +479,9 @@ impl ModelApp {
         self.cam.fov = if self.ui.perspective { PERSPECTIVE_FOV } else { 0.0 };
         if !self.synthetic.is_empty() {
             ctx.request_repaint();
+        }
+        if self.session.results_view.as_ref().is_some_and(|v| v.animate) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(results::PERIOD / results::FRAMES as f64));
         }
         self.screenshots(ctx);
     }
@@ -511,6 +635,8 @@ pub fn command_label(id: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use modelcraft_render::Vec3;
+
     use super::*;
 
     #[test]
@@ -592,6 +718,110 @@ mod tests {
         assert!(s.tris.iter().all(|tri| tri.color == theme::rgb(t.geometry)));
         assert!(!d.bounds.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The sample cantilever in an app, solved (static step `Load`, frequency step `Modes`).
+    fn solved_app() -> ModelApp {
+        let mut app = ModelApp::new(Session::default());
+        app.run_script(&modelcraft_engine::sample::cantilever()).unwrap();
+        app.run("solve.static", json!({})).unwrap();
+        app.run("solve.frequency", json!({})).unwrap();
+        app
+    }
+
+    fn node_at(app: &ModelApp, xyz: [f64; 3]) -> u32 {
+        *app.session.model.nodes().iter().find(|(_, n)| n.xyz == xyz).unwrap().0
+    }
+
+    #[test]
+    fn solving_from_the_form_shows_the_result_on_the_results_tab() {
+        let mut app = ModelApp::new(Session::default());
+        app.run_script(&modelcraft_engine::sample::cantilever()).unwrap();
+        app.start("solve.static").unwrap();
+        app.run_dialog().unwrap();
+        let view = app.session.results_view.clone().unwrap();
+        assert_eq!((view.step.as_str(), view.contour, view.deformed), ("Load", Some(modelcraft_engine::results::Field::VonMises), true));
+        assert_eq!(app.ui.tab, Tab::Results);
+        app.start("solve.frequency").unwrap();
+        app.run_dialog().unwrap();
+        let view = app.session.results_view.clone().unwrap();
+        assert_eq!((view.step.as_str(), view.mode, view.contour), ("Modes", 1, Some(modelcraft_engine::results::Field::Displacement)));
+        // The plot draws contour bands: more triangles than the model's faces.
+        let faces = app.display().tris.len();
+        assert!(app.scene().1.tris.len() > faces);
+        app.run("results.clear", json!({})).unwrap();
+        assert!(app.plot().is_none());
+        assert_eq!(app.scene().1.tris.len(), faces);
+    }
+
+    /// Rendered on the CPU from the front, undeformed, with Z displacement contours: the free end
+    /// (lowest band) is blue, the clamped end (highest band) red.
+    #[test]
+    fn contours_render_with_known_colours_at_known_nodes() {
+        let mut app = solved_app();
+        app.run("results.contour", json!({"step": "Load", "field": "displacement_z", "bands": 6})).unwrap();
+        app.run("results.deformed", json!({"show": false})).unwrap();
+        app.ui.style = Style::Shaded;
+        app.set_view(StandardView::Front);
+        app.fit_view();
+        let (w, h) = (400, 200);
+        let cam = app.cam;
+        let radius = app.scene().1.radius;
+        let canvas = modelcraft_render::render(app.scene().1, &cam, w, h).unwrap();
+        let pixel = |p: Vec3| {
+            let (x, y, _) = cam.to_screen(p, w as f64, h as f64, radius).unwrap();
+            let i = (y as usize * w + x as usize) * 4;
+            [canvas.rgba[i], canvas.rgba[i + 1], canvas.rgba[i + 2]]
+        };
+        // Cell centres on the front face (y = 0), one at each end.
+        let tip = pixel(Vec3::new(97.5, 0.0, 12.5));
+        let root = pixel(Vec3::new(2.5, 0.0, 12.5));
+        assert!(tip[2] > tip[0] + 60, "the free end is blue: {tip:?}");
+        assert!(root[0] > root[2] + 60, "the clamped end is red: {root:?}");
+    }
+
+    #[test]
+    fn probing_a_node_reads_its_values_and_stale_results_say_so() {
+        let mut app = solved_app();
+        app.show_result("Load").unwrap();
+        let tip = node_at(&app, [100.0, 0.0, 0.0]);
+        app.probe_node(tip).unwrap();
+        let probe = app.probe.clone().unwrap();
+        assert_eq!((probe.node, probe.step.as_str()), (tip, "Load"));
+        assert!(probe.lines.iter().any(|l| l.starts_with("U ")) && probe.lines.iter().any(|l| l.starts_with("Von Mises")), "{probe:?}");
+        // A root node carries a reaction.
+        app.probe_node(node_at(&app, [0.0, 0.0, 0.0])).unwrap();
+        assert!(app.probe.as_ref().unwrap().lines.iter().any(|l| l.starts_with("RF ")));
+        // The plot under a click: a ray onto the tip's end face picks a node there.
+        let plot = app.plot().unwrap();
+        let (node, _) = plot.display.pick(Vec3::new(1000.0, 0.5, 0.5), Vec3::new(-1.0, 0.0, 0.0)).unwrap();
+        assert_eq!(app.session.model.node(node).unwrap().xyz[0], 100.0);
+        // An edit leaves the plot shown but stale; probing it is refused.
+        app.run(
+            "model.material.edit",
+            json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 70000, "poisson": 0.33}, "density": 2.7e-9}),
+        )
+        .unwrap();
+        assert!(app.plot().is_some_and(|p| p.stale));
+        let e = app.probe_node(tip).unwrap_err();
+        assert!(e.contains("stale") && app.probe.is_none(), "{e}");
+    }
+
+    #[test]
+    fn the_capture_shows_the_legend_and_panel_over_the_plot() {
+        let mut app = solved_app();
+        app.show_result("Load").unwrap();
+        let image = app.capture(capture::CaptureSize { width: 1200.0, height: 800.0, scale: 1.0 }).unwrap();
+        let t = theme::Tokens::dark();
+        // The legend's top swatch (the highest band, red) is drawn left of the middle.
+        let red = t.contour[4];
+        let near = |c: egui::Color32, d: egui::Color32| {
+            (i32::from(c.r()) - i32::from(d.r())).abs() < 30
+                && (i32::from(c.g()) - i32::from(d.g())).abs() < 40
+                && (i32::from(c.b()) - i32::from(d.b())).abs() < 30
+        };
+        let found = (0..600).any(|x| (150..400).any(|y| near(image.pixels[y * 1200 + x], red)));
+        assert!(found, "a red legend swatch");
     }
 
     #[test]

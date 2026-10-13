@@ -12,6 +12,7 @@ workspace = true
 modelcraft-model = { workspace = true }
 modelcraft-engine = { workspace = true }
 modelcraft-render = { workspace = true }
+modelcraft-solver = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 serde = { workspace = true }

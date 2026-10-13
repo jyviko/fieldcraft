@@ -113,6 +113,8 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "dialog": app.dialog.as_ref().map(|d| json!({"command": d.command, "text": d.text, "error": d.error})),
             "status": app.status,
             "model": {"nodes": app.session.model.nodes().len(), "elements": app.session.model.elements().len()},
+            "results": app.session.results_report(),
+            "probe": app.probe,
             "version": crate::VERSION,
         })),
         "ui.toolbar" => ok(crate::toolbar::describe(app)),

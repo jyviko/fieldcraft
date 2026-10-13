@@ -243,6 +243,34 @@ impl DisplayMesh {
         }
     }
 
+    /// The node nearest to where a ray (`origin`, `dir`) first hits an element face ahead of
+    /// its origin: the hit face's closest corner, and the hit point. Line elements and geometry
+    /// are not hit.
+    pub fn pick(&self, origin: Vec3, dir: Vec3) -> Option<(u32, Vec3)> {
+        let mut best: Option<(f64, &DisplayTri)> = None;
+        for t in &self.tris {
+            // Möller–Trumbore, both sides.
+            let (e1, e2) = (t.p[1] - t.p[0], t.p[2] - t.p[0]);
+            let h = dir.cross(e2);
+            let det = e1.dot(h);
+            if !(det.abs() > 1e-300) {
+                continue;
+            }
+            let s = origin - t.p[0];
+            let u = s.dot(h) / det;
+            let q = s.cross(e1);
+            let v = dir.dot(q) / det;
+            let d = e2.dot(q) / det;
+            if u >= 0.0 && v >= 0.0 && u + v <= 1.0 && d >= 0.0 && d.is_finite() && best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, t));
+            }
+        }
+        let (d, t) = best?;
+        let hit = origin + dir * d;
+        let (i, _) = t.p.iter().enumerate().min_by(|a, b| a.1.dist(hit).total_cmp(&b.1.dist(hit)))?;
+        Some((*t.nodes.get(i)?, hit))
+    }
+
     /// The elements moved by `offset(label)` (no offset for a node it has none for): faces,
     /// edges, line elements and nodes move, face normals follow the deformation. Geometry
     /// surfaces are left out (they do not deform).
@@ -389,6 +417,21 @@ mod tests {
         // No offset, or a non-finite one, leaves a node where it is.
         let same = d.displaced(|label| (label == 1).then_some(Vec3::new(f64::NAN, 0.0, 0.0)));
         assert_eq!(same.tris, d.tris);
+    }
+
+    #[test]
+    fn picking_finds_the_nearest_corner_of_the_face_hit_first() {
+        let m = block(2, 1, 1);
+        let d = DisplayMesh::from_model(&m);
+        // From above, aimed near the corner (2, 1, 1): the top face is hit, not the bottom.
+        let (label, hit) = d.pick(Vec3::new(1.9, 0.9, 10.0), Vec3::new(0.0, 0.0, -1.0)).unwrap();
+        assert_eq!(m.node(label).unwrap().xyz, [2.0, 1.0, 1.0]);
+        assert!((hit.z - 1.0).abs() < 1e-12);
+        // From below the bottom face wins.
+        let (label, _) = d.pick(Vec3::new(0.1, 0.1, -10.0), Vec3::new(0.0, 0.0, 1.0)).unwrap();
+        assert_eq!(m.node(label).unwrap().xyz, [0.0, 0.0, 0.0]);
+        assert_eq!(d.pick(Vec3::new(5.0, 5.0, 10.0), Vec3::new(0.0, 0.0, -1.0)), None);
+        assert_eq!(d.pick(Vec3::new(f64::NAN, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0)), None);
     }
 
     #[test]

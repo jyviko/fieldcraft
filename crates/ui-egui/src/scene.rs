@@ -5,7 +5,7 @@
 //! the model has no element faces; once it is meshed, as boundaries only, so the mesh is not
 //! hidden behind coincident faces.
 
-use modelcraft_render::{Camera, DisplayMesh, Scene, SceneLine, ScenePoint, SceneTri};
+use modelcraft_render::{Aabb3, Camera, DisplayMesh, Scene, SceneLine, ScenePoint, SceneTri};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{Tokens, rgb};
@@ -66,9 +66,8 @@ pub fn build(display: &DisplayMesh, style: Style, show_nodes: bool, t: &Tokens) 
     s
 }
 
-/// The radius around the camera target that holds the whole model (for the clipping planes).
-pub fn radius(display: &DisplayMesh, cam: &Camera) -> f64 {
-    let b = &display.bounds;
+/// The radius around the camera target that holds the bounds (for the clipping planes).
+pub fn radius(b: &Aabb3, cam: &Camera) -> f64 {
     if b.is_empty() { 1.0 } else { (cam.target.dist(b.center()) + b.diagonal() * 0.5).max(1e-3) }
 }
 
@@ -94,6 +93,6 @@ mod tests {
         let s = build(&d, Style::Wireframe, false, &t);
         assert_eq!((s.tris.len(), s.lines.len()), (0, 6));
         assert_eq!(s.tris.first().map(|t| t.color), None);
-        assert!(radius(&d, &Camera::default()) > 0.5);
+        assert!(radius(&d.bounds, &Camera::default()) > 0.5);
     }
 }

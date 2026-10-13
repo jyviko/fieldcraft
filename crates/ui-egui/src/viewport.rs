@@ -19,6 +19,11 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     app.viewport.rect = Some(rect);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     navigate(app, ui, &response, rect);
+    if response.clicked()
+        && let Some(at) = response.interact_pointer_pos()
+    {
+        probe_at(app, at, rect);
+    }
     let t = Tokens::get(app.ui.dark);
     let painter = ui.painter_at(rect);
     gradient(&painter, rect, t.viewport_top, t.viewport_bottom);
@@ -38,6 +43,17 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     }
     axis_indicator(app, &painter, rect, &t);
     view_buttons(app, ui, rect, &t);
+    crate::results_panel::show(app, ui, rect, &t);
+}
+
+/// A click on a results plot probes the node nearest to the face under the pointer.
+fn probe_at(app: &mut ModelApp, at: Pos2, rect: Rect) {
+    let Some(plot) = app.plot() else { return };
+    let (origin, dir) = app.cam.ray(f64::from(at.x - rect.left()), f64::from(at.y - rect.top()), f64::from(rect.width()), f64::from(rect.height()));
+    if let Some((node, _)) = plot.display.pick(origin, dir) {
+        // A failure (a stale result) shows in the status bar.
+        let _ = app.probe_node(node);
+    }
 }
 
 fn navigate(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response, rect: Rect) {

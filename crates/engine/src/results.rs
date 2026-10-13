@@ -8,6 +8,7 @@
 
 use modelcraft_solver::StepResult;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
 
@@ -203,6 +204,25 @@ impl Session {
     /// model changed since it was solved; it is stale).
     pub fn latest_result(&self, step: &str) -> Option<(&std::sync::Arc<StepResult>, bool)> {
         self.results.get(step).map(|(revision, r)| (r, *revision == self.revision))
+    }
+
+    /// What the results display shows: the view, whether its result is stale, the contour
+    /// field's range and a frequency step's modes (the `results.*` commands' reply).
+    pub fn results_report(&self) -> Value {
+        let Some(v) = &self.results_view else { return json!({"view": null}) };
+        let Some((r, current)) = self.latest_result(&v.step) else { return json!({"view": v}) };
+        let mut out = json!({"view": v, "stale": !current});
+        if let Some(f) = v.contour
+            && let Ok(values) = field_values(r, f, v.mode)
+        {
+            let ends =
+                range(r.nodes(), &values).map(|((ln, lv), (hn, hv))| json!({"min": {"node": ln, "value": lv}, "max": {"node": hn, "value": hv}}));
+            out["contour"] = json!({"field": f, "label": f.label(), "range": ends});
+        }
+        if let StepResult::Frequency(fr) = r.as_ref() {
+            out["modes"] = fr.modes.iter().enumerate().map(|(i, m)| json!({"mode": i + 1, "frequency": m.frequency})).collect();
+        }
+        out
     }
 
     /// Every step with a result, current or stale, by name.

@@ -6,7 +6,7 @@ use modelcraft_solver::StepResult;
 use serde_json::{Value, json};
 
 use super::{opt, xyz};
-use crate::results::{DEFAULT_BANDS, Field, MAX_BANDS, MIN_BANDS, ResultsView, field_values, range};
+use crate::results::{DEFAULT_BANDS, Field, MAX_BANDS, MIN_BANDS, ResultsView};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const DEFORMED: CommandSpec = CommandSpec {
@@ -114,23 +114,6 @@ fn view_of<'a>(s: &'a mut Session, step: &str) -> &'a mut ResultsView {
     s.results_view.get_or_insert_with(|| ResultsView::new(step))
 }
 
-/// What the display shows now, for the commands' replies.
-pub(crate) fn report(s: &Session) -> Value {
-    let Some(v) = &s.results_view else { return json!({"view": null}) };
-    let Some((r, current)) = s.latest_result(&v.step) else { return json!({"view": v}) };
-    let mut out = json!({"view": v, "stale": !current});
-    if let Some(f) = v.contour
-        && let Ok(values) = field_values(r, f, v.mode)
-    {
-        let ends = range(r.nodes(), &values).map(|((ln, lv), (hn, hv))| json!({"min": {"node": ln, "value": lv}, "max": {"node": hn, "value": hv}}));
-        out["contour"] = json!({"field": f, "label": f.label(), "range": ends});
-    }
-    if let StepResult::Frequency(fr) = r.as_ref() {
-        out["modes"] = fr.modes.iter().enumerate().map(|(i, m)| json!({"mode": i + 1, "frequency": m.frequency})).collect();
-    }
-    out
-}
-
 fn deformed(s: &mut Session, p: &Value) -> Result<Value> {
     let step = step_for(s, p, false)?;
     let show = opt::<bool>(p, "show")?.unwrap_or(true);
@@ -148,7 +131,7 @@ fn deformed(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(scale) = scale {
         v.scale = scale;
     }
-    Ok(report(s))
+    Ok(s.results_report())
 }
 
 fn contour(s: &mut Session, p: &Value) -> Result<Value> {
@@ -178,7 +161,7 @@ fn contour(s: &mut Session, p: &Value) -> Result<Value> {
     let v = view_of(s, &step);
     v.contour = field;
     v.bands = bands.unwrap_or(if v.bands == 0 { DEFAULT_BANDS } else { v.bands });
-    Ok(report(s))
+    Ok(s.results_report())
 }
 
 fn modes(s: &mut Session, p: &Value) -> Result<Value> {
@@ -198,7 +181,7 @@ fn modes(s: &mut Session, p: &Value) -> Result<Value> {
     let v = view_of(s, &step);
     v.mode = mode;
     v.deformed = true;
-    Ok(report(s))
+    Ok(s.results_report())
 }
 
 fn animate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -207,13 +190,13 @@ fn animate(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = &mut s.results_view {
             v.animate = false;
         }
-        return Ok(report(s));
+        return Ok(s.results_report());
     }
     let step = step_for(s, &json!({}), false)?;
     let v = view_of(s, &step);
     v.animate = true;
     v.deformed = true;
-    Ok(report(s))
+    Ok(s.results_report())
 }
 
 fn clear(s: &mut Session, _: &Value) -> Result<Value> {
@@ -322,7 +305,7 @@ mod tests {
         // An edit makes the results stale; the display keeps showing them, marked.
         s.execute("model.material.edit", &json!({"name": "Mat", "elastic": {"type": "isotropic", "young": 2000, "poisson": 0}, "density": 1}))
             .unwrap();
-        assert_eq!(report(&s)["stale"], true);
+        assert_eq!(s.results_report()["stale"], true);
         s.execute("results.clear", &json!({})).unwrap();
         assert!(s.results_view.is_none());
         assert!(s.execute("edit.undo", &json!({})).is_ok());

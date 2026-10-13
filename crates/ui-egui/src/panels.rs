@@ -73,6 +73,8 @@ pub fn status_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
 pub fn model_tree(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
     let model = &app.session.model;
+    let shown = app.session.results_view.as_ref().map(|v| v.step.clone());
+    let mut show = None;
     egui::Panel::left("mc_tree").resizable(true).default_size(220.0).frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::same(8))).show(
         ui,
         |ui| {
@@ -102,10 +104,26 @@ pub fn model_tree(app: &mut ModelApp, ui: &mut egui::Ui) {
                 if !app.session.surfaces.is_empty() {
                     ui.label(format!("Surfaces ({})", app.session.surfaces.len()));
                 }
+                let steps: Vec<(&str, bool)> = app.session.result_steps().collect();
+                if !steps.is_empty() {
+                    egui::CollapsingHeader::new(format!("Results ({})", steps.len())).id_salt("mc_tree_results").default_open(true).show(ui, |ui| {
+                        for (name, current) in steps {
+                            let text = if current { RichText::new(name) } else { RichText::new(format!("{name} (stale)")).color(t.text_dim) };
+                            let selected = shown.as_deref() == Some(name);
+                            if ui.selectable_label(selected, text).on_hover_text("Show this step's results").clicked() {
+                                show = Some(name.to_string());
+                            }
+                        }
+                    });
+                }
                 ui.label(format!("History ({} commands)", app.session.journal.len()));
             });
         },
     );
+    if let Some(step) = show {
+        // Errors show in the status bar.
+        let _ = app.show_result(&step);
+    }
 }
 
 /// The command registry by area (the id's first part), each command a button that starts it.

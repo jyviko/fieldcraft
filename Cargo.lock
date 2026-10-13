@@ -2000,6 +2000,7 @@ dependencies = [
  "modelcraft-engine",
  "modelcraft-model",
  "modelcraft-render",
+ "modelcraft-solver",
  "resvg",
  "serde",
  "serde_json",

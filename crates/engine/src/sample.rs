@@ -1,10 +1,13 @@
-//! The sample model the desktop app opens with `--sample`: a script of ordinary commands, so it
-//! builds the same way a user's script does.
+//! Sample models as scripts of ordinary commands, so they build the same way a user's script
+//! does.
 //!
-//! Two parts side by side: a 40 × 20 × 10 block of 5 mm hex8 cells, and a 15 mm cube split into
-//! 162 tet4 elements (each 5 mm cell into six tetrahedra around its main diagonal, the Kuhn
-//! subdivision, which is conforming between neighbouring cells). Every element is positively
-//! oriented.
+//! [`script`], the model the desktop app opens with `--sample`: two parts side by side, a
+//! 40 × 20 × 10 block of 5 mm hex8 cells, and a 15 mm cube split into 162 tet4 elements (each
+//! 5 mm cell into six tetrahedra around its main diagonal, the Kuhn subdivision, which is
+//! conforming between neighbouring cells). Every element is positively oriented.
+//!
+//! [`cantilever`], a model ready to solve: a steel beam clamped at one end with a load on the
+//! other, a static and a frequency step.
 
 use serde_json::{Value, json};
 
@@ -91,6 +94,61 @@ pub fn script() -> Value {
     Value::Array(steps)
 }
 
+/// The cantilever's length (x), width (y) and height (z) in mm, and its hex8 cells along each.
+pub const CANTILEVER_SIZE: [f64; 3] = [100.0, 10.0, 20.0];
+const CANTILEVER_CELLS: [u32; 3] = [20, 2, 4];
+
+/// A steel cantilever (E = 210 GPa, ν = 0.3, ρ = 7.85 t/m³ in mm, t, s, N, MPa) of hex8
+/// elements with incompatible modes, clamped at x = 0 (set `root`), with a total force of
+/// 1000 N down on the free end (set `tip`); step `Load` (static) and step `Modes` (six modes).
+/// Euler–Bernoulli puts the tip 4 P L³ / (E w h³) = 0.238 mm down.
+pub fn cantilever() -> Value {
+    let [nx, ny, nz] = CANTILEVER_CELLS;
+    let [lx, ly, lz] = CANTILEVER_SIZE;
+    let id = |i: u32, j: u32, k: u32| 1 + i + j * (nx + 1) + k * (nx + 1) * (ny + 1);
+    let mut steps = vec![json!({"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}})];
+    for k in 0..=nz {
+        for j in 0..=ny {
+            for i in 0..=nx {
+                let xyz = [lx * f64::from(i) / f64::from(nx), ly * f64::from(j) / f64::from(ny), lz * f64::from(k) / f64::from(nz)];
+                steps.push(json!({"command": "mesh.node.add", "params": {"label": id(i, j, k), "xyz": xyz}}));
+            }
+        }
+    }
+    let mut element = 0u32;
+    for k in 0..nz {
+        for j in 0..ny {
+            for i in 0..nx {
+                element += 1;
+                let nodes = [
+                    id(i, j, k),
+                    id(i + 1, j, k),
+                    id(i + 1, j + 1, k),
+                    id(i, j + 1, k),
+                    id(i, j, k + 1),
+                    id(i + 1, j, k + 1),
+                    id(i + 1, j + 1, k + 1),
+                    id(i, j + 1, k + 1),
+                ];
+                steps.push(json!({"command": "mesh.element.add", "params": {"label": element, "kind": "hex8", "nodes": nodes}}));
+            }
+        }
+    }
+    let end = |i: u32| -> Vec<u32> { (0..=nz).flat_map(|k| (0..=ny).map(move |j| id(i, j, k))).collect() };
+    steps.extend([
+        json!({"command": "model.set.create", "params": {"name": "beam", "elements": (1..=element).collect::<Vec<_>>()}}),
+        json!({"command": "model.set.create", "params": {"name": "root", "nodes": end(0)}}),
+        json!({"command": "model.set.create", "params": {"name": "tip", "nodes": end(nx)}}),
+        json!({"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}, "density": 7.85e-9}}),
+        json!({"command": "model.section.create", "params": {"name": "Beam", "set": "beam", "material": "Steel", "kind": {"type": "solid"}, "formulation": {"incompatible_modes": true}}}),
+        json!({"command": "model.boundary_condition.create", "params": {"name": "Clamp", "type": "fixed", "target": {"set": "root"}}}),
+        json!({"command": "model.load.create", "params": {"name": "Push", "type": "force", "target": {"set": "tip"}, "vector": [0, 0, -1000]}}),
+        json!({"command": "model.step.create", "params": {"name": "Load", "procedure": {"type": "static"}, "boundary_conditions": ["Clamp"], "loads": ["Push"]}}),
+        json!({"command": "model.step.create", "params": {"name": "Modes", "procedure": {"type": "frequency", "modes": 6}, "boundary_conditions": ["Clamp"]}}),
+    ]);
+    Value::Array(steps)
+}
+
 /// Six times the signed volume of the tetrahedron `p[0..4]` (positive when p3 lies on the side
 /// p0 → p1 → p2 turns counter-clockwise around).
 fn signed_volume(p: &[[f64; 3]]) -> f64 {
@@ -123,5 +181,19 @@ mod tests {
             volume += v;
         }
         assert!((volume - 15.0f64.powi(3)).abs() < 1e-9, "{volume}");
+    }
+
+    #[test]
+    fn the_cantilever_solves_close_to_beam_theory() {
+        let mut s = Session::default();
+        s.run_script(&cantilever()).unwrap();
+        let r = s.execute("solve.static", &json!({})).unwrap();
+        let [l, w, h] = CANTILEVER_SIZE;
+        let beam = 4.0 * 1000.0 * l.powi(3) / (210000.0 * w * h.powi(3));
+        let tip = r["max_displacement"]["value"].as_f64().unwrap();
+        // Shear deformation adds a little (L/h = 5).
+        assert!(tip > beam && tip < 1.1 * beam, "{tip} vs {beam}");
+        let f = s.execute("solve.frequency", &json!({})).unwrap();
+        assert_eq!(f["modes"].as_array().map(Vec::len), Some(6));
     }
 }

@@ -18,7 +18,7 @@ crates in strictly lower layers.
 
 | Layer | Crate | Role | Status |
 |---|---|---|---|
-| L0 | `modelcraft-model` | Solver-neutral FE model: nodes, elements by label; materials, sections, sets, BCs, loads and steps as they land. Knows no file format. | started |
+| L0 | `modelcraft-model` | Solver-neutral FE model: nodes and elements by label, their geometry tags, sets, materials, sections, couplings, BCs, loads and steps, the model check and the resolved view the writers read. Knows no file format and no geometry type. | started |
 | L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`; face-tagged 3MF files read into the same type without the kernel (docs/formats/tagged-mesh.md). No SolidCraft type in its API. | started |
 | L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
 | L1 | `modelcraft-solver` | Element formulations, assembly, sparse linear static and modal solution. | planned |
@@ -77,6 +77,38 @@ Rules beyond the layer order:
    Mapped and swept hex build on these face meshes.
 6. **Quality.** Scaled Jacobian, aspect ratio, dihedral angles; every generated mesh is checked
    for positive Jacobians and conserved volume before it reaches the model.
+
+## Model definition
+
+`modelcraft-model` holds the analysis model in no solver's vocabulary (the writers map it to
+element names, cards and keywords):
+
+- **Geometry tags.** Geometry is referred to by name only: a body and, inside it, the persistent
+  name of a face, edge or vertex (`{"body": "Body1", "face": "F2:top"}`). A mesher tags what it
+  makes: each element with the body (solids), face (shells) or edge (beams) it fills, each
+  boundary element face with its geometry face, element edges with geometry edges, nodes with
+  vertices (`Model::geometry_tag`, `tag_element`, `tag_element_face`, …; `mesh.tag` by hand).
+  Replacing or removing an element drops its tags; a remesh clears them and writes new ones.
+- **Sets** are defined by geometry names, explicit labels or both, and resolve against the
+  current mesh into sorted nodes, elements and element faces. A face name also selects the pieces
+  a kernel splits it into (`name#0`, `name#1`). Because the definition names geometry, a remesh,
+  or an edit of the design followed by a remesh, keeps every set, section and load in place.
+- **Element faces** are numbered per kind (`ElementKind::faces`): solids' faces are oriented with
+  the right-hand normal pointing out; shells have a positive and a negative side.
+- **Definitions** (materials, sections with their element formulation, reference points,
+  couplings, boundary conditions, loads, steps) refer to each other by name. A reference must
+  exist when it is made, and a definition still referred to cannot be deleted; what depends on
+  the mesh is checked when the model is resolved.
+- **Steps** list the boundary conditions and loads active in them. Nothing propagates from one
+  step to the next.
+- **Units** are a label (`mm-t-s-N-MPa`, …); numbers are never converted, and the check warns
+  when a modulus, density or gravity is implausible for the chosen system.
+- **Check and resolve.** `Model::check` lists errors and warnings, each naming its item (a set
+  member not on the mesh, an element with no section or in two, a moment on solid nodes, a
+  missing density for a frequency step, …). `Model::resolve` returns what writers and the solver
+  read besides the definitions: every set resolved, the section of every element, and the node
+  label of every reference point (after the largest mesh node, in name order). It fails when the
+  check finds an error.
 
 ## Commands
 

@@ -42,16 +42,16 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Mesh | Hex-dominant by recombination; polycube | M6 | yes | planned |
 | Mesh | Smoothing, untangling, boundary padding, layers through thin walls | M6 | yes | planned |
 | Mesh | Mesh editing (move, merge, split, collapse, remesh region), imported orphan meshes | M6 | yes | started (node/element add/remove) |
-| Model | Sets and surfaces bound to geometry names | M3 | yes | planned |
-| Model | Materials: elastic (isotropic, orthotropic), density, unit-system check | M3 | | planned |
+| Model | Sets and surfaces bound to geometry names | M3 | yes | done |
+| Model | Materials: elastic (isotropic, orthotropic), density, unit-system check | M3 | | done |
 | Model | Materials: plasticity, hyperelasticity, damage, thermal | M8 | | planned |
-| Model | Sections: solid, shell, beam profiles; assignment by set | M3 | | planned |
+| Model | Sections: solid, shell, beam profiles; assignment by set | M3 | | done |
 | Model | Composite layups, material orientations, continuum shells | M8 | yes | planned |
-| Model | Element formulation per region (integration, incompatible modes, hybrid) mapped per solver | M3 | yes | planned |
-| Model | Boundary conditions: fixed, displacement, symmetry | M3 | | planned |
-| Model | Loads: force and moment, pressure, gravity, body force | M3 | | planned |
-| Model | Reference points, kinematic and distributing coupling | M3 | | planned |
-| Model | Steps: linear static, frequency; output presets | M3 | | planned |
+| Model | Element formulation per region (integration, incompatible modes, hybrid) mapped per solver | M3 | yes | done (model; per-solver mapping with the deck writers) |
+| Model | Boundary conditions: fixed, displacement, symmetry | M3 | | done |
+| Model | Loads: force and moment, pressure, gravity, body force | M3 | | done |
+| Model | Reference points, kinematic and distributing coupling | M3 | | done |
+| Model | Steps: linear static, frequency; output presets | M3 | | done |
 | Model | Steps: nonlinear static, explicit dynamics, heat transfer; amplitudes | M7–M8 | | planned |
 | Interaction | Tie between non-matching meshes | M7 | | planned |
 | Interaction | Contact (general and pairs), friction, automatic pair detection | M7 | | planned |

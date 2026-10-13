@@ -17,3 +17,10 @@ solidcraft-io = { workspace = true }
 thiserror = { workspace = true }
 zip = { workspace = true }
 quick-xml = { workspace = true }
+solidcraft-engine = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[features]
+# Build designs from SolidCraft command scripts (`script_design`): the test corpus and tooling.
+# Off by default; the library itself only opens designs.
+scripts = ["dep:solidcraft-engine", "dep:serde_json"]

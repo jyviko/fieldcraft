@@ -19,9 +19,13 @@
 
 mod design;
 pub mod sample;
+#[cfg(feature = "scripts")]
+mod script;
 
 pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design, open_design_file};
 pub mod tagged_mesh;
+#[cfg(feature = "scripts")]
+pub use script::{MAX_SCRIPT_BYTES, script_design};
 use solidcraft_kernel::{Body, KernelError, guard};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

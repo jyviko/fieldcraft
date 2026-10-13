@@ -16,6 +16,7 @@ modelcraft-model = { path = "crates/model" }
 modelcraft-geometry = { path = "crates/geometry" }
 modelcraft-mesh = { path = "crates/mesh" }
 modelcraft-engine = { path = "crates/engine" }
+modelcraft-testkit = { path = "crates/testkit" }
 
 # foundation
 thiserror = "2"
@@ -33,6 +34,9 @@ solidcraft-geom = { git = "https://github.com/bherbruck/solidcraft", rev = "de14
 solidcraft-kernel = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
 solidcraft-doc = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
 solidcraft-io = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
+# Runs SolidCraft command scripts (the test corpus recipes); only behind modelcraft-geometry's
+# `scripts` feature.
+solidcraft-engine = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

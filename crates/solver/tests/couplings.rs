@@ -361,3 +361,32 @@ fn coupling_errors_name_the_problem() {
         let _ = solve_static(&g.model, Some("Step"), &Limits::default());
     }
 }
+
+/// A distributing coupling on a large face whose reference point is held ties every coupled
+/// node to every other (a dense block of (3N)² entries): refused up front, before the reduced
+/// matrix is built, with the size it would need. Any other reduction that would outgrow the
+/// budget stops while counting, before allocating.
+#[test]
+fn oversized_reductions_are_refused_before_allocating() {
+    let mut g = grid([83, 83, 1], ElementKind::Hex8, |q| [83.0 * q[0], 83.0 * q[1], q[2]]);
+    g.define(iso(1000.0, 0.3), None, full(), Procedure::Static {});
+    g.couple("Base", [41.5, 41.5, 0.0], CouplingKind::Distributing, &ALL, |q| near(q[2], 0.0));
+    g.bc("hold", BoundaryCondition::Fixed { target: rp("Base") });
+    g.face_set("top", |q| near(q[2], 1.0));
+    g.load("p", Load::Pressure { set: "top".into(), magnitude: 1.0 });
+    let start = std::time::Instant::now();
+    let e = solve_static(&g.model, Some("Step"), &Limits::default()).unwrap_err().to_string();
+    eprintln!("refused in {:?}: {e}", start.elapsed());
+    assert!(e.contains("couples 7056 nodes") && e.contains("GB") && e.contains("kinematic coupling"), "{e}");
+
+    let mut g = grid([2, 1, 1], ElementKind::Hex8, |q| [2.0 * q[0], q[1], q[2]]);
+    g.define(iso(1000.0, 0.3), None, full(), Procedure::Static {});
+    g.couple("Root", [0.0, 0.5, 0.5], CouplingKind::Kinematic, &ALL, |q| near(q[0], 0.0));
+    g.bc("clamp", BoundaryCondition::Fixed { target: rp("Root") });
+    g.face_set("end", |q| near(q[0], 1.0));
+    g.load("p", Load::Pressure { set: "end".into(), magnitude: 1.0 });
+    let tight = Limits { max_factor_entries: 4, ..Limits::default() };
+    let e = solve_static(&g.model, Some("Step"), &tight).unwrap_err().to_string();
+    assert!(e.contains("reduced matrices need more than"), "{e}");
+    assert!(solve_static(&g.model, Some("Step"), &Limits::default()).is_ok());
+}

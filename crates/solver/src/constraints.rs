@@ -42,6 +42,11 @@
 //! positive definite for the Cholesky factorization. With no coupling, T is the identity on the
 //! free degrees of freedom and the result is the plain elimination of prescribed values, bit for
 //! bit.
+//!
+//! **Memory.** A held distributing coupling point makes one coupled node depend on all the others,
+//! a dense (3N)² block in the reduced matrix; its size is estimated from the rows and refused
+//! against the factorization's memory budget before anything is built, and every other reduction
+//! counts its entries (stopping at the budget) before it allocates them.
 
 use std::collections::BTreeMap;
 
@@ -296,13 +301,58 @@ pub struct Reduction {
     prescribed_motion: Vec<f64>,
     /// Whether any degree of freedom depends on others (T is not a plain selection).
     has_dependents: bool,
+    budget: Budget,
+}
+
+/// The memory the reduced matrices may take, checked before they are built: the same budget as
+/// the factorization's (`Limits::max_factor_entries` doubles of 8 bytes).
+#[derive(Debug, Clone, Copy)]
+pub struct Budget {
+    pub max_bytes: usize,
+    /// Entries of the assembled mesh pattern.
+    pub pattern_entries: usize,
+    /// Matrices reduced together (stiffness, and mass for frequency steps).
+    pub matrices: usize,
+}
+
+impl Budget {
+    /// Bytes of `entries` reduced entries: one column index and one value per matrix.
+    fn bytes(&self, entries: usize) -> usize {
+        entries.saturating_mul(8 * (1 + self.matrices))
+    }
+
+    fn exceeded(&self, entries: usize) -> bool {
+        self.bytes(entries) > self.max_bytes
+    }
+}
+
+/// An empty vector with room for `n` elements, or a limit error when the memory is not there.
+fn reserved<T>(n: usize) -> Result<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| Error::Limit(format!("cannot allocate {} for the reduced matrices", gigabytes(n.saturating_mul(8)))))?;
+    Ok(v)
+}
+
+fn gigabytes(bytes: usize) -> String {
+    format!("{:.2} GB", bytes as f64 / 1e9)
 }
 
 impl Reduction {
     /// Eliminate the prescribed values (`prescribed(active)` gives them) and the constraint rows.
     /// `order` is the mesh nodes' order for numbering the free equations; reference point
     /// equations follow them.
-    pub fn new(mesh: &Mesh, order: &[usize], rows: &[Row], prescribed: impl FnOnce(&[bool]) -> Result<Vec<Option<f64>>>) -> Result<Reduction> {
+    ///
+    /// A distributing coupling whose reference point is held makes one of its nodes depend on
+    /// all the others, which couples every coupled degree of freedom with every other: a dense
+    /// (3N)² block in the reduced matrix. Its size is checked against `budget` before anything is
+    /// built.
+    pub fn new(
+        mesh: &Mesh,
+        order: &[usize],
+        rows: &[Row],
+        prescribed: impl FnOnce(&[bool]) -> Result<Vec<Option<f64>>>,
+        budget: Budget,
+    ) -> Result<Reduction> {
         let n = mesh.dofs();
         let active = active_dofs(mesh, rows);
         let prescribed = prescribed(&active)?;
@@ -314,6 +364,31 @@ impl Reduction {
             })
             .collect();
         let values: Vec<f64> = (0..n).map(|d| prescribed.get(d).copied().flatten().unwrap_or(0.0)).collect();
+        // Dense blocks: the mesh degrees of freedom of the rows meant to eliminate a held
+        // reference point, one block per coupling.
+        let mut coupled: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for row in rows {
+            if row.pivot >= mesh.mesh_dofs() && state.get(row.pivot) == Some(&State::Fixed) {
+                coupled.entry(row.coupling).or_default().extend(row.terms.iter().map(|t| t.0).filter(|d| *d < mesh.mesh_dofs()));
+            }
+        }
+        let mut blocks: Vec<(&str, usize, usize)> = Vec::new();
+        for (name, mut dofs) in coupled {
+            dofs.sort_unstable();
+            dofs.dedup();
+            let mut nodes: Vec<usize> = dofs.iter().map(|d| d / 3).collect();
+            nodes.dedup();
+            blocks.push((name, nodes.len(), dofs.len().saturating_mul(dofs.len())));
+        }
+        let dense: usize = blocks.iter().fold(0, |a, b| a.saturating_add(b.2));
+        if dense > 0 && budget.exceeded(budget.pattern_entries.saturating_add(dense)) {
+            let (name, nodes, _) = blocks.iter().max_by_key(|b| b.2).copied().unwrap_or(("?", 0, 0));
+            return Err(Error::Limit(format!(
+                "distributing coupling `{name}` couples {nodes} nodes and its reference point is held, which ties every coupled node to every other: the reduced stiffness needs about {} (the limit is {}); split the surface into smaller couplings, hold the surface itself, or use a kinematic coupling",
+                gigabytes(budget.bytes(budget.pattern_entries.saturating_add(dense))),
+                gigabytes(budget.max_bytes)
+            )));
+        }
         // Dependent expressions in free and prescribed degrees of freedom, and for each free
         // degree of freedom the expressions that use it (possibly listed twice).
         let mut exprs: Vec<Vec<(usize, f64)>> = Vec::new();
@@ -420,7 +495,7 @@ impl Reduction {
         }
         let prescribed_motion = (0..n).map(|d| fixed.row(d).map(|(p, c)| c * values.get(p).copied().unwrap_or(0.0)).sum()).collect();
         let columns = free.transpose(eq_dof.len());
-        Ok(Reduction { eq_dof, active, free, columns, fixed, prescribed_motion, has_dependents: !exprs.is_empty() })
+        Ok(Reduction { eq_dof, active, free, columns, fixed, prescribed_motion, has_dependents: !exprs.is_empty(), budget })
     }
 
     /// Free equations.
@@ -441,13 +516,47 @@ impl Reduction {
         }
         let pattern = mats.first().ok_or_else(|| Error::Internal("no matrix to reduce".into()))?;
         let n = self.neq();
-        let mut acc = vec![[0.0; M]; n];
         let mut mark = vec![usize::MAX; n];
+        // A plain selection has at most the mesh pattern's entries; otherwise count them first
+        // (stopping at the budget) so nothing larger than the budget is ever allocated.
+        let entries = if self.has_dependents {
+            let budget = Budget { matrices: M, ..self.budget };
+            let mut count = 0usize;
+            for e in 0..n {
+                for (dof, _) in self.columns.row(e) {
+                    for b in pattern.row(dof).0 {
+                        for (f, _) in self.free.row(*b) {
+                            if let Some(m) = mark.get_mut(f)
+                                && *m != e
+                            {
+                                *m = e;
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+                if budget.exceeded(count) {
+                    return Err(Error::Limit(format!(
+                        "the reduced matrices need more than {} (the limit is {}); couplings tie too many nodes together",
+                        gigabytes(budget.bytes(count)),
+                        gigabytes(budget.max_bytes)
+                    )));
+                }
+            }
+            mark.iter_mut().for_each(|m| *m = usize::MAX);
+            count
+        } else {
+            pattern.idx.len()
+        };
+        let mut acc = vec![[0.0; M]; n];
         let mut touched: Vec<usize> = Vec::new();
         let mut ptr = Vec::with_capacity(n + 1);
         ptr.push(0);
-        let mut idx = Vec::with_capacity(pattern.idx.len());
-        let mut vals: [Vec<f64>; M] = std::array::from_fn(|_| Vec::with_capacity(pattern.idx.len()));
+        let mut idx: Vec<usize> = reserved(entries)?;
+        let mut vals: [Vec<f64>; M] = std::array::from_fn(|_| Vec::new());
+        for v in &mut vals {
+            *v = reserved(entries)?;
+        }
         for e in 0..n {
             touched.clear();
             for (dof, ca) in self.columns.row(e) {

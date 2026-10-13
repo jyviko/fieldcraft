@@ -7,7 +7,7 @@ use modelcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
 use serde::Serialize;
 
 use crate::cholesky::{Factor, FactorError, UpperColumns};
-use crate::constraints::{Reduction, coupling_rows};
+use crate::constraints::{Budget, Reduction, coupling_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
 use crate::ordering::nested_dissection;
 use crate::sparse::{Csr, NodeGraph, add_block, add_diagonal, add_scalar};
@@ -197,17 +197,22 @@ fn split(full: &[f64], mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[f64; 6]>) {
 }
 
 /// Constraint rows, prescribed values and their elimination for a step.
-fn reduction(
-    model: &Model,
-    resolved: &Resolved,
-    mesh: &Mesh,
-    step: &Step,
-    values: bool,
-    order: &[usize],
-    warnings: &mut Vec<String>,
-) -> Result<Reduction> {
-    let rows = coupling_rows(model, resolved, mesh)?;
-    Reduction::new(mesh, order, &rows, |active| prescribed(model, resolved, mesh, step, values, active, warnings))
+/// The model, its resolved view, the mesh and the step being solved.
+struct Setup<'a> {
+    model: &'a Model,
+    resolved: &'a Resolved,
+    mesh: &'a Mesh,
+    step: &'a Step,
+}
+
+fn reduction(s: &Setup, values: bool, order: &[usize], budget: Budget, warnings: &mut Vec<String>) -> Result<Reduction> {
+    let rows = coupling_rows(s.model, s.resolved, s.mesh)?;
+    Reduction::new(s.mesh, order, &rows, |active| prescribed(s.model, s.resolved, s.mesh, s.step, values, active, warnings), budget)
+}
+
+/// The reduced matrices' memory budget: the factorization's.
+fn budget(limits: &Limits, graph: &NodeGraph, matrices: usize) -> Budget {
+    Budget { max_bytes: limits.max_factor_entries.saturating_mul(8), pattern_entries: graph.entries(), matrices }
 }
 
 /// Solve a linear static step: the step named `step`, or the model's only static step.
@@ -218,7 +223,8 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
     let order = nested_dissection(&mesh.xyz, &graph.adjacency);
-    let red = reduction(model, &resolved, &mesh, step, true, &order, &mut warnings)?;
+    let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
+    let red = reduction(&setup, true, &order, budget(limits, &graph, 1), &mut warnings)?;
     let f = loads(model, &resolved, &mesh, step, &red.active)?;
     let k = assemble(&mesh, &graph, None)?.k;
     if red.neq() == 0 {
@@ -344,7 +350,8 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
     let order = nested_dissection(&mesh.xyz, &graph.adjacency);
-    let red = reduction(model, &resolved, &mesh, step, false, &order, &mut warnings)?;
+    let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
+    let red = reduction(&setup, false, &order, budget(limits, &graph, 2), &mut warnings)?;
     let Assembled { k, m } = assemble(&mesh, &graph, Some(options.mass))?;
     let m = m.ok_or_else(|| Error::Internal("mass matrix".into()))?;
     // Every element's mass entries sum to its mass, once per direction.

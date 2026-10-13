@@ -47,6 +47,12 @@ impl From<KernelError> for Error {
     }
 }
 
+/// SolidCraft's linear modelling tolerance (mm): points closer than this are the same point.
+/// Each face of a [`Shape::tessellate`] result carries its own copy of the boundary points it
+/// shares with its neighbours, accurate to this tolerance, so two copies of one point can differ
+/// by up to twice it; boundary surface preparation welds at that distance.
+pub const LINEAR_TOLERANCE: f64 = solidcraft_geom::LINEAR_TOL;
+
 /// A solid body.
 #[derive(Debug, Clone)]
 pub struct Shape {

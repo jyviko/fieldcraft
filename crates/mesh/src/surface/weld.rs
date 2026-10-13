@@ -4,9 +4,10 @@
 
 use std::collections::HashMap;
 
-use super::index;
+use super::{MAX_RELATIVE_WELD, index};
 use crate::predicates::MIN_MAGNITUDE;
 use crate::vec3::{dot, norm, sub};
+use crate::{Error, Result};
 
 pub(crate) struct Welded {
     pub points: Vec<[f64; 3]>,
@@ -15,10 +16,11 @@ pub(crate) struct Welded {
     pub source_triangle: Vec<u32>,
 }
 
-/// Weld the vertices `triangles` use (indices already checked) within `relative` × the
-/// bounding-box diagonal, snap coordinates below [`MIN_MAGNITUDE`] to zero and drop triangles
-/// that collapse.
-pub(crate) fn weld(positions: &[[f64; 3]], triangles: &[[u32; 3]], relative: f64) -> Welded {
+/// Weld the vertices `triangles` use (indices already checked) within the larger of `relative`
+/// × the bounding-box diagonal and `absolute`, snap coordinates below [`MIN_MAGNITUDE`] to zero
+/// and drop triangles that collapse. A distance above [`MAX_RELATIVE_WELD`] of the diagonal is an
+/// error; one below 1e-15 of it welds identical coordinates only.
+pub(crate) fn weld(positions: &[[f64; 3]], triangles: &[[u32; 3]], relative: f64, absolute: f64) -> Result<Welded> {
     let mut used = vec![false; positions.len()];
     for v in triangles.iter().flatten() {
         if let Some(u) = used.get_mut(*v as usize) {
@@ -33,7 +35,13 @@ pub(crate) fn weld(positions: &[[f64; 3]], triangles: &[[u32; 3]], relative: f64
             hi[k] = hi[k].max(p[k]);
         }
     }
-    let tol = relative * norm(sub(hi, lo));
+    let diagonal = norm(sub(hi, lo));
+    let tol = (relative * diagonal).max(absolute);
+    if tol > MAX_RELATIVE_WELD * diagonal {
+        return Err(Error::Invalid(format!(
+            "weld distance {tol} is more than {MAX_RELATIVE_WELD} of the surface's size ({diagonal}): it would merge distinct vertices"
+        )));
+    }
 
     let mut map = vec![u32::MAX; positions.len()];
     let mut points: Vec<[f64; 3]> = Vec::new();
@@ -44,9 +52,9 @@ pub(crate) fn weld(positions: &[[f64; 3]], triangles: &[[u32; 3]], relative: f64
         source_vertex.push(index(v));
         w
     };
-    if tol > 0.0 && tol.is_finite() {
+    if tol >= 1e-15 * diagonal && tol > 0.0 {
         // Cells of side `tol`: a vertex's representatives are in its cell or the 26 around it.
-        // Coordinates over the cell size stay below 1e15 (relative ≥ 1e-15), exact in i64.
+        // Coordinates over the cell size stay below 1e15, exact in i64.
         let cell = |p: [f64; 3]| [0, 1, 2].map(|k| ((p[k] - lo[k]) / tol).floor() as i64);
         let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::new();
         for (v, p) in referenced() {
@@ -111,5 +119,5 @@ pub(crate) fn weld(positions: &[[f64; 3]], triangles: &[[u32; 3]], relative: f64
             source_triangle.push(index(t));
         }
     }
-    Welded { points, triangles: out, source_vertex, source_triangle }
+    Ok(Welded { points, triangles: out, source_vertex, source_triangle })
 }

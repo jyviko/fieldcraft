@@ -212,6 +212,9 @@ mod tests {
             json!({"body": "Body1", "tolerance": 0.5, "weld": 0}),
             json!({"body": "Body1", "tolerance": 0.5, "weld": 1e-3}),
             json!({"body": "Body1", "tolerance": 0.5, "weld": f64::MIN_POSITIVE}),
+            json!({"body": "Body1", "tolerance": 0.5, "weld": 0, "weld_distance": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "weld_distance": 1e300}),
+            json!({"body": "Body1", "tolerance": 0.5, "weld_distance": 0.05}),
             json!({"body": "Body1", "tolerance": 0.5, "feature_angle": 1e-300}),
             json!({"body": "Body1", "tolerance": 0.5, "feature_angle": null}),
         ];

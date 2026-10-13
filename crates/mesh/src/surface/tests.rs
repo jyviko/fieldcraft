@@ -159,6 +159,14 @@ fn a_triangle_soup_welds_into_the_solid() {
     assert_eq!(prepare(&noisy).unwrap().points().len(), 8);
     let exact = SurfaceOptions { weld_tolerance: 0.0, ..SurfaceOptions::default() };
     assert!(matches!(BoundarySurface::new(&noisy.0, &noisy.1, &noisy.2, &exact), Err(Error::Surface(_))));
+    // Or an absolute distance (a CAD kernel's tolerance).
+    let mut noisy = soup(&c);
+    for (i, p) in noisy.0.iter_mut().enumerate() {
+        p[1] += 1.5e-6 * (i % 2) as f64;
+    }
+    assert!(matches!(prepare(&noisy), Err(Error::Surface(_))));
+    let kernel = SurfaceOptions { weld_distance: 2e-6, ..SurfaceOptions::default() };
+    assert_eq!(BoundarySurface::new(&noisy.0, &noisy.1, &noisy.2, &kernel).unwrap().points().len(), 8);
 }
 
 #[test]
@@ -292,6 +300,9 @@ fn hostile_input_is_an_error() {
     assert!(matches!(BoundarySurface::new(&[[1.0; 3]; 3], &[[0, 1, 2]], &[], &o), Err(Error::Invalid(_))));
     for w in [-1.0, f64::NAN, 1e-20, 0.5, f64::INFINITY] {
         assert!(BoundarySurface::new(&c.0, &c.1, &c.2, &SurfaceOptions { weld_tolerance: w, ..o }).is_err(), "{w}");
+    }
+    for d in [-1.0, f64::NAN, f64::INFINITY, 0.01] {
+        assert!(BoundarySurface::new(&c.0, &c.1, &c.2, &SurfaceOptions { weld_distance: d, ..o }).is_err(), "{d}");
     }
     for a in [0.0, -1.0, 181.0, f64::NAN] {
         assert!(BoundarySurface::new(&c.0, &c.1, &c.2, &SurfaceOptions { feature_angle: a, ..o }).is_err(), "{a}");

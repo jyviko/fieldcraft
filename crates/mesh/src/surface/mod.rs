@@ -6,13 +6,14 @@
 //!
 //! 1. **Coordinates and indices** are checked: finite, within [`modelcraft_model::MAX_COORD`],
 //!    in range.
-//! 2. **Weld.** Vertices closer than a tolerance relative to the bounding-box diagonal become one,
-//!    in input order (the earliest vertex of a cluster is its representative and keeps its
-//!    position), so the result does not depend on hashing. SolidCraft's tessellation is a
-//!    triangle soup (three vertices per triangle, shared boundary polylines with identical
-//!    coordinates), so this is where its faces join. Triangles that collapse are dropped;
-//!    coordinates below [`crate::predicates::MIN_MAGNITUDE`] snap to zero so every point is in
-//!    the exact predicates' domain.
+//! 2. **Weld.** Vertices closer than a distance (relative to the bounding-box diagonal, or
+//!    absolute: [`SurfaceOptions`]) become one, in input order (the earliest vertex of a cluster
+//!    is its representative and keeps its position), so the result does not depend on hashing.
+//!    SolidCraft's tessellation is a triangle soup (three vertices per triangle), and two faces'
+//!    copies of a shared boundary point agree only to within the kernel's tolerance, so this is
+//!    where its faces join. Triangles that collapse are dropped; coordinates below
+//!    [`crate::predicates::MIN_MAGNITUDE`] snap to zero so every point is in the exact
+//!    predicates' domain.
 //! 3. **Degenerate triangles** (exactly collinear corners) are rejected.
 //! 4. **Topology.** Every edge has exactly two triangles that traverse it in opposite directions
 //!    (closed, edge-manifold, consistently oriented), and the triangles around each vertex form a
@@ -65,13 +66,24 @@ pub const MAX_PAIR_TESTS: u64 = 1_000_000_000;
 /// Cap on triangle solid angles summed to nest shells (shells × triangles, after box culling).
 pub const MAX_WINDING_WORK: u64 = 500_000_000;
 
+/// The largest weld distance, as a fraction of the bounding-box diagonal.
+pub const MAX_RELATIVE_WELD: f64 = 1e-3;
+
 /// How [`BoundarySurface::new`] welds and finds features.
+///
+/// Vertices closer than the larger of `weld_tolerance` × the bounding-box diagonal and
+/// `weld_distance` are welded. Tessellations of B-rep faces agree on their shared boundary points
+/// only to within the kernel's tolerance, so a caller with CAD input sets `weld_distance` from it
+/// (twice the kernel's linear tolerance: each face's copy of a boundary point is within it of the
+/// exact point).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SurfaceOptions {
-    /// Vertices closer than this fraction of the bounding-box diagonal are welded; 0 welds only
-    /// identical coordinates. In `[0, 1e-3]`; nonzero values below 1e-15 are refused (finer than
-    /// the coordinates themselves).
+    /// Relative weld distance, in `[0, 1e-3]`; nonzero values below 1e-15 are refused (finer than
+    /// the coordinates themselves). 0 with `weld_distance` 0 welds identical coordinates only.
     pub weld_tolerance: f64,
+    /// Absolute weld distance in model units, at least 0 and at most [`MAX_RELATIVE_WELD`] of the
+    /// bounding-box diagonal.
+    pub weld_distance: f64,
     /// An edge inside one B-rep face is a feature when the normals of its two triangles differ
     /// by more than this angle, in degrees, in `(0, 180]` (180: face boundaries only).
     pub feature_angle: f64,
@@ -79,7 +91,7 @@ pub struct SurfaceOptions {
 
 impl Default for SurfaceOptions {
     fn default() -> Self {
-        SurfaceOptions { weld_tolerance: 1e-9, feature_angle: 45.0 }
+        SurfaceOptions { weld_tolerance: 1e-9, weld_distance: 0.0, feature_angle: 45.0 }
     }
 }
 
@@ -294,7 +306,7 @@ impl BoundarySurface {
         }
         check_input(positions, triangles)?;
 
-        let welded = weld::weld(positions, triangles, options.weld_tolerance);
+        let welded = weld::weld(positions, triangles, options.weld_tolerance, options.weld_distance)?;
         if welded.triangles.is_empty() {
             return Err(Error::Invalid("every triangle collapses when the vertices are welded".into()));
         }
@@ -406,8 +418,13 @@ impl BoundarySurface {
 
 fn check_options(o: &SurfaceOptions) -> Result<()> {
     let w = o.weld_tolerance;
-    if !(w == 0.0 || (1e-15..=1e-3).contains(&w)) {
-        return Err(Error::Invalid(format!("weld tolerance must be 0 or in [1e-15, 1e-3] (relative to the bounding-box diagonal), got {w}")));
+    if !(w == 0.0 || (1e-15..=MAX_RELATIVE_WELD).contains(&w)) {
+        return Err(Error::Invalid(format!(
+            "weld tolerance must be 0 or in [1e-15, {MAX_RELATIVE_WELD}] (relative to the bounding-box diagonal), got {w}"
+        )));
+    }
+    if !(o.weld_distance >= 0.0 && o.weld_distance <= MAX_COORD) {
+        return Err(Error::Invalid(format!("weld distance must be a length of at least 0, got {}", o.weld_distance)));
     }
     if !(o.feature_angle > 0.0 && o.feature_angle <= 180.0) {
         return Err(Error::Invalid(format!("feature angle must be in (0, 180] degrees, got {}", o.feature_angle)));

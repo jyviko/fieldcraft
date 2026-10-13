@@ -62,7 +62,7 @@ fn delaunay_points(_: &mut Session, p: &Value) -> Result<Value> {
 pub const SURFACE_CHECK: CommandSpec = CommandSpec {
     id: "mesh.surface.check",
     label: "Check Boundary Surface",
-    params: r#"{"body": "Body1", "tolerance": 0.05} or {"surface": 0}, optional "weld": 1e-9 (0 or 1e-15..=1e-3 of the bounding-box diagonal), "feature_angle": 45 (degrees, (0, 180]) — welds the tessellated body or imported surface and checks it can bound a volume mesh: closed, manifold, outward, no self-intersections; reports shells, genus, volume and feature edges, or the located defects"#,
+    params: r#"{"body": "Body1", "tolerance": 0.05} or {"surface": 0}, optional "weld": 1e-9 (0 or 1e-15..=1e-3 of the bounding-box diagonal), "weld_distance": 2e-6 (mm; default twice SolidCraft's linear tolerance), "feature_angle": 45 (degrees, (0, 180]) — welds the tessellated body or imported surface and checks it can bound a volume mesh: closed, manifold, outward, no self-intersections; reports shells, genus, volume and feature edges, or the located defects"#,
     run: surface_check,
 };
 
@@ -181,6 +181,7 @@ fn surface_check(s: &mut Session, p: &Value) -> Result<Value> {
     let defaults = SurfaceOptions::default();
     let options = SurfaceOptions {
         weld_tolerance: optional_number(p, "weld", defaults.weld_tolerance)?,
+        weld_distance: optional_number(p, "weld_distance", 2.0 * modelcraft_geometry::LINEAR_TOLERANCE)?,
         feature_angle: optional_number(p, "feature_angle", defaults.feature_angle)?,
     };
     let mesh = surface_input(s, p)?;
@@ -346,6 +347,8 @@ mod tests {
             json!({}),
             json!({"surface": 0, "weld": 1.0}),
             json!({"surface": 0, "weld": "fine"}),
+            json!({"surface": 0, "weld_distance": -1}),
+            json!({"surface": 0, "weld_distance": 1}),
             json!({"surface": 0, "feature_angle": 0}),
             json!({"body": "Body1"}),
             json!({"body": "Nope", "tolerance": 0.05}),

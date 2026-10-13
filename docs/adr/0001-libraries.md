@@ -9,10 +9,12 @@ algorithms, where the obvious open-source implementations are GPL-family, must c
 
 ## Decision
 
-**Geometry: SolidCraft's kernel**, as a git dependency pinned by rev
-(`solidcraft-kernel`, `solidcraft-geom`; MIT OR Apache-2.0, built on the Apache-2.0 truck
-crates). ModelCraft uses its B-rep bodies and its tessellation; it does not read CAD exchange
-files itself. Only `modelcraft-geometry` may depend on it.
+**Geometry: SolidCraft**, as git dependencies pinned by rev (`solidcraft-kernel`,
+`solidcraft-geom`, `solidcraft-doc`, `solidcraft-io`; MIT OR Apache-2.0, built on the Apache-2.0
+truck crates). SolidCraft is the primary geometry source: ModelCraft opens SolidCraft designs and
+meshes from SolidCraft's tessellation, and reads face-tagged meshes SolidCraft exports. Other CAD
+exchange files (STEP, which SolidCraft's kernel already reads) can be added as secondary inputs
+through the same crate. Only `modelcraft-geometry` may depend on SolidCraft.
 
 **Meshing: our own**, implemented from published papers (`docs/meshing/literature.md`).
 Robust predicates follow Shewchuk's adaptive-precision arithmetic (the paper; his reference

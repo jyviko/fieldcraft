@@ -1880,6 +1880,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "modelcraft-decks",
+ "modelcraft-explicit",
  "modelcraft-geometry",
  "modelcraft-io",
  "modelcraft-mesh",

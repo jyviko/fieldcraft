@@ -15,6 +15,7 @@ modelcraft-mesh = { workspace = true }
 modelcraft-io = { workspace = true }
 modelcraft-decks = { workspace = true }
 modelcraft-solver = { workspace = true }
+modelcraft-explicit = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

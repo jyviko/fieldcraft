@@ -21,10 +21,10 @@ pub mod sample;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use modelcraft_explicit::ExplicitResult;
 use modelcraft_geometry::Design;
 use modelcraft_geometry::tagged_mesh::TaggedSurface;
 use modelcraft_model::Model;
-use modelcraft_solver::StepResult;
 use serde_json::Value;
 
 use crate::history::History;
@@ -47,12 +47,38 @@ pub enum EngineError {
     Deck(#[from] modelcraft_decks::Error),
     #[error(transparent)]
     Solver(#[from] modelcraft_solver::Error),
+    #[error(transparent)]
+    Explicit(#[from] modelcraft_explicit::Error),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+/// The result of a solved step, from the implicit or the explicit solver.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepResult {
+    Implicit(modelcraft_solver::StepResult),
+    Explicit(ExplicitResult),
+}
+
+impl StepResult {
+    pub fn step(&self) -> &str {
+        match self {
+            StepResult::Implicit(r) => r.step(),
+            StepResult::Explicit(r) => &r.step,
+        }
+    }
+
+    /// The node labels the result's per-node values follow, sorted.
+    pub fn nodes(&self) -> &[u32] {
+        match self {
+            StepResult::Implicit(r) => r.nodes(),
+            StepResult::Explicit(r) => &r.nodes,
+        }
+    }
+}
 
 /// What a command works on, which decides how [`Session::execute`] records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

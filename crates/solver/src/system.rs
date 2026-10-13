@@ -141,6 +141,7 @@ impl Mesh {
         for p in &points {
             layout.point(p.label, DofSet::STRUCTURAL);
         }
+        let layout = layout.build();
         let dofs = layout.dofs();
         if dofs > max_dofs {
             return Err(Error::Limit(format!("the model has {dofs} degrees of freedom; the limit is {max_dofs}")));
@@ -149,7 +150,7 @@ impl Mesh {
             .iter()
             .map(|l| model.node(*l).map(|n| n.xyz).ok_or_else(|| Error::Invalid(format!("node {l} is missing"))))
             .collect::<Result<_>>()?;
-        let mut mesh = Mesh { labels, xyz, elements: Vec::with_capacity(elements.len()), points, layout: layout.build() };
+        let mut mesh = Mesh { labels, xyz, elements: Vec::with_capacity(elements.len()), points, layout };
         for (label, kind, nodes, formulation, d, density) in elements {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();

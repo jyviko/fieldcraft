@@ -47,9 +47,11 @@
 //! lines along x); elements embedded in a higher dimension (shells, beams, trusses in 3D) pass
 //! coordinates in their own local frame.
 
+use std::sync::LazyLock;
+
 use modelcraft_model::ElementKind;
 
-use crate::dense::inverse3;
+use crate::dense::positive_inverse;
 use crate::jet::Jet;
 use crate::shape::{self, HEX_CORNERS, MAX_NODES, Shape, TET_CORNERS, WEDGE_CORNERS};
 use crate::{Error, Result};
@@ -257,7 +259,12 @@ impl Basis {
     }
 
     /// The natural coordinates of the nodes, in node order.
-    pub fn nodes(self) -> Vec<[f64; 3]> {
+    pub fn nodes(self) -> &'static [[f64; 3]] {
+        static TABLES: LazyLock<Vec<Vec<[f64; 3]>>> = LazyLock::new(|| Basis::ALL.iter().map(|b| b.build_nodes()).collect());
+        TABLES.get(self as usize).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    fn build_nodes(self) -> Vec<[f64; 3]> {
         match self {
             Basis::Line2 => LINE_ENDS.to_vec(),
             Basis::Line3 => with_midsides(&LINE_ENDS, ElementKind::Rod2.edges()),
@@ -440,32 +447,27 @@ impl Basis {
         Error::Degenerate(format!("a {} element is inverted or degenerate (its Jacobian is not positive)", self.name()))
     }
 
-    fn inverse(self, j: &[[f64; 3]; 3]) -> Result<([[f64; 3]; 3], f64)> {
-        let (inv, det) = inverse3(j).ok_or_else(|| self.degenerate())?;
-        let norms: f64 = j.iter().map(|r| (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt()).product();
-        if !(det > 1e-12 * norms) {
-            return Err(self.degenerate());
-        }
-        Ok((inv, det))
-    }
-
     /// Physical gradients at a point from its natural shape (`eval`) and the node coordinates.
     pub fn gradients(self, s: &Shape, xyz: &[[f64; 3]]) -> Result<Gradients> {
-        let (inv, det) = self.inverse(&self.jacobian(s, xyz)?)?;
+        self.mapped(s, xyz).map(|m| m.0)
+    }
+
+    /// The physical gradients and J⁻¹.
+    fn mapped(self, s: &Shape, xyz: &[[f64; 3]]) -> Result<(Gradients, [[f64; 3]; 3])> {
+        let (inv, det) = positive_inverse(&self.jacobian(s, xyz)?).ok_or_else(|| self.degenerate())?;
         let mut dx = [[0.0; 3]; MAX_NODES];
         for (g, d) in dx.iter_mut().zip(s.derivatives()) {
             for b in 0..3 {
                 g[b] = inv[b][0] * d[0] + inv[b][1] * d[1] + inv[b][2] * d[2];
             }
         }
-        Ok(Gradients { count: s.count, dx, det })
+        Ok((Gradients { count: s.count, dx, det }, inv))
     }
 
     /// Physical gradients and Hessians from a point's `eval2` and the node coordinates, with the
     /// second-derivative term of the map.
     pub fn hessians(self, s: &Shape2, xyz: &[[f64; 3]]) -> Result<Hessians> {
-        let gradients = self.gradients(&s.shape, xyz)?;
-        let (inv, _) = self.inverse(&self.jacobian(&s.shape, xyz)?)?;
+        let (gradients, inv) = self.mapped(&s.shape, xyz)?;
         let dim = self.dim();
         // X_b″ = Σᵢ x_{i,b} H_ξ(Nᵢ) for the mapped coordinates b < dim.
         let mut map2 = [[[0.0; 3]; 3]; 3];
@@ -565,7 +567,8 @@ mod tests {
 
     #[test]
     fn kronecker_delta_and_partition_of_unity() {
-        for b in Basis::ALL {
+        for (i, b) in Basis::ALL.into_iter().enumerate() {
+            assert_eq!(b as usize, i, "Basis::ALL is in declaration order (node tables)");
             let nodes = b.nodes();
             assert_eq!(nodes.len(), b.count(), "{}", b.name());
             for (i, p) in nodes.iter().enumerate() {

@@ -105,6 +105,14 @@ pub fn inverse3(m: &[[f64; 3]; 3]) -> Option<([[f64; 3]; 3], f64)> {
     Some((inv, det))
 }
 
+/// The inverse and determinant of a Jacobian that maps a reference element onto a valid one:
+/// `None` unless det J is positive beyond round-off relative to the product of its row norms.
+pub fn positive_inverse(j: &[[f64; 3]; 3]) -> Option<([[f64; 3]; 3], f64)> {
+    let (inv, det) = inverse3(j)?;
+    let norms: f64 = j.iter().map(|r| (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt()).product();
+    (det > 1e-12 * norms).then_some((inv, det))
+}
+
 pub fn det3(m: &[[f64; 3]; 3]) -> f64 {
     m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])

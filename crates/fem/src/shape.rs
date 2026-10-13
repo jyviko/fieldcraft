@@ -157,33 +157,12 @@ pub fn hex20(xi: [f64; 3]) -> Shape {
 mod tests {
     use super::*;
 
-    fn nodes_of(kind: &str) -> Vec<[f64; 3]> {
-        match kind {
-            "tet4" => TET_CORNERS.to_vec(),
-            "tet10" => {
-                let mut v = TET_CORNERS.to_vec();
-                for e in ElementKind::Tet10.edges() {
-                    v.push([0, 1, 2].map(|k| (TET_CORNERS[e[0]][k] + TET_CORNERS[e[1]][k]) / 2.0));
-                }
-                v
-            }
-            "hex8" => HEX_CORNERS.to_vec(),
-            "wedge6" => WEDGE_CORNERS.to_vec(),
-            _ => {
-                let mut v = HEX_CORNERS.to_vec();
-                for e in ElementKind::Hex20.edges() {
-                    v.push([0, 1, 2].map(|k| (HEX_CORNERS[e[0]][k] + HEX_CORNERS[e[1]][k]) / 2.0));
-                }
-                v
-            }
-        }
-    }
-
     #[test]
     fn kronecker_delta_partition_of_unity_and_derivatives() {
         let kinds: [(&str, fn([f64; 3]) -> Shape); 5] = [("tet4", tet4), ("tet10", tet10), ("wedge6", wedge6), ("hex8", hex8), ("hex20", hex20)];
         for (name, f) in kinds {
-            let nodes = nodes_of(name);
+            let nodes = crate::Basis::ALL.iter().find(|b| b.name() == name).map(|b| b.nodes()).unwrap_or_default();
+            assert!(!nodes.is_empty());
             for (i, p) in nodes.iter().enumerate() {
                 let s = f(*p);
                 for (j, v) in s.values().iter().enumerate() {
@@ -197,7 +176,7 @@ mod tests {
             assert!((s.values().iter().sum::<f64>() - 1.0).abs() < 1e-14);
             for k in 0..3 {
                 assert!(s.derivatives().iter().map(|d| d[k]).sum::<f64>().abs() < 1e-13);
-                let x: f64 = s.values().iter().zip(&nodes).map(|(n, x)| n * x[k]).sum();
+                let x: f64 = s.values().iter().zip(nodes).map(|(n, x)| n * x[k]).sum();
                 assert!((x - p[k]).abs() < 1e-14, "{name}");
                 let h = 1e-6;
                 let (mut a, mut b) = (p, p);

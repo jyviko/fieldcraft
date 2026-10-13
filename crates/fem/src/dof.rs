@@ -259,11 +259,6 @@ impl LayoutBuilder {
         self
     }
 
-    /// The number of unknowns the layout will have.
-    pub fn dofs(&self) -> usize {
-        self.nodes.values().chain(self.points.iter().map(|p| &p.1)).map(|k| k.len()).sum()
-    }
-
     pub fn build(&self) -> DofLayout {
         let mut slots = Vec::with_capacity(self.nodes.len() + self.points.len());
         let mut total = 0;
@@ -423,7 +418,6 @@ mod tests {
         b.element(&[3, 5, 7], ElementDofs::SOLID);
         b.node(5, DofSet::TEMPERATURE);
         b.point(100, DofSet::STRUCTURAL);
-        assert_eq!(b.dofs(), 6 + 4 + 6 + 6);
         let l = b.build();
         assert_eq!((l.nodes(), l.slots(), l.dofs(), l.node_dofs()), (3, 4, 22, 16));
         assert_eq!(l.node(3), Some(0));

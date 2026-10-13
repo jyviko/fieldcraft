@@ -7,7 +7,7 @@
 //! label, then the element's own node order), so assembled values are the same bit for bit on
 //! every run and platform.
 
-use modelcraft_fem::{DofKind, DofLayout, DofSet};
+use modelcraft_fem::{DofLayout, DofSet};
 
 use crate::{Error, Result};
 
@@ -123,31 +123,32 @@ impl NodeGraph {
     }
 }
 
-/// Node b's block in node a's rows of a matrix built by [`NodeGraph::zero_matrix`] (the rows of
-/// a node share one pattern): one search per node pair.
-struct Block<'l> {
-    layout: &'l DofLayout,
-    a: usize,
-    b: usize,
-    /// The block's first column within each of a's rows.
-    at: usize,
+/// Most kinds a node carries ([`modelcraft_fem::DofKind::ALL`]).
+const MAX_KINDS: usize = 8;
+
+/// Where node b's block lies in node a's rows of a matrix built by [`NodeGraph::zero_matrix`],
+/// for the degrees of freedom `kinds` of both: the value index of (row r, column c) is
+/// `rows[r] + cols[c]`. The rows of a node share one pattern, so this is one search per node
+/// pair.
+struct Block {
+    rows: [usize; MAX_KINDS],
+    cols: [usize; MAX_KINDS],
 }
 
-impl<'l> Block<'l> {
-    fn new(k: &Csr, layout: &'l DofLayout, a: usize, b: usize) -> Result<Block<'l>> {
-        let row = layout.range(a).start;
-        let (start, end) = (k.ptr.get(row).copied().unwrap_or(0), k.ptr.get(row + 1).copied().unwrap_or(0));
-        let cols = k.idx.get(start..end).ok_or_else(|| Error::Internal("pattern".into()))?;
-        let at = cols.binary_search(&layout.range(b).start).map_err(|_| Error::Internal("entry outside the pattern".into()))?;
-        Ok(Block { layout, a, b, at })
-    }
-
-    /// The value index of (a's `row`, b's `col`).
-    fn entry(&self, k: &Csr, row: DofKind, col: DofKind) -> Result<usize> {
-        let missing = || Error::Internal(format!("an element degree of freedom ({row:?}, {col:?}) its nodes do not have"));
-        let r = self.layout.dof(self.a, row).ok_or_else(missing)?;
-        let c = self.layout.kinds(self.b).position(col).ok_or_else(missing)?;
-        Ok(k.ptr.get(r).copied().unwrap_or(0) + self.at + c)
+impl Block {
+    fn new(k: &Csr, layout: &DofLayout, a: usize, b: usize, kinds: DofSet) -> Result<Block> {
+        let first = layout.range(a).start;
+        let (start, end) = (k.ptr.get(first).copied().unwrap_or(0), k.ptr.get(first + 1).copied().unwrap_or(0));
+        let pattern = k.idx.get(start..end).ok_or_else(|| Error::Internal("pattern".into()))?;
+        let at = pattern.binary_search(&layout.range(b).start).map_err(|_| Error::Internal("entry outside the pattern".into()))?;
+        let missing = |kind| Error::Internal(format!("an element degree of freedom ({kind:?}) its node does not have"));
+        let mut block = Block { rows: [0; MAX_KINDS], cols: [0; MAX_KINDS] };
+        for ((row, col), kind) in block.rows.iter_mut().zip(&mut block.cols).zip(kinds.iter()) {
+            let r = layout.dof(a, kind).ok_or_else(|| missing(kind))?;
+            *row = k.ptr.get(r).copied().unwrap_or(0) + at;
+            *col = layout.kinds(b).position(kind).ok_or_else(|| missing(kind))?;
+        }
+        Ok(block)
     }
 }
 
@@ -168,11 +169,10 @@ pub fn add_block(k: &mut Csr, layout: &DofLayout, nodes: &[usize], kinds: DofSet
     }
     for (i, &a) in nodes.iter().enumerate() {
         for (j, &b) in nodes.iter().enumerate() {
-            let block = Block::new(k, layout, a, b)?;
-            for (r, row) in kinds.iter().enumerate() {
-                for (c, col) in kinds.iter().enumerate() {
-                    let at = block.entry(k, row, col)?;
-                    add_at(k, at, data.get((per * i + r) * width + per * j + c).copied().unwrap_or(0.0));
+            let block = Block::new(k, layout, a, b, kinds)?;
+            for r in 0..per {
+                for c in 0..per {
+                    add_at(k, block.rows[r] + block.cols[c], data.get((per * i + r) * width + per * j + c).copied().unwrap_or(0.0));
                 }
             }
         }
@@ -180,32 +180,31 @@ pub fn add_block(k: &mut Csr, layout: &DofLayout, nodes: &[usize], kinds: DofSet
     Ok(())
 }
 
-/// Add an n × n element matrix to each translation's block (consistent mass).
-pub fn add_scalar(k: &mut Csr, layout: &DofLayout, nodes: &[usize], data: &[f64]) -> Result<()> {
+/// Add an n × n element matrix to the block of each of `kinds` (a solid's consistent mass on its
+/// translations).
+pub fn add_scalar(k: &mut Csr, layout: &DofLayout, nodes: &[usize], kinds: DofSet, data: &[f64]) -> Result<()> {
     let n = nodes.len();
     if data.len() != n * n {
         return Err(Error::Internal("element matrix size".into()));
     }
     for (i, &a) in nodes.iter().enumerate() {
         for (j, &b) in nodes.iter().enumerate() {
-            let block = Block::new(k, layout, a, b)?;
+            let block = Block::new(k, layout, a, b, kinds)?;
             let v = data.get(i * n + j).copied().unwrap_or(0.0);
-            for kind in DofSet::TRANSLATIONS.iter() {
-                let at = block.entry(k, kind, kind)?;
-                add_at(k, at, v);
+            for c in 0..kinds.len() {
+                add_at(k, block.rows[c] + block.cols[c], v);
             }
         }
     }
     Ok(())
 }
 
-/// Add a per-node diagonal to each translation (lumped mass).
-pub fn add_diagonal(k: &mut Csr, layout: &DofLayout, nodes: &[usize], diagonal: &[f64]) -> Result<()> {
+/// Add a per-node diagonal to each of `kinds` (a solid's lumped mass on its translations).
+pub fn add_diagonal(k: &mut Csr, layout: &DofLayout, nodes: &[usize], kinds: DofSet, diagonal: &[f64]) -> Result<()> {
     for (&a, v) in nodes.iter().zip(diagonal) {
-        let block = Block::new(k, layout, a, a)?;
-        for kind in DofSet::TRANSLATIONS.iter() {
-            let at = block.entry(k, kind, kind)?;
-            add_at(k, at, *v);
+        let block = Block::new(k, layout, a, a, kinds)?;
+        for c in 0..kinds.len() {
+            add_at(k, block.rows[c] + block.cols[c], *v);
         }
     }
     Ok(())
@@ -241,8 +240,8 @@ mod tests {
         assert!(add_block(&mut k, &layout, &[0, 2], DofSet::TRANSLATIONS, &e).is_err(), "nodes 0 and 2 share no element");
         // Scalar (per component) and diagonal additions land on each component.
         let mut m = g.zero_matrix(&layout);
-        add_scalar(&mut m, &layout, &[0, 1], &[2.0, 1.0, 1.0, 2.0]).unwrap();
-        add_diagonal(&mut m, &layout, &[2], &[5.0]).unwrap();
+        add_scalar(&mut m, &layout, &[0, 1], DofSet::TRANSLATIONS, &[2.0, 1.0, 1.0, 2.0]).unwrap();
+        add_diagonal(&mut m, &layout, &[2], DofSet::TRANSLATIONS, &[5.0]).unwrap();
         assert_eq!(m.diagonal(), vec![2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 5.0, 5.0, 5.0]);
         assert_eq!(m.row(0).1, &[2.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
         let s = k.add_scaled(-1.0, &k).unwrap();

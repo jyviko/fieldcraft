@@ -140,8 +140,8 @@ fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<As
         if let (Some(mm), Some(kind)) = (m.as_mut(), mass) {
             let rho = e.density.ok_or_else(|| Error::Invalid(format!("element {} has no density", e.label)))?;
             match kind {
-                MassKind::Consistent => add_scalar(mm, layout, &e.nodes, &solid.mass(rho).map_err(at)?.data)?,
-                MassKind::Lumped => add_diagonal(mm, layout, &e.nodes, &solid.lumped_mass(rho).map_err(at)?)?,
+                MassKind::Consistent => add_scalar(mm, layout, &e.nodes, solid.dofs().node, &solid.mass(rho).map_err(at)?.data)?,
+                MassKind::Lumped => add_diagonal(mm, layout, &e.nodes, solid.dofs().node, &solid.lumped_mass(rho).map_err(at)?)?,
             }
         }
     }
@@ -381,9 +381,10 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let pairs = lanczos(&op, shift, wanted, BLOCK, max_basis, TOLERANCE)?;
     // Participation: Γ_d = φᵀ M r_d with r_d the unit translation along d on the free equations
     // (mesh and reference point translations).
+    let directions: Vec<Option<usize>> = red.eq_dof.iter().map(|dof| mesh.kind(*dof).and_then(DofKind::direction)).collect();
     let mr: Vec<Vec<f64>> = (0..3)
         .map(|d| {
-            let r: Vec<f64> = red.eq_dof.iter().map(|dof| if mesh.kind(*dof).and_then(DofKind::direction) == Some(d) { 1.0 } else { 0.0 }).collect();
+            let r: Vec<f64> = directions.iter().map(|dir| if *dir == Some(d) { 1.0 } else { 0.0 }).collect();
             let mut y = vec![0.0; neq];
             mff.mul(&r, &mut y);
             y

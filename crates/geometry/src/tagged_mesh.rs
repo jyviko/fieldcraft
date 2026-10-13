@@ -1,8 +1,8 @@
 //! Face-tagged meshes in 3MF packages (`docs/formats/tagged-mesh.md`).
 //!
 //! A 3MF package (3MF Core Specification 1.3) whose triangles may carry `ft:face`, the B-rep face
-//! they lie on, in ModelCraft's face-tag namespace. SolidCraft writes it; any other 3MF reads as
-//! untagged surfaces (one face each). Reading is plain parsing from bytes (no kernel call, no file
+//! they lie on. SolidCraft defines the format and writes it (its `docs/formats/3mf-face-tags.md`);
+//! any other 3MF reads as untagged surfaces (one face each). Reading is plain parsing from bytes (no kernel call, no file
 //! system), so it also runs in the browser.
 //!
 //! Packages are untrusted: the file, its parts, zip entries, XML nesting, vertex and triangle
@@ -36,8 +36,8 @@ use modelcraft_model::MAX_COORD;
 const MIN_RELATIVE_DET: f64 = 1e-12;
 
 const CORE_NS: &[u8] = b"http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
-/// The face-tag namespace, version 1.
-pub const FACE_TAGS_NS: &str = "https://github.com/jyviko/modelcraft/formats/face-tags/2026/10";
+/// SolidCraft's face-tag namespace, version 1.
+pub const FACE_TAGS_NS: &str = "https://github.com/bherbruck/solidcraft/formats/3mf-face-tags/2026/10";
 
 /// One build item of a package: a named surface whose `tri_face` holds the face tags.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -416,7 +416,7 @@ mod tests {
 
     use super::*;
 
-    const HEAD: &str = r#"<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:ft="https://github.com/jyviko/modelcraft/formats/face-tags/2026/10"><resources>"#;
+    const HEAD: &str = r#"<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:ft="https://github.com/bherbruck/solidcraft/formats/3mf-face-tags/2026/10"><resources>"#;
 
     /// A writer built from docs/formats/tagged-mesh.md alone (SolidCraft's is a separate
     /// program): shortest round-trip coordinates, one object and build item per surface.

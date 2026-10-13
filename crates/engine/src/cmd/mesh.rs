@@ -310,8 +310,7 @@ mod tests {
         use modelcraft_geometry::{SurfaceMesh, open_design};
 
         let plate = Plate::default();
-        let mut s = Session::default();
-        s.design = Some(Arc::new(open_design(&plate_design(&plate).unwrap()).unwrap()));
+        let mut s = Session { design: Some(Arc::new(open_design(&plate_design(&plate).unwrap()).unwrap())), ..Session::default() };
         let r = s.execute("mesh.surface.check", &json!({"body": "Body1", "tolerance": 0.05})).unwrap();
         assert_eq!(r["valid"], true, "{r}");
         assert_eq!(r["faces"], 8);

@@ -1,0 +1,67 @@
+*HEADING
+ModelCraft model, units mm-t-s-N-MPa
+** Written by ModelCraft. The numbers are in one consistent unit system and are not converted.
+** Nodes
+*NODE
+1, 0.0, 0.0, 0.0
+2, 100.0, 0.0, 0.0
+3, 200.0, 0.0, 0.0
+4, 0.0, 100.0, 0.0
+5, 100.0, 100.0, 0.0
+6, 200.0, 100.0, 0.0
+7, 0.0, 200.0, 0.0
+8, 100.0, 200.0, 0.0
+9, 200.0, 200.0, 0.0
+** Elements
+*ELEMENT, TYPE=S4R
+1, 1, 2, 5, 4
+2, 2, 3, 6, 5
+3, 4, 5, 8, 7
+4, 5, 6, 9, 8
+** Sets
+*NSET, NSET=edge
+1, 4, 7
+*NSET, NSET=mid
+2, 5, 8
+*NSET, NSET=skin
+1, 2, 3, 4, 5, 6, 7, 8, 9
+*ELSET, ELSET=skin
+1, 2, 3, 4
+*NSET, NSET=top
+1, 2, 3, 4, 5, 6, 7, 8, 9
+*SURFACE, TYPE=ELEMENT, NAME=top
+1, SPOS
+2, SPOS
+3, SPOS
+4, SPOS
+** Materials
+*MATERIAL, NAME=Aluminium
+*ELASTIC, TYPE=ISOTROPIC
+70000.0, 0.33
+*DENSITY
+2.7E-9
+** Sections
+** section plate
+*SHELL SECTION, ELSET=skin, MATERIAL=Aluminium, OFFSET=0.5
+2.0, 5
+** Initial state: boundary conditions active in every step
+*BOUNDARY
+** boundary condition clamp
+edge, ENCASTRE
+** boundary condition sym
+mid, XSYMM
+** Step Load
+*STEP, NAME=Load, NLGEOM=NO
+*STATIC
+1.0, 1.0
+** boundary conditions: as in the base state
+*DSLOAD, OP=NEW
+top, P, 0.01
+*DLOAD, OP=NEW
+skin, GRAV, 9810.0, 0.0, 0.0, -1.0
+*OUTPUT, FIELD, OP=NEW
+*NODE OUTPUT
+U, RF
+*ELEMENT OUTPUT
+S, E
+*END STEP

@@ -1,0 +1,75 @@
+*HEADING
+ModelCraft model, units mm-t-s-N-MPa
+** Written by ModelCraft. The numbers are in one consistent unit system and are not converted.
+** Nodes
+*NODE
+1, 0.0, 0.0, 0.0
+2, 0.0, 0.0, 10.0
+3, 0.0, 10.0, 0.0
+4, 0.0, 10.0, 10.0
+5, 25.0, 0.0, 0.0
+6, 25.0, 0.0, 10.0
+7, 25.0, 10.0, 0.0
+8, 25.0, 10.0, 10.0
+9, 50.0, 0.0, 0.0
+10, 50.0, 0.0, 10.0
+11, 50.0, 10.0, 0.0
+12, 50.0, 10.0, 10.0
+13, 75.0, 0.0, 0.0
+14, 75.0, 0.0, 10.0
+15, 75.0, 10.0, 0.0
+16, 75.0, 10.0, 10.0
+17, 100.0, 0.0, 0.0
+18, 100.0, 0.0, 10.0
+19, 100.0, 10.0, 0.0
+20, 100.0, 10.0, 10.0
+** Elements
+*ELEMENT, TYPE=C3D8I
+1, 1, 5, 7, 3, 2, 6, 8, 4
+2, 5, 9, 11, 7, 6, 10, 12, 8
+3, 9, 13, 15, 11, 10, 14, 16, 12
+4, 13, 17, 19, 15, 14, 18, 20, 16
+** Sets
+*NSET, NSET=all
+1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16
+17, 18, 19, 20
+*ELSET, ELSET=all
+1, 2, 3, 4
+*NSET, NSET=root
+1, 2, 3, 4
+*SURFACE, TYPE=ELEMENT, NAME=root
+1, S6
+*NSET, NSET=tip
+17, 18, 19, 20
+*SURFACE, TYPE=ELEMENT, NAME=tip
+4, S4
+** Materials
+*MATERIAL, NAME=Steel
+*ELASTIC, TYPE=ISOTROPIC
+210000.0, 0.3
+*DENSITY
+7.85E-9
+** Sections
+** section beam
+*SOLID SECTION, ELSET=all, MATERIAL=Steel
+,
+** Initial state: boundary conditions active in every step
+*BOUNDARY
+** boundary condition clamp
+root, ENCASTRE
+** Step Bend
+*STEP, NAME=Bend, NLGEOM=NO
+*STATIC
+1.0, 1.0
+** boundary conditions: as in the base state
+*CLOAD, OP=NEW
+17, 3, -25.0
+18, 3, -25.0
+19, 3, -25.0
+20, 3, -25.0
+*OUTPUT, FIELD, OP=NEW
+*NODE OUTPUT
+U, RF
+*ELEMENT OUTPUT
+S, E
+*END STEP

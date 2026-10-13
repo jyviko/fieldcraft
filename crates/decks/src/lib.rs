@@ -5,6 +5,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod abaqus;
+
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
     /// The model has something this format cannot express (named, with the format).

@@ -366,3 +366,26 @@ fn errors_name_the_problem() {
     assert!(solve_frequency(&g.model, Some("Step"), &FrequencyOptions::default(), &Limits::default()).is_err(), "a static step");
     assert!(solve_static(&g.model, Some("Step"), &Limits::default()).is_ok());
 }
+
+/// Plasticity is explicit dynamics' business: the linear static solver gives the elastic answer
+/// for a plastic material, bit for bit, and says it left the plasticity out.
+#[test]
+fn plastic_materials_solve_elastically_with_a_warning() {
+    let solve = |plastic: bool| {
+        let mut g = grid([4, 1, 1], ElementKind::Hex20, |q| [4.0 * q[0], q[1], q[2]]);
+        g.define(iso(1000.0, 0.3), None, full(), Procedure::Static {});
+        if plastic {
+            let mut m = g.model.material("Mat").unwrap().clone();
+            m.plastic = Some(modelcraft_model::Plastic::Bilinear { yield_stress: 1.0, hardening_modulus: 0.0, hardening: Default::default() });
+            g.model.replace_material("Mat", m).unwrap();
+        }
+        g.fixed("root", |q| near(q[0], 0.0));
+        g.face_set("tip", |q| near(q[0], 1.0));
+        g.load("p", Load::Pressure { set: "tip".into(), magnitude: -10.0 });
+        static_solve(&g)
+    };
+    let (a, b) = (solve(false), solve(true));
+    assert_eq!(a.displacement, b.displacement);
+    assert!(b.warnings.iter().any(|w| w.contains("material `Mat`") && w.contains("elastic constants only")), "{:?}", b.warnings);
+    assert!(!a.warnings.iter().any(|w| w.contains("elastic constants only")));
+}

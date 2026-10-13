@@ -43,6 +43,8 @@ pub static ALL: &[CommandSpec] = &[
     define::MATERIAL_CREATE,
     define::MATERIAL_EDIT,
     define::MATERIAL_DELETE,
+    define::MATERIAL_PLASTICITY,
+    define::MATERIAL_DAMAGE,
     define::SECTION_CREATE,
     define::SECTION_EDIT,
     define::SECTION_DELETE,

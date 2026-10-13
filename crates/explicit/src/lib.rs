@@ -17,10 +17,12 @@
 //! - **Integration** ([`integrate`]): the time loop, kinematic constraints, energy accounting
 //!   with a balance check, history samples and field frames ([`result`]).
 //!
-//! This first version is geometrically linear (small displacements and strains; the elements'
-//! gradients are those of the undeformed mesh) with linear elastic materials, which is what the
-//! analytic verification problems need. Large deformation kinematics with objective stress rates
-//! and inelastic materials come next (docs/solvers/literature.md, Part F, X2).
+//! With nonlinear geometry (the default) the elements are updated Lagrangian and the material
+//! state is integrated in rate form with an objective stress rate (Jaumann by Hughes–Winget,
+//! Green–Naghdi by Flanagan–Taylor); materials are hypoelastic or J2 plastic (bilinear,
+//! tabulated, Johnson–Cook) with Johnson–Cook damage and element erosion ([`elements`];
+//! docs/solvers/literature.md, Parts F and J). Without it the gradients stay those of the
+//! undeformed mesh (small displacements).
 //!
 //! Everything is sequential, with elements in label order and no parallel reductions, so the
 //! same model gives the same numbers bit for bit; sizes, increments and output are capped by
@@ -35,8 +37,9 @@ pub mod integrate;
 pub mod result;
 pub mod system;
 
+pub use elements::Failure;
 pub use integrate::solve_explicit;
-pub use result::{ControllingElement, Energies, ExplicitResult, Frame, History};
+pub use result::{ControllingElement, Energies, ErodedElement, ExplicitResult, Frame, History};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {

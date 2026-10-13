@@ -468,3 +468,17 @@ fn body(f: &mut [f64], mesh: &Mesh, e: &Elem, b: [f64; 3]) -> Result<()> {
     }
     Ok(())
 }
+
+/// The linear solver uses the elastic constants alone: a warning for each material in use whose
+/// plasticity, damage or erosion it leaves out.
+pub fn inelastic_warnings(model: &Model) -> Vec<String> {
+    let used: BTreeSet<&str> = model.sections().values().map(|s| s.material.as_str()).collect();
+    used.into_iter()
+        .filter(|name| model.material(name).is_some_and(|m| m.plastic.is_some() || m.damage.is_some() || m.erosion.is_some()))
+        .map(|name| {
+            format!(
+                "material `{name}`: the linear solver uses its elastic constants only (its plasticity, damage and erosion act in explicit dynamics)"
+            )
+        })
+        .collect()
+}

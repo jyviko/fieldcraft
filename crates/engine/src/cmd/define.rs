@@ -80,7 +80,7 @@ definition_commands!(
     Material,
     "material",
     "Material",
-    r#"{"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3} | {"type": "engineering_constants", "young": [E1, E2, E3], "poisson": [ν12, ν13, ν23], "shear": [G12, G13, G23]}, "density": 7.85e-9, "fluid": {"type": "newtonian", "viscosity": 1.0e-9} (dynamic viscosity; a fluid needs a density)} — in the model's unit system (model.units), never converted"#,
+    r#"{"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3} | {"type": "engineering_constants", "young": [E1, E2, E3], "poisson": [ν12, ν13, ν23], "shear": [G12, G13, G23]}, "density": 7.85e-9, "fluid": {"type": "newtonian", "viscosity": 1.0e-9} (dynamic viscosity; a fluid needs a density), "plastic": {…} (see model.material.plasticity), "damage": {…}, "erosion": {…} (see model.material.damage)} — in the model's unit system (model.units), never converted"#,
     add_material,
     replace_material,
     remove_material,
@@ -88,6 +88,51 @@ definition_commands!(
     MATERIAL_EDIT,
     MATERIAL_DELETE
 );
+
+/// A copy of material `name` with `change` applied, put back through the model's validation.
+fn change_material(s: &mut Session, p: &Value, change: impl FnOnce(&mut Material, &Value) -> Result<()>) -> Result<Value> {
+    let n = name(p)?;
+    let mut m = s.model.material(n).cloned().ok_or_else(|| EngineError::Params(format!("material `{n}` does not exist")))?;
+    change(&mut m, p)?;
+    s.model.replace_material(n, m)?;
+    Ok(json!({"name": n}))
+}
+
+pub const MATERIAL_PLASTICITY: CommandSpec = CommandSpec {
+    id: "model.material.plasticity",
+    label: "Plasticity",
+    params: r#"{"name": "Steel", "plastic": {"type": "bilinear", "yield_stress": 250, "hardening_modulus": 1000, "hardening": "isotropic|kinematic"} | {"type": "table", "points": [{"strain": 0, "stress": 250}, {"strain": 0.1, "stress": 300}]} | {"type": "johnson_cook", "a": 792, "b": 510, "n": 0.26, "c": 0.014, "m": 1.03, "reference_strain_rate": 1, "room_temperature": 294, "melt_temperature": 1793, "specific_heat": 4.77e8, "taylor_quinney": 0.9} | null} — von Mises plasticity of an isotropic material (null removes it); explicit dynamics uses it, the linear solver the elastic constants alone"#,
+    kind: CommandKind::Model,
+    run: |s: &mut Session, p: &Value| {
+        change_material(s, p, |m, p| {
+            m.plastic = req(p, "plastic")?;
+            Ok(())
+        })
+    },
+};
+
+pub const MATERIAL_DAMAGE: CommandSpec = CommandSpec {
+    id: "model.material.damage",
+    label: "Damage",
+    params: r#"{"name": "Steel", "damage": {"type": "johnson_cook", "d1": 0.05, "d2": 3.44, "d3": -2.12, "d4": 0.002, "d5": 0.61} | null, "erosion": {"plastic_strain": 1.0} | null} — damage to failure and element erosion of a plastic material (each key optional; null removes it); a failed element is eroded in explicit dynamics"#,
+    kind: CommandKind::Model,
+    run: |s: &mut Session, p: &Value| {
+        change_material(s, p, |m, p| {
+            // Absent leaves a field as it is; null removes it.
+            let (damage, erosion) = (opt(p, "damage")?, opt(p, "erosion")?);
+            if damage.is_none() && erosion.is_none() {
+                return Err(EngineError::Params("give `damage`, `erosion` or both".into()));
+            }
+            if let Some(d) = damage {
+                m.damage = d;
+            }
+            if let Some(e) = erosion {
+                m.erosion = e;
+            }
+            Ok(())
+        })
+    },
+};
 
 definition_commands!(
     "section",
@@ -422,5 +467,36 @@ pub(crate) mod tests {
         s.execute("mesh.tag.clear", &json!({})).unwrap();
         let e = s.execute("model.set.resolve", &json!({"name": "root"})).unwrap_err().to_string();
         assert!(e.contains("face left of body Bar is not on the mesh (the mesh carries no geometry tags)"), "{e}");
+    }
+
+    #[test]
+    fn plasticity_and_damage_edit_a_material() {
+        let mut s = Session::default();
+        defined_bar(&mut s);
+        let bilinear = json!({"type": "bilinear", "yield_stress": 250, "hardening_modulus": 1000});
+        s.execute("model.material.plasticity", &json!({"name": "Steel", "plastic": bilinear})).unwrap();
+        assert!(s.model.material("Steel").unwrap().plastic.is_some());
+        // Damage needs plasticity; D4 and D5 need Johnson–Cook: refused, the model unchanged.
+        let before = s.model.clone();
+        let jc_damage = json!({"type": "johnson_cook", "d1": 0.05, "d2": 3.44, "d3": -2.12, "d4": 0.002, "d5": 0.61});
+        assert!(s.execute("model.material.damage", &json!({"name": "Steel", "damage": jc_damage})).is_err());
+        assert_eq!(s.model, before);
+        s.execute(
+            "model.material.damage",
+            &json!({"name": "Steel", "damage": {"type": "johnson_cook", "d1": 0.3, "d2": 0, "d3": 0}, "erosion": {"plastic_strain": 0.5}}),
+        )
+        .unwrap();
+        let m = s.model.material("Steel").unwrap();
+        assert!(m.damage.is_some() && m.erosion.is_some());
+        s.execute("model.material.damage", &json!({"name": "Steel", "erosion": null})).unwrap();
+        assert!(s.model.material("Steel").unwrap().erosion.is_none() && s.model.material("Steel").unwrap().damage.is_some());
+        // Removing plasticity under damage is refused.
+        assert!(s.execute("model.material.plasticity", &json!({"name": "Steel", "plastic": null})).is_err());
+        for bad in
+            [json!({"name": "Steel"}), json!({"name": "Nope", "plastic": null}), json!({"name": "Steel", "plastic": {"type": "table", "points": []}})]
+        {
+            assert!(s.execute("model.material.plasticity", &bad).is_err(), "{bad}");
+        }
+        assert!(s.execute("model.material.damage", &json!({"name": "Steel"})).is_err());
     }
 }

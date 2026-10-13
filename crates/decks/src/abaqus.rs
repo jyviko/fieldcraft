@@ -82,6 +82,21 @@
 //! materials outside solid sections (shell and beam material axes need orientations), and
 //! distributing couplings that leave a translation free.
 //!
+//! # Materials
+//!
+//! Isotropic elasticity is `*ELASTIC, TYPE=ISOTROPIC`, engineering constants
+//! `TYPE=ENGINEERING CONSTANTS`, density `*DENSITY`. Von Mises plasticity is `*PLASTIC`: a
+//! hardening table as its (yield stress, plastic strain) lines; bilinear isotropic hardening as
+//! two lines, the second at a plastic strain of [`BILINEAR_REACH`] (Abaqus holds the last yield
+//! stress beyond a table's end, so the line is written out further than any analysis strains);
+//! bilinear kinematic hardening as `HARDENING=KINEMATIC` with its yield stress at plastic strains
+//! 0 and 1 (Abaqus's linear kinematic model extends that line); Johnson–Cook as
+//! `HARDENING=JOHNSON COOK` (A, B, n, m, melting and transition temperature, the transition
+//! temperature being the model's room temperature) with `*RATE DEPENDENT, TYPE=JOHNSON COOK`
+//! (C, ε̇₀) when C is not zero, and adiabatic heating as `*SPECIFIC HEAT` and
+//! `*INELASTIC HEAT FRACTION`. Damage and erosion are failure models of Abaqus/Explicit, and this
+//! writer writes Abaqus/Standard procedures: they are reported, not written.
+//!
 //! Node order: the model stores elements in Abaqus order, so connectivity passes through; the
 //! model's face numbers are Abaqus's S1–S6 for solids, and SPOS/SNEG for shell faces 1/2.
 
@@ -89,13 +104,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use modelcraft_model::{
-    BeamProfile, BoundaryCondition, CouplingKind, Elastic, Element, ElementKind, Integration, Load, Model, OutputVariable, Procedure, Resolved,
-    Section, SectionKind, Step, Symmetry, Target,
+    BeamProfile, BoundaryCondition, CouplingKind, Elastic, Element, ElementKind, Hardening, Integration, Load, Model, OutputVariable, Plastic,
+    Procedure, Resolved, Section, SectionKind, Step, Symmetry, Target,
 };
 
 use crate::{Error, Result, unsupported};
 
 const FORMAT: &str = "Abaqus";
+
+/// The plastic strain a bilinear isotropic hardening line is written out to (1000%).
+pub const BILINEAR_REACH: f64 = 10.0;
 
 /// Longest line Abaqus reads.
 pub const MAX_LINE: usize = 256;
@@ -250,6 +268,13 @@ fn check_expressible(model: &Model) -> Result<()> {
     }
     for step in model.steps().iter().filter(|s| matches!(s.procedure, Procedure::ExplicitDynamic(_))) {
         bad.insert(format!("step `{}`: explicit dynamic steps (not written to Abaqus input yet)", step.name));
+    }
+    for (name, m) in model.materials() {
+        if m.damage.is_some() || m.erosion.is_some() {
+            bad.insert(format!(
+                "material `{name}`: damage and erosion (Abaqus/Explicit failure models; this writer writes Abaqus/Standard procedures so far)"
+            ));
+        }
     }
     for (name, c) in model.couplings() {
         if c.kind == CouplingKind::Distributing && !(1..=3).all(|d| c.dofs.contains(d)) {
@@ -620,6 +645,50 @@ impl Deck {
             if let Some(rho) = m.density {
                 self.line("*DENSITY");
                 self.numbers_line("", &[rho])?;
+            }
+            if let Some(p) = &m.plastic {
+                self.plastic(p)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Von Mises plasticity (see the module documentation for the mapping).
+    fn plastic(&mut self, p: &Plastic) -> Result<()> {
+        match p {
+            Plastic::Bilinear { yield_stress, hardening_modulus, hardening } => {
+                if *hardening_modulus == 0.0 {
+                    self.line("*PLASTIC");
+                    self.numbers_line("", &[*yield_stress, 0.0])?;
+                } else if *hardening == Hardening::Kinematic {
+                    self.line("*PLASTIC, HARDENING=KINEMATIC");
+                    self.numbers_line("", &[*yield_stress, 0.0])?;
+                    self.numbers_line("", &[yield_stress + hardening_modulus, 1.0])?;
+                } else {
+                    self.line("*PLASTIC");
+                    self.numbers_line("", &[*yield_stress, 0.0])?;
+                    self.numbers_line("", &[yield_stress + hardening_modulus * BILINEAR_REACH, BILINEAR_REACH])?;
+                }
+            }
+            Plastic::Table { points } => {
+                self.line("*PLASTIC");
+                for point in points {
+                    self.numbers_line("", &[point.stress, point.strain])?;
+                }
+            }
+            Plastic::JohnsonCook { a, b, n, c, m, reference_strain_rate, room_temperature, melt_temperature, specific_heat, taylor_quinney } => {
+                self.line("*PLASTIC, HARDENING=JOHNSON COOK");
+                self.numbers_line("", &[*a, *b, *n, *m, *melt_temperature, *room_temperature])?;
+                if *c != 0.0 {
+                    self.line("*RATE DEPENDENT, TYPE=JOHNSON COOK");
+                    self.numbers_line("", &[*c, *reference_strain_rate])?;
+                }
+                if let Some(cp) = specific_heat {
+                    self.line("*SPECIFIC HEAT");
+                    self.numbers_line("", &[*cp])?;
+                    self.line("*INELASTIC HEAT FRACTION");
+                    self.numbers_line("", &[*taylor_quinney])?;
+                }
             }
         }
         Ok(())

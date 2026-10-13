@@ -22,8 +22,8 @@
 
 use modelcraft_model::{ExplicitDynamic, Model, OutputVariable, Procedure, Step};
 
-use crate::elements::{Workspace, internal_forces};
-use crate::result::{ControllingElement, Energies, ExplicitResult, Frame, History};
+use crate::elements::{Motion, State, Workspace, internal_forces};
+use crate::result::{ControllingElement, Energies, ErodedElement, ExplicitResult, Frame, History};
 use crate::system::{NODE_DOFS, System};
 use crate::{Error, Limits, Result};
 
@@ -178,13 +178,17 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     let total_mass: f64 = sys.mass.iter().sum();
     let mut ws = Workspace::new(&sys);
     let mut previous = Workspace::new(&sys);
+    let mut state = State::new(&sys);
+    let mut eroded: Vec<ErodedElement> = Vec::new();
     let mut u = vec![0.0; n];
     let mut du = vec![0.0; n];
     let v0 = sys.initial_velocity.clone();
     let initial_kinetic = 0.5 * v0.iter().zip(&mass).map(|(v, m)| m * v * v).sum::<f64>();
+    let inelastic = sys.materials.iter().any(|m| m.j2.as_ref().is_some_and(|j| j.flow.is_some()));
 
     // Start: forces at rest with the initial velocities, then the half increment.
-    let crit = internal_forces(&sys, &u, &v0, &bulk, &mut ws);
+    let start = Motion { u: &u, du: &du, v: &v0, dt: 0.0, time: 0.0, bulk: &bulk };
+    let crit = internal_forces(&sys, &start, &mut state, &mut ws)?;
     let mut dt_half = (scale * crit).min(end);
     let initial_increment = dt_half;
     let mut v_half = vec![0.0; n];
@@ -222,17 +226,28 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         history.displacement.push(pick(u));
         history.velocity.push(pick(v));
     };
-    let frame = |t: f64, u: &[f64], v: &[f64], ws: &Workspace| Frame {
-        time: t,
-        displacement: if output.displacement { per_node(u) } else { Vec::new() },
-        velocity: if output.displacement { per_node(v) } else { Vec::new() },
-        stress: if output.stress { ws.stress.clone() } else { Vec::new() },
-        strain: if output.strain { ws.strain.clone() } else { Vec::new() },
+    let frame = |t: f64, u: &[f64], v: &[f64], state: &State| {
+        let each = |on: bool, f: &dyn Fn(&crate::elements::ElementState) -> f64| -> Vec<f64> {
+            if on { state.elements.iter().map(f).collect() } else { Vec::new() }
+        };
+        let inelastic = output.stress && inelastic;
+        Frame {
+            time: t,
+            displacement: if output.displacement { per_node(u) } else { Vec::new() },
+            velocity: if output.displacement { per_node(v) } else { Vec::new() },
+            stress: if output.stress { state.elements.iter().map(|e| e.point.stress).collect() } else { Vec::new() },
+            strain: if output.strain { state.elements.iter().map(|e| e.strain).collect() } else { Vec::new() },
+            plastic_strain: each(inelastic, &|e| e.point.plastic_strain),
+            damage: each(inelastic, &|e| e.point.damage),
+            temperature: each(inelastic, &|e| e.point.temperature),
+            failed: if output.stress { state.elements.iter().map(|e| e.failed.is_some()).collect() } else { Vec::new() },
+        }
     };
+    let plastic = |state: &State| state.elements.iter().map(|e| e.plastic_work).sum::<f64>();
     let mut histories = Schedule { interval: settings.history_interval(), next: settings.history_interval() };
     let mut frames_due = Schedule { interval: settings.output_interval(), next: settings.output_interval() };
     sample(&mut history, 0.0, dt_half, energy, &u, &v0, &reaction);
-    out_frames.push(frame(0.0, &u, &v0, &ws));
+    out_frames.push(frame(0.0, &u, &v0, &state));
 
     let mut t = 0.0;
     let mut increments = 0u64;
@@ -253,7 +268,14 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         t += dt_half;
         increments += 1;
         std::mem::swap(&mut ws, &mut previous);
-        let crit = internal_forces(&sys, &u, &v_half, &bulk, &mut ws);
+        let motion = Motion { u: &u, du: &du, v: &v_half, dt: dt_half, time: t, bulk: &bulk };
+        let crit = internal_forces(&sys, &motion, &mut state, &mut ws)?;
+        for &(index, failure) in &state.eroded {
+            let element = state.elements.get(index);
+            let internal = element.map_or(0.0, |e| e.energy);
+            energy.eroded += internal;
+            eroded.push(ErodedElement { label: sys.elements.get(index).copied().unwrap_or(0), time: t, failure, internal_energy: internal });
+        }
         let remaining = end - t;
         let last = remaining <= 1e-12 * end;
         let dt_next = if last { 0.0 } else { (scale * crit).min(remaining) };
@@ -269,8 +291,8 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         let [mut internal, mut hourglass, mut viscous, mut external, mut constraint, mut kinetic] = [0.0; 6];
         let forces = ws.stress_force.iter().zip(&ws.hourglass_force).zip(&ws.viscous_force);
         let before = previous.stress_force.iter().zip(&previous.hourglass_force).zip(&previous.viscous_force);
-        let state = v_now.iter_mut().zip(&v_half).zip(&v_new).zip(&mass).zip(&du).zip(&sys.external).zip(&reaction);
-        for ((((((((now, vh), vn), m), dx), e), r), ((s, h), q)), ((s0, h0), q0)) in state.zip(forces).zip(before) {
+        let per_dof = v_now.iter_mut().zip(&v_half).zip(&v_new).zip(&mass).zip(&du).zip(&sys.external).zip(&reaction);
+        for ((((((((now, vh), vn), m), dx), e), r), ((s, h), q)), ((s0, h0), q0)) in per_dof.zip(forces).zip(before) {
             *now = vh + weight * (vn - vh);
             internal += dx * (s0 + s);
             hourglass += dx * (h0 + h);
@@ -287,14 +309,16 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         energy.kinetic = 0.5 * kinetic;
         peak_internal = peak_internal.max(energy.internal.abs());
         energy.balance = energy.kinetic + energy.internal + energy.hourglass + energy.viscous - energy.external - energy.constraint - initial_kinetic;
-        if !(energy.balance.is_finite() && crit.is_finite()) {
+        // Every element eroded leaves an infinite critical increment: the nodes fly freely.
+        if !(energy.balance.is_finite() && !crit.is_nan()) {
             return Err(Error::Unstable(format!("the solution is not finite at time {t:.6e} (increment {increments})")));
         }
         if histories.due(t) || last {
+            energy.plastic = plastic(&state);
             sample(&mut history, t, dt_half, energy, &u, &v_now, &reaction);
         }
         if frames_due.due(t) || last {
-            out_frames.push(frame(t, &u, &v_now, &ws));
+            out_frames.push(frame(t, &u, &v_now, &state));
         }
         std::mem::swap(&mut v_half, &mut v_new);
         dt_half = dt_next;
@@ -307,8 +331,16 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
             sample(&mut history, t, dt_half, energy, &u, &v_now, &reaction);
         }
         if out_frames.last().map(|f| f.time) != Some(t) {
-            out_frames.push(frame(t, &u, &v_now, &ws));
+            out_frames.push(frame(t, &u, &v_now, &state));
         }
+    }
+    energy.plastic = plastic(&state);
+    if !eroded.is_empty() {
+        warnings.push(format!(
+            "{} elements eroded (their material failed); their internal energy at erosion was {:.4e}",
+            eroded.len(),
+            energy.eroded
+        ));
     }
 
     let error = energy.relative_error(initial_kinetic);
@@ -338,6 +370,7 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         total_mass,
         energy,
         initial_kinetic,
+        eroded,
         warnings,
     })
 }

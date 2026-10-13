@@ -44,7 +44,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Mesh | Mesh editing (move, merge, split, collapse, remesh region), imported orphan meshes | M6 | yes | started (node/element add/remove) |
 | Model | Sets and surfaces bound to geometry names | M3 | yes | done |
 | Model | Materials: elastic (isotropic, orthotropic), density, unit-system check | M3 | | done |
-| Model | Materials: plasticity, hyperelasticity, damage, thermal | M8 | | planned |
+| Model | Materials: plasticity, hyperelasticity, damage, thermal | M8 | | started (von Mises plasticity: bilinear, table, Johnson–Cook; Johnson–Cook damage, erosion; written to Abaqus `*PLASTIC`, Nastran `MATS1`, LS-DYNA plastic materials where expressible) |
 | Model | Sections: solid, shell, beam profiles; assignment by set | M3 | | done |
 | Model | 2D sections: plane stress, plane strain, axisymmetric (XY plane, Y the axis); element edges in sets; centrifugal load | M4 | | done |
 | Model | Composite layups, material orientations, continuum shells | M8 | yes | planned |
@@ -62,7 +62,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Decks | LS-DYNA keyword writer (implicit; explicit in M8) | M3 | | done (implicit static and eigenvalue; beam sections planned) |
 | Decks | Readers keeping unknown keywords | M9 | | planned |
 | Solve | Own linear static and modal solver, verified against analytic solutions | M4 | yes | started (solid elements: tet4, tet10, wedge6, hex8, hex20; 2D plane stress, plane strain and axisymmetric tri3, tri6, quad4 (full, incompatible modes), quad8 (full, reduced); reference points, kinematic and distributing couplings, moments; centrifugal loads) |
-| Solve | Own explicit dynamics solver (central differences, one-point hex8 with hourglass control, nodal-pressure tet4, bulk viscosity, energy balance), verified against analytic wave and impact solutions | M10 | yes | started (X1 core: small-strain elastic, rigid walls; large deformation, plasticity and contact planned) |
+| Solve | Own explicit dynamics solver (central differences, one-point hex8 with hourglass control, nodal-pressure tet4, bulk viscosity, energy balance), verified against analytic wave and impact solutions | M10 | yes | started (X1 core and X2: large deformation, objective rates, J2 and Johnson–Cook plasticity, damage, erosion; contact planned) |
 | Results | Deformed shape, contours, mode shapes, probes, reaction sums | M4 | | started (results in the session, `solve.probe`, reaction sums; display planned) |
 | Results | XY and path plots, cuts, display groups, free-body forces, animation | M9 | | planned |
 | Results | Readers for public result formats (Nastran OP2, LS-DYNA d3plot, Abaqus `.fil`) | M9 | | planned |

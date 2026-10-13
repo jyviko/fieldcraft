@@ -1061,3 +1061,33 @@ lattice Boltzmann package's code was opened.
   5(2):317–328, 1959, with the higher terms of A. S. Sangani, A. Acrivos, Int. J. Multiphase Flow
   8(4):343–360, 1982 (DOIs not checked). Benchmark (published numerical reference values, tagged,
   not part of the analytic gate): Schäfer & Turek 1996, 2D-1 (C8).
+
+## Part J: Large deformation and inelastic materials (X2), as implemented
+
+The papers and books `modelcraft_fem::{rotation, plasticity}` and `modelcraft-explicit`'s X2
+update are written from (cited again in the module docs):
+
+- Updated Lagrangian one-point elements, strain increments on the midpoint configuration:
+  T. Belytschko, W. K. Liu, B. Moran, K. Elkhodary, *Nonlinear Finite Elements for Continua and
+  Structures*, 2nd ed., Wiley 2014 (ch. 4–6); the closed-form integrated gradients b = ∂V/∂x of
+  the hexahedron, D. P. Flanagan, T. Belytschko, IJNME 17(5):679–706, 1981 (we tabulate the 24
+  coefficients of the volume form and check them against their exact integration).
+- Jaumann rate, incrementally objective: T. J. R. Hughes, J. Winget, IJNME 15(12):1862–1867,
+  1980 (Cayley rotation of the midpoint spin increment; a rigid rotation of any size is exact).
+- Green–Naghdi rate: D. P. Flanagan, L. M. Taylor, CMAME 62(3):305–320, 1987 (incremental polar
+  rotation from V̇ = L V − V Ω; we solve [(tr V) I − V] x = axial(D V − V D) and integrate V with
+  the midpoint rule).
+- Radial return for J2 with isotropic and linear kinematic (Prager) hardening: J. C. Simo, T. J.
+  R. Hughes, *Computational Inelasticity*, Springer 1998, §3.3; R. D. Krieg, D. B. Krieg, J.
+  Press. Vessel Technol. 99(4):510–515, 1977.
+- Johnson–Cook flow stress (rate clamped at ε̇* ≥ 1, T* in [0, 1], adiabatic heating with a
+  Taylor–Quinney fraction) and fracture strain D1–D5 with D = Σ Δε_p/ε_f: G. R. Johnson, W. H.
+  Cook 1983 (7th Int. Symp. Ballistics) and Eng. Fract. Mech. 21(1):31–48, 1985. The fracture
+  strain is floored at 10⁻⁶ (our choice).
+- Erosion: G. R. Johnson, R. A. Stryk, Int. J. Impact Eng. 5:411–421, 1987; T. Belytschko, J. I.
+  Lin, ibid. 5:111–127, 1987 (delete, keep nodal mass and momentum, report the energy).
+- Verification: J. K. Dienes, Acta Mech. 32:217–232, 1979 (simple shear, closed forms for both
+  rates); G. I. Taylor, Proc. R. Soc. A 194:289–299, 1948 (the yield stress from the final length
+  and undeformed length of a flat-ended projectile). Published experimental Taylor-bar lengths
+  (Wilkins & Guinan 1973) are not used: that needs the owner's sign-off for a tagged benchmark
+  suite.

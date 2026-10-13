@@ -8,7 +8,13 @@
 //!   `*SECTION_BEAM` (rods as trusses) and the element formulation mapped from the section's
 //!   ([`elements`]); `*HOURGLASS` where a reduced-integration formulation needs it;
 //! - `*MAT_ELASTIC` for isotropic and `*MAT_ORTHOTROPIC_ELASTIC` (global material axes) for
-//!   orthotropic materials;
+//!   orthotropic materials; von Mises plasticity as `*MAT_PLASTIC_KINEMATIC` (bilinear: the
+//!   tangent modulus E·H/(E + H) of the uniaxial curve, β = 1 isotropic or 0 kinematic, the
+//!   erosion plastic strain as its failure strain) or `*MAT_PIECEWISE_LINEAR_PLASTICITY` (a
+//!   hardening table as a `*DEFINE_CURVE` of yield stress against plastic strain, the erosion
+//!   plastic strain as its failure strain). Johnson–Cook plasticity and damage are reported: their
+//!   LS-DYNA material needs an equation of state and belongs to explicit analyses, which this
+//!   writer does not write yet;
 //! - `*ELEMENT_SOLID` (tetrahedra and wedges as degenerate hexahedra, 10-node tetrahedra),
 //!   `*ELEMENT_SOLID_H20`, `*ELEMENT_SHELL` and `*ELEMENT_BEAM`;
 //! - `*SET_NODE_LIST` and `*SET_SEGMENT` for the sets boundary conditions, loads and couplings
@@ -47,8 +53,8 @@ mod elements;
 use std::collections::{BTreeMap, BTreeSet};
 
 use modelcraft_model::{
-    BoundaryCondition, CouplingKind, Diagnostic, Dofs, Elastic, Element, ElementKind, Load, Model, OutputVariable, Procedure, Resolved, Section,
-    SectionKind, Step, Target,
+    BoundaryCondition, CouplingKind, Diagnostic, Dofs, Elastic, Element, ElementKind, Hardening, Load, Material, Model, OutputVariable, Plastic,
+    Procedure, Resolved, Section, SectionKind, Step, Target,
 };
 
 use crate::{Error, Result};
@@ -117,6 +123,8 @@ struct Plan<'a> {
     uniform: BTreeMap<&'a str, ([f64; 3], u32)>,
     /// The part set gravity acts on, when it acts on a set.
     gravity_parts: Option<Vec<u32>>,
+    /// Material name → the curve id of its hardening table.
+    curves: BTreeMap<&'a str, u32>,
 }
 
 /// Write the model as an LS-DYNA keyword deck.
@@ -304,13 +312,25 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
             None
         }
     };
-    for m in materials.keys() {
-        if model.material(m).is_some_and(|m| m.density.is_none()) {
-            refused.insert(format!("material `{m}` has no density, and LS-DYNA requires a mass density on every material"));
+    let mut curves = BTreeMap::new();
+    for name in materials.keys() {
+        let Some(m) = model.material(name) else { continue };
+        if m.density.is_none() {
+            refused.insert(format!("material `{name}` has no density, and LS-DYNA requires a mass density on every material"));
+        }
+        if matches!(m.plastic, Some(Plastic::JohnsonCook { .. })) || m.damage.is_some() {
+            refused.insert(format!(
+                "material `{name}`: Johnson–Cook plasticity and damage (LS-DYNA's Johnson–Cook material needs an equation of state and is for explicit analyses, which this writer does not write yet)"
+            ));
+        }
+        if matches!(m.plastic, Some(Plastic::Table { .. })) {
+            // Curve ids after the steps' load ramps (ids 1 to the number of steps).
+            let lcid = u32::try_from(model.steps().len() + 1 + curves.len()).map_err(|_| Error::Limit("too many curves".into()))?;
+            curves.insert(*name, lcid);
         }
     }
     crate::unsupported(FORMAT, refused)?;
-    Ok(Plan { parts, materials, hourglasses, sets, node_sets, segment_sets, uniform, gravity_parts })
+    Ok(Plan { parts, materials, hourglasses, sets, node_sets, segment_sets, uniform, gravity_parts, curves })
 }
 
 /// A 1-based id from a 0-based index.
@@ -374,6 +394,7 @@ fn materials(d: &mut Deck, model: &Model, plan: &Plan) -> Result<()> {
         let m = model.material(name).ok_or_else(|| broken(format!("material `{name}`")))?;
         let rho = m.density.unwrap_or_default();
         match m.elastic {
+            Some(Elastic::Isotropic { young, poisson }) if m.plastic.is_some() => plastic_material(d, name, mid, rho, young, poisson, m, plan)?,
             Some(Elastic::Isotropic { young, poisson }) => {
                 d.line("*MAT_ELASTIC_TITLE");
                 d.line(name);
@@ -397,6 +418,56 @@ fn materials(d: &mut Deck, model: &Model, plan: &Plan) -> Result<()> {
             }
             None => return Err(broken(format!("material `{name}` has no elastic constants"))),
         }
+    }
+    Ok(())
+}
+
+/// The plastic materials: `*MAT_PLASTIC_KINEMATIC` or `*MAT_PIECEWISE_LINEAR_PLASTICITY` with its
+/// curve, in place of `*MAT_ELASTIC`.
+fn plastic_material(d: &mut Deck, name: &str, mid: u32, rho: f64, young: f64, poisson: f64, m: &Material, plan: &Plan) -> Result<()> {
+    let fail = m.erosion.map_or(Field::Blank, |e| Field::from(e.plastic_strain));
+    match &m.plastic {
+        Some(Plastic::Bilinear { yield_stress, hardening_modulus, hardening }) => {
+            d.line("*MAT_PLASTIC_KINEMATIC_TITLE");
+            d.line(name);
+            d.header(&["mid", "ro", "e", "pr", "sigy", "etan", "beta"]);
+            let tangent = young * hardening_modulus / (young + hardening_modulus);
+            let beta = if *hardening == Hardening::Kinematic { 0.0 } else { 1.0 };
+            d.card([
+                Field::from(mid),
+                Field::from(rho),
+                Field::from(young),
+                Field::from(poisson),
+                Field::from(*yield_stress),
+                Field::from(tangent),
+                Field::from(beta),
+            ]);
+            d.header(&["src", "srp", "fs"]);
+            d.card([Field::Blank, Field::Blank, fail]);
+        }
+        Some(Plastic::Table { points }) => {
+            let lcid = plan.curves.get(name).copied().ok_or_else(|| broken(format!("material `{name}` has no curve")))?;
+            d.line("*MAT_PIECEWISE_LINEAR_PLASTICITY_TITLE");
+            d.line(name);
+            d.header(&["mid", "ro", "e", "pr", "sigy", "etan", "fail"]);
+            let first = m.plastic.as_ref().map_or(0.0, Plastic::initial_yield);
+            d.card([Field::from(mid), Field::from(rho), Field::from(young), Field::from(poisson), Field::from(first), Field::Blank, fail]);
+            d.header(&["c", "p", "lcss"]);
+            d.card([Field::Blank, Field::Blank, Field::from(lcid)]);
+            d.header(&["eps1"]);
+            d.card([Field::Blank]);
+            d.header(&["es1"]);
+            d.card([Field::Blank]);
+            d.line("*DEFINE_CURVE_TITLE");
+            d.line(&format!("{name} hardening"));
+            d.header(&["lcid"]);
+            d.card([Field::from(lcid)]);
+            d.header(&["a1", "o1"]);
+            for p in points {
+                d.card([Field::from(p.strain), Field::from(p.stress)]);
+            }
+        }
+        _ => return Err(broken(format!("material `{name}`: a plasticity LS-DYNA cannot take"))),
     }
     Ok(())
 }

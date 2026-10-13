@@ -32,8 +32,11 @@ fn plate(kind: SectionKind, element: ElementKind, formulation: Formulation) -> M
     m.add_set("all", Set { elements: all, ..Set::default() }).unwrap();
     m.add_set("left", Set { nodes: vec![1, 4], ..Set::default() }).unwrap();
     m.add_set("right", Set { edges: vec![right], ..Set::default() }).unwrap();
-    m.add_material("Steel", Material { elastic: Some(Elastic::Isotropic { young: 210_000.0, poisson: 0.3 }), density: Some(7.85e-9), fluid: None })
-        .unwrap();
+    m.add_material(
+        "Steel",
+        Material { elastic: Some(Elastic::Isotropic { young: 210_000.0, poisson: 0.3 }), density: Some(7.85e-9), ..Material::default() },
+    )
+    .unwrap();
     m.add_section("plate", Section { set: "all".into(), material: "Steel".into(), kind, formulation }).unwrap();
     m.add_boundary_condition("hold", BoundaryCondition::Fixed { target: Target::Set("left".into()) }).unwrap();
     m.add_load("press", Load::Pressure { set: "right".into(), magnitude: 5.0 }).unwrap();

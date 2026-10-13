@@ -3,6 +3,8 @@
 
 use serde::Serialize;
 
+use crate::elements::Failure;
+
 /// The energy account at one time (Belytschko, Liu, Moran, Elkhodary 2014, §6.2.3). The works of
 /// the internal and external forces are integrated with the trapezoidal rule over each
 /// increment's displacement; the constraints' with their impulses (see [`crate::integrate`]).
@@ -20,6 +22,10 @@ pub struct Energies {
     pub external: f64,
     /// Work of the boundary conditions and rigid walls on the model.
     pub constraint: f64,
+    /// Plastic work: the part of `internal` dissipated by plastic flow.
+    pub plastic: f64,
+    /// Internal energy of the eroded elements when they eroded (part of `internal`).
+    pub eroded: f64,
     /// kinetic + internal + hourglass + viscous − external − constraint − the initial kinetic
     /// energy: zero when energy is conserved.
     pub balance: f64,
@@ -45,7 +51,26 @@ pub struct Frame {
     /// Per element in [`ExplicitResult::elements`] order (one-point elements: one value each):
     /// xx, yy, zz, xy, xz, yz, engineering shear strains.
     pub stress: Vec<[f64; 6]>,
+    /// The accumulated strain increments (small strain: the strain; large deformation: the
+    /// integral of the rate of deformation, rotated with the material).
     pub strain: Vec<[f64; 6]>,
+    /// Per element, with stress output in a model with plasticity: equivalent plastic strain,
+    /// damage and temperature.
+    pub plastic_strain: Vec<f64>,
+    pub damage: Vec<f64>,
+    pub temperature: Vec<f64>,
+    /// Per element, with stress output: whether it has eroded.
+    pub failed: Vec<bool>,
+}
+
+/// An element removed from the analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct ErodedElement {
+    pub label: u32,
+    pub time: f64,
+    pub failure: Failure,
+    /// Its internal energy (stress work) when it eroded.
+    pub internal_energy: f64,
 }
 
 /// Quantities sampled through the run.
@@ -95,5 +120,7 @@ pub struct ExplicitResult {
     /// The energy account at the end.
     pub energy: Energies,
     pub initial_kinetic: f64,
+    /// Elements eroded during the run, in the order they eroded.
+    pub eroded: Vec<ErodedElement>,
     pub warnings: Vec<String>,
 }

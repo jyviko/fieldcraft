@@ -54,11 +54,11 @@ pub use constraints::{Coupling, CouplingKind, ReferencePoint};
 pub use fluids::{BoxFace, BoxFaces, FaceCondition, FluidBoundary, FluidDomain, Profile, SurfaceBoundary, SurfaceCondition};
 pub use geometry::{Classification, Entity, GeometryRef};
 pub use loads::{Distribution, Load, centrifugal_acceleration};
-pub use materials::{Elastic, Fluid, Material};
+pub use materials::{Damage, Elastic, Erosion, Fluid, Hardening, HardeningPoint, Material, Plastic};
 pub use mesh::{Element, ElementEdge, ElementFace, ElementKind, Node, check_coordinates};
 pub use sections::{BeamProfile, Extent, Formulation, Integration, Section, SectionKind};
 pub use sets::Set;
-pub use steps::{BulkViscosity, ExplicitDynamic, Hourglass, HourglassKind, InitialVelocity, OutputVariable, Procedure, RigidWall, Step};
+pub use steps::{BulkViscosity, ExplicitDynamic, Hourglass, HourglassKind, InitialVelocity, OutputVariable, Procedure, RigidWall, Step, StressRate};
 pub use units::UnitSystem;
 
 /// The largest node or element label. Nastran's GRID and element ids stop at 99 999 999 (eight

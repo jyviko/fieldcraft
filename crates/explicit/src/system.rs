@@ -3,11 +3,14 @@
 //! vector of an explicit dynamic step.
 
 use modelcraft_fem::material::Elasticity;
+use modelcraft_fem::plasticity::J2;
 use modelcraft_fem::uniform::{Hex8, Tet4, modulus_bound};
 use modelcraft_fem::{DofKind, DofLayout, DofSet, face};
-use modelcraft_model::{Elastic, ElementKind, ExplicitDynamic, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step, Target};
+use modelcraft_model::{
+    Elastic, ElementKind, ExplicitDynamic, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step, StressRate, Target,
+};
 
-use crate::elements::add_at;
+use crate::elements::{HexScales, add_at, frequency_bound, hex_scales};
 use crate::{Error, Result};
 
 /// Degrees of freedom per node: the three translations, node-major (see [`System`]).
@@ -27,8 +30,13 @@ pub struct Material {
     pub wave_speed: f64,
     /// The bound of [`modelcraft_fem::uniform::modulus_bound`].
     pub modulus: f64,
-    /// Bulk modulus, for the nodal-pressure tetrahedron (isotropic materials).
-    pub bulk: Option<f64>,
+    /// The largest normal stiffness M (λ + 2μ when isotropic): c = √(M/ρ).
+    pub stiffest: f64,
+    /// The hypoelastic(–plastic) update of an isotropic material; `None` for orthotropic
+    /// elasticity, updated with [`Material::elasticity`].
+    pub j2: Option<J2>,
+    /// The equivalent plastic strain at which elements erode.
+    pub erosion: Option<f64>,
 }
 
 /// A one-point hexahedron.
@@ -41,9 +49,10 @@ pub struct Hex {
     pub material: usize,
     pub kinematics: Hex8,
     pub gamma: [[f64; 8]; 4],
-    /// The hourglass coefficient: a damping (viscous) or a stiffness (stiffness form), see
-    /// [`crate::elements`].
-    pub hourglass: f64,
+    /// Row-sum lumped masses of the element's nodes.
+    pub mass: [f64; 8],
+    /// Size, hourglass coefficient and frequency bound of the undeformed element.
+    pub rest: HexScales,
     /// The element's stable length: its critical increment without bulk viscosity is
     /// `length / wave_speed`.
     pub length: f64,
@@ -57,6 +66,9 @@ pub struct Tet {
     pub nodes: [usize; 4],
     pub material: usize,
     pub kinematics: Tet4,
+    pub mass: [f64; 4],
+    /// The frequency bound ω² of the undeformed element.
+    pub omega2: f64,
     pub length: f64,
 }
 
@@ -97,6 +109,10 @@ pub struct System {
     /// Nodes whose histories are recorded.
     pub history_nodes: Vec<usize>,
     pub hourglass: HourglassKind,
+    pub hourglass_coefficient: f64,
+    /// Large deformation (updated Lagrangian) or the undeformed mesh's gradients.
+    pub nonlinear: bool,
+    pub stress_rate: StressRate,
     pub warnings: Vec<String>,
 }
 
@@ -114,8 +130,11 @@ fn material(model: &Model, name: &str) -> Result<Material> {
         .ok_or_else(|| invalid(format!("material `{name}` has no density, and explicit dynamics needs one")))?;
     let d = modelcraft_fem::elasticity(elastic).map_err(|e| invalid(format!("material `{name}`: {e}")))?;
     let stiffest = d[0][0].max(d[1][1]).max(d[2][2]);
-    let bulk = match *elastic {
-        Elastic::Isotropic { young, poisson } => Some(young / (3.0 * (1.0 - 2.0 * poisson))),
+    // The model keeps plasticity, damage and erosion to isotropic materials.
+    let j2 = match *elastic {
+        Elastic::Isotropic { .. } => {
+            Some(J2::from_model(elastic, m.plastic.as_ref(), m.damage.as_ref()).map_err(|e| invalid(format!("material `{name}`: {e}")))?)
+        }
         Elastic::EngineeringConstants { .. } => None,
     };
     Ok(Material {
@@ -124,20 +143,10 @@ fn material(model: &Model, name: &str) -> Result<Material> {
         density,
         wave_speed: (stiffest / density).sqrt(),
         modulus: modulus_bound(elastic, &d),
-        bulk,
+        stiffest,
+        j2,
+        erosion: m.erosion.map(|e| e.plastic_strain),
     })
-}
-
-/// The largest absolute row sum of the hourglass vectors' Gram matrix Σ_I γ_αI γ_βI / v_I (an
-/// upper bound of its largest eigenvalue, exact for parallelepipeds where the γ_α are
-/// orthogonal).
-fn hourglass_gram_bound(gamma: &[[f64; 8]; 4], nodal_volume: &[f64; 8]) -> f64 {
-    let mut worst: f64 = 0.0;
-    for a in gamma {
-        let row: f64 = gamma.iter().map(|b| a.iter().zip(b).zip(nodal_volume).map(|((x, y), v)| x * y / v).sum::<f64>().abs()).sum();
-        worst = worst.max(row);
-    }
-    worst
 }
 
 /// The section's elements of a kind the explicit solver has, or why not.
@@ -183,7 +192,7 @@ impl System {
             for &label in &set.elements {
                 let el = model.element(label).ok_or_else(|| invalid(format!("element {label} is missing")))?;
                 check_formulation(el.kind, name, &section.formulation)?;
-                if el.kind == ElementKind::Tet4 && materials.get(mi).is_some_and(|m| m.bulk.is_none()) {
+                if el.kind == ElementKind::Tet4 && materials.get(mi).is_some_and(|m| m.j2.is_none()) {
                     return Err(Error::NotSupported(format!(
                         "nodal-pressure tet4 elements of the orthotropic material `{}` (section `{name}`)",
                         section.material
@@ -222,6 +231,9 @@ impl System {
             external: vec![0.0; dofs],
             history_nodes: Vec::new(),
             hourglass: settings.hourglass.kind,
+            hourglass_coefficient: settings.hourglass.coefficient,
+            nonlinear: settings.nonlinear_geometry,
+            stress_rate: settings.stress_rate,
             warnings: resolved.warnings.iter().map(ToString::to_string).collect(),
             labels,
             xyz,
@@ -237,28 +249,20 @@ impl System {
                     let x = nodes.map(|i| sys.xyz.get(i).copied().unwrap_or_default());
                     let k = Hex8::hex8(&x).map_err(at)?;
                     let gamma = k.hourglass_vectors(&x);
-                    // h: the edge of the cube with the element's volume and gradient norm.
-                    let h = k.volume / (2.0 * k.gradient_norm()).sqrt();
-                    let kappa = settings.hourglass.coefficient;
-                    let mut omega2 = k.frequency_bound(mat.modulus, rho);
-                    let hourglass = match settings.hourglass.kind {
-                        HourglassKind::Viscous => kappa * rho * c * h * h / 16.0,
-                        HourglassKind::Stiffness => {
-                            let stiffness = kappa * rho * c * c * h / 16.0;
-                            omega2 += stiffness * hourglass_gram_bound(&gamma, &k.nodal_volume) / rho;
-                            stiffness
-                        }
-                    };
-                    sys.lump(&nodes, &k.nodal_volume, rho);
-                    sys.hexes.push(Hex { label, index, nodes, material: mi, kinematics: k, gamma, hourglass, length: 2.0 * c / omega2.sqrt() });
+                    let mass = k.nodal_volume.map(|v| rho * v);
+                    let rest = hex_scales(&k, &gamma, &mass, mat, rho, settings.hourglass);
+                    sys.lump(&nodes, &mass);
+                    let length = 2.0 * c / rest.omega2.sqrt();
+                    sys.hexes.push(Hex { label, index, nodes, material: mi, kinematics: k, gamma, mass, rest, length });
                 }
                 ElementKind::Tet4 => {
                     let nodes: [usize; 4] = idx.try_into().map_err(|_| invalid(format!("element {label} does not have 4 nodes")))?;
                     let x = nodes.map(|i| sys.xyz.get(i).copied().unwrap_or_default());
                     let k = Tet4::tet4(&x).map_err(at)?;
-                    let omega2 = k.frequency_bound(mat.modulus, rho);
-                    sys.lump(&nodes, &k.nodal_volume, rho);
-                    sys.tets.push(Tet { label, index, nodes, material: mi, kinematics: k, length: 2.0 * c / omega2.sqrt() });
+                    let mass = k.nodal_volume.map(|v| rho * v);
+                    let omega2 = frequency_bound(&k, k.gradient_norm(), mat.modulus, &mass);
+                    sys.lump(&nodes, &mass);
+                    sys.tets.push(Tet { label, index, nodes, material: mi, kinematics: k, mass, omega2, length: 2.0 * c / omega2.sqrt() });
                 }
                 other => return Err(Error::Internal(format!("{} element kind", other.name()))),
             }
@@ -270,10 +274,10 @@ impl System {
     }
 
     /// Add an element's row-sum lumped masses.
-    fn lump(&mut self, nodes: &[usize], nodal_volume: &[f64], density: f64) {
-        for (node, v) in nodes.iter().zip(nodal_volume) {
+    fn lump(&mut self, nodes: &[usize], mass: &[f64]) {
+        for (node, v) in nodes.iter().zip(mass) {
             if let Some(m) = self.mass.get_mut(*node) {
-                *m += density * v;
+                *m += v;
             }
         }
     }

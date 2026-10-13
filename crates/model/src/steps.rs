@@ -118,6 +118,30 @@ pub struct ExplicitDynamic {
     /// Artificial bulk viscosity.
     #[serde(default)]
     pub bulk_viscosity: BulkViscosity,
+    /// Large deformation (updated Lagrangian: gradients of the current configuration, stress
+    /// updated in rate form with an objective stress rate); `false` keeps the gradients of the
+    /// undeformed mesh (small displacements and rotations).
+    #[serde(default = "yes")]
+    pub nonlinear_geometry: bool,
+    /// The objective stress rate of large deformation.
+    #[serde(default)]
+    pub stress_rate: StressRate,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// The objective stress rate a large-deformation stress update uses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StressRate {
+    /// Jaumann (co-rotational with the spin), integrated with the Hughes–Winget rotation.
+    #[default]
+    Jaumann,
+    /// Green–Naghdi (co-rotational with the rotation of the polar decomposition), integrated as
+    /// Flanagan and Taylor do.
+    GreenNaghdi,
 }
 
 fn default_dt_scale() -> f64 {
@@ -142,6 +166,8 @@ impl ExplicitDynamic {
             rigid_walls: Vec::new(),
             hourglass: Hourglass::default(),
             bulk_viscosity: BulkViscosity::default(),
+            nonlinear_geometry: true,
+            stress_rate: StressRate::default(),
         }
     }
 

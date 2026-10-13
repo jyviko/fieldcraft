@@ -13,7 +13,7 @@ use modelcraft_model::*;
 // Our own models.
 
 fn steel() -> Material {
-    Material { elastic: Some(Elastic::Isotropic { young: 210000.0, poisson: 0.3 }), density: Some(7.85e-9), fluid: None }
+    Material { elastic: Some(Elastic::Isotropic { young: 210000.0, poisson: 0.3 }), density: Some(7.85e-9), ..Material::default() }
 }
 
 fn step(name: &str, procedure: Procedure, bcs: &[&str], loads: &[&str]) -> Step {
@@ -72,7 +72,7 @@ fn cantilever_modes() -> Model {
     let mut m = Model::default();
     cantilever_mesh(&mut m);
     let ortho = Elastic::EngineeringConstants { young: [140000.0, 10000.0, 10000.0], poisson: [0.3, 0.3, 0.45], shear: [5000.0, 5000.0, 3500.0] };
-    m.add_material("Ply", Material { elastic: Some(ortho), density: Some(1.6e-9), fluid: None }).unwrap();
+    m.add_material("Ply", Material { elastic: Some(ortho), density: Some(1.6e-9), ..Material::default() }).unwrap();
     let f = Formulation { incompatible_modes: true, ..Formulation::default() };
     m.add_section("beam", Section { set: "all".into(), material: "Ply".into(), kind: SectionKind::Solid {}, formulation: f }).unwrap();
     m.add_reference_point("RP", ReferencePoint { xyz: [5.0, 0.5, 0.5], label: 0 }).unwrap();
@@ -155,8 +155,11 @@ fn solids() -> Model {
     let h: Vec<u32> = h.iter().map(|p| node(&mut m, *p)).collect();
     m.set_element(4, ElementKind::Hex20, h).unwrap();
 
-    m.add_material("Aluminium", Material { elastic: Some(Elastic::Isotropic { young: 70e9, poisson: 0.33 }), density: Some(2700.0), fluid: None })
-        .unwrap();
+    m.add_material(
+        "Aluminium",
+        Material { elastic: Some(Elastic::Isotropic { young: 70e9, poisson: 0.33 }), density: Some(2700.0), ..Material::default() },
+    )
+    .unwrap();
     for (e, name) in [(1, "tet4"), (2, "tet10"), (3, "wedge"), (4, "hex20")] {
         m.add_set(name, Set { elements: vec![e], ..Set::default() }).unwrap();
         let f = Formulation { hybrid: e == 1, ..Formulation::default() };
@@ -658,7 +661,11 @@ fn hostile_numbers_stay_within_their_fields() {
     m.set_node(2, [f64::MIN_POSITIVE, -f64::MIN_POSITIVE, 5e-324]).unwrap();
     m.replace_material(
         "Steel",
-        Material { elastic: Some(Elastic::Isotropic { young: 1e300, poisson: 0.499_999_999_999_999_9 }), density: Some(1e-300), fluid: None },
+        Material {
+            elastic: Some(Elastic::Isotropic { young: 1e300, poisson: 0.499_999_999_999_999_9 }),
+            density: Some(1e-300),
+            ..Material::default()
+        },
     )
     .unwrap();
     m.replace_load(
@@ -686,4 +693,47 @@ fn explicit_steps_are_refused_by_every_format() {
         assert!(matches!(e, Error::Unsupported { .. }), "{}: {e}", f.name);
         assert!(e.to_string().contains("step `Impact`: explicit dynamic"), "{}: {e}", f.name);
     }
+}
+
+/// Plasticity: `*MAT_PLASTIC_KINEMATIC` (bilinear) and `*MAT_PIECEWISE_LINEAR_PLASTICITY` with a
+/// curve numbered after the steps' ramps; the erosion strain is the failure strain; Johnson–Cook
+/// and damage are reported.
+#[test]
+fn plasticity_is_written_as_plastic_materials() {
+    let with = |p: Plastic, erosion: Option<f64>| {
+        let mut m = cantilever();
+        m.replace_material("Steel", Material { plastic: Some(p), erosion: erosion.map(|e| Erosion { plastic_strain: e }), ..steel() }).unwrap();
+        m
+    };
+    let w = lsdyna::write(&with(Plastic::Bilinear { yield_stress: 250.0, hardening_modulus: 1000.0, hardening: Hardening::Isotropic }, Some(0.5)))
+        .unwrap();
+    let mat = w.text.split("*MAT_PLASTIC_KINEMATIC_TITLE\nSteel\n").nth(1).unwrap();
+    let cards: Vec<Vec<&str>> = mat.lines().filter(|l| !l.starts_with('$')).take(2).map(|l| l.split_whitespace().collect()).collect();
+    // E_t = E H / (E + H) = 210000 · 1000 / 211000.
+    let etan: f64 = cards[0][5].parse().unwrap();
+    assert!((etan - 210000.0 * 1000.0 / 211000.0).abs() < 1e-9, "{cards:?}");
+    assert_eq!((cards[0][4], cards[0][6], cards[1][0]), ("250.0", "1.0", "0.5"), "{cards:?}");
+    assert!(!w.text.contains("*MAT_ELASTIC"));
+    let table = Plastic::Table { points: vec![HardeningPoint { strain: 0.0, stress: 200.0 }, HardeningPoint { strain: 0.1, stress: 300.0 }] };
+    let w = lsdyna::write(&with(table, None)).unwrap();
+    let mat = w.text.split("*MAT_PIECEWISE_LINEAR_PLASTICITY_TITLE\nSteel\n").nth(1).unwrap();
+    let cards: Vec<&str> = mat.lines().filter(|l| !l.starts_with('$')).take(2).collect();
+    assert_eq!(cards[1].split_whitespace().collect::<Vec<_>>(), ["2"], "the curve after the one step's ramp: {cards:?}");
+    let curve = w.text.split("*DEFINE_CURVE_TITLE\nSteel hardening\n").nth(1).unwrap();
+    let rows: Vec<Vec<&str>> = curve.lines().filter(|l| !l.starts_with('$')).take(3).map(|l| l.split_whitespace().collect()).collect();
+    assert_eq!(rows, [vec!["2"], vec!["0.0", "200.0"], vec!["0.1", "300.0"]]);
+    let jc = Plastic::JohnsonCook {
+        a: 90.0,
+        b: 292.0,
+        n: 0.31,
+        c: 0.0,
+        m: 1.0,
+        reference_strain_rate: 1.0,
+        room_temperature: 294.0,
+        melt_temperature: 1356.0,
+        specific_heat: None,
+        taylor_quinney: 0.9,
+    };
+    let Err(Error::Unsupported { what, .. }) = lsdyna::write(&with(jc, None)) else { panic!() };
+    assert!(what.contains("Johnson–Cook"), "{what}");
 }

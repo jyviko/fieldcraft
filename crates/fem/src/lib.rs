@@ -20,6 +20,10 @@
 //! - [`face`]: consistent nodal forces of pressure on element faces;
 //! - [`uniform`]: uniform-strain (one-point) hexahedron and tetrahedron kinematics, hourglass
 //!   shape vectors and element frequency bounds for explicit dynamics;
+//! - [`rotation`]: incrementally objective stress updates (Hughes–Winget Jaumann, Flanagan–Taylor
+//!   Green–Naghdi);
+//! - [`plasticity`]: J2 radial return with isotropic, kinematic and Johnson–Cook hardening,
+//!   Johnson–Cook damage;
 //! - [`dense`]: the small dense linear algebra inside an element.
 //!
 //! Conventions: element matrices are ordered node by node, each node's degrees of freedom in
@@ -38,7 +42,9 @@ pub mod face;
 pub mod jet;
 pub mod material;
 pub mod plane;
+pub mod plasticity;
 pub mod quadrature;
+pub mod rotation;
 pub mod shape;
 pub mod uniform;
 

@@ -81,7 +81,9 @@ impl Grid {
     fn define(&mut self, kind: SectionKind, young: f64, nu: f64, density: Option<f64>, formulation: Formulation, procedure: Procedure) {
         let all: Vec<u32> = self.model.elements().keys().copied().collect();
         self.model.add_set("all", Set { elements: all, ..Set::default() }).unwrap();
-        self.model.add_material("Mat", Material { elastic: Some(Elastic::Isotropic { young, poisson: nu }), density, fluid: None }).unwrap();
+        self.model
+            .add_material("Mat", Material { elastic: Some(Elastic::Isotropic { young, poisson: nu }), density, ..Material::default() })
+            .unwrap();
         self.model.add_section("plane", Section { set: "all".into(), material: "Mat".into(), kind, formulation }).unwrap();
         self.model.add_step(Step::new("Step", procedure), None).unwrap();
     }

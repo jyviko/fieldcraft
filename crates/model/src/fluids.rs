@@ -510,7 +510,7 @@ mod tests {
         }
         let mut solid = water();
         solid.fluid = None;
-        m.add_material("Steel", Material { elastic: None, density: Some(7.85e-9), fluid: None }).unwrap();
+        m.add_material("Steel", Material { elastic: None, density: Some(7.85e-9), ..Material::default() }).unwrap();
         assert!(m.add_fluid_domain("Dry", FluidDomain { material: "Steel".into(), ..channel() }).is_err());
         assert!(m.replace_material("Water", solid).is_err(), "a domain needs the fluid behaviour");
         assert!(matches!(m.remove_material("Water"), Err(Error::InUse(_))));

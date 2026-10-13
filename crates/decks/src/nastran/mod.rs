@@ -14,9 +14,12 @@
 //! - the element formulation: `PSOLID`'s integration network and scheme (see [`solid_rule`]);
 //!   formulations Nastran's linear elements have no counterpart for are reported, not
 //!   approximated;
-//! - isotropic materials: `MAT1`; orthotropic engineering constants: `MAT9` (the stiffness matrix
-//!   in the basic axes) for solids and `MAT8` for shells lying in planes of constant Z, with the
-//!   material X axis tied to the basic X axis through a `CORD2R`;
+//! - isotropic materials: `MAT1`, with `MATS1` for von Mises plasticity (bilinear by its
+//!   hardening slope, a hardening table as a `TABLES1` stress–strain curve; Johnson–Cook, damage
+//!   and erosion are reported, not written); a linear solution reads the elastic entry alone;
+//! - orthotropic engineering constants: `MAT9` (the stiffness matrix in the basic axes) for
+//!   solids and `MAT8` for shells lying in planes of constant Z, with the material X axis tied to
+//!   the basic X axis through a `CORD2R`;
 //! - boundary conditions: per step, one constraint set of `SPC1` (held degrees of freedom) and
 //!   `SPC` (prescribed values); in a modes step every constrained degree of freedom is held;
 //! - forces, moments and tractions: `FORCE` and `MOMENT` at the nodal values the model resolves,
@@ -44,8 +47,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use modelcraft_model::{
-    BeamProfile, Coupling, CouplingKind, Dofs, Elastic, ElementKind, Formulation, Integration, Load, MAX_LABEL, Model, OutputVariable, Procedure,
-    Resolved, SectionKind, Step,
+    BeamProfile, Coupling, CouplingKind, Dofs, Elastic, ElementKind, Formulation, Hardening, Integration, Load, MAX_LABEL, Model, OutputVariable,
+    Plastic, Procedure, Resolved, SectionKind, Step,
 };
 
 use crate::{Error, Result};
@@ -184,6 +187,8 @@ struct MaterialIds {
     solid: Option<u32>,
     /// `MAT8`, for orthotropic materials of shells.
     shell: Option<u32>,
+    /// `TABLES1` of a tabulated plasticity's stress–strain curve.
+    table: Option<u32>,
 }
 
 /// Which element families use a material.
@@ -307,7 +312,7 @@ impl<'m> Deck<'m> {
     }
 
     fn plan(&mut self) -> Result<()> {
-        self.plan_materials();
+        self.plan_materials()?;
         self.plan_sections()?;
         self.plan_couplings()?;
         self.plan_constraints()?;
@@ -321,7 +326,7 @@ impl<'m> Deck<'m> {
     }
 
     /// Material ids, for the forms the sections need.
-    fn plan_materials(&mut self) {
+    fn plan_materials(&mut self) -> Result<()> {
         let model = self.model;
         let mut uses: BTreeMap<&str, MaterialUse> = BTreeMap::new();
         for s in model.sections().values() {
@@ -353,8 +358,24 @@ impl<'m> Deck<'m> {
                 }
                 None => MaterialIds::default(),
             };
+            let mut ids = ids;
+            if let Some(m) = model.material(name) {
+                match &m.plastic {
+                    Some(Plastic::JohnsonCook { .. }) => {
+                        self.problems
+                            .insert(format!("material `{name}`: Johnson–Cook plasticity (MATS1 has no rate- and temperature-dependent flow stress)"));
+                    }
+                    Some(Plastic::Table { .. }) => ids.table = Some(next_id(&mut self.next_sid)?),
+                    _ => {}
+                }
+                if m.damage.is_some() || m.erosion.is_some() {
+                    self.problems
+                        .insert(format!("material `{name}`: damage and erosion (Nastran's linear and implicit solutions have no element failure)"));
+                }
+            }
             self.materials.insert(name, ids);
         }
+        Ok(())
     }
 
     /// A new property for `elements`.
@@ -706,6 +727,9 @@ impl<'m> Deck<'m> {
             }
             if let (Some(card), Some(mid)) = (card, ids.isotropic) {
                 write_named(out, &format!("material {name}"), mid, card)?;
+                if let (Some(plastic), Some(Elastic::Isotropic { young, .. })) = (&m.plastic, m.elastic) {
+                    plasticity(out, name, mid, young, plastic, ids.table)?;
+                }
             }
         }
 
@@ -904,6 +928,29 @@ fn beam_dimensions(p: BeamProfile) -> (&'static str, Vec<f64>) {
         BeamProfile::Pipe { radius, .. } => ("ROD", vec![radius]),
         BeamProfile::I { height, width, web, flange } => ("I", vec![height, width, width, web, flange, flange]),
         BeamProfile::Box { width, height, thickness } => ("BOX", vec![width, height, thickness, thickness]),
+    }
+}
+
+/// `MATS1` (von Mises yield, `YF` 1) of an isotropic material's plasticity: a bilinear law by its
+/// work-hardening slope `H` (stress against plastic strain) and initial yield stress `LIMIT1`,
+/// isotropic (`HR` 1) or kinematic (`HR` 2); a hardening table as a `TABLES1` stress–strain
+/// curve through the origin, with the total strain σ/E + ε_p of each point.
+fn plasticity(out: &mut String, name: &str, mid: u32, young: f64, plastic: &Plastic, table: Option<u32>) -> Result<()> {
+    let what = format!("plasticity of {name}");
+    match (plastic, table) {
+        (Plastic::Bilinear { yield_stress, hardening_modulus, hardening }, _) => {
+            let hr = if *hardening == Hardening::Kinematic { 2 } else { 1 };
+            let card = Card::new("MATS1").int(mid).blank().text("PLASTIC").real(*hardening_modulus).int(1).int(hr).real(*yield_stress);
+            write_named(out, &what, mid, card)
+        }
+        (Plastic::Table { points }, Some(tid)) => {
+            write_named(out, &what, mid, Card::new("MATS1").int(mid).int(tid).text("PLASTIC").blank().int(1).int(1))?;
+            let curve = std::iter::once([0.0, 0.0]).chain(points.iter().map(|p| [p.stress / young + p.strain, p.stress])).flatten();
+            write_named(out, &format!("stress-strain curve of {name}"), tid, Card::new("TABLES1").int(tid).end_line().reals(curve).text("ENDT"))
+        }
+        (Plastic::Table { .. }, None) | (Plastic::JohnsonCook { .. }, _) => {
+            Err(Error::Model(modelcraft_model::Error::Invalid(format!("material `{name}`: its plasticity was not planned for MATS1"))))
+        }
     }
 }
 

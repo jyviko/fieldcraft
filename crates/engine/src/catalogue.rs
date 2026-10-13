@@ -203,9 +203,9 @@ pub static CATALOGUE: &[Capability] = &[
         "Elastic (isotropic, orthotropic) material with density",
         &["model.material.edit", "model.material.delete"],
     ),
-    soon("model.material.plasticity", "Plasticity", Properties, "Materials", "M8", "Plastic hardening data"),
+    ready("model.material.plasticity", "Plasticity", Properties, "Materials", "Von Mises plasticity: bilinear, hardening table or Johnson–Cook"),
     soon("model.material.hyperelastic", "Hyperelastic", Properties, "Materials", "M8", "Hyperelastic material models"),
-    soon("model.material.damage", "Damage", Properties, "Materials", "M8", "Damage initiation and evolution"),
+    ready("model.material.damage", "Damage", Properties, "Materials", "Johnson–Cook damage and element erosion"),
     soon("model.material.thermal", "Thermal", Properties, "Materials", "M8", "Conductivity, specific heat and expansion"),
     soon(
         "model.material.eos",

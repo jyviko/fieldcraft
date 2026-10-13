@@ -1,8 +1,21 @@
-//! Materials: linear elasticity, mass density and fluid behaviour.
+//! Materials: linear elasticity, mass density, fluid behaviour, and the inelastic behaviours of
+//! explicit dynamics: von Mises (J2) plasticity with a bilinear, tabulated or Johnson–Cook flow stress,
+//! Johnson–Cook damage, and element erosion criteria.
+//!
+//! The records are solver-neutral and named for what they describe, never after a product's
+//! keyword or material number; the deck writers map them to each format.
+//!
+//! - Johnson–Cook flow stress: G. R. Johnson, W. H. Cook, *A constitutive model and data for
+//!   metals subjected to large strains, high strain rates and high temperatures*, Proc. 7th Int.
+//!   Symp. on Ballistics, The Hague, 541–547, 1983:
+//!   σ_y = (A + B ε_pⁿ)(1 + C ln ε̇*)(1 − T*ᵐ), ε̇* = ε̇_p / ε̇₀, T* = (T − T_room)/(T_melt − T_room).
+//! - Johnson–Cook fracture: G. R. Johnson, W. H. Cook, *Fracture characteristics of three metals
+//!   subjected to various strains, strain rates, temperatures and pressures*, Eng. Fract. Mech.
+//!   21(1):31–48, 1985: ε_f = (D1 + D2 e^{D3 σ*})(1 + D4 ln ε̇*)(1 + D5 T*), D = Σ Δε_p / ε_f.
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Model, Result, context, insert_new, not_in_use, positive, remove_existing, replace_existing};
+use crate::{Error, Model, Result, context, finite, insert_new, not_in_use, positive, remove_existing, replace_existing};
 
 /// Names of the engineering constants' shear moduli, in order.
 pub(crate) const SHEAR_MODULI: [&str; 3] = ["G12", "G13", "G23"];
@@ -78,6 +91,179 @@ impl Fluid {
     }
 }
 
+/// Most points of a plastic hardening table.
+pub const MAX_TABLE_POINTS: usize = 1000;
+
+/// How the yield surface moves with plastic flow.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Hardening {
+    /// The yield surface grows (the yield stress rises with the equivalent plastic strain).
+    #[default]
+    Isotropic,
+    /// The yield surface translates (linear kinematic hardening of the back stress, Prager), so
+    /// reversed loading yields early (Bauschinger effect).
+    Kinematic,
+}
+
+/// One point of a hardening table: the yield stress at an equivalent plastic strain.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HardeningPoint {
+    /// Equivalent plastic strain.
+    pub strain: f64,
+    /// Yield stress (von Mises equivalent).
+    pub stress: f64,
+}
+
+/// Rate-independent or Johnson–Cook von Mises plasticity (needs isotropic elasticity).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Plastic {
+    /// Linear hardening: the yield stress `yield_stress + hardening_modulus · ε_p` (isotropic), or
+    /// a yield surface of radius `yield_stress` whose centre moves with modulus
+    /// `hardening_modulus` (kinematic). The hardening modulus is the slope of the uniaxial stress
+    /// against the plastic strain (0: perfectly plastic).
+    Bilinear {
+        yield_stress: f64,
+        #[serde(default)]
+        hardening_modulus: f64,
+        #[serde(default)]
+        hardening: Hardening,
+    },
+    /// Isotropic hardening by a table of yield stress against equivalent plastic strain, linear
+    /// between the points and constant after the last. The first point is at plastic strain 0;
+    /// the strains increase.
+    Table { points: Vec<HardeningPoint> },
+    /// Johnson–Cook flow stress (isotropic hardening): `a`, `b`, `n` the strain hardening, `c`
+    /// the strain-rate sensitivity relative to `reference_strain_rate` (rates below it count as
+    /// it), `m` the thermal softening between `room_temperature` and `melt_temperature`. With a
+    /// `specific_heat`, plastic work heats the material adiabatically (the fraction
+    /// `taylor_quinney` of it); without one the temperature stays at room temperature.
+    JohnsonCook {
+        a: f64,
+        b: f64,
+        n: f64,
+        #[serde(default)]
+        c: f64,
+        #[serde(default = "one")]
+        m: f64,
+        #[serde(default = "one")]
+        reference_strain_rate: f64,
+        room_temperature: f64,
+        melt_temperature: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        specific_heat: Option<f64>,
+        #[serde(default = "default_taylor_quinney")]
+        taylor_quinney: f64,
+    },
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+fn default_taylor_quinney() -> f64 {
+    0.9
+}
+
+impl Plastic {
+    /// The name of the kind, for messages.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Plastic::Bilinear { .. } => "bilinear plasticity",
+            Plastic::Table { .. } => "tabulated plasticity",
+            Plastic::JohnsonCook { .. } => "Johnson–Cook plasticity",
+        }
+    }
+
+    /// The initial yield stress (at zero plastic strain, the reference rate and room
+    /// temperature).
+    pub fn initial_yield(&self) -> f64 {
+        match self {
+            Plastic::Bilinear { yield_stress, .. } => *yield_stress,
+            Plastic::Table { points } => points.first().map_or(0.0, |p| p.stress),
+            Plastic::JohnsonCook { a, .. } => *a,
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let nonnegative = |what: &str, v: f64| {
+            if v >= 0.0 && v.is_finite() { Ok(v) } else { Err(Error::Invalid(format!("{what} must be a finite number ≥ 0, got {v}"))) }
+        };
+        match self {
+            Plastic::Bilinear { yield_stress, hardening_modulus, .. } => {
+                positive("yield stress", *yield_stress)?;
+                nonnegative("hardening modulus", *hardening_modulus)?;
+            }
+            Plastic::Table { points } => {
+                if points.is_empty() || points.len() > MAX_TABLE_POINTS {
+                    return Err(Error::Invalid(format!("a hardening table has 1 to {MAX_TABLE_POINTS} points, got {}", points.len())));
+                }
+                if points.first().is_some_and(|p| p.strain != 0.0) {
+                    return Err(Error::Invalid("a hardening table starts at plastic strain 0".into()));
+                }
+                for p in points {
+                    nonnegative("plastic strain", p.strain)?;
+                    positive("yield stress", p.stress)?;
+                }
+                if points.windows(2).any(|w| w.get(1).map(|b| b.strain) <= w.first().map(|a| a.strain)) {
+                    return Err(Error::Invalid("the plastic strains of a hardening table must increase".into()));
+                }
+            }
+            Plastic::JohnsonCook { a, b, n, c, m, reference_strain_rate, room_temperature, melt_temperature, specific_heat, taylor_quinney } => {
+                positive("A", *a)?;
+                nonnegative("B", *b)?;
+                nonnegative("n", *n)?;
+                nonnegative("C", *c)?;
+                positive("m", *m)?;
+                positive("reference strain rate", *reference_strain_rate)?;
+                finite("room temperature", *room_temperature)?;
+                finite("melt temperature", *melt_temperature)?;
+                if !(melt_temperature > room_temperature) {
+                    return Err(Error::Invalid(format!(
+                        "the melt temperature {melt_temperature} must be above the room temperature {room_temperature}"
+                    )));
+                }
+                if let Some(cp) = specific_heat {
+                    positive("specific heat", *cp)?;
+                }
+                if !(0.0..=1.0).contains(taylor_quinney) {
+                    return Err(Error::Invalid(format!("the Taylor–Quinney fraction is in [0, 1], got {taylor_quinney}")));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Damage that accumulates with plastic strain; a material point fails when it reaches 1.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Damage {
+    /// Johnson–Cook fracture strain ε_f = (d1 + d2 e^{d3 σ*})(1 + d4 ln ε̇*)(1 + d5 T*), with σ*
+    /// the mean stress over the von Mises stress; ε̇* and T* as in Johnson–Cook plasticity (`d4`
+    /// and `d5` need it).
+    JohnsonCook {
+        d1: f64,
+        d2: f64,
+        d3: f64,
+        #[serde(default)]
+        d4: f64,
+        #[serde(default)]
+        d5: f64,
+    },
+}
+
+/// When elements of the material are removed from the analysis (eroded), besides failing by
+/// [`Damage`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Erosion {
+    /// The equivalent plastic strain at which an element erodes.
+    pub plastic_strain: f64,
+}
+
 /// A material.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -90,6 +276,16 @@ pub struct Material {
     /// How it flows, for fluid domains (needs a density).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fluid: Option<Fluid>,
+    /// Von Mises plasticity (explicit dynamics; the linear implicit solver uses the elastic
+    /// constants alone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plastic: Option<Plastic>,
+    /// Damage to failure (explicit dynamics: a failed element erodes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damage: Option<Damage>,
+    /// Erosion criteria (explicit dynamics).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub erosion: Option<Erosion>,
 }
 
 impl Material {
@@ -108,6 +304,33 @@ impl Material {
         }
         if let Some(d) = self.density {
             positive("density", d)?;
+        }
+        if let Some(p) = &self.plastic {
+            if !matches!(self.elastic, Some(Elastic::Isotropic { .. })) {
+                return Err(Error::Invalid(format!("{} needs isotropic elastic constants", p.name())));
+            }
+            p.validate()?;
+        }
+        if let Some(Damage::JohnsonCook { d1, d2, d3, d4, d5 }) = self.damage {
+            for (what, v) in [("D1", d1), ("D2", d2), ("D3", d3), ("D4", d4), ("D5", d5)] {
+                finite(what, v)?;
+            }
+            match &self.plastic {
+                None => return Err(Error::Invalid("damage needs plasticity (it accumulates with the plastic strain)".into())),
+                Some(Plastic::JohnsonCook { .. }) => {}
+                Some(_) if d4 != 0.0 || d5 != 0.0 => {
+                    return Err(Error::Invalid(
+                        "the damage terms D4 and D5 need Johnson–Cook plasticity (its reference strain rate and temperatures)".into(),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        if let Some(e) = self.erosion {
+            positive("erosion plastic strain", e.plastic_strain)?;
+            if self.plastic.is_none() {
+                return Err(Error::Invalid("a plastic-strain erosion criterion needs plasticity".into()));
+            }
         }
         Ok(())
     }
@@ -187,5 +410,70 @@ mod tests {
         assert!(ortho([0.3, f64::NAN, 0.4]).validate().is_err());
         let zero_shear = Elastic::EngineeringConstants { young: [1.0; 3], poisson: [0.0; 3], shear: [1.0, 0.0, 1.0] };
         assert!(zero_shear.validate().unwrap_err().to_string().contains("G13"));
+    }
+
+    fn steel() -> Material {
+        Material { density: Some(7.85e-9), ..iso(2.1e5, 0.3) }
+    }
+
+    fn jc() -> Plastic {
+        Plastic::JohnsonCook {
+            a: 792.0,
+            b: 510.0,
+            n: 0.26,
+            c: 0.014,
+            m: 1.03,
+            reference_strain_rate: 1.0,
+            room_temperature: 294.0,
+            melt_temperature: 1793.0,
+            specific_heat: Some(4.77e8),
+            taylor_quinney: 0.9,
+        }
+    }
+
+    #[test]
+    fn plasticity_damage_and_erosion_validate() {
+        let ok = |p: Plastic| Material { plastic: Some(p), ..steel() }.validate();
+        ok(Plastic::Bilinear { yield_stress: 250.0, hardening_modulus: 1000.0, hardening: Hardening::Kinematic }).unwrap();
+        ok(Plastic::Table { points: vec![HardeningPoint { strain: 0.0, stress: 250.0 }, HardeningPoint { strain: 0.1, stress: 300.0 }] }).unwrap();
+        ok(jc()).unwrap();
+        for bad in [
+            Plastic::Bilinear { yield_stress: 0.0, hardening_modulus: 0.0, hardening: Hardening::Isotropic },
+            Plastic::Bilinear { yield_stress: 1.0, hardening_modulus: -1.0, hardening: Hardening::Isotropic },
+            Plastic::Table { points: vec![] },
+            Plastic::Table { points: vec![HardeningPoint { strain: 0.1, stress: 250.0 }] },
+            Plastic::Table { points: vec![HardeningPoint { strain: 0.0, stress: 250.0 }, HardeningPoint { strain: 0.0, stress: 300.0 }] },
+            Plastic::Table { points: vec![HardeningPoint { strain: 0.0, stress: f64::NAN }] },
+            Plastic::Table { points: vec![HardeningPoint { strain: 0.0, stress: 1.0 }; MAX_TABLE_POINTS + 1] },
+        ] {
+            assert!(ok(bad.clone()).is_err(), "{bad:?}");
+        }
+        let mut cold = jc();
+        if let Plastic::JohnsonCook { melt_temperature, room_temperature, .. } = &mut cold {
+            *melt_temperature = *room_temperature;
+        }
+        assert!(ok(cold).is_err(), "melt above room");
+        // Plasticity needs isotropic elasticity; damage and erosion need plasticity.
+        let ortho = Elastic::EngineeringConstants { young: [1.0; 3], poisson: [0.0; 3], shear: [1.0; 3] };
+        assert!(Material { elastic: Some(ortho), plastic: Some(jc()), ..steel() }.validate().is_err());
+        let damage = Damage::JohnsonCook { d1: 0.05, d2: 3.44, d3: -2.12, d4: 0.002, d5: 0.61 };
+        Material { plastic: Some(jc()), damage: Some(damage), erosion: Some(Erosion { plastic_strain: 2.0 }), ..steel() }.validate().unwrap();
+        assert!(Material { damage: Some(damage), ..steel() }.validate().is_err());
+        let bilinear = Plastic::Bilinear { yield_stress: 250.0, hardening_modulus: 0.0, hardening: Hardening::Isotropic };
+        assert!(Material { plastic: Some(bilinear.clone()), damage: Some(damage), ..steel() }.validate().is_err(), "D4, D5 need Johnson–Cook");
+        let plain = Damage::JohnsonCook { d1: 0.5, d2: 0.0, d3: 0.0, d4: 0.0, d5: 0.0 };
+        Material { plastic: Some(bilinear), damage: Some(plain), ..steel() }.validate().unwrap();
+        assert!(Material { erosion: Some(Erosion { plastic_strain: 1.0 }), ..steel() }.validate().is_err());
+        // JSON: defaults fill in, unknown fields are refused.
+        let m: Material = serde_json::from_str(
+            r#"{"elastic":{"type":"isotropic","young":1,"poisson":0.3},"plastic":{"type":"johnson_cook","a":1,"b":2,"n":0.5,"room_temperature":0,"melt_temperature":100}}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(m.plastic, Some(Plastic::JohnsonCook { m, reference_strain_rate, taylor_quinney, .. }) if m == 1.0 && reference_strain_rate == 1.0 && taylor_quinney == 0.9)
+        );
+        assert!(serde_json::from_str::<Material>(r#"{"density":1,"plastic":{"type":"bilinear","yield_stress":1,"oops":2}}"#).is_err());
+        let text = serde_json::to_string(&Material { plastic: Some(jc()), damage: Some(damage), ..steel() }).unwrap();
+        assert_eq!(serde_json::from_str::<Material>(&text).unwrap(), Material { plastic: Some(jc()), damage: Some(damage), ..steel() });
     }
 }

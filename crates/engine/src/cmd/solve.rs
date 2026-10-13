@@ -54,7 +54,7 @@ pub const FLUID: CommandSpec = CommandSpec {
 pub const PROBE: CommandSpec = CommandSpec {
     id: "solve.probe",
     label: "Probe Results",
-    params: r#"{"step": "Load", "nodes": [1, 2], "mode": 1, "frame": 0} — the stored result at nodes: displacement, reaction, stress and von Mises (static), the shape of mode `mode` (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default); a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
+    params: r#"{"step": "Load", "nodes": [1, 2], "mode": 1, "frame": 0} — the stored result at nodes: displacement, reaction, stress and von Mises (static), the shape of mode `mode` (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
     kind: CommandKind::Model,
     run: probe,
 };
@@ -175,6 +175,7 @@ fn explicit_summary(r: &ExplicitResult) -> Value {
         "energy_balance": r.energy.relative_error(r.initial_kinetic),
         "frames": r.frames.len(),
         "history_samples": r.history.time.len(),
+        "eroded": r.eroded,
         "warnings": r.warnings,
     })
 }
@@ -344,15 +345,15 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
             format!("step `{step}` has no result; solve it first")
         })
     })?;
-    if let StepResult::Fluid(r) = result.as_ref() {
-        return probe_fluid(r, p);
-    }
-    let nodes = labels(p, "nodes", MAX_PROBE)?;
     let result = match result.as_ref() {
-        StepResult::Explicit(r) => return probe_frame(r, &step, &nodes, p),
+        StepResult::Explicit(r) => {
+            let list = |key| if p.get(key).is_some() { labels(p, key, MAX_PROBE) } else { Ok(Vec::new()) };
+            return probe_frame(r, &step, &list("nodes")?, &list("elements")?, p);
+        }
         StepResult::Fluid(r) => return probe_fluid(r, p),
         StepResult::Implicit(r) => r,
     };
+    let nodes = labels(p, "nodes", MAX_PROBE)?;
     let locate = |label: u32| {
         result
             .locate(label)
@@ -399,11 +400,38 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"step": step, "nodes": out}))
 }
 
-/// Displacement and velocity at nodes in one field frame of an explicit result.
-fn probe_frame(r: &ExplicitResult, step: &str, nodes: &[u32], p: &Value) -> Result<Value> {
+/// Displacement and velocity at nodes, and element results, in one field frame of an explicit
+/// result.
+fn probe_frame(r: &ExplicitResult, step: &str, nodes: &[u32], elements: &[u32], p: &Value) -> Result<Value> {
     let last = r.frames.len().saturating_sub(1);
     let k = opt::<usize>(p, "frame")?.unwrap_or(last);
     let f = r.frames.get(k).ok_or_else(|| EngineError::Params(format!("`frame` must be from 0 to {last}")))?;
+    if nodes.is_empty() && elements.is_empty() {
+        return Err(EngineError::Params("give `nodes`, `elements` or both".into()));
+    }
+    if !elements.is_empty() && f.stress.is_empty() {
+        return Err(EngineError::Params(format!("step `{step}` does not output stresses")));
+    }
+    let element_values: Vec<Value> = elements
+        .iter()
+        .map(|&l| {
+            let i =
+                r.elements.binary_search(&l).map_err(|_| EngineError::Params(format!("element {l} has no result (it is not a solved element)")))?;
+            Ok(json!({
+                "element": l,
+                "stress": f.stress.get(i),
+                "von_mises": f.stress.get(i).map(modelcraft_fem::von_mises),
+                "strain": f.strain.get(i),
+                "plastic_strain": f.plastic_strain.get(i),
+                "damage": f.damage.get(i),
+                "temperature": f.temperature.get(i),
+                "eroded": f.failed.get(i),
+            }))
+        })
+        .collect::<Result<_>>()?;
+    if nodes.is_empty() {
+        return Ok(json!({"step": step, "frame": k, "time": f.time, "elements": element_values}));
+    }
     if f.displacement.is_empty() {
         return Err(EngineError::Params(format!("step `{step}` does not output displacements")));
     }
@@ -415,7 +443,7 @@ fn probe_frame(r: &ExplicitResult, step: &str, nodes: &[u32], p: &Value) -> Resu
             Ok(json!({"node": l, "displacement": f.displacement.get(i), "velocity": f.velocity.get(i)}))
         })
         .collect::<Result<_>>()?;
-    Ok(json!({"step": step, "frame": k, "time": f.time, "nodes": out}))
+    Ok(json!({"step": step, "frame": k, "time": f.time, "nodes": out, "elements": element_values}))
 }
 
 #[cfg(test)]
@@ -850,6 +878,11 @@ pub(crate) mod tests {
         assert_eq!(probe["nodes"][1]["velocity"][0].as_f64(), Some(-0.1), "{probe}");
         let last = s.execute("solve.probe", &json!({"step": "Impact", "nodes": [9]})).unwrap();
         assert_eq!(last["frame"], 4, "{last}");
+        let el = s.execute("solve.probe", &json!({"step": "Impact", "elements": [1, 8]})).unwrap();
+        let e = &el["elements"][0];
+        assert!(e["stress"].as_array().unwrap().len() == 6 && e["von_mises"].as_f64().unwrap() >= 0.0 && e["eroded"] == false, "{el}");
+        assert!(e["plastic_strain"].is_null(), "an elastic model has no plastic strain: {el}");
+        assert_eq!(r["eroded"].as_array().map(Vec::len), Some(0), "{r}");
         let h = s.execute("solve.history", &json!({"step": "Impact", "every": 2})).unwrap();
         assert_eq!(h["time"].as_array().unwrap().len(), h["energies"].as_array().unwrap().len());
         assert!(h["nodes"][0]["velocity"].as_array().unwrap().len() > 5, "{h}");
@@ -875,6 +908,11 @@ pub(crate) mod tests {
             json!({"step": "Impact", "nodes": [1], "frame": 99}),
             json!({"step": "Impact", "nodes": [1], "frame": -1}),
             json!({"step": "Impact", "nodes": [0, 4294967296u64]}),
+            json!({"step": "Impact"}),
+            json!({"step": "Impact", "elements": [999]}),
+            json!({"step": "Impact", "elements": [0, -1, 1.5]}),
+            json!({"step": "Impact", "elements": vec![1; 20_000]}),
+            json!({"step": "Impact", "elements": "all", "nodes": [1]}),
         ];
         for id in ["solve.explicit", "solve.history", "solve.probe"] {
             for p in &hostile {

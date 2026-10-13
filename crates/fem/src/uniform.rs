@@ -109,6 +109,65 @@ impl UniformStrain<8> {
     }
 }
 
+/// The hexahedron's volume as a form in its corner positions (in the model's hex8 node order):
+/// with C_IJK = ∫ ε_abc ∂_aN_I ∂_bN_J ∂_cN_K dξ (the determinant of the Jacobian expanded over
+/// the corners), which is antisymmetric in I, J, K, V = Σ_{I<J<K} C_IJK x_I · (x_J × x_K). The 24
+/// nonzero coefficients with I < J < K are ±1/12; this table holds them times 12 (the tests
+/// integrate them again).
+const VOLUME_FORM: [(usize, usize, usize, f64); 24] = [
+    (0, 1, 2, -1.0),
+    (0, 1, 3, -1.0),
+    (0, 1, 4, 1.0),
+    (0, 1, 5, 1.0),
+    (0, 2, 3, -1.0),
+    (0, 3, 4, -1.0),
+    (0, 3, 7, -1.0),
+    (0, 4, 5, -1.0),
+    (0, 4, 7, 1.0),
+    (1, 2, 3, -1.0),
+    (1, 2, 5, 1.0),
+    (1, 2, 6, 1.0),
+    (1, 4, 5, -1.0),
+    (1, 5, 6, -1.0),
+    (2, 3, 6, 1.0),
+    (2, 3, 7, 1.0),
+    (2, 5, 6, -1.0),
+    (2, 6, 7, -1.0),
+    (3, 4, 7, 1.0),
+    (3, 6, 7, -1.0),
+    (4, 5, 6, 1.0),
+    (4, 5, 7, 1.0),
+    (4, 6, 7, 1.0),
+    (5, 6, 7, 1.0),
+];
+
+impl UniformStrain<8> {
+    /// The integrated gradients and volume of a hexahedron in closed form: b_I = ∂V/∂x_I of the
+    /// volume form ([`VOLUME_FORM`]; D. P. Flanagan, T. Belytschko 1981 give it written out),
+    /// so b_I gathers C_IJK x_J × x_K, and V = ⅓ Σ_I b_I · x_I. A few hundred operations instead of a Gauss loop, for the
+    /// current configuration of large deformation. The element is refused when its volume is not
+    /// positive. `nodal_volume` is left at the mean V/8: an explicit solver keeps the lumped
+    /// masses of the undeformed element.
+    pub fn hex8_deformed(xyz: &[[f64; 3]; 8]) -> Result<Hex8> {
+        let mut b = [[0.0f64; 3]; 8];
+        let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        for (i, j, k, c) in VOLUME_FORM {
+            let (xi, xj, xk) = (xyz[i], xyz[j], xyz[k]);
+            for (target, v) in [(i, cross(xj, xk)), (j, cross(xk, xi)), (k, cross(xi, xj))] {
+                for d in 0..3 {
+                    b[target][d] += c * v[d];
+                }
+            }
+        }
+        let b = b.map(|v| v.map(|c| c / 12.0));
+        let volume: f64 = b.iter().zip(xyz).map(|(bi, x)| bi[0] * x[0] + bi[1] * x[1] + bi[2] * x[2]).sum::<f64>() / 3.0;
+        if !(volume > 0.0 && volume.is_finite() && b.iter().flatten().all(|v| v.is_finite())) {
+            return Err(degenerate("hex8"));
+        }
+        Ok(UniformStrain { b, volume, nodal_volume: [volume / 8.0; 8] })
+    }
+}
+
 impl UniformStrain<4> {
     /// The linear tetrahedron of corners `xyz` (the model's tet4 node order).
     pub fn tet4(xyz: &[[f64; 3]; 4]) -> Result<Tet4> {
@@ -279,6 +338,52 @@ mod tests {
         assert!(Hex8::hex8(&inverted).is_err());
         assert!(Tet4::tet4(&[TET[1], TET[0], TET[2], TET[3]]).is_err());
         assert!(Hex8::hex8(&[[f64::NAN; 3]; 8]).is_err());
+    }
+
+    #[test]
+    fn the_volume_form_is_the_integrated_one() {
+        let mut c = [[[0.0f64; 8]; 8]; 8];
+        for p in Rule::Hex(2).points() {
+            let s = shape::hex8(p.xi);
+            let d = s.derivatives();
+            for i in 0..8 {
+                for j in 0..8 {
+                    for k in 0..8 {
+                        let m = [[d[i][0], d[j][0], d[k][0]], [d[i][1], d[j][1], d[k][1]], [d[i][2], d[j][2], d[k][2]]];
+                        c[i][j][k] += p.weight * crate::dense::det3(&m);
+                    }
+                }
+            }
+        }
+        let mut table = Vec::new();
+        for i in 0..8 {
+            for j in i + 1..8 {
+                for k in j + 1..8 {
+                    if (12.0 * c[i][j][k]).abs() > 1e-9 {
+                        assert!((12.0 * c[i][j][k] - (12.0 * c[i][j][k]).round()).abs() < 1e-12);
+                        table.push((i, j, k, (12.0 * c[i][j][k]).round()));
+                    }
+                }
+            }
+        }
+        assert_eq!(table, VOLUME_FORM.to_vec());
+    }
+
+    #[test]
+    fn closed_form_gradients_equal_the_integrated_ones() {
+        let hex = distorted();
+        let (a, b) = (Hex8::hex8(&hex).unwrap(), Hex8::hex8_deformed(&hex).unwrap());
+        assert!((a.volume - b.volume).abs() < 1e-14 * a.volume, "{} vs {}", a.volume, b.volume);
+        for (x, y) in a.b.iter().flatten().zip(b.b.iter().flatten()) {
+            assert!((x - y).abs() < 1e-14, "{x} vs {y}");
+        }
+        let mut inverted = hex;
+        inverted.swap(0, 1);
+        inverted.swap(2, 3);
+        inverted.swap(4, 5);
+        inverted.swap(6, 7);
+        assert!(Hex8::hex8_deformed(&inverted).is_err());
+        assert!(Hex8::hex8_deformed(&[[f64::NAN; 3]; 8]).is_err());
     }
 
     #[test]

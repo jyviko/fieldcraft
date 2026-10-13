@@ -12,7 +12,7 @@ use crate::constraints::{Budget, Reduction, coupling_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
 use crate::ordering::nested_dissection;
 use crate::sparse::{Csr, NodeGraph, add_block, add_diagonal, add_scalar};
-use crate::system::{Mesh, loads, prescribed};
+use crate::system::{Mesh, inelastic_warnings, loads, prescribed};
 use crate::{Error, Limits, Result};
 
 /// Size and effort of a solution.
@@ -209,6 +209,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     let step = model.select_step(step, |p| matches!(p, Procedure::Static {}), "static")?;
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
+    warnings.extend(inelastic_warnings(model));
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
     let order = nested_dissection(&mesh.xyz, &graph.adjacency);
     let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
@@ -336,6 +337,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     }
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
+    warnings.extend(inelastic_warnings(model));
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
     let order = nested_dissection(&mesh.xyz, &graph.adjacency);
     let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };

@@ -15,7 +15,7 @@ use modelcraft_model::{
 // Models
 
 fn steel() -> Material {
-    Material { elastic: Some(Elastic::Isotropic { young: 210_000.0, poisson: 0.3 }), density: Some(7.85e-9), fluid: None }
+    Material { elastic: Some(Elastic::Isotropic { young: 210_000.0, poisson: 0.3 }), density: Some(7.85e-9), ..Material::default() }
 }
 
 fn faces(list: &[(u32, u8)]) -> Set {
@@ -91,7 +91,7 @@ fn plate() -> Model {
     m.add_set("top", faces(&[(1, 1), (2, 1), (3, 1), (4, 1)])).unwrap();
     m.add_set("edge", Set { nodes: vec![1, 4, 7], ..Set::default() }).unwrap();
     m.add_set("mid", Set { nodes: vec![2, 5, 8], ..Set::default() }).unwrap();
-    let aluminium = Material { elastic: Some(Elastic::Isotropic { young: 70_000.0, poisson: 0.33 }), density: Some(2.7e-9), fluid: None };
+    let aluminium = Material { elastic: Some(Elastic::Isotropic { young: 70_000.0, poisson: 0.33 }), density: Some(2.7e-9), ..Material::default() };
     m.add_material("Aluminium", aluminium).unwrap();
     let kind = SectionKind::Shell { thickness: 2.0, offset: 0.5, points: 5 };
     let formulation = Formulation { integration: Integration::Reduced, ..Formulation::default() };
@@ -523,8 +523,11 @@ fn largest_labels_longest_numbers_and_names_fit_a_line() {
     m.set_element(modelcraft_model::MAX_LABEL, ElementKind::Hex20, (0..20).map(|i| base + i).collect()).unwrap();
     let long = format!("A{}", "x".repeat(modelcraft_model::MAX_NAME_LEN - 1));
     m.add_set(&long, Set { elements: vec![modelcraft_model::MAX_LABEL], nodes: (0..20).map(|i| base + i).collect(), ..Set::default() }).unwrap();
-    m.add_material(&long, Material { elastic: Some(Elastic::Isotropic { young: ugly.abs(), poisson: 0.3 }), density: Some(1.0), fluid: None })
-        .unwrap();
+    m.add_material(
+        &long,
+        Material { elastic: Some(Elastic::Isotropic { young: ugly.abs(), poisson: 0.3 }), density: Some(1.0), ..Material::default() },
+    )
+    .unwrap();
     m.add_section(&long, Section { set: long.clone(), material: long.clone(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
         .unwrap();
     m.add_reference_point(&long, ReferencePoint { xyz: [ugly; 3], label: 0 }).unwrap();
@@ -640,7 +643,7 @@ fn what_abaqus_cannot_express_is_named() {
 
     let mut ortho = plate();
     let carbon = Elastic::EngineeringConstants { young: [140e3, 10e3, 10e3], poisson: [0.3, 0.3, 0.4], shear: [5e3, 5e3, 3.8e3] };
-    ortho.replace_material("Aluminium", Material { elastic: Some(carbon), density: Some(1.6e-9), fluid: None }).unwrap();
+    ortho.replace_material("Aluminium", Material { elastic: Some(carbon), density: Some(1.6e-9), ..Material::default() }).unwrap();
     assert!(unsupported(&ortho).contains("orthotropic material `Aluminium` in a shell section"));
 
     let mut loose = frequency();
@@ -658,7 +661,7 @@ fn what_abaqus_cannot_express_is_named() {
 fn orthotropic_solids_beams_and_rods_are_written() {
     let mut m = cantilever();
     let carbon = Elastic::EngineeringConstants { young: [140e3, 10e3, 10e3], poisson: [0.3, 0.3, 0.4], shear: [5e3, 5e3, 3.8e3] };
-    m.replace_material("Steel", Material { elastic: Some(carbon), density: None, fluid: None }).unwrap();
+    m.replace_material("Steel", Material { elastic: Some(carbon), density: None, ..Material::default() }).unwrap();
     let deck = abaqus::write(&m).unwrap();
     assert!(deck.contains("*ELASTIC, TYPE=ENGINEERING CONSTANTS\n140000.0, 10000.0, 10000.0, 0.3, 0.3, 0.4, 5000.0, 5000.0\n3800.0\n"), "{deck}");
 
@@ -698,4 +701,55 @@ fn a_model_that_is_not_ready_is_refused() {
     m.remove_section("beam").unwrap();
     assert!(matches!(abaqus::write(&m), Err(Error::Model(_))));
     assert!(matches!(abaqus::write(&Model::default()), Err(Error::Model(_))));
+}
+
+/// The cantilever with its steel given each plasticity in turn.
+fn plastic_cantilever(p: modelcraft_model::Plastic) -> Model {
+    let mut m = cantilever();
+    m.replace_material("Steel", Material { plastic: Some(p), ..steel() }).unwrap();
+    m
+}
+
+/// Plasticity is written as `*PLASTIC` (and Johnson–Cook's rate and heat keywords); damage and
+/// erosion, failure models of Abaqus/Explicit, are reported.
+#[test]
+fn plasticity_is_written_and_failure_reported() {
+    use modelcraft_model::{Damage, Erosion, Hardening, HardeningPoint, Plastic};
+    let section = |deck: &str| deck.split("*MATERIAL, NAME=Steel").nth(1).and_then(|s| s.split("*SOLID SECTION").next()).unwrap().to_string();
+    let deck =
+        abaqus::write(&plastic_cantilever(Plastic::Bilinear { yield_stress: 250.0, hardening_modulus: 1000.0, hardening: Hardening::Isotropic }))
+            .unwrap();
+    assert!(section(&deck).contains("*PLASTIC\n250.0, 0.0\n10250.0, 10.0\n"), "{}", section(&deck));
+    let deck =
+        abaqus::write(&plastic_cantilever(Plastic::Bilinear { yield_stress: 250.0, hardening_modulus: 1000.0, hardening: Hardening::Kinematic }))
+            .unwrap();
+    assert!(section(&deck).contains("*PLASTIC, HARDENING=KINEMATIC\n250.0, 0.0\n1250.0, 1.0\n"), "{}", section(&deck));
+    let table = Plastic::Table { points: vec![HardeningPoint { strain: 0.0, stress: 200.0 }, HardeningPoint { strain: 0.1, stress: 300.0 }] };
+    let deck = abaqus::write(&plastic_cantilever(table)).unwrap();
+    assert!(section(&deck).contains("*PLASTIC\n200.0, 0.0\n300.0, 0.1\n"), "{}", section(&deck));
+    let jc = Plastic::JohnsonCook {
+        a: 90.0,
+        b: 292.0,
+        n: 0.31,
+        c: 0.025,
+        m: 1.09,
+        reference_strain_rate: 1.0,
+        room_temperature: 294.0,
+        melt_temperature: 1356.0,
+        specific_heat: Some(3.83e8),
+        taylor_quinney: 0.9,
+    };
+    let deck = abaqus::write(&plastic_cantilever(jc.clone())).unwrap();
+    let s = section(&deck);
+    assert!(
+        s.contains("*PLASTIC, HARDENING=JOHNSON COOK\n90.0, 292.0, 0.31, 1.09, 1356.0, 294.0\n*RATE DEPENDENT, TYPE=JOHNSON COOK\n0.025, 1.0\n*SPECIFIC HEAT\n383000000.0\n*INELASTIC HEAT FRACTION\n0.9\n"),
+        "{s}"
+    );
+    let mut failing = plastic_cantilever(jc);
+    let mut steel = failing.material("Steel").unwrap().clone();
+    steel.damage = Some(Damage::JohnsonCook { d1: 0.54, d2: 4.89, d3: -3.03, d4: 0.014, d5: 1.12 });
+    steel.erosion = Some(Erosion { plastic_strain: 1.0 });
+    failing.replace_material("Steel", steel).unwrap();
+    let Err(Error::Unsupported { what, .. }) = abaqus::write(&failing) else { panic!("damage is not written") };
+    assert!(what.contains("material `Steel`: damage and erosion"), "{what}");
 }

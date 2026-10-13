@@ -131,7 +131,7 @@ impl Read {
 // Our own models.
 
 fn steel() -> Material {
-    Material { elastic: Some(Elastic::Isotropic { young: 210_000.0, poisson: 0.3 }), density: Some(7.85e-9), fluid: None }
+    Material { elastic: Some(Elastic::Isotropic { young: 210_000.0, poisson: 0.3 }), density: Some(7.85e-9), ..Material::default() }
 }
 
 /// A bar of `n` unit hex8 along X; node (i, y, z) = 1 + 4i + 2y + z.
@@ -190,7 +190,7 @@ fn plate() -> Model {
     m.add_set("top", Set { faces: (1..=4).map(|element| ElementFace { element, face: 1 }).collect(), ..Set::default() }).unwrap();
     m.add_material(
         "Aluminium",
-        Material { elastic: Some(Elastic::Isotropic { young: 70_000.0, poisson: 0.33 }), density: Some(2.7e-9), fluid: None },
+        Material { elastic: Some(Elastic::Isotropic { young: 70_000.0, poisson: 0.33 }), density: Some(2.7e-9), ..Material::default() },
     )
     .unwrap();
     let shell = SectionKind::Shell { thickness: 2.0, offset: 0.0, points: 5 };
@@ -521,7 +521,7 @@ fn beams_rods_orthotropy_couplings_and_prescribed_motion() {
     let ortho = Material {
         elastic: Some(Elastic::EngineeringConstants { young: [140e3, 10e3, 12e3], poisson: [0.3, 0.28, 0.4], shear: [5e3, 4.5e3, 3.8e3] }),
         density: Some(1.6e-9),
-        fluid: None,
+        ..Material::default()
     };
     m.add_material("Carbon", ortho.clone()).unwrap();
     m.replace_section(
@@ -676,7 +676,7 @@ fn what_nastran_cannot_express_is_named() {
     // Orthotropic beams, tilted orthotropic shells, one-point shells.
     let mut m = plate();
     let ortho = Elastic::EngineeringConstants { young: [140e3, 10e3, 10e3], poisson: [0.3, 0.3, 0.4], shear: [5e3, 5e3, 3.8e3] };
-    m.replace_material("Aluminium", Material { elastic: Some(ortho), density: Some(1.6e-9), fluid: None }).unwrap();
+    m.replace_material("Aluminium", Material { elastic: Some(ortho), density: Some(1.6e-9), ..Material::default() }).unwrap();
     m.set_node(9, [10.0, 10.0, 0.5]).unwrap();
     assert!(unsupported(&m).contains("planes of constant Z"));
     m.set_node(9, [10.0, 10.0, 0.0]).unwrap();
@@ -695,7 +695,7 @@ fn what_nastran_cannot_express_is_named() {
     let mut m = plate();
     m.set_element(9, ElementKind::Rod2, vec![1, 9]).unwrap();
     m.add_set("bars", Set { elements: vec![9], ..Set::default() }).unwrap();
-    m.add_material("Fibre", Material { elastic: Some(ortho), density: Some(1.6e-9), fluid: None }).unwrap();
+    m.add_material("Fibre", Material { elastic: Some(ortho), density: Some(1.6e-9), ..Material::default() }).unwrap();
     m.add_section(
         "bars",
         Section { set: "bars".into(), material: "Fibre".into(), kind: SectionKind::Rod { area: 1.0 }, formulation: Formulation::default() },
@@ -734,4 +734,51 @@ fn conflicting_values_and_ids_at_the_top_of_the_range() {
     m.add_reference_point("RP", ReferencePoint { xyz: [3.0, 0.5, 0.5], label: 1000 }).unwrap();
     m.add_coupling("pad", Coupling { reference_point: "RP".into(), set: "end".into(), kind: CouplingKind::Kinematic, dofs: Dofs::all() }).unwrap();
     assert!(matches!(nastran::write(&m), Err(Error::Limit(_))));
+}
+
+/// Plasticity: `MATS1` beside `MAT1` (bilinear by slope, a table through `TABLES1`); Johnson–Cook,
+/// damage and erosion are reported.
+#[test]
+fn plasticity_is_written_as_mats1() {
+    use modelcraft_model::{Erosion, Hardening, HardeningPoint, Plastic};
+    let with = |p: Plastic| {
+        let mut m = cantilever();
+        m.replace_material("Steel", Material { plastic: Some(p), ..steel() }).unwrap();
+        m
+    };
+    let deck = nastran::write(&with(Plastic::Bilinear { yield_stress: 250.0, hardening_modulus: 1000.0, hardening: Hardening::Kinematic })).unwrap();
+    let r = read(&deck);
+    let (_, f) = r.cards.iter().find(|(n, _)| n == "MATS1").unwrap();
+    assert_eq!((f[0].as_str(), f[1].as_str(), f[2].as_str(), int(&f[4]), int(&f[5])), ("1", "", "PLASTIC", 1, 2), "{f:?}");
+    assert_eq!((real(&f[3]), real(&f[6])), (1000.0, 250.0), "{f:?}");
+    let table = Plastic::Table { points: vec![HardeningPoint { strain: 0.0, stress: 210.0 }, HardeningPoint { strain: 0.1, stress: 315.0 }] };
+    let deck = nastran::write(&with(table)).unwrap();
+    let r = read(&deck);
+    let (_, mats1) = r.cards.iter().find(|(n, _)| n == "MATS1").unwrap();
+    let (_, table) = r.cards.iter().find(|(n, _)| n == "TABLES1").unwrap();
+    assert_eq!(mats1[1], table[0], "MATS1 names its table");
+    // The curve after the header line: the origin, then total strain σ/E + ε_p against σ.
+    let data: Vec<&String> = table[8..].iter().filter(|f| !f.is_empty()).collect();
+    assert_eq!(data.last().map(|s| s.as_str()), Some("ENDT"));
+    let values: Vec<f64> = data[..data.len() - 1].iter().map(|s| real(s)).collect();
+    let want = [0.0, 0.0, 0.001, 210.0, 0.1015, 315.0];
+    assert!(values.len() == 6 && values.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-12), "{values:?}");
+    let jc = Plastic::JohnsonCook {
+        a: 90.0,
+        b: 292.0,
+        n: 0.31,
+        c: 0.0,
+        m: 1.0,
+        reference_strain_rate: 1.0,
+        room_temperature: 294.0,
+        melt_temperature: 1356.0,
+        specific_heat: None,
+        taylor_quinney: 0.9,
+    };
+    let mut m = with(jc);
+    let mut steel = m.material("Steel").unwrap().clone();
+    steel.erosion = Some(Erosion { plastic_strain: 1.0 });
+    m.replace_material("Steel", steel).unwrap();
+    let Err(Error::Unsupported { what, .. }) = nastran::write(&m) else { panic!() };
+    assert!(what.contains("Johnson–Cook plasticity") && what.contains("damage and erosion"), "{what}");
 }

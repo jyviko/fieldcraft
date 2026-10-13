@@ -5,7 +5,7 @@ Generated from the capability catalogue (`crates/engine/src/catalogue.rs`) by
 Every entry is a toolbar button. **Ready** entries run their command; **coming soon** entries are
 shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 
-31 ready, 69 coming soon.
+32 ready, 68 coming soon.
 
 ## Geometry
 
@@ -117,7 +117,7 @@ shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 | Check | Check Model — Name every missing or bad definition before writing or solving | ready | `model.check` |
 | Decks | Abaqus Input — Write an Abaqus input file (.inp) | ready | `deck.write {"format":"abaqus"}` |
 | Decks | Nastran Deck — Write Nastran bulk data (SOL 101, 103) | ready | `deck.write {"format":"nastran"}` |
-| Decks | LS-DYNA Deck — Write an LS-DYNA keyword file | coming soon (M3) |  |
+| Decks | LS-DYNA Deck — Write an LS-DYNA keyword file | ready | `deck.write {"format":"lsdyna"}` |
 | Decks | Read Deck — Read a deck, keeping keywords ModelCraft does not know | coming soon (M9) |  |
 | Implicit | Static — Linear static solve with ModelCraft's own solver | coming soon (M4) |  |
 | Implicit | Frequency — Natural frequencies and mode shapes | coming soon (M4) |  |

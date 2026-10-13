@@ -205,7 +205,9 @@ pub fn element_quality(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<ElementQua
             let (area, metrics) = shape::quad(corners(&p)?);
             return Ok(ElementQuality { kind, size: area, jacobian: None, metrics });
         }
-        ElementKind::Rod2 | ElementKind::Beam2 => return Err(Error::Invalid(format!("quality metrics are not defined for {}", kind.name()))),
+        ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => {
+            return Err(Error::Invalid(format!("quality metrics are not defined for {}", kind.name())));
+        }
         ElementKind::Tet4 | ElementKind::Tet10 => shape::tet(corners(&p)?),
         ElementKind::Wedge6 => {
             let c: [[f64; 3]; 6] = corners(&p)?;

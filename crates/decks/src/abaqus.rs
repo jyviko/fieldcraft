@@ -63,6 +63,16 @@
 //! | tri3, quad4 | | S3 / S3R, S4 / S4R | | |
 //! | quad8 | | S8R (reduced only) | | |
 //! | beam2, rod2 | | | B31 | T3D2 |
+//! | rod3 | | | | T3D3 |
+//!
+//! Point masses, springs and dashpots are elements numbered after the mesh's, one per resolved
+//! copy, in an element set per definition (`<name>-mass`, `<name>-inertia`, `<name>-spring`, made
+//! unique against the model's sets): `MASS` with `*MASS` (one mass for every direction),
+//! `ROTARYI` with `*ROTARY INERTIA` (I11, I22, I33, I12, I13, I23), and `SPRING1`/`DASHPOT1` to
+//! the ground and `SPRING2`/`DASHPOT2` between two nodes along a global degree of freedom, or
+//! `SPRINGA`/`DASHPOTA` along the line of the nodes, with `*SPRING`/`*DASHPOT`. A mass that
+//! differs by direction and a spring along a skew fixed vector are reported (they need a local
+//! orientation, not written yet).
 //!
 //! | ModelCraft | Plane stress | Plane strain | Axisymmetric |
 //! |---|---|---|---|
@@ -137,13 +147,16 @@ pub fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
     crate::refuse_fluid(FORMAT, model)?;
     let by_type = elements_by_type(model, r)?;
     check_expressible(model)?;
+    let discrete = discrete_groups(model, r)?;
     let mut d = Deck::default();
     d.heading(model);
     d.nodes(model)?;
     d.elements(&by_type);
+    d.discrete_elements(&discrete);
     d.sets(model, r)?;
     d.materials(model)?;
     d.sections(model)?;
+    d.discrete_properties(&discrete)?;
     d.couplings(model, r);
     d.steps(model, r)?;
     Ok(d.out)
@@ -198,6 +211,7 @@ pub fn element_type(kind: ElementKind, section: &Section) -> std::result::Result
         (S::Shell { .. }, K::Tri6, ..) => return Err("tri6 shells (Abaqus has no general-purpose six-node triangular shell)".into()),
         (S::Beam { .. }, K::Beam2, ..) => "B31",
         (S::Rod { .. }, K::Rod2, ..) => "T3D2",
+        (S::Rod { .. }, K::Rod3, ..) => "T3D3",
         (s, ..) => return Err(format!("{} elements in a {} section", kind.name(), s.name())),
     };
     Ok(if f.hybrid { format!("{plain}H") } else { plain.to_string() })
@@ -284,6 +298,90 @@ fn check_expressible(model: &Model) -> Result<()> {
     unsupported(FORMAT, bad)
 }
 
+/// The property of a group of discrete elements.
+enum DiscreteProperty {
+    Mass(f64),
+    Inertia([f64; 6]),
+    /// `*SPRING` or `*DASHPOT`: the degrees of freedom line (empty for the axial form) and the
+    /// stiffness or damping coefficient.
+    Spring {
+        dashpot: bool,
+        dofs: String,
+        value: f64,
+    },
+}
+
+/// The discrete elements of one definition: element type, element set, members and property.
+struct DiscreteGroup {
+    element_type: &'static str,
+    elset: String,
+    members: Vec<(u32, Vec<u32>)>,
+    property: DiscreteProperty,
+}
+
+/// Point masses, springs and dashpots as element groups (one per definition and element type,
+/// labels counting up after the mesh's), or everything Abaqus cannot take.
+fn discrete_groups<'r>(model: &Model, r: &'r Resolved) -> Result<Vec<DiscreteGroup>> {
+    let mut next = model.elements().keys().next_back().map_or(1, |l| l.saturating_add(1));
+    let mut label = || -> Result<u32> {
+        let l = next;
+        if l > modelcraft_model::MAX_LABEL {
+            return Err(Error::Limit(format!(
+                "no element label left below {} for point masses, springs and dashpots",
+                modelcraft_model::MAX_LABEL as u64 + 1
+            )));
+        }
+        next += 1;
+        Ok(l)
+    };
+    let mut taken: BTreeSet<String> = model.sets().keys().map(|n| n.to_ascii_uppercase()).collect();
+    let mut groups: Vec<DiscreteGroup> = Vec::new();
+    // The (definition, element type) the last group holds.
+    let mut current: Option<(&str, &'static str)> = None;
+    let mut push = |name: &'r str, suffix: &str, element_type: &'static str, property: DiscreteProperty, member: (u32, Vec<u32>)| {
+        let key = (name, element_type);
+        if current.as_ref() == Some(&key)
+            && let Some(g) = groups.last_mut()
+        {
+            g.members.push(member);
+            return;
+        }
+        let elset = crate::unique_name(&format!("{name}-{suffix}"), &mut taken);
+        groups.push(DiscreteGroup { element_type, elset, members: vec![member], property });
+        current = Some(key);
+    };
+    let mut bad = BTreeSet::new();
+    for m in &r.masses {
+        if m.mass.iter().any(|c| *c != 0.0) {
+            if m.mass[0] != m.mass[1] || m.mass[0] != m.mass[2] {
+                bad.insert(format!("point mass `{}`: a mass that differs by direction (needs a local orientation, not written yet)", m.name));
+            }
+            push(&m.name, "mass", "MASS", DiscreteProperty::Mass(m.mass[0]), (label()?, vec![m.node]));
+        }
+    }
+    for m in &r.masses {
+        if m.inertia.iter().any(|c| *c != 0.0) {
+            push(&m.name, "inertia", "ROTARYI", DiscreteProperty::Inertia(m.inertia), (label()?, vec![m.node]));
+        }
+    }
+    for s in &r.springs {
+        let what = s.kind();
+        let line = matches!(s.direction, modelcraft_model::ResolvedDirection::Line(_));
+        let (element_type, dofs, nodes) = match (s.second, crate::axis_dof(s.direction), line) {
+            (Some(b), _, true) => (if s.dashpot { "DASHPOTA" } else { "SPRINGA" }, String::new(), vec![s.first, b]),
+            (Some(b), Some(d), false) => (if s.dashpot { "DASHPOT2" } else { "SPRING2" }, format!("{d}, {d}"), vec![s.first, b]),
+            (None, Some(d), _) => (if s.dashpot { "DASHPOT1" } else { "SPRING1" }, d.to_string(), vec![s.first]),
+            (_, None, _) => {
+                bad.insert(format!("{what} `{}`: a direction along no global axis (needs a local orientation, not written yet)", s.name));
+                continue;
+            }
+        };
+        push(&s.name, what, element_type, DiscreteProperty::Spring { dashpot: s.dashpot, dofs, value: s.value }, (label()?, nodes));
+    }
+    unsupported(FORMAT, bad)?;
+    Ok(groups)
+}
+
 /// Append a real number in the shortest form that reads back to the same value: `0.1`,
 /// `210000.0`, `7.85E-9`, `1.0E300`.
 fn push_number(out: &mut String, v: f64) -> Result<()> {
@@ -342,15 +440,7 @@ fn coupling_surfaces(model: &Model, r: &Resolved) -> BTreeMap<String, String> {
         r.sets.iter().filter(|(n, s)| !s.faces.is_empty() || !r.planar_edges(n).is_empty()).map(|(n, _)| n.to_ascii_uppercase()).collect();
     let mut out = BTreeMap::new();
     for name in model.couplings().keys() {
-        let base = format!("{name}-nodes");
-        let mut candidate = base.clone();
-        let mut k = 2u32;
-        while taken.contains(&candidate.to_ascii_uppercase()) {
-            candidate = format!("{base}-{k}");
-            k = k.saturating_add(1);
-        }
-        taken.insert(candidate.to_ascii_uppercase());
-        out.insert(name.clone(), candidate);
+        out.insert(name.clone(), crate::unique_name(&format!("{name}-nodes"), &mut taken));
     }
     out
 }
@@ -579,6 +669,41 @@ impl Deck {
                 self.out.push('\n');
             }
         }
+    }
+
+    fn discrete_elements(&mut self, groups: &[DiscreteGroup]) {
+        if groups.is_empty() {
+            return;
+        }
+        self.comment("Point masses, springs and dashpots");
+        for g in groups {
+            self.line(&format!("*ELEMENT, TYPE={}, ELSET={}", g.element_type, g.elset));
+            for (label, nodes) in &g.members {
+                let nodes: Vec<String> = nodes.iter().map(u32::to_string).collect();
+                self.line(&format!("{label}, {}", nodes.join(", ")));
+            }
+        }
+    }
+
+    fn discrete_properties(&mut self, groups: &[DiscreteGroup]) -> Result<()> {
+        for g in groups {
+            match &g.property {
+                DiscreteProperty::Mass(m) => {
+                    self.line(&format!("*MASS, ELSET={}", g.elset));
+                    self.numbers_line("", &[*m])?;
+                }
+                DiscreteProperty::Inertia(i) => {
+                    self.line(&format!("*ROTARY INERTIA, ELSET={}", g.elset));
+                    self.numbers_line("", i)?;
+                }
+                DiscreteProperty::Spring { dashpot, dofs, value } => {
+                    self.line(&format!("{}, ELSET={}", if *dashpot { "*DASHPOT" } else { "*SPRING" }, g.elset));
+                    self.line(if dofs.is_empty() { "," } else { dofs });
+                    self.numbers_line("", &[*value])?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn sets(&mut self, model: &Model, r: &Resolved) -> Result<()> {

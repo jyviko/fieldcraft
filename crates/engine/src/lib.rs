@@ -404,6 +404,13 @@ mod tests {
             json!({"name": "Bend", "procedure": {"type": "static"}, "loads": "push"}),
             json!({"step": "Bend", "loads": ["nope"], "active": "yes"}),
             json!({"step": "Bend", "boundary_conditions": [], "loads": []}),
+            json!({"name": "A", "target": {"set": "end"}, "mass": [1e308, -1, f64::MAX], "inertia": [1, 1, 1, 1e300, 0, 0]}),
+            json!({"name": "A", "target": {"reference_point": "RP"}, "inertia": [1, 2]}),
+            json!({"name": "A", "target": {"set": "end"}, "mass": "heavy"}),
+            json!({"name": "A", "type": "spring", "first": {"set": "end"}, "second": {"set": "end"}, "direction": "line", "stiffness": 1e308}),
+            json!({"name": "A", "type": "spring", "first": {"set": "end"}, "direction": {"dof": 255}, "stiffness": 1}),
+            json!({"name": "A", "type": "dashpot", "first": {"set": "end"}, "direction": {"vector": [1e-320, 0, 0]}, "coefficient": -1}),
+            json!({"name": "A", "type": "dashpot", "first": {"reference_point": "RP"}, "direction": {"dof": 4}, "coefficient": 1e300}),
             json!({"system": "furlongs"}),
             // Fluid domains, boundaries and steps.
             json!({"name": "A", "material": "Steel", "min": [0, 0, 0], "max": [1e308, 1, 1], "spacing": 1e-300}),

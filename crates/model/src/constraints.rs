@@ -104,6 +104,7 @@ impl Model {
                 .map(|(n, _)| format!("boundary condition `{n}`")),
         );
         users.extend(self.loads.iter().filter(|(_, l)| l.reference_point() == Some(name)).map(|(n, _)| format!("load `{n}`")));
+        users.extend(self.discrete_users(|t| t.reference_point() == Some(name)));
         not_in_use("reference point", name, users)?;
         remove_existing(&mut self.reference_points, "reference point", name).map(|_| ())
     }

@@ -19,10 +19,10 @@ hex8/20/27 with first and second derivatives).
 
 | Element | Use | Status |
 |---|---|---|
-| Point mass | Lumped mass at a node or reference point (isotropic or per direction) | in progress (1D elements I) |
-| Rotary inertia | Inertia tensor at a 6-DOF node | in progress (1D elements I) |
-| Spring to ground / two-point spring | Linear spring in a fixed direction or along the line of nodes | in progress (1D elements I) |
-| Dashpot to ground / two-point | Linear viscous damper (dynamic steps; ignored in static) | in progress (1D elements I) |
+| Point mass | Lumped mass at a node or reference point (isotropic or per direction) | done (implicit, explicit; Abaqus MASS, Nastran CONM1, LS-DYNA ELEMENT_MASS; per direction: Nastran only) |
+| Rotary inertia | Inertia tensor at a 6-DOF node | done (implicit; Abaqus ROTARYI, Nastran CONM1, LS-DYNA ELEMENT_INERTIA; explicit when it has rotations) |
+| Spring to ground / two-point spring | Linear spring in a fixed direction or along the line of nodes | done (implicit, explicit translational; Abaqus SPRING1/2/A, Nastran CELAS2, LS-DYNA ELEMENT_DISCRETE; skew fixed directions: LS-DYNA only) |
+| Dashpot to ground / two-point | Linear viscous damper (dynamic steps; ignored in static) | done (explicit; ignored with a warning in static and frequency steps; Abaqus DASHPOT1/2/A, Nastran CDAMP2, LS-DYNA ELEMENT_DISCRETE) |
 | Nonstructural mass | Mass spread over a region without stiffness | planned |
 | Connectors | Kinematic joints (hinge, slot, universal…) with elasticity, damping, stops | planned (M7) |
 
@@ -30,8 +30,8 @@ hex8/20/27 with first and second derivatives).
 
 | Element | Use | Status |
 |---|---|---|
-| Truss, 2-node (2D and 3D) | Axial members, cables (compression allowed) | in progress (1D elements I) |
-| Truss, 3-node (2D and 3D) | Curved axial members | in progress (1D elements I) |
+| Truss, 2-node (2D and 3D) | Axial members, cables (compression allowed) | done (rod2: implicit, explicit; T3D2, CROD, LS-DYNA truss beam; a plane truss is a space truss with its out-of-plane motion held) |
+| Truss, 3-node (2D and 3D) | Curved axial members | done (rod3: implicit, explicit; Abaqus T3D3; no Nastran or LS-DYNA counterpart) |
 | Beam, 2-node Timoshenko, 3D | Frames, stiffeners; shear deformable | in progress (shells and beams) |
 | Beam, 2-node Euler–Bernoulli (cubic), 2D and 3D | Slender frames; exact for end-loaded prismatic members | planned (1D elements II) |
 | Beam, 3-node Timoshenko (quadratic), 2D and 3D | Curved and stocky beams | planned (1D elements II) |

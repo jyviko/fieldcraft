@@ -138,8 +138,13 @@ module docs; ADR 0001 records why the linear algebra is our own.
    quad4, quad8), chosen by the section kind, and the model then has two degrees of freedom per
    node: the 2D elements declare `ElementDofs::new(DofSet::PLANE)` (Ux, Uy) to the `DofLayout`. A 2D model
    lies in the XY plane (axisymmetric: x the radius, Y the axis; nodes on the axis are held
-   radially), is loaded on element edges, and cannot mix with solids or couplings yet. Every reference point a coupling
-   ties to the mesh gets six degrees of freedom (translations, rotations) after the mesh's. Shells
+   radially), is loaded on element edges, and cannot mix with solids or couplings yet. Rod
+   sections' rod2 and rod3 elements are trusses (`modelcraft_fem::truss`). Point masses, rotary
+   inertia and springs (`Resolved::masses`, `springs`, expanded per node by the model) assemble on
+   the unknowns their nodes are given (`discrete::needs`, `discrete::dof_of`); dashpots are
+   ignored with a warning (no velocities in static and frequency steps). Every reference point a
+   coupling or a discrete element uses gets six degrees of freedom (translations, rotations) after
+   the mesh's. Shells
    and beams return "not supported yet". The step's boundary conditions prescribe translations
    (rotations do not exist on solid nodes) and a coupled point's six directions; its loads become
    a load vector: forces and tractions from `Resolved::nodal_loads`, forces and moments on coupled
@@ -181,7 +186,10 @@ and rigid-body modes.
 (kinematic and distributing), clamping through a coupled point equals clamping (static and
 modes), tension through a distributing coupling against the equivalent pressure away from the
 end, pure bending by a moment through a distributing coupling, torsion of a tube by a moment on
-a kinematically coupled point (twist and shear stress).
+a kinematically coupled point (twist and shear stress). `crates/solver/tests/one_d.rs`: member
+forces of determinate trusses (a plane Pratt truss, a space tripod) against the method of joints,
+the three-bar truss, a rod3 constant-stress patch and a bar hanging under its weight, spring–mass,
+skew springs, the two-mass chain, a bar with a tip mass and the torsional pendulum.
 
 ## Explicit solver
 
@@ -192,9 +200,11 @@ number their degrees of freedom with `modelcraft_fem::DofLayout` (docs/fem.md).
 
 1. **System.** `Model::resolve()`; hex8 sections with reduced integration become one-point
    uniform-strain hexahedra with Flanagan–Belytschko hourglass control, tet4 sections Bonet–Burton
-   average nodal pressure tetrahedra (`modelcraft_fem::uniform` holds their kinematics). Other
-   element kinds and formulations, couplings, reference points and moments return "not supported
-   yet". Masses are row-sum lumped. A zero-valued boundary condition holds a degree of freedom; a
+   average nodal pressure tetrahedra (`modelcraft_fem::uniform` holds their kinematics), rod2 and
+   rod3 trusses (`discrete`). Point masses add to the lumped mass; springs and dashpots (on the
+   previous half increment's velocity) add internal and viscous forces and their own stable
+   increment. Other element kinds and formulations, couplings, reference points, rotary inertia,
+   rotational springs and moments return "not supported yet". Masses are row-sum lumped. A zero-valued boundary condition holds a degree of freedom; a
    displacement value is reached at constant velocity over the step. Loads act in full from the
    start. The step lists initial velocities and fixed frictionless rigid planes by set.
 2. **Time step.** Each element's highest frequency is bounded in closed form (exact for a cube);
@@ -227,7 +237,9 @@ only): stress waves in hex8 and tet4 bars (front at c·t, σ = ρ c v, work inpu
 rigid wall (contact time 2L/c, rebound speed, plateau force ρ c v₀ A), the energy balance,
 bit-for-bit repeatability; Dienes' simple shear for both rates, a stressed element turned rigidly
 by 90°, the J2 uniaxial curve and unloading at large strain, damage failure at the fracture
-strain, and the Taylor bar against Taylor's 1948 estimate; in the engine (`solve.rs`), a
+strain, and the Taylor bar against Taylor's 1948 estimate; `crates/explicit/tests/one_d.rs`:
+spring–mass period, damped decay rate and period, a dashpot alone, two masses on a line spring,
+waves in rod2 and rod3 bars; in the engine (`solve.rs`), a
 cantilever's free-vibration period against `solve.frequency`.
 
 ## Lattice Boltzmann solver

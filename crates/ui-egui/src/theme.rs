@@ -153,7 +153,7 @@ impl Tokens {
             ElementKind::Tet4 | ElementKind::Tet10 => self.tet,
             ElementKind::Wedge6 => self.wedge,
             ElementKind::Tri3 | ElementKind::Tri6 | ElementKind::Quad4 | ElementKind::Quad8 => self.shell,
-            ElementKind::Rod2 | ElementKind::Beam2 => self.line_element,
+            ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => self.line_element,
         }
     }
 }

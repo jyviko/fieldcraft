@@ -199,6 +199,7 @@ impl Basis {
     pub fn of(kind: ElementKind) -> Basis {
         match kind {
             ElementKind::Rod2 | ElementKind::Beam2 => Basis::Line2,
+            ElementKind::Rod3 => Basis::Line3,
             ElementKind::Tri3 => Basis::Tri3,
             ElementKind::Tri6 => Basis::Tri6,
             ElementKind::Quad4 => Basis::Quad4,

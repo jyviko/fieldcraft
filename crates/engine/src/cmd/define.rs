@@ -1,13 +1,14 @@
 //! Model definition commands: create, edit and delete sets, materials, sections, reference
-//! points, couplings, boundary conditions, loads, fluid domains and steps, and the step activity
-//! table.
+//! points, couplings, point masses, springs and dashpots, boundary conditions, loads, fluid
+//! domains and steps, and the step activity table.
 //!
 //! Each definition's parameters are its JSON form in the model (the same form a `.modelcraft`
 //! file stores), plus its `name`. `create` fails when the name is taken, `edit` replaces an
 //! existing definition, `delete` refuses while another definition refers to it.
 
 use modelcraft_model::{
-    BoundaryCondition, Coupling, FaceCondition, FluidBoundary, FluidDomain, Load, Material, Model, ReferencePoint, Section, Set, Step,
+    BoundaryCondition, Coupling, FaceCondition, FluidBoundary, FluidDomain, Load, Material, Model, PointMass, ReferencePoint, Section, Set, Spring,
+    Step,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -174,6 +175,34 @@ definition_commands!(
     COUPLING_CREATE,
     COUPLING_EDIT,
     COUPLING_DELETE
+);
+
+definition_commands!(
+    "point mass",
+    PointMass,
+    "mass",
+    "Point Mass",
+    r#"{"name": "motor", "target": {"set": "…"} | {"reference_point": "…"}, "mass": 2.5 | [mx, my, mz] (per global direction), "inertia": [I11, I22, I33, I12, I13, I23] (tensor about the node in global axes; needs rotations: a reference point)} — at every node of the target, each with the full value"#,
+    add_mass,
+    replace_mass,
+    remove_mass,
+    MASS_CREATE,
+    MASS_EDIT,
+    MASS_DELETE
+);
+
+definition_commands!(
+    "spring",
+    Spring,
+    "spring",
+    "Spring or Dashpot",
+    r#"{"name": "mount", "type": "spring", "stiffness": 1000 | "type": "dashpot", "coefficient": 5, "first": {"set": "…"} | {"reference_point": "…"}, "second": (optional; without it each node of `first` connects to the ground; with it each end is one node), "direction": {"dof": 1..6} (4–6: torsional) | {"vector": [x, y, z]} | "line" (along the two ends, two-point only)} — dashpots act in dynamic steps; static and frequency steps ignore them"#,
+    add_spring,
+    replace_spring,
+    remove_spring,
+    SPRING_CREATE,
+    SPRING_EDIT,
+    SPRING_DELETE
 );
 
 definition_commands!(

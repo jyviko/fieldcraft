@@ -16,7 +16,7 @@ pub mod nastran;
 use std::collections::{BTreeMap, BTreeSet};
 
 use modelcraft_model::nodal::edge_pressure;
-use modelcraft_model::{Diagnostic, Load, Model, Resolved};
+use modelcraft_model::{Diagnostic, Load, Model, Resolved, ResolvedDirection};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
@@ -157,4 +157,29 @@ pub fn edge_pressure_loads<'a>(model: &Model, r: &Resolved, active: impl IntoIte
     }
     out.retain(|_, v| *v != 0.0);
     Ok(out)
+}
+
+/// The global degree of freedom (1–6) a spring or dashpot direction acts along, when it is one
+/// (a vector or line along an axis counts: the sign does not matter to a spring).
+pub(crate) fn axis_dof(d: ResolvedDirection) -> Option<u8> {
+    match d {
+        ResolvedDirection::Dof(k) => Some(k),
+        ResolvedDirection::Vector(n) | ResolvedDirection::Line(n) => {
+            let axis = n.iter().position(|c| c.abs() == 1.0)?;
+            (n.iter().filter(|c| **c != 0.0).count() == 1).then_some(axis as u8 + 1)
+        }
+    }
+}
+
+/// `base`, or `base-2`, `base-3`, … : the first that is not in `taken` (compared without case),
+/// which it is then added to.
+pub(crate) fn unique_name(base: &str, taken: &mut BTreeSet<String>) -> String {
+    let mut candidate = base.to_string();
+    let mut k = 2u32;
+    while taken.contains(&candidate.to_ascii_uppercase()) {
+        candidate = format!("{base}-{k}");
+        k = k.saturating_add(1);
+    }
+    taken.insert(candidate.to_ascii_uppercase());
+    candidate
 }

@@ -35,7 +35,13 @@
 //!   (`PPLANE`/`PLPLANE` with `CPLSTN*`/`CQUADX`, `CTRIAX6`, `PAXI`) differ between Nastran
 //!   dialects, so a deck could not be read the same everywhere;
 //! - centrifugal loads: `RFORCE` about an axis through the origin of the basic system (speed in
-//!   revolutions per time unit).
+//!   revolutions per time unit);
+//! - point masses: `CONM1`, the node's 6 × 6 mass matrix (the masses per direction on the
+//!   translations, the inertia tensor's components on the rotations, so no product-of-inertia sign
+//!   convention is involved); springs and dashpots along a global degree of freedom: `CELAS2` and
+//!   `CDAMP2` (the second grid left blank for one to the ground). Their ids follow the rigid
+//!   elements'. A spring or dashpot along a skew direction and the three-node truss (rod3) have
+//!   no counterpart here and are reported.
 //!
 //! Field widths, continuations and number forms are in [`card`]. Model content Nastran cannot
 //! express is reported as [`Error::Unsupported`], every item at once, and nothing is written.
@@ -96,7 +102,7 @@ pub fn order(kind: ElementKind) -> &'static [usize] {
 /// The connection entry's name for an element kind.
 pub fn element_card(kind: ElementKind) -> &'static str {
     match kind {
-        ElementKind::Rod2 => "CROD",
+        ElementKind::Rod2 | ElementKind::Rod3 => "CROD",
         ElementKind::Beam2 => "CBEAM",
         ElementKind::Tri3 => "CTRIA3",
         ElementKind::Tri6 => "CTRIA6",
@@ -257,6 +263,8 @@ struct Deck<'m> {
     element_pid: BTreeMap<u32, u32>,
     /// Rigid elements: (id, coupling name, coupling).
     rigid: Vec<(u32, &'m str, &'m Coupling)>,
+    /// Point masses, springs and dashpots: (comment, card).
+    discrete: Vec<(String, Card)>,
     /// Node → (dependent degrees of freedom, coupling that makes them dependent).
     dependent: BTreeMap<u32, (Dofs, &'m str)>,
     /// Constraint sets by id.
@@ -304,6 +312,7 @@ impl<'m> Deck<'m> {
             properties: Vec::new(),
             element_pid: BTreeMap::new(),
             rigid: Vec::new(),
+            discrete: Vec::new(),
             dependent: BTreeMap::new(),
             spc_sets: Vec::new(),
             load_sids: BTreeMap::new(),
@@ -315,6 +324,7 @@ impl<'m> Deck<'m> {
         self.plan_materials()?;
         self.plan_sections()?;
         self.plan_couplings()?;
+        self.plan_discrete()?;
         self.plan_constraints()?;
         self.plan_loads()?;
         for sub in &mut self.subcases {
@@ -447,6 +457,9 @@ impl<'m> Deck<'m> {
                     self.add_property(sname, Property::Beam { mid, profile, orientation }, elements.iter().copied())?;
                 }
                 SectionKind::Rod { area } => {
+                    if elements.iter().any(|e| kind_of(*e) == Some(ElementKind::Rod3)) {
+                        self.problems.insert(format!("section `{sname}`: three-node trusses (rod3; Nastran's rods have two grids)"));
+                    }
                     let Some(mid) = ids.isotropic else { continue };
                     self.add_property(sname, Property::Rod { mid, area }, elements.iter().copied())?;
                 }
@@ -516,6 +529,44 @@ impl<'m> Deck<'m> {
                 "couplings `{a}` and `{b}` both make nodes {} follow another node (Nastran makes a degree of freedom dependent once)",
                 labels(&nodes)
             ));
+        }
+        Ok(())
+    }
+
+    /// Point masses, springs and dashpots, numbered after the rigid elements.
+    fn plan_discrete(&mut self) -> Result<()> {
+        let r = self.r;
+        let mut next = self.rigid.last().map(|e| e.0).or_else(|| self.model.elements().keys().next_back().copied()).unwrap_or(0);
+        let mut id = || -> Result<u32> {
+            next = next
+                .checked_add(1)
+                .filter(|n| *n <= MAX_LABEL)
+                .ok_or_else(|| Error::Limit(format!("no element id left below {} for point masses, springs and dashpots", MAX_LABEL as u64 + 1)))?;
+            Ok(next)
+        };
+        for m in &r.masses {
+            let [mx, my, mz] = m.mass;
+            let [i11, i22, i33, i12, i13, i23] = m.inertia;
+            // M11, M21, M22, M31, M32, M33, then the rotations' rows: M41…M44, M51…M55, M61…M66.
+            let card = Card::new("CONM1")
+                .int(id()?)
+                .int(m.node)
+                .blank()
+                .reals([mx, 0.0, my, 0.0, 0.0, mz, 0.0, 0.0, 0.0, i11, 0.0, 0.0, 0.0, i12, i22, 0.0, 0.0, 0.0, i13, i23, i33]);
+            self.discrete.push((format!("point mass {}", m.name), card));
+        }
+        for s in &r.springs {
+            let what = s.kind();
+            let Some(dof) = crate::axis_dof(s.direction) else {
+                self.problems.insert(format!("{what} `{}`: a direction along no global axis (CELAS and CDAMP act along grid components)", s.name));
+                continue;
+            };
+            let card = Card::new(if s.dashpot { "CDAMP2" } else { "CELAS2" }).int(id()?).real(s.value).int(s.first).int(dof);
+            let card = match s.second {
+                Some(b) => card.int(b).int(dof),
+                None => card,
+            };
+            self.discrete.push((format!("{what} {}", s.name), card));
         }
         Ok(())
     }
@@ -779,6 +830,13 @@ impl<'m> Deck<'m> {
                 }
             };
             write_named(out, &format!("coupling {name}"), *eid, card)?;
+        }
+        if !self.discrete.is_empty() {
+            comment(out, "point masses, springs and dashpots");
+        }
+        for (what, card) in &self.discrete {
+            comment(out, what);
+            card.write(out)?;
         }
         Ok(())
     }

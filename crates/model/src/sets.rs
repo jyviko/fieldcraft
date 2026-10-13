@@ -122,6 +122,7 @@ impl Model {
         let mut users = Vec::new();
         users.extend(self.sections.iter().filter(|(_, s)| s.set == set).map(|(n, _)| format!("section `{n}`")));
         users.extend(self.couplings.iter().filter(|(_, c)| c.set == set).map(|(n, _)| format!("coupling `{n}`")));
+        users.extend(self.discrete_users(|t| t.set() == Some(set)));
         users
             .extend(self.boundary_conditions.iter().filter(|(_, b)| b.target().set() == Some(set)).map(|(n, _)| format!("boundary condition `{n}`")));
         users.extend(self.loads.iter().filter(|(_, l)| l.set() == Some(set)).map(|(n, _)| format!("load `{n}`")));

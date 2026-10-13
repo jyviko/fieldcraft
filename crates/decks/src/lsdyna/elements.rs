@@ -38,7 +38,7 @@ impl Keyword {
             ElementKind::Hex20 => Keyword::SolidH20,
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Wedge6 | ElementKind::Hex8 => Keyword::Solid,
             ElementKind::Tri3 | ElementKind::Tri6 | ElementKind::Quad4 | ElementKind::Quad8 => Keyword::Shell,
-            ElementKind::Rod2 | ElementKind::Beam2 => Keyword::Beam,
+            ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => Keyword::Beam,
         }
     }
 
@@ -56,6 +56,7 @@ impl Keyword {
 pub(crate) fn order(kind: ElementKind) -> &'static [usize] {
     match kind {
         ElementKind::Rod2 | ElementKind::Beam2 => &[0, 1],
+        ElementKind::Rod3 => &[0, 1, 2],
         ElementKind::Tri3 => &[0, 1, 2, 2],
         ElementKind::Tri6 => &[0, 1, 2, 2, 3, 4, 5, 5],
         ElementKind::Quad4 => &[0, 1, 2, 3],
@@ -141,6 +142,7 @@ pub(crate) fn elform(kind: ElementKind, section: &SectionKind, f: Formulation, s
         },
         SectionKind::Rod { .. } => match kind {
             ElementKind::Rod2 => plain(3),
+            ElementKind::Rod3 => no("LS-DYNA's trusses have two nodes; there is no counterpart for"),
             _ => no("a rod section cannot hold"),
         },
         SectionKind::Beam { .. } => no("beam sections are not written to LS-DYNA decks yet (planned with beam profiles):"),

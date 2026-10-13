@@ -14,6 +14,7 @@ pub struct Node {
 
 /// Element topology. Node order is corners first, then mid-side nodes, with positive volume for
 /// a right-handed ordering:
+/// - rod3: the two ends, then the middle node;
 /// - tet10: mid-side nodes 5–10 on edges 1-2, 2-3, 3-1, 1-4, 2-4, 3-4;
 /// - wedge6: triangle 1-2-3, then 4-5-6 on the side its right-hand normal points to;
 /// - hex8/hex20: face 1-2-3-4, then 5-6-7-8 above it; hex20's mid-side nodes 9–12 lie on the
@@ -25,8 +26,10 @@ pub struct Node {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ElementKind {
-    /// Two-node axial member.
+    /// Two-node axial member (truss).
     Rod2,
+    /// Three-node axial member (quadratic truss, straight or curved).
+    Rod3,
     /// Two-node beam.
     Beam2,
     /// Three-node triangle (shell or membrane).
@@ -50,8 +53,9 @@ pub enum ElementKind {
 }
 
 impl ElementKind {
-    pub const ALL: [ElementKind; 11] = [
+    pub const ALL: [ElementKind; 12] = [
         ElementKind::Rod2,
+        ElementKind::Rod3,
         ElementKind::Beam2,
         ElementKind::Tri3,
         ElementKind::Tri6,
@@ -67,7 +71,7 @@ impl ElementKind {
     pub fn node_count(self) -> usize {
         match self {
             ElementKind::Rod2 | ElementKind::Beam2 => 2,
-            ElementKind::Tri3 => 3,
+            ElementKind::Rod3 | ElementKind::Tri3 => 3,
             ElementKind::Quad4 | ElementKind::Tet4 => 4,
             ElementKind::Tri6 | ElementKind::Wedge6 => 6,
             ElementKind::Quad8 | ElementKind::Hex8 => 8,
@@ -79,7 +83,7 @@ impl ElementKind {
     /// Corner nodes: the first ones in the node list (the rest are mid-side nodes).
     pub fn corner_count(self) -> usize {
         match self {
-            ElementKind::Rod2 | ElementKind::Beam2 => 2,
+            ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => 2,
             ElementKind::Tri3 | ElementKind::Tri6 => 3,
             ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Tet4 | ElementKind::Tet10 => 4,
             ElementKind::Wedge6 => 6,
@@ -95,7 +99,7 @@ impl ElementKind {
     /// Topological dimension: 1 for line elements, 2 for shells, 3 for solids.
     pub fn dimension(self) -> u8 {
         match self {
-            ElementKind::Rod2 | ElementKind::Beam2 => 1,
+            ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => 1,
             ElementKind::Tri3 | ElementKind::Tri6 | ElementKind::Quad4 | ElementKind::Quad8 => 2,
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Wedge6 | ElementKind::Hex8 | ElementKind::Hex20 => 3,
         }
@@ -105,6 +109,7 @@ impl ElementKind {
     pub fn name(self) -> &'static str {
         match self {
             ElementKind::Rod2 => "rod2",
+            ElementKind::Rod3 => "rod3",
             ElementKind::Beam2 => "beam2",
             ElementKind::Tri3 => "tri3",
             ElementKind::Tri6 => "tri6",
@@ -134,7 +139,7 @@ impl ElementKind {
     /// - Line elements have none.
     pub fn faces(self) -> &'static [&'static [usize]] {
         match self {
-            ElementKind::Rod2 | ElementKind::Beam2 => &[],
+            ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => &[],
             ElementKind::Tri3 => &[&[0, 1, 2], &[0, 2, 1]],
             ElementKind::Tri6 => &[&[0, 1, 2, 3, 4, 5], &[0, 2, 1, 5, 4, 3]],
             ElementKind::Quad4 => &[&[0, 1, 2, 3], &[0, 3, 2, 1]],
@@ -160,6 +165,7 @@ impl ElementKind {
     pub fn edges(self) -> &'static [&'static [usize]] {
         match self {
             ElementKind::Rod2 | ElementKind::Beam2 => &[&[0, 1]],
+            ElementKind::Rod3 => &[&[0, 1, 2]],
             ElementKind::Tri3 => &[&[0, 1], &[1, 2], &[2, 0]],
             ElementKind::Tri6 => &[&[0, 1, 3], &[1, 2, 4], &[2, 0, 5]],
             ElementKind::Quad4 => &[&[0, 1], &[1, 2], &[2, 3], &[3, 0]],
@@ -357,7 +363,7 @@ mod tests {
     /// Reference coordinates with positive volume for each kind (mid-side nodes at edge midpoints).
     fn reference(kind: ElementKind) -> Vec<[f64; 3]> {
         let corners: Vec<[f64; 3]> = match kind {
-            ElementKind::Rod2 | ElementKind::Beam2 => vec![[0., 0., 0.], [1., 0., 0.]],
+            ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => vec![[0., 0., 0.], [1., 0., 0.]],
             ElementKind::Tri3 | ElementKind::Tri6 => vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]],
             ElementKind::Quad4 | ElementKind::Quad8 => vec![[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]],
             ElementKind::Tet4 | ElementKind::Tet10 => vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]],

@@ -997,6 +997,12 @@ the module docs):
   distributing (interpolation) constraint as a least-squares rigid fit with loads spread by
   virtual work, G. H. K. Heirman, W. Desmet, Multibody Syst. Dyn. 24(2):219–234, 2010; the
   reduced matrix product T_fᵀ K T_f row by row, F. G. Gustavson, ACM TOMS 4(3):250–269, 1978.
+- Trusses and discrete elements: the isoparametric bar along its arc, R. D. Cook, D. S. Malkus,
+  M. E. Plesha, R. J. Witt, *Concepts and Applications of Finite Element Analysis*, 4th ed.,
+  Wiley 2002, §3.6 and §6.2, and Hughes 2000, §1.10; springs k [n nᵀ, −n nᵀ; −n nᵀ, n nᵀ],
+  Cook et al. 2002, §2.2 and §2.10; HRZ lumping as above. Verified against the method of joints
+  (statically determinate trusses), the three-bar truss, the hanging bar, √(k/m), the two-mass
+  chain and the torsional pendulum √(k_t/J).
 - Verification: R. H. MacNeal, R. L. Harder, *A proposed standard set of problems to test finite
   element accuracy*, Finite Elem. Anal. Des. 1(1):3–20, 1985 (patch tests); Lamé, Kirsch,
   Timoshenko and Euler–Bernoulli closed forms; Saint-Venant's principle (tension through a
@@ -1024,6 +1030,10 @@ again in the module docs):
   14(5):437–449, 1998.
 - Bulk viscosity and its time-step correction: J. von Neumann, R. D. Richtmyer, J. Appl. Phys.
   21(3):232–237, 1950; M. L. Wilkins, J. Comput. Phys. 36(3):281–303, 1980.
+- Springs and dashpots: lagged-velocity damping and the damped stable increment
+  Δt ≤ (2/ω)(√(1 + ξ²) − ξ), Belytschko et al. 2014, §6.2–6.3; Gershgorin's bound on
+  M^{-1/2} K M^{-1/2} per degree of freedom. Verified against the damped oscillator's decay e^{−ξωt}
+  and period 2π/ω_d.
 - Rigid walls as kinematic velocity constraints: T. J. R. Hughes, R. L. Taylor, J. L. Sackman,
   A. Curnier, W. Kanoknukulchai, CMAME 8(3):249–276, 1976.
 - Verification: d'Alembert's solution of the 1D wave equation (front at c t, σ = ρ c v), the

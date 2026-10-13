@@ -31,6 +31,15 @@
 //!   (with `*LOAD_BODY_PARTS` when it acts on a set); output as `*DATABASE_BINARY_D3PLOT`,
 //!   `*DATABASE_SPCFORC` and `*DATABASE_EXTENT_BINARY`.
 //!
+//! Point masses are `*ELEMENT_MASS` (one mass for every direction) or `*ELEMENT_INERTIA` (the
+//! inertia tensor's components, with the mass); springs and dashpots are `*ELEMENT_DISCRETE` with
+//! one `*PART`, `*SECTION_DISCRETE` (torsional for a rotational degree of freedom) and
+//! `*MAT_SPRING_ELASTIC` or `*MAT_DAMPER_VISCOUS` per definition, acting along the line of their
+//! nodes or along a `*DEFINE_SD_ORIENTATION` vector. A spring or dashpot to the ground connects
+//! to an extra node at the same place, held by `*BOUNDARY_SPC_NODE` (labels after the mesh's).
+//! Element, part, section and material ids continue after the mesh's. A mass that differs by
+//! direction and the three-node truss (rod3) are reported.
+//!
 //! Several steps are independent analyses in the model (nothing carries over), which is what
 //! LS-DYNA's `*CASE` runs: each step is a case between `*CASE_BEGIN_n` and `*CASE_END_n`, run in
 //! order when LS-DYNA is started with `CASE` on its command line. A single step is written
@@ -54,7 +63,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use modelcraft_model::{
     BoundaryCondition, CouplingKind, Diagnostic, Dofs, Elastic, Element, ElementKind, Hardening, Load, Material, Model, OutputVariable, Plastic,
-    Procedure, Resolved, Section, SectionKind, Step, Target,
+    Procedure, Resolved, ResolvedDirection, Section, SectionKind, Step, Target,
 };
 
 use crate::{Error, Result};
@@ -161,6 +170,7 @@ fn write_with(model: &Model, r: &Resolved) -> Result<Written> {
     element_cards(&mut d, &plan)?;
     sets(&mut d, model, r, &plan)?;
     couplings(&mut d, model, r, &plan)?;
+    discrete(&mut d, model, r, &plan)?;
     if let Some(parts) = &plan.gravity_parts {
         d.line("*SET_PART_LIST");
         d.header(&["sid"]);
@@ -312,6 +322,11 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
             None
         }
     };
+    for m in &r.masses {
+        if m.mass[0] != m.mass[1] || m.mass[0] != m.mass[2] {
+            refused.insert(format!("point mass `{}`: a mass that differs by direction (LS-DYNA's mass elements take one mass)", m.name));
+        }
+    }
     let mut curves = BTreeMap::new();
     for name in materials.keys() {
         let Some(m) = model.material(name) else { continue };
@@ -641,6 +656,122 @@ fn couplings(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan) -> Result<(
                 d.card([Field::from(sid), Field::from(123)]);
                 next_interpolation += 1;
             }
+        }
+    }
+    Ok(())
+}
+
+/// Point masses, springs and dashpots (see the module docs).
+fn discrete(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan) -> Result<()> {
+    if r.masses.is_empty() && r.springs.is_empty() {
+        return Ok(());
+    }
+    let limit = |what: &str| Error::Limit(format!("no {what} id left for point masses, springs and dashpots"));
+    let mut eid = model.elements().keys().next_back().copied().unwrap_or(0);
+    let mut next_eid = || -> Result<u32> {
+        eid = eid.checked_add(1).filter(|e| *e <= modelcraft_model::MAX_LABEL).ok_or_else(|| limit("element"))?;
+        Ok(eid)
+    };
+    d.comment("Point masses");
+    for m in &r.masses {
+        let mass = m.mass[0];
+        if m.inertia.iter().all(|c| *c == 0.0) {
+            d.line("*ELEMENT_MASS");
+            d.header(&["eid", "nid", "mass"]);
+            d.card([Field::from(next_eid()?), Field::from(m.node), Field::from(mass)]);
+        } else {
+            let [i11, i22, i33, i12, i13, i23] = m.inertia;
+            d.line("*ELEMENT_INERTIA");
+            d.header(&["eid", "nid", "csid"]);
+            d.card([Field::from(next_eid()?), Field::from(m.node)]);
+            d.header(&["ixx", "ixy", "ixz", "iyy", "iyz", "izz", "mass"]);
+            d.card([i11, i12, i13, i22, i23, i33, mass].map(Field::from));
+        }
+    }
+    if r.springs.is_empty() {
+        return Ok(());
+    }
+    // Ids after the mesh's parts, the rigid bodies' parts and the materials.
+    let kinematic = model.couplings().values().filter(|c| c.kind == CouplingKind::Kinematic).count();
+    let mut pid = u32::try_from(plan.parts.len() + kinematic).map_err(|_| limit("part"))?;
+    let mut mid = u32::try_from(plan.materials.len()).map_err(|_| limit("material"))?;
+    let mut vid = 0u32;
+    // Ground nodes: labels after the mesh's, skipping the reference points'.
+    let taken: BTreeSet<u32> = model.reference_points().values().map(|p| p.label).collect();
+    let mut node = model.nodes().keys().next_back().copied().unwrap_or(0);
+    let mut ground: Vec<(u32, [f64; 3])> = Vec::new();
+    let mut elements: Vec<Vec<Field>> = Vec::new();
+    let mut current: Option<&str> = None;
+    let mut vid_of_part = 0u32;
+    for s in &r.springs {
+        let rotational = s.direction.is_rotational();
+        if current != Some(s.name.as_str()) {
+            current = Some(&s.name);
+            pid = pid.checked_add(1).ok_or_else(|| limit("part"))?;
+            mid = mid.checked_add(1).ok_or_else(|| limit("material"))?;
+            d.comment(&format!("{} `{}`", s.kind(), s.name));
+            if s.dashpot {
+                d.line("*MAT_DAMPER_VISCOUS_TITLE");
+                d.line(&s.name);
+                d.header(&["mid", "dc"]);
+            } else {
+                d.line("*MAT_SPRING_ELASTIC_TITLE");
+                d.line(&s.name);
+                d.header(&["mid", "k"]);
+            }
+            d.card([Field::from(mid), Field::from(s.value)]);
+            d.line("*SECTION_DISCRETE");
+            d.header(&["secid", "dro"]);
+            d.card([Field::from(pid), Field::from(i32::from(rotational))]);
+            d.line("*PART");
+            d.line(&s.name);
+            d.header(&["pid", "secid", "mid"]);
+            d.card([Field::from(pid), Field::from(pid), Field::from(mid)]);
+            let axis = (!matches!(s.direction, ResolvedDirection::Line(_))).then(|| s.direction.axis());
+            let v = match axis {
+                Some([x, y, z]) => {
+                    vid += 1;
+                    d.line("*DEFINE_SD_ORIENTATION");
+                    d.header(&["vid", "iop", "xt", "yt", "zt"]);
+                    d.card([Field::from(vid), Field::from(0), Field::from(x), Field::from(y), Field::from(z)]);
+                    vid
+                }
+                None => 0,
+            };
+            vid_of_part = v;
+        }
+        let second = match s.second {
+            Some(b) => b,
+            None => {
+                node = node.checked_add(1).ok_or_else(|| limit("node"))?;
+                while taken.contains(&node) {
+                    node = node.checked_add(1).ok_or_else(|| limit("node"))?;
+                }
+                if node > modelcraft_model::MAX_LABEL {
+                    return Err(limit("node"));
+                }
+                ground.push((node, model.label_xyz(s.first).ok_or_else(|| broken(format!("node {}", s.first)))?));
+                node
+            }
+        };
+        elements.push(vec![Field::from(next_eid()?), Field::from(pid), Field::from(s.first), Field::from(second), Field::from(vid_of_part)]);
+    }
+    d.line("*ELEMENT_DISCRETE");
+    d.header(&["eid", "pid", "n1", "n2", "vid"]);
+    for e in elements {
+        d.card(e);
+    }
+    if !ground.is_empty() {
+        d.comment("The ground ends of springs and dashpots, held in every direction");
+        d.line("*NODE");
+        d.header(&["nid", "x", "y", "z"]);
+        for (l, [x, y, z]) in &ground {
+            d.card([Field::from(*l), Field::from(*x), Field::from(*y), Field::from(*z)]);
+        }
+        d.line("*BOUNDARY_SPC_NODE");
+        d.header(&["nid", "cid", "dofx", "dofy", "dofz", "dofrx", "dofry", "dofrz"]);
+        for (l, _) in &ground {
+            d.card([Field::from(*l), Field::Blank].into_iter().chain([1; 6].map(Field::from)));
         }
     }
     Ok(())

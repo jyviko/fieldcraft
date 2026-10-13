@@ -79,7 +79,7 @@ pub struct DisplayMesh {
 /// counter-clockwise seen from outside for a positively oriented element.
 fn faces(kind: ElementKind) -> &'static [&'static [usize]] {
     match kind {
-        ElementKind::Rod2 | ElementKind::Beam2 => &[],
+        ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => &[],
         ElementKind::Tri3 | ElementKind::Tri6 => &[&[0, 1, 2]],
         ElementKind::Quad4 | ElementKind::Quad8 => &[&[0, 1, 2, 3]],
         ElementKind::Tet4 | ElementKind::Tet10 => &[&[0, 2, 1], &[0, 1, 3], &[1, 2, 3], &[2, 0, 3]],

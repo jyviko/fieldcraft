@@ -8,7 +8,8 @@
 //! - named sets ([`sets`]) defined by geometry names or explicit labels, resolved to nodes,
 //!   elements and element faces against the current mesh, so they survive remeshing;
 //! - materials and the unit system ([`materials`], [`units`]), sections with their element
-//!   formulation ([`sections`]), reference points and couplings ([`constraints`]);
+//!   formulation ([`sections`]), reference points and couplings ([`constraints`]), point masses,
+//!   springs and dashpots ([`discrete`]);
 //! - boundary conditions ([`bcs`]), loads ([`loads`]) and steps with an explicit table of which
 //!   boundary conditions and loads are active in each step ([`steps`]);
 //! - the check that names every missing or bad item, and the resolved view the deck writers and
@@ -33,6 +34,7 @@
 pub mod bcs;
 pub mod check;
 pub mod constraints;
+pub mod discrete;
 pub mod fluids;
 pub mod geometry;
 pub mod loads;
@@ -51,6 +53,7 @@ use serde::{Deserialize, Serialize};
 pub use bcs::{BoundaryCondition, Dofs, Symmetry, Target};
 pub use check::{Diagnostic, Resolved, ResolvedSet, Severity};
 pub use constraints::{Coupling, CouplingKind, ReferencePoint};
+pub use discrete::{Direction, Mass, PointMass, ResolvedDirection, ResolvedMass, ResolvedSpring, Spring};
 pub use fluids::{BoxFace, BoxFaces, FaceCondition, FluidBoundary, FluidDomain, Profile, SurfaceBoundary, SurfaceCondition};
 pub use geometry::{Classification, Entity, GeometryRef};
 pub use loads::{Distribution, Load, centrifugal_acceleration};
@@ -113,6 +116,10 @@ pub struct Model {
     sections: BTreeMap<String, Section>,
     reference_points: BTreeMap<String, ReferencePoint>,
     couplings: BTreeMap<String, Coupling>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    masses: BTreeMap<String, PointMass>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    springs: BTreeMap<String, Spring>,
     boundary_conditions: BTreeMap<String, BoundaryCondition>,
     loads: BTreeMap<String, Load>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -143,6 +150,10 @@ struct ModelData {
     reference_points: BTreeMap<String, ReferencePoint>,
     #[serde(default)]
     couplings: BTreeMap<String, Coupling>,
+    #[serde(default)]
+    masses: BTreeMap<String, PointMass>,
+    #[serde(default)]
+    springs: BTreeMap<String, Spring>,
     #[serde(default)]
     boundary_conditions: BTreeMap<String, BoundaryCondition>,
     #[serde(default)]
@@ -197,6 +208,12 @@ impl TryFrom<ModelData> for Model {
         }
         for (n, v) in d.couplings {
             m.add_coupling(&n, v)?;
+        }
+        for (n, v) in d.masses {
+            m.add_mass(&n, v)?;
+        }
+        for (n, v) in d.springs {
+            m.add_spring(&n, v)?;
         }
         for (n, v) in d.boundary_conditions {
             m.add_boundary_condition(&n, v)?;
@@ -307,6 +324,8 @@ impl Model {
             sections: self.sections.clone(),
             reference_points: self.reference_points.clone(),
             couplings: self.couplings.clone(),
+            masses: self.masses.clone(),
+            springs: self.springs.clone(),
             boundary_conditions: self.boundary_conditions.clone(),
             loads: self.loads.clone(),
             fluid_domains: self.fluid_domains.clone(),
@@ -315,13 +334,15 @@ impl Model {
     }
 
     /// Counts of each kind of definition, for summaries.
-    pub fn definition_counts(&self) -> [(&'static str, usize); 9] {
+    pub fn definition_counts(&self) -> [(&'static str, usize); 11] {
         [
             ("sets", self.sets.len()),
             ("materials", self.materials.len()),
             ("sections", self.sections.len()),
             ("reference_points", self.reference_points.len()),
             ("couplings", self.couplings.len()),
+            ("masses", self.masses.len()),
+            ("springs", self.springs.len()),
             ("boundary_conditions", self.boundary_conditions.len()),
             ("loads", self.loads.len()),
             ("fluid_domains", self.fluid_domains.len()),

@@ -56,7 +56,8 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Model | Steps: nonlinear static, explicit dynamics, heat transfer; amplitudes | M7–M8 | | planned |
 | Interaction | Tie between non-matching meshes | M7 | | planned |
 | Interaction | Contact (general and pairs), friction, automatic pair detection | M7 | | planned |
-| Interaction | Bolt pretension, springs, point masses, connectors | M7 | | planned |
+| Interaction | Springs and dashpots (ground or two-point; DOF, vector or line), point masses with rotary inertia | M4 | | done (implicit; explicit translational; all three decks with what each cannot take reported) |
+| Interaction | Bolt pretension, connectors | M7 | | planned |
 | Decks | Abaqus input writer (`deck.write`, flat deck; reports what Abaqus cannot express) | M3 | | done |
 | Decks | Nastran bulk data writer (`deck.write`, SOL 101 or 103 per deck; reports what Nastran cannot express) | M3 | | done |
 | Decks | LS-DYNA keyword writer (implicit; explicit in M8) | M3 | | done (implicit static and eigenvalue; beam sections planned) |

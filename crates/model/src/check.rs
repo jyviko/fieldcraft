@@ -71,6 +71,11 @@ pub struct Resolved {
     /// apply, so every one of them distributes a load the same way. A force or traction gives
     /// force components, a moment moment components.
     pub nodal_loads: BTreeMap<String, Vec<(u32, [f64; 3])>>,
+    /// Every point mass at every node of its target, by definition name, then node.
+    pub masses: Vec<crate::ResolvedMass>,
+    /// Every spring and dashpot at every node of its target (or between its two ends), by
+    /// definition name, then node.
+    pub springs: Vec<crate::ResolvedSpring>,
     /// The check's warnings (a resolved model has no errors).
     pub warnings: Vec<Diagnostic>,
     /// How each element of a 2D section (plane stress, plane strain, axisymmetric) extends out
@@ -95,6 +100,11 @@ impl Resolved {
     /// The edges of a set that belong to 2D elements: where a 2D model's surface loads act.
     pub fn planar_edges(&self, set: &str) -> Vec<crate::ElementEdge> {
         self.sets.get(set).map(|s| s.edges.iter().filter(|e| self.planar.contains_key(&e.element)).copied().collect()).unwrap_or_default()
+    }
+
+    /// The node labels point masses, springs and dashpots act on (repeats possible).
+    pub fn discrete_labels(&self) -> impl Iterator<Item = u32> + '_ {
+        self.masses.iter().map(|m| m.node).chain(self.springs.iter().flat_map(|s| std::iter::once(s.first).chain(s.second)))
     }
 
     /// The nodes a boundary condition, force or moment acts on.
@@ -160,9 +170,10 @@ impl Model {
         let mut resolved = Resolved::default();
         let units = self.units;
 
-        // A model of fluid steps alone needs no mesh: its domains carry their own grid.
+        // A model of fluid steps alone needs no mesh: its domains carry their own grid; one of
+        // point masses, springs and dashpots alone is its own mesh.
         let fluid_only = !self.steps.is_empty() && self.steps.iter().all(|s| s.procedure.fluid_domain().is_some());
-        if self.elements.is_empty() && !fluid_only {
+        if self.elements.is_empty() && !fluid_only && self.masses.is_empty() && self.springs.is_empty() {
             d.error("model", "the mesh has no elements");
         }
         if units.length().is_none() {
@@ -229,7 +240,7 @@ impl Model {
                     k.dimension() == 2
                 }
                 SectionKind::Beam { .. } => k == ElementKind::Beam2,
-                SectionKind::Rod { .. } => k == ElementKind::Rod2,
+                SectionKind::Rod { .. } => matches!(k, ElementKind::Rod2 | ElementKind::Rod3),
             };
             // The linear element with an incompatible-modes formulation for this kind of section.
             let incompatible_kind = if sec.kind.is_planar() { ElementKind::Quad4 } else { ElementKind::Hex8 };
@@ -362,6 +373,9 @@ impl Model {
             }
         }
 
+        // Point masses, springs and dashpots.
+        let (masses, springs) = self.resolve_discrete(&resolved, &mut d, &has_rotations);
+
         // Loads.
         let mut nodal_loads = BTreeMap::new();
         for (name, load) in &self.loads {
@@ -449,9 +463,121 @@ impl Model {
         }
 
         resolved.nodal_loads = nodal_loads;
+        resolved.masses = masses;
+        resolved.springs = springs;
         let mut out = d.0;
         out.sort_by_key(|a| a.severity);
         (resolved, out)
+    }
+
+    /// Point masses, springs and dashpots expanded to their nodes, reporting what cannot be
+    /// expanded.
+    fn resolve_discrete(
+        &self,
+        resolved: &Resolved,
+        d: &mut Diagnostics,
+        has_rotations: &dyn Fn(&Target) -> bool,
+    ) -> (Vec<crate::ResolvedMass>, Vec<crate::ResolvedSpring>) {
+        use crate::{Direction, ResolvedDirection, ResolvedMass, ResolvedSpring};
+        let mut masses = Vec::new();
+        let mut springs = Vec::new();
+        let mut count = 0usize;
+        let mut over = false;
+        let mut take = |n: usize| {
+            count = count.saturating_add(n);
+            over |= count > crate::discrete::MAX_DISCRETE;
+            !over
+        };
+        for (name, m) in &self.masses {
+            let subject = format!("point mass `{name}`");
+            let nodes = resolved.target_nodes(&m.target);
+            if nodes.is_empty() {
+                d.error(&subject, format!("{} has no nodes", m.target));
+                continue;
+            }
+            if m.inertia.is_some_and(|i| i.iter().any(|c| *c != 0.0)) && !has_rotations(&m.target) {
+                d.error(&subject, format!("{} has no nodes with rotations for its inertia; put it on a reference point", m.target));
+            }
+            if !take(nodes.len()) {
+                break;
+            }
+            let mass = m.mass.map_or([0.0; 3], crate::Mass::components);
+            let inertia = m.inertia.unwrap_or_default();
+            masses.extend(nodes.iter().map(|n| ResolvedMass { name: name.clone(), node: *n, mass, inertia }));
+        }
+        for (name, s) in &self.springs {
+            let subject = format!("{} `{name}`", s.kind());
+            let first = resolved.target_nodes(s.first());
+            let rotational = s.direction().is_rotational();
+            if first.is_empty() {
+                d.error(&subject, format!("{} has no nodes", s.first()));
+                continue;
+            }
+            if rotational && s.targets().any(|t| !has_rotations(t)) {
+                d.error(&subject, "acts on a rotation, and its nodes have none; connect reference points (or shell and beam nodes)");
+            }
+            let unit = |v: [f64; 3]| {
+                let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                (len > 0.0 && len.is_finite()).then(|| v.map(|c| c / len))
+            };
+            let pairs: Vec<(u32, Option<u32>)> = match s.second() {
+                None => first.iter().map(|n| (*n, None)).collect(),
+                Some(t) => {
+                    let second = resolved.target_nodes(t);
+                    if first.len() != 1 || second.len() != 1 {
+                        d.error(
+                            &subject,
+                            format!(
+                                "a two-point {} connects one node to one node; {} has {} and {t} has {} (use a vertex set or a reference point at each end)",
+                                s.kind(),
+                                s.first(),
+                                first.len(),
+                                second.len()
+                            ),
+                        );
+                        continue;
+                    }
+                    match (first.first(), second.first()) {
+                        (Some(a), Some(b)) if a == b => {
+                            d.error(&subject, format!("both ends are node {a}"));
+                            continue;
+                        }
+                        (Some(a), Some(b)) => vec![(*a, Some(*b))],
+                        _ => continue,
+                    }
+                }
+            };
+            if !take(pairs.len()) {
+                break;
+            }
+            for (a, b) in pairs {
+                let direction = match s.direction() {
+                    Direction::Dof(k) => ResolvedDirection::Dof(k),
+                    Direction::Vector(v) => match unit(v) {
+                        Some(n) => ResolvedDirection::Vector(n),
+                        None => {
+                            d.error(&subject, "its direction vector has no length");
+                            break;
+                        }
+                    },
+                    Direction::Line => {
+                        let ends = b.and_then(|b| Some((self.label_xyz(a)?, self.label_xyz(b)?)));
+                        match ends.and_then(|(x, y)| unit([y[0] - x[0], y[1] - x[1], y[2] - x[2]])) {
+                            Some(n) => ResolvedDirection::Line(n),
+                            None => {
+                                d.error(&subject, "its two ends are at the same point, so it has no line to act along");
+                                break;
+                            }
+                        }
+                    }
+                };
+                springs.push(ResolvedSpring { name: name.clone(), dashpot: s.is_dashpot(), first: a, second: b, direction, value: s.value() });
+            }
+        }
+        if over {
+            d.error("model", format!("point masses, springs and dashpots resolve to more than {} copies", crate::discrete::MAX_DISCRETE));
+        }
+        (masses, springs)
     }
 
     /// A force, moment or traction as nodal values (`None` for other loads), or why it cannot be

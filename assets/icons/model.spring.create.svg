@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
-  <title>interaction.spring</title>
+  <title>model.spring.create</title>
   <g id="Layer_1" data-name="Layer 1">
     <path d="M1.2 12 C1.2 11.006 2.006 10.2 3 10.2 C3.994 10.2 4.8 11.006 4.8 12 C4.8 12.994 3.994 13.8 3 13.8 C2.006 13.8 1.2 12.994 1.2 12 Z" fill="#dde2ea"/>
     <path d="M19.2 12 C19.2 11.006 20.006 10.2 21 10.2 C21.994 10.2 22.8 11.006 22.8 12 C22.8 12.994 21.994 13.8 21 13.8 C20.006 13.8 19.2 12.994 19.2 12 Z" fill="#dde2ea"/>

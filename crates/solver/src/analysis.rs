@@ -3,7 +3,7 @@
 use modelcraft_fem::element::{Extrapolation, extrapolation};
 use modelcraft_fem::quadrature::Rule;
 use modelcraft_fem::{PointStress, von_mises};
-use modelcraft_model::{ElementKind, Model, Procedure, Resolved};
+use modelcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
 use serde::Serialize;
 
 use crate::cholesky::{Factor, FactorError, UpperColumns};

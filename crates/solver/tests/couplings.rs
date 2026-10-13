@@ -108,7 +108,7 @@ fn clamping_through_a_coupled_reference_point_is_clamping() {
     assert!((b.reaction_total[2] - 1.0).abs() < 1e-9, "{:?}", b.reaction_total);
 
     let modes = Procedure::Frequency { modes: 3, min_hz: None, max_hz: None };
-    let (direct, coupled) = (build(false, modes), build(true, modes));
+    let (direct, coupled) = (build(false, modes.clone()), build(true, modes));
     let f = |g: &Grid| solve_frequency(&g.model, Some("Step"), &FrequencyOptions::default(), &Limits::default()).unwrap();
     let (fa, fb) = (f(&direct), f(&coupled));
     for (x, y) in fa.modes.iter().zip(&fb.modes) {

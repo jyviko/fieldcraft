@@ -9,6 +9,9 @@
 
 pub mod cmd;
 
+use std::sync::Arc;
+
+use modelcraft_geometry::Design;
 use modelcraft_model::Model;
 use serde_json::Value;
 
@@ -20,6 +23,8 @@ pub enum EngineError {
     Params(String),
     #[error(transparent)]
     Model(#[from] modelcraft_model::Error),
+    #[error(transparent)]
+    Geometry(#[from] modelcraft_geometry::Error),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
@@ -46,19 +51,22 @@ pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
     commands().iter().find(|c| c.id == id)
 }
 
-/// The model being edited and the commands that built it.
+/// The model being edited, the geometry it is built on and the commands that built it.
 #[derive(Debug, Clone, Default)]
 pub struct Session {
     pub model: Model,
+    /// The open SolidCraft design (`geometry.open`); shared, so a snapshot costs nothing.
+    pub design: Option<Arc<Design>>,
     /// Commands that changed the model, in order (a script that rebuilds it).
     pub journal: Vec<(String, Value)>,
 }
 
 impl Session {
-    /// Run a command. On an error or a panic the model is left as it was.
+    /// Run a command. On an error or a panic the model and the design are left as they were.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         let before = self.model.clone();
+        let design_before = self.design.clone();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
         let result = match outcome {
             Ok(r) => r,
@@ -68,10 +76,17 @@ impl Session {
                 Err(EngineError::Internal { command: id.to_string(), message })
             }
         };
+        let design_changed = match (&self.design, &design_before) {
+            (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+            (a, b) => a.is_some() != b.is_some(),
+        };
         match &result {
-            Ok(_) if self.model != before => self.journal.push((id.to_string(), params.clone())),
+            Ok(_) if self.model != before || design_changed => self.journal.push((id.to_string(), params.clone())),
             Ok(_) => {}
-            Err(_) => self.model = before,
+            Err(_) => {
+                self.model = before;
+                self.design = design_before;
+            }
         }
         result
     }
@@ -91,6 +106,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use modelcraft_geometry::sample::{Plate, plate_design};
     use serde_json::json;
 
     #[test]
@@ -143,6 +159,14 @@ mod tests {
             json!({"label": 1, "kind": "nope", "nodes": [1]}),
             json!({"label": 1, "kind": "tet4", "nodes": [1, 1, 1, 1]}),
             json!({"label": 1, "kind": "hex20", "nodes": vec![u32::MAX; 20]}),
+            json!({"path": ""}),
+            json!({"path": "/"}),
+            json!({"path": "/dev/zero"}),
+            json!({"path": "/no/such/design.solidcraft"}),
+            json!({"path": "x".repeat(100_000)}),
+            json!({"path": 7}),
+            json!({"body": "Body1", "tolerance": 0.05}),
+            json!({"body": null, "tolerance": "fine"}),
         ];
         for spec in commands() {
             for p in &hostile {
@@ -151,5 +175,83 @@ mod tests {
             }
         }
         assert!(Session::default().execute("no.such", &json!({})).is_err());
+
+        // The same against an open design.
+        let (_dir, path) = sample_design_file(&Plate::default());
+        let mut opened = Session::default();
+        opened.execute("geometry.open", &json!({"path": path})).unwrap();
+        let tess = [
+            json!({"body": "Body1"}),
+            json!({"body": "Body1", "tolerance": 0}),
+            json!({"body": "Body1", "tolerance": -1}),
+            json!({"body": "Body1", "tolerance": 1e-300}),
+            json!({"body": "Body1", "tolerance": 1e300}),
+            json!({"body": "Body2", "tolerance": 0.1}),
+        ];
+        for p in tess.iter().chain(&hostile) {
+            for spec in commands() {
+                let mut s = opened.clone();
+                let _ = s.execute(spec.id, p);
+            }
+        }
+    }
+
+    /// A design file in a fresh temporary directory (removed when the guard drops).
+    fn sample_design_file(plate: &Plate) -> (TempDir, String) {
+        let dir = TempDir::new();
+        let path = dir.0.join("plate.solidcraft");
+        std::fs::write(&path, plate_design(plate).unwrap()).unwrap();
+        (dir, path.to_string_lossy().into_owned())
+    }
+
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new() -> Self {
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("modelcraft-engine-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn open_a_design_list_its_bodies_and_tessellate_one() {
+        let (_dir, path) = sample_design_file(&Plate::default());
+        let mut s = Session::default();
+        let opened = s.execute("geometry.open", &json!({"path": path})).unwrap();
+        assert_eq!(opened["bodies"], json!(["Body1"]));
+        assert_eq!(opened["errors"], json!([]));
+        assert_eq!(s.journal.len(), 1);
+
+        let bodies = s.execute("geometry.bodies", &json!({})).unwrap();
+        let volume = bodies[0]["volume"].as_f64().unwrap();
+        let expect = (40.0 * 30.0 - std::f64::consts::PI * 25.0) * 10.0;
+        assert!((volume - expect).abs() < 1e-3 * expect, "{volume}");
+        let faces = bodies[0]["faces"].as_array().unwrap();
+        assert_eq!(faces.len(), 8);
+
+        let t = s.execute("geometry.tessellate", &json!({"body": "Body1", "tolerance": 0.05})).unwrap();
+        let per_face: Vec<u64> = t["faces"].as_array().unwrap().iter().map(|f| f["triangles"].as_u64().unwrap()).collect();
+        assert!(per_face.iter().all(|&n| n > 0), "{t}");
+        assert_eq!(per_face.iter().sum::<u64>(), t["triangles"].as_u64().unwrap());
+
+        // A failed open keeps the design that was open.
+        assert!(s.execute("geometry.open", &json!({"path": "/no/such/design.solidcraft"})).is_err());
+        assert!(s.design.is_some());
+        assert_eq!(s.journal.len(), 1);
+
+        // Re-opening the edited design rebuilds it with the same face names.
+        std::fs::write(&path, plate_design(&Plate { width: 60.0, ..Plate::default() }).unwrap()).unwrap();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        let wider = s.execute("geometry.bodies", &json!({})).unwrap();
+        assert!(wider[0]["volume"].as_f64().unwrap() > volume);
+        assert_eq!(wider[0]["faces"], bodies[0]["faces"]);
+        assert_eq!(s.journal.len(), 2);
     }
 }

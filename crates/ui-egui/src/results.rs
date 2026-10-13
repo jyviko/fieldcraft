@@ -2,16 +2,16 @@
 //! model's display data. The deformed shape moves every element by its nodes' displacements
 //! (or a mode shape) times the scale; contours split the faces into flat-coloured bands
 //! ([`modelcraft_render::contour`]); animation steps the deformation through a fixed number of
-//! frames per cycle. A plot of a stale result (the model changed since the solve) is drawn the
+//! frames per cycle (an explicit step's animation runs through its field frames, contours
+//! following). A plot of a stale result (the model changed since the solve) is drawn the
 //! same way and marked.
 
 use std::sync::Arc;
 
-use modelcraft_engine::Session;
-use modelcraft_engine::results::{Field, ResultsView, displacements, field_values, magnitude, range};
+use modelcraft_engine::results::{Field, Kind, Pick, ResultsView, displacements, field_values, magnitude, range};
+use modelcraft_engine::{Session, StepResult};
 use modelcraft_render::contour::{Bands, band_color, split_triangle};
 use modelcraft_render::{DisplayMesh, Scene, SceneTri, Vec3};
-use modelcraft_solver::StepResult;
 
 use crate::Style;
 use crate::theme::{Tokens, rgb};
@@ -53,6 +53,8 @@ pub struct Plot {
     /// The elements as drawn (deformed at the current animation frame).
     pub display: DisplayMesh,
     pub contour: Option<Arc<Contour>>,
+    /// The mode and field frame drawn.
+    pub pick: Pick,
 }
 
 /// The part of a plot that does not change with the animation frame.
@@ -65,10 +67,18 @@ pub struct Prepared {
 impl Plot {
     /// A frequency step's mode shown, and its frequency.
     pub fn mode(&self) -> Option<(usize, f64)> {
-        match self.result.as_ref() {
-            StepResult::Frequency(f) => f.modes.get(self.view.mode.checked_sub(1)?).map(|m| (self.view.mode, m.frequency)),
-            StepResult::Static(_) => None,
+        match self.result.kind() {
+            Kind::Frequency(f) => f.modes.get(self.pick.mode.checked_sub(1)?).map(|m| (self.pick.mode, m.frequency)),
+            Kind::Static(_) | Kind::Explicit(_) => None,
         }
+    }
+
+    /// An explicit step's field frame shown, its time and the number of frames.
+    pub fn frame(&self) -> Option<(usize, f64, usize)> {
+        let Kind::Explicit(e) = self.result.kind() else { return None };
+        let n = e.frames.len();
+        let k = self.pick.frame.unwrap_or(n.checked_sub(1)?);
+        Some((k, e.frames.get(k)?.time, n))
     }
 
     /// The node's position in the plot, if it is drawn.
@@ -90,54 +100,76 @@ pub fn frame(view: &ResultsView, now: f64) -> Option<u64> {
 }
 
 /// The deformation multiplier of an animation frame: a mode swings through ±1, a static step
-/// grows from 0 to 1 and back.
+/// grows from 0 to 1 and back; an explicit step's frames are drawn as they are.
 pub fn swing(result: &StepResult, frame: Option<u64>) -> f64 {
     let Some(k) = frame else { return 1.0 };
     let a = std::f64::consts::TAU * k as f64 / FRAMES as f64;
-    match result {
-        StepResult::Frequency(_) => a.sin(),
-        StepResult::Static(_) => 0.5 * (1.0 - a.cos()),
+    match result.kind() {
+        Kind::Frequency(_) => a.sin(),
+        Kind::Static(_) => 0.5 * (1.0 - a.cos()),
+        Kind::Explicit(_) => 1.0,
     }
+}
+
+/// What is drawn at animation `frame`: the view's mode and field frame, an animated explicit
+/// step running through its field frames once per cycle.
+pub fn pick(view: &ResultsView, result: &StepResult, frame: Option<u64>) -> Pick {
+    let mut p = view.pick();
+    if let (Some(k), Kind::Explicit(e)) = (frame, result.kind())
+        && let Some(last) = e.frames.len().checked_sub(1)
+    {
+        p.frame = Some((k as usize * e.frames.len() / FRAMES as usize).min(last));
+    }
+    p
 }
 
 /// The deformation scale factor: the view's, or automatic (the largest displacement a tenth of
 /// the model's size); 0 when the view is undeformed or nothing moves.
-pub fn scale(view: &ResultsView, result: &StepResult, base: &DisplayMesh) -> f64 {
+pub fn scale(view: &ResultsView, result: &StepResult, pick: Pick, base: &DisplayMesh) -> f64 {
     if !view.deformed {
         return 0.0;
     }
     if let Some(s) = view.scale {
         return s;
     }
-    let largest = displacements(result, view.mode).map_or(0.0, |u| u.iter().map(|v| magnitude(*v)).filter(|m| m.is_finite()).fold(0.0, f64::max));
+    let largest = displacements(result, pick).map_or(0.0, |u| u.iter().map(|v| magnitude(*v)).filter(|m| m.is_finite()).fold(0.0, f64::max));
     let size = base.bounds.diagonal();
     if largest > 0.0 && size.is_finite() && size > 0.0 { AUTO_FRACTION * size / largest } else { 0.0 }
 }
 
-/// The frame-independent part of the session's results plot: the deformation scale and the
-/// contour values.
-pub fn prepare(session: &Session, base: &DisplayMesh) -> Option<Prepared> {
+/// The part of the session's results plot that depends on what is drawn (`pick`), not on the
+/// animation's deformation multiplier: the deformation scale and the contour values.
+pub fn prepare(session: &Session, base: &DisplayMesh, pick: Pick) -> Option<Prepared> {
     let (view, result, _) = shown(session)?;
     let contour = view.contour.and_then(|field| {
-        let values = field_values(result, field, view.mode).ok()?;
+        let values = field_values(&session.model, result, field, pick).ok()?;
         let (min, max) = range(result.nodes(), &values)?;
         Some(Arc::new(Contour { field, bands: Bands::new(min.1, max.1, view.bands), min, max, values }))
     });
-    Some(Prepared { scale: scale(view, result, base), contour })
+    Some(Prepared { scale: scale(view, result, pick, base), contour })
 }
 
-/// The plot of the session's results view on the model's display data, at animation `frame`,
+/// The plot of the session's results view on the model's display data at animation `frame`,
 /// with its [`prepare`]d part.
 pub fn plot(session: &Session, base: &DisplayMesh, frame: Option<u64>, prepared: &Prepared) -> Option<Plot> {
     let (view, result, current) = shown(session)?;
     let nodes = result.nodes();
+    let pick = pick(view, result, frame);
     let factor = prepared.scale * swing(result, frame);
-    let u = displacements(result, view.mode).unwrap_or(&[]);
+    let u = displacements(result, pick).unwrap_or(&[]);
     let display = base.displaced(|label| {
         let i = nodes.binary_search(&label).ok()?;
         u.get(i).map(|d| Vec3::from(*d) * factor)
     });
-    Some(Plot { view: view.clone(), result: result.clone(), stale: !current, scale: prepared.scale, display, contour: prepared.contour.clone() })
+    Some(Plot {
+        view: view.clone(),
+        result: result.clone(),
+        stale: !current,
+        scale: prepared.scale,
+        display,
+        contour: prepared.contour.clone(),
+        pick,
+    })
 }
 
 /// The scene of a plot: the deformed elements drawn as the model is ([`scene::build`]), with
@@ -185,7 +217,8 @@ pub(crate) mod tests {
     use super::*;
 
     fn plot_at(s: &Session, base: &DisplayMesh, frame: Option<u64>) -> Option<Plot> {
-        plot(s, base, frame, &prepare(s, base)?)
+        let (view, result, _) = shown(s)?;
+        plot(s, base, frame, &prepare(s, base, pick(view, result, frame))?)
     }
 
     /// The sample cantilever, solved (static step `Load`, frequency step `Modes`).
@@ -213,7 +246,7 @@ pub(crate) mod tests {
         assert_eq!(p.scale, 2.0);
         // A tip corner moves twice its displacement.
         let tip = node_at(&s, [100.0, 0.0, 0.0]);
-        let StepResult::Static(r) = p.result.as_ref() else { panic!("a static result") };
+        let Kind::Static(r) = p.result.kind() else { panic!("a static result") };
         let u = r.displacement[r.nodes.binary_search(&tip).unwrap()];
         let at = p.node_position(tip).unwrap();
         assert!((at.z - 2.0 * u[2]).abs() < 1e-12 && u[2] < -0.2, "{at:?} {u:?}");

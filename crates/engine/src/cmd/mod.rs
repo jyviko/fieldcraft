@@ -80,6 +80,7 @@ pub static ALL: &[CommandSpec] = &[
     results::CONTOUR,
     results::MODES,
     results::ANIMATE,
+    results::FRAME,
     results::REACTIONS,
     results::CLEAR,
 ];

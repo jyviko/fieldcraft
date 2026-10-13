@@ -212,11 +212,14 @@ impl Session {
     }
 
     /// Keep a step's result for the current state. With no results shown, the display shows it;
-    /// a view of the same step stays as it is (on mode 1 if its mode is gone).
+    /// a view of the same step stays as it is (on mode 1 and the last frame if its own are gone).
     pub(crate) fn store_result(&mut self, result: StepResult) {
         match &mut self.results_view {
             None => self.results_view = Some(results::ResultsView::for_result(&result)),
-            Some(v) if v.step == result.step() && results::displacements(&result, v.mode).is_err() => v.mode = 1,
+            Some(v) if v.step == result.step() && results::displacements(&result, v.pick()).is_err() => {
+                v.mode = 1;
+                v.frame = None;
+            }
             Some(_) => {}
         }
         self.results.insert(result.step().to_string(), (self.revision, Arc::new(result)));

@@ -101,12 +101,14 @@ pub struct Viewport {
     pub gpu_errors: gpu::GpuErrors,
 }
 
-/// A probed node: its values as lines of text, for the step and mode they were read from.
+/// A probed node: its values as lines of text, for the step, mode and frame they were read from.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Probe {
     pub node: u32,
     pub step: String,
     pub mode: usize,
+    /// The explicit field frame (`None`: the last).
+    pub frame: Option<usize>,
     pub lines: Vec<String>,
 }
 
@@ -118,6 +120,8 @@ struct PlotKey {
     result: usize,
     current: bool,
     view: modelcraft_engine::results::ResultsView,
+    /// The mode and field frame drawn (an animated explicit step changes frames).
+    pick: modelcraft_engine::results::Pick,
     frame: Option<u64>,
 }
 
@@ -303,7 +307,12 @@ impl ModelApp {
     /// Probe a node of the results shown (`solve.probe`) and keep its values for the viewport.
     pub fn probe_node(&mut self, node: u32) -> Result<(), String> {
         let Some(view) = self.session.results_view.clone() else { return Err("no results are shown".into()) };
-        let reply = match self.run("solve.probe", json!({"step": view.step, "nodes": [node], "mode": view.mode})) {
+        let pick = self.plot().map_or(view.pick(), |p| p.pick);
+        let mut params = json!({"step": view.step, "nodes": [node], "mode": pick.mode});
+        if let Some(frame) = pick.frame {
+            params["frame"] = json!(frame);
+        }
+        let reply = match self.run("solve.probe", params) {
             Ok(v) => v,
             Err(e) => {
                 self.probe = None;
@@ -323,15 +332,18 @@ impl ModelApp {
         if let Some(m) = at.get("von_mises").and_then(Value::as_f64) {
             lines.push(format!("Von Mises {}", results::number(m)));
         }
+        if let Some(v) = vector("velocity") {
+            lines.push(format!("V {}  |V| {}", triple(v), results::number(modelcraft_engine::results::magnitude(v))));
+        }
         if let Some(shape) = vector("shape") {
-            lines.push(format!("Mode {} shape {}", view.mode, triple(shape)));
+            lines.push(format!("Mode {} shape {}", pick.mode, triple(shape)));
         }
         let contour = self.plot().and_then(|p| p.contour.as_ref().map(|c| (c.field, c.at(p.result.nodes(), node))));
         if let Some((field, v)) = contour.filter(|(f, _)| *f != modelcraft_engine::results::Field::VonMises) {
             lines.push(format!("{} {}", field.label(), results::number(v)));
         }
         self.set_status(lines.join("   "), false);
-        self.probe = Some(Probe { node, step: view.step, mode: view.mode, lines });
+        self.probe = Some(Probe { node, step: view.step, mode: pick.mode, frame: pick.frame, lines });
         Ok(())
     }
 
@@ -408,19 +420,21 @@ impl ModelApp {
     fn plot_key(&self) -> Option<PlotKey> {
         let (view, result, current) = results::shown(&self.session)?;
         let frame = results::frame(view, self.now);
-        Some(PlotKey { revision: self.revision, result: Arc::as_ptr(result) as usize, current, view: view.clone(), frame })
+        let pick = results::pick(view, result, frame);
+        Some(PlotKey { revision: self.revision, result: Arc::as_ptr(result) as usize, current, view: view.clone(), pick, frame })
     }
 
     /// The results plot the viewport draws, rebuilt when its key changes; `None` shows the
     /// model. Only the deformation follows the animation frame; the scale and contour values are
-    /// kept while the rest of the key stays.
+    /// kept while the rest of the key (the mode and field frame drawn among it) stays.
     pub fn plot(&mut self) -> Option<Arc<results::Plot>> {
         let key = self.plot_key();
         if self.plot.0 != key {
             self.display();
             let still = key.as_ref().map(|k| PlotKey { frame: None, ..k.clone() });
             if self.prepared.0 != still {
-                self.prepared = (still, results::prepare(&self.session, &self.display.1).unwrap_or_default());
+                let pick = key.as_ref().map(|k| k.pick).unwrap_or_default();
+                self.prepared = (still, results::prepare(&self.session, &self.display.1, pick).unwrap_or_default());
             }
             let frame = key.as_ref().and_then(|k| k.frame);
             let p = key.as_ref().and_then(|_| results::plot(&self.session, &self.display.1, frame, &self.prepared.1));
@@ -810,6 +824,36 @@ mod tests {
         assert!(app.plot().is_some_and(|p| p.stale));
         let e = app.probe_node(tip).unwrap_err();
         assert!(e.contains("stale") && app.probe.is_none(), "{e}");
+    }
+
+    #[test]
+    fn explicit_frames_are_drawn_and_animated() {
+        let mut app = ModelApp::new(Session::default());
+        app.run_script(&modelcraft_engine::sample::impact()).unwrap();
+        app.run("solve.explicit", json!({})).unwrap();
+        // The last frame at true scale: the bar has moved back off the wall's side (x < 0 is
+        // the wall, so nothing passes it) and carries stress contours.
+        let last = app.plot().unwrap();
+        assert_eq!(last.frame().map(|(k, _, n)| (k, n)), Some((10, 11)));
+        assert!(last.contour.as_ref().is_some_and(|c| c.field == modelcraft_engine::results::Field::VonMises));
+        assert!(last.display.bounds.min.x > -1e-6, "{:?}", last.display.bounds);
+        // Frame 0 is the undeformed bar at rest on its initial velocity.
+        app.run("results.frame", json!({"frame": 0})).unwrap();
+        let first = app.plot().unwrap();
+        assert_eq!(first.display.tris, app.display().tris);
+        // Animated, the frames run through once per cycle.
+        app.run("results.animate", json!({})).unwrap();
+        app.now = results::PERIOD * 0.5;
+        assert_eq!(app.plot().unwrap().pick.frame, Some(5));
+        let image = app.capture(capture::CaptureSize { width: 1200.0, height: 800.0, scale: 1.0 }).unwrap();
+        assert_eq!(image.size, [1200, 800]);
+        // Probing reads the frame drawn.
+        app.run("results.animate", json!({"on": false})).unwrap();
+        app.run("results.frame", json!({"frame": 4})).unwrap();
+        app.probe_node(node_at(&app, [100.0, 0.0, 0.0])).unwrap();
+        let probe = app.probe.clone().unwrap();
+        assert_eq!(probe.frame, Some(4));
+        assert!(probe.lines.iter().any(|l| l.starts_with("U ")), "{probe:?}");
     }
 
     #[test]

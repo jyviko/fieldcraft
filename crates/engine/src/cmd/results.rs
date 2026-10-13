@@ -2,11 +2,10 @@
 //! animation) and reaction sums. The display is session state ([`ResultsView`]): these
 //! commands are not edits, so they are not journalled or undone.
 
-use modelcraft_solver::StepResult;
 use serde_json::{Value, json};
 
 use super::{opt, xyz};
-use crate::results::{Field, MAX_BANDS, MIN_BANDS, ResultsView};
+use crate::results::{Field, Kind, MAX_BANDS, MIN_BANDS, ResultsView};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const DEFORMED: CommandSpec = CommandSpec {
@@ -41,6 +40,14 @@ pub const ANIMATE: CommandSpec = CommandSpec {
     run: animate,
 };
 
+pub const FRAME: CommandSpec = CommandSpec {
+    id: "results.frame",
+    label: "Field Frame",
+    params: r#"{"step": "Impact", "frame": 3, "time": 0.002} — shows a field frame of a solved explicit step, by index from 0 or the frame nearest a time (neither: the last); the deformed shape and contours follow it"#,
+    kind: CommandKind::Session,
+    run: frame,
+};
+
 pub const REACTIONS: CommandSpec = CommandSpec {
     id: "results.reactions",
     label: "Reaction Sums",
@@ -67,35 +74,53 @@ fn solved_list(s: &Session) -> String {
     if names.is_empty() { "no step is solved yet (solve.static, solve.frequency)".into() } else { format!("solved steps: {}", names.join(", ")) }
 }
 
-fn is_frequency(s: &Session, step: &str) -> bool {
-    s.latest_result(step).is_some_and(|(r, _)| matches!(r.as_ref(), StepResult::Frequency(_)))
+/// The steps a command works on.
+#[derive(Clone, Copy, PartialEq)]
+enum Want {
+    Any,
+    Frequency,
+    Explicit,
+}
+
+impl Want {
+    fn fits(self, s: &Session, step: &str) -> bool {
+        s.latest_result(step).is_some_and(|(r, _)| match (self, r.kind()) {
+            (Want::Any, _) | (Want::Frequency, Kind::Frequency(_)) | (Want::Explicit, Kind::Explicit(_)) => true,
+            (Want::Frequency | Want::Explicit, _) => false,
+        })
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Want::Any => "solved",
+            Want::Frequency => "frequency",
+            Want::Explicit => "explicit",
+        }
+    }
 }
 
 /// The step a command works on: `step`, else the step shown, else the first solved one
-/// (current results first). `frequency` asks for a frequency step.
-fn step_for(s: &Session, p: &Value, frequency: bool) -> Result<String> {
-    let fits = |name: &str| s.latest_result(name).is_some() && (!frequency || is_frequency(s, name));
+/// (current results first) of the kind it wants.
+fn step_for(s: &Session, p: &Value, want: Want) -> Result<String> {
     if let Some(name) = opt::<String>(p, "step")? {
         if s.latest_result(&name).is_none() {
             return Err(EngineError::Params(format!("step `{name}` has no result; {}", solved_list(s))));
         }
-        if !fits(&name) {
-            return Err(EngineError::Params(format!("step `{name}` is not a frequency step")));
+        if !want.fits(s, &name) {
+            return Err(EngineError::Params(format!("step `{name}` is not a {} step", want.name())));
         }
         return Ok(name);
     }
     if let Some(v) = &s.results_view
-        && fits(&v.step)
+        && want.fits(s, &v.step)
     {
         return Ok(v.step.clone());
     }
-    let mut steps: Vec<(&str, bool)> = s.result_steps().filter(|(n, _)| fits(n)).collect();
+    let mut steps: Vec<(&str, bool)> = s.result_steps().filter(|(n, _)| want.fits(s, n)).collect();
     // Current results first, then by name (stable).
     steps.sort_by_key(|(_, current)| !*current);
-    steps
-        .first()
-        .map(|(n, _)| n.to_string())
-        .ok_or_else(|| EngineError::Params(if frequency { format!("no frequency step has a result; {}", solved_list(s)) } else { solved_list(s) }))
+    steps.first().map(|(n, _)| n.to_string()).ok_or_else(|| {
+        EngineError::Params(if want == Want::Any { solved_list(s) } else { format!("no {} step has a result; {}", want.name(), solved_list(s)) })
+    })
 }
 
 /// The view of `step`: the one shown, or the step's first look ([`ResultsView::for_result`])
@@ -109,7 +134,7 @@ fn view_of<'a>(s: &'a mut Session, step: &str) -> Result<&'a mut ResultsView> {
 }
 
 fn deformed(s: &mut Session, p: &Value) -> Result<Value> {
-    let step = step_for(s, p, false)?;
+    let step = step_for(s, p, Want::Any)?;
     let show = opt::<bool>(p, "show")?.unwrap_or(true);
     let scale = match p.get("scale") {
         None => None,
@@ -129,7 +154,7 @@ fn deformed(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn contour(s: &mut Session, p: &Value) -> Result<Value> {
-    let step = step_for(s, p, false)?;
+    let step = step_for(s, p, Want::Any)?;
     let name = opt::<String>(p, "field")?.ok_or_else(|| EngineError::Params("`field` is required (a field id, or \"none\")".into()))?;
     let field = match name.as_str() {
         "none" => None,
@@ -161,9 +186,9 @@ fn contour(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn modes(s: &mut Session, p: &Value) -> Result<Value> {
-    let step = step_for(s, p, true)?;
-    let count = match s.latest_result(&step).map(|(r, _)| r.as_ref()) {
-        Some(StepResult::Frequency(f)) => f.modes.len(),
+    let step = step_for(s, p, Want::Frequency)?;
+    let count = match s.latest_result(&step).map(|(r, _)| r.kind()) {
+        Some(Kind::Frequency(f)) => f.modes.len(),
         _ => 0,
     };
     let mode = match p.get("mode") {
@@ -188,10 +213,34 @@ fn animate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return Ok(s.results_report());
     }
-    let step = step_for(s, &json!({}), false)?;
+    let step = step_for(s, &json!({}), Want::Any)?;
     let v = view_of(s, &step)?;
     v.animate = true;
     v.deformed = true;
+    Ok(s.results_report())
+}
+
+fn frame(s: &mut Session, p: &Value) -> Result<Value> {
+    let step = step_for(s, p, Want::Explicit)?;
+    let times: Vec<f64> = match s.latest_result(&step).map(|(r, _)| r.kind()) {
+        Some(Kind::Explicit(e)) => e.frames.iter().map(|f| f.time).collect(),
+        _ => Vec::new(),
+    };
+    let last = times.len().checked_sub(1).ok_or_else(|| EngineError::Params(format!("step `{step}` has no field frames")))?;
+    let k = match (p.get("frame"), opt::<f64>(p, "time")?) {
+        (Some(f), _) => f
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n <= last)
+            .ok_or_else(|| EngineError::Params(format!("`frame` must be from 0 to {last}")))?,
+        (None, Some(t)) if t.is_finite() => {
+            times.iter().enumerate().min_by(|a, b| (a.1 - t).abs().total_cmp(&(b.1 - t).abs())).map_or(last, |(i, _)| i)
+        }
+        (None, Some(_)) => return Err(EngineError::Params("`time` must be a number".into())),
+        (None, None) => last,
+    };
+    let v = view_of(s, &step)?;
+    v.frame = Some(k);
     Ok(s.results_report())
 }
 
@@ -201,14 +250,16 @@ fn clear(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 fn reactions(s: &mut Session, p: &Value) -> Result<Value> {
-    let step = step_for(s, p, false)?;
+    let step = step_for(s, p, Want::Any)?;
     let about = if p.get("about").is_some() { xyz(p, "about")? } else { [0.0; 3] };
     if !about.iter().all(|c| c.is_finite()) {
         return Err(EngineError::Params("`about` must be a finite [x, y, z]".into()));
     }
     let Some((result, current)) = s.latest_result(&step) else { return Err(EngineError::Params(solved_list(s))) };
-    let StepResult::Static(r) = result.as_ref() else {
-        return Err(EngineError::Params(format!("step `{step}` is a frequency step: it has no reactions")));
+    let Kind::Static(r) = result.kind() else {
+        return Err(EngineError::Params(format!(
+            "step `{step}` is not a static step: reactions are kept for static steps (explicit steps keep the constraint force history, solve.history)"
+        )));
     };
     let sets: Vec<String> = match p.get("sets") {
         Some(v) => {
@@ -329,6 +380,32 @@ mod tests {
     }
 
     #[test]
+    fn explicit_frames_drive_the_display() {
+        let mut s = Session::default();
+        s.run_script(&crate::sample::impact()).unwrap();
+        s.execute("solve.explicit", &json!({})).unwrap();
+        // The first look: the last frame, true scale, von Mises averaged from the elements.
+        let r = s.results_report();
+        assert_eq!((r["view"]["step"].as_str(), r["view"]["scale"].as_f64(), r["view"]["frame"].is_null()), (Some("Impact"), Some(1.0), true), "{r}");
+        assert_eq!(r["frames"].as_array().map(Vec::len), Some(11));
+        assert!(r["contour"]["range"]["max"]["value"].as_f64().unwrap() > 0.0, "{r}");
+        // A frame by time: the nearest one.
+        let r = s.execute("results.frame", &json!({"time": 1.3e-5})).unwrap();
+        assert_eq!(r["view"]["frame"], 3, "{r}");
+        assert!((r["time"].as_f64().unwrap() - 1.3e-5).abs() < 1e-6, "frames land on increments: {r}");
+        // At frame 0 the bar has not hit yet: no stress.
+        let r = s.execute("results.frame", &json!({"frame": 0})).unwrap();
+        assert!(r["contour"]["range"]["max"]["value"].as_f64().unwrap().abs() < 1e-6, "{r}");
+        s.execute("results.contour", &json!({"field": "displacement_x"})).unwrap();
+        // Frames keep velocities: every node starts at 10 m/s.
+        let r = s.execute("results.contour", &json!({"field": "velocity"})).unwrap();
+        assert!((r["contour"]["range"]["min"]["value"].as_f64().unwrap() - 10000.0).abs() < 1e-6, "{r}");
+        assert!(s.execute("results.frame", &json!({"frame": 11})).is_err());
+        assert!(s.execute("results.modes", &json!({})).is_err());
+        assert!(s.execute("results.reactions", &json!({})).is_err());
+    }
+
+    #[test]
     fn results_hostile_params_never_panic() {
         let s = solved();
         let hostile = [
@@ -355,8 +432,13 @@ mod tests {
             json!({"sets": vec!["root"; 2000]}),
             json!({"about": [1e308, 1e308, 1e308]}),
             json!({"about": "here"}),
+            json!({"frame": -1}),
+            json!({"frame": 1e300}),
+            json!({"time": "late"}),
+            json!({"time": 1e308}),
+            json!({"step": "Bend", "frame": 0}),
         ];
-        for id in ["results.deformed", "results.contour", "results.modes", "results.animate", "results.reactions", "results.clear"] {
+        for id in ["results.deformed", "results.contour", "results.modes", "results.animate", "results.frame", "results.reactions", "results.clear"] {
             for p in &hostile {
                 let mut t = s.clone();
                 let _ = t.execute(id, p);

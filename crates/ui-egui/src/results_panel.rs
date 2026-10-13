@@ -3,7 +3,8 @@
 //! the `results.*` commands.
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Stroke, pos2, vec2};
-use modelcraft_engine::results::Field;
+use modelcraft_engine::results::{Field, Kind};
+use modelcraft_explicit::{Energies, ExplicitResult};
 use serde_json::{Value, json};
 
 use crate::ModelApp;
@@ -15,6 +16,9 @@ const PANEL_WIDTH: f32 = 260.0;
 /// Width of the panel's drop-down lists.
 const COMBO_WIDTH: f32 = 160.0;
 const SWATCH: egui::Vec2 = vec2(18.0, 15.0);
+/// Height of the energy plot (points), and the most points one of its lines draws.
+const PLOT_HEIGHT: f32 = 90.0;
+const MAX_PLOT_POINTS: usize = 400;
 
 /// Draw the legend, the probe and the panel when a results plot is shown.
 pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
@@ -36,6 +40,9 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
     let mut step = format!("Step {}", plot.view.step);
     if let Some((mode, hz)) = plot.mode() {
         step.push_str(&format!(", mode {mode}: {} Hz", number(hz)));
+    }
+    if let Some((k, time, n)) = plot.frame() {
+        step.push_str(&format!(", frame {k} of {}: t = {}", n.saturating_sub(1), number(time)));
     }
     lines.push((step, t.overlay_text));
     if plot.scale > 0.0 {
@@ -89,7 +96,7 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
 
 /// The probed node: a marker on it and its values beside it.
 fn probe(app: &ModelApp, plot: &Plot, painter: &egui::Painter, t: &Tokens) {
-    let Some(p) = app.probe.as_ref().filter(|p| p.step == plot.view.step && p.mode == plot.view.mode) else { return };
+    let Some(p) = app.probe.as_ref().filter(|p| p.step == plot.view.step && p.mode == plot.pick.mode && p.frame == plot.pick.frame) else { return };
     let Some(at) = plot.node_position(p.node).and_then(|w| crate::viewport::to_screen(app, w)) else { return };
     painter.circle(at, 5.0, t.accent, Stroke::new(2.0, t.overlay_text));
     let font = FontId::proportional(12.0);
@@ -164,7 +171,10 @@ fn panel(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, rect: Rect, t: &Tok
             }
             ui.end_row();
         });
-        if let modelcraft_solver::StepResult::Frequency(f) = plot.result.as_ref() {
+        if let Kind::Explicit(e) = plot.result.kind() {
+            ui.separator();
+            explicit(ui, e, plot, t, &mut run);
+        } else if let Kind::Frequency(f) = plot.result.kind() {
             ui.separator();
             ui.label(RichText::new("Modes").color(t.text_dim));
             egui::ScrollArea::vertical().id_salt("mc_results_modes").max_height(150.0).show(ui, |ui| {
@@ -192,6 +202,63 @@ fn panel(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, rect: Rect, t: &Tok
             app.reactions = reply.ok();
         }
     }
+}
+
+/// An explicit step: a frame slider (the deformed shape and contours follow it) and the energy
+/// histories, plotted and read at the frame's time.
+fn explicit(ui: &mut egui::Ui, e: &ExplicitResult, plot: &Plot, t: &Tokens, run: &mut Vec<(&'static str, Value)>) {
+    if let Some((k, time, n)) = plot.frame() {
+        ui.horizontal(|ui| {
+            ui.label("Frame");
+            let mut frame = k;
+            if ui.add(egui::Slider::new(&mut frame, 0..=n.saturating_sub(1))).changed() {
+                run.push(("results.frame", json!({"frame": frame})));
+            }
+        });
+        ui.label(RichText::new(format!("t = {}", number(time))).color(t.text_dim));
+    }
+    let h = &e.history;
+    if h.time.is_empty() {
+        return;
+    }
+    let series: [(&str, Color32, fn(&Energies) -> f64); 4] = [
+        ("Kinetic", t.accent, |e| e.kinetic),
+        ("Internal", t.ok, |e| e.internal),
+        ("Hourglass", t.warm, |e| e.hourglass),
+        ("External", t.error, |e| e.external),
+    ];
+    ui.label(RichText::new("Energies").color(t.text_dim));
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), PLOT_HEIGHT), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, t.field);
+    let t_end = h.time.last().copied().unwrap_or(0.0).max(f64::MIN_POSITIVE);
+    let top = h.energies.iter().flat_map(|e| series.iter().map(move |(_, _, f)| f(e).abs())).filter(|v| v.is_finite()).fold(0.0, f64::max);
+    let top = if top > 0.0 { top } else { 1.0 };
+    let at =
+        |time: f64, v: f64| pos2(rect.left() + (time / t_end) as f32 * rect.width(), rect.bottom() - 2.0 - (v / top) as f32 * (rect.height() - 4.0));
+    // At most a few hundred points per line, however long the history.
+    let stride = (h.time.len() / MAX_PLOT_POINTS).max(1);
+    for (_, color, f) in &series {
+        let points: Vec<egui::Pos2> =
+            h.time.iter().zip(&h.energies).step_by(stride).filter(|(_, e)| f(e).is_finite()).map(|(time, e)| at(*time, f(e))).collect();
+        painter.add(egui::Shape::line(points, Stroke::new(1.5, *color)));
+    }
+    // The frame's time, and the sample nearest it.
+    let now = plot.frame().map_or(t_end, |(_, time, _)| time);
+    let x = at(now, 0.0).x;
+    painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, t.text_dim));
+    let i = h.time.iter().enumerate().min_by(|a, b| (a.1 - now).abs().total_cmp(&(b.1 - now).abs())).map_or(0, |(i, _)| i);
+    let Some(at_now) = h.energies.get(i) else { return };
+    egui::Grid::new("mc_results_energies").num_columns(2).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
+        for (name, color, f) in &series {
+            ui.label(RichText::new(*name).color(*color));
+            ui.label(number(f(at_now)));
+            ui.end_row();
+        }
+        ui.label(RichText::new("Balance").color(t.text_dim));
+        ui.label(number(at_now.balance));
+        ui.end_row();
+    });
 }
 
 fn reactions_table(ui: &mut egui::Ui, r: &Value, t: &Tokens) {

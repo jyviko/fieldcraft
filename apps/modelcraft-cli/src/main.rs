@@ -1,5 +1,6 @@
 //! modelcraft-cli commands
 //! modelcraft-cli run <script.json>
+//! modelcraft-cli features
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -13,6 +14,8 @@ usage:
   modelcraft-cli commands              list every command with its parameters
   modelcraft-cli run <script.json>     run a script (a JSON array of {\"command\", \"params\"})
                                        and print the model summary
+  modelcraft-cli features              print docs/features.md (every capability, ready or
+                                       coming soon) from the capability catalogue
 ";
 
 /// Largest script accepted (bytes).
@@ -25,6 +28,10 @@ fn main() -> ExitCode {
             for c in modelcraft_engine::commands() {
                 println!("{:<24} {:<18} {}", c.id, c.label, c.params);
             }
+            Ok(())
+        }
+        Some("features") => {
+            print!("{}", modelcraft_engine::catalogue::features_page());
             Ok(())
         }
         Some("run") => args.get(1).ok_or_else(|| format!("run needs a script\n\n{USAGE}")).and_then(|p| run(p)),

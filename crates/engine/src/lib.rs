@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod autosave;
+pub mod catalogue;
 pub mod cmd;
 pub mod history;
 pub mod sample;

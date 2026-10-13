@@ -146,8 +146,9 @@ module docs; ADR 0001 records why the linear algebra is our own.
 5. **Frequency.** Shift-invert block Lanczos (block 6, full reorthogonalization) on
    K − σM, σ = 0 for a supported structure and slightly negative for a free one, so rigid-body
    modes come out at zero; mass-normalized shapes, participation factors and effective masses.
-6. **Results** stay in the session per step and are cleared by any command that changes the
-   model.
+6. **Results** stay in the session per step, stamped with the session revision they were solved
+   at; `Session::result` hands out only those of the current revision, so an edit makes them
+   stale and undoing back to the solved state makes them current again.
 
 Verification (`crates/solver/tests/verification.rs`, analytic only): displacement and traction
 patch tests for every element and formulation (exact to round-off), cantilever tip deflection

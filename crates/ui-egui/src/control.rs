@@ -11,6 +11,7 @@ use std::sync::mpsc::Sender;
 use modelcraft_render::StandardView;
 use serde_json::{Value, json};
 
+use crate::capture::CaptureSize;
 use crate::{ModelApp, UiState};
 
 /// `ui.render`'s image size when none is given.
@@ -241,6 +242,18 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             ok(Value::Null)
         }
         "ui.screenshot" => Outcome::Screenshot { path: s("path").map(str::to_string) },
+        "ui.capture" => {
+            let live = window_size(ctx);
+            let dim = |k: &str, default: f32| match p.get(k) {
+                None | Some(Value::Null) => Ok(default),
+                Some(v) => v.as_f64().filter(|x| x.is_finite()).map(|x| x as f32).ok_or_else(|| format!("`{k}` must be a number")),
+            };
+            let size = match (dim("width", live.width), dim("height", live.height), dim("scale", live.scale)) {
+                (Ok(width), Ok(height), Ok(scale)) => CaptureSize { width, height, scale },
+                (Err(e), ..) | (_, Err(e), _) | (.., Err(e)) => return err(e),
+            };
+            Outcome::Done(capture_to(app, size, s("path")))
+        }
         "ui.render" => {
             let Some(path) = s("path") else { return err("missing `path`") };
             let (w, h) = match (render_dim(p, "width", RENDER_DEFAULT[0]), render_dim(p, "height", RENDER_DEFAULT[1])) {
@@ -262,6 +275,34 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             ok(Value::Null)
         }
         other => err(format!("unknown method `{other}`")),
+    }
+}
+
+/// The window's size in points and its pixels per point (1400 × 900 at 1 before a window was
+/// laid out).
+pub fn window_size(ctx: &egui::Context) -> CaptureSize {
+    let r = ctx.content_rect();
+    let fits = |v: f32| v.is_finite() && (1.0..=crate::capture::MAX_SIDE as f32).contains(&v);
+    let scale = Some(ctx.pixels_per_point()).filter(|s| crate::capture::SCALE_RANGE.contains(s)).unwrap_or(1.0);
+    if fits(r.width()) && fits(r.height()) {
+        CaptureSize { width: r.width(), height: r.height(), scale }
+    } else {
+        CaptureSize { width: 1400.0, height: 900.0, scale }
+    }
+}
+
+/// Capture the whole window offscreen ([`ModelApp::capture`]) and save it as PNG (a reply).
+pub fn capture_to(app: &mut ModelApp, size: CaptureSize, path: Option<&str>) -> Value {
+    match app.capture(size) {
+        Ok(image) => {
+            let mut reply = save_screenshot(&image, path);
+            if let Some(r) = reply.get_mut("result").and_then(Value::as_object_mut) {
+                r.insert("offscreen".into(), json!(true));
+                r.insert("scale".into(), json!(size.scale));
+            }
+            reply
+        }
+        Err(e) => json!({"ok": false, "error": e}),
     }
 }
 
@@ -387,6 +428,7 @@ mod tests {
             "ui.worldToScreen",
             "ui.resize",
             "ui.render",
+            "ui.capture",
             "ui.toolbar",
         ] {
             for p in &hostile {
@@ -409,6 +451,23 @@ mod tests {
         assert_eq!(call(&mut app, "ui.set", json!({"tab": "nope"}))["ok"], false);
         let r = call(&mut app, "ui.start", json!({"command": "mesh.order.quadratic"}));
         assert_eq!((r["ok"].as_bool(), r["error"].as_str()), (Some(false), Some("Quadratic is coming soon (M2)")));
+    }
+
+    #[test]
+    fn ui_capture_saves_the_whole_window() {
+        let mut app = ModelApp::new(Session::default());
+        let path = std::env::temp_dir().join(format!("modelcraft-capture-{}.png", std::process::id()));
+        let r = call(&mut app, "ui.capture", json!({"path": path.to_string_lossy(), "width": 640, "height": 400, "scale": 1}));
+        assert_eq!(
+            (r["ok"].as_bool(), r["result"]["width"].as_u64(), r["result"]["offscreen"].as_bool()),
+            (Some(true), Some(640), Some(true)),
+            "{r}"
+        );
+        assert!(std::fs::read(&path).unwrap().starts_with(&[0x89, b'P', b'N', b'G']));
+        let _ = std::fs::remove_file(&path);
+        for bad in [json!({"width": "x"}), json!({"width": 1e9}), json!({"scale": 0}), json!({"height": -1})] {
+            assert_eq!(call(&mut app, "ui.capture", bad.clone())["ok"], false, "{bad}");
+        }
     }
 
     #[test]

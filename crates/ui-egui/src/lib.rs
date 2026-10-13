@@ -11,6 +11,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod capture;
 pub mod control;
 pub mod gpu;
 pub mod icons;
@@ -133,6 +134,8 @@ pub struct ModelApp {
     control_rx: Option<Receiver<ControlRequest>>,
     shots: Vec<Shot>,
     shot_token: u64,
+    /// The offscreen context `ui.capture` draws the window with (made on first use).
+    offscreen: Option<Box<capture::Offscreen>>,
     /// The app time (seconds) of the current frame.
     pub now: f64,
     pub quit_requested: bool,
@@ -159,6 +162,7 @@ impl ModelApp {
             control_rx: None,
             shots: Vec::new(),
             shot_token: 0,
+            offscreen: None,
             now: 0.0,
             quit_requested: false,
         };
@@ -451,11 +455,14 @@ impl ModelApp {
             }
         }
         let now = self.now;
+        // No frame was presented in time (a hidden window, a locked screen): draw the window
+        // offscreen instead.
+        let (late, waiting): (Vec<Shot>, Vec<Shot>) = std::mem::take(&mut self.shots).into_iter().partition(|s| now > s.deadline);
+        self.shots = waiting;
+        for s in late {
+            let _ = s.reply.send(control::capture_to(self, control::window_size(ctx), s.path.as_deref()));
+        }
         self.shots.retain_mut(|s| {
-            if now > s.deadline {
-                let _ = s.reply.send(json!({"ok": false, "error": "no frame was presented (window hidden?); use ui.render"}));
-                return false;
-            }
             s.frames += 1;
             if !s.requested && s.frames >= 3 {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(s.token)));

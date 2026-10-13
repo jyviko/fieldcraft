@@ -48,6 +48,7 @@ Commands never open forms when run this way. `modelcraft-cli commands` prints th
 | `ui.text` | `text` | typed text (into the focused field) |
 | `ui.worldToScreen` | `points`: `[[x, y, z]…]` (at most 1000) | screen points in the viewport drawn last frame (null when not on screen) |
 | `ui.resize` | `width`, `height` | window inner size in points |
-| `ui.screenshot` | `path?` | PNG of the window, taken a few frames later; needs a presented frame (a hidden window or a locked screen answers with an error: use `ui.render`). Without `path`: `modelcraft-shot.png` in the temporary folder |
+| `ui.screenshot` | `path?` | PNG of the window, taken a few frames later; waits for a presented frame; when none comes within 8 seconds (a hidden window, a locked screen) it answers with `ui.capture`'s offscreen picture (`"offscreen": true`). Without `path`: `modelcraft-shot.png` in the temporary folder |
+| `ui.capture` | `path?`, `width?`, `height?` (points; default the window's), `scale?` (pixels per point, 0.5–4; default the window's) | PNG of the whole window (menu, toolbar, panels, forms and the viewport) drawn offscreen: the UI pass runs in a separate egui context and is rasterised on the CPU, so it works with the window hidden, minimised or the screen locked. At most 8192 pixels a side and 16 megapixels. Without `path`: `modelcraft-shot.png` in the temporary folder |
 | `ui.render` | `path`, `width?` (default 1280), `height?` (default 800): whole pixels, each 1–8192 and at most 16 megapixels in all | CPU render of the model with the current camera and view settings (no window or GPU needed). A size out of range, or a scene over 20 million primitives, is an error |
 | `app.quit` | — | closes the window |

@@ -44,6 +44,39 @@ mod tests {
         assert!((m.volume - 6000.0).abs() < 1e-6, "{}", m.volume);
     }
 
+    /// Bodies of components come out where the assembly places them: through every occurrence
+    /// (instances are bodies of their own) and through rotations as well as translations.
+    #[test]
+    fn component_bodies_are_placed_by_their_occurrences() {
+        let script = r#"{"commands": [
+            {"command": "component.create", "params": {"name": "Block"}},
+            {"command": "solid.box", "params": {"length": 10, "width": 4, "height": 2, "body_name": "B"}},
+            {"command": "component.activate", "params": {"component": "root"}},
+            {"command": "occurrence.copy", "params": {"component": "Block", "translate": [100, 0, 0]}},
+            {"command": "occurrence.move", "params": {"occurrence": "Block:1", "axis": [0, 0, 1], "angle": "90 deg", "translate": [0, 50, 0]}}
+        ]}"#;
+        let design = open_design(&script_design(script).unwrap()).unwrap();
+        assert!(design.errors.is_empty(), "{:?}", design.errors);
+        let mut boxes: Vec<([f64; 3], [f64; 3], f64)> = design
+            .bodies
+            .iter()
+            .map(|b| {
+                let m = b.measure().unwrap();
+                (m.bbox_min, m.bbox_max, m.volume)
+            })
+            .collect();
+        boxes.sort_by(|a, b| a.0[0].total_cmp(&b.0[0]));
+        assert_eq!(boxes.len(), 2, "{:?}", design.bodies.iter().map(|b| &b.name).collect::<Vec<_>>());
+        let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-6);
+        // The first occurrence turned 90 degrees about Z, then moved 50 along Y.
+        assert!(close(boxes[0].0, [-4.0, 50.0, 0.0]) && close(boxes[0].1, [0.0, 60.0, 2.0]), "{boxes:?}");
+        // The instance, moved 100 along X.
+        assert!(close(boxes[1].0, [100.0, 0.0, 0.0]) && close(boxes[1].1, [110.0, 4.0, 2.0]), "{boxes:?}");
+        assert!(boxes.iter().all(|b| (b.2 - 80.0).abs() < 1e-6));
+        // Placed bodies keep their persistent face names.
+        assert!(design.bodies.iter().all(|b| b.faces().len() == 6), "{:?}", design.bodies.iter().map(|b| b.faces().len()).collect::<Vec<_>>());
+    }
+
     #[test]
     fn hostile_scripts_are_an_error() {
         for s in ["", "{", "[1]", "{}", r#"[{"command": "no.such"}]"#, r#"[{"command": "solid.box", "params": {"length": -1e400}}]"#] {

@@ -18,7 +18,8 @@ pub const MAX_DESIGN_BYTES: usize = solidcraft_io::MAX_DESIGN_BYTES;
 #[derive(Debug, Clone)]
 pub struct Design {
     pub name: String,
-    /// The bodies at the end of the timeline, in the design's order.
+    /// The bodies at the end of the timeline, in the design's order, placed in the world: bodies of
+    /// components moved by their occurrences, one body per placement.
     pub bodies: Vec<Shape>,
     /// Features that failed to rebuild. The design still opens with the bodies the rest made,
     /// as it does in SolidCraft.
@@ -63,7 +64,9 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
         .filter(|r| !r.skipped)
         .filter_map(|r| r.error.as_ref().map(|e| FeatureError { feature: r.name.clone(), message: e.clone() }))
         .collect();
-    let state = model.state();
+    // Placed in the world: a component's bodies through every occurrence of it (an instance is a
+    // body of its own, named after its occurrence path), as SolidCraft displays and exports them.
+    let state = guard("place components", || Ok(solidcraft_doc::world_state(doc, &model.state())))?;
     let mut bodies = Vec::with_capacity(state.bodies.len());
     for b in &state.bodies {
         let faces = guard("name faces", || {

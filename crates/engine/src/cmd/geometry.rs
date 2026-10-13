@@ -67,7 +67,7 @@ fn bodies(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(Value::Array(out))
 }
 
-fn body<'a>(s: &'a Session, p: &Value) -> Result<&'a Shape> {
+pub(crate) fn body<'a>(s: &'a Session, p: &Value) -> Result<&'a Shape> {
     let name = p.get("body").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`body` must be a body name".into()))?;
     s.design.as_deref().and_then(|d| d.body(name)).ok_or_else(|| EngineError::Params(format!("no body `{name}` (open a design first)")))
 }

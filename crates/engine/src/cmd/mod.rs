@@ -21,6 +21,7 @@ pub static ALL: &[CommandSpec] = &[
     mesh::ELEMENT_REMOVE,
     mesh::QUALITY,
     mesh::DELAUNAY_POINTS,
+    mesh::SURFACE_CHECK,
 ];
 
 /// A required label parameter (1..=u32::MAX; the model checks its own range).

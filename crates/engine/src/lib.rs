@@ -184,6 +184,10 @@ mod tests {
             json!({"points": [[1e308, -1e308, 0], [0, 0, 0]]}),
             json!({"points": [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]}),
             json!({"points": vec![[1, 1, 1]; 30_000]}),
+            json!({"surface": 0}),
+            json!({"surface": -1}),
+            json!({"surface": 1e300}),
+            json!({"surface": "0", "weld": -1, "feature_angle": 1e300}),
         ];
         for spec in commands() {
             for p in &hostile {
@@ -204,6 +208,12 @@ mod tests {
             json!({"body": "Body1", "tolerance": 1e-300}),
             json!({"body": "Body1", "tolerance": 1e300}),
             json!({"body": "Body2", "tolerance": 0.1}),
+            json!({"body": "Body1", "tolerance": 0.5, "surface": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "weld": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "weld": 1e-3}),
+            json!({"body": "Body1", "tolerance": 0.5, "weld": f64::MIN_POSITIVE}),
+            json!({"body": "Body1", "tolerance": 0.5, "feature_angle": 1e-300}),
+            json!({"body": "Body1", "tolerance": 0.5, "feature_angle": null}),
         ];
         for p in tess.iter().chain(&hostile) {
             for spec in commands() {

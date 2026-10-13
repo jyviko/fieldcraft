@@ -65,10 +65,7 @@ pub struct Part {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Source {
     /// The script, read from `recipe.json`.
-    Recipe {
-        path: PathBuf,
-        script: String,
-    },
+    Recipe(String),
     Analytic(Analytic),
 }
 
@@ -130,32 +127,44 @@ impl Analytic {
 /// The analytic shapes of the corpus.
 pub fn analytic_parts() -> Vec<Part> {
     let plate = sample::Plate { width: 200.0, depth: 100.0, thickness: 5.0, hole_diameter: 20.0 };
-    let shapes: [(&str, &str, Analytic); 5] = [
-        ("analytic-sphere", "Sphere r 20: curvature everywhere, no edges.", Analytic::Sphere { radius: 20.0 }),
-        ("analytic-torus", "Torus 30/8: genus 1 with doubly curved faces and no edges.", Analytic::Torus { major: 30.0, minor: 8.0 }),
-        ("analytic-cylinder", "Cylinder r 10, h 40: the round bar of beam and torsion checks.", Analytic::Cylinder { radius: 10.0, height: 40.0 }),
-        ("analytic-pipe", "Thick-walled pipe 20/30, length 60: the Lamé cylinder.", Analytic::Pipe { inner: 20.0, outer: 30.0, length: 60.0 }),
-        ("analytic-plate-hole", "Plate 200 x 100 x 5 with a 20 mm hole: the Kirsch plate.", Analytic::PlateWithHole(plate)),
+    let shapes: [(&str, &str, &[&str], Analytic); 5] = [
+        ("analytic-sphere", "Sphere r 20: curvature everywhere, no edges.", &[], Analytic::Sphere { radius: 20.0 }),
+        ("analytic-torus", "Torus 30/8: genus 1 with doubly curved faces and no edges.", &["genus"], Analytic::Torus { major: 30.0, minor: 8.0 }),
+        (
+            "analytic-cylinder",
+            "Cylinder r 10, h 40: the round bar of beam and torsion checks.",
+            &["sweepable"],
+            Analytic::Cylinder { radius: 10.0, height: 40.0 },
+        ),
+        (
+            "analytic-pipe",
+            "Thick-walled pipe 20/30, length 60: the Lamé cylinder.",
+            &["genus", "sweepable"],
+            Analytic::Pipe { inner: 20.0, outer: 30.0, length: 60.0 },
+        ),
+        ("analytic-plate-hole", "Plate 200 x 100 x 5 with a 20 mm hole: the Kirsch plate.", &["genus", "sweepable"], Analytic::PlateWithHole(plate)),
     ];
     shapes
         .into_iter()
-        .map(|(name, description, shape)| {
-            let mut categories = vec!["analytic".to_string()];
-            if matches!(shape, Analytic::Torus { .. } | Analytic::Pipe { .. } | Analytic::PlateWithHole(_)) {
-                categories.push("genus".into());
-            }
-            if matches!(shape, Analytic::Cylinder { .. } | Analytic::Pipe { .. } | Analytic::PlateWithHole(_)) {
-                categories.push("sweepable".into());
-            }
-            Part { name: name.into(), description: description.into(), categories, volume: Some(shape.volume()), source: Source::Analytic(shape) }
+        .map(|(name, description, more, shape)| Part {
+            name: name.into(),
+            description: description.into(),
+            categories: std::iter::once("analytic").chain(more.iter().copied()).map(str::to_string).collect(),
+            volume: Some(shape.volume()),
+            source: Source::Analytic(shape),
         })
         .collect()
 }
 
+/// The workspace root (this crate is `crates/testkit` in it).
+pub fn workspace_root() -> PathBuf {
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    here.ancestors().nth(2).unwrap_or(here).to_path_buf()
+}
+
 /// The workspace's corpus directory, `tests/corpus`.
 pub fn corpus_dir() -> PathBuf {
-    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
-    here.ancestors().nth(2).unwrap_or(here).join("tests").join("corpus")
+    workspace_root().join("tests").join("corpus")
 }
 
 fn read(path: &Path) -> Result<String> {
@@ -171,8 +180,7 @@ fn read(path: &Path) -> Result<String> {
 pub fn read_recipe(dir: &Path) -> Result<Part> {
     let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let bad = |message: String| Error::Part { part: name.clone(), message };
-    let path = dir.join("recipe.json");
-    let script = read(&path)?;
+    let script = read(&dir.join("recipe.json"))?;
     let value: Value = serde_json::from_str(&script).map_err(|e| bad(format!("recipe.json is not JSON: {e}")))?;
     let meta = value.get("corpus").ok_or_else(|| bad("recipe.json has no `corpus` object".into()))?;
     let categories: Vec<String> = meta
@@ -186,16 +194,16 @@ pub fn read_recipe(dir: &Path) -> Result<Part> {
     if let Some(c) = categories.iter().find(|c| !CATEGORIES.iter().any(|(k, _)| k == c)) {
         return Err(bad(format!("unknown category `{c}`")));
     }
-    let volume = match meta.get("volume_mm3") {
-        None => None,
-        Some(v) => Some(v.as_f64().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(|| bad("`corpus.volume_mm3` must be a positive number".into()))?),
-    };
+    let volume = meta
+        .get("volume_mm3")
+        .map(|v| v.as_f64().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(|| bad("`corpus.volume_mm3` must be a positive number".into())))
+        .transpose()?;
     let readme = read(&dir.join("README.md"))?;
     let description = readme.lines().map(|l| l.trim_start_matches('#').trim()).find(|l| !l.is_empty()).unwrap_or_default().to_string();
     if description.is_empty() {
         return Err(bad("README.md is empty".into()));
     }
-    Ok(Part { name, description, categories, volume, source: Source::Recipe { path, script } })
+    Ok(Part { name, description, categories, volume, source: Source::Recipe(script) })
 }
 
 /// Every recipe under `dir`, by name.
@@ -220,7 +228,7 @@ pub fn parts() -> Result<Vec<Part>> {
 pub fn load(part: &Part) -> Result<Design> {
     let geometry = |source| Error::Geometry { part: part.name.clone(), source };
     let bytes = match &part.source {
-        Source::Recipe { script, .. } => script_design(script),
+        Source::Recipe(script) => script_design(script),
         Source::Analytic(shape) => shape.design(),
     }
     .map_err(geometry)?;

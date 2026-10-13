@@ -19,11 +19,12 @@ pub fn script_design(script: &str) -> Result<Vec<u8>> {
         return Err(Error::Invalid(format!("script is larger than {MAX_SCRIPT_BYTES} bytes")));
     }
     let value: serde_json::Value = serde_json::from_str(script).map_err(|e| Error::Invalid(format!("script is not JSON: {e}")))?;
+    // A failing command is the recipe's error; only a panic is the kernel's.
     let doc = guard("run script", || {
         let mut session = solidcraft_engine::Session::default();
-        session.run_script(&value).map_err(|e| KernelError::Invalid(format!("script: {e}")))?;
-        Ok(session.doc.clone())
-    })?;
+        Ok(session.run_script(&value).map(|_| session.doc.clone()))
+    })?
+    .map_err(|e| Error::Invalid(format!("script: {e}")))?;
     guard("save design", || solidcraft_io::write_design_container(&doc).map_err(|e| KernelError::Internal(format!("save design: {e}"))))
         .map_err(Error::from)
 }

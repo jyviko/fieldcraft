@@ -10,27 +10,27 @@ clock on the machine that ran it; every other column is deterministic.
 
 | part | categories | bodies | faces | triangles | tol. mm | build ms | enclosed mm³ | SolidCraft mm³ | rel. diff | exact mm³ |
 |---|---|---|---|---|---|---|---|---|---|---|
-| bent-tube | sweepable, thin-wall, genus | 1 | 18 | 4296 | 0.121 | 419 | 4213.1 | 4159.4 | 1.3e-2 | 4159.8 |
-| bolted-assembly | assembly, blocky | 3 | 22 | 284 | 0.117 | 54 | 33004.7 | 32999.0 | 1.7e-4 | 32998.9 |
-| cross-cylinders | boolean, sharp | 1 | 10 | 1395 | 0.087 | 11393 | 32197.4 | 32357.8 | -5.0e-3 | 32365.8 |
-| filleted-bracket | fillet, genus, sweepable | 1 | 13 | 540 | 0.088 | 407 | 32162.3 | 32145.0 | 5.4e-4 | 32144.8 |
+| bent-tube | sweepable, thin-wall, genus | 1 | 18 | 4296 | 0.121 | 443 | 4213.1 | 4159.4 | 1.3e-2 | 4159.8 |
+| bolted-assembly | assembly, blocky | 3 | 22 | 284 | 0.117 | 53 | 33004.7 | 32999.0 | 1.7e-4 | 32998.9 |
+| cross-cylinders | boolean, sharp | 1 | 10 | 1395 | 0.087 | 7912 | 32197.4 | 32357.8 | -5.0e-3 | 32365.8 |
+| filleted-bracket | fillet, genus, sweepable | 1 | 13 | 540 | 0.088 | 387 | 32162.3 | 32145.0 | 5.4e-4 | 32144.8 |
 | i-beam | sweepable, thin-wall | 1 | 14 | 44 | 0.208 | 3 | 61600.0 | 61600.0 | 0.0e0 | 61600.0 |
 | loft-transition | organic | 1 | 6 | 292 | 0.075 | 56 | 56390.2 | 56450.6 | -1.1e-3 | – |
-| perforated-plate | genus, thin-wall, sweepable | 1 | 54 | 1644 | 0.144 | 264 | 26822.2 | 26764.6 | 2.2e-3 | 26764.2 |
-| pinhole-block | small-feature, genus | 1 | 38 | 4044 | 0.073 | 198 | 49919.4 | 49909.6 | 2.0e-4 | 49909.5 |
-| rounded-box | fillet | 1 | 26 | 2540 | 0.054 | 151 | 23325.7 | 23340.5 | -6.3e-4 | 23340.8 |
+| perforated-plate | genus, thin-wall, sweepable | 1 | 54 | 1644 | 0.144 | 269 | 26822.2 | 26764.6 | 2.2e-3 | 26764.2 |
+| pinhole-block | small-feature, genus | 1 | 38 | 4044 | 0.073 | 203 | 49919.4 | 49909.6 | 2.0e-4 | 49909.5 |
+| rounded-box | fillet | 1 | 26 | 2540 | 0.054 | 148 | 23325.7 | 23340.5 | -6.3e-4 | 23340.8 |
 | shallow-groove | near-tangent, boolean | 1 | 8 | 62 | 0.075 | 11 | 47795.2 | 47782.3 | 2.7e-4 | 47781.5 |
 | sharp-wedge | sharp, thin-wall, sweepable | 1 | 5 | 8 | 0.083 | 2 | 3200.0 | 3200.0 | 0.0e0 | 3200.0 |
-| sphere-on-plate | near-tangent, boolean | 1 | 12 | 2826 | 0.098 | 713 | 69353.3 | 69509.0 | -2.2e-3 | 69509.7 |
-| spline-vase | organic | 1 | 11 | 3890 | 0.106 | 224 | 94891.2 | 94948.5 | -6.0e-4 | – |
-| stepped-block | blocky, sharp | 1 | 14 | 96 | 0.078 | 30 | 47000.0 | 47000.0 | 0.0e0 | 47000.0 |
-| thin-ribs | thin-wall, blocky | 1 | 26 | 92 | 0.119 | 62 | 32000.0 | 32000.0 | -4.5e-16 | 32000.0 |
-| thin-wall-enclosure | thin-wall, blocky | 1 | 11 | 36 | 0.108 | 7 | 15564.0 | 15564.0 | 0.0e0 | 15564.0 |
-| analytic-sphere | analytic | 1 | 6 | 2784 | 0.069 | 273 | 33353.4 | 33507.9 | -4.6e-3 | 33510.3 |
-| analytic-torus | analytic, genus | 1 | 6 | 7230 | 0.109 | 645 | 37644.1 | 37893.7 | -6.6e-3 | 37899.3 |
-| analytic-cylinder | analytic, sweepable | 1 | 4 | 1004 | 0.049 | 49 | 12533.1 | 12564.7 | -2.5e-3 | 12566.4 |
-| analytic-pipe | analytic, genus, sweepable | 1 | 6 | 1448 | 0.104 | 175 | 94150.9 | 94238.0 | -9.3e-4 | 94247.8 |
-| analytic-plate-hole | analytic, genus, sweepable | 1 | 8 | 112 | 0.224 | 34 | 98449.1 | 98429.5 | 2.0e-4 | 98429.2 |
+| sphere-on-plate | near-tangent, boolean | 1 | 12 | 2826 | 0.098 | 687 | 69353.3 | 69509.0 | -2.2e-3 | 69509.7 |
+| spline-vase | organic | 1 | 11 | 3890 | 0.106 | 218 | 94891.2 | 94948.5 | -6.0e-4 | – |
+| stepped-block | blocky, sharp | 1 | 14 | 96 | 0.078 | 32 | 47000.0 | 47000.0 | 0.0e0 | 47000.0 |
+| thin-ribs | thin-wall, blocky | 1 | 26 | 92 | 0.119 | 65 | 32000.0 | 32000.0 | -4.5e-16 | 32000.0 |
+| thin-wall-enclosure | thin-wall, blocky | 1 | 11 | 36 | 0.108 | 8 | 15564.0 | 15564.0 | 0.0e0 | 15564.0 |
+| analytic-sphere | analytic | 1 | 6 | 2784 | 0.069 | 248 | 33353.4 | 33507.9 | -4.6e-3 | 33510.3 |
+| analytic-torus | analytic, genus | 1 | 6 | 7230 | 0.109 | 338 | 37644.1 | 37893.7 | -6.6e-3 | 37899.3 |
+| analytic-cylinder | analytic, sweepable | 1 | 4 | 1004 | 0.049 | 25 | 12533.1 | 12564.7 | -2.5e-3 | 12566.4 |
+| analytic-pipe | analytic, genus, sweepable | 1 | 6 | 1448 | 0.104 | 42 | 94150.9 | 94238.0 | -9.3e-4 | 94247.8 |
+| analytic-plate-hole | analytic, genus, sweepable | 1 | 8 | 112 | 0.224 | 11 | 98449.1 | 98429.5 | 2.0e-4 | 98429.2 |
 
 ## Categories
 

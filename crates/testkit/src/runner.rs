@@ -13,16 +13,18 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::corpus::{self, CATEGORIES, Part};
-use modelcraft_geometry::{Design, SurfaceMesh};
+use modelcraft_geometry::{Design, Measure, SurfaceMesh};
 
 pub const FILE: &str = "docs/meshing/corpus.md";
 /// Chordal tolerance of the boundary surface, relative to the part's bounding-box diagonal.
 const RELATIVE_TOLERANCE: f64 = 1e-3;
 
 /// A built part with its boundary surfaces.
-pub struct Loaded {
-    pub part: Part,
+pub struct Loaded<'a> {
+    pub part: &'a Part,
     pub design: Design,
+    /// SolidCraft's measures, one per body in the design's order.
+    pub measures: Vec<Measure>,
     /// One per body, in the design's order.
     pub surfaces: Vec<SurfaceMesh>,
     /// The chordal tolerance the surfaces were made with (mm).
@@ -52,24 +54,21 @@ impl Stage for SurfaceVolume {
 
     fn run(&self, l: &Loaded) -> Result<Vec<String>, String> {
         let enclosed: f64 = l.surfaces.iter().map(SurfaceMesh::enclosed_volume).sum();
-        let mut measured = 0.0;
-        for b in &l.design.bodies {
-            measured += b.measure().map_err(|e| format!("measure {}: {e}", b.name))?.volume;
-        }
+        let measured: f64 = l.measures.iter().map(|m| m.volume).sum();
         let rel = if measured.abs() > 0.0 { (enclosed - measured) / measured } else { f64::NAN };
         Ok(vec![format!("{enclosed:.1}"), format!("{measured:.1}"), format!("{rel:.1e}"), l.part.volume.map_or("–".into(), |v| format!("{v:.1}"))])
     }
 }
 
-fn load(part: Part) -> Result<(Loaded, f64), String> {
+fn load(part: &Part) -> Result<(Loaded<'_>, f64), String> {
     let start = Instant::now();
-    let design = corpus::load(&part).map_err(|e| e.to_string())?;
+    let design = corpus::load(part).map_err(|e| e.to_string())?;
     if let Some(e) = design.errors.first() {
         return Err(format!("feature {} failed: {}", e.feature, e.message));
     }
+    let measures = design.bodies.iter().map(|b| b.measure().map_err(|e| format!("measure {}: {e}", b.name))).collect::<Result<Vec<_>, _>>()?;
     let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-    for b in &design.bodies {
-        let m = b.measure().map_err(|e| format!("measure {}: {e}", b.name))?;
+    for m in &measures {
         for i in 0..3 {
             lo[i] = lo[i].min(m.bbox_min[i]);
             hi[i] = hi[i].max(m.bbox_max[i]);
@@ -77,12 +76,15 @@ fn load(part: Part) -> Result<(Loaded, f64), String> {
     }
     let diagonal = (0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f64>().sqrt();
     let tolerance = RELATIVE_TOLERANCE * if diagonal.is_finite() && diagonal > 0.0 { diagonal } else { 1.0 };
-    let mut surfaces = Vec::with_capacity(design.bodies.len());
-    for b in &design.bodies {
-        surfaces.push(b.tessellate(tolerance).map_err(|e| format!("tessellate {}: {e}", b.name))?);
-    }
+    let surfaces =
+        design.bodies.iter().map(|b| b.tessellate(tolerance).map_err(|e| format!("tessellate {}: {e}", b.name))).collect::<Result<Vec<_>, _>>()?;
     let ms = start.elapsed().as_secs_f64() * 1e3;
-    Ok((Loaded { part, design, surfaces, tolerance }, ms))
+    Ok((Loaded { part, design, measures, surfaces, tolerance }, ms))
+}
+
+/// A failed part or stage: the error, then blanks to fill `width` cells.
+fn error_cells(e: &str, width: usize) -> impl Iterator<Item = String> {
+    std::iter::once(format!("error: {e}")).chain(std::iter::repeat_n(String::new(), width.saturating_sub(1)))
 }
 
 /// Run the corpus; with `write` (and every part) write [`FILE`] under the workspace `root`.
@@ -95,33 +97,23 @@ pub fn run(root: &Path, only: Option<&str>, write: bool) -> Result<(), String> {
         }
     }
     let stages = stages();
-    let mut header = vec!["part", "categories", "bodies", "faces", "triangles", "tol. mm", "build ms"];
+    const PART_COLUMNS: &[&str] = &["part", "categories", "bodies", "faces", "triangles", "tol. mm", "build ms"];
+    let mut header = PART_COLUMNS.to_vec();
     for s in &stages {
         header.extend_from_slice(s.headers());
     }
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut failures = 0;
-    let mut covered: Vec<(&str, usize)> = CATEGORIES.iter().map(|(c, _)| (*c, 0)).collect();
-    let mut descriptions = Vec::new();
-    for part in parts {
-        let name = part.name.clone();
-        eprintln!("corpus: {name}");
-        for (c, n) in &mut covered {
-            if part.categories.iter().any(|x| x == c) {
-                *n += 1;
-            }
-        }
-        descriptions.push((name.clone(), part.description.clone()));
-        let categories = part.categories.join(", ");
-        let mut row = vec![name.clone(), categories];
+    for part in &parts {
+        eprintln!("corpus: {}", part.name);
+        let mut row = vec![part.name.clone(), part.categories.join(", ")];
         match load(part) {
             Err(e) => {
                 failures += 1;
-                row.push(format!("error: {e}"));
-                row.resize(header.len(), String::new());
+                row.extend(error_cells(&e, header.len() - row.len()));
             }
             Ok((l, ms)) => {
-                let faces: usize = l.design.bodies.iter().map(|b| b.measure().map(|m| m.faces).unwrap_or(0)).sum();
+                let faces: usize = l.measures.iter().map(|m| m.faces).sum();
                 let triangles: usize = l.surfaces.iter().map(|s| s.triangles.len()).sum();
                 row.extend([
                     l.design.bodies.len().to_string(),
@@ -131,12 +123,16 @@ pub fn run(root: &Path, only: Option<&str>, write: bool) -> Result<(), String> {
                     format!("{ms:.0}"),
                 ]);
                 for s in &stages {
+                    let width = s.headers().len();
                     match s.run(&l) {
-                        Ok(cells) => row.extend(cells),
+                        Ok(cells) if cells.len() == width => row.extend(cells),
+                        Ok(cells) => {
+                            failures += 1;
+                            row.extend(error_cells(&format!("stage gave {} cells for {width} columns", cells.len()), width));
+                        }
                         Err(e) => {
                             failures += 1;
-                            row.push(format!("error: {e}"));
-                            row.extend(std::iter::repeat_n(String::new(), s.headers().len().saturating_sub(1)));
+                            row.extend(error_cells(&e, width));
                         }
                     }
                 }
@@ -148,7 +144,7 @@ pub fn run(root: &Path, only: Option<&str>, write: bool) -> Result<(), String> {
     println!("{table}");
     if write && only.is_none() {
         let path = root.join(FILE);
-        std::fs::write(&path, document(&table, &covered, &descriptions)).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::write(&path, document(&table, &parts)).map_err(|e| format!("{}: {e}", path.display()))?;
         println!("corpus: wrote {FILE}");
     }
     if failures > 0 { Err(format!("corpus: {failures} part(s) or stage(s) failed")) } else { Ok(()) }
@@ -162,7 +158,7 @@ fn markdown_table(header: &[&str], rows: &[Vec<String>]) -> String {
     s
 }
 
-fn document(table: &str, covered: &[(&str, usize)], descriptions: &[(String, String)]) -> String {
+fn document(table: &str, parts: &[Part]) -> String {
     let mut s = String::from(
         "# Meshing test corpus\n\n\
          Generated by `cargo xtask corpus`; do not edit. The parts are our own: SolidCraft recipes in\n\
@@ -174,13 +170,13 @@ fn document(table: &str, covered: &[(&str, usize)], descriptions: &[(String, Str
     );
     s.push_str(table);
     s.push_str("\n## Categories\n\n| category | stresses | parts |\n|---|---|---|\n");
-    for (c, n) in covered {
-        let what = CATEGORIES.iter().find(|(k, _)| k == c).map_or("", |(_, w)| *w);
+    for (c, what) in CATEGORIES {
+        let n = parts.iter().filter(|p| p.categories.iter().any(|x| x == c)).count();
         let _ = writeln!(s, "| {c} | {what} | {n} |");
     }
     s.push_str("\n## Parts\n\n");
-    for (name, d) in descriptions {
-        let _ = writeln!(s, "- `{name}`: {d}");
+    for p in parts {
+        let _ = writeln!(s, "- `{}`: {}", p.name, p.description);
     }
     s
 }

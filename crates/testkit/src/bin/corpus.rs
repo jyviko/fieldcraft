@@ -20,9 +20,7 @@ fn main() -> ExitCode {
             }
         }
     }
-    let root = modelcraft_testkit::corpus::corpus_dir();
-    let root = root.ancestors().nth(2).unwrap_or(&root);
-    match modelcraft_testkit::runner::run(root, only, write) {
+    match modelcraft_testkit::runner::run(&modelcraft_testkit::corpus::workspace_root(), only, write) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");

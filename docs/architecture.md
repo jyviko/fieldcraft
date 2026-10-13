@@ -26,7 +26,6 @@ crates in strictly lower layers.
 | L1 | `modelcraft-render` | Display data (meshes, contour maps) without a GPU dependency. | planned |
 | L2 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
 | L3 | `modelcraft-io` | `.modelcraft` files, result files. | planned |
-| L1 | `modelcraft-geometry` feature `scripts` | Builds designs from SolidCraft command scripts (`script_design`, through `solidcraft-engine`); off by default, used by the test corpus. | started |
 | L4 | `modelcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts. | started |
 | L5 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI, control channel and MCP server. | planned |
 | testkit | `modelcraft-testkit` | Test tooling, a dev-dependency only: the meshing test corpus (`tests/corpus/*/recipe.json`, analytic shapes) and its runner (`cargo xtask corpus`). | started |
@@ -38,6 +37,9 @@ Rules beyond the layer order:
   SolidCraft's `[patch.crates-io]` (its fixed truck crates) does not reach dependents, so the
   workspace repeats it from the same rev; bump both together.
 - Everything below the apps builds for `wasm32-unknown-unknown`.
+- `modelcraft-geometry`'s non-default `scripts` feature builds designs from SolidCraft command
+  scripts (`script_design`, through `solidcraft-engine`) for the test corpus; the library opens
+  designs without it.
 
 ## Meshing pipeline
 

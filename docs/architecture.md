@@ -19,7 +19,7 @@ crates in strictly lower layers.
 | Layer | Crate | Role | Status |
 |---|---|---|---|
 | L0 | `modelcraft-model` | Solver-neutral FE model: nodes, elements by label; materials, sections, sets, BCs, loads and steps as they land. Knows no file format. | started |
-| L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`. No SolidCraft type in its API. | started |
+| L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`; face-tagged 3MF files read into the same type without the kernel (docs/formats/tagged-mesh.md). No SolidCraft type in its API. | started |
 | L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
 | L1 | `modelcraft-solver` | Element formulations, assembly, sparse linear static and modal solution. | planned |
 | L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. | planned |

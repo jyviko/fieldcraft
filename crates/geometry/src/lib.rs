@@ -21,6 +21,7 @@ mod design;
 pub mod sample;
 
 pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design, open_design_file};
+pub mod tagged_mesh;
 use solidcraft_kernel::{Body, KernelError, guard};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

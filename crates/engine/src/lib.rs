@@ -2,8 +2,8 @@
 //!
 //! Everything a user can do is a command ([`CommandSpec`]) with a JSON form. The desktop UI,
 //! scripts, the CLI and the control channel all run the same commands through
-//! [`Session::execute`], which never lets a failure or a panic damage the model: the model is
-//! restored and an [`EngineError`] comes back.
+//! [`Session::execute`], which never lets a failure or a panic damage the session: the model and
+//! the surfaces are restored and an [`EngineError`] comes back.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -12,6 +12,7 @@ pub mod cmd;
 use std::sync::Arc;
 
 use modelcraft_geometry::Design;
+use modelcraft_geometry::tagged_mesh::TaggedSurface;
 use modelcraft_model::Model;
 use serde_json::Value;
 
@@ -25,6 +26,9 @@ pub enum EngineError {
     Model(#[from] modelcraft_model::Error),
     #[error(transparent)]
     Geometry(#[from] modelcraft_geometry::Error),
+    /// A file could not be read or written.
+    #[error("{0}")]
+    File(String),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
@@ -57,16 +61,21 @@ pub struct Session {
     pub model: Model,
     /// The open SolidCraft design (`geometry.open`); shared, so a snapshot costs nothing.
     pub design: Option<Arc<Design>>,
+    /// Face-tagged boundary surfaces (`geometry.import.mesh`): the input to volume meshing.
+    /// Each is shared, so the per-command snapshot is cheap.
+    pub surfaces: Vec<Arc<TaggedSurface>>,
     /// Commands that changed the model, in order (a script that rebuilds it).
     pub journal: Vec<(String, Value)>,
 }
 
 impl Session {
-    /// Run a command. On an error or a panic the model and the design are left as they were.
+    /// Run a command. On an error or a panic the model, the design and the surfaces are left as
+    /// they were.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         let before = self.model.clone();
         let design_before = self.design.clone();
+        let surfaces_before = self.surfaces.clone();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
         let result = match outcome {
             Ok(r) => r,
@@ -77,12 +86,15 @@ impl Session {
             }
         };
         let design_changed = self.design.as_ref().map(Arc::as_ptr) != design_before.as_ref().map(Arc::as_ptr);
+        let surfaces_changed =
+            self.surfaces.len() != surfaces_before.len() || self.surfaces.iter().zip(&surfaces_before).any(|(a, b)| !Arc::ptr_eq(a, b));
         match &result {
-            Ok(_) if self.model != before || design_changed => self.journal.push((id.to_string(), params.clone())),
+            Ok(_) if self.model != before || design_changed || surfaces_changed => self.journal.push((id.to_string(), params.clone())),
             Ok(_) => {}
             Err(_) => {
                 self.model = before;
                 self.design = design_before;
+                self.surfaces = surfaces_before;
             }
         }
         result

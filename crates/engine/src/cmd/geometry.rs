@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use modelcraft_geometry::tagged_mesh::{self, MAX_FILE_BYTES};
 use modelcraft_geometry::{Shape, open_design_file};
 use serde_json::{Value, json};
 
+use super::read_capped;
 use crate::{CommandSpec, EngineError, Result, Session};
 
 pub const OPEN: CommandSpec = CommandSpec {
@@ -24,6 +26,13 @@ pub const TESSELLATE: CommandSpec = CommandSpec {
     label: "Tessellate Body",
     params: r#"{"body": "Body1", "tolerance": 0.05} — triangulates the body's boundary within the chordal tolerance (mm); reports triangles per face"#,
     run: tessellate,
+};
+
+pub const IMPORT_MESH: CommandSpec = CommandSpec {
+    id: "geometry.import.mesh",
+    label: "Import Tagged Mesh",
+    params: r#"{"path": "part.3mf"} — adds each build item of a 3MF package as a surface; triangles keep their B-rep face tags (docs/formats/tagged-mesh.md)"#,
+    run: import_mesh,
 };
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
@@ -76,4 +85,65 @@ fn tessellate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let faces: Vec<Value> = shape.faces().iter().zip(per_face).map(|(f, n)| json!({"name": f.name, "triangles": n})).collect();
     Ok(json!({"body": shape.name, "vertices": mesh.positions.len(), "triangles": mesh.triangles.len(), "faces": faces}))
+}
+
+fn import_mesh(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = p
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|x| !x.trim().is_empty() && x.len() < 4096)
+        .ok_or_else(|| EngineError::Params("`path` must name a .3mf file".into()))?;
+    let surfaces = tagged_mesh::read_3mf(&read_capped(path, MAX_FILE_BYTES)?)?;
+    let first = s.surfaces.len();
+    let added: Vec<Value> = surfaces
+        .iter()
+        .enumerate()
+        .map(|(k, t)| json!({"index": first + k, "name": t.name, "vertices": t.mesh.positions.len(), "triangles": t.mesh.triangles.len(), "faces": t.faces}))
+        .collect();
+    s.surfaces.extend(surfaces.into_iter().map(Arc::new));
+    Ok(json!({"path": path, "surfaces": added}))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, Write};
+
+    use super::*;
+
+    fn package(model: &str) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file("3D/3dmodel.model", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(model.as_bytes()).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn import_adds_tagged_surfaces_and_failures_change_nothing() {
+        let dir = std::env::temp_dir().join(format!("modelcraft-import-mesh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = format!(
+            r#"<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:ft="{}"><resources>
+<object id="1" name="Tet" ft:faces="2"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/><vertex x="0" y="0" z="1"/></vertices>
+<triangles><triangle v1="0" v2="2" v3="1" ft:face="0"/><triangle v1="0" v2="1" v3="3" ft:face="1"/><triangle v1="1" v2="2" v3="3" ft:face="1"/><triangle v1="0" v2="3" v3="2" ft:face="1"/></triangles></mesh></object>
+</resources><build><item objectid="1"/></build></model>"#,
+            tagged_mesh::FACE_TAGS_NS
+        );
+        let good = dir.join("tet.3mf");
+        std::fs::write(&good, package(&model)).unwrap();
+        let junk = dir.join("junk.3mf");
+        std::fs::write(&junk, b"PK\x03\x04 not really").unwrap();
+
+        let mut s = Session::default();
+        let r = s.execute("geometry.import.mesh", &json!({"path": good.to_str().unwrap()})).unwrap();
+        assert_eq!(r["surfaces"][0], json!({"index": 0, "name": "Tet", "vertices": 4, "triangles": 4, "faces": 2}));
+        assert_eq!(s.surfaces[0].mesh.tri_face, vec![0, 1, 1, 1]);
+        assert_eq!(s.journal.len(), 1);
+
+        for p in [json!({"path": junk.to_str().unwrap()}), json!({"path": dir.join("missing.3mf").to_str().unwrap()}), json!({"path": ""})] {
+            assert!(s.execute("geometry.import.mesh", &p).is_err(), "{p}");
+        }
+        assert_eq!(s.surfaces.len(), 1);
+        assert_eq!(s.journal.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -51,38 +51,39 @@ pub(crate) fn real(v: f64) -> (String, bool) {
         return ("0.0".into(), true);
     }
     let positional = with_point(format!("{v}"));
+    // Positional reads best for everyday magnitudes (the common case: no other form is built).
+    let everyday = (1e-4..1e15).contains(&v.abs());
+    if everyday && positional.len() <= WIDTH {
+        return (positional, true);
+    }
+    // Without the leading zero (`-.0123`), which every Fortran reader takes.
+    let bare = (v.abs() < 1.0).then(|| positional.replacen("0.", ".", 1));
     let scientific = match format!("{v:e}").split_once('e') {
         Some((m, e)) => format!("{}e{e}", with_point(m.to_string())),
         None => positional.clone(),
     };
-    // Without the leading zero (`-.0123`), which every Fortran reader takes, when that is needed.
-    let bare = positional.replacen("0.", ".", 1);
-    let bare = if v.abs() < 1.0 { bare } else { positional.clone() };
-    // Positional reads best for everyday magnitudes; otherwise the shortest form.
-    let everyday = (1e-4..1e15).contains(&v.abs());
-    // Candidates in order of preference among equals: everyday magnitudes positional first,
-    // others the shortest, scientific before positional; the bare form only when it is needed.
-    let candidates = if everyday { [positional, bare, scientific] } else { [scientific, positional, bare] };
-    let shortest = candidates
-        .into_iter()
-        .enumerate()
-        .filter(|(_, s)| s.len() <= WIDTH)
-        .min_by_key(|(i, s)| if everyday { (0, *i) } else { (s.len(), *i) })
-        .map(|(_, s)| s)
-        .unwrap_or_default();
-    if !shortest.is_empty() {
-        return (shortest, true);
+    // Everyday magnitudes keep the positional digits if dropping the zero is enough; others
+    // take the shortest form, scientific first among equals.
+    let fits = |s: &String| s.len() <= WIDTH;
+    let chosen = if everyday {
+        bare.filter(fits).or_else(|| Some(scientific).filter(fits))
+    } else {
+        [Some(scientific), Some(positional), bare].into_iter().flatten().filter(fits).min_by_key(String::len)
+    };
+    if let Some(s) = chosen {
+        return (s, true);
     }
-    // Round to the most significant digits that fit (13 always do: sign, 13 digits, the point
-    // and a four-character exponent make 20).
-    for digits in (1..=16usize).rev() {
-        let s = trim_mantissa(&format!("{v:.*e}", digits - 1));
+    // Round to the most significant digits that fit: 13 always do (sign, 13 digits, the point
+    // and a four-character exponent make 20), so the loop always returns.
+    let mut s = String::new();
+    for digits in (13..=16usize).rev() {
+        s = trim_mantissa(&format!("{v:.*e}", digits - 1));
         if s.len() <= WIDTH {
-            let exact = s.parse::<f64>().is_ok_and(|r| r == v);
-            return (s, exact);
+            break;
         }
     }
-    (format!("{v:.0e}"), false)
+    let exact = s.parse::<f64>().is_ok_and(|r| r == v);
+    (s, exact)
 }
 
 /// Add `.0` to a number written without a decimal point (Fortran reads both, but an explicit
@@ -112,67 +113,66 @@ pub(crate) struct Deck {
 }
 
 impl Deck {
-    pub(crate) fn keyword(&mut self, keyword: &str) {
-        self.text.push_str(keyword);
+    /// A line written as given: a keyword, or a title or heading card.
+    pub(crate) fn line(&mut self, text: &str) {
+        self.text.push_str(text);
         self.text.push('\n');
     }
 
     /// A comment line (`$` in column 1).
     pub(crate) fn comment(&mut self, text: &str) {
-        self.text.push('$');
-        if !text.is_empty() {
-            self.text.push(' ');
-            self.text.push_str(text);
-        }
-        self.text.push('\n');
+        self.text.push_str("$ ");
+        self.line(text);
     }
 
     /// A comment naming the fields of the cards that follow, each over its column.
     pub(crate) fn header(&mut self, names: &[&str]) {
-        let mut line = String::from("$");
+        self.text.push('$');
         for (i, name) in names.iter().enumerate() {
             let width = if i == 0 { WIDTH - 1 } else { WIDTH };
-            let _ = write!(line, "{name:>width$}");
+            let _ = write!(self.text, "{name:>width$}");
         }
-        self.text.push_str(line.trim_end());
-        self.text.push('\n');
+        self.end_card();
     }
 
     /// A card of fields.
-    pub(crate) fn card(&mut self, fields: &[Field]) {
-        let mut line = String::new();
+    pub(crate) fn card(&mut self, fields: impl IntoIterator<Item = Field>) {
         for f in fields {
             match f {
                 Field::Int(v) => {
-                    let _ = write!(line, "{v:>WIDTH$}");
+                    let _ = write!(self.text, "{v:>WIDTH$}");
                 }
                 Field::Real(v) => {
-                    let (s, exact) = real(*v);
-                    if !exact {
-                        self.rounded += 1;
-                    }
-                    let _ = write!(line, "{s:>WIDTH$}");
+                    let (s, exact) = real(v);
+                    self.rounded += usize::from(!exact);
+                    let _ = write!(self.text, "{s:>WIDTH$}");
                 }
-                Field::Blank => line.push_str(&" ".repeat(WIDTH)),
+                Field::Blank => {
+                    let _ = write!(self.text, "{:WIDTH$}", "");
+                }
             }
         }
-        self.text.push_str(line.trim_end());
-        self.text.push('\n');
+        self.end_card();
     }
 
-    /// A text card (a title or heading), written as given.
-    pub(crate) fn text(&mut self, text: &str) {
-        self.text.push_str(text);
+    /// End a card: trailing blanks (left-out fields) dropped, then the line break.
+    fn end_card(&mut self) {
+        let kept = self.text.trim_end_matches(' ').len();
+        self.text.truncate(kept);
         self.text.push('\n');
     }
 
     /// Cards of up to eight integers each (set member lists).
     pub(crate) fn list(&mut self, values: &[u32]) {
         for chunk in values.chunks(8) {
-            let fields: Vec<Field> = chunk.iter().map(|v| Field::from(*v)).collect();
-            self.card(&fields);
+            self.card(ints(chunk));
         }
     }
+}
+
+/// Integer fields.
+pub(crate) fn ints(values: &[u32]) -> impl Iterator<Item = Field> + '_ {
+    values.iter().map(|v| Field::from(*v))
 }
 
 #[cfg(test)]
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn cards_are_right_aligned_and_trimmed() {
         let mut d = Deck::default();
-        d.card(&[Field::from(1u32), Field::Blank, Field::from(2.5), Field::Blank]);
+        d.card([Field::from(1u32), Field::Blank, Field::from(2.5), Field::Blank]);
         assert_eq!(d.text, format!("{:>20}{:20}{:>20}\n", 1, "", "2.5"));
         d.list(&[1, 2, 3, 4, 5, 6, 7, 8, 9]);
         assert_eq!(d.text.lines().count(), 3);

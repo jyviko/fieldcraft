@@ -182,13 +182,9 @@ fn solids() -> Model {
 
 /// A unit 20-node hexahedron at `o` in model order.
 fn hex20_nodes(o: [f64; 3]) -> Vec<[f64; 3]> {
-    let corners =
-        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0]];
-    let edges = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)];
+    let corners = CUBE.map(|c| c.map(|v| (v + 1.0) / 2.0));
     let mut out: Vec<[f64; 3]> = corners.to_vec();
-    for (a, b) in edges {
-        out.push([(corners[a][0] + corners[b][0]) / 2.0, (corners[a][1] + corners[b][1]) / 2.0, (corners[a][2] + corners[b][2]) / 2.0]);
-    }
+    out.extend(HEX_EDGES.map(|(a, b)| [0, 1, 2].map(|k| (corners[a][k] + corners[b][k]) / 2.0)));
     out.iter().map(|p| [p[0] + o[0], p[1] + o[1], p[2] + o[2]]).collect()
 }
 
@@ -266,7 +262,7 @@ struct Read {
     nodes: BTreeMap<u32, [f64; 3]>,
     /// Element → its nodes as written.
     elements: BTreeMap<u32, Vec<u32>>,
-    /// Element → part.
+    /// The part ids elements are in.
     parts: BTreeSet<u32>,
     node_sets: BTreeMap<String, Vec<u32>>,
 }
@@ -374,17 +370,17 @@ fn awkward_coordinates_round_trip_or_are_counted() {
 // ---------------------------------------------------------------------------------------------
 // Node order: the sign of the Jacobian in LS-DYNA's element conventions.
 
-/// Trilinear hexahedron in LS-DYNA order (1-4 one face, 5-8 over them): det J at a point.
-fn hex8_det(x: &[[f64; 3]], (r, s, t): (f64, f64, f64)) -> f64 {
-    const C: [[f64; 3]; 8] =
-        [[-1., -1., -1.], [1., -1., -1.], [1., 1., -1.], [-1., 1., -1.], [-1., -1., 1.], [1., -1., 1.], [1., 1., 1.], [-1., 1., 1.]];
+/// Hexahedron corners in the reference cube, in LS-DYNA (and model) order.
+const CUBE: [[f64; 3]; 8] =
+    [[-1., -1., -1.], [1., -1., -1.], [1., 1., -1.], [-1., 1., -1.], [-1., -1., 1.], [1., -1., 1.], [1., 1., 1.], [-1., 1., 1.]];
+
+/// Hexahedron edges as corner pairs, in mid-side node order.
+const HEX_EDGES: [(usize, usize); 12] = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)];
+
+/// det J of the map with shape-function gradients `dn[i]` (reference axes) at nodes `x[i]`.
+fn jacobian_det(x: &[[f64; 3]], dn: impl Iterator<Item = [f64; 3]>) -> f64 {
     let mut j = [[0.0; 3]; 3];
-    for (p, c) in x.iter().zip(C) {
-        let d = [
-            c[0] * (1.0 + c[1] * s) * (1.0 + c[2] * t) / 8.0,
-            c[1] * (1.0 + c[0] * r) * (1.0 + c[2] * t) / 8.0,
-            c[2] * (1.0 + c[0] * r) * (1.0 + c[1] * s) / 8.0,
-        ];
+    for (p, d) in x.iter().zip(dn) {
         for a in 0..3 {
             for b in 0..3 {
                 j[a][b] += d[a] * p[b];
@@ -392,6 +388,20 @@ fn hex8_det(x: &[[f64; 3]], (r, s, t): (f64, f64, f64)) -> f64 {
         }
     }
     det(j)
+}
+
+/// Trilinear hexahedron in LS-DYNA order (1-4 one face, 5-8 over them): det J at a point.
+fn hex8_det(x: &[[f64; 3]], (r, s, t): (f64, f64, f64)) -> f64 {
+    jacobian_det(
+        x,
+        CUBE.iter().map(|c| {
+            [
+                c[0] * (1.0 + c[1] * s) * (1.0 + c[2] * t) / 8.0,
+                c[1] * (1.0 + c[0] * r) * (1.0 + c[2] * t) / 8.0,
+                c[2] * (1.0 + c[0] * r) * (1.0 + c[1] * s) / 8.0,
+            ]
+        }),
+    )
 }
 
 fn det(j: [[f64; 3]; 3]) -> f64 {
@@ -454,15 +464,10 @@ fn degenerate_solids_have_positive_jacobians_in_lsdyna_order() {
     }
 }
 
-/// [`written_coordinates`] without writing: the mapping applied by hand to coordinates that the
+/// [`written_coordinates`] without writing: the writer's node order applied to coordinates the
 /// model would reject as inverted.
 fn written_coordinates_unchecked(kind: ElementKind, xyz: &[[f64; 3]]) -> Vec<[f64; 3]> {
-    let order: &[usize] = match kind {
-        ElementKind::Tet4 => &[0, 1, 2, 3, 3, 3, 3, 3],
-        ElementKind::Wedge6 => &[1, 0, 3, 4, 2, 2, 5, 5],
-        _ => &[0, 1, 2, 3, 4, 5, 6, 7],
-    };
-    order.iter().map(|&i| xyz[i]).collect()
+    lsdyna::node_order(kind).iter().map(|&i| xyz[i]).collect()
 }
 
 /// Quadratic tetrahedron in LS-DYNA order (mid-sides 5, 6, 7 on 1-2, 2-3, 3-1 and 8, 9, 10 on
@@ -472,23 +477,9 @@ fn tet10_det(x: &[[f64; 3]], l: [f64; 3]) -> f64 {
     // dL/d(ξ, η, ζ) with L1 = 1 − ξ − η − ζ, L2 = ξ, L3 = η, L4 = ζ.
     let dl = [[-1.0, -1.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     let edges = [(0, 1), (1, 2), (2, 0), (1, 3), (2, 3), (0, 3)];
-    let mut j = [[0.0; 3]; 3];
-    let mut add = |p: [f64; 3], dn: [f64; 3]| {
-        for a in 0..3 {
-            for b in 0..3 {
-                j[a][b] += dn[a] * p[b];
-            }
-        }
-    };
-    for i in 0..4 {
-        let k = 4.0 * ls[i] - 1.0;
-        add(x[i], [k * dl[i][0], k * dl[i][1], k * dl[i][2]]);
-    }
-    for (m, (a, b)) in edges.iter().enumerate() {
-        let dn = [0, 1, 2].map(|c| 4.0 * (dl[*a][c] * ls[*b] + ls[*a] * dl[*b][c]));
-        add(x[4 + m], dn);
-    }
-    det(j)
+    let corners = (0..4).map(|i| dl[i].map(|d| (4.0 * ls[i] - 1.0) * d));
+    let mids = edges.iter().map(|&(a, b)| [0, 1, 2].map(|c| 4.0 * (dl[a][c] * ls[b] + ls[a] * dl[b][c])));
+    jacobian_det(x, corners.chain(mids))
 }
 
 #[test]
@@ -511,40 +502,24 @@ fn tet10_mid_side_nodes_sit_on_lsdyna_edges_with_positive_jacobian() {
 
 /// 20-node serendipity hexahedron in LS-DYNA order: det J at a point.
 fn hex20_det(x: &[[f64; 3]], p: [f64; 3]) -> f64 {
-    const C: [[f64; 3]; 8] =
-        [[-1., -1., -1.], [1., -1., -1.], [1., 1., -1.], [-1., 1., -1.], [-1., -1., 1.], [1., -1., 1.], [1., 1., 1.], [-1., 1., 1.]];
-    let edges = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)];
-    let mut nodes: Vec<[f64; 3]> = C.to_vec();
-    for (a, b) in edges {
-        nodes.push([0, 1, 2].map(|k| (C[a][k] + C[b][k]) / 2.0));
-    }
-    let mut j = [[0.0; 3]; 3];
-    for (xi, n) in x.iter().zip(&nodes) {
+    let mut nodes: Vec<[f64; 3]> = CUBE.to_vec();
+    nodes.extend(HEX_EDGES.map(|(a, b)| [0, 1, 2].map(|k| (CUBE[a][k] + CUBE[b][k]) / 2.0)));
+    let gradient = |n: &[f64; 3]| -> [f64; 3] {
         let q = [0, 1, 2].map(|k| 1.0 + n[k] * p[k]);
-        let dn: [f64; 3] = if n.iter().all(|c| c.abs() == 1.0) {
-            let s = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - 2.0;
-            [0, 1, 2].map(|k| {
-                let (a, b) = ((k + 1) % 3, (k + 2) % 3);
-                n[k] * q[a] * q[b] * (s + q[k]) / 8.0
-            })
-        } else {
-            let z = (0..3).find(|k| n[*k] == 0.0).unwrap();
-            [0, 1, 2].map(|k| {
-                let others: f64 = (0..3).filter(|m| *m != k && *m != z).map(|m| q[m]).product();
-                if k == z {
-                    -2.0 * p[z] * (0..3).filter(|m| *m != z).map(|m| q[m]).product::<f64>() / 4.0
-                } else {
-                    n[k] * (1.0 - p[z] * p[z]) * others / 4.0
-                }
-            })
-        };
-        for a in 0..3 {
-            for b in 0..3 {
-                j[a][b] += dn[a] * xi[b];
+        match (0..3).find(|k| n[*k] == 0.0) {
+            // Corner: N = q0 q1 q2 (n·p − 2) / 8.
+            None => {
+                let s = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - 2.0;
+                [0, 1, 2].map(|k| n[k] * q[(k + 1) % 3] * q[(k + 2) % 3] * (s + q[k]) / 8.0)
             }
+            // Mid-side on an edge along axis z: N = (1 − p_z²) q_a q_b / 4.
+            Some(z) => [0, 1, 2].map(|k| {
+                let others = |skip: usize| (0..3).filter(|m| *m != skip && *m != z).map(|m| q[m]).product::<f64>();
+                if k == z { -2.0 * p[z] * others(z) / 4.0 } else { n[k] * (1.0 - p[z] * p[z]) * others(k) / 4.0 }
+            }),
         }
-    }
-    det(j)
+    };
+    jacobian_det(x, nodes.iter().map(gradient))
 }
 
 #[test]

@@ -19,9 +19,8 @@
 
 use modelcraft_model::{ElementKind, Formulation, Integration, SectionKind};
 
-use crate::{Error, Result};
-
-pub(crate) const FORMAT: &str = "LS-DYNA";
+use super::unsupported;
+use crate::Result;
 
 /// How an element is written: its keyword and its node list in LS-DYNA order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -92,10 +91,6 @@ pub(crate) enum Hourglass {
 pub(crate) struct Elform {
     pub(crate) elform: i32,
     pub(crate) hourglass: Option<Hourglass>,
-}
-
-fn unsupported(what: String) -> Error {
-    Error::Unsupported { format: FORMAT, what }
 }
 
 /// The formulation of a section's elements of one kind.

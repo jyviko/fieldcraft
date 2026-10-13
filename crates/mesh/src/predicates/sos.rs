@@ -20,6 +20,7 @@
 
 use std::cmp::Ordering;
 
+use super::indirect::{Axis, GenericPoint, generic_compare, generic_insphere, generic_orient3d};
 use super::{Point2, Point3, Sign, incircle, insphere, orient2d, orient3d};
 
 /// Lexicographic order on coordinates (total: `f64::total_cmp`).
@@ -61,6 +62,64 @@ fn insphere_perturbed(a: &Point3, b: &Point3, c: &Point3, d: &Point3, e: &Point3
         let minor = orient3d(p, q, r, s);
         if !minor.is_zero() {
             // Row i + 1 (1-based), lift column 4: cofactor sign (-1)^(i + 5).
+            return if i % 2 == 1 { minor } else { -minor };
+        }
+    }
+    Sign::Zero
+}
+
+/// The lexicographic order of two points' exact coordinates (`x`, then `y`, then `z`): the rank
+/// order of the perturbation, for explicit and implicit points alike. On explicit points it is
+/// the order [`insphere_sos`] uses (coordinates in the predicates' domain have no `-0.0` issue
+/// once admitted: callers pass `+0.0`).
+pub fn generic_lex(p: &GenericPoint, q: &GenericPoint) -> Ordering {
+    if let (GenericPoint::Explicit(p), GenericPoint::Explicit(q)) = (p, q) {
+        return lex(&p.coords(), &q.coords());
+    }
+    [Axis::X, Axis::Y, Axis::Z].into_iter().map(|a| generic_compare(p, q, a)).find(|o| o.is_ne()).unwrap_or(Ordering::Equal)
+}
+
+/// [`insphere_sos`] on explicit or implicit points: the same lift by lexicographic rank, so a
+/// triangulation built with [`insphere_sos`] stays consistent when implicit points are added.
+/// Never [`Sign::Zero`] when `a, b, c, d` is not coplanar; points must be pairwise distinct.
+pub fn generic_insphere_sos(a: &GenericPoint, b: &GenericPoint, c: &GenericPoint, d: &GenericPoint, e: &GenericPoint) -> Sign {
+    if let (GenericPoint::Explicit(a), GenericPoint::Explicit(b), GenericPoint::Explicit(c), GenericPoint::Explicit(d), GenericPoint::Explicit(e)) =
+        (a, b, c, d, e)
+    {
+        return insphere_sos(a, b, c, d, e);
+    }
+    let exact = generic_insphere(a, b, c, d, e);
+    if !exact.is_zero() {
+        return exact;
+    }
+    let points = [a, b, c, d, e];
+    // Positions by decreasing rank, ties by position: an insertion sort, which needs no total
+    // order guarantee from the comparator to stay in bounds.
+    let mut order = [0usize, 1, 2, 3, 4];
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 {
+            let (Some(&x), Some(&y)) = (order.get(j - 1), order.get(j)) else { break };
+            let (Some(px), Some(py)) = (points.get(x), points.get(y)) else { break };
+            // Decreasing: swap when the later one is larger.
+            if generic_lex(py, px) == Ordering::Greater {
+                order.swap(j - 1, j);
+                j -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+    for i in order {
+        let [p, q, r, s] = match i {
+            0 => [b, c, d, e],
+            1 => [a, c, d, e],
+            2 => [a, b, d, e],
+            3 => [a, b, c, e],
+            _ => [a, b, c, d],
+        };
+        let minor = generic_orient3d(p, q, r, s);
+        if !minor.is_zero() {
             return if i % 2 == 1 { minor } else { -minor };
         }
     }

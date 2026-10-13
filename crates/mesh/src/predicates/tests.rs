@@ -605,3 +605,138 @@ fn undefined_constructions_are_rejected() {
         assert_eq!(generic_compare(&t, &GenericPoint::Explicit(o), axis), Ordering::Equal);
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// LNC points and the generic in-sphere (Diazzi et al. 2023, §4.3)
+// ---------------------------------------------------------------------------------------------
+
+fn r_lnc(a: &Point3, b: &Point3, t: f64) -> RPoint {
+    let (a, b) = (rp(a), rp(b));
+    std::array::from_fn(|k| a[k].clone() + q(t) * (b[k].clone() - a[k].clone()))
+}
+
+fn r_insphere(p: &[RPoint; 5]) -> Sign {
+    let rows: Vec<Vec<BigRational>> = (0..4).map(|i| lifted(rsub(&p[i], &p[4]).to_vec())).collect();
+    rsign(&rdet(&rows))
+}
+
+#[test]
+fn lnc_points_lie_on_their_segment_in_parameter_order() {
+    let mut r = Rng(11);
+    for _ in 0..200 {
+        let (a, b) = (rand_pt(&mut r, 10.0), rand_pt(&mut r, 10.0));
+        let (t0, t1) = (r.unit().clamp(1e-9, 0.5), 0.5 + r.unit().clamp(1e-9, 0.49));
+        let (p0, p1) = (GenericPoint::Lnc(Lnc::new(&a, &b, t0).unwrap()), GenericPoint::Lnc(Lnc::new(&a, &b, t1).unwrap()));
+        let (ga, gb) = (GenericPoint::Explicit(a), GenericPoint::Explicit(b));
+        for axis in [Axis::X, Axis::Y, Axis::Z] {
+            assert_eq!(generic_orient2d(&ga, &gb, &p0, axis), Sign::Zero);
+            assert_eq!(generic_orient2d(&p0, &p1, &gb, axis), Sign::Zero);
+            let k = axis.index();
+            let want = r_lnc(&a, &b, t0)[k].cmp(&r_lnc(&a, &b, t1)[k]);
+            assert_eq!(generic_compare(&p0, &p1, axis), want);
+        }
+        let exact = r_lnc(&a, &b, t0);
+        let rounded = p0.approx();
+        let (lo, hi) = p0.bounds();
+        for k in 0..3 {
+            let x = exact[k].to_f64().unwrap();
+            assert!((rounded[k] - x).abs() <= 2.0 * f64::EPSILON * x.abs().max(1e-300), "{} vs {x}", rounded[k]);
+            assert!(q(lo[k]) <= exact[k] && exact[k] <= q(hi[k]));
+        }
+    }
+    let (a, b) = (p3(0.0, 0.0, 0.0), p3(1.0, 1.0, 1.0));
+    for bad in [0.0, 1.0, -0.5, 1.5, f64::NAN, f64::INFINITY, 1e-300] {
+        assert!(Lnc::new(&a, &b, bad).is_err(), "{bad}");
+    }
+    assert!(Lnc::new(&a, &a, 0.5).is_err());
+}
+
+#[test]
+fn generic_orient3d_and_insphere_match_rationals_on_lnc_points() {
+    let mut r = Rng(12);
+    let mut checked = 0;
+    for i in 0..120 {
+        let pts: Vec<Point3> = (0..9).map(|_| rand_pt(&mut r, 1.0)).collect();
+        let t = r.unit().clamp(1e-6, 1.0 - 1e-6);
+        let lnc = Lnc::new(&pts[0], &pts[1], t).unwrap();
+        let Ok(lpi) = Lpi::new(&pts[2], &pts[3], &pts[4], &pts[5], &pts[6]) else { continue };
+        let g = [GenericPoint::Lnc(lnc), GenericPoint::Lpi(lpi)];
+        let rg = [r_lnc(&pts[0], &pts[1], t), r_lpi(&pts[2], &pts[3], &pts[4], &pts[5], &pts[6])];
+        let ex: Vec<Point3> = (0..5).map(|_| rand_pt(&mut r, 1.0)).collect();
+        for mask in 0u32..243 {
+            if !(i + mask as usize).is_multiple_of(5) {
+                continue;
+            }
+            let (mut gp, mut rpv) = (Vec::new(), Vec::new());
+            let mut m = mask;
+            for e in &ex {
+                match m % 3 {
+                    0 => {
+                        gp.push(GenericPoint::Explicit(*e));
+                        rpv.push(rp(e));
+                    }
+                    k => {
+                        gp.push(g[k as usize - 1].clone());
+                        rpv.push(rg[k as usize - 1].clone());
+                    }
+                }
+                m /= 3;
+            }
+            let want = r_orient3d(&[rpv[0].clone(), rpv[1].clone(), rpv[2].clone(), rpv[3].clone()]);
+            assert_eq!(generic_orient3d(&gp[0], &gp[1], &gp[2], &gp[3]), want, "orient mask {mask}");
+            let want = r_insphere(&[rpv[0].clone(), rpv[1].clone(), rpv[2].clone(), rpv[3].clone(), rpv[4].clone()]);
+            assert_eq!(generic_insphere(&gp[0], &gp[1], &gp[2], &gp[3], &gp[4]), want, "insphere mask {mask}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 3000, "{checked}");
+    // The explicit fast path and the formula agree on the sign convention.
+    let (a, b, c, d) = (p3(0.0, 0.0, 0.0), p3(1.0, 0.0, 0.0), p3(0.0, 1.0, 0.0), p3(0.0, 0.0, 1.0));
+    let inside = GenericPoint::Lnc(Lnc::new(&a, &p3(1.0, 1.0, 1.0), 0.25).unwrap());
+    let e = |p: &Point3| GenericPoint::Explicit(*p);
+    let shewchuk_positive = orient3d(&b, &a, &c, &d) == Sign::Positive;
+    let (x, y) = if shewchuk_positive { (b, a) } else { (a, b) };
+    assert_eq!(insphere(&x, &y, &c, &d, &p3(0.25, 0.25, 0.25)), Sign::Positive);
+    assert_eq!(generic_insphere(&e(&x), &e(&y), &e(&c), &e(&d), &inside), Sign::Positive);
+}
+
+/// On a grid, a segment's midpoint (an LNC point) is a grid point: the perturbed in-sphere of
+/// the implicit form must give the explicit form's answer, including every cospherical tie.
+#[test]
+fn perturbed_generic_insphere_agrees_with_explicit_points() {
+    let mut r = Rng(13);
+    let mut ties = 0;
+    for _ in 0..800 {
+        let v: Vec<[f64; 3]> = (0..5).map(|_| [r.int(1) as f64, r.int(1) as f64, r.int(1) as f64]).collect();
+        if (0..5).any(|i| (0..i).any(|j| v[i] == v[j])) {
+            continue;
+        }
+        let p: Vec<Point3> = v.iter().map(|c| p3(c[0], c[1], c[2])).collect();
+        if orient3d(&p[0], &p[1], &p[2], &p[3]).is_zero() {
+            continue;
+        }
+        // Each point as the midpoint of a segment through it (direction from the generator).
+        let g: Vec<GenericPoint> = p
+            .iter()
+            .map(|c| {
+                if r.int(1) == 0 {
+                    return GenericPoint::Explicit(*c);
+                }
+                let d = [r.int(2) as f64, r.int(2) as f64, (r.int(2) as f64) + 7.0];
+                let x = c.coords();
+                let a = p3(x[0] - d[0], x[1] - d[1], x[2] - d[2]);
+                let b = p3(x[0] + d[0], x[1] + d[1], x[2] + d[2]);
+                GenericPoint::Lnc(Lnc::new(&a, &b, 0.5).unwrap())
+            })
+            .collect();
+        let want = insphere_sos(&p[0], &p[1], &p[2], &p[3], &p[4]);
+        assert_eq!(generic_insphere_sos(&g[0], &g[1], &g[2], &g[3], &g[4]), want, "{v:?}");
+        ties += insphere(&p[0], &p[1], &p[2], &p[3], &p[4]).is_zero() as usize;
+        for i in 0..5 {
+            for j in 0..5 {
+                assert_eq!(generic_lex(&g[i], &g[j]), v[i].partial_cmp(&v[j]).unwrap());
+            }
+        }
+    }
+    assert!(ties > 20, "{ties}");
+}

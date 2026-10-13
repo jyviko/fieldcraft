@@ -27,6 +27,16 @@ impl Interval {
         if lo.is_nan() || hi.is_nan() { Self::NAN } else { Self { lo: lo.next_down(), hi: hi.next_up() } }
     }
 
+    /// The lower bound.
+    pub(crate) fn lo(&self) -> f64 {
+        self.lo
+    }
+
+    /// The upper bound.
+    pub(crate) fn hi(&self) -> f64 {
+        self.hi
+    }
+
     /// The midpoint, an approximation of the value.
     pub(crate) fn mid(&self) -> f64 {
         0.5 * self.lo + 0.5 * self.hi

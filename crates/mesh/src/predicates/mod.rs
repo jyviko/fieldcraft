@@ -13,6 +13,11 @@
 //! - M. Attene, *Indirect Predicates for Geometric Constructions*, CAD 126:102856, 2020 (paper
 //!   only; his code is LGPL and is not read): [`Lpi`], [`Tpi`], [`GenericPoint`] and the
 //!   `generic_*` predicates.
+//! - L. Diazzi, D. Panozzo, A. Vaxman, M. Attene, *Constrained Delaunay Tetrahedrization: A
+//!   Robust and Practical Approach*, ACM TOG 42(6):181, 2023, §4.3 (paper only; the authors'
+//!   code is GPL/LGPL and is not read): the [`Lnc`] point on a segment, [`generic_insphere`],
+//!   and its perturbed form [`generic_insphere_sos`] with the same lexicographic lift as
+//!   [`insphere_sos`].
 //!
 //! # Arithmetic assumptions
 //! IEEE 754 binary64, round-to-nearest-even, no extended intermediate precision, no FMA
@@ -40,8 +45,8 @@ mod ring;
 mod sos;
 
 pub use adaptive::{incircle, incircle_filter, insphere, insphere_filter, orient2d, orient2d_filter, orient3d, orient3d_filter};
-pub use indirect::{Axis, GenericPoint, Lpi, Tpi, generic_compare, generic_orient2d, generic_orient3d, orient2d_projected};
-pub use sos::{incircle_sos, insphere_sos};
+pub use indirect::{Axis, GenericPoint, Lnc, Lpi, Tpi, generic_compare, generic_insphere, generic_orient2d, generic_orient3d, orient2d_projected};
+pub use sos::{generic_insphere_sos, generic_lex, incircle_sos, insphere_sos};
 
 use crate::{Error, Result};
 

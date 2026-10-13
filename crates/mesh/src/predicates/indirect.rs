@@ -1,7 +1,10 @@
 //! Indirect predicates on implicit points (Attene 2020, §4–§5), from the paper only.
 //!
 //! An implicit point is kept as the explicit points that define it and is never rounded: a
-//! line–plane intersection ([`Lpi`], §4.2) or a three-plane intersection ([`Tpi`]). Each has
+//! line–plane intersection ([`Lpi`], §4.2), a three-plane intersection ([`Tpi`]), or a linear
+//! combination of two points ([`Lnc`], the Steiner points of Diazzi, Panozzo, Vaxman, Attene,
+//! *Constrained Delaunay Tetrahedrization: A Robust and Practical Approach*, ACM TOG 42(6), 2023,
+//! §4.3). Each has
 //! homogeneous coordinates `(X, W)` that are polynomials in the defining coordinates, so a
 //! predicate on implicit points is the sign of a polynomial times the signs of the `W`s
 //! (Attene §4.3–§4.6, §5.1: "count how many of them have a negative sign").
@@ -19,9 +22,10 @@
 use std::cmp::Ordering;
 
 use super::dyadic::Dyadic;
+use super::eft::{two_diff, two_product, two_sum};
 use super::interval::Interval;
-use super::ring::{Ring, Signed, det2, det3};
-use super::{Point2, Point3, Sign, orient2d, orient3d};
+use super::ring::{Ring, Signed, det2, det3, sq3};
+use super::{Point2, Point3, Sign, insphere, orient2d, orient3d};
 use crate::{Error, Result};
 
 /// A coordinate axis: the axis compared by [`generic_compare`], or dropped by
@@ -127,6 +131,15 @@ fn tpi_hom<T: Ring>(planes: &[[[f64; 3]; 3]; 3]) -> Hom<T> {
     Hom { x, w: Some(det3(&[n1, n2, n3])) }
 }
 
+/// `a + t (b - a)` (Diazzi et al. 2023, §4.3 write `t v₁ + (1 - t) v₂`; this form keeps every
+/// operand a double, so it is exact in the ring). `W = 1`.
+fn lnc_hom<T: Ring>(a: &[f64; 3], b: &[f64; 3], t: f64) -> Hom<T> {
+    let (a, b, t) = (lift::<T>(a), lift::<T>(b), T::from_f64(t));
+    let d = sub3(&b, &a);
+    let x = std::array::from_fn(|k| coord(&a, k) + t.clone() * coord(&d, k));
+    Hom { x, w: None }
+}
+
 /// Decides the sign of `W` exactly: filter first, integers if needed.
 fn exact_w_sign(filter: &Hom<Interval>, exact: impl FnOnce() -> Hom<Dyadic>) -> Sign {
     w_sign(&filter.w).or_else(|| w_sign(&exact().w)).unwrap_or(Sign::Zero)
@@ -172,12 +185,61 @@ impl Tpi {
     }
 }
 
+/// The point `a + t (b - a)` of segment `a b`, `0 < t < 1`: an LNC point (LiNear Combination,
+/// Diazzi et al. 2023, §4.3), the Steiner points of constrained Delaunay boundary recovery. It
+/// lies exactly on the segment, and points on one segment are ordered by `t`.
+#[derive(Debug, Clone)]
+pub struct Lnc {
+    a: [f64; 3],
+    b: [f64; 3],
+    t: f64,
+    filter: [Interval; 3],
+}
+
+impl Lnc {
+    /// Fails unless `a ≠ b` and `t` is an admissible double strictly between 0 and 1.
+    pub fn new(a: &Point3, b: &Point3, t: f64) -> Result<Self> {
+        if !(t > 0.0 && t < 1.0 && super::is_admissible(t)) {
+            return Err(Error::Invalid(format!("segment parameter {t:e} is not an admissible number strictly between 0 and 1")));
+        }
+        if a == b {
+            return Err(Error::Invalid("a point on a segment needs two distinct endpoints".into()));
+        }
+        let filter = lnc_hom::<Interval>(&a.0, &b.0, t).x;
+        Ok(Self { a: a.0, b: b.0, t, filter })
+    }
+
+    /// The segment parameter `t`.
+    pub fn t(&self) -> f64 {
+        self.t
+    }
+
+    /// The segment's endpoints `a` (at `t = 0`) and `b` (at `t = 1`).
+    pub fn endpoints(&self) -> [[f64; 3]; 2] {
+        [self.a, self.b]
+    }
+
+    /// The coordinates rounded to doubles, within about one unit in the last place of each
+    /// (error-free transforms: `b - a` and `t (b - a)` are kept as two-term sums).
+    pub fn rounded(&self) -> [f64; 3] {
+        std::array::from_fn(|k| {
+            let (a, b) = (self.a[k], self.b[k]);
+            let (d, d_lo) = two_diff(b, a);
+            let (p, p_lo) = two_product(self.t, d);
+            let tail = p_lo + self.t * d_lo;
+            let (s, s_lo) = two_sum(a, p);
+            s + (s_lo + tail)
+        })
+    }
+}
+
 /// An explicit point or an implicit one, for the `generic_*` predicates.
 #[derive(Debug, Clone)]
 pub enum GenericPoint {
     Explicit(Point3),
     Lpi(Lpi),
     Tpi(Tpi),
+    Lnc(Lnc),
 }
 
 impl From<Point3> for GenericPoint {
@@ -199,6 +261,7 @@ impl GenericPoint {
             GenericPoint::Explicit(p) => Hom { x: lift(&p.0), w: None },
             GenericPoint::Lpi(l) => l.filter.clone(),
             GenericPoint::Tpi(t) => t.filter.clone(),
+            GenericPoint::Lnc(l) => Hom { x: l.filter, w: None },
         }
     }
 
@@ -207,6 +270,7 @@ impl GenericPoint {
             GenericPoint::Explicit(p) => Hom { x: lift(&p.0), w: None },
             GenericPoint::Lpi(l) => lpi_hom(&l.points),
             GenericPoint::Tpi(t) => tpi_hom(&t.planes),
+            GenericPoint::Lnc(l) => lnc_hom(&l.a, &l.b, l.t),
         }
     }
 
@@ -215,10 +279,35 @@ impl GenericPoint {
     pub fn approx(&self) -> [f64; 3] {
         match self {
             GenericPoint::Explicit(p) => p.0,
+            GenericPoint::Lnc(l) => l.rounded(),
             _ => {
                 let h = self.filter_hom();
                 let w = h.w.map_or(1.0, |w| w.mid());
                 h.x.map(|x| x.mid() / w)
+            }
+        }
+    }
+
+    /// A box that certainly contains the point: `(lo, hi)` per axis. Unbounded (`±∞`) when the
+    /// filter cannot bound the division of an LPI or TPI.
+    pub fn bounds(&self) -> ([f64; 3], [f64; 3]) {
+        match self {
+            GenericPoint::Explicit(p) => (p.0, p.0),
+            GenericPoint::Lnc(l) => (l.filter.map(|x| x.lo()), l.filter.map(|x| x.hi())),
+            _ => {
+                let h = self.filter_hom();
+                let mut lo = [f64::NEG_INFINITY; 3];
+                let mut hi = [f64::INFINITY; 3];
+                if let Some(w) = h.w.filter(|w| w.lo() > 0.0 || w.hi() < 0.0) {
+                    for (k, x) in h.x.iter().enumerate() {
+                        let q = [x.lo() / w.lo(), x.lo() / w.hi(), x.hi() / w.lo(), x.hi() / w.hi()];
+                        if q.iter().all(|v| v.is_finite()) {
+                            lo[k] = q.iter().copied().fold(f64::INFINITY, f64::min).next_down();
+                            hi[k] = q.iter().copied().fold(f64::NEG_INFINITY, f64::max).next_up();
+                        }
+                    }
+                }
+                (lo, hi)
             }
         }
     }
@@ -261,6 +350,41 @@ pub fn generic_orient3d(a: &GenericPoint, b: &GenericPoint, c: &GenericPoint, d:
     }
     let (points, flipped) = pivot_last([a, b, c, d]);
     let sign = decide(points, orient3d_formula, orient3d_formula);
+    if flipped { -sign } else { sign }
+}
+
+/// `det[p_i - e, |p_i - e|²]` (rows `a, b, c, d`), Shewchuk's in-sphere determinant, in
+/// homogeneous form: `R_i = W_e X_i - W_i X_e = W_i W_e (p_i - e)`, and row `i` scaled by the
+/// positive `(W_i W_e)²` becomes `[W_i W_e R_i, |R_i|²]`, so the sign needs no division.
+fn insphere_formula<T: Ring + Signed>([a, b, c, d, e]: [Hom<T>; 5]) -> Option<Sign> {
+    let row = |p: &Hom<T>| -> ([T; 3], T) {
+        let r: [T; 3] = std::array::from_fn(|k| mulw(coord(&p.x, k), &e.w) - mulw(coord(&e.x, k), &p.w));
+        let [x, y, z] = &r;
+        let lift = sq3(x, y, z);
+        let scale = match (&p.w, &e.w) {
+            (None, None) => None,
+            (Some(w), None) | (None, Some(w)) => Some(w.clone()),
+            (Some(w), Some(v)) => Some(w.clone() * v.clone()),
+        };
+        (r.map(|v| mulw(v, &scale)), lift)
+    };
+    let [(ra, la), (rb, lb), (rc, lc), (rd, ld)] = [row(&a), row(&b), row(&c), row(&d)];
+    // Expansion along the lift column: -la·M_a + lb·M_b - lc·M_c + ld·M_d.
+    let m = |p: &[T; 3], q: &[T; 3], r: &[T; 3]| det3(&[p.clone(), q.clone(), r.clone()]);
+    let det = ld * m(&ra, &rb, &rc) - lc * m(&ra, &rb, &rd) + lb * m(&ra, &rc, &rd) - la * m(&rb, &rc, &rd);
+    det.sign()
+}
+
+/// [`insphere`] on explicit or implicit points, same sign convention (positive when `e` is
+/// inside the sphere through `a, b, c, d`, for `orient3d(a, b, c, d) > 0`). Exact.
+pub fn generic_insphere(a: &GenericPoint, b: &GenericPoint, c: &GenericPoint, d: &GenericPoint, e: &GenericPoint) -> Sign {
+    if let (Some(a), Some(b), Some(c), Some(d), Some(e)) = (a.explicit(), b.explicit(), c.explicit(), d.explicit(), e.explicit()) {
+        return insphere(a, b, c, d, e);
+    }
+    // The 5×5 form with rows `[p, |p|², 1]` is alternating in its arguments, so moving an
+    // explicit point to the pivot only flips the sign.
+    let (points, flipped) = pivot_last([a, b, c, d, e]);
+    let sign = decide(points, insphere_formula, insphere_formula);
     if flipped { -sign } else { sign }
 }
 

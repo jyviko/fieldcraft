@@ -21,18 +21,20 @@ crates in strictly lower layers.
 | L0 | `modelcraft-model` | Solver-neutral FE model: nodes and elements by label, their geometry tags, sets, materials, sections, couplings, BCs, loads and steps, the model check and the resolved view the writers read. Knows no file format and no geometry type. | started |
 | L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`; face-tagged 3MF files read into the same type without the kernel (docs/formats/tagged-mesh.md). No SolidCraft type in its API. | started |
 | L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
-| L1 | `modelcraft-solver` | Element formulations, assembly, sparse linear static and modal solution. | planned |
+| L1 | `modelcraft-fem` | Element kernels shared by every structural solver: shape functions, Gauss quadrature, strain–displacement matrices, element stiffness and mass, elastic constitutive matrices. Pure functions, no solver loop. | planned |
 | L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. Text out, no file system; `deck.write` saves it. | started |
 | L1 | `modelcraft-render` | Display data without a GPU dependency: the visible faces, element edges and nodes of a model, the orbit camera, a CPU rasterizer for headless snapshots; contour maps later. | started |
-| L2 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
-| L3 | `modelcraft-io` | `.modelcraft` files (docs/formats/modelcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery. Bytes in, bytes out; the file system only in `fs` and `recovery`. Result files later. | started |
-| L4 | `modelcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts. | started |
-| L5 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI (egui + wgpu viewport, model tree, commands, status bar) and control channel requests (docs/control-protocol.md); MCP server. | ui started |
+| L2 | `modelcraft-solver` | Implicit solver: assembly from the resolved model, boundary conditions, sparse direct solution, linear static and modal analysis, stresses and reactions. The explicit (`modelcraft-explicit`) and lattice Boltzmann (`modelcraft-lbm`) solvers join this layer. | planned |
+| L3 | `modelcraft-fsi` | Fluid–structure coupling between the L2 solvers (later). | planned |
+| L4 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
+| L5 | `modelcraft-io` | `.modelcraft` files (docs/formats/modelcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery. Bytes in, bytes out; the file system only in `fs` and `recovery`. Result files later. | started |
+| L6 | `modelcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts. | started |
+| L7 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI (egui + wgpu viewport, model tree, commands, status bar) and control channel requests (docs/control-protocol.md); MCP server. | ui started |
 | testkit | `modelcraft-testkit` | Test tooling, a dev-dependency only: the meshing test corpus (`tests/corpus/*/recipe.json`, analytic shapes) and its runner (`cargo xtask corpus`). | started |
 | apps | `modelcraft`, `modelcraft-cli`, `modelcraft-web` | Desktop, command line, browser. | desktop, cli started |
 
 Rules beyond the layer order:
-- Nothing below L5 uses egui, eframe, winit, wgpu or rfd.
+- Nothing below L7 uses egui, eframe, winit, wgpu or rfd.
 - Only `modelcraft-geometry` uses `solidcraft-*`, pinned by rev in the workspace `Cargo.toml`.
   SolidCraft's `[patch.crates-io]` (its fixed truck crates) does not reach dependents, so the
   workspace repeats it from the same rev; bump both together. The same goes for SolidCraft's

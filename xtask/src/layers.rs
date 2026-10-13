@@ -14,8 +14,8 @@ pub enum Class {
     Layer(u8),
     /// Layer 0, and additionally may depend on no workspace crate at all.
     Standalone,
-    /// Test tooling: may depend on anything up to L5 (it sits at L6 for rule
-    /// purposes); other crates may use it only as a dev-dependency.
+    /// Test tooling: may depend on anything up to L7 (it sits at [`TESTKIT_LAYER`]
+    /// for rule purposes); other crates may use it only as a dev-dependency.
     Testkit,
     /// Binaries and build tooling: exempt from the rules.
     Exempt,
@@ -26,7 +26,7 @@ impl Class {
         match self {
             Class::Layer(l) => Some(l),
             Class::Standalone => Some(0),
-            Class::Testkit => Some(6),
+            Class::Testkit => Some(TESTKIT_LAYER),
             Class::Exempt => None,
         }
     }
@@ -35,17 +35,23 @@ impl Class {
 /// The layering table. Names are package names without the `modelcraft-`
 /// prefix.
 pub const TABLE: &[(&str, Class)] = &[
+    // L0: the solver-neutral model.
     ("model", Class::Layer(0)),
+    // L1: geometry and math kernels.
     ("geometry", Class::Layer(1)),
     ("mesh", Class::Layer(1)),
-    ("solver", Class::Layer(1)),
+    ("fem", Class::Layer(1)),
     ("decks", Class::Layer(1)),
     ("render", Class::Layer(1)),
-    ("doc", Class::Layer(2)),
-    ("io", Class::Layer(3)),
-    ("engine", Class::Layer(4)),
-    ("ui-egui", Class::Layer(5)),
-    ("mcp", Class::Layer(5)),
+    // L2: solvers (the explicit and lattice Boltzmann solvers join here).
+    ("solver", Class::Layer(2)),
+    // L3: coupling between solvers (`fsi`, later).
+    // L4 and up: the document, files, commands, UI.
+    ("doc", Class::Layer(4)),
+    ("io", Class::Layer(5)),
+    ("engine", Class::Layer(6)),
+    ("ui-egui", Class::Layer(7)),
+    ("mcp", Class::Layer(7)),
     ("testkit", Class::Testkit),
     // apps and tooling
     ("modelcraft", Class::Exempt),
@@ -73,7 +79,13 @@ pub const UI_CRATES: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit",
 pub const SOLIDCRAFT_GATEWAY: &str = "geometry";
 
 /// First layer allowed to use UI crates.
-pub const UI_MIN_LAYER: u8 = 5;
+pub const UI_MIN_LAYER: u8 = 7;
+
+/// The layer the testkit sits at for rule purposes: above every layered crate.
+pub const TESTKIT_LAYER: u8 = UI_MIN_LAYER + 1;
+
+/// The layer reported for apps and tooling when a layered crate depends on one.
+const APPS_LAYER: u8 = TESTKIT_LAYER + 1;
 
 pub fn short_name(pkg: &str) -> &str {
     pkg.strip_prefix("modelcraft-").unwrap_or(pkg)
@@ -118,7 +130,7 @@ pub enum Violation {
     Upward { krate: String, dep: String, from: u8, to: u8, kind: DepKind },
     StandaloneHasWorkspaceDep { krate: String, dep: String },
     TestkitAsNormalDep { krate: String },
-    UiBelowL5 { krate: String, dep: String, layer: u8 },
+    UiBelowUiLayer { krate: String, dep: String, layer: u8 },
     SolidCraftOutsideGeometry { krate: String, dep: String },
 }
 
@@ -137,8 +149,8 @@ impl std::fmt::Display for Violation {
             Violation::TestkitAsNormalDep { krate } => {
                 write!(f, "{krate}: modelcraft-testkit may only be a dev-dependency")
             }
-            Violation::UiBelowL5 { krate, dep, layer } => {
-                write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L5+")
+            Violation::UiBelowUiLayer { krate, dep, layer } => {
+                write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L{UI_MIN_LAYER}+")
             }
             Violation::SolidCraftOutsideGeometry { krate, dep } => {
                 write!(f, "{krate} depends on `{dep}`; only modelcraft-{SOLIDCRAFT_GATEWAY} may use SolidCraft")
@@ -183,7 +195,7 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                                 krate: c.name.clone(),
                                 dep: d.name.clone(),
                                 from: layer,
-                                to: if to == u8::MAX { 7 } else { to },
+                                to: to.min(APPS_LAYER),
                                 kind: d.kind,
                             });
                         }
@@ -192,7 +204,7 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
             } else if d.name.starts_with("solidcraft-") && short_name(&c.name) != SOLIDCRAFT_GATEWAY {
                 out.push(Violation::SolidCraftOutsideGeometry { krate: c.name.clone(), dep: d.name.clone() });
             } else if layer < UI_MIN_LAYER && is_ui_crate(&d.name) {
-                out.push(Violation::UiBelowL5 { krate: c.name.clone(), dep: d.name.clone(), layer });
+                out.push(Violation::UiBelowUiLayer { krate: c.name.clone(), dep: d.name.clone(), layer });
             }
         }
     }
@@ -259,12 +271,14 @@ mod tests {
     #[test]
     fn upward_dependency_flagged() {
         let v = check(&[c("modelcraft-doc", &[("modelcraft-engine", Normal, true)])]);
-        assert!(matches!(v[..], [Violation::Upward { from: 2, to: 4, .. }]));
+        assert!(matches!(v[..], [Violation::Upward { from: 4, to: 6, .. }]));
+        let v = check(&[c("modelcraft-fem", &[("modelcraft-solver", Normal, true)])]);
+        assert!(matches!(v[..], [Violation::Upward { from: 1, to: 2, .. }]));
     }
 
     #[test]
     fn sideways_dependency_flagged() {
-        let v = check(&[c("modelcraft-mesh", &[("modelcraft-solver", Normal, true)])]);
+        let v = check(&[c("modelcraft-mesh", &[("modelcraft-fem", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 1, to: 1, .. }]));
     }
 
@@ -280,10 +294,26 @@ mod tests {
     }
 
     #[test]
-    fn ui_crates_below_l6_flagged() {
+    fn solvers_sit_above_the_kernels() {
+        let g = [
+            c("modelcraft-fem", &[("modelcraft-model", Normal, true)]),
+            c("modelcraft-solver", &[("modelcraft-fem", Normal, true), ("modelcraft-mesh", Normal, true)]),
+            c("modelcraft-engine", &[("modelcraft-solver", Normal, true)]),
+        ];
+        assert!(check(&g).is_empty(), "{:?}", check(&g));
+        let v = check(&[c("modelcraft-solver", &[("modelcraft-engine", Normal, true)])]);
+        assert!(matches!(v[..], [Violation::Upward { from: 2, to: 6, .. }]));
+        let v = check(&[c("modelcraft-engine", &[("modelcraft-cli", Normal, true)])]);
+        assert!(matches!(v[..], [Violation::Upward { from: 6, to: APPS_LAYER, .. }]));
+    }
+
+    #[test]
+    fn ui_crates_below_the_ui_layer_flagged() {
         for dep in ["egui", "eframe", "winit", "egui_kittest", "rfd", "bevy_ecs", "bevy"] {
             let v = check(&[c("modelcraft-engine", &[(dep, Normal, false)])]);
-            assert!(matches!(v[..], [Violation::UiBelowL5 { layer: 4, .. }]), "{dep}");
+            assert!(matches!(v[..], [Violation::UiBelowUiLayer { layer: 6, .. }]), "{dep}");
+            let v = check(&[c("modelcraft-solver", &[(dep, Normal, false)])]);
+            assert!(matches!(v[..], [Violation::UiBelowUiLayer { layer: 2, .. }]), "{dep}");
         }
         assert!(check(&[c("modelcraft-engine", &[("egui_extras_not", Normal, false)])]).is_empty());
         assert!(check(&[c("modelcraft-ui-egui", &[("winit", Normal, false)])]).is_empty());

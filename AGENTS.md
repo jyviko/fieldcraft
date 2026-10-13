@@ -79,7 +79,7 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   JSON `run`) + tests. The UI, scripts, CLI and control channel all reach the same commands.
 - **Programmatic calls never open dialogs.**
 - **Layering** is enforced by `cargo xtask layers` (`docs/architecture.md`): L0 `model` → L1
-  `geometry`, `mesh`, `fem`, `decks`, `render` → L2 solvers (`solver`; `explicit`, `lbm` later) →
+  `geometry`, `mesh`, `fem`, `decks`, `render` → L2 solvers (`solver`, `lbm`; `explicit` later) →
   L3 `fsi` (later) → L4 `doc` → L5 `io` → L6 `engine` → L7 `ui-egui`, `mcp` → apps. Nothing below
   L7 depends on egui/eframe/winit/wgpu/rfd. **Only
   `crates/geometry` may use `solidcraft-*`.**

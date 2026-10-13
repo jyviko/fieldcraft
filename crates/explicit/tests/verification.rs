@@ -77,7 +77,8 @@ impl Bar {
             }
         }
         m.add_set("end_face", Set { faces, ..Set::default() }).unwrap();
-        m.add_material("Mat", Material { elastic: Some(Elastic::Isotropic { young: YOUNG, poisson: 0.0 }), density: Some(DENSITY) }).unwrap();
+        m.add_material("Mat", Material { elastic: Some(Elastic::Isotropic { young: YOUNG, poisson: 0.0 }), density: Some(DENSITY), fluid: None })
+            .unwrap();
         let integration = if kind == ElementKind::Hex8 { Integration::Reduced } else { Integration::Full };
         let formulation = Formulation { integration, ..Formulation::default() };
         m.add_section("bar", Section { set: "all".into(), material: "Mat".into(), kind: SectionKind::Solid {}, formulation }).unwrap();
@@ -333,10 +334,13 @@ fn caps_and_unsupported_models_are_errors() {
     assert!(solve_explicit(&full.model, None, &Limits::default()).unwrap_err().to_string().contains("not supported yet"));
     let mut ortho = Bar::new(ElementKind::Tet4, 4, ExplicitDynamic::new(end));
     let constants = Elastic::EngineeringConstants { young: [YOUNG; 3], poisson: [0.0; 3], shear: [YOUNG / 2.0; 3] };
-    ortho.model.replace_material("Mat", Material { elastic: Some(constants), density: Some(DENSITY) }).unwrap();
+    ortho.model.replace_material("Mat", Material { elastic: Some(constants), density: Some(DENSITY), fluid: None }).unwrap();
     assert!(solve_explicit(&ortho.model, None, &Limits::default()).unwrap_err().to_string().contains("orthotropic"));
     let mut light = Bar::new(ElementKind::Tet4, 4, ExplicitDynamic::new(end));
-    light.model.replace_material("Mat", Material { elastic: Some(Elastic::Isotropic { young: YOUNG, poisson: 0.0 }), density: None }).unwrap();
+    light
+        .model
+        .replace_material("Mat", Material { elastic: Some(Elastic::Isotropic { young: YOUNG, poisson: 0.0 }), density: None, fluid: None })
+        .unwrap();
     assert!(solve_explicit(&light.model, None, &Limits::default()).is_err());
     // A node behind its wall at the start.
     let mut behind = ExplicitDynamic::new(end);

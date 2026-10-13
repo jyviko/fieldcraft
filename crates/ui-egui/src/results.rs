@@ -69,7 +69,7 @@ impl Plot {
     pub fn mode(&self) -> Option<(usize, f64)> {
         match self.result.kind() {
             Kind::Frequency(f) => f.modes.get(self.pick.mode.checked_sub(1)?).map(|m| (self.pick.mode, m.frequency)),
-            Kind::Static(_) | Kind::Explicit(_) => None,
+            Kind::Static(_) | Kind::Explicit(_) | Kind::Fluid(_) => None,
         }
     }
 
@@ -107,7 +107,7 @@ pub fn swing(result: &StepResult, frame: Option<u64>) -> f64 {
     match result.kind() {
         Kind::Frequency(_) => a.sin(),
         Kind::Static(_) => 0.5 * (1.0 - a.cos()),
-        Kind::Explicit(_) => 1.0,
+        Kind::Explicit(_) | Kind::Fluid(_) => 1.0,
     }
 }
 

@@ -24,8 +24,9 @@ crates in strictly lower layers.
 | L1 | `modelcraft-fem` | Element kernels shared by every structural solver: the element table (tet4, tet10, wedge6, hex8 full and incompatible modes, hex20 full and reduced), shape functions, quadrature, element stiffness, consistent and lumped mass, body and pressure loads, stresses and their extrapolation, isotropic and orthotropic elasticity, and the uniform-strain (one-point) hex8 and tet4 kinematics, hourglass shape vectors and element frequency bounds of the explicit solver. Pure functions, no solver loop. | started |
 | L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. Text out, no file system; `deck.write` saves it. | started |
 | L1 | `modelcraft-render` | Display data without a GPU dependency: the visible faces, element edges and nodes of a model, the orbit camera, a CPU rasterizer for headless snapshots, geometry surfaces with their face boundaries, deformed shapes and banded contour plots of nodal results, picking. | started |
-| L2 | `modelcraft-solver` | Implicit solver: assembly from the resolved model, boundary conditions, sparse direct solution, linear static and modal analysis, stresses and reactions. The lattice Boltzmann solver (`modelcraft-lbm`) joins this layer. | started |
+| L2 | `modelcraft-solver` | Implicit solver: assembly from the resolved model, boundary conditions, sparse direct solution, linear static and modal analysis, stresses and reactions. | started |
 | L2 | `modelcraft-explicit` | Explicit dynamics: central-difference time integration with lumped mass, one-point hex8 with hourglass control, nodal-pressure tet4, bulk viscosity, rigid walls, energy account, histories and field frames. | started |
+| L2 | `modelcraft-lbm` | Lattice Boltzmann flow solver on the CPU: D3Q19 two-relaxation-time scheme, bounce-back and slip walls, Zou–He inlets and outlets, obstacles voxelised from the face-tagged surface with exact predicates, momentum-exchange forces per face. Uses `mesh` for the predicates and the boundary surface. | started |
 | L3 | `modelcraft-fsi` | Fluid–structure coupling between the L2 solvers (later). | planned |
 | L4 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
 | L5 | `modelcraft-io` | `.modelcraft` files (docs/formats/modelcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery. Bytes in, bytes out; the file system only in `fs` and `recovery`. Result files later. | started |
@@ -204,6 +205,43 @@ The first version is geometrically linear with linear elastic materials. Verific
 (front at c·t, σ = ρ c v, work input), a bar striking a rigid wall (contact time 2L/c, rebound
 speed, plateau force ρ c v₀ A), the energy balance, bit-for-bit repeatability; in the engine
 (`solve.rs`), a cantilever's free-vibration period against `solve.frequency`.
+
+## Lattice Boltzmann solver
+
+`modelcraft-lbm` solves a model's fluid steps (`solve.fluid`; `solve.probe` reads velocity and
+pressure at points and wall force histories). Papers are cited in the module docs and in
+`docs/solvers/literature.md` (Part I).
+
+1. **Model.** A fluid material (density, Newtonian viscosity), a fluid domain (box, cubic cell
+   spacing, a condition on each box face: wall, moving wall, slip, velocity inlet with a uniform
+   or parabolic profile, pressure outlet, periodic pair; obstacle bodies and moving-wall
+   conditions on their named faces; initial velocity; body acceleration) and a fluid step (end
+   time or steps, optional time step, frames, the TRT parameter Λ). Deck writers refuse fluid
+   steps.
+2. **Setup.** Lattice units from the spacing, the time step and the density. Without a given
+   time step the solver keeps the characteristic lattice velocity at 0.05 and τ ≤ 1. A lattice
+   Mach number above 0.3, τ below 0.505 or a lattice acceleration above 0.01 is refused with the
+   numbers and what to change; caps on cells, steps, cell updates and frame memory are checked
+   before anything is allocated.
+3. **Grid.** The engine triangulates each obstacle body (or takes an imported surface) and
+   prepares its `BoundarySurface`; cells whose centres have a positive winding number are solid,
+   decided with exact `orient2d`/`orient3d` and one symbolic perturbation, so faces through cell
+   centres and lines through edges are classified consistently.
+4. **Stepping.** TRT collision with Guo forcing in place; pull streaming as one shifted copy per
+   direction with per-link rules for the cells next to walls and box faces; Zou–He on inlet and
+   outlet layers. Wall links give the momentum exchanged with every box face and B-rep face
+   (the face of the triangle nearest the link). A non-positive density or a lattice speed above
+   0.5 stops the run with an error.
+5. **Results.** Frames of velocity and gauge pressure per cell (single precision), force
+   histories per wall and the fluid mass, in model units, stored per step like the implicit
+   results.
+
+Verification (`crates/lbm/tests/verification.rs`, analytic): plane Poiseuille exact to round-off
+with Λ = 3/16 and second order with Λ = 1/4; Couette exact with the wall shear μU/H; Taylor–Green
+decay second order; Poiseuille in a staircase pipe; Stokes drag of a simple cubic sphere array
+against Hasimoto (1959); a parabolic-inlet, pressure-outlet channel against Poiseuille; mass
+conserved to round-off; bit-for-bit reproducibility. `crates/lbm/tests/benchmark.rs` (ignored,
+published reference values): Schäfer–Turek 2D-1.
 
 ## Commands
 

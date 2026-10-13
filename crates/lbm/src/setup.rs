@@ -1,0 +1,334 @@
+//! From a fluid step of the model to lattice units: the grid, the time step, the relaxation
+//! times, and the checks that keep the scheme in its stable and accurate range.
+//!
+//! # Units (Krüger et al. 2017, ch. 7)
+//! Lattice units take the spacing `Δx`, the time step `Δt` and the fluid's density `ρ₀` as 1. A
+//! velocity converts by `Δx/Δt`, a kinematic viscosity by `Δx²/Δt`, an acceleration by `Δx/Δt²`,
+//! a pressure by `ρ₀ Δx²/Δt²` and a force by `ρ₀ Δx⁴/Δt²`. The lattice viscosity fixes the
+//! symmetric relaxation time, `ν = c_s² (τ⁺ − ½)` with `c_s² = 1/3`.
+//!
+//! # Time step
+//! Unless the step gives one, `Δt` is the largest that keeps the characteristic lattice velocity
+//! at [`TARGET_LATTICE_VELOCITY`] (Mach 0.087: the weakly compressible error is O(Ma²)) and
+//! `τ⁺` at most [`AUTO_TAU_MAX`] (beyond it the scheme only gets less accurate in time). The
+//! characteristic velocity is the largest of the inlet and wall velocities, the initial velocity,
+//! `√(2 Δp / ρ)` across pressure faces and, for a driving acceleration `a`, the smaller of the
+//! viscous plane-channel peak `a H² / (8 ν)` (H the box's smallest extent) and the free-fall speed
+//! `√(2 a L)` (L its largest).
+//!
+//! # Limits
+//! A run is refused, naming the numbers and what to change, when the lattice Mach number of the
+//! characteristic velocity exceeds [`MAX_MACH`] (the scheme is weakly compressible and loses
+//! stability toward Ma ≈ 0.5), when `τ⁺ < `[`MIN_TAU`] (the grid cannot resolve this viscosity at
+//! this velocity; linear stability analysis, Lallemand & Luo 2000, shows the stable velocity range
+//! shrinks to nothing as τ → ½), or when the lattice acceleration exceeds [`MAX_LATTICE_ACCELERATION`].
+//! While running, a lattice speed above [`MAX_LATTICE_SPEED`] or a non-finite or non-positive
+//! density stops the run with [`crate::Error::Unstable`].
+
+use modelcraft_mesh::surface::BoundarySurface;
+use modelcraft_model::{BoxFace, FaceCondition, FluidDomain, Model, Procedure, SurfaceCondition};
+
+use crate::voxel::Grid;
+use crate::{Error, Limits, Result};
+
+/// The characteristic lattice velocity the automatic time step aims at.
+pub const TARGET_LATTICE_VELOCITY: f64 = 0.05;
+/// The largest symmetric relaxation time the automatic time step allows.
+pub const AUTO_TAU_MAX: f64 = 1.0;
+/// The largest lattice Mach number `u Δt / (Δx c_s)` of the characteristic velocity.
+pub const MAX_MACH: f64 = 0.3;
+/// The smallest symmetric relaxation time τ⁺.
+pub const MIN_TAU: f64 = 0.505;
+/// The largest lattice acceleration `a Δt² / Δx`.
+pub const MAX_LATTICE_ACCELERATION: f64 = 0.01;
+/// A lattice speed above this during a run means it went unstable (Mach 0.87).
+pub const MAX_LATTICE_SPEED: f64 = 0.5;
+/// The default two-relaxation-time parameter Λ: bounce-back walls exactly halfway between cells
+/// (Ginzburg, Verhaeghe & d'Humières 2008).
+pub const DEFAULT_MAGIC: f64 = 3.0 / 16.0;
+
+/// The surface of an obstacle body and the persistent name of each of its faces (by the
+/// triangles' face tags); prepared by the caller from the geometry.
+#[derive(Debug, Clone)]
+pub struct Obstacle {
+    pub body: String,
+    pub surface: BoundarySurface,
+    /// Face names by tag; tags without a name are called `face0`, `face1`, ….
+    pub faces: Vec<String>,
+}
+
+/// An obstacle of the domain as the run sees it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObstacleFaces {
+    /// The obstacle's index in the caller's obstacle list.
+    pub index: usize,
+    /// Every face tag's name.
+    pub names: Vec<String>,
+    /// Every face tag's wall velocity in lattice units (zero for walls at rest).
+    pub velocities: Vec<[f64; 3]>,
+}
+
+/// A fluid step in lattice units.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Setup {
+    pub step: String,
+    pub domain: FluidDomain,
+    pub grid: Grid,
+    /// ρ₀ and the kinematic viscosity ν = μ / ρ₀, in model units.
+    pub density: f64,
+    pub viscosity: f64,
+    pub time_step: f64,
+    pub steps: u64,
+    pub frames: u32,
+    /// τ⁺ and τ⁻ (Λ = (τ⁺ − ½)(τ⁻ − ½)).
+    pub tau_plus: f64,
+    pub tau_minus: f64,
+    pub magic: f64,
+    /// The characteristic velocity in model and lattice units, and its lattice Mach number.
+    pub velocity: f64,
+    pub lattice_velocity: f64,
+    pub mach: f64,
+    /// The body acceleration and initial velocity in lattice units.
+    pub acceleration: [f64; 3],
+    pub initial_velocity: [f64; 3],
+    /// The domain's obstacles, in its order.
+    pub obstacles: Vec<ObstacleFaces>,
+    pub warnings: Vec<String>,
+}
+
+fn norm(v: [f64; 3]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+/// The fluid step named `step` (or the only fluid step when `step` is `None`) and its domain.
+pub fn fluid_step<'m>(model: &'m Model, step: Option<&str>) -> Result<(&'m modelcraft_model::Step, &'m FluidDomain)> {
+    let s = model.select_step(step, |p| p.fluid_domain().is_some(), "fluid")?;
+    let name = s.procedure.fluid_domain().unwrap_or_default();
+    let domain = model.fluid_domain(name).ok_or_else(|| Error::NotFound(format!("fluid domain `{name}`")))?;
+    Ok((s, domain))
+}
+
+impl Setup {
+    /// Convert a fluid step, checking it against the stability limits and `limits`.
+    pub fn new(model: &Model, step: Option<&str>, obstacles: &[Obstacle], limits: &Limits) -> Result<Setup> {
+        // The model checked the domain and its material when they were defined.
+        let (s, domain) = fluid_step(model, step)?;
+        let domain = domain.clone();
+        let Procedure::Fluid { end_time, steps, time_step, frames, magic, .. } = &s.procedure else {
+            return Err(Error::Invalid(format!("step `{}` is not a fluid step", s.name)));
+        };
+        let material = model.material(&domain.material);
+        let (Some(density), Some(fluid)) = (material.and_then(|m| m.density), material.and_then(|m| m.fluid)) else {
+            return Err(Error::Invalid(format!("material `{}` needs a density and fluid behaviour", domain.material)));
+        };
+        let viscosity = fluid.viscosity() / density;
+        if !(viscosity > 0.0 && viscosity.is_finite()) {
+            return Err(Error::Invalid(format!("the kinematic viscosity μ/ρ of material `{}` is {viscosity}", domain.material)));
+        }
+
+        // The grid.
+        let counts = domain.cells()?;
+        let mut cells = [0usize; 3];
+        let mut total: u64 = 1;
+        for a in 0..3 {
+            cells[a] = usize::try_from(counts[a]).map_err(|_| Error::Limit("the grid is too large".into()))?;
+            total = total.saturating_mul(counts[a]);
+        }
+        if total > limits.max_cells {
+            return Err(Error::Limit(format!(
+                "the domain has {total} cells ({} × {} × {}), above the cap of {}; coarsen the spacing or raise `max_cells`",
+                cells[0], cells[1], cells[2], limits.max_cells
+            )));
+        }
+        for face in BoxFace::ALL {
+            let open = matches!(domain.faces.get(face), FaceCondition::Velocity { .. } | FaceCondition::Pressure { .. });
+            if open && cells[face.axis()] < 2 {
+                return Err(Error::Invalid(format!("box face {} is an inlet or outlet, so the box needs at least 2 cells across it", face.name())));
+            }
+        }
+        let grid = Grid { origin: domain.min, spacing: domain.spacing, cells };
+        let h = domain.spacing;
+
+        // The characteristic velocity.
+        let mut u_char: f64 = norm(domain.initial_velocity);
+        let mut pressures = Vec::new();
+        for face in BoxFace::ALL {
+            match *domain.faces.get(face) {
+                FaceCondition::MovingWall { velocity } | FaceCondition::Velocity { velocity, .. } => u_char = u_char.max(norm(velocity)),
+                FaceCondition::Pressure { pressure } => pressures.push(pressure),
+                FaceCondition::Wall {} | FaceCondition::Slip {} | FaceCondition::Periodic {} => {}
+            }
+        }
+        for sb in &domain.surfaces {
+            if let SurfaceCondition::MovingWall { velocity } = sb.condition {
+                u_char = u_char.max(norm(velocity));
+            }
+        }
+        let lo = pressures.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = pressures.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if hi > lo {
+            u_char = u_char.max((2.0 * (hi - lo) / density).sqrt());
+        }
+        let a = norm(domain.acceleration);
+        if a > 0.0 {
+            let extents: Vec<f64> = (0..3).map(|k| domain.max[k] - domain.min[k]).collect();
+            let small = extents.iter().copied().fold(f64::INFINITY, f64::min);
+            let large = extents.iter().copied().fold(0.0, f64::max);
+            u_char = u_char.max((a * small * small / (8.0 * viscosity)).min((2.0 * a * large).sqrt()));
+        }
+        if !u_char.is_finite() {
+            return Err(Error::Invalid("the flow's velocity scale is not a finite number".into()));
+        }
+
+        // The time step and the number of steps.
+        let diffusive = (AUTO_TAU_MAX - 0.5) * h * h / (3.0 * viscosity);
+        let auto = if u_char > 0.0 { (TARGET_LATTICE_VELOCITY * h / u_char).min(diffusive) } else { diffusive };
+        let (dt, n) = match (*time_step, *end_time, *steps) {
+            (Some(dt), Some(t), _) => {
+                let n = (t / dt).round();
+                if !(n >= 1.0) {
+                    return Err(Error::Invalid(format!("the end time {t} is shorter than the time step {dt}")));
+                }
+                (dt, n)
+            }
+            (Some(dt), None, Some(n)) => (dt, n as f64),
+            (None, Some(t), _) => {
+                let n = (t / auto).ceil().max(1.0);
+                (t / n, n)
+            }
+            (None, None, Some(n)) => (auto, n as f64),
+            (_, None, None) => return Err(Error::Invalid(format!("step `{}` needs `end_time` or `steps`", s.name))),
+        };
+        if !(dt > 0.0 && dt.is_finite()) {
+            return Err(Error::Invalid(format!("the time step {dt} is not a positive number")));
+        }
+        if !(n <= limits.max_steps as f64) {
+            return Err(Error::Limit(format!(
+                "the step needs {n} time steps of {dt}, above the cap of {}; shorten it or raise `max_steps`",
+                limits.max_steps
+            )));
+        }
+        let n = n as u64;
+        let updates = (total as f64) * (n as f64);
+        if !(updates <= limits.max_cell_updates as f64) {
+            return Err(Error::Limit(format!(
+                "{total} cells for {n} time steps is {updates:e} cell updates, above the cap of {:e}; coarsen, shorten or raise `max_cell_updates`",
+                limits.max_cell_updates as f64
+            )));
+        }
+
+        // Lattice parameters and the stability limits.
+        let nu = viscosity * dt / (h * h);
+        let tau_plus = 3.0 * nu + 0.5;
+        let lattice_velocity = u_char * dt / h;
+        let mach = lattice_velocity / crate::lattice::CS2.sqrt();
+        if mach > MAX_MACH {
+            return Err(Error::Invalid(format!(
+                "the lattice Mach number is {mach:.3} (velocity {u_char} with time step {dt} and spacing {h}), above {MAX_MACH}: lower the time step"
+            )));
+        }
+        if !(tau_plus >= MIN_TAU) {
+            return Err(Error::Invalid(format!(
+                "the relaxation time τ = {tau_plus:.5} is below {MIN_TAU}: the grid cannot resolve viscosity {viscosity} at this time step (cell Reynolds number {:.1}); refine the spacing or raise the time step",
+                if nu > 0.0 { lattice_velocity / nu } else { f64::INFINITY }
+            )));
+        }
+        let magic = magic.unwrap_or(DEFAULT_MAGIC);
+        let tau_minus = 0.5 + magic / (tau_plus - 0.5);
+        let acceleration = domain.acceleration.map(|c| c * dt * dt / h);
+        if norm(acceleration) > MAX_LATTICE_ACCELERATION {
+            return Err(Error::Invalid(format!(
+                "the lattice acceleration is {:.3e}, above {MAX_LATTICE_ACCELERATION}: lower the time step",
+                norm(acceleration)
+            )));
+        }
+
+        // Obstacles, their face names and their faces' wall velocities.
+        let mut domain_obstacles = Vec::with_capacity(domain.obstacles.len());
+        let mut warnings = Vec::new();
+        for body in &domain.obstacles {
+            let (index, o) = obstacles
+                .iter()
+                .enumerate()
+                .find(|(_, o)| &o.body == body)
+                .ok_or_else(|| Error::NotFound(format!("obstacle body `{body}` has no surface (open the design or import its surface)")))?;
+            let tags = o.surface.tri_face().iter().copied().max().map_or(1, |m| m as usize + 1).max(o.faces.len());
+            let names: Vec<String> = (0..tags).map(|t| o.faces.get(t).cloned().unwrap_or_else(|| format!("face{t}"))).collect();
+            let mut velocities = vec![[0.0; 3]; tags];
+            for sb in domain.surfaces.iter().filter(|sb| &sb.face.body == body) {
+                let mut hit = false;
+                for (tag, name) in names.iter().enumerate() {
+                    if sb.face.selects(&modelcraft_model::GeometryRef::face(body.as_str(), name.as_str())?) {
+                        hit = true;
+                        if let (Some(slot), SurfaceCondition::MovingWall { velocity }) = (velocities.get_mut(tag), sb.condition) {
+                            *slot = velocity.map(|c| c * dt / h);
+                        }
+                    }
+                }
+                if !hit {
+                    return Err(Error::NotFound(format!("the {} is not a face of the obstacle's surface", sb.face)));
+                }
+            }
+            domain_obstacles.push(ObstacleFaces { index, names, velocities });
+        }
+        if mach > 0.1 + 1e-12 {
+            warnings.push(format!(
+                "lattice Mach number {mach:.3}: the compressibility error, of order Ma² ≈ {:.1}%, may be visible",
+                100.0 * mach * mach
+            ));
+        }
+        if tau_plus < 0.51 {
+            warnings.push(format!("τ = {tau_plus:.4} is close to ½: under-resolved flows may go unstable; a finer spacing is safer"));
+        }
+
+        Ok(Setup {
+            step: s.name.clone(),
+            grid,
+            density,
+            viscosity,
+            time_step: dt,
+            steps: n,
+            frames: *frames,
+            tau_plus,
+            tau_minus,
+            magic,
+            velocity: u_char,
+            lattice_velocity,
+            mach,
+            acceleration,
+            initial_velocity: domain.initial_velocity.map(|c| c * dt / h),
+            obstacles: domain_obstacles,
+            warnings,
+            domain,
+        })
+    }
+
+    /// Model units per lattice unit of velocity, pressure and force.
+    pub fn velocity_scale(&self) -> f64 {
+        self.grid.spacing / self.time_step
+    }
+
+    pub fn pressure_scale(&self) -> f64 {
+        self.density * self.grid.spacing * self.grid.spacing / (self.time_step * self.time_step)
+    }
+
+    pub fn force_scale(&self) -> f64 {
+        self.pressure_scale() * self.grid.spacing * self.grid.spacing
+    }
+
+    /// A velocity in lattice units.
+    pub fn to_lattice(&self, v: [f64; 3]) -> [f64; 3] {
+        let k = 1.0 / self.velocity_scale();
+        v.map(|c| c * k)
+    }
+
+    /// The lattice density of a gauge pressure: `1 + p / (c_s² ρ₀ Δx²/Δt²)`.
+    pub fn lattice_density(&self, pressure: f64) -> f64 {
+        1.0 + pressure / (crate::lattice::CS2 * self.pressure_scale())
+    }
+
+    /// The gauge pressure of a lattice density (the inverse of [`Setup::lattice_density`]).
+    pub fn gauge_pressure(&self, rho: f64) -> f64 {
+        (rho - 1.0) * crate::lattice::CS2 * self.pressure_scale()
+    }
+}

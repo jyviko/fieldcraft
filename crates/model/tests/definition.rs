@@ -56,7 +56,8 @@ fn defined() -> Model {
     m.add_set("all", Set::of_geometry(vec![GeometryRef::body("Bar").unwrap()])).unwrap();
     m.add_set("root", Set::of_geometry(vec![GeometryRef::face("Bar", "left").unwrap()])).unwrap();
     m.add_set("end", Set::of_geometry(vec![GeometryRef::face("Bar", "right").unwrap()])).unwrap();
-    m.add_material("Steel", Material { elastic: Some(Elastic::Isotropic { young: 2.1e5, poisson: 0.3 }), density: Some(7.85e-9) }).unwrap();
+    m.add_material("Steel", Material { elastic: Some(Elastic::Isotropic { young: 2.1e5, poisson: 0.3 }), density: Some(7.85e-9), fluid: None })
+        .unwrap();
     m.add_section("bar", Section { set: "all".into(), material: "Steel".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
         .unwrap();
     m.add_reference_point("RP", ReferencePoint { xyz: [3.0, 0.5, 0.5], label: 0 }).unwrap();
@@ -120,7 +121,7 @@ fn the_check_names_what_is_missing() {
     m.add_set("side", Set { faces: vec![ElementFace { element: 1, face: 3 }], ..Set::default() }).unwrap();
     m.add_load("ghost-load", Load::Pressure { set: "ghost".into(), magnitude: 1.0 }).unwrap();
     m.add_load("twist", Load::Moment { target: Target::Set("end".into()), vector: [1.0, 0.0, 0.0], distribution: Distribution::Total }).unwrap();
-    m.add_material("Soft", Material { elastic: Some(Elastic::Isotropic { young: 2.1e11, poisson: 0.3 }), density: None }).unwrap();
+    m.add_material("Soft", Material { elastic: Some(Elastic::Isotropic { young: 2.1e11, poisson: 0.3 }), density: None, fluid: None }).unwrap();
     m.add_section("again", Section { set: "side".into(), material: "Soft".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
         .unwrap();
     m.add_section(
@@ -326,7 +327,8 @@ fn a_total_force_on_a_face_is_the_same_on_every_mesh() {
     m.set_units(UnitSystem::MmTonneS);
     m.add_set("all", Set::of_geometry(vec![GeometryRef::body("Block").unwrap()])).unwrap();
     m.add_set("end", Set::of_geometry(vec![GeometryRef::face("Block", "end").unwrap()])).unwrap();
-    m.add_material("Steel", Material { elastic: Some(Elastic::Isotropic { young: 2.1e5, poisson: 0.3 }), density: Some(7.85e-9) }).unwrap();
+    m.add_material("Steel", Material { elastic: Some(Elastic::Isotropic { young: 2.1e5, poisson: 0.3 }), density: Some(7.85e-9), fluid: None })
+        .unwrap();
     m.add_section("block", Section { set: "all".into(), material: "Steel".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
         .unwrap();
     let force = |distribution| Load::Force { target: Target::Set("end".into()), vector: [100.0, 0.0, -50.0], distribution };

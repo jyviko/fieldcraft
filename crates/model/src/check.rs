@@ -136,7 +136,9 @@ impl Model {
         let mut resolved = Resolved::default();
         let units = self.units;
 
-        if self.elements.is_empty() {
+        // A model of fluid steps alone needs no mesh: its domains carry their own grid.
+        let fluid_only = !self.steps.is_empty() && self.steps.iter().all(|s| s.procedure.fluid_domain().is_some());
+        if self.elements.is_empty() && !fluid_only {
             d.error("model", "the mesh has no elements");
         }
         if units.length().is_none() {
@@ -248,7 +250,7 @@ impl Model {
                 let why = match s.procedure {
                     Procedure::Frequency { .. } => "extracts frequencies",
                     Procedure::ExplicitDynamic(_) => "is dynamic",
-                    Procedure::Static {} => return None,
+                    Procedure::Static {} | Procedure::Fluid { .. } => return None,
                 };
                 Some(format!("step `{}` {why}", s.name))
             })
@@ -373,6 +375,8 @@ impl Model {
                         d.warning(&subject, "nothing loads or moves the model in this step");
                     }
                 }
+                // The fluid domain holds its own conditions; nothing structural applies.
+                Procedure::Fluid { .. } => continue,
             }
             // A free body is a natural case of transient dynamics (flight, impact).
             if s.boundary_conditions.is_empty() && !s.procedure.is_dynamic() {

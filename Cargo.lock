@@ -1884,6 +1884,7 @@ dependencies = [
  "modelcraft-fem",
  "modelcraft-geometry",
  "modelcraft-io",
+ "modelcraft-lbm",
  "modelcraft-mesh",
  "modelcraft-model",
  "modelcraft-solver",
@@ -1938,6 +1939,15 @@ dependencies = [
  "sha2",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "modelcraft-lbm"
+version = "0.1.0"
+dependencies = [
+ "modelcraft-mesh",
+ "modelcraft-model",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

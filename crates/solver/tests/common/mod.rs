@@ -123,7 +123,7 @@ impl Grid {
     pub fn define(&mut self, elastic: Elastic, density: Option<f64>, formulation: Formulation, procedure: Procedure) {
         let all: Vec<u32> = self.model.elements().keys().copied().collect();
         self.model.add_set("all", Set { elements: all, ..Set::default() }).unwrap();
-        self.model.add_material("Mat", Material { elastic: Some(elastic), density }).unwrap();
+        self.model.add_material("Mat", Material { elastic: Some(elastic), density, fluid: None }).unwrap();
         self.model.add_section("solid", Section { set: "all".into(), material: "Mat".into(), kind: SectionKind::Solid {}, formulation }).unwrap();
         self.model.add_step(Step::new("Step", procedure), None).unwrap();
     }

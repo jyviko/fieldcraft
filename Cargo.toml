@@ -20,6 +20,7 @@ modelcraft-io = { path = "crates/io" }
 modelcraft-fem = { path = "crates/fem" }
 modelcraft-solver = { path = "crates/solver" }
 modelcraft-explicit = { path = "crates/explicit" }
+modelcraft-lbm = { path = "crates/lbm" }
 modelcraft-engine = { path = "crates/engine" }
 modelcraft-testkit = { path = "crates/testkit" }
 modelcraft-render = { path = "crates/render" }
@@ -75,6 +76,11 @@ opt-level = 2
 [profile.dev]
 opt-level = 1
 
+# The lattice Boltzmann kernels are compute loops over millions of cells; their verification
+# runs (tests) need them optimised.
+[profile.dev.package.modelcraft-lbm]
+opt-level = 3
+
 # Tests and lints (`cargo xtask ci`, GitHub CI). Debug assertions are off because truck's
 # debug-only checks reject valid geometry (SolidCraft builds its tests the same way).
 [profile.ci]
@@ -87,6 +93,9 @@ incremental = false
 
 [profile.ci.package."*"]
 opt-level = 2
+
+[profile.ci.package.modelcraft-lbm]
+opt-level = 3
 
 [profile.release]
 opt-level = 3

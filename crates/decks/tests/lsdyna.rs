@@ -13,7 +13,7 @@ use modelcraft_model::*;
 // Our own models.
 
 fn steel() -> Material {
-    Material { elastic: Some(Elastic::Isotropic { young: 210000.0, poisson: 0.3 }), density: Some(7.85e-9) }
+    Material { elastic: Some(Elastic::Isotropic { young: 210000.0, poisson: 0.3 }), density: Some(7.85e-9), fluid: None }
 }
 
 fn step(name: &str, procedure: Procedure, bcs: &[&str], loads: &[&str]) -> Step {
@@ -72,7 +72,7 @@ fn cantilever_modes() -> Model {
     let mut m = Model::default();
     cantilever_mesh(&mut m);
     let ortho = Elastic::EngineeringConstants { young: [140000.0, 10000.0, 10000.0], poisson: [0.3, 0.3, 0.45], shear: [5000.0, 5000.0, 3500.0] };
-    m.add_material("Ply", Material { elastic: Some(ortho), density: Some(1.6e-9) }).unwrap();
+    m.add_material("Ply", Material { elastic: Some(ortho), density: Some(1.6e-9), fluid: None }).unwrap();
     let f = Formulation { incompatible_modes: true, ..Formulation::default() };
     m.add_section("beam", Section { set: "all".into(), material: "Ply".into(), kind: SectionKind::Solid {}, formulation: f }).unwrap();
     m.add_reference_point("RP", ReferencePoint { xyz: [5.0, 0.5, 0.5], label: 0 }).unwrap();
@@ -155,7 +155,8 @@ fn solids() -> Model {
     let h: Vec<u32> = h.iter().map(|p| node(&mut m, *p)).collect();
     m.set_element(4, ElementKind::Hex20, h).unwrap();
 
-    m.add_material("Aluminium", Material { elastic: Some(Elastic::Isotropic { young: 70e9, poisson: 0.33 }), density: Some(2700.0) }).unwrap();
+    m.add_material("Aluminium", Material { elastic: Some(Elastic::Isotropic { young: 70e9, poisson: 0.33 }), density: Some(2700.0), fluid: None })
+        .unwrap();
     for (e, name) in [(1, "tet4"), (2, "tet10"), (3, "wedge"), (4, "hex20")] {
         m.add_set(name, Set { elements: vec![e], ..Set::default() }).unwrap();
         let f = Formulation { hybrid: e == 1, ..Formulation::default() };
@@ -657,7 +658,7 @@ fn hostile_numbers_stay_within_their_fields() {
     m.set_node(2, [f64::MIN_POSITIVE, -f64::MIN_POSITIVE, 5e-324]).unwrap();
     m.replace_material(
         "Steel",
-        Material { elastic: Some(Elastic::Isotropic { young: 1e300, poisson: 0.499_999_999_999_999_9 }), density: Some(1e-300) },
+        Material { elastic: Some(Elastic::Isotropic { young: 1e300, poisson: 0.499_999_999_999_999_9 }), density: Some(1e-300), fluid: None },
     )
     .unwrap();
     m.replace_load(

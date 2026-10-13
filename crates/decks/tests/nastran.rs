@@ -131,7 +131,7 @@ impl Read {
 // Our own models.
 
 fn steel() -> Material {
-    Material { elastic: Some(Elastic::Isotropic { young: 210_000.0, poisson: 0.3 }), density: Some(7.85e-9) }
+    Material { elastic: Some(Elastic::Isotropic { young: 210_000.0, poisson: 0.3 }), density: Some(7.85e-9), fluid: None }
 }
 
 /// A bar of `n` unit hex8 along X; node (i, y, z) = 1 + 4i + 2y + z.
@@ -188,7 +188,11 @@ fn plate() -> Model {
     m.add_set("all", Set { elements: vec![1, 2, 3, 4], ..Set::default() }).unwrap();
     m.add_set("edge", Set { nodes: vec![1, 4, 7], ..Set::default() }).unwrap();
     m.add_set("top", Set { faces: (1..=4).map(|element| ElementFace { element, face: 1 }).collect(), ..Set::default() }).unwrap();
-    m.add_material("Aluminium", Material { elastic: Some(Elastic::Isotropic { young: 70_000.0, poisson: 0.33 }), density: Some(2.7e-9) }).unwrap();
+    m.add_material(
+        "Aluminium",
+        Material { elastic: Some(Elastic::Isotropic { young: 70_000.0, poisson: 0.33 }), density: Some(2.7e-9), fluid: None },
+    )
+    .unwrap();
     let shell = SectionKind::Shell { thickness: 2.0, offset: 0.0, points: 5 };
     m.add_section("skin", Section { set: "all".into(), material: "Aluminium".into(), kind: shell, formulation: Formulation::default() }).unwrap();
     m.add_boundary_condition("clamp", BoundaryCondition::Fixed { target: Target::Set("edge".into()) }).unwrap();
@@ -517,6 +521,7 @@ fn beams_rods_orthotropy_couplings_and_prescribed_motion() {
     let ortho = Material {
         elastic: Some(Elastic::EngineeringConstants { young: [140e3, 10e3, 12e3], poisson: [0.3, 0.28, 0.4], shear: [5e3, 4.5e3, 3.8e3] }),
         density: Some(1.6e-9),
+        fluid: None,
     };
     m.add_material("Carbon", ortho.clone()).unwrap();
     m.replace_section(
@@ -671,7 +676,7 @@ fn what_nastran_cannot_express_is_named() {
     // Orthotropic beams, tilted orthotropic shells, one-point shells.
     let mut m = plate();
     let ortho = Elastic::EngineeringConstants { young: [140e3, 10e3, 10e3], poisson: [0.3, 0.3, 0.4], shear: [5e3, 5e3, 3.8e3] };
-    m.replace_material("Aluminium", Material { elastic: Some(ortho), density: Some(1.6e-9) }).unwrap();
+    m.replace_material("Aluminium", Material { elastic: Some(ortho), density: Some(1.6e-9), fluid: None }).unwrap();
     m.set_node(9, [10.0, 10.0, 0.5]).unwrap();
     assert!(unsupported(&m).contains("planes of constant Z"));
     m.set_node(9, [10.0, 10.0, 0.0]).unwrap();
@@ -690,7 +695,7 @@ fn what_nastran_cannot_express_is_named() {
     let mut m = plate();
     m.set_element(9, ElementKind::Rod2, vec![1, 9]).unwrap();
     m.add_set("bars", Set { elements: vec![9], ..Set::default() }).unwrap();
-    m.add_material("Fibre", Material { elastic: Some(ortho), density: Some(1.6e-9) }).unwrap();
+    m.add_material("Fibre", Material { elastic: Some(ortho), density: Some(1.6e-9), fluid: None }).unwrap();
     m.add_section(
         "bars",
         Section { set: "bars".into(), material: "Fibre".into(), kind: SectionKind::Rod { area: 1.0 }, formulation: Formulation::default() },

@@ -60,6 +60,7 @@ pub fn write(model: &Model) -> Result<String> {
 
 /// [`write`] for a model already resolved.
 pub fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
+    crate::refuse_fluid(FORMAT, model)?;
     let mut deck = Deck::new(model, r, model.steps().iter().collect());
     deck.plan()?;
     deck.emit()

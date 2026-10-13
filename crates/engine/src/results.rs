@@ -20,6 +20,8 @@ pub enum Kind<'a> {
     Static(&'a StaticResult),
     Frequency(&'a FrequencyResult),
     Explicit(&'a ExplicitResult),
+    /// Per cell, not per node: no nodal fields to display yet.
+    Fluid(&'a modelcraft_lbm::FluidResult),
 }
 
 impl StepResult {
@@ -28,6 +30,7 @@ impl StepResult {
             StepResult::Implicit(modelcraft_solver::StepResult::Static(r)) => Kind::Static(r),
             StepResult::Implicit(modelcraft_solver::StepResult::Frequency(r)) => Kind::Frequency(r),
             StepResult::Explicit(r) => Kind::Explicit(r),
+            StepResult::Fluid(r) => Kind::Fluid(r),
         }
     }
 }
@@ -146,8 +149,10 @@ impl Field {
             Kind::Static(_) => (true, false),
             Kind::Frequency(_) => (false, false),
             Kind::Explicit(e) => e.frames.last().map_or((false, false), |f| (!f.stress.is_empty(), !f.velocity.is_empty())),
+            // Cell fields have their own display (M12 streamlines); no nodal field.
+            Kind::Fluid(_) => return None.into_iter().flatten(),
         };
-        Field::ALL.into_iter().filter(move |f| if *f == Field::Velocity { velocity } else { stress || !f.is_stress() })
+        Some(Field::ALL.into_iter().filter(move |f| if *f == Field::Velocity { velocity } else { stress || !f.is_stress() })).into_iter().flatten()
     }
 }
 
@@ -222,6 +227,7 @@ pub fn displacements(r: &StepResult, pick: Pick) -> Result<&[[f64; 3]]> {
             }
             Ok(&f.displacement)
         }
+        Kind::Fluid(f) => Err(EngineError::Params(format!("step `{}` is a fluid step: its fields are per cell (solve.probe)", f.step))),
     }
 }
 
@@ -233,7 +239,7 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
     let stresses = || -> Result<std::borrow::Cow<'_, [[f64; 6]]>> {
         match r.kind() {
             Kind::Static(s) => Ok(std::borrow::Cow::Borrowed(s.stress.as_slice())),
-            Kind::Frequency(_) => Err(unavailable()),
+            Kind::Frequency(_) | Kind::Fluid(_) => Err(unavailable()),
             Kind::Explicit(e) => {
                 let f = frame(e, pick)?;
                 if f.stress.is_empty() {
@@ -255,7 +261,7 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
                 let f = frame(e, pick)?;
                 if f.velocity.is_empty() { Err(unavailable()) } else { Ok(f.velocity.iter().map(|v| magnitude(*v)).collect()) }
             }
-            Kind::Static(_) | Kind::Frequency(_) => Err(unavailable()),
+            Kind::Static(_) | Kind::Frequency(_) | Kind::Fluid(_) => Err(unavailable()),
         },
         Field::VonMises => each(&modelcraft_fem::von_mises),
         Field::MaxPrincipal => principal(0),
@@ -337,6 +343,9 @@ impl Session {
                 if let Ok(f) = frame(e, v.pick()) {
                     out["time"] = json!(f.time);
                 }
+            }
+            Kind::Fluid(f) => {
+                out["frames"] = f.frames.iter().map(|f| f.time).collect();
             }
             Kind::Static(_) => {}
         }

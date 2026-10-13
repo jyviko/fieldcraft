@@ -261,8 +261,21 @@ pub static CATALOGUE: &[Capability] = &[
         "Force, moment, pressure, traction, gravity or body force",
         &["model.load.edit", "model.load.delete"],
     ),
-    soon("flow.domain", "Fluid Domain", Loads, "Flow", "M12", "The fluid grid voxelised from the face-tagged surface"),
-    soon("flow.boundary", "Inlet & Outlet", Loads, "Flow", "M12", "Velocity inlets, pressure outlets and walls"),
+    ready_more(
+        "model.fluid_domain.create",
+        "Fluid Domain",
+        Loads,
+        "Flow",
+        "The box of fluid cells, its fluid, and the obstacle bodies voxelised from their face-tagged surfaces",
+        &["model.fluid_domain.edit", "model.fluid_domain.delete"],
+    ),
+    ready(
+        "model.fluid_domain.boundary",
+        "Inlet & Outlet",
+        Loads,
+        "Flow",
+        "Velocity inlets, pressure outlets, walls, moving and slip walls, periodic faces",
+    ),
     // ---- Interactions ----
     ready_more(
         "model.reference_point.create",
@@ -306,7 +319,7 @@ pub static CATALOGUE: &[Capability] = &[
         "Transient dynamics of an explicit step by central differences (contact and erosion coming in M10)",
     ),
     soon("solve.blast", "Blast & Impact", Solve, "Explicit", "M14", "EOS-driven fluids with fluid–structure contact (ALE or SPH)"),
-    soon("solve.flow", "Lattice Boltzmann", Solve, "Fluids", "M12", "Lattice Boltzmann flow on the CPU or the GPU"),
+    ready("solve.fluid", "Lattice Boltzmann", Solve, "Fluids", "Lattice Boltzmann flow of a fluid step on the CPU, with wall forces"),
     soon("solve.fsi", "Fluid–Structure", Solve, "Fluids", "M13", "Coupled fluid and structure solve"),
     // ---- Results ----
     ready_more("results.deformed", "Deformed", Results, "Display", "The deformed shape of a solved step, to scale", &["results.clear"]),

@@ -104,6 +104,7 @@ pub fn write(model: &Model) -> Result<String> {
 
 /// [`write`] for a model already resolved.
 pub fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
+    crate::refuse_fluid(FORMAT, model)?;
     let by_type = elements_by_type(model, r)?;
     check_expressible(model)?;
     let mut d = Deck::default();
@@ -757,6 +758,7 @@ impl Deck {
         for step in steps {
             self.comment(&format!("Step {}", step.name));
             match step.procedure {
+                Procedure::Fluid { .. } => return Err(crate::fluid_step(FORMAT, &step.name)),
                 Procedure::Static {} => {
                     self.line(&format!("*STEP, NAME={}, NLGEOM=NO", step.name));
                     self.line("*STATIC");

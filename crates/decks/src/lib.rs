@@ -83,6 +83,19 @@ pub fn with_steps(model: &Model, names: &[String]) -> Result<Model> {
     Ok(out)
 }
 
+/// A fluid step: solved by ModelCraft's lattice Boltzmann solver, never written to a deck.
+pub(crate) fn fluid_step(format: &'static str, step: &str) -> Error {
+    Error::Unsupported { format, what: format!("fluid step `{step}` (solve it with solve.fluid; write the structural steps only)") }
+}
+
+/// Every writer's first check: the model has no fluid step.
+pub(crate) fn refuse_fluid(format: &'static str, model: &Model) -> Result<()> {
+    match model.steps().iter().find(|s| s.procedure.fluid_domain().is_some()) {
+        Some(step) => Err(fluid_step(format, &step.name)),
+        None => Ok(()),
+    }
+}
+
 /// Every deck format, one row per writer.
 pub const FORMATS: &[Format] = &[
     Format { name: "abaqus", extension: "inp", writer: abaqus::write_resolved },

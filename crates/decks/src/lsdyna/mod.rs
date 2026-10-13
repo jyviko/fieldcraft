@@ -126,6 +126,7 @@ pub(crate) fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
 }
 
 fn write_with(model: &Model, r: &Resolved) -> Result<Written> {
+    crate::refuse_fluid(FORMAT, model)?;
     let estimate = (model.nodes().len() + model.reference_points().len()) * 130 + model.elements().len() * 260;
     if estimate > MAX_DECK_BYTES {
         return Err(Error::Limit(format!("the deck would be about {estimate} bytes; at most {MAX_DECK_BYTES} are written")));
@@ -566,6 +567,7 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
     d.header(&["imflag", "dt0"]);
     d.card([Field::from(1), Field::from(1.0)]);
     match step.procedure {
+        Procedure::Fluid { .. } => return Err(crate::fluid_step(FORMAT, &step.name)),
         Procedure::Static {} => {
             d.line("*CONTROL_IMPLICIT_SOLUTION");
             d.header(&["nsolvr"]);

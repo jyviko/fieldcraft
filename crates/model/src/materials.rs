@@ -1,4 +1,4 @@
-//! Materials: linear elasticity and mass density.
+//! Materials: linear elasticity, mass density and fluid behaviour.
 
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +60,24 @@ impl Elastic {
     }
 }
 
+/// Fluid behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Fluid {
+    /// A Newtonian fluid of this dynamic viscosity μ (shear stress per shear rate; for example
+    /// 1.0e-9 MPa·s for water in mm, t, s). Its kinematic viscosity is μ over the density.
+    Newtonian { viscosity: f64 },
+}
+
+impl Fluid {
+    /// The dynamic viscosity μ.
+    pub fn viscosity(&self) -> f64 {
+        match *self {
+            Fluid::Newtonian { viscosity } => viscosity,
+        }
+    }
+}
+
 /// A material.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,12 +87,21 @@ pub struct Material {
     /// Mass per volume, needed by frequency steps and gravity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub density: Option<f64>,
+    /// How it flows, for fluid domains (needs a density).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fluid: Option<Fluid>,
 }
 
 impl Material {
     pub fn validate(&self) -> Result<()> {
-        if self.elastic.is_none() && self.density.is_none() {
-            return Err(Error::Invalid("a material needs elastic constants or a density".into()));
+        if self.elastic.is_none() && self.density.is_none() && self.fluid.is_none() {
+            return Err(Error::Invalid("a material needs elastic constants, a density or fluid behaviour".into()));
+        }
+        if let Some(f) = &self.fluid {
+            positive("viscosity", f.viscosity())?;
+            if self.density.is_none() {
+                return Err(Error::Invalid("a fluid needs a density".into()));
+            }
         }
         if let Some(e) = &self.elastic {
             e.validate()?;
@@ -102,11 +129,17 @@ impl Model {
 
     pub fn replace_material(&mut self, name: &str, material: Material) -> Result<()> {
         material.validate().map_err(|e| context("material", name, e))?;
+        if material.fluid.is_none()
+            && let Some(d) = self.fluid_domain_users(name).next()
+        {
+            return Err(Error::Invalid(format!("material `{name}`: fluid domain `{d}` needs its fluid behaviour")));
+        }
         replace_existing(&mut self.materials, "material", name, material)
     }
 
     pub fn remove_material(&mut self, name: &str) -> Result<()> {
-        let users = self.sections.iter().filter(|(_, s)| s.material == name).map(|(n, _)| format!("section `{n}`")).collect();
+        let mut users: Vec<String> = self.sections.iter().filter(|(_, s)| s.material == name).map(|(n, _)| format!("section `{n}`")).collect();
+        users.extend(self.fluid_domain_users(name).map(|n| format!("fluid domain `{n}`")));
         not_in_use("material", name, users)?;
         remove_existing(&mut self.materials, "material", name).map(|_| ())
     }
@@ -117,7 +150,7 @@ mod tests {
     use super::*;
 
     fn iso(young: f64, poisson: f64) -> Material {
-        Material { elastic: Some(Elastic::Isotropic { young, poisson }), density: None }
+        Material { elastic: Some(Elastic::Isotropic { young, poisson }), ..Material::default() }
     }
 
     #[test]
@@ -129,12 +162,17 @@ mod tests {
             let e = m.add_material("Bad", bad).unwrap_err();
             assert!(e.to_string().contains("material `Bad`"), "{e}");
         }
-        assert!(m.add_material("Light", Material { elastic: None, density: Some(-1.0) }).is_err());
+        assert!(m.add_material("Light", Material { density: Some(-1.0), ..Material::default() }).is_err());
+        let fluid = |viscosity, density| Material { density, fluid: Some(Fluid::Newtonian { viscosity }), ..Material::default() };
+        m.add_material("Water", fluid(1.0e-9, Some(1.0e-9))).unwrap();
+        for bad in [fluid(0.0, Some(1.0)), fluid(-1.0, Some(1.0)), fluid(f64::NAN, Some(1.0)), fluid(1.0, None)] {
+            assert!(m.add_material("Bad", bad).is_err());
+        }
         assert!(m.add_material("1st", iso(1.0, 0.3)).is_err(), "names start with a letter");
         assert!(m.add_material("has space", iso(1.0, 0.3)).is_err());
         m.replace_material("Steel", iso(2.0e5, 0.29)).unwrap();
         assert!(m.replace_material("Nope", iso(2.0e5, 0.29)).is_err());
-        assert_eq!(m.materials().len(), 1);
+        assert_eq!(m.materials().len(), 2);
     }
 
     #[test]

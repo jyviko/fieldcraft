@@ -50,6 +50,8 @@ pub enum EngineError {
     Solver(#[from] modelcraft_solver::Error),
     #[error(transparent)]
     Explicit(#[from] modelcraft_explicit::Error),
+    #[error(transparent)]
+    Fluid(#[from] modelcraft_lbm::Error),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
@@ -57,11 +59,12 @@ pub enum EngineError {
 
 pub type Result<T> = std::result::Result<T, EngineError>;
 
-/// The result of a solved step, from the implicit or the explicit solver.
+/// The result of a solved step, from the implicit, the explicit or the lattice Boltzmann solver.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepResult {
     Implicit(modelcraft_solver::StepResult),
     Explicit(ExplicitResult),
+    Fluid(modelcraft_lbm::FluidResult),
 }
 
 impl StepResult {
@@ -69,6 +72,7 @@ impl StepResult {
         match self {
             StepResult::Implicit(r) => r.step(),
             StepResult::Explicit(r) => &r.step,
+            StepResult::Fluid(r) => &r.step,
         }
     }
 
@@ -77,6 +81,8 @@ impl StepResult {
         match self {
             StepResult::Implicit(r) => r.nodes(),
             StepResult::Explicit(r) => &r.nodes,
+            // A fluid result is per cell, not per node.
+            StepResult::Fluid(_) => &[],
         }
     }
 }
@@ -357,6 +363,19 @@ mod tests {
             json!({"step": "Bend", "loads": ["nope"], "active": "yes"}),
             json!({"step": "Bend", "boundary_conditions": [], "loads": []}),
             json!({"system": "furlongs"}),
+            // Fluid domains, boundaries and steps.
+            json!({"name": "A", "material": "Steel", "min": [0, 0, 0], "max": [1e308, 1, 1], "spacing": 1e-300}),
+            json!({"name": "A", "material": "Steel", "min": [0, 0, 0], "max": [1, 1, 1], "spacing": 0.5, "faces": {"x_min": {"type": "periodic"}}}),
+            json!({"name": "A", "material": "nope", "min": [0, 0, 0], "max": [1, 1, 1], "spacing": 0.5, "obstacles": ["", ""]}),
+            json!({"name": "A", "density": 1, "fluid": {"type": "newtonian", "viscosity": -1}}),
+            json!({"name": "A", "fluid": {"type": "newtonian", "viscosity": 1}}),
+            json!({"domain": "A", "at": "x_mid", "condition": {"type": "wall"}}),
+            json!({"domain": "A", "at": {"body": "B", "face": "f"}, "condition": {"type": "pressure", "pressure": 1e308}}),
+            json!({"domain": null, "at": null, "condition": null}),
+            json!({"name": "A", "procedure": {"type": "fluid", "domain": "A", "steps": 1e300}}),
+            json!({"name": "A", "procedure": {"type": "fluid", "domain": "A", "end_time": -1, "steps": 3}}),
+            json!({"name": "Bend", "procedure": {"type": "fluid", "domain": "nope", "end_time": 1}}),
+            json!({"step": "Bend", "max_cells": 1e300, "max_steps": -3}),
             json!({"geometry": {"body": "Bar"}, "elements": [1, 99], "faces": [{"element": 1, "face": 200}]}),
             json!({"geometry": {"body": "Bar", "vertex": "v"}, "nodes": [1], "edges": [{"element": 1, "edge": 0}]}),
         ];

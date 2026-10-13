@@ -33,6 +33,7 @@
 pub mod bcs;
 pub mod check;
 pub mod constraints;
+pub mod fluids;
 pub mod geometry;
 pub mod loads;
 pub mod materials;
@@ -50,9 +51,10 @@ use serde::{Deserialize, Serialize};
 pub use bcs::{BoundaryCondition, Dofs, Symmetry, Target};
 pub use check::{Diagnostic, Resolved, ResolvedSet, Severity};
 pub use constraints::{Coupling, CouplingKind, ReferencePoint};
+pub use fluids::{BoxFace, BoxFaces, FaceCondition, FluidBoundary, FluidDomain, Profile, SurfaceBoundary, SurfaceCondition};
 pub use geometry::{Classification, Entity, GeometryRef};
 pub use loads::{Distribution, Load};
-pub use materials::{Elastic, Material};
+pub use materials::{Elastic, Fluid, Material};
 pub use mesh::{Element, ElementFace, ElementKind, Node, check_coordinates};
 pub use sections::{BeamProfile, Formulation, Integration, Section, SectionKind};
 pub use sets::Set;
@@ -113,6 +115,8 @@ pub struct Model {
     couplings: BTreeMap<String, Coupling>,
     boundary_conditions: BTreeMap<String, BoundaryCondition>,
     loads: BTreeMap<String, Load>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    fluid_domains: BTreeMap<String, FluidDomain>,
     /// In analysis order.
     steps: Vec<Step>,
 }
@@ -143,6 +147,8 @@ struct ModelData {
     boundary_conditions: BTreeMap<String, BoundaryCondition>,
     #[serde(default)]
     loads: BTreeMap<String, Load>,
+    #[serde(default)]
+    fluid_domains: BTreeMap<String, FluidDomain>,
     #[serde(default)]
     steps: Vec<Step>,
 }
@@ -197,6 +203,9 @@ impl TryFrom<ModelData> for Model {
         }
         for (n, v) in d.loads {
             m.add_load(&n, v)?;
+        }
+        for (n, v) in d.fluid_domains {
+            m.add_fluid_domain(&n, v)?;
         }
         for s in d.steps {
             m.add_step(s, None)?;
@@ -300,12 +309,13 @@ impl Model {
             couplings: self.couplings.clone(),
             boundary_conditions: self.boundary_conditions.clone(),
             loads: self.loads.clone(),
+            fluid_domains: self.fluid_domains.clone(),
             steps: self.steps.clone(),
         }
     }
 
     /// Counts of each kind of definition, for summaries.
-    pub fn definition_counts(&self) -> [(&'static str, usize); 8] {
+    pub fn definition_counts(&self) -> [(&'static str, usize); 9] {
         [
             ("sets", self.sets.len()),
             ("materials", self.materials.len()),
@@ -314,6 +324,7 @@ impl Model {
             ("couplings", self.couplings.len()),
             ("boundary_conditions", self.boundary_conditions.len()),
             ("loads", self.loads.len()),
+            ("fluid_domains", self.fluid_domains.len()),
             ("steps", self.steps.len()),
         ]
     }

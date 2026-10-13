@@ -1,11 +1,14 @@
 //! Model definition commands: create, edit and delete sets, materials, sections, reference
-//! points, couplings, boundary conditions, loads and steps, and the step activity table.
+//! points, couplings, boundary conditions, loads, fluid domains and steps, and the step activity
+//! table.
 //!
 //! Each definition's parameters are its JSON form in the model (the same form a `.modelcraft`
 //! file stores), plus its `name`. `create` fails when the name is taken, `edit` replaces an
 //! existing definition, `delete` refuses while another definition refers to it.
 
-use modelcraft_model::{BoundaryCondition, Coupling, Load, Material, Model, ReferencePoint, Section, Set, Step};
+use modelcraft_model::{
+    BoundaryCondition, Coupling, FaceCondition, FluidBoundary, FluidDomain, Load, Material, Model, ReferencePoint, Section, Set, Step,
+};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -77,7 +80,7 @@ definition_commands!(
     Material,
     "material",
     "Material",
-    r#"{"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3} | {"type": "engineering_constants", "young": [E1, E2, E3], "poisson": [ν12, ν13, ν23], "shear": [G12, G13, G23]}, "density": 7.85e-9} — in the model's unit system (model.units), never converted"#,
+    r#"{"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3} | {"type": "engineering_constants", "young": [E1, E2, E3], "poisson": [ν12, ν13, ν23], "shear": [G12, G13, G23]}, "density": 7.85e-9, "fluid": {"type": "newtonian", "viscosity": 1.0e-9} (dynamic viscosity; a fluid needs a density)} — in the model's unit system (model.units), never converted"#,
     add_material,
     replace_material,
     remove_material,
@@ -156,10 +159,40 @@ definition_commands!(
     LOAD_DELETE
 );
 
+definition_commands!(
+    "fluid domain",
+    FluidDomain,
+    "fluid_domain",
+    "Fluid Domain",
+    r#"{"name": "Flow", "material": "Water" (a density and fluid behaviour), "min": [x, y, z], "max": [x, y, z], "spacing": 1.0 (cubic cells; every extent a whole number of spacings), "faces": {"x_min": {"type": "velocity", "velocity": [u, v, w], "profile": "uniform|parabolic"}, "x_max": {"type": "pressure", "pressure": 0}, "y_min": {"type": "wall"} | {"type": "moving_wall", "velocity": [u, v, w] (in the face's plane)} | {"type": "slip"} | {"type": "periodic"} (in opposite pairs), …} (default walls), "obstacles": ["Body1"] (solid bodies of the design or imported surfaces, by name), "surfaces": [{"face": {"body": "Body1", "face": "F2:top"}, "condition": {"type": "moving_wall", "velocity": [u, v, w]}}] (obstacle faces are walls unless listed), "initial_velocity": [u, v, w], "acceleration": [x, y, z] (gravity or a driving force per mass), "tolerance": 0.1 (obstacle triangulation; default a tenth of the spacing)}"#,
+    add_fluid_domain,
+    replace_fluid_domain,
+    remove_fluid_domain,
+    FLUID_DOMAIN_CREATE,
+    FLUID_DOMAIN_EDIT,
+    FLUID_DOMAIN_DELETE
+);
+
+pub const FLUID_BOUNDARY: CommandSpec = CommandSpec {
+    id: "model.fluid_domain.boundary",
+    label: "Inlet, Outlet or Wall",
+    params: r#"{"domain": "Flow", "at": "x_min" (a box face) | {"body": "Body1", "face": "F2:top"} (an obstacle face), "condition": {"type": "velocity", "velocity": [u, v, w], "profile": "uniform|parabolic"} | {"type": "pressure", "pressure": 0} | {"type": "wall"} | {"type": "moving_wall", "velocity": [u, v, w]} | {"type": "slip"} | {"type": "periodic"}} — sets one boundary's condition (obstacle faces take walls and moving walls)"#,
+    kind: CommandKind::Model,
+    run: fluid_boundary,
+};
+
+fn fluid_boundary(s: &mut Session, p: &Value) -> Result<Value> {
+    let domain: &str = req(p, "domain")?;
+    let at: FluidBoundary = req(p, "at")?;
+    let condition: FaceCondition = req(p, "condition")?;
+    s.model.set_fluid_boundary(domain, at, condition)?;
+    Ok(json!({"domain": domain}))
+}
+
 pub const STEP_CREATE: CommandSpec = CommandSpec {
     id: "model.step.create",
     label: "New Step",
-    params: r#"{"name": "Bend", "procedure": {"type": "static"} | {"type": "frequency", "modes": 10, "min_hz": 0, "max_hz": 500} | {"type": "explicit_dynamic", "end_time": 0.001, "dt_scale": 0.9, "max_increments": 10000000, "output_interval", "history_interval", "history_nodes": "set", "initial_velocities": [{"set", "velocity": [vx, vy, vz]}], "rigid_walls": [{"set", "point", "normal"}], "hourglass": {"type": "viscous|stiffness", "coefficient": 0.1}, "bulk_viscosity": {"linear": 0.06, "quadratic": 1.5}}, "output": ["displacement", "reaction_force", "stress", "strain"] (default by procedure), "boundary_conditions": [names], "loads": [names] (active in this step; nothing carries over between steps), "before": "step" (default: last)}"#,
+    params: r#"{"name": "Bend", "procedure": {"type": "static"} | {"type": "frequency", "modes": 10, "min_hz": 0, "max_hz": 500} | {"type": "fluid", "domain": "Flow", "end_time": 1.0 | "steps": 1000, "time_step": (default: chosen for Mach 0.087 and τ ≤ 1), "frames": 10, "magic": 0.1875 (the two-relaxation-time Λ)} | {"type": "explicit_dynamic", "end_time": 0.001, "dt_scale": 0.9, "max_increments": 10000000, "output_interval", "history_interval", "history_nodes": "set", "initial_velocities": [{"set", "velocity": [vx, vy, vz]}], "rigid_walls": [{"set", "point", "normal"}], "hourglass": {"type": "viscous|stiffness", "coefficient": 0.1}, "bulk_viscosity": {"linear": 0.06, "quadratic": 1.5}}, "output": ["displacement", "reaction_force", "stress", "strain"] (default by procedure), "boundary_conditions": [names], "loads": [names] (active in this step; nothing carries over between steps), "before": "step" (default: last)}"#,
     kind: CommandKind::Model,
     run: step_create,
 };
@@ -207,7 +240,7 @@ fn step_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let n = name(p)?;
     let mut step = s.model.step(n).cloned().ok_or_else(|| EngineError::Params(format!("no step `{n}`")))?;
     if let Some(procedure) = opt(p, "procedure")? {
-        step.procedure = procedure;
+        step.set_procedure(procedure);
     }
     if let Some(o) = opt(p, "output")? {
         step.output = o;

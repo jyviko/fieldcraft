@@ -1024,3 +1024,32 @@ again in the module docs):
   element keeps 1 − 1/n² of the bending energy with n elements through the depth, which predicts
   its period with viscous hourglass control to 0.03%.
 
+## Part I: Lattice Boltzmann core (M12, plan L1), as implemented
+
+`modelcraft-lbm` is written from these papers and the book (cited again in its module docs). No
+lattice Boltzmann package's code was opened.
+
+- Lattice, equilibrium, units, stream–collide, bounce-back, forcing and boundary conditions:
+  Krüger et al. 2017 (C1.2); D3Q19 from Qian, d'Humières & Lallemand 1992 (C1.3).
+- Collision: two relaxation times, Ginzburg, Verhaeghe & d'Humières 2008 (C2.2). The parameter
+  Λ = (τ⁺ − ½)(τ⁻ − ½) is the step's `magic` (default 3/16: walls exactly halfway).
+- Body force: Guo, Zheng & Shi 2002 (C1.6), split into the symmetric and antisymmetric parts
+  relaxed with τ⁺ and τ⁻.
+- Walls: halfway bounce-back, Ladd's moving-wall term and momentum exchange (Ladd 1994, C3.1);
+  momentum exchange also after R. Mei, D. Yu, W. Shyy, L.-S. Luo, *Force evaluation in the
+  lattice Boltzmann method involving curved geometry*, PRE 65:041203, 2002 (DOI not checked).
+- Inlets and outlets: Zou & He 1997 (C3.3), with the D3Q19 transverse-momentum correction of
+  M. Hecht, J. Harting, *Implementation of on-site velocity boundary conditions for D3Q19
+  lattice Boltzmann simulations*, J. Stat. Mech. 2010, P01018 (DOI not checked).
+- Stability limits (Mach ≤ 0.3, τ⁺ ≥ 0.505, runtime speed ≤ 0.5): Sterling & Chen 1996 and
+  Lallemand & Luo 2000 (C1.5) for the shrinking stable region as τ → ½.
+- Voxelisation: Shewchuk's exact `orient2d`/`orient3d` (`modelcraft_mesh::predicates`) with a
+  symbolic perturbation after H. Edelsbrunner, E. P. Mücke, *Simulation of Simplicity*, ACM TOG
+  9(1):66–104, 1990; link faces by nearest triangle, C. Ericson, *Real-Time Collision Detection*,
+  Morgan Kaufmann 2005, §5.1.5.
+- Verification: analytic Poiseuille, Couette and Taylor–Green solutions (C8); the Stokes drag of
+  a simple cubic array of spheres, H. Hasimoto, *On the periodic fundamental solutions of the
+  Stokes equations and their application to viscous flow past a cubic array of spheres*, JFM
+  5(2):317–328, 1959, with the higher terms of A. S. Sangani, A. Acrivos, Int. J. Multiphase Flow
+  8(4):343–360, 1982 (DOIs not checked). Benchmark (published numerical reference values, tagged,
+  not part of the analytic gate): Schäfer & Turek 1996, 2D-1 (C8).

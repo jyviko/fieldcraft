@@ -30,6 +30,16 @@ pub const MAX_HISTORY_SAMPLES: f64 = 1_000_000.0;
 /// Most initial velocities or rigid walls an explicit dynamic step lists.
 pub const MAX_STEP_ITEMS: usize = 10_000;
 
+/// Most time steps a fluid step asks for (the solver caps a run lower by default).
+pub const MAX_FLUID_STEPS: u64 = 1_000_000_000;
+
+/// Most output frames a fluid step writes.
+pub const MAX_FLUID_FRAMES: u32 = 1000;
+
+fn default_frames() -> u32 {
+    10
+}
+
 /// What a step solves.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -47,6 +57,25 @@ pub enum Procedure {
     },
     /// Transient dynamics by explicit time integration up to `end_time`.
     ExplicitDynamic(ExplicitDynamic),
+    /// Time-dependent incompressible flow in a fluid domain, from rest (or the domain's initial
+    /// velocity) to `end_time`, or for `steps` time steps of `time_step` (exactly one of the two
+    /// lengths). The solver picks the time step when `time_step` is left out. `frames` velocity
+    /// and pressure fields are written, evenly spaced, after the initial one; forces on every
+    /// wall are recorded throughout. `magic` is the lattice Boltzmann two-relaxation-time
+    /// parameter Λ (default 3/16, which puts bounce-back walls exactly halfway between cells).
+    Fluid {
+        domain: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_time: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        steps: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time_step: Option<f64>,
+        #[serde(default = "default_frames")]
+        frames: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        magic: Option<f64>,
+    },
 }
 
 /// The settings of an explicit dynamic step.
@@ -281,6 +310,15 @@ impl Procedure {
             Procedure::Static {} => "static",
             Procedure::Frequency { .. } => "frequency",
             Procedure::ExplicitDynamic(_) => "explicit_dynamic",
+            Procedure::Fluid { .. } => "fluid",
+        }
+    }
+
+    /// The fluid domain a fluid step solves in.
+    pub fn fluid_domain(&self) -> Option<&str> {
+        match self {
+            Procedure::Fluid { domain, .. } => Some(domain),
+            Procedure::Static {} | Procedure::Frequency { .. } | Procedure::ExplicitDynamic(_) => None,
         }
     }
 
@@ -293,7 +331,7 @@ impl Procedure {
     pub fn sets(&self) -> impl Iterator<Item = &str> {
         let explicit = match self {
             Procedure::ExplicitDynamic(e) => Some(e),
-            Procedure::Static {} | Procedure::Frequency { .. } => None,
+            Procedure::Static {} | Procedure::Frequency { .. } | Procedure::Fluid { .. } => None,
         };
         explicit.into_iter().flat_map(ExplicitDynamic::sets)
     }
@@ -301,6 +339,27 @@ impl Procedure {
     pub fn validate(&self) -> Result<()> {
         if let Procedure::ExplicitDynamic(e) = self {
             return e.validate();
+        }
+        if let Procedure::Fluid { end_time, steps, time_step, frames, magic, .. } = *self {
+            match (end_time, steps) {
+                (Some(t), None) => {
+                    crate::positive("end time", t)?;
+                }
+                (None, Some(n)) if (1..=MAX_FLUID_STEPS).contains(&n) => {}
+                (None, Some(n)) => return Err(Error::Invalid(format!("a fluid step runs 1 to {MAX_FLUID_STEPS} time steps, got {n}"))),
+                _ => return Err(Error::Invalid("a fluid step needs exactly one of `end_time` and `steps`".into())),
+            }
+            if let Some(dt) = time_step {
+                crate::positive("time step", dt)?;
+            }
+            if !(1..=MAX_FLUID_FRAMES).contains(&frames) {
+                return Err(Error::Invalid(format!("a fluid step writes 1 to {MAX_FLUID_FRAMES} frames, got {frames}")));
+            }
+            if let Some(m) = magic
+                && !(m > 0.0 && m <= 1.0)
+            {
+                return Err(Error::Invalid(format!("the two-relaxation-time parameter Λ must be above 0 and at most 1, got {m}")));
+            }
         }
         if let Procedure::Frequency { modes, min_hz, max_hz } = *self {
             if !(1..=MAX_MODES).contains(&modes) {
@@ -326,6 +385,8 @@ impl Procedure {
             Procedure::Static {} => OutputVariable::ALL.into_iter().collect(),
             Procedure::Frequency { .. } => [OutputVariable::Displacement].into_iter().collect(),
             Procedure::ExplicitDynamic(_) => [OutputVariable::Displacement, OutputVariable::Stress].into_iter().collect(),
+            // Velocity, pressure and wall forces, always.
+            Procedure::Fluid { .. } => BTreeSet::new(),
         }
     }
 }
@@ -366,6 +427,20 @@ impl Step {
     /// A step with the procedure's default output and nothing active.
     pub fn new(name: impl Into<String>, procedure: Procedure) -> Step {
         Step { name: name.into(), output: procedure.default_output(), procedure, boundary_conditions: BTreeSet::new(), loads: BTreeSet::new() }
+    }
+
+    /// Change the procedure. Moving between a structural and a fluid procedure starts from the
+    /// new procedure's default output and, for a fluid step, nothing active (a fluid step takes
+    /// its conditions from its domain); between structural procedures the output and table stay.
+    pub fn set_procedure(&mut self, procedure: Procedure) {
+        if procedure.fluid_domain().is_some() != self.procedure.fluid_domain().is_some() {
+            self.output = procedure.default_output();
+            if procedure.fluid_domain().is_some() {
+                self.boundary_conditions.clear();
+                self.loads.clear();
+            }
+        }
+        self.procedure = procedure;
     }
 }
 
@@ -414,6 +489,16 @@ impl Model {
         step.procedure.validate().map_err(|e| context("step", &step.name, e))?;
         for set in step.procedure.sets() {
             require(&self.sets, "set", set).map_err(|e| context("step", &step.name, e))?;
+        }
+        if let Some(domain) = step.procedure.fluid_domain() {
+            require(&self.fluid_domains, "fluid domain", domain).map_err(|e| context("step", &step.name, e))?;
+            if !(step.boundary_conditions.is_empty() && step.loads.is_empty() && step.output.is_empty()) {
+                return Err(context(
+                    "step",
+                    &step.name,
+                    Error::Invalid("a fluid step takes its conditions from its fluid domain and always writes velocity, pressure and wall forces: list no boundary conditions, loads or output".into()),
+                ));
+            }
         }
         for b in &step.boundary_conditions {
             require(&self.boundary_conditions, "boundary condition", b).map_err(|e| context("step", &step.name, e))?;

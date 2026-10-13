@@ -1,7 +1,7 @@
 //! `solve.*`: run the model's steps with the implicit solver, keep the results in the session,
 //! and read them back.
 
-use modelcraft_solver::{FrequencyOptions, Limits, MassKind, StepResult, solve_frequency, solve_static};
+use modelcraft_solver::{FrequencyOptions, Limits, Location, MassKind, StepResult, solve_frequency, solve_static};
 use serde_json::{Value, json};
 
 use super::{labels, opt};
@@ -115,24 +115,28 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
     let step = opt::<String>(p, "step")?.ok_or_else(|| EngineError::Params("`step` is required".into()))?;
     let result = s.result(&step).ok_or_else(|| EngineError::Params(format!("step `{step}` has no result; solve it first")))?;
     let nodes = labels(p, "nodes", MAX_PROBE)?;
-    let index = |label: u32| {
-        result.nodes().binary_search(&label).map_err(|_| EngineError::Params(format!("node {label} has no result (it belongs to no solved element)")))
+    let locate = |label: u32| {
+        result
+            .locate(label)
+            .ok_or_else(|| EngineError::Params(format!("node {label} has no result (it belongs to no solved element or coupled reference point)")))
     };
     let out: Vec<Value> = match result.as_ref() {
         StepResult::Static(r) => nodes
             .iter()
             .map(|&l| {
-                if let Some(p) = r.reference_points.iter().find(|p| p.label == l) {
-                    return Ok(json!({"node": l, "reference_point": p.name, "displacement": p.displacement, "reaction": p.reaction}));
-                }
-                let i = index(l)?;
-                Ok(json!({
-                    "node": l,
-                    "displacement": r.displacement.get(i),
-                    "reaction": r.reaction.get(i),
-                    "stress": r.stress.get(i),
-                    "von_mises": r.von_mises.get(i),
-                }))
+                Ok(match locate(l)? {
+                    Location::Point(k) => {
+                        let p = r.reference_points.get(k);
+                        json!({"node": l, "reference_point": p.map(|p| &p.name), "displacement": p.map(|p| p.displacement), "reaction": p.map(|p| p.reaction)})
+                    }
+                    Location::Node(i) => json!({
+                        "node": l,
+                        "displacement": r.displacement.get(i),
+                        "reaction": r.reaction.get(i),
+                        "stress": r.stress.get(i),
+                        "von_mises": r.von_mises.get(i),
+                    }),
+                })
             })
             .collect::<Result<_>>()?,
         StepResult::Frequency(r) => {
@@ -144,11 +148,12 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
             nodes
                 .iter()
                 .map(|&l| {
-                    if let Some(k) = r.reference_points.iter().position(|(_, label)| *label == l) {
-                        let name = r.reference_points.get(k).map(|(n, _)| n.as_str());
-                        return Ok(json!({"node": l, "reference_point": name, "shape": m.point_shape.get(k)}));
-                    }
-                    Ok(json!({"node": l, "shape": m.shape.get(index(l)?)}))
+                    Ok(match locate(l)? {
+                        Location::Point(k) => {
+                            json!({"node": l, "reference_point": r.reference_points.get(k).map(|p| &p.0), "shape": m.point_shape.get(k)})
+                        }
+                        Location::Node(i) => json!({"node": l, "shape": m.shape.get(i)}),
+                    })
                 })
                 .collect::<Result<_>>()?
         }

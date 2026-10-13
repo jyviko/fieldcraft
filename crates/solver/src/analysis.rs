@@ -7,7 +7,7 @@ use modelcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
 use serde::Serialize;
 
 use crate::cholesky::{Factor, FactorError, UpperColumns};
-use crate::constraints::{Reduction, active_dofs, coupling_rows};
+use crate::constraints::{Reduction, coupling_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
 use crate::ordering::nested_dissection;
 use crate::sparse::{Csr, NodeGraph, add_block, add_diagonal, add_scalar};
@@ -205,11 +205,9 @@ fn reduction(
     values: bool,
     order: &[usize],
     warnings: &mut Vec<String>,
-) -> Result<(Reduction, Vec<bool>)> {
+) -> Result<Reduction> {
     let rows = coupling_rows(model, resolved, mesh)?;
-    let active = active_dofs(mesh, &rows);
-    let fixed = prescribed(model, resolved, mesh, step, values, &active, warnings)?;
-    Ok((Reduction::new(mesh, order, &fixed, &rows, &active)?, active))
+    Reduction::new(mesh, order, &rows, |active| prescribed(model, resolved, mesh, step, values, active, warnings))
 }
 
 /// Solve a linear static step: the step named `step`, or the model's only static step.
@@ -220,13 +218,15 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
     let order = nested_dissection(&mesh.xyz, &graph.adjacency);
-    let (red, active) = reduction(model, &resolved, &mesh, step, true, &order, &mut warnings)?;
-    let f = loads(model, &resolved, &mesh, step, &active)?;
+    let red = reduction(model, &resolved, &mesh, step, true, &order, &mut warnings)?;
+    let f = loads(model, &resolved, &mesh, step, &red.active)?;
     let k = assemble(&mesh, &graph, None)?.k;
-    if red.neq == 0 {
+    if red.neq() == 0 {
         return Err(Error::Invalid("every degree of freedom is prescribed; there is nothing to solve".into()));
     }
-    let chol = factor_raw(&red.reduce(&k), limits).map_err(|e| factor_error(e, &mesh, &red))?;
+    let [kff] = red.reduce([&k])?;
+    let chol = factor_raw(&kff, limits).map_err(|e| factor_error(e, &mesh, &red))?;
+    drop(kff);
     let mut q = red.rhs(&f, &k);
     chol.solve(&mut q)?;
     let u = red.expand(&q, true);
@@ -234,20 +234,14 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         return Err(Error::Singular("the solution is not finite; the model is ill-conditioned".into()));
     }
     let (displacement, point_motion) = split(&u, &mesh);
-    let (reaction, point_reaction) = split(&red.reactions(&k, &u, &f), &mesh);
-    // Force totals: mesh translations and reference point translations.
+    let reactions = red.reactions(&k, &u, &f);
+    let (reaction, point_reaction) = split(&reactions, &mesh);
     let (mut applied_total, mut reaction_total) = ([0.0; 3], [0.0; 3]);
-    for (node_f, node_r) in f.as_chunks::<3>().0.iter().take(mesh.labels.len()).zip(&reaction) {
-        for c in 0..3 {
-            applied_total[c] += node_f[c];
-            reaction_total[c] += node_r[c];
-        }
-    }
-    let point_loads = f.get(mesh.mesh_dofs()..).unwrap_or_default().as_chunks::<6>().0;
-    for (pf, pr) in point_loads.iter().zip(&point_reaction) {
-        for c in 0..3 {
-            applied_total[c] += pf[c];
-            reaction_total[c] += pr[c];
+    for (dof, (fv, rv)) in f.iter().zip(&reactions).enumerate() {
+        let d = mesh.direction(dof);
+        if let (Some(a), Some(r)) = (applied_total.get_mut(d), reaction_total.get_mut(d)) {
+            *a += fv;
+            *r += rv;
         }
     }
     let reference_points = mesh
@@ -305,7 +299,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         reference_points,
         applied_total,
         reaction_total,
-        stats: Stats { dofs: mesh.dofs(), equations: red.neq, factor_entries: chol.entries(), lanczos_vectors: 0 },
+        stats: Stats { dofs: mesh.dofs(), equations: red.neq(), factor_entries: chol.entries(), lanczos_vectors: 0 },
         warnings,
     })
 }
@@ -350,17 +344,16 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
     let order = nested_dissection(&mesh.xyz, &graph.adjacency);
-    let (red, _) = reduction(model, &resolved, &mesh, step, false, &order, &mut warnings)?;
+    let red = reduction(model, &resolved, &mesh, step, false, &order, &mut warnings)?;
     let Assembled { k, m } = assemble(&mesh, &graph, Some(options.mass))?;
     let m = m.ok_or_else(|| Error::Internal("mass matrix".into()))?;
     // Every element's mass entries sum to its mass, once per direction.
     let total_mass = m.val.iter().sum::<f64>() / 3.0;
-    let neq = red.neq;
+    let neq = red.neq();
     if neq == 0 {
         return Err(Error::Invalid("every degree of freedom is held; there is nothing to vibrate".into()));
     }
-    let kff = red.reduce(&k);
-    let mff = red.reduce(&m);
+    let [kff, mff] = red.reduce([&k, &m])?;
     drop((k, m));
     let shifted = |s: f64| -> Result<Factor> { factor_raw(&kff.add_scaled(-s, &mff)?, limits).map_err(|e| factor_error(e, &mesh, &red)) };
     let (shift, chol) = match options.shift {
@@ -395,11 +388,9 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let pairs = lanczos(&op, shift, wanted, BLOCK, max_basis, TOLERANCE)?;
     // Participation: Γ_d = φᵀ M r_d with r_d the unit translation along d on the free equations
     // (mesh and reference point translations).
-    let mesh_dofs = mesh.mesh_dofs();
-    let direction = |dof: usize| if dof < mesh_dofs { dof % 3 } else { (dof - mesh_dofs) % 6 };
     let mr: Vec<Vec<f64>> = (0..3)
         .map(|d| {
-            let r: Vec<f64> = red.eq_dof.iter().map(|dof| if direction(*dof) == d { 1.0 } else { 0.0 }).collect();
+            let r: Vec<f64> = red.eq_dof.iter().map(|dof| if mesh.direction(*dof) == d { 1.0 } else { 0.0 }).collect();
             let mut y = vec![0.0; neq];
             mff.mul(&r, &mut y);
             y
@@ -432,6 +423,13 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     })
 }
 
+/// Where a label's result is in a [`StepResult`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Location {
+    Node(usize),
+    Point(usize),
+}
+
 /// The result of one step, as a session keeps it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepResult {
@@ -452,5 +450,18 @@ impl StepResult {
             StepResult::Static(r) => &r.nodes,
             StepResult::Frequency(r) => &r.nodes,
         }
+    }
+
+    /// Where a label's result is: a mesh node (index into [`Self::nodes`]) or a coupled
+    /// reference point (index into the result's reference points).
+    pub fn locate(&self, label: u32) -> Option<Location> {
+        if let Ok(i) = self.nodes().binary_search(&label) {
+            return Some(Location::Node(i));
+        }
+        match self {
+            StepResult::Static(r) => r.reference_points.iter().position(|p| p.label == label),
+            StepResult::Frequency(r) => r.reference_points.iter().position(|p| p.1 == label),
+        }
+        .map(Location::Point)
     }
 }

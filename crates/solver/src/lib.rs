@@ -31,7 +31,8 @@ pub mod sparse;
 pub mod system;
 
 pub use analysis::{
-    ElementStress, FrequencyOptions, FrequencyResult, MassKind, Mode, PointResult, StaticResult, Stats, StepResult, solve_frequency, solve_static,
+    ElementStress, FrequencyOptions, FrequencyResult, Location, MassKind, Mode, PointResult, StaticResult, Stats, StepResult, solve_frequency,
+    solve_static,
 };
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

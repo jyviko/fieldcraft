@@ -308,9 +308,11 @@ fn coupling_errors_name_the_problem() {
     g.load("m", moment(rp("Tip"), [1.0, 0.0, 0.0]));
     assert!(err(&g).contains("rotation about X is not coupled"), "{}", err(&g));
 
+    let loose = |g: &mut Grid| g.model.add_reference_point("Loose", modelcraft_model::ReferencePoint { xyz: [3.0, 0.0, 0.0], label: 0 }).unwrap();
+
     // A force on a reference point nothing couples.
     let mut g = base();
-    g.model.add_reference_point("Loose", modelcraft_model::ReferencePoint { xyz: [3.0, 0.0, 0.0], label: 0 }).unwrap();
+    loose(&mut g);
     g.couple("Tip", [2.0, 0.5, 0.5], CouplingKind::Kinematic, &ALL, |q| near(q[0], 1.0));
     g.load("f", force(rp("Loose"), [1.0, 0.0, 0.0]));
     assert!(err(&g).contains("no coupling ties"), "{}", err(&g));
@@ -344,7 +346,7 @@ fn coupling_errors_name_the_problem() {
 
     // A boundary condition on an uncoupled point holds nothing and says so.
     let mut g = base();
-    g.model.add_reference_point("Loose", modelcraft_model::ReferencePoint { xyz: [3.0, 0.0, 0.0], label: 0 }).unwrap();
+    loose(&mut g);
     g.bc("hold", BoundaryCondition::Fixed { target: rp("Loose") });
     g.face_set("end", |q| near(q[0], 1.0));
     g.load("p", Load::Pressure { set: "end".into(), magnitude: 1.0 });
@@ -352,12 +354,10 @@ fn coupling_errors_name_the_problem() {
     assert!(r.warnings.iter().any(|w| w.contains("holds nothing")), "{:?}", r.warnings);
 
     // Hostile geometry: a reference point far away still solves or fails cleanly.
-    let mut g = base();
-    g.couple("Far", [1e9, -1e9, 1e9], CouplingKind::Kinematic, &ALL, |q| near(q[0], 1.0));
-    g.load("m", moment(rp("Far"), [1.0, 1.0, 1.0]));
-    let _ = solve_static(&g.model, Some("Step"), &Limits::default());
-    let mut g = base();
-    g.couple("Far", [1e9, -1e9, 1e9], CouplingKind::Distributing, &ALL, |q| near(q[0], 1.0));
-    g.load("m", moment(rp("Far"), [1.0, 1.0, 1.0]));
-    let _ = solve_static(&g.model, Some("Step"), &Limits::default());
+    for kind in [CouplingKind::Kinematic, CouplingKind::Distributing] {
+        let mut g = base();
+        g.couple("Far", [1e9, -1e9, 1e9], kind, &ALL, |q| near(q[0], 1.0));
+        g.load("m", moment(rp("Far"), [1.0, 1.0, 1.0]));
+        let _ = solve_static(&g.model, Some("Step"), &Limits::default());
+    }
 }

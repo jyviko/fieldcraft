@@ -43,7 +43,7 @@
 //! free degrees of freedom and the result is the plain elimination of prescribed values, bit for
 //! bit.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use modelcraft_fem::dense::inverse3;
 use modelcraft_model::{CouplingKind, Model, Resolved};
@@ -54,11 +54,11 @@ use crate::{Error, Result};
 
 /// One linear constraint Σ cⱼ uⱼ = 0 and the degree of freedom meant to be eliminated with it.
 #[derive(Debug, Clone)]
-pub struct Row {
+pub struct Row<'m> {
     pub terms: Vec<(usize, f64)>,
     pub pivot: usize,
-    /// The coupling it comes from (for messages).
-    pub origin: String,
+    /// The name of the coupling it comes from (for messages).
+    pub coupling: &'m str,
 }
 
 /// A coefficient below this fraction of a row's largest one is round-off, not a constraint.
@@ -84,7 +84,7 @@ fn mat_mul(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
 }
 
 /// The constraint rows of every coupling: couplings by name, nodes by label, directions in order.
-pub fn coupling_rows(model: &Model, resolved: &Resolved, mesh: &Mesh) -> Result<Vec<Row>> {
+pub fn coupling_rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh) -> Result<Vec<Row<'m>>> {
     let mut rows = Vec::new();
     for (name, c) in model.couplings() {
         let point = mesh.point(&c.reference_point).ok_or_else(|| Error::Internal(format!("reference point `{}`", c.reference_point)))?;
@@ -100,18 +100,18 @@ pub fn coupling_rows(model: &Model, resolved: &Resolved, mesh: &Mesh) -> Result<
             .map(|l| mesh.node(*l).ok_or_else(|| Error::Invalid(format!("coupling `{name}`: node {l} belongs to no solid element"))))
             .collect::<Result<_>>()?;
         let xyz = |n: usize| mesh.xyz.get(n).copied().unwrap_or_default();
-        let origin = format!("coupling `{name}`");
+        // The coupled directions of the reference point, 0–5.
+        let coupled = |range: std::ops::Range<usize>| range.filter(|k| c.dofs.contains(*k as u8 + 1));
         match c.kind {
             CouplingKind::Kinematic => {
-                let translations: Vec<usize> = (0..3).filter(|k| c.dofs.contains(*k as u8 + 1)).collect();
-                if translations.is_empty() {
+                if coupled(0..3).next().is_none() {
                     return Err(Error::Invalid(format!(
                         "coupling `{name}` couples only rotations, which the nodes of solid elements do not have; couple translations too"
                     )));
                 }
                 for &n in &nodes {
                     let r = sub(xyz(n), xr);
-                    for &k in &translations {
+                    for k in coupled(0..3) {
                         // u_s,k − u_r,k − (θ × r)_k = 0, (θ × r)_k = θ_a r_b − θ_b r_a.
                         let (a, b) = ((k + 1) % 3, (k + 2) % 3);
                         let mut terms = vec![(3 * n + k, 1.0), (rp + k, -1.0)];
@@ -121,7 +121,7 @@ pub fn coupling_rows(model: &Model, resolved: &Resolved, mesh: &Mesh) -> Result<
                         if r[a] != 0.0 {
                             terms.push((rp + 3 + b, r[a]));
                         }
-                        rows.push(Row { terms, pivot: 3 * n + k, origin: origin.clone() });
+                        rows.push(Row { terms, pivot: 3 * n + k, coupling: name });
                     }
                 }
             }
@@ -146,8 +146,7 @@ pub fn coupling_rows(model: &Model, resolved: &Resolved, mesh: &Mesh) -> Result<
                 }
                 let trace = j[0][0] + j[1][1] + j[2][2];
                 let inverse = inverse3(&j).filter(|(_, det)| *det > 1e-10 * trace.powi(3) / 27.0).map(|(inv, _)| inv);
-                let rotations = (4..=6).any(|d| c.dofs.contains(d));
-                if inverse.is_none() && rotations {
+                if inverse.is_none() && coupled(3..6).next().is_some() {
                     return Err(Error::Invalid(format!(
                         "coupling `{name}`: the nodes of set `{}` lie on one line (or at one point), so a distributing coupling cannot carry rotations through them; couple translations only or use a kinematic coupling",
                         c.set
@@ -156,12 +155,9 @@ pub fn coupling_rows(model: &Model, resolved: &Resolved, mesh: &Mesh) -> Result<
                 // θ = Σ Gᵢ uᵢ with Gᵢ = J⁻¹ [rᵢ]×; u_r = Σ (I/N − [d]× Gᵢ) uᵢ with d = x_r − c.
                 let d = cross_matrix(sub(xr, centroid));
                 let g: Vec<[[f64; 3]; 3]> = arms.iter().map(|r| inverse.map_or([[0.0; 3]; 3], |inv| mat_mul(&inv, &cross_matrix(*r)))).collect();
-                for k in 0..6u8 {
-                    if !c.dofs.contains(k + 1) {
-                        continue;
-                    }
-                    let k = usize::from(k);
-                    let mut terms = vec![(rp + k, 1.0)];
+                for k in coupled(0..6) {
+                    let mut terms = Vec::with_capacity(1 + 3 * nodes.len());
+                    terms.push((rp + k, 1.0));
                     for (&n, gi) in nodes.iter().zip(&g) {
                         for comp in 0..3 {
                             let a = if k < 3 {
@@ -175,7 +171,7 @@ pub fn coupling_rows(model: &Model, resolved: &Resolved, mesh: &Mesh) -> Result<
                             }
                         }
                     }
-                    rows.push(Row { terms, pivot: rp + k, origin: origin.clone() });
+                    rows.push(Row { terms, pivot: rp + k, coupling: name });
                 }
             }
         }
@@ -185,7 +181,7 @@ pub fn coupling_rows(model: &Model, resolved: &Resolved, mesh: &Mesh) -> Result<
 
 /// The degrees of freedom that exist: every mesh translation, and the reference point
 /// directions some coupling row involves.
-pub fn active_dofs(mesh: &Mesh, rows: &[Row]) -> Vec<bool> {
+fn active_dofs(mesh: &Mesh, rows: &[Row]) -> Vec<bool> {
     let mut active = vec![false; mesh.dofs()];
     active.iter_mut().take(mesh.mesh_dofs()).for_each(|a| *a = true);
     for row in rows {
@@ -267,60 +263,49 @@ enum State {
     Inactive,
 }
 
-/// Add `scale · src` into the sorted `dst`.
-fn merge(dst: &mut Vec<(usize, f64)>, src: &[(usize, f64)], scale: f64) {
-    let mut out = Vec::with_capacity(dst.len() + src.len());
-    let (mut i, mut j) = (0, 0);
-    while i < dst.len() || j < src.len() {
-        match (dst.get(i), src.get(j)) {
-            (Some(a), Some(b)) if a.0 == b.0 => {
-                out.push((a.0, a.1 + scale * b.1));
-                i += 1;
-                j += 1;
-            }
-            (Some(a), Some(b)) if a.0 < b.0 => {
-                out.push(*a);
-                i += 1;
-            }
-            (Some(a), None) => {
-                out.push(*a);
-                i += 1;
-            }
-            (_, Some(b)) => {
-                out.push((b.0, scale * b.1));
-                j += 1;
-            }
-            (None, None) => break,
+/// Sort terms by degree of freedom (stably, so equal ones add in the order given) and add the
+/// equal ones, dropping exact zeros.
+fn combine(mut terms: Vec<(usize, f64)>) -> Vec<(usize, f64)> {
+    terms.sort_by_key(|t| t.0);
+    let mut out: Vec<(usize, f64)> = Vec::with_capacity(terms.len());
+    for (dof, c) in terms {
+        match out.last_mut() {
+            Some(last) if last.0 == dof => last.1 += c,
+            _ => out.push((dof, c)),
         }
     }
     out.retain(|t| t.1 != 0.0);
-    *dst = out;
+    out
 }
 
 /// The map from the free equations and prescribed values to every degree of freedom.
 #[derive(Debug, Clone)]
 pub struct Reduction {
-    /// Free equations.
-    pub neq: usize,
-    /// The degree of freedom of each equation.
+    /// The degree of freedom of each free equation.
     pub eq_dof: Vec<usize>,
-    /// Prescribed value of each degree of freedom (0 where none).
-    pub values: Vec<f64>,
-    /// Whether a degree of freedom is prescribed.
-    pub prescribed: Vec<bool>,
-    /// Whether a degree of freedom depends on others through a constraint.
-    pub dependent: Vec<bool>,
+    /// Whether a degree of freedom exists (mesh translations, and the reference point
+    /// directions some coupling ties).
+    pub active: Vec<bool>,
     /// T_f: per degree of freedom, (equation, coefficient).
     free: Terms,
+    /// T_fᵀ: per equation, (degree of freedom, coefficient).
+    columns: Terms,
     /// T_p: per degree of freedom, (prescribed degree of freedom, coefficient).
     fixed: Terms,
+    /// T_p u_p, the motion of the prescribed values alone.
+    prescribed_motion: Vec<f64>,
+    /// Whether any degree of freedom depends on others (T is not a plain selection).
+    has_dependents: bool,
 }
 
 impl Reduction {
-    /// Eliminate the prescribed values and the constraint rows. `order` is the mesh nodes' order
-    /// for numbering the free equations; reference point equations follow them.
-    pub fn new(mesh: &Mesh, order: &[usize], prescribed: &[Option<f64>], rows: &[Row], active: &[bool]) -> Result<Reduction> {
+    /// Eliminate the prescribed values (`prescribed(active)` gives them) and the constraint rows.
+    /// `order` is the mesh nodes' order for numbering the free equations; reference point
+    /// equations follow them.
+    pub fn new(mesh: &Mesh, order: &[usize], rows: &[Row], prescribed: impl FnOnce(&[bool]) -> Result<Vec<Option<f64>>>) -> Result<Reduction> {
         let n = mesh.dofs();
+        let active = active_dofs(mesh, rows);
+        let prescribed = prescribed(&active)?;
         let mut state: Vec<State> = (0..n)
             .map(|d| match (active.get(d).copied().unwrap_or(false), prescribed.get(d).copied().flatten()) {
                 (false, _) => State::Inactive,
@@ -330,25 +315,24 @@ impl Reduction {
             .collect();
         let values: Vec<f64> = (0..n).map(|d| prescribed.get(d).copied().flatten().unwrap_or(0.0)).collect();
         // Dependent expressions in free and prescribed degrees of freedom, and for each free
-        // degree of freedom the expressions that use it.
+        // degree of freedom the expressions that use it (possibly listed twice).
         let mut exprs: Vec<Vec<(usize, f64)>> = Vec::new();
-        let mut users: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+        let mut users: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for row in rows {
             let scale = row.terms.iter().fold(0.0f64, |m, t| m.max(t.1.abs()));
             if !(scale > 0.0 && scale.is_finite()) {
-                return Err(Error::Invalid(format!("{}: a constraint with no finite coefficient", row.origin)));
+                return Err(Error::Invalid(format!("coupling `{}`: a constraint with no finite coefficient", row.coupling)));
             }
             // The row in current free and prescribed degrees of freedom.
-            let mut terms: Vec<(usize, f64)> = Vec::new();
-            let mut sorted = row.terms.clone();
-            sorted.sort_by_key(|t| t.0);
-            for (dof, c) in sorted {
+            let mut expanded = Vec::with_capacity(row.terms.len());
+            for &(dof, c) in &row.terms {
                 match state.get(dof).copied() {
-                    Some(State::Free | State::Fixed) => merge(&mut terms, &[(dof, c)], 1.0),
-                    Some(State::Dependent(e)) => merge(&mut terms, exprs.get(e).map(Vec::as_slice).unwrap_or_default(), c),
+                    Some(State::Free | State::Fixed) => expanded.push((dof, c)),
+                    Some(State::Dependent(e)) => expanded.extend(exprs.get(e).into_iter().flatten().map(|t| (t.0, c * t.1))),
                     Some(State::Inactive) | None => return Err(Error::Internal("a constraint on a missing degree of freedom".into())),
                 }
             }
+            let terms = combine(expanded);
             let candidate = |t: &&(usize, f64)| state.get(t.0) == Some(&State::Free) && t.1.abs() > NEGLIGIBLE * scale;
             let intended = terms.iter().filter(candidate).find(|t| t.0 == row.pivot);
             let largest = terms.iter().filter(candidate).fold(None, |best: Option<&(usize, f64)>, t| match best {
@@ -357,37 +341,37 @@ impl Reduction {
             });
             let Some(&(pivot, cp)) = intended.or(largest) else {
                 // Only prescribed degrees of freedom (or round-off) are left.
-                let residual: f64 =
-                    terms.iter().filter(|t| state.get(t.0) == Some(&State::Fixed)).map(|t| t.1 * values.get(t.0).copied().unwrap_or(0.0)).sum();
-                let size: f64 = terms.iter().map(|t| (t.1 * values.get(t.0).copied().unwrap_or(0.0)).abs()).sum();
+                let value = |t: &(usize, f64)| t.1 * values.get(t.0).copied().unwrap_or(0.0);
+                let residual: f64 = terms.iter().filter(|t| state.get(t.0) == Some(&State::Fixed)).map(value).sum();
+                let size: f64 = terms.iter().map(|t| value(t).abs()).sum();
                 if residual.abs() > 1e-9 * size.max(f64::MIN_POSITIVE) && residual.abs() > 0.0 {
                     return Err(Error::Invalid(format!(
-                        "{} contradicts the prescribed values (boundary conditions or other couplings hold its nodes in a way it cannot follow)",
-                        row.origin
+                        "coupling `{}` contradicts the prescribed values (boundary conditions or other couplings hold its nodes in a way it cannot follow)",
+                        row.coupling
                     )));
                 }
                 continue;
             };
             let expr: Vec<(usize, f64)> = terms.iter().filter(|t| t.0 != pivot).map(|t| (t.0, -t.1 / cp)).collect();
+            let free_terms: Vec<usize> = expr.iter().filter(|t| state.get(t.0) == Some(&State::Free)).map(|t| t.0).collect();
             // Substitute the pivot in the expressions that use it.
-            if let Some(using) = users.remove(&pivot) {
+            if let Some(mut using) = users.remove(&pivot) {
+                using.sort_unstable();
+                using.dedup();
                 for u in using {
                     let Some(e) = exprs.get_mut(u) else { continue };
                     let Ok(at) = e.binary_search_by_key(&pivot, |t| t.0) else { continue };
                     let a = e.remove(at).1;
-                    merge(e, &expr, a);
-                    for t in e.iter() {
-                        if state.get(t.0) == Some(&State::Free) {
-                            users.entry(t.0).or_default().insert(u);
-                        }
+                    let merged = combine(e.drain(..).chain(expr.iter().map(|t| (t.0, a * t.1))).collect());
+                    *e = merged;
+                    for &dof in &free_terms {
+                        users.entry(dof).or_default().push(u);
                     }
                 }
             }
             let index = exprs.len();
-            for t in &expr {
-                if state.get(t.0) == Some(&State::Free) {
-                    users.entry(t.0).or_default().insert(index);
-                }
+            for &dof in &free_terms {
+                users.entry(dof).or_default().push(index);
             }
             exprs.push(expr);
             if let Some(s) = state.get_mut(pivot) {
@@ -411,7 +395,6 @@ impl Reduction {
             return Err(Error::Internal("the node order misses a degree of freedom".into()));
         }
         let (mut free, mut fixed) = (Terms::default(), Terms::default());
-        let mut dependent = vec![false; n];
         for dof in 0..n {
             match state.get(dof).copied().unwrap_or(State::Inactive) {
                 State::Free => {
@@ -428,9 +411,6 @@ impl Reduction {
                     let on = |want: State| expr.iter().filter(move |t| state.get(t.0) == Some(&want));
                     free.push_row(on(State::Free).map(|t| (eq.get(t.0).copied().unwrap_or(0), t.1)));
                     fixed.push_row(on(State::Fixed).copied());
-                    if let Some(d) = dependent.get_mut(dof) {
-                        *d = true;
-                    }
                 }
                 State::Inactive => {
                     free.push_row(std::iter::empty());
@@ -438,79 +418,88 @@ impl Reduction {
                 }
             }
         }
-        let prescribed = state.iter().map(|s| *s == State::Fixed).collect();
-        Ok(Reduction { neq: eq_dof.len(), eq_dof, values, prescribed, dependent, free, fixed })
+        let prescribed_motion = (0..n).map(|d| fixed.row(d).map(|(p, c)| c * values.get(p).copied().unwrap_or(0.0)).sum()).collect();
+        let columns = free.transpose(eq_dof.len());
+        Ok(Reduction { eq_dof, active, free, columns, fixed, prescribed_motion, has_dependents: !exprs.is_empty() })
     }
 
-    /// Whether any degree of freedom depends on others (T is not a plain selection).
-    pub fn has_dependents(&self) -> bool {
-        self.dependent.iter().any(|d| *d)
+    /// Free equations.
+    pub fn neq(&self) -> usize {
+        self.eq_dof.len()
     }
 
-    /// T_fᵀ A T_f for a matrix over the mesh's degrees of freedom (reference points carry no
-    /// stiffness or mass of their own). Row by row with a dense accumulator (F. G. Gustavson,
-    /// *Two fast algorithms for sparse matrices*, ACM TOMS 4(3):250–269, 1978), in a fixed order;
-    /// structural zeros are kept so matrices on one pattern keep one pattern.
-    pub fn reduce(&self, a: &Csr) -> Csr {
-        let n = self.neq;
-        let columns = self.free.transpose(n);
-        let mut acc = vec![0.0; n];
+    /// T_fᵀ A T_f for each matrix, all over the mesh's degrees of freedom and on one pattern
+    /// (reference points carry no stiffness or mass of their own). Row by row with a dense
+    /// accumulator (F. G. Gustavson, *Two fast algorithms for sparse matrices*, ACM TOMS
+    /// 4(3):250–269, 1978), in a fixed order, sharing the symbolic work between the matrices;
+    /// structural zeros are kept, so the results share one pattern too.
+    pub fn reduce<const M: usize>(&self, mats: [&Csr; M]) -> Result<[Csr; M]> {
+        if let Some(first) = mats.first()
+            && mats.iter().any(|m| m.ptr != first.ptr || m.idx != first.idx)
+        {
+            return Err(Error::Internal("matrices with different patterns".into()));
+        }
+        let pattern = mats.first().ok_or_else(|| Error::Internal("no matrix to reduce".into()))?;
+        let n = self.neq();
+        let mut acc = vec![[0.0; M]; n];
         let mut mark = vec![usize::MAX; n];
         let mut touched: Vec<usize> = Vec::new();
         let mut ptr = Vec::with_capacity(n + 1);
         ptr.push(0);
-        let (mut idx, mut val) = (Vec::new(), Vec::new());
+        let mut idx = Vec::with_capacity(pattern.idx.len());
+        let mut vals: [Vec<f64>; M] = std::array::from_fn(|_| Vec::with_capacity(pattern.idx.len()));
         for e in 0..n {
             touched.clear();
-            for (dof, ca) in columns.row(e) {
-                let (cols, vals) = a.row(dof);
-                for (b, v) in cols.iter().zip(vals) {
-                    for (f, cb) in self.free.row(*b) {
+            for (dof, ca) in self.columns.row(e) {
+                let (start, end) = (pattern.ptr.get(dof).copied().unwrap_or(0), pattern.ptr.get(dof + 1).copied().unwrap_or(0));
+                for at in start..end {
+                    let Some(&b) = pattern.idx.get(at) else { continue };
+                    let v: [f64; M] = std::array::from_fn(|i| mats.get(i).and_then(|m| m.val.get(at)).copied().unwrap_or(0.0));
+                    for (f, cb) in self.free.row(b) {
                         let (Some(m), Some(x)) = (mark.get_mut(f), acc.get_mut(f)) else { continue };
                         if *m != e {
                             *m = e;
-                            *x = 0.0;
+                            *x = [0.0; M];
                             touched.push(f);
                         }
-                        *x += ca * v * cb;
+                        for i in 0..M {
+                            x[i] += ca * v[i] * cb;
+                        }
                     }
                 }
             }
             touched.sort_unstable();
             for &f in &touched {
                 idx.push(f);
-                val.push(acc.get(f).copied().unwrap_or(0.0));
+                let x = acc.get(f).copied().unwrap_or([0.0; M]);
+                for i in 0..M {
+                    vals[i].push(x[i]);
+                }
             }
             ptr.push(idx.len());
         }
-        let mut out = Csr { n, ptr, idx, val };
-        if self.has_dependents() {
-            symmetrize(&mut out);
-        }
-        out
-    }
-
-    /// The displacement of the prescribed values alone, T_p u_p, over every degree of freedom.
-    fn prescribed_motion(&self) -> Vec<f64> {
-        (0..self.values.len()).map(|d| self.fixed.row(d).map(|(p, c)| c * self.values.get(p).copied().unwrap_or(0.0)).sum()).collect()
+        Ok(vals.map(|val| {
+            let mut out = Csr { n, ptr: ptr.clone(), idx: idx.clone(), val };
+            if self.has_dependents {
+                out.mirror_lower();
+            }
+            out
+        }))
     }
 
     /// The reduced right-hand side T_fᵀ (f − K T_p u_p); `k` is over the mesh's degrees of freedom.
     pub fn rhs(&self, f: &[f64], k: &Csr) -> Vec<f64> {
-        let mut g = f.to_vec();
-        let u0 = self.prescribed_motion();
-        if u0.iter().any(|v| *v != 0.0) {
-            let mut ku = vec![0.0; k.n];
-            k.mul(u0.get(..k.n).unwrap_or_default(), &mut ku);
-            for (x, y) in g.iter_mut().zip(&ku) {
-                *x -= y;
-            }
+        let mut ku = Vec::new();
+        if self.prescribed_motion.iter().any(|v| *v != 0.0) {
+            ku = vec![0.0; k.n];
+            k.mul(self.prescribed_motion.get(..k.n).unwrap_or_default(), &mut ku);
         }
-        let mut rhs = vec![0.0; self.neq];
-        for (dof, gv) in g.iter().enumerate() {
+        let mut rhs = vec![0.0; self.neq()];
+        for (dof, fv) in f.iter().enumerate() {
+            let g = fv - ku.get(dof).copied().unwrap_or(0.0);
             for (e, c) in self.free.row(dof) {
                 if let Some(r) = rhs.get_mut(e) {
-                    *r += c * gv;
+                    *r += c * g;
                 }
             }
         }
@@ -520,12 +509,13 @@ impl Reduction {
     /// Every degree of freedom from the free equations' values `q` (and the prescribed values
     /// when `with_values`).
     pub fn expand(&self, q: &[f64], with_values: bool) -> Vec<f64> {
-        let u0 = if with_values { self.prescribed_motion() } else { vec![0.0; self.values.len()] };
-        u0.iter()
-            .enumerate()
-            .map(|(d, base)| {
+        (0..self.prescribed_motion.len())
+            .map(|d| {
                 let free: f64 = self.free.row(d).map(|(e, c)| c * q.get(e).copied().unwrap_or(0.0)).sum();
-                if self.fixed.is_empty_row(d) { free } else { base + free }
+                match self.prescribed_motion.get(d) {
+                    Some(base) if with_values && !self.fixed.is_empty_row(d) => base + free,
+                    _ => free,
+                }
             })
             .collect()
     }
@@ -533,13 +523,13 @@ impl Reduction {
     /// The reactions at the prescribed degrees of freedom, T_pᵀ (K u − f), over every degree of
     /// freedom (zero where nothing is prescribed).
     pub fn reactions(&self, k: &Csr, u: &[f64], f: &[f64]) -> Vec<f64> {
-        let mut out = vec![0.0; self.values.len()];
+        let mut out = vec![0.0; self.prescribed_motion.len()];
         for (dof, fv) in f.iter().enumerate() {
             if self.fixed.is_empty_row(dof) {
                 continue;
             }
             let (cols, vals) = k.row(dof);
-            let ku: f64 = if dof < k.n { cols.iter().zip(vals).map(|(j, v)| v * u.get(*j).copied().unwrap_or(0.0)).sum() } else { 0.0 };
+            let ku: f64 = cols.iter().zip(vals).map(|(j, v)| v * u.get(*j).copied().unwrap_or(0.0)).sum();
             let r = ku - fv;
             for (p, c) in self.fixed.row(dof) {
                 if let Some(x) = out.get_mut(p) {
@@ -548,24 +538,5 @@ impl Reduction {
             }
         }
         out
-    }
-}
-
-/// Make a matrix exactly symmetric by copying the lower triangle (what the factorization reads)
-/// onto the upper one.
-fn symmetrize(a: &mut Csr) {
-    for r in 0..a.n {
-        let (start, end) = (a.ptr.get(r).copied().unwrap_or(0), a.ptr.get(r + 1).copied().unwrap_or(0));
-        for at in start..end {
-            let Some(&c) = a.idx.get(at) else { continue };
-            if c <= r {
-                continue;
-            }
-            let (cs, ce) = (a.ptr.get(c).copied().unwrap_or(0), a.ptr.get(c + 1).copied().unwrap_or(0));
-            let mirror = a.idx.get(cs..ce).and_then(|cols| cols.binary_search(&r).ok()).and_then(|i| a.val.get(cs + i)).copied();
-            if let (Some(v), Some(x)) = (mirror, a.val.get_mut(at)) {
-                *x = v;
-            }
-        }
     }
 }

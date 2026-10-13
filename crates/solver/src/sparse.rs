@@ -41,33 +41,23 @@ impl Csr {
             .collect()
     }
 
-    /// The matrix on a subset of rows and columns, renumbered: `map[i]` is the new index of old
-    /// index i, or `None` to drop it. The new rows keep sorted columns.
-    pub fn restrict(&self, map: &[Option<usize>], n: usize) -> Csr {
-        let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
-        for (r, m) in map.iter().enumerate() {
-            let Some(nr) = *m else { continue };
-            let (cols, vals) = self.row(r);
-            let Some(out) = rows.get_mut(nr) else { continue };
-            for (c, v) in cols.iter().zip(vals) {
-                if let Some(Some(nc)) = map.get(*c) {
-                    out.push((*nc, *v));
+    /// Make the matrix exactly symmetric by copying the lower triangle (what the factorization
+    /// reads) onto the upper one; the pattern must be structurally symmetric.
+    pub fn mirror_lower(&mut self) {
+        for r in 0..self.n {
+            let (start, end) = (self.ptr.get(r).copied().unwrap_or(0), self.ptr.get(r + 1).copied().unwrap_or(0));
+            for at in start..end {
+                let Some(&c) = self.idx.get(at) else { continue };
+                if c <= r {
+                    continue;
+                }
+                let (cs, ce) = (self.ptr.get(c).copied().unwrap_or(0), self.ptr.get(c + 1).copied().unwrap_or(0));
+                let mirror = self.idx.get(cs..ce).and_then(|cols| cols.binary_search(&r).ok()).and_then(|i| self.val.get(cs + i)).copied();
+                if let (Some(v), Some(x)) = (mirror, self.val.get_mut(at)) {
+                    *x = v;
                 }
             }
-            out.sort_by_key(|e| e.0);
         }
-        let mut ptr = Vec::with_capacity(n + 1);
-        ptr.push(0);
-        let mut idx = Vec::new();
-        let mut val = Vec::new();
-        for row in rows {
-            for (c, v) in row {
-                idx.push(c);
-                val.push(v);
-            }
-            ptr.push(idx.len());
-        }
-        Csr { n, ptr, idx, val }
     }
 
     /// `self + a·other` on the same pattern.
@@ -198,7 +188,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn assemble_restrict_multiply() {
+    fn assemble_mirror_multiply() {
         // Two "elements" sharing node 1.
         let g = NodeGraph::new(3, [vec![0usize, 1], vec![1, 2]].into_iter());
         assert_eq!(g.adjacency, vec![vec![0, 1], vec![0, 1, 2], vec![1, 2]]);
@@ -215,11 +205,10 @@ mod tests {
         let mut y = vec![0.0; 9];
         k.mul(&x, &mut y);
         assert_eq!(y, vec![1.0; 3].into_iter().chain([2.0; 3]).chain([1.0; 3]).collect::<Vec<_>>());
-        // Keep the x components only, in reverse order.
-        let map: Vec<Option<usize>> = (0..9).map(|i| (i % 3 == 0).then_some(2 - i / 3)).collect();
-        let r = k.restrict(&map, 3);
-        assert_eq!(r.diagonal(), vec![2.0, 4.0, 2.0]);
-        assert_eq!(r.row(1).0, &[0, 1, 2]);
+        // Mirroring keeps a symmetric matrix as it is.
+        let mut mirrored = k.clone();
+        mirrored.mirror_lower();
+        assert_eq!(mirrored, k);
         assert!(add_block(&mut k, &[0, 2], &e).is_err(), "nodes 0 and 2 share no element");
         // Scalar (per component) and diagonal additions land on each component.
         let mut m = g.zero_matrix();

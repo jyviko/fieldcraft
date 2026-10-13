@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use modelcraft_geometry::tagged_mesh;
-use modelcraft_geometry::{Shape, open_design_file};
+use modelcraft_geometry::{Shape, SurfaceMesh, open_design_file};
 use serde_json::{Value, json};
 
 use crate::{CommandSpec, EngineError, Result, Session};
@@ -67,15 +67,20 @@ fn bodies(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(Value::Array(out))
 }
 
-pub(crate) fn body<'a>(s: &'a Session, p: &Value) -> Result<&'a Shape> {
+fn body<'a>(s: &'a Session, p: &Value) -> Result<&'a Shape> {
     let name = p.get("body").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`body` must be a body name".into()))?;
     s.design.as_deref().and_then(|d| d.body(name)).ok_or_else(|| EngineError::Params(format!("no body `{name}` (open a design first)")))
 }
 
-fn tessellate(s: &mut Session, p: &Value) -> Result<Value> {
+/// The body named by `body`, tessellated within `tolerance`.
+pub(crate) fn body_mesh<'a>(s: &'a Session, p: &Value) -> Result<(&'a Shape, SurfaceMesh)> {
     let shape = body(s, p)?;
     let tolerance = p.get("tolerance").and_then(Value::as_f64).ok_or_else(|| EngineError::Params("`tolerance` must be a number (mm)".into()))?;
-    let mesh = shape.tessellate(tolerance)?;
+    Ok((shape, shape.tessellate(tolerance)?))
+}
+
+fn tessellate(s: &mut Session, p: &Value) -> Result<Value> {
+    let (shape, mesh) = body_mesh(s, p)?;
     let mut per_face = vec![0usize; shape.faces().len()];
     for &f in &mesh.tri_face {
         if let Some(n) = per_face.get_mut(f as usize) {

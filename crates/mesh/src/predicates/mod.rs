@@ -40,7 +40,7 @@ mod ring;
 mod sos;
 
 pub use adaptive::{incircle, incircle_filter, insphere, insphere_filter, orient2d, orient2d_filter, orient3d, orient3d_filter};
-pub use indirect::{Axis, GenericPoint, Lpi, Tpi, generic_compare, generic_orient2d, generic_orient3d};
+pub use indirect::{Axis, GenericPoint, Lpi, Tpi, generic_compare, generic_orient2d, generic_orient3d, orient2d_projected};
 pub use sos::{incircle_sos, insphere_sos};
 
 use crate::{Error, Result};

@@ -56,7 +56,7 @@ use std::fmt;
 use modelcraft_model::{MAX_COORD, MAX_ELEMENTS, MAX_NODES};
 
 use crate::predicates::Point3;
-use crate::vec3::{cross, dot, norm, sub};
+use crate::vec3::{cross, norm, sub};
 use crate::{Error, Result};
 
 /// Defects listed in an error; the count covers the rest.
@@ -81,8 +81,9 @@ pub struct SurfaceOptions {
     /// Relative weld distance, in `[0, 1e-3]`; nonzero values below 1e-15 are refused (finer than
     /// the coordinates themselves). 0 with `weld_distance` 0 welds identical coordinates only.
     pub weld_tolerance: f64,
-    /// Absolute weld distance in model units, at least 0 and at most [`MAX_RELATIVE_WELD`] of the
-    /// bounding-box diagonal.
+    /// Absolute weld distance in model units, at least 0 (the combined distance may be at most
+    /// [`MAX_RELATIVE_WELD`] of the bounding-box diagonal). A tessellation carries its own
+    /// (`modelcraft_geometry::SurfaceMesh::weld_distance`).
     pub weld_distance: f64,
     /// An edge inside one B-rep face is a feature when the normals of its two triangles differ
     /// by more than this angle, in degrees, in `(0, 180]` (180: face boundaries only).
@@ -312,17 +313,12 @@ impl BoundarySurface {
         }
         let pts: Vec<Point3> = welded.points.iter().map(|&p| Point3::try_from(p)).collect::<Result<_>>()?;
         let tri_face: Vec<u32> = welded.source_triangle.iter().map(|&t| tri_face.get(t as usize).copied().unwrap_or(0)).collect();
-        let surface = Surface {
-            pts: &pts,
-            points: &welded.points,
-            triangles: &welded.triangles,
-            source_vertex: &welded.source_vertex,
-            source_triangle: &welded.source_triangle,
-        };
+        let surface =
+            Surface { pts: &pts, triangles: &welded.triangles, source_vertex: &welded.source_vertex, source_triangle: &welded.source_triangle };
 
         let mut defects = Defects::new();
         for (t, tri) in surface.triangles.iter().enumerate() {
-            if intersect::is_degenerate(surface.corners(tri)?)? {
+            if intersect::is_degenerate(surface.corners(tri)?) {
                 defects.push(Defect::Degenerate { triangle: surface.source_tri(t), at: surface.centroid(t) });
             }
         }
@@ -455,7 +451,6 @@ pub(crate) fn index(i: usize) -> u32 {
 /// The welded surface the checks run on.
 pub(crate) struct Surface<'a> {
     pts: &'a [Point3],
-    points: &'a [[f64; 3]],
     triangles: &'a [[u32; 3]],
     source_vertex: &'a [u32],
     source_triangle: &'a [u32],
@@ -471,12 +466,16 @@ impl Surface<'_> {
     }
 
     fn xyz(&self, v: u32) -> [f64; 3] {
-        self.points.get(v as usize).copied().unwrap_or([0.0; 3])
+        self.pts.get(v as usize).map_or([0.0; 3], Point3::coords)
+    }
+
+    /// The corner positions of triangle `t`.
+    fn tri_xyz(&self, t: usize) -> [[f64; 3]; 3] {
+        self.triangles.get(t).copied().unwrap_or([0; 3]).map(|v| self.xyz(v))
     }
 
     fn centroid(&self, t: usize) -> [f64; 3] {
-        let tri = self.triangles.get(t).copied().unwrap_or([0; 3]);
-        let [a, b, c] = tri.map(|v| self.xyz(v));
+        let [a, b, c] = self.tri_xyz(t);
         [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0]
     }
 
@@ -495,13 +494,42 @@ impl Surface<'_> {
 
     /// The unnormalized normal of triangle `t` (floating point; for angles only).
     fn normal(&self, t: usize) -> [f64; 3] {
-        let tri = self.triangles.get(t).copied().unwrap_or([0; 3]);
-        let [a, b, c] = tri.map(|v| self.xyz(v));
+        let [a, b, c] = self.tri_xyz(t);
         cross(sub(b, a), sub(c, a))
     }
 }
 
-/// The angle between two vectors in degrees (0 when either is zero).
-fn angle_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
-    norm(cross(a, b)).atan2(dot(a, b)).to_degrees()
+/// An axis-aligned box (empty until a point is added).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Box3 {
+    pub lo: [f64; 3],
+    pub hi: [f64; 3],
+}
+
+impl Box3 {
+    pub const EMPTY: Box3 = Box3 { lo: [f64::INFINITY; 3], hi: [f64::NEG_INFINITY; 3] };
+
+    pub fn add_point(&mut self, p: [f64; 3]) {
+        self.add(&Box3 { lo: p, hi: p });
+    }
+
+    pub fn add(&mut self, o: &Box3) {
+        for ((lo, hi), (olo, ohi)) in self.lo.iter_mut().zip(&mut self.hi).zip(o.lo.iter().zip(&o.hi)) {
+            *lo = lo.min(*olo);
+            *hi = hi.max(*ohi);
+        }
+    }
+
+    /// Closed overlap.
+    pub fn touches(&self, o: &Box3) -> bool {
+        (0..3).all(|k| self.lo[k] <= o.hi[k] && o.lo[k] <= self.hi[k])
+    }
+
+    pub fn contains(&self, p: [f64; 3]) -> bool {
+        self.touches(&Box3 { lo: p, hi: p })
+    }
+
+    pub fn diagonal(&self) -> f64 {
+        norm(sub(self.hi, self.lo))
+    }
 }

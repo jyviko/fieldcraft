@@ -5,43 +5,22 @@
 //! then decided exactly ([`super::intersect::surface_pair_intersects`]).
 
 use super::intersect::surface_pair_intersects;
-use super::{Defect, Defects, MAX_PAIR_TESTS, Surface};
+use super::{Box3, Defect, Defects, MAX_PAIR_TESTS, Surface};
 use crate::{Error, Result};
 
 /// Triangles per leaf.
 const LEAF: usize = 4;
 
-#[derive(Debug, Clone, Copy)]
-struct Box3 {
-    lo: [f64; 3],
-    hi: [f64; 3],
-}
-
-impl Box3 {
-    const EMPTY: Box3 = Box3 { lo: [f64::INFINITY; 3], hi: [f64::NEG_INFINITY; 3] };
-
-    fn add(&mut self, o: &Box3) {
-        for k in 0..3 {
-            self.lo[k] = self.lo[k].min(o.lo[k]);
-            self.hi[k] = self.hi[k].max(o.hi[k]);
-        }
-    }
-
-    fn touches(&self, o: &Box3) -> bool {
-        (0..3).all(|k| self.lo[k] <= o.hi[k] && o.lo[k] <= self.hi[k])
-    }
-
-    /// Twice the centre along `k` (no rounding from halving).
-    fn centre2(&self, k: usize) -> f64 {
-        self.lo.get(k).copied().unwrap_or(0.0) + self.hi.get(k).copied().unwrap_or(0.0)
-    }
+/// Twice the centre of a box (no rounding from halving).
+fn centre2(b: &Box3) -> [f64; 3] {
+    [0, 1, 2].map(|k| b.lo[k] + b.hi[k])
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Node {
     bounds: Box3,
-    /// Children, or `None` for a leaf over `order[start..end]`.
-    children: Option<(usize, usize)>,
+    /// The left child (the right one follows it), or `None` for a leaf over `order[start..end]`.
+    children: Option<usize>,
     start: usize,
     end: usize,
 }
@@ -63,8 +42,7 @@ fn build(boxes: &[Box3]) -> Bvh {
         for &t in slice.iter() {
             if let Some(b) = boxes.get(t as usize) {
                 bounds.add(b);
-                let c = [0, 1, 2].map(|k| b.centre2(k));
-                centres.add(&Box3 { lo: c, hi: c });
+                centres.add_point(centre2(b));
             }
         }
         let mut node = Node { bounds, children: None, start, end };
@@ -77,13 +55,13 @@ fn build(boxes: &[Box3]) -> Bvh {
             } else {
                 2
             };
-            let key = |t: &u32| boxes.get(*t as usize).map_or(0.0, |b| b.centre2(axis));
+            let key = |t: &u32| boxes.get(*t as usize).map_or(0.0, |b| centre2(b)[axis]);
             let mid = (end - start) / 2;
             slice.select_nth_unstable_by(mid, |a, b| key(a).total_cmp(&key(b)).then(a.cmp(b)));
             let l = nodes.len();
             nodes.push(empty);
             nodes.push(empty);
-            node.children = Some((l, l + 1));
+            node.children = Some(l);
             work.push((l, start, start + mid));
             work.push((l + 1, start + mid, end));
         }
@@ -113,7 +91,7 @@ impl Search<'_> {
             return Err(Error::Limit(format!("self-intersection check: more than {MAX_PAIR_TESTS} triangle pairs to test")));
         }
         let (Some(ts), Some(tt)) = (self.surface.triangles.get(s as usize), self.surface.triangles.get(t as usize)) else { return Ok(true) };
-        if surface_pair_intersects([*ts, *tt], self.surface.corners(ts)?, self.surface.corners(tt)?)? {
+        if surface_pair_intersects([*ts, *tt], self.surface.corners(ts)?, self.surface.corners(tt)?) {
             let (s, t) = (s.min(t) as usize, s.max(t) as usize);
             self.defects
                 .push(Defect::SelfIntersection { triangles: [self.surface.source_tri(s), self.surface.source_tri(t)], at: self.surface.centroid(s) });
@@ -130,8 +108,7 @@ pub(crate) fn self_intersections(surface: &Surface) -> Result<Defects> {
         .map(|t| {
             let mut b = Box3::EMPTY;
             for v in t {
-                let p = surface.xyz(*v);
-                b.add(&Box3 { lo: p, hi: p });
+                b.add_point(surface.xyz(*v));
             }
             b
         })
@@ -144,7 +121,7 @@ pub(crate) fn self_intersections(surface: &Surface) -> Result<Defects> {
         let (Some(na), Some(nb)) = (bvh.nodes.get(a), bvh.nodes.get(b)) else { continue };
         if a == b {
             match na.children {
-                Some((l, r)) => stack.extend([(l, r), (r, r), (l, l)]),
+                Some(l) => stack.extend([(l, l + 1), (l + 1, l + 1), (l, l)]),
                 None => {
                     let tris = leaf(na);
                     for (i, &s) in tris.iter().enumerate() {
@@ -171,10 +148,10 @@ pub(crate) fn self_intersections(surface: &Surface) -> Result<Defects> {
                     }
                 }
             }
-            (Some((l, r)), None) => stack.extend([(r, b), (l, b)]),
-            (None, Some((l, r))) => stack.extend([(a, r), (a, l)]),
-            (Some((l, r)), Some(_)) if na.end - na.start >= nb.end - nb.start => stack.extend([(r, b), (l, b)]),
-            (Some(_), Some((l, r))) => stack.extend([(a, r), (a, l)]),
+            (Some(l), None) => stack.extend([(l + 1, b), (l, b)]),
+            (None, Some(l)) => stack.extend([(a, l + 1), (a, l)]),
+            (Some(l), Some(_)) if na.end - na.start >= nb.end - nb.start => stack.extend([(l + 1, b), (l, b)]),
+            (Some(_), Some(l)) => stack.extend([(a, l + 1), (a, l)]),
         }
     }
     let mut defects = search.defects;

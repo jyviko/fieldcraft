@@ -64,3 +64,11 @@ pub(crate) fn labels(p: &Value, key: &str, max_len: usize) -> Result<Vec<u32>> {
         .collect::<Option<Vec<u32>>>()
         .ok_or_else(|| EngineError::Params(format!("`{key}` must be labels in 1..={MAX_LABEL}")))
 }
+
+/// An optional number parameter.
+pub(crate) fn optional_number(p: &Value, key: &str, default: f64) -> Result<f64> {
+    match p.get(key) {
+        None => Ok(default),
+        Some(v) => v.as_f64().ok_or_else(|| EngineError::Params(format!("`{key}` must be a number"))),
+    }
+}

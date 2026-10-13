@@ -275,14 +275,21 @@ fn orient2d_formula<T: Ring + Signed>([a, b, c]: [Hom<T>; 3], (u, v): (usize, us
 /// seen from the positive side of that axis (`Z` → the `xy` plane, `X` → `yz`, `Y` → `zx`).
 /// Exact. Attene's `orient2d3d` (§4.5) is this with the axis of the largest normal component.
 pub fn generic_orient2d(a: &GenericPoint, b: &GenericPoint, c: &GenericPoint, drop: Axis) -> Sign {
-    let (u, v) = drop.projected();
     if let (Some(a), Some(b), Some(c)) = (a.explicit(), b.explicit(), c.explicit()) {
-        let proj = |p: &Point3| Point2([coord(&p.0, u), coord(&p.0, v)]);
-        return orient2d(&proj(a), &proj(b), &proj(c));
+        return orient2d_projected(a, b, c, drop);
     }
+    let (u, v) = drop.projected();
     let (points, flipped) = pivot_last([a, b, c]);
     let sign = decide(points, |h| orient2d_formula(h, (u, v)), |h| orient2d_formula(h, (u, v)));
     if flipped { -sign } else { sign }
+}
+
+/// [`orient2d`] of the projections of three explicit points onto the coordinate plane that drops
+/// `drop`, seen from the positive side of that axis (the explicit case of [`generic_orient2d`]).
+pub fn orient2d_projected(a: &Point3, b: &Point3, c: &Point3, drop: Axis) -> Sign {
+    let (u, v) = drop.projected();
+    let proj = |p: &Point3| Point2([coord(&p.0, u), coord(&p.0, v)]);
+    orient2d(&proj(a), &proj(b), &proj(c))
 }
 
 /// `X_a / W_a - X_b / W_b = (W_b X_a - W_a X_b) / (W_a W_b)` along one axis.

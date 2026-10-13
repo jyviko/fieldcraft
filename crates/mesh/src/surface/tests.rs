@@ -354,37 +354,37 @@ fn exact_pair_tests() {
     let [o, x, y, z] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]].map(p3);
     let t = [&o, &x, &y];
     // Segments: piercing, touching a vertex, coplanar crossing, coplanar outside, parallel.
-    assert!(segment_meets_triangle(&p3([0.2, 0.2, -1.0]), &p3([0.2, 0.2, 1.0]), t).unwrap());
-    assert!(segment_meets_triangle(&p3([1.0, 0.0, 0.0]), &p3([1.0, 0.0, 5.0]), t).unwrap());
-    assert!(segment_meets_triangle(&p3([-1.0, 0.3, 0.0]), &p3([2.0, 0.3, 0.0]), t).unwrap());
-    assert!(!segment_meets_triangle(&p3([0.6, 0.6, 0.0]), &p3([2.0, 2.0, 0.0]), t).unwrap());
-    assert!(!segment_meets_triangle(&p3([0.0, 0.0, 1.0]), &p3([1.0, 0.0, 1.0]), t).unwrap());
+    assert!(segment_meets_triangle(&p3([0.2, 0.2, -1.0]), &p3([0.2, 0.2, 1.0]), t));
+    assert!(segment_meets_triangle(&p3([1.0, 0.0, 0.0]), &p3([1.0, 0.0, 5.0]), t));
+    assert!(segment_meets_triangle(&p3([-1.0, 0.3, 0.0]), &p3([2.0, 0.3, 0.0]), t));
+    assert!(!segment_meets_triangle(&p3([0.6, 0.6, 0.0]), &p3([2.0, 2.0, 0.0]), t));
+    assert!(!segment_meets_triangle(&p3([0.0, 0.0, 1.0]), &p3([1.0, 0.0, 1.0]), t));
     // On the hypotenuse x + y = 1 of a triangle whose corners are not exact in binary.
     let (a, b) = (p3([0.1, 0.9, 0.0]), p3([0.9, 0.1, 0.0]));
     let mid = p3([0.5, 0.5, 0.0]);
     assert!(
-        segment_meets_triangle(&p3([0.5, 0.5, -1.0]), &p3([0.5, 0.5, 1.0]), [&o, &a, &b]).unwrap()
+        segment_meets_triangle(&p3([0.5, 0.5, -1.0]), &p3([0.5, 0.5, 1.0]), [&o, &a, &b])
             == (orient2d_sign(&a, &b, &mid) * orient2d_sign(&a, &b, &o) >= 0)
     );
 
-    assert!(triangles_meet(t, [&p3([0.1, 0.1, -1.0]), &p3([0.1, 0.1, 1.0]), &p3([0.5, 0.1, 0.0])]).unwrap());
-    assert!(!triangles_meet(t, [&p3([0.1, 0.1, 0.5]), &p3([0.6, 0.1, 0.5]), &p3([0.1, 0.6, 0.5])]).unwrap());
+    assert!(triangles_meet(t, [&p3([0.1, 0.1, -1.0]), &p3([0.1, 0.1, 1.0]), &p3([0.5, 0.1, 0.0])]));
+    assert!(!triangles_meet(t, [&p3([0.1, 0.1, 0.5]), &p3([0.6, 0.1, 0.5]), &p3([0.1, 0.6, 0.5])]));
 
     // Shared edge o–x: folded flat onto t, flat on the other side, and bent out of plane.
     let ids = |s: [u32; 3], t: [u32; 3]| [s, t];
     let (w, w2, w3) = (p3([0.5, 0.5, 0.0]), p3([0.5, -0.5, 0.0]), p3([0.5, 0.5, 1.0]));
-    assert!(surface_pair_intersects(ids([0, 1, 2], [1, 0, 3]), t, [&x, &o, &w]).unwrap());
-    assert!(!surface_pair_intersects(ids([0, 1, 2], [1, 0, 3]), t, [&x, &o, &w2]).unwrap());
-    assert!(!surface_pair_intersects(ids([0, 1, 2], [1, 0, 3]), t, [&x, &o, &w3]).unwrap());
+    assert!(surface_pair_intersects(ids([0, 1, 2], [1, 0, 3]), t, [&x, &o, &w]));
+    assert!(!surface_pair_intersects(ids([0, 1, 2], [1, 0, 3]), t, [&x, &o, &w2]));
+    assert!(!surface_pair_intersects(ids([0, 1, 2], [1, 0, 3]), t, [&x, &o, &w3]));
 
     // Shared vertex o: a coplanar triangle inside t's corner, one outside it, one crossing t, one
     // out of plane touching only at o, and one whose edge runs along t's edge o–x.
     let at_o = ids([0, 1, 2], [0, 3, 4]);
-    assert!(surface_pair_intersects(at_o, t, [&o, &p3([0.3, 0.1, 0.0]), &p3([0.1, 0.3, 0.0])]).unwrap());
-    assert!(!surface_pair_intersects(at_o, t, [&o, &p3([-0.3, -0.1, 0.0]), &p3([-0.1, -0.3, 0.0])]).unwrap());
-    assert!(surface_pair_intersects(at_o, t, [&o, &p3([0.3, 0.3, -1.0]), &p3([0.3, 0.3, 1.0])]).unwrap());
-    assert!(!surface_pair_intersects(at_o, t, [&o, &z, &p3([-1.0, -1.0, 1.0])]).unwrap());
-    assert!(surface_pair_intersects(at_o, t, [&o, &p3([0.5, 0.0, 0.0]), &p3([0.5, -1.0, 0.0])]).unwrap());
+    assert!(surface_pair_intersects(at_o, t, [&o, &p3([0.3, 0.1, 0.0]), &p3([0.1, 0.3, 0.0])]));
+    assert!(!surface_pair_intersects(at_o, t, [&o, &p3([-0.3, -0.1, 0.0]), &p3([-0.1, -0.3, 0.0])]));
+    assert!(surface_pair_intersects(at_o, t, [&o, &p3([0.3, 0.3, -1.0]), &p3([0.3, 0.3, 1.0])]));
+    assert!(!surface_pair_intersects(at_o, t, [&o, &z, &p3([-1.0, -1.0, 1.0])]));
+    assert!(surface_pair_intersects(at_o, t, [&o, &p3([0.5, 0.0, 0.0]), &p3([0.5, -1.0, 0.0])]));
 }
 
 /// The exact orientation of `c` against the directed line `ab` seen from +z, as -1, 0, 1.

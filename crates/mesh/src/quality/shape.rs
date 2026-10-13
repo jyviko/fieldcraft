@@ -14,12 +14,8 @@ use std::f64::consts::SQRT_2;
 
 use super::Metric;
 
+use crate::vec3::angle_deg as angle;
 pub(crate) use crate::vec3::{P, cross, det, dot, norm, sub};
-
-/// The angle between two vectors in degrees, 0 when either is zero.
-fn angle(a: P, b: P) -> f64 {
-    norm(cross(a, b)).atan2(dot(a, b)).to_degrees()
-}
 
 /// `num / den`, or `fallback` when the denominator is zero or the quotient is not finite.
 fn ratio(num: f64, den: f64, fallback: f64) -> f64 {

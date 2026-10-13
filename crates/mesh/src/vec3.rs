@@ -18,3 +18,8 @@ pub(crate) fn norm(a: P) -> f64 {
 pub(crate) fn det(a: P, b: P, c: P) -> f64 {
     dot(a, cross(b, c))
 }
+
+/// The angle between two vectors in degrees (0 when either is zero).
+pub(crate) fn angle_deg(a: P, b: P) -> f64 {
+    norm(cross(a, b)).atan2(dot(a, b)).to_degrees()
+}

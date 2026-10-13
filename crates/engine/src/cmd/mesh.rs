@@ -1,11 +1,13 @@
-use modelcraft_mesh::delaunay::Triangulation;
+use std::borrow::Cow;
+
 use modelcraft_geometry::SurfaceMesh;
+use modelcraft_mesh::delaunay::Triangulation;
 use modelcraft_mesh::quality::{self, QualityReport};
 use modelcraft_mesh::surface::{BoundarySurface, Defect, FeatureKind, SurfaceOptions};
 use modelcraft_model::{ElementKind, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
-use super::{label, labels, points, xyz};
+use super::{label, labels, optional_number, points, xyz};
 use crate::{CommandSpec, EngineError, Result, Session};
 
 pub const NODE_ADD: CommandSpec = CommandSpec {
@@ -62,7 +64,7 @@ fn delaunay_points(_: &mut Session, p: &Value) -> Result<Value> {
 pub const SURFACE_CHECK: CommandSpec = CommandSpec {
     id: "mesh.surface.check",
     label: "Check Boundary Surface",
-    params: r#"{"body": "Body1", "tolerance": 0.05} or {"surface": 0}, optional "weld": 1e-9 (0 or 1e-15..=1e-3 of the bounding-box diagonal), "weld_distance": 2e-6 (mm; default twice SolidCraft's linear tolerance), "feature_angle": 45 (degrees, (0, 180]) — welds the tessellated body or imported surface and checks it can bound a volume mesh: closed, manifold, outward, no self-intersections; reports shells, genus, volume and feature edges, or the located defects"#,
+    params: r#"{"body": "Body1", "tolerance": 0.05} or {"surface": 0}, optional "weld": 1e-9 (0 or 1e-15..=1e-3 of the bounding-box diagonal), "weld_distance": mm (default: the surface's own, twice SolidCraft's linear tolerance for a tessellated body, 0 for an imported mesh), "feature_angle": 45 (degrees, (0, 180]) — welds the tessellated body or imported surface and checks it can bound a volume mesh: closed, manifold, outward, no self-intersections; reports shells, genus, volume and feature edges, or the located defects"#,
     run: surface_check,
 };
 
@@ -146,30 +148,18 @@ fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The surface named by `body` (tessellated at `tolerance`) or `surface` (an imported index).
-fn surface_input(s: &Session, p: &Value) -> Result<SurfaceMesh> {
+fn surface_input<'a>(s: &'a Session, p: &Value) -> Result<Cow<'a, SurfaceMesh>> {
     match (p.get("body"), p.get("surface")) {
-        (Some(_), None) => {
-            let shape = super::geometry::body(s, p)?;
-            let tolerance =
-                p.get("tolerance").and_then(Value::as_f64).ok_or_else(|| EngineError::Params("`tolerance` must be a number (mm)".into()))?;
-            Ok(shape.tessellate(tolerance)?)
-        }
+        (Some(_), None) => Ok(Cow::Owned(super::geometry::body_mesh(s, p)?.1)),
         (None, Some(i)) => {
             let n = s.surfaces.len();
             i.as_u64()
                 .and_then(|i| usize::try_from(i).ok())
                 .and_then(|i| s.surfaces.get(i))
-                .map(|t| t.mesh.clone())
+                .map(|t| Cow::Borrowed(&t.mesh))
                 .ok_or_else(|| EngineError::Params(format!("`surface` must be the index of an imported surface (there are {n})")))
         }
         _ => Err(EngineError::Params("give either `body` (with `tolerance`) or `surface`".into())),
-    }
-}
-
-fn optional_number(p: &Value, key: &str, default: f64) -> Result<f64> {
-    match p.get(key) {
-        None => Ok(default),
-        Some(v) => v.as_f64().ok_or_else(|| EngineError::Params(format!("`{key}` must be a number"))),
     }
 }
 
@@ -178,13 +168,13 @@ fn defect_json(d: &Defect) -> Value {
 }
 
 fn surface_check(s: &mut Session, p: &Value) -> Result<Value> {
+    let mesh = surface_input(s, p)?;
     let defaults = SurfaceOptions::default();
     let options = SurfaceOptions {
         weld_tolerance: optional_number(p, "weld", defaults.weld_tolerance)?,
-        weld_distance: optional_number(p, "weld_distance", 2.0 * modelcraft_geometry::LINEAR_TOLERANCE)?,
+        weld_distance: optional_number(p, "weld_distance", mesh.weld_distance)?,
         feature_angle: optional_number(p, "feature_angle", defaults.feature_angle)?,
     };
-    let mesh = surface_input(s, p)?;
     let surface = match BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options) {
         Ok(surface) => surface,
         Err(modelcraft_mesh::Error::Surface(d)) => {
@@ -285,7 +275,8 @@ mod tests {
     fn a_tessellated_block_is_a_valid_boundary() {
         use modelcraft_mesh::surface::{BoundarySurface, FeatureKind, SurfaceOptions};
         let mesh = modelcraft_geometry::block([0.0; 3], [2.0, 3.0, 4.0]).unwrap().tessellate(0.01).unwrap();
-        let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &SurfaceOptions::default()).unwrap();
+        let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
+        let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).unwrap();
         assert!(s.points().len() < mesh.positions.len(), "the tessellation is a soup that welding joins");
         assert_eq!((s.shells().len(), s.shells()[0].genus), (1, 0));
         assert!((s.volume() - 24.0).abs() < 1e-9, "{}", s.volume());
@@ -327,8 +318,8 @@ mod tests {
         // A tagged tetrahedron, and the same with a face missing.
         let p = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         let t = vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]];
-        let tet = SurfaceMesh { positions: p.clone(), triangles: t.clone(), tri_face: vec![0, 1, 1, 1] };
-        let open = SurfaceMesh { positions: p, triangles: t[..3].to_vec(), tri_face: vec![0, 1, 1] };
+        let tet = SurfaceMesh { positions: p.clone(), triangles: t.clone(), tri_face: vec![0, 1, 1, 1], weld_distance: 0.0 };
+        let open = SurfaceMesh { positions: p, triangles: t[..3].to_vec(), tri_face: vec![0, 1, 1], weld_distance: 0.0 };
         for mesh in [tet, open] {
             s.surfaces.push(Arc::new(TaggedSurface { name: "Tet".into(), mesh, faces: 2 }));
         }

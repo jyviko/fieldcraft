@@ -48,10 +48,7 @@ impl From<KernelError> for Error {
 }
 
 /// SolidCraft's linear modelling tolerance (mm): points closer than this are the same point.
-/// Each face of a [`Shape::tessellate`] result carries its own copy of the boundary points it
-/// shares with its neighbours, accurate to this tolerance, so two copies of one point can differ
-/// by up to twice it; boundary surface preparation welds at that distance.
-pub const LINEAR_TOLERANCE: f64 = solidcraft_geom::LINEAR_TOL;
+const LINEAR_TOLERANCE: f64 = solidcraft_geom::LINEAR_TOL;
 
 /// A solid body.
 #[derive(Debug, Clone)]
@@ -92,6 +89,11 @@ pub struct SurfaceMesh {
     pub triangles: Vec<[u32; 3]>,
     /// The B-rep face each triangle lies on.
     pub tri_face: Vec<u32>,
+    /// Copies of one point closer than this are the same point (0: only identical coordinates).
+    /// A [`Shape::tessellate`] result is a triangle soup whose faces each carry their own copy of
+    /// the boundary points they share, accurate to the kernel's linear tolerance, so two copies
+    /// can differ by up to twice it; boundary surface preparation welds at this distance.
+    pub weld_distance: f64,
 }
 
 fn xyz(v: solidcraft_geom::Vec3) -> [f64; 3] {
@@ -135,7 +137,12 @@ impl Shape {
             return Err(Error::Invalid(format!("tessellation tolerance must be a positive number, got {tolerance}")));
         }
         let m = guard("tessellate", || self.body.tessellate(tolerance))?;
-        Ok(SurfaceMesh { positions: m.positions.into_iter().map(xyz).collect(), triangles: m.triangles, tri_face: m.tri_face })
+        Ok(SurfaceMesh {
+            positions: m.positions.into_iter().map(xyz).collect(),
+            triangles: m.triangles,
+            tri_face: m.tri_face,
+            weld_distance: 2.0 * LINEAR_TOLERANCE,
+        })
     }
 }
 

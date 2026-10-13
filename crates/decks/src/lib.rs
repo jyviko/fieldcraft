@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 pub mod abaqus;
+pub mod lsdyna;
 pub mod nastran;
 
 use std::collections::{BTreeMap, BTreeSet};

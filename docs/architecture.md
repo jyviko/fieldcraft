@@ -26,8 +26,10 @@ crates in strictly lower layers.
 | L1 | `modelcraft-render` | Display data (meshes, contour maps) without a GPU dependency. | planned |
 | L2 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
 | L3 | `modelcraft-io` | `.modelcraft` files, result files. | planned |
+| L1 | `modelcraft-geometry` feature `scripts` | Builds designs from SolidCraft command scripts (`script_design`, through `solidcraft-engine`); off by default, used by the test corpus. | started |
 | L4 | `modelcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts. | started |
 | L5 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI, control channel and MCP server. | planned |
+| testkit | `modelcraft-testkit` | Test tooling, a dev-dependency only: the meshing test corpus (`tests/corpus/*/recipe.json`, analytic shapes) and its runner (`cargo xtask corpus`). | started |
 | apps | `modelcraft`, `modelcraft-cli`, `modelcraft-web` | Desktop, command line, browser. | cli started |
 
 Rules beyond the layer order:
@@ -43,6 +45,8 @@ Rules beyond the layer order:
    so feature edges and face-based loads and BCs survive meshing. Faces of an opened design also
    carry SolidCraft's persistent names (`F2:side:l4`, from the feature and sketch curve that made
    them), so a load on a named face follows it when the design is edited and opened again.
+   Bodies of components are placed in the world through their occurrences (one body per
+   placement), as SolidCraft displays and exports them.
 2. **Surface preparation.** Weld coincident vertices, check the surface is closed, manifold and
    consistently oriented, find feature edges (face boundaries, sharp dihedral angles).
 3. **Tetrahedral meshing.** Bowyer–Watson Delaunay on Shewchuk's adaptive predicates (symbolic
@@ -66,3 +70,16 @@ Every user-visible action is a `CommandSpec` in `crates/engine/src/cmd/<area>.rs
 form. `Session::execute` clones the model, runs the command under `catch_unwind`, and restores
 the model on an error or a panic; commands that changed the model are journalled, so the
 journal replays as a script.
+
+## Test corpus
+
+Meshers are measured on our own parts (`docs/adr/0001-libraries.md`, test geometry). Each part is
+a SolidCraft command script in `tests/corpus/<name>/recipe.json` (the file `solidcraft-cli run`
+takes, plus a `corpus` object with its categories and, when it has one, its closed-form volume)
+with a one-line `README.md`; analytic shapes (sphere, torus, cylinder, thick-walled pipe, plate
+with a hole) are generated in code. `modelcraft-testkit` runs a recipe in SolidCraft's engine,
+saves the design and opens it through `open_design`, the path a person's design takes, so no
+geometry is stored. `cargo xtask corpus` (a release build of the testkit's `corpus` binary)
+builds every part, tessellates it and runs each stage of `modelcraft_testkit::runner`, writing
+docs/meshing/corpus.md. A mesher joins by implementing `runner::Stage` (its columns, and a run
+over the part's tessellated surfaces) and adding itself to `runner::stages()`.

@@ -67,6 +67,9 @@ models that come from ABC, GrabCAD or Siemens NX; HexMe's Gmsh-made models are a
 Thingi10K is not used either (owner decision 2026-10-13: authoring tools unrecorded). **The test
 corpus is our own:** parts built with SolidCraft (scripts or designs authored in SolidCraft,
 committed as their recipes so the geometry is regenerated, not stored) and analytic shapes.
+Recipes are SolidCraft command scripts run through `solidcraft-engine` (same pinned rev), a
+dependency of `modelcraft-geometry` only behind its non-default `scripts` feature, which the test
+tooling (`modelcraft-testkit`) enables; the shipped library opens designs without it.
 
 **Commercial products** (Abaqus, Nastran, LS-DYNA, LS-PrePost, HyperMesh, ANSA, Femap, Patran,
 ANSYS) are never run, scripted or used as a source of data. Deck formats come from the vendors'

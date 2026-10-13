@@ -60,8 +60,8 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Decks | Nastran bulk data writer (`deck.write`, SOL 101 or 103 per deck; reports what Nastran cannot express) | M3 | | done |
 | Decks | LS-DYNA keyword writer (implicit; explicit in M8) | M3 | | done (implicit static and eigenvalue; beam sections planned) |
 | Decks | Readers keeping unknown keywords | M9 | | planned |
-| Solve | Own linear static and modal solver, verified against analytic solutions | M4 | yes | planned |
-| Results | Deformed shape, contours, mode shapes, probes, reaction sums | M4 | | planned |
+| Solve | Own linear static and modal solver, verified against analytic solutions | M4 | yes | started (solid elements: tet4, tet10, hex8, hex20) |
+| Results | Deformed shape, contours, mode shapes, probes, reaction sums | M4 | | started (results in the session, `solve.probe`, reaction sums; display planned) |
 | Results | XY and path plots, cuts, display groups, free-body forces, animation | M9 | | planned |
 | Results | Readers for public result formats (Nastran OP2, LS-DYNA d3plot, Abaqus `.fil`) | M9 | | planned |
 | Results | Mesh convergence studies | M9 | | planned |

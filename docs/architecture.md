@@ -21,10 +21,10 @@ crates in strictly lower layers.
 | L0 | `modelcraft-model` | Solver-neutral FE model: nodes and elements by label, their geometry tags, sets, materials, sections, couplings, BCs, loads and steps, the model check and the resolved view the writers read. Knows no file format and no geometry type. | started |
 | L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`; face-tagged 3MF files read into the same type without the kernel (docs/formats/tagged-mesh.md). No SolidCraft type in its API. | started |
 | L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
-| L1 | `modelcraft-fem` | Element kernels shared by every structural solver: shape functions, Gauss quadrature, strain–displacement matrices, element stiffness and mass, elastic constitutive matrices. Pure functions, no solver loop. | planned |
+| L1 | `modelcraft-fem` | Element kernels shared by every structural solver: the element table (tet4, tet10, hex8 full and incompatible modes, hex20 full and reduced), shape functions, quadrature, element stiffness, consistent and lumped mass, body and pressure loads, stresses and their extrapolation, isotropic and orthotropic elasticity. Pure functions, no solver loop. | started |
 | L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. Text out, no file system; `deck.write` saves it. | started |
 | L1 | `modelcraft-render` | Display data without a GPU dependency: the visible faces, element edges and nodes of a model, the orbit camera, a CPU rasterizer for headless snapshots; contour maps later. | started |
-| L2 | `modelcraft-solver` | Implicit solver: assembly from the resolved model, boundary conditions, sparse direct solution, linear static and modal analysis, stresses and reactions. The explicit (`modelcraft-explicit`) and lattice Boltzmann (`modelcraft-lbm`) solvers join this layer. | planned |
+| L2 | `modelcraft-solver` | Implicit solver: assembly from the resolved model, boundary conditions, sparse direct solution, linear static and modal analysis, stresses and reactions. The explicit (`modelcraft-explicit`) and lattice Boltzmann (`modelcraft-lbm`) solvers join this layer. | started |
 | L3 | `modelcraft-fsi` | Fluid–structure coupling between the L2 solvers (later). | planned |
 | L4 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
 | L5 | `modelcraft-io` | `.modelcraft` files (docs/formats/modelcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery. Bytes in, bytes out; the file system only in `fs` and `recovery`. Result files later. | started |
@@ -121,6 +121,38 @@ element names, cards and keywords):
   when it is created, so remeshing or adding nodes and points never renumbers them.
 - **Files.** A model deserializes by replaying its contents through the same checked methods the
   commands use, so a file cannot hold what commands would refuse.
+
+## Implicit solver
+
+`modelcraft-solver` solves a model's linear static and frequency steps (`solve.static`,
+`solve.frequency`; `solve.probe` reads the stored results). Methods and papers are cited in the
+module docs; ADR 0001 records why the linear algebra is our own.
+
+1. **System.** `Model::resolve()`; each solid section's elements take their material's
+   elasticity matrix and the section's formulation (`modelcraft_fem::element::ELEMENT_TYPES`, one
+   row per element kind). Couplings, reference points, moments, shells and beams return "not
+   supported yet". The step's boundary conditions prescribe translations (rotations do not exist
+   on solid nodes); its loads become a load vector: forces and tractions from
+   `Resolved::nodal_loads`, pressure as consistent face loads, gravity and body forces through the
+   element shape functions.
+2. **Assembly** on the node graph (3 × 3 blocks, elements in label order, so sums are
+   reproducible bit for bit).
+3. **Ordering and elimination.** Nested dissection of the nodes by coordinate bisection; free
+   degrees of freedom numbered in that order; prescribed values moved to the right-hand side (no
+   penalty).
+4. **Static solution.** Up-looking sparse Cholesky (the factor size is computed and capped before
+   any value), reactions K u − f, integration-point stresses extrapolated to the nodes and
+   averaged, von Mises. A zero pivot names the node and direction that can move freely.
+5. **Frequency.** Shift-invert block Lanczos (block 6, full reorthogonalization) on
+   K − σM, σ = 0 for a supported structure and slightly negative for a free one, so rigid-body
+   modes come out at zero; mass-normalized shapes, participation factors and effective masses.
+6. **Results** stay in the session per step and are cleared by any command that changes the
+   model.
+
+Verification (`crates/solver/tests/verification.rs`, analytic only): displacement and traction
+patch tests for every element and formulation (exact to round-off), cantilever tip deflection
+against Timoshenko with convergence rates of the linear elements, Lamé's cylinder, Kirsch's
+plate with a hole (Kt → 3), cantilever and free–free beam frequencies with six rigid-body modes.
 
 ## Commands
 

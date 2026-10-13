@@ -953,3 +953,30 @@ the better pairing — this is why FSI should support both structure solvers.
    tagged as "benchmark", kept separate from the analytic suite).
 8. **Quad shell meshing is missing from the roadmap.** X5 needs quad-dominant surface meshes; without them shells
    run on tri3 (BLT has a triangular variant, less accurate). Flag for the roadmap.
+
+## Part G: Implicit solver (M4), as implemented
+
+The papers and books `modelcraft-fem` and `modelcraft-solver` are written from (cited again in
+the module docs):
+
+- Elements: O. C. Zienkiewicz, R. L. Taylor, J. Z. Zhu, *The Finite Element Method: Its Basis
+  and Fundamentals*, 7th ed., 2013; T. J. R. Hughes, *The Finite Element Method*, Dover 2000.
+- Incompatible modes: Wilson, Taylor, Doherty, Ghaboussi 1973; R. L. Taylor, P. J. Beresford,
+  E. L. Wilson, IJNME 10(6):1211–1219, 1976 (the det J₀/det J correction that passes the patch
+  test).
+- Tetrahedron quadrature: A. H. Stroud, *Approximate Calculation of Multiple Integrals*, 1971
+  (conical product rules).
+- Mass lumping: E. Hinton, T. Rock, O. C. Zienkiewicz, Earthquake Eng. Struct. Dyn.
+  4(3):245–249, 1976.
+- Stress extrapolation: E. Hinton, J. S. Campbell, IJNME 8(3):461–480, 1974.
+- Ordering: A. George, SIAM J. Numer. Anal. 10(2):345–363, 1973; H. D. Simon, Computing Systems
+  in Engineering 2:135–148, 1991.
+- Sparse Cholesky: T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM 2006; J. W. H.
+  Liu, SIAM J. Matrix Anal. Appl. 11(1):134–172, 1990.
+- Eigenvalues: T. Ericsson, A. Ruhe, Math. Comp. 35(152):1251–1268, 1980; R. G. Grimes, J. G.
+  Lewis, H. D. Simon, SIAM J. Matrix Anal. Appl. 15(1):228–272, 1994; B. N. Parlett, *The
+  Symmetric Eigenvalue Problem*, SIAM 1998; G. H. Golub, C. F. Van Loan, *Matrix Computations*,
+  4th ed., 2013.
+- Verification: R. H. MacNeal, R. L. Harder, *A proposed standard set of problems to test finite
+  element accuracy*, Finite Elem. Anal. Des. 1(1):3–20, 1985 (patch tests); Lamé, Kirsch,
+  Timoshenko and Euler–Bernoulli closed forms.

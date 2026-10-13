@@ -37,6 +37,11 @@ commands:
   corpus [--part NAME] [--no-write]
                   build every meshing test corpus part (tests/corpus, analytic shapes), tessellate
                   and mesh it, and write the results to docs/meshing/corpus.md (release build)
+  oracle [--case NAME]... [--bless NAME|all]... [--quick] [--no-write]
+                  run the verification and validation cases (tests/oracle, docs/verification.md)
+                  against their references and fixtures; write docs/oracle.md after a full run;
+                  --bless freezes a passing case's results in its fixture.json; --quick skips
+                  cases marked slow (release build)
   wasm            cargo check every library crate for wasm32-unknown-unknown
   ci              fmt --check, assets, licences --check, layers, clippy -D warnings, then the tests
                   (not the heavy ones) with the wasm check alongside (stops at the first failing
@@ -71,6 +76,12 @@ fn main() -> ExitCode {
             let mut c = cargo();
             c.args(["run", "--release", "-p", "modelcraft-testkit", "--bin", "corpus", "--"]).args(&rest);
             run(c, "corpus")
+        }
+        Some("oracle") => {
+            // A binary of the testkit, which has the engine and SolidCraft scripts for geometry.
+            let mut c = cargo();
+            c.args(["run", "--release", "-p", "modelcraft-testkit", "--bin", "oracle", "--"]).args(&rest);
+            run(c, "oracle")
         }
         Some("wasm") => cmd_wasm(),
         Some("-h" | "--help" | "help") | None => {

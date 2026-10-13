@@ -1,0 +1,55 @@
+{
+ "title": "MacNeal–Harder curved cantilever, hex8 with incompatible modes",
+ "kind": "benchmark",
+ "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20: Fig. 5 (p. 7) geometry, material and mesh; Table 3 (p. 10) theoretical tip displacements",
+ "quantities": [
+  {
+   "id": "in_plane",
+   "quantity": "tip displacement along the in-plane load",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "In_plane",
+     "at": [
+      [
+       0,
+       4.12,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/1"
+   },
+   "value": 0.08734,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14)",
+   "known_failure": "0.880 of the theory, grade C: straight-sided hex8 on six elements over 90° (MacNeal–Harder's HEXA(8): 0.880, Table 9 p. 15)"
+  },
+  {
+   "id": "out_of_plane",
+   "quantity": "tip displacement along the out-of-plane load",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Out_of_plane",
+     "at": [
+      [
+       0,
+       4.12,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": 0.5022,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14)",
+   "known_failure": "0.798 of the theory, grade D: out-of-plane bending with torsion on one element across (MacNeal–Harder's HEXA(8): 0.849)"
+  }
+ ]
+}

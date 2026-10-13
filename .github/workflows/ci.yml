@@ -88,6 +88,24 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo xtask test --heavy
 
+  oracle:
+    # Verification and validation (docs/verification.md): every case against its reference and
+    # its fixture, and docs/oracle.md must be the table the cases produce. Cases marked `slow`
+    # run here too while the whole set stays within a few minutes; `--quick` skips them.
+    name: cargo xtask oracle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: oracle
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo xtask oracle
+      - name: docs/oracle.md is current
+        run: git diff --exit-code docs/oracle.md
+
   advisories:
     name: Dependency advisories and sources
     needs: changes

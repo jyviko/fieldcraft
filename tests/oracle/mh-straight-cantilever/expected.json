@@ -1,0 +1,92 @@
+{
+ "title": "MacNeal–Harder straight cantilever, regular hex8 mesh with incompatible modes",
+ "kind": "benchmark",
+ "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20: Fig. 4(a) (p. 7) geometry, material and mesh; Table 3 (p. 10) theoretical tip displacements",
+ "quantities": [
+  {
+   "id": "extension",
+   "quantity": "tip displacement along the load, extension",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Extension",
+     "at": [
+      [
+       6.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 3e-05,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14)"
+  },
+  {
+   "id": "in_plane",
+   "quantity": "tip displacement along the load, in-plane shear (width 0.2)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "In_plane",
+     "at": [
+      [
+       6.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/1"
+   },
+   "value": 0.1081,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14)",
+   "known_failure": "0.978 of the theory, grade B: one hex8 with incompatible modes through the depth of the prescribed mesh (MacNeal–Harder's HEXA(8): 0.981, Table 8(a) p. 15); refined meshes converge (cantilever-hex8-incompatible)"
+  },
+  {
+   "id": "out_of_plane",
+   "quantity": "tip displacement along the load, out-of-plane shear (depth 0.1)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Out_of_plane",
+     "at": [
+      [
+       6.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": 0.4321,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14)",
+   "known_failure": "0.973 of the theory, grade B, as for in-plane shear (MacNeal–Harder's HEXA(8): 0.981)"
+  },
+  {
+   "id": "twist",
+   "quantity": "tip rotation under a unit twisting moment",
+   "measure": {
+    "from": "twist",
+    "pointer": "/reference_points/0/displacement/3"
+   },
+   "value": 0.03208,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14); the moment reaches the end through a distributing coupling",
+   "known_failure": "0.892 of the theory, grade C: one element across the section cannot represent the torsion warping (MacNeal–Harder's HEXA(8): 0.910, HEX20: 0.904)"
+  }
+ ]
+}

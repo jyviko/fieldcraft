@@ -1,0 +1,67 @@
+{
+ "title": "Elastic bar striking a rigid wall (explicit)",
+ "kind": "theory",
+ "source": "One-dimensional elastic impact on a rigid wall: contact time 2L/c, rebound at the impact speed, contact stress ρcv₀; Graff, Wave Motion in Elastic Solids, Dover 1991, §2.3; Johnson, Impact Strength of Materials, Arnold 1972, §1.6",
+ "quantities": [
+  {
+   "id": "u_front",
+   "quantity": "displacement of the struck end at t = 0.3 (in contact until 2L/c = 0.2, then leaving at v₀)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Impact",
+     "at": [
+      [
+       0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.009999999999999998,
+   "tolerance": {
+    "relative": 0.03
+   },
+   "reason": "the contact ends at 2L/c in the elastic theory; the discrete release front is spread over a few elements, a few tenths of a percent of the time, and the rebound speed is v₀ to about 1%"
+  },
+  {
+   "id": "u_back",
+   "quantity": "displacement of the far end at t = 0.3 (−v₀L/c, then +v₀ after the reflection)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Impact",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.01,
+   "tolerance": {
+    "relative": 0.03
+   },
+   "reason": "as for the struck end"
+  },
+  {
+   "id": "ke",
+   "quantity": "kinetic energy after the rebound over the initial ½mv₀²",
+   "measure": {
+    "from": "solve",
+    "pointer": "/energy/kinetic",
+    "scale": 1999.9999999999995
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "an elastic impact keeps the kinetic energy; quadratic bulk viscosity in the compression front and the vibration left in the bar take about 1%"
+  }
+ ]
+}

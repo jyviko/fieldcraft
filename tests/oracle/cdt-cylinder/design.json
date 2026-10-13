@@ -1,0 +1,12 @@
+{
+ "commands": [
+  {
+   "command": "solid.cylinder",
+   "params": {
+    "radius": 10.0,
+    "height": 20.0,
+    "body_name": "Cylinder"
+   }
+  }
+ ]
+}

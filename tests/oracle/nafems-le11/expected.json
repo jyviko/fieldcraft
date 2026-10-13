@@ -1,0 +1,14 @@
+{
+ "title": "NAFEMS LE11 solid cylinder/taper/sphere under a temperature field",
+ "kind": "benchmark",
+ "source": "NAFEMS, The Standard NAFEMS Benchmarks, TNSB Rev. 3, October 1990, test LE11 (target σ_zz = −105 MPa at A)",
+ "status": "pending",
+ "requires": "thermal loads (M8 heat transfer)",
+ "quantities": [
+  {
+   "id": "szz_A",
+   "quantity": "σ_zz at A",
+   "value": -105.0
+  }
+ ]
+}

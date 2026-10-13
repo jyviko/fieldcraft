@@ -1,0 +1,19 @@
+{
+ "title": "MacNeal–Harder twisted beam",
+ "kind": "benchmark",
+ "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20, Fig. 6 (p. 8), Table 3 (p. 10)",
+ "status": "pending",
+ "requires": "shell elements (M8) or mapped blocks with helical edges",
+ "quantities": [
+  {
+   "id": "in_plane",
+   "quantity": "tip displacement along the in-plane load",
+   "value": 0.005424
+  },
+  {
+   "id": "out_of_plane",
+   "quantity": "tip displacement along the out-of-plane load",
+   "value": 0.001754
+  }
+ ]
+}

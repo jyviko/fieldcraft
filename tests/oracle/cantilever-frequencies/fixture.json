@@ -1,0 +1,17 @@
+{
+  "note": "ModelCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "f1": {
+      "band": 1.2770863695053732e-11,
+      "value": 0.012750678058109033
+    },
+    "f1_pair": {
+      "band": 1.2770863695053732e-11,
+      "value": 0.012750678058529053
+    },
+    "f2": {
+      "band": 8.003363662360005e-11,
+      "value": 0.07916657526441415
+    }
+  }
+}

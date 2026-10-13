@@ -1,0 +1,85 @@
+{
+ "title": "NAFEMS FV32 cantilevered tapered membrane, free vibration (hex20 plane stress layer)",
+ "kind": "benchmark",
+ "source": "NAFEMS, The Standard NAFEMS Benchmarks, TNSB Rev. 3, October 1990, test FV32 (frequencies 44.623, 130.03, 162.70, 246.05, 379.90, 391.44 Hz); as reproduced in the Abaqus 2017 Benchmarks Guide, 'FV32: Cantilevered tapered membrane'",
+ "quantities": [
+  {
+   "id": "f1",
+   "quantity": "frequency of mode 1 (Hz)",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/0/frequency"
+   },
+   "value": 44.623,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "targets published to five figures for 2D plane stress; a thin solid layer with a free face differs from plane stress by O((t/L)²) and the 16 × 8 quadratic mesh is converged to about 0.1%"
+  },
+  {
+   "id": "f2",
+   "quantity": "frequency of mode 2 (Hz)",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/1/frequency"
+   },
+   "value": 130.03,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "targets published to five figures for 2D plane stress; a thin solid layer with a free face differs from plane stress by O((t/L)²) and the 16 × 8 quadratic mesh is converged to about 0.1%"
+  },
+  {
+   "id": "f3",
+   "quantity": "frequency of mode 3 (Hz)",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/2/frequency"
+   },
+   "value": 162.7,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "targets published to five figures for 2D plane stress; a thin solid layer with a free face differs from plane stress by O((t/L)²) and the 16 × 8 quadratic mesh is converged to about 0.1%"
+  },
+  {
+   "id": "f4",
+   "quantity": "frequency of mode 4 (Hz)",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/3/frequency"
+   },
+   "value": 246.05,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "targets published to five figures for 2D plane stress; a thin solid layer with a free face differs from plane stress by O((t/L)²) and the 16 × 8 quadratic mesh is converged to about 0.1%"
+  },
+  {
+   "id": "f5",
+   "quantity": "frequency of mode 5 (Hz)",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/4/frequency"
+   },
+   "value": 379.9,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "targets published to five figures for 2D plane stress; a thin solid layer with a free face differs from plane stress by O((t/L)²) and the 16 × 8 quadratic mesh is converged to about 0.1%"
+  },
+  {
+   "id": "f6",
+   "quantity": "frequency of mode 6 (Hz)",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/5/frequency"
+   },
+   "value": 391.44,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "targets published to five figures for 2D plane stress; a thin solid layer with a free face differs from plane stress by O((t/L)²) and the 16 × 8 quadratic mesh is converged to about 0.1%"
+  }
+ ]
+}

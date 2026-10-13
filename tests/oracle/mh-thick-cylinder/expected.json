@@ -1,0 +1,76 @@
+{
+ "title": "MacNeal–Harder thick-walled cylinder, nearly incompressible (hex8 with incompatible modes)",
+ "kind": "benchmark",
+ "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20: Fig. 10 (p. 9) geometry, material and radial mesh; Table 5(c) (p. 11) radial displacements at the inner radius",
+ "quantities": [
+  {
+   "id": "ur_1",
+   "quantity": "radial displacement at the inner radius, ν = 0.49",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       3.0,
+       0,
+       0.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.0050399,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14)"
+  },
+  {
+   "id": "ur_2",
+   "quantity": "radial displacement at the inner radius, ν = 0.499",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       3.0,
+       0,
+       2.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.0050602,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14)"
+  },
+  {
+   "id": "ur_3",
+   "quantity": "radial displacement at the inner radius, ν = 0.4999",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       3.0,
+       0,
+       4.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.0050623,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14)"
+  }
+ ]
+}

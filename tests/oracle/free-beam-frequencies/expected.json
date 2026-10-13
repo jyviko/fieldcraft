@@ -1,0 +1,46 @@
+{
+ "title": "Natural frequencies of a free beam: rigid-body modes and the first bending mode",
+ "kind": "theory",
+ "source": "Euler–Bernoulli free–free beam, β₁L = 4.7300; Timoshenko, Young and Weaver, Vibration Problems in Engineering, 4th ed., Wiley 1974, §5.3",
+ "quantities": [
+  {
+   "id": "rigid_6",
+   "quantity": "sixth frequency (the last rigid-body mode)",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/5/frequency"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 8.1264203095911e-05
+   },
+   "reason": "a free body has six zero frequencies; numerical rigid-body frequencies below 10⁻³ of the first elastic one (eigenvalues below 10⁻⁶ of it) are rounding of the shifted solve"
+  },
+  {
+   "id": "f7",
+   "quantity": "first free–free bending frequency (mode 7)",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/6/frequency"
+   },
+   "value": 0.08126420309591101,
+   "tolerance": {
+    "relative": 0.015
+   },
+   "reason": "Euler–Bernoulli neglects shear and rotary inertia, about 0.8% at L/h = 20 for the free–free mode"
+  },
+  {
+   "id": "mass",
+   "quantity": "total mass",
+   "measure": {
+    "from": "modes",
+    "pointer": "/total_mass"
+   },
+   "value": 20.0,
+   "tolerance": {
+    "relative": 1e-12
+   },
+   "reason": "the mass matrix integrates the density exactly"
+  }
+ ]
+}

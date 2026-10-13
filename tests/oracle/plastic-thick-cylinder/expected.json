@@ -1,0 +1,14 @@
+{
+ "title": "Elastic–perfectly plastic thick cylinder: collapse pressure",
+ "kind": "theory",
+ "source": "Hill, The Mathematical Theory of Plasticity, Oxford 1950, ch. V §2: plane strain von Mises collapse pressure p = (2/√3)σ_y ln(b/a)",
+ "status": "pending",
+ "requires": "J2 plasticity (M8/M10 X2)",
+ "quantities": [
+  {
+   "id": "p_collapse",
+   "quantity": "collapse pressure for a = 10, b = 20, σ_y = 250",
+   "value": 200.0944
+  }
+ ]
+}

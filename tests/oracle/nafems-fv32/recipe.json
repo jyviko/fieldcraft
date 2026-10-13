@@ -1,0 +1,12 @@
+[
+ {"command": "mesh.block", "params": {"body": "Membrane", "kind": "hex20", "corners": [[0, 0, 0], [10, 2, 0], [10, 3, 0], [0, 5, 0], [0, 0, 0.025], [10, 2, 0.025], [10, 3, 0.025], [0, 5, 0.025]], "divisions": [16, 8, 1], "faces": {"6": "root", "1": "mid"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Membrane"}]}},
+ {"command": "model.set.create", "params": {"name": "root", "geometry": [{"body": "Membrane", "face": "root"}]}},
+ {"command": "model.set.create", "params": {"name": "mid", "geometry": [{"body": "Membrane", "face": "mid"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 200000000000.0, "poisson": 0.3}, "density": 8000.0}},
+ {"command": "model.section.create", "params": {"name": "membrane", "set": "all", "material": "Steel", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "root", "type": "displacement", "target": {"set": "root"}, "values": [0, 0, null, null, null, null]}},
+ {"command": "model.boundary_condition.create", "params": {"name": "mid", "type": "symmetry", "target": {"set": "mid"}, "plane": "z"}},
+ {"command": "model.step.create", "params": {"name": "Modes", "procedure": {"type": "frequency", "modes": 6}, "boundary_conditions": ["root", "mid"], "loads": []}},
+ {"command": "solve.frequency", "params": {"step": "Modes"}, "id": "modes"}
+]

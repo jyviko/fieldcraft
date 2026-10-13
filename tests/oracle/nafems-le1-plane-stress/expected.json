@@ -1,0 +1,14 @@
+{
+ "title": "NAFEMS LE1 elliptic membrane with 2D plane stress elements",
+ "kind": "benchmark",
+ "source": "NAFEMS, The Standard NAFEMS Benchmarks, TNSB Rev. 3, October 1990, test LE1",
+ "status": "pending",
+ "requires": "2D plane stress elements (docs/elements.md)",
+ "quantities": [
+  {
+   "id": "syy_D",
+   "quantity": "σ_yy at D (2, 0)",
+   "value": 92.7
+  }
+ ]
+}

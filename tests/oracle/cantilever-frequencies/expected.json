@@ -1,0 +1,46 @@
+{
+ "title": "Natural frequencies of a cantilever (Euler–Bernoulli)",
+ "kind": "theory",
+ "source": "Euler–Bernoulli beam: f_n = (β_n L)²/(2π L²)·√(EI/ρA), β₁L = 1.8751, β₂L = 4.6941; Timoshenko, Young and Weaver, Vibration Problems in Engineering, 4th ed., Wiley 1974, §5.3",
+ "quantities": [
+  {
+   "id": "f1",
+   "quantity": "first bending frequency (modes 1 and 2 are the y and z pair)",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/0/frequency"
+   },
+   "value": 0.012770863695053732,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "Euler–Bernoulli neglects shear and rotary inertia, which lower f1 by about 0.2% at L/h = 20"
+  },
+  {
+   "id": "f1_pair",
+   "quantity": "the other first bending frequency",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/1/frequency"
+   },
+   "value": 0.012770863695053732,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "as f1: a square section bends alike in y and z"
+  },
+  {
+   "id": "f2",
+   "quantity": "second bending frequency",
+   "measure": {
+    "from": "modes",
+    "pointer": "/modes/2/frequency"
+   },
+   "value": 0.08003363662360005,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "shear and rotary inertia lower the second mode by about 1% at L/h = 20 (Timoshenko)"
+  }
+ ]
+}

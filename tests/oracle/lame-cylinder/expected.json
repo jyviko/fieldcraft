@@ -1,0 +1,76 @@
+{
+ "title": "Thick-walled cylinder under internal pressure, plane strain (Lamé)",
+ "kind": "theory",
+ "source": "Lamé's solution, Timoshenko and Goodier, Theory of Elasticity, 3rd ed., McGraw-Hill 1970, §28 (thick-walled cylinder)",
+ "quantities": [
+  {
+   "id": "ur_a",
+   "quantity": "radial displacement at the bore (10, 0, 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.00907936507936508,
+   "tolerance": {
+    "relative": 0.001
+   },
+   "reason": "quadratic elements on 8 radial divisions resolve u_r = A r + B/r to well under 0.1%"
+  },
+  {
+   "id": "ur_b",
+   "quantity": "radial displacement outside (20, 0, 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       20.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.005777777777777778,
+   "tolerance": {
+    "relative": 0.001
+   },
+   "reason": "as for the bore"
+  },
+  {
+   "id": "hoop_a",
+   "quantity": "hoop stress σ_θ = σ_yy at the bore (10, 0, 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 166.66666666666666,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "stress extrapolated from the integration points to the bore surface and averaged over two elements: about 0.5% at the steepest gradient"
+  }
+ ]
+}

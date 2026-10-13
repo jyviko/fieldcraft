@@ -1,0 +1,43 @@
+{
+ "title": "Cantilever under a tip load, Timoshenko deflection (tet10)",
+ "kind": "theory",
+ "source": "Timoshenko and Gere, Mechanics of Materials (beam with shear deformation: δ = PL³/3EI + PL/κGA, κ = 5/6 for a rectangle); Cowper, J. Appl. Mech. 33 (1966) 335–340 for the shear coefficient",
+ "quantities": [
+  {
+   "id": "tip_uz",
+   "quantity": "tip deflection u_z at (10, 0.5, 0.5)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Bend",
+     "at": [
+      [
+       10.0,
+       0.5,
+       0.5
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": -4.024,
+   "tolerance": {
+    "relative": 0.005
+   },
+   "reason": "beam theory vs 3D elasticity (a few tenths of a percent at L/h = 10); quadratic tetrahedra are converged on this mesh"
+  },
+  {
+   "id": "reaction",
+   "quantity": "total reaction z",
+   "measure": {
+    "from": "solve",
+    "pointer": "/reaction_total/2"
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "equilibrium holds to rounding"
+  }
+ ]
+}

@@ -1,0 +1,17 @@
+[
+ {"command": "mesh.block", "params": {"body": "Plate", "kind": "hex20", "corners": [[1.0, 0, 0], [30.0, 0, 0], [30.0, 30.0, 0], [0.7071067811865476, 0.7071067811865476, 0], [1.0, 0, 0.1], [30.0, 0, 0.1], [30.0, 30.0, 0.1], [0.7071067811865476, 0.7071067811865476, 0.1]], "divisions": [40, 16, 1], "bias": [40, 1, 1], "edges": [{"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 0.1]}}], "faces": {"6": "hole", "3": "y0", "4": "load", "1": "z0"}}},
+ {"command": "mesh.block", "params": {"body": "Plate", "kind": "hex20", "corners": [[0.7071067811865476, 0.7071067811865476, 0], [30.0, 30.0, 0], [0, 30.0, 0], [0, 1.0, 0], [0.7071067811865476, 0.7071067811865476, 0.1], [30.0, 30.0, 0.1], [0, 30.0, 0.1], [0, 1.0, 0.1]], "divisions": [40, 16, 1], "bias": [40, 1, 1], "edges": [{"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 0.1]}}], "faces": {"6": "hole", "5": "x0", "1": "z0"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Plate"}]}},
+ {"command": "model.set.create", "params": {"name": "x0", "geometry": [{"body": "Plate", "face": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "y0", "geometry": [{"body": "Plate", "face": "y0"}]}},
+ {"command": "model.set.create", "params": {"name": "z0", "geometry": [{"body": "Plate", "face": "z0"}]}},
+ {"command": "model.set.create", "params": {"name": "load", "geometry": [{"body": "Plate", "face": "load"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.3}}},
+ {"command": "model.section.create", "params": {"name": "plate", "set": "all", "material": "Mat", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sx", "type": "symmetry", "target": {"set": "x0"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sy", "type": "symmetry", "target": {"set": "y0"}, "plane": "y"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sz", "type": "symmetry", "target": {"set": "z0"}, "plane": "z"}},
+ {"command": "model.load.create", "params": {"name": "S", "type": "traction", "set": "load", "vector": [1, 0, 0]}},
+ {"command": "model.step.create", "params": {"name": "Tension", "procedure": {"type": "static"}, "boundary_conditions": ["sx", "sy", "sz"], "loads": ["S"]}},
+ {"command": "solve.static", "params": {}, "id": "solve"}
+]

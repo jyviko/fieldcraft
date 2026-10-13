@@ -1,0 +1,30 @@
+{
+ "title": "Scordelis–Lo roof with one layer of hex20 reduced-integration solids",
+ "kind": "benchmark",
+ "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20: Fig. 8 (p. 8) geometry, material and load; Table 5(a) (p. 11) reference displacement 0.3024; Belytschko et al., Computer Methods in Applied Mechanics and Engineering 51 (1985) 221–258 (shell obstacle course)",
+ "quantities": [
+  {
+   "id": "uz",
+   "quantity": "vertical displacement at the midpoint of the free edge, mid-surface",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       0,
+       16.069690242163,
+       19.151111077974
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": -0.3024,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14); MacNeal and Harder normalise by 0.3024 (the deep-shell value quoted in their [5] is 0.3086), and a solid model of R/t = 100 differs from shell theory by O(t/R)"
+  }
+ ]
+}

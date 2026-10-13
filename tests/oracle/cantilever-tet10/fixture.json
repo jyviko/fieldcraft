@@ -1,0 +1,13 @@
+{
+  "note": "ModelCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "reaction": {
+      "band": 1.0000000000174362e-9,
+      "value": 1.000000000017436
+    },
+    "tip_uz": {
+      "band": 4.024e-9,
+      "value": -4.0232748685235595
+    }
+  }
+}

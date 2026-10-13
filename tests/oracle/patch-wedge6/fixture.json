@@ -1,0 +1,33 @@
+{
+  "note": "ModelCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "sxx": {
+      "band": 1.0000000000000007e-9,
+      "value": 1.0000000000000007
+    },
+    "sxy": {
+      "band": 1.000000000000084e-12,
+      "value": -8.37913026900662e-17
+    },
+    "syy": {
+      "band": 2.0000000000000005e-9,
+      "value": 2.0000000000000004
+    },
+    "szz": {
+      "band": 3.0000000000000004e-9,
+      "value": 2.9999999999999987
+    },
+    "ux": {
+      "band": 2.5000000000000005e-13,
+      "value": -0.00024999999999999784
+    },
+    "uy": {
+      "band": 1.0000000000000016e-12,
+      "value": 0.0010000000000000015
+    },
+    "uz": {
+      "band": 2.25e-12,
+      "value": 0.002249999999999995
+    }
+  }
+}

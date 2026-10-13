@@ -1,0 +1,15 @@
+[
+ {"command": "mesh.block", "params": {"body": "Beam", "kind": "hex8", "corners": [[4.12, 0, 0], [4.32, 0, 0], [0, 4.32, 0], [0, 4.12, 0], [4.12, 0, 0.1], [4.32, 0, 0.1], [0, 4.32, 0.1], [0, 4.12, 0.1]], "divisions": [1, 6, 1], "edges": [{"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [2, 3], "arc": {"center": [0, 0, 0]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 0.1]}}, {"corners": [6, 7], "arc": {"center": [0, 0, 0.1]}}], "faces": {"3": "root", "5": "tip"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Beam"}]}},
+ {"command": "model.set.create", "params": {"name": "root", "geometry": [{"body": "Beam", "face": "root"}]}},
+ {"command": "model.set.create", "params": {"name": "tip", "geometry": [{"body": "Beam", "face": "tip"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 10000000.0, "poisson": 0.25}}},
+ {"command": "model.section.create", "params": {"name": "beam", "set": "all", "material": "Mat", "kind": {"type": "solid"}, "formulation": {"incompatible_modes": true}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "clamp", "type": "fixed", "target": {"set": "root"}}},
+ {"command": "model.load.create", "params": {"name": "in_plane", "type": "force", "target": {"set": "tip"}, "vector": [0, 1, 0]}},
+ {"command": "model.load.create", "params": {"name": "out_of_plane", "type": "force", "target": {"set": "tip"}, "vector": [0, 0, 1]}},
+ {"command": "model.step.create", "params": {"name": "In_plane", "procedure": {"type": "static"}, "boundary_conditions": ["clamp"], "loads": ["in_plane"]}},
+ {"command": "model.step.create", "params": {"name": "Out_of_plane", "procedure": {"type": "static"}, "boundary_conditions": ["clamp"], "loads": ["out_of_plane"]}},
+ {"command": "solve.static", "params": {"step": "In_plane"}},
+ {"command": "solve.static", "params": {"step": "Out_of_plane"}}
+]

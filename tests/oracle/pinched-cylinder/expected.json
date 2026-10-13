@@ -1,0 +1,14 @@
+{
+ "title": "Pinched cylinder with rigid diaphragms",
+ "kind": "benchmark",
+ "source": "Belytschko, Stolarski, Liu, Carpenter and Ong, 'Stress projection for membrane and shear locking in shell finite elements', Computer Methods in Applied Mechanics and Engineering 51 (1985) 221–258 (the shell obstacle course); reference 1.8248 × 10⁻⁵ under the load",
+ "status": "pending",
+ "requires": "shell elements (M8)",
+ "quantities": [
+  {
+   "id": "u",
+   "quantity": "radial displacement under the load",
+   "value": -1.8248e-05
+  }
+ ]
+}

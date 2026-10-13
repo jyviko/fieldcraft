@@ -1,0 +1,168 @@
+{
+ "title": "MacNeal–Harder patch test for solids (hex8 with incompatible modes)",
+ "kind": "benchmark",
+ "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20: Fig. 3 (p. 6) geometry and inner node locations, Table 2(c) (p. 10) boundary displacements and theoretical solution",
+ "quantities": [
+  {
+   "id": "sxx",
+   "quantity": "σ_xx at inner node 7 (0.788, 0.693, 0.644)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Patch",
+     "at": [
+      [
+       0.788,
+       0.693,
+       0.644
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 2000.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "syy",
+   "quantity": "σ_yy at inner node 7 (0.788, 0.693, 0.644)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Patch",
+     "at": [
+      [
+       0.788,
+       0.693,
+       0.644
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 2000.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "szz",
+   "quantity": "σ_zz at inner node 7 (0.788, 0.693, 0.644)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Patch",
+     "at": [
+      [
+       0.788,
+       0.693,
+       0.644
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/2"
+   },
+   "value": 2000.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "txy",
+   "quantity": "τ_xy at inner node 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Patch",
+     "at": [
+      [
+       0.788,
+       0.693,
+       0.644
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/3"
+   },
+   "value": 400.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "txz",
+   "quantity": "τ_xz at inner node 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Patch",
+     "at": [
+      [
+       0.788,
+       0.693,
+       0.644
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/4"
+   },
+   "value": 400.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "tyz",
+   "quantity": "τ_yz at inner node 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Patch",
+     "at": [
+      [
+       0.788,
+       0.693,
+       0.644
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/5"
+   },
+   "value": 400.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "u7",
+   "quantity": "u_x at inner node 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Patch",
+     "at": [
+      [
+       0.788,
+       0.693,
+       0.644
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.0014565000000000001,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  }
+ ]
+}

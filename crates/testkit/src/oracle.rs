@@ -1,0 +1,688 @@
+//! The verification and validation oracle (docs/verification.md): every case in
+//! `tests/oracle/<case>/` is our own model of a problem with a known answer, run through the
+//! command engine and compared with its reference values and with its frozen fixture.
+//!
+//! A case directory holds:
+//! - `expected.json`: the case's kind (theory, experiment, benchmark), source, status and its
+//!   quantities: how each is measured, the reference value, the tolerance and the reason for it;
+//! - `recipe.json`: the model as ModelCraft commands (a JSON array of `{"command", "params"}`,
+//!   each step optionally with an `id` that measures can read its output by); absent while a
+//!   case is pending;
+//! - `design.json` (optional): a SolidCraft script that builds the geometry, opened first;
+//! - `fixture.json`: our accepted values, written by `--bless` once the case passes;
+//! - `README.md`: the problem in our own words.
+//!
+//! [`run`] (the `oracle` binary, `cargo xtask oracle`) runs the cases, prints and checks the
+//! results and writes `docs/oracle.md` after a full run.
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
+
+use modelcraft_engine::Session;
+use serde_json::{Value, json};
+
+/// Largest case file read.
+const MAX_FILE_BYTES: u64 = 16 << 20;
+
+/// Fixture band: a result may move by this fraction of its size (and a thousandth of the
+/// reference's absolute tolerance) before CI calls it a change. Results are deterministic on one
+/// platform; the band only absorbs last-digit differences of the system maths library.
+pub const FIXTURE_RELATIVE: f64 = 1e-9;
+
+/// The kinds of reference (docs/verification.md).
+pub const KINDS: [&str; 3] = ["theory", "benchmark", "experiment"];
+
+/// Options of one run.
+#[derive(Debug, Default, Clone)]
+pub struct Options {
+    /// Run only these cases (all when empty).
+    pub cases: Vec<String>,
+    /// Write `fixture.json` for these cases when they pass (`all` for every passing case).
+    pub bless: Vec<String>,
+    /// Skip cases marked `slow`.
+    pub quick: bool,
+    /// Write docs/oracle.md (only after a run of every case).
+    pub write: bool,
+}
+
+/// A quantity's tolerance: |ours − reference| ≤ relative·|reference| + absolute.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Tolerance {
+    pub relative: f64,
+    pub absolute: f64,
+}
+
+impl Tolerance {
+    fn from_json(v: &Value) -> Result<Tolerance, String> {
+        let get = |k: &str| -> Result<f64, String> {
+            match v.get(k) {
+                None => Ok(0.0),
+                Some(x) => x.as_f64().filter(|x| x.is_finite() && *x >= 0.0).ok_or_else(|| format!("tolerance `{k}` must be a number ≥ 0")),
+            }
+        };
+        let t = Tolerance { relative: get("relative")?, absolute: get("absolute")? };
+        if t.relative == 0.0 && t.absolute == 0.0 && v.get("exact") != Some(&Value::Bool(true)) {
+            return Err("a tolerance gives `relative`, `absolute` or `\"exact\": true`".into());
+        }
+        Ok(t)
+    }
+
+    pub fn allows(&self, reference: f64, ours: f64) -> bool {
+        (ours - reference).abs() <= self.relative * reference.abs() + self.absolute
+    }
+
+    fn describe(&self) -> String {
+        match (self.relative > 0.0, self.absolute > 0.0) {
+            (true, false) => fraction(self.relative),
+            (false, true) => format!("± {}", number(self.absolute)),
+            (true, true) => format!("{} + {}", fraction(self.relative), number(self.absolute)),
+            (false, false) => "exact".into(),
+        }
+    }
+}
+
+/// One quantity of a case.
+#[derive(Debug, Clone)]
+pub struct Quantity {
+    pub id: String,
+    pub description: String,
+    pub measure: Value,
+    pub reference: Option<f64>,
+    pub tolerance: Tolerance,
+    pub reason: String,
+    pub known_failure: Option<String>,
+}
+
+/// One case's `expected.json`.
+#[derive(Debug, Clone)]
+pub struct Expected {
+    pub title: String,
+    pub kind: String,
+    pub source: String,
+    pub pending: Option<String>,
+    pub slow: bool,
+    pub quantities: Vec<Quantity>,
+}
+
+fn text(v: &Value, key: &str) -> Result<String, String> {
+    v.get(key).and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_string).ok_or_else(|| format!("`{key}` must be a non-empty string"))
+}
+
+impl Expected {
+    pub fn parse(v: &Value) -> Result<Expected, String> {
+        let kind = text(v, "kind")?;
+        if !KINDS.contains(&kind.as_str()) {
+            return Err(format!("`kind` must be one of {KINDS:?}"));
+        }
+        let pending = match v.get("status").and_then(Value::as_str) {
+            None | Some("active") => None,
+            Some("pending") => Some(text(v, "requires")?),
+            Some(other) => return Err(format!("`status` must be active or pending, not `{other}`")),
+        };
+        let list = v.get("quantities").and_then(Value::as_array).filter(|q| !q.is_empty()).ok_or("`quantities` must be a non-empty list")?;
+        let mut quantities = Vec::with_capacity(list.len());
+        for q in list {
+            let id = text(q, "id")?;
+            let context = |e: String| format!("quantity `{id}`: {e}");
+            let reference = match q.get("value") {
+                None | Some(Value::Null) if pending.is_some() => None,
+                Some(x) => Some(x.as_f64().filter(|x| x.is_finite()).ok_or_else(|| context("`value` must be a finite number".into()))?),
+                None => return Err(context("`value` is required".into())),
+            };
+            let tolerance = match q.get("tolerance") {
+                None if pending.is_some() => Tolerance::default(),
+                Some(t) => Tolerance::from_json(t).map_err(context)?,
+                None => return Err(context("`tolerance` is required".into())),
+            };
+            let reason = if pending.is_some() { q.get("reason").and_then(Value::as_str).unwrap_or_default().to_string() } else { text(q, "reason").map_err(context)? };
+            let measure = q.get("measure").cloned().unwrap_or(Value::Null);
+            if pending.is_none() && measure.get("pointer").and_then(Value::as_str).is_none() {
+                return Err(context("`measure` needs a JSON `pointer` into a step's output or a command's".into()));
+            }
+            if quantities.iter().any(|x: &Quantity| x.id == id) {
+                return Err(format!("quantity `{id}` is listed twice"));
+            }
+            quantities.push(Quantity {
+                description: text(q, "quantity").map_err(context)?,
+                known_failure: q.get("known_failure").and_then(Value::as_str).map(str::to_string),
+                id,
+                measure,
+                reference,
+                tolerance,
+                reason,
+            });
+        }
+        Ok(Expected {
+            title: text(v, "title")?,
+            kind,
+            source: text(v, "source")?,
+            pending,
+            slow: v.get("slow").and_then(Value::as_bool).unwrap_or(false),
+            quantities,
+        })
+    }
+}
+
+/// A frozen value and how far it may move.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frozen {
+    pub value: f64,
+    pub band: f64,
+}
+
+/// The band a fixture value gets when it is blessed.
+pub fn fixture_band(value: f64, reference: f64, tolerance: Tolerance) -> f64 {
+    FIXTURE_RELATIVE * value.abs().max(reference.abs()) + 1e-3 * tolerance.absolute
+}
+
+fn read_json(path: &Path) -> Result<Value, String> {
+    let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+    if size > MAX_FILE_BYTES {
+        return Err(format!("{}: larger than {MAX_FILE_BYTES} bytes", path.display()));
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn read_fixture(path: &Path) -> Result<Option<BTreeMap<String, Frozen>>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let v = read_json(path)?;
+    let values = v.get("values").and_then(Value::as_object).ok_or_else(|| format!("{}: no `values`", path.display()))?;
+    values
+        .iter()
+        .map(|(k, f)| {
+            let value = f.get("value").and_then(Value::as_f64);
+            let band = f.get("band").and_then(Value::as_f64).filter(|b| *b >= 0.0);
+            match (value, band) {
+                (Some(value), Some(band)) => Ok((k.clone(), Frozen { value, band })),
+                _ => Err(format!("{}: `{k}` needs a `value` and a `band` ≥ 0", path.display())),
+            }
+        })
+        .collect::<Result<_, _>>()
+        .map(Some)
+}
+
+/// The result of measuring one quantity.
+#[derive(Debug, Clone)]
+pub struct Measured {
+    pub id: String,
+    pub value: Result<f64, String>,
+}
+
+/// Run a case's recipe and measure its quantities. A failing command fails every quantity.
+pub fn run_case(dir: &Path, expected: &Expected) -> Result<Vec<Measured>, String> {
+    let mut session = Session::default();
+    let design = dir.join("design.json");
+    if design.is_file() {
+        let script = std::fs::read_to_string(&design).map_err(|e| format!("{}: {e}", design.display()))?;
+        let bytes = modelcraft_geometry::script_design(&script).map_err(|e| format!("design.json: {e}"))?;
+        let opened = modelcraft_geometry::open_design(&bytes).map_err(|e| format!("design.json: {e}"))?;
+        if let Some(e) = opened.errors.first() {
+            return Err(format!("design.json: feature {}: {}", e.feature, e.message));
+        }
+        session.design = Some(Arc::new(opened));
+    }
+    let recipe = read_json(&dir.join("recipe.json"))?;
+    let steps = recipe.as_array().ok_or("recipe.json must be a JSON array of steps")?;
+    let mut outputs: BTreeMap<String, Value> = BTreeMap::new();
+    for (i, step) in steps.iter().enumerate() {
+        let command = step.get("command").and_then(Value::as_str).ok_or_else(|| format!("recipe step {}: no `command`", i + 1))?;
+        let params = step.get("params").cloned().unwrap_or_else(|| json!({}));
+        let out = session.execute(command, &params).map_err(|e| format!("recipe step {} ({command}): {e}", i + 1))?;
+        if let Some(id) = step.get("id").and_then(Value::as_str) {
+            outputs.insert(id.to_string(), out);
+        }
+    }
+    Ok(expected
+        .quantities
+        .iter()
+        .map(|q| Measured { id: q.id.clone(), value: measure(&mut session, &outputs, &q.measure) })
+        .collect())
+}
+
+/// Read one number: from a recipe step's output (`"from": id`) or a command run now
+/// (`"command"`, `"params"`), at a JSON pointer.
+fn measure(session: &mut Session, outputs: &BTreeMap<String, Value>, m: &Value) -> Result<f64, String> {
+    let pointer = m.get("pointer").and_then(Value::as_str).ok_or("no `pointer`")?;
+    let fresh;
+    let out = match (m.get("from").and_then(Value::as_str), m.get("command").and_then(Value::as_str)) {
+        (Some(id), None) => outputs.get(id).ok_or_else(|| format!("no recipe step has id `{id}`"))?,
+        (None, Some(command)) => {
+            let params = m.get("params").cloned().unwrap_or_else(|| json!({}));
+            fresh = session.execute(command, &params).map_err(|e| format!("{command}: {e}"))?;
+            &fresh
+        }
+        _ => return Err("a measure gives either `from` (a recipe step id) or `command`".into()),
+    };
+    let v = out.pointer(pointer).ok_or_else(|| format!("nothing at `{pointer}`"))?;
+    let x = v.as_f64().ok_or_else(|| format!("`{pointer}` is {v}, not a number"))?;
+    let x = x * m.get("scale").and_then(Value::as_f64).unwrap_or(1.0);
+    if x.is_finite() { Ok(x) } else { Err(format!("`{pointer}` is not finite")) }
+}
+
+/// How one quantity came out.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Verdict {
+    Pass,
+    Fail,
+    /// Fails, and expected.json says why.
+    Known,
+    /// Marked as a known failure but passes: remove the mark.
+    Fixed,
+    /// Could not be measured.
+    Error(String),
+    Pending,
+}
+
+/// The fixture check of one quantity.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FixtureCheck {
+    Matches,
+    Moved { frozen: f64 },
+    Missing,
+    /// No fixture is kept (pending, failing or known-failing quantity).
+    NotKept,
+    Blessed,
+}
+
+/// One row of the report.
+#[derive(Debug, Clone)]
+pub struct Row {
+    pub case: String,
+    pub quantity: Quantity,
+    pub ours: Option<f64>,
+    pub verdict: Verdict,
+    pub fixture: FixtureCheck,
+}
+
+/// Judge a measured value against the reference and the fixture.
+pub fn judge(q: &Quantity, ours: &Result<f64, String>, frozen: Option<&Frozen>) -> (Verdict, FixtureCheck) {
+    let (Some(reference), Ok(ours)) = (q.reference, ours) else {
+        return match ours {
+            Err(e) => (Verdict::Error(e.clone()), FixtureCheck::NotKept),
+            Ok(_) => (Verdict::Pending, FixtureCheck::NotKept),
+        };
+    };
+    let pass = q.tolerance.allows(reference, *ours);
+    let verdict = match (pass, &q.known_failure) {
+        (true, None) => Verdict::Pass,
+        (true, Some(_)) => Verdict::Fixed,
+        (false, None) => Verdict::Fail,
+        (false, Some(_)) => Verdict::Known,
+    };
+    let fixture = match frozen {
+        Some(f) if (ours - f.value).abs() <= f.band => FixtureCheck::Matches,
+        Some(f) => FixtureCheck::Moved { frozen: f.value },
+        None if verdict == Verdict::Pass => FixtureCheck::Missing,
+        None => FixtureCheck::NotKept,
+    };
+    (verdict, fixture)
+}
+
+/// The case directories under `tests/oracle`, sorted.
+pub fn case_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let dir = root.join("tests").join("oracle");
+    let mut cases: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("expected.json").is_file())
+        .collect();
+    cases.sort();
+    Ok(cases)
+}
+
+fn name_of(dir: &Path) -> String {
+    dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// Run the oracle. Fails when a quantity fails its reference, a fixture moved or is missing,
+/// a known failure now passes, or a case cannot run.
+pub fn run(root: &Path, options: &Options) -> Result<(), String> {
+    let all = case_dirs(root)?;
+    for want in options.cases.iter().chain(options.bless.iter().filter(|b| *b != "all")) {
+        if !all.iter().any(|d| name_of(d) == *want) {
+            return Err(format!("no case `{want}` in tests/oracle"));
+        }
+    }
+    let selected: Vec<&PathBuf> = all.iter().filter(|d| options.cases.is_empty() || options.cases.contains(&name_of(d))).collect();
+    let mut rows = Vec::new();
+    let mut cases: Vec<(String, Expected)> = Vec::new();
+    let mut problems = Vec::new();
+    let mut skipped = Vec::new();
+    for dir in selected {
+        let case = name_of(dir);
+        let expected = Expected::parse(&read_json(&dir.join("expected.json"))?).map_err(|e| format!("{case}/expected.json: {e}"))?;
+        if expected.slow && options.quick {
+            skipped.push(case);
+            continue;
+        }
+        let measured: Vec<Measured> = if expected.pending.is_some() {
+            expected.quantities.iter().map(|q| Measured { id: q.id.clone(), value: Err("pending".into()) }).collect()
+        } else {
+            let start = Instant::now();
+            let m = run_case(dir, &expected).unwrap_or_else(|e| expected.quantities.iter().map(|q| Measured { id: q.id.clone(), value: Err(e.clone()) }).collect());
+            eprintln!("oracle: {case} ({:.2} s)", start.elapsed().as_secs_f64());
+            m
+        };
+        let fixture_path = dir.join("fixture.json");
+        let fixture = read_fixture(&fixture_path)?;
+        let bless = options.bless.iter().any(|b| *b == case || b == "all");
+        let mut case_rows = Vec::new();
+        for (q, m) in expected.quantities.iter().zip(&measured) {
+            let (verdict, check) = if expected.pending.is_some() {
+                (Verdict::Pending, FixtureCheck::NotKept)
+            } else {
+                judge(q, &m.value, fixture.as_ref().and_then(|f| f.get(&q.id)))
+            };
+            case_rows.push(Row { case: case.clone(), quantity: q.clone(), ours: m.value.as_ref().ok().copied(), verdict, fixture: check });
+        }
+        if bless && expected.pending.is_none() {
+            let passing = case_rows.iter().all(|r| matches!(r.verdict, Verdict::Pass | Verdict::Known));
+            if !passing {
+                problems.push(format!("{case}: not blessed, it does not pass against expected.json"));
+            } else {
+                let mut values = serde_json::Map::new();
+                for r in case_rows.iter_mut().filter(|r| r.verdict == Verdict::Pass) {
+                    if let (Some(ours), Some(reference)) = (r.ours, r.quantity.reference) {
+                        values.insert(r.quantity.id.clone(), json!({"value": ours, "band": fixture_band(ours, reference, r.quantity.tolerance)}));
+                        r.fixture = FixtureCheck::Blessed;
+                    }
+                }
+                let text = serde_json::to_string_pretty(&json!({
+                    "note": "ModelCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+                    "values": values,
+                }))
+                .map_err(|e| e.to_string())?;
+                std::fs::write(&fixture_path, text + "\n").map_err(|e| format!("{}: {e}", fixture_path.display()))?;
+            }
+        }
+        for r in &case_rows {
+            let id = format!("{case}/{}", r.quantity.id);
+            match &r.verdict {
+                Verdict::Fail => problems.push(format!("{id}: {} vs reference {} ({})", show(r.ours), show(r.quantity.reference), r.quantity.tolerance.describe())),
+                Verdict::Fixed => problems.push(format!("{id}: passes now; remove its `known_failure` mark")),
+                Verdict::Error(e) => problems.push(format!("{id}: {e}")),
+                _ => {}
+            }
+            match &r.fixture {
+                FixtureCheck::Moved { frozen } => problems.push(format!("{id}: moved from the fixture {} to {}", number(*frozen), show(r.ours))),
+                FixtureCheck::Missing => problems.push(format!("{id}: no fixture; bless the case (`cargo xtask oracle --bless {case}`)")),
+                _ => {}
+            }
+        }
+        rows.extend(case_rows);
+        cases.push((case, expected));
+    }
+    print_summary(&rows);
+    if options.write && options.cases.is_empty() && !options.quick {
+        let path = root.join("docs").join("oracle.md");
+        std::fs::write(&path, report(&cases, &rows)).map_err(|e| format!("{}: {e}", path.display()))?;
+        eprintln!("oracle: wrote docs/oracle.md");
+    }
+    if !skipped.is_empty() {
+        eprintln!("oracle: skipped slow cases: {}", skipped.join(", "));
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} problem(s):\n  {}", problems.len(), problems.join("\n  ")))
+    }
+}
+
+fn print_summary(rows: &[Row]) {
+    for r in rows {
+        if r.verdict == Verdict::Pending {
+            continue;
+        }
+        println!(
+            "{:<34} {:<22} ours {:<14} ref {:<14} err {:<12} {:<14} {}",
+            r.case,
+            r.quantity.id,
+            show(r.ours),
+            show(r.quantity.reference),
+            error_of(r),
+            verdict_text(&r.verdict),
+            fixture_text(&r.fixture)
+        );
+    }
+}
+
+/// A number with five significant digits.
+pub fn number(x: f64) -> String {
+    if x == 0.0 {
+        return "0".into();
+    }
+    let a = x.abs();
+    if (1e-3..1e5).contains(&a) {
+        let digits = 4 - a.log10().floor() as i32;
+        let s = format!("{x:.*}", digits.max(0) as usize);
+        if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s }
+    } else {
+        format!("{x:.4e}")
+    }
+}
+
+/// A fraction as a percentage with three significant digits.
+fn percent(r: f64) -> String {
+    let p = r * 100.0;
+    if p == 0.0 {
+        return "0%".into();
+    }
+    let digits = (2 - p.abs().log10().floor() as i32).max(0) as usize;
+    let s = format!("{p:.digits$}");
+    let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
+    format!("{s}%")
+}
+
+/// A tolerance's relative part: a percentage, or a plain fraction when it only admits rounding.
+fn fraction(r: f64) -> String {
+    if r >= 1e-4 { percent(r) } else { format!("{r:.0e} rel.") }
+}
+
+fn show(x: Option<f64>) -> String {
+    x.map(number).unwrap_or_else(|| "—".into())
+}
+
+/// The error against the reference: relative where the reference is not zero.
+fn error_of(r: &Row) -> String {
+    let (Some(ours), Some(reference)) = (r.ours, r.quantity.reference) else { return "—".into() };
+    let d = ours - reference;
+    if reference != 0.0 && r.quantity.tolerance.relative > 0.0 {
+        let rel = d / reference.abs();
+        if rel.abs() < 1e-12 { "< 1e-10%".into() } else { percent(rel) }
+    } else if d.abs() < 1e-12 {
+        "< 1e-12".into()
+    } else {
+        format!("{d:.1e}")
+    }
+}
+
+fn verdict_text(v: &Verdict) -> String {
+    match v {
+        Verdict::Pass => "pass".into(),
+        Verdict::Fail => "**FAIL**".into(),
+        Verdict::Known => "known failure".into(),
+        Verdict::Fixed => "**passes: remove known_failure**".into(),
+        Verdict::Error(_) => "**ERROR**".into(),
+        Verdict::Pending => "pending".into(),
+    }
+}
+
+fn fixture_text(f: &FixtureCheck) -> &'static str {
+    match f {
+        FixtureCheck::Matches => "matches",
+        FixtureCheck::Moved { .. } => "**MOVED**",
+        FixtureCheck::Missing => "**missing**",
+        FixtureCheck::NotKept => "—",
+        FixtureCheck::Blessed => "blessed",
+    }
+}
+
+fn cell(s: &str) -> String {
+    s.replace('|', "/").replace('\n', " ")
+}
+
+/// docs/oracle.md.
+pub fn report(cases: &[(String, Expected)], rows: &[Row]) -> String {
+    let active: Vec<&(String, Expected)> = cases.iter().filter(|(_, e)| e.pending.is_none()).collect();
+    let count = |kind: &str| active.iter().filter(|(_, e)| e.kind == kind).count();
+    let quantities = rows.iter().filter(|r| r.verdict != Verdict::Pending).count();
+    let passing = rows.iter().filter(|r| r.verdict == Verdict::Pass).count();
+    let known = rows.iter().filter(|r| r.verdict == Verdict::Known).count();
+    let mut md = String::new();
+    let _ = write!(
+        md,
+        "# Verification and validation oracle\n\n\
+Generated by `cargo xtask oracle` from [`tests/oracle/`](../tests/oracle/); the policy is [verification.md](verification.md). \
+Every case is our own model, built with ModelCraft commands from the problem's published description, and compared with \
+the reference value its `expected.json` cites, within the stated tolerance and for the stated reason. Accepted results are \
+frozen in each case's `fixture.json`: a later change that moves one beyond its band (10⁻⁹ of its size) fails CI even while \
+the reference still passes. No reference value was produced with a commercial product.\n\n\
+**{passing} of {quantities} quantities pass** ({known} known failure(s)) in {} active cases: {} theory, {} published \
+benchmark, {} experiment; {} pending cases wait for capabilities still being built.\n\n",
+        active.len(),
+        count("theory"),
+        count("benchmark"),
+        count("experiment"),
+        cases.len() - active.len(),
+    );
+    for kind in KINDS {
+        let in_kind: Vec<&&(String, Expected)> = active.iter().filter(|(_, e)| e.kind == kind).collect();
+        if in_kind.is_empty() {
+            continue;
+        }
+        let heading = match kind {
+            "theory" => "Theory: closed-form solutions, patch tests and mesh invariants",
+            "benchmark" => "Published benchmarks",
+            _ => "Experiments",
+        };
+        let _ = write!(md, "## {heading}\n\n| Case | Quantity | Reference | ModelCraft | Error | Tolerance | Result | Fixture |\n|---|---|---|---|---|---|---|---|\n");
+        for (case, _) in &in_kind {
+            for r in rows.iter().filter(|r| &r.case == case) {
+                let mut result = verdict_text(&r.verdict);
+                if let Some(k) = &r.quantity.known_failure {
+                    result = format!("{result}: {k}");
+                }
+                if let Verdict::Error(e) = &r.verdict {
+                    result = format!("{result}: {e}");
+                }
+                let _ = writeln!(
+                    md,
+                    "| [{case}](../tests/oracle/{case}/) | {} | {} | {} | {} | {} | {} | {} |",
+                    cell(&r.quantity.description),
+                    show(r.quantity.reference),
+                    show(r.ours),
+                    error_of(r),
+                    r.quantity.tolerance.describe(),
+                    cell(&result),
+                    fixture_text(&r.fixture),
+                );
+            }
+        }
+        md.push('\n');
+    }
+    md += "## Sources and tolerances\n\n";
+    for (case, e) in &active {
+        let _ = write!(md, "- **[{case}](../tests/oracle/{case}/)** ({}): {}. Source: {}.", e.kind, cell(&e.title), cell(&e.source));
+        let reasons: Vec<String> = e.quantities.iter().map(|q| format!("{}: {}", q.id, cell(&q.reason))).collect();
+        let _ = writeln!(md, " Tolerances — {}", reasons.join("; "));
+    }
+    let pending: Vec<&(String, Expected)> = cases.iter().filter(|(_, e)| e.pending.is_some()).collect();
+    if !pending.is_empty() {
+        md += "\n## Pending cases\n\nReference values already cited; each case gets its recipe when the capability it needs lands.\n\n| Case | Kind | Problem | Needs | Reference values | Source |\n|---|---|---|---|---|---|\n";
+        for (case, e) in pending {
+            let values: Vec<String> =
+                e.quantities.iter().map(|q| format!("{} = {}", cell(&q.description), q.reference.map(number).unwrap_or_else(|| "to be transcribed".into()))).collect();
+            let _ = writeln!(
+                md,
+                "| [{case}](../tests/oracle/{case}/) | {} | {} | {} | {} | {} |",
+                e.kind,
+                cell(&e.title),
+                cell(e.pending.as_deref().unwrap_or_default()),
+                values.join("; "),
+                cell(&e.source)
+            );
+        }
+    }
+    md
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quantity(reference: f64, tolerance: Tolerance, known: Option<&str>) -> Quantity {
+        Quantity {
+            id: "q".into(),
+            description: "q".into(),
+            measure: json!({"from": "s", "pointer": "/x"}),
+            reference: Some(reference),
+            tolerance,
+            reason: "r".into(),
+            known_failure: known.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn verdicts_and_fixtures() {
+        let t = Tolerance { relative: 0.01, absolute: 0.0 };
+        let q = quantity(2.0, t, None);
+        let frozen = Frozen { value: 2.01, band: fixture_band(2.01, 2.0, t) };
+        assert_eq!(judge(&q, &Ok(2.01), Some(&frozen)), (Verdict::Pass, FixtureCheck::Matches));
+        assert_eq!(judge(&q, &Ok(2.011), Some(&frozen)), (Verdict::Pass, FixtureCheck::Moved { frozen: 2.01 }));
+        assert_eq!(judge(&q, &Ok(2.01), None), (Verdict::Pass, FixtureCheck::Missing));
+        assert_eq!(judge(&q, &Ok(2.1), None).0, Verdict::Fail);
+        assert_eq!(judge(&quantity(2.0, t, Some("why")), &Ok(2.1), None), (Verdict::Known, FixtureCheck::NotKept));
+        assert_eq!(judge(&quantity(2.0, t, Some("why")), &Ok(2.0), None).0, Verdict::Fixed);
+        assert!(matches!(judge(&q, &Err("boom".into()), None).0, Verdict::Error(_)));
+        // Zero references use the absolute tolerance, and the band keeps a floor from it.
+        let a = Tolerance { relative: 0.0, absolute: 1e-9 };
+        assert!(a.allows(0.0, 5e-10) && !a.allows(0.0, 2e-9));
+        assert!(fixture_band(1e-16, 0.0, a) >= 1e-12);
+    }
+
+    #[test]
+    fn expected_files_are_checked() {
+        let good = json!({"title": "t", "kind": "theory", "source": "s", "quantities": [
+            {"id": "a", "quantity": "a", "measure": {"from": "x", "pointer": "/a"}, "value": 1.0, "tolerance": {"relative": 0.1}, "reason": "r"}]});
+        assert!(Expected::parse(&good).is_ok());
+        let pending = json!({"title": "t", "kind": "benchmark", "source": "s", "status": "pending", "requires": "shells",
+            "quantities": [{"id": "a", "quantity": "a", "value": null}]});
+        assert!(Expected::parse(&pending).unwrap().pending.is_some());
+        for (key, bad) in [
+            ("kind", json!("guess")),
+            ("quantities", json!([])),
+            ("status", json!("maybe")),
+            ("title", json!("")),
+        ] {
+            let mut v = good.clone();
+            v[key] = bad;
+            assert!(Expected::parse(&v).is_err(), "{key}");
+        }
+        for (key, bad) in [("tolerance", json!({})), ("tolerance", json!({"relative": -1})), ("value", json!("x")), ("reason", json!("")), ("measure", json!({}))] {
+            let mut v = good.clone();
+            v["quantities"][0][key] = bad;
+            assert!(Expected::parse(&v).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn numbers_print_with_five_digits() {
+        assert_eq!(number(92.7), "92.7");
+        assert_eq!(number(-4.0241234), "-4.0241");
+        assert_eq!(number(0.30241), "0.30241");
+        assert_eq!(number(1.8248e-5), "1.8248e-5");
+        assert_eq!(number(210000.0), "2.1000e5");
+        assert_eq!(number(0.0), "0");
+        assert_eq!(percent(-0.0050317), "-0.503%");
+        assert_eq!(percent(0.000132), "0.0132%");
+        assert_eq!(percent(0.02), "2%");
+        assert_eq!(fraction(1e-9), "1e-9 rel.");
+    }
+}

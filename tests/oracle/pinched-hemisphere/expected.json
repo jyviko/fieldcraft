@@ -1,0 +1,14 @@
+{
+ "title": "Hemispherical shell with an 18° hole under alternating point loads",
+ "kind": "benchmark",
+ "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20, Fig. 9 (p. 9), Table 5(b) (p. 11): 0.0940 (lower bound 0.0924 from their [7])",
+ "status": "pending",
+ "requires": "shell elements (M8), or mapped blocks that follow doubly curved faces",
+ "quantities": [
+  {
+   "id": "u",
+   "quantity": "displacement under the load along the load",
+   "value": 0.094
+  }
+ ]
+}

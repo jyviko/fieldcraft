@@ -1,0 +1,13 @@
+{
+  "note": "ModelCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "invalid": {
+      "band": 0.0,
+      "value": 0.0
+    },
+    "volume": {
+      "band": 6.267477343911638e-6,
+      "value": 6266.527341942973
+    }
+  }
+}

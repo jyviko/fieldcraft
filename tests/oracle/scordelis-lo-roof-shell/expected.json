@@ -1,0 +1,14 @@
+{
+ "title": "Scordelis–Lo roof with shell elements",
+ "kind": "benchmark",
+ "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20, Fig. 8 (p. 8), Table 5(a) (p. 11); Belytschko, Stolarski, Liu, Carpenter and Ong, 'Stress projection for membrane and shear locking in shell finite elements', Computer Methods in Applied Mechanics and Engineering 51 (1985) 221–258 (the shell obstacle course)",
+ "status": "pending",
+ "requires": "shell elements (MITC4, M8)",
+ "quantities": [
+  {
+   "id": "uz",
+   "quantity": "vertical displacement at the midpoint of the free edge",
+   "value": -0.3024
+  }
+ ]
+}

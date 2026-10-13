@@ -1,0 +1,168 @@
+{
+ "title": "Constant-stress patch test, hex20",
+ "kind": "theory",
+ "source": "Irons and Razzaque, 'Experience with the patch test for convergence of finite elements', in Aziz (ed.), The Mathematical Foundations of the Finite Element Method, Academic Press 1972, pp. 557–587; MacNeal and Harder, Finite Elements in Analysis and Design 1 (1985) 3–20, constant-stress loading, p. 14 Table 7",
+ "quantities": [
+  {
+   "id": "ux",
+   "quantity": "u_x at the corner (1, 1, 1)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": -0.00025,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "uy",
+   "quantity": "u_y at the corner (1, 1, 1)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/1"
+   },
+   "value": 0.001,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "uz",
+   "quantity": "u_z at the corner (1, 1, 1)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": 0.00225,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "sxx",
+   "quantity": "σ_xx at the inner node (0.46, 0.55, 0.53)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       0.46,
+       0.55,
+       0.53
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "syy",
+   "quantity": "σ_yy at the inner node (0.46, 0.55, 0.53)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       0.46,
+       0.55,
+       0.53
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 2.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "szz",
+   "quantity": "σ_zz at the inner node (0.46, 0.55, 0.53)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       0.46,
+       0.55,
+       0.53
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/2"
+   },
+   "value": 3.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding"
+  },
+  {
+   "id": "sxy",
+   "quantity": "σ_xy at the inner node",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       0.46,
+       0.55,
+       0.53
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/3"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 1e-09
+   },
+   "reason": "a patch test is passed exactly: the tolerance only admits rounding (stresses of order 1)"
+  }
+ ]
+}

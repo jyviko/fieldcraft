@@ -1,0 +1,33 @@
+{
+ "title": "Constrained Delaunay mesh of a cylinder: volume within the chordal bound, valid elements",
+ "kind": "theory",
+ "source": "mesh invariants: an inscribed polygon of sagitta s loses at most 2s/R of a circle's area (elementary geometry); constrained Delaunay tetrahedralization after Diazzi et al., ACM TOG 42(6) 2023",
+ "quantities": [
+  {
+   "id": "volume",
+   "quantity": "volume of the tetrahedra",
+   "measure": {
+    "from": "tet",
+    "pointer": "/volume"
+   },
+   "value": 6267.477343911638,
+   "tolerance": {
+    "relative": 0.0025
+   },
+   "reason": "the tessellation inscribes the cylinder within the chordal tolerance s = 0.05: the polygon section loses between 0 and 2s/R = 0.5% of the area; the reference is the middle of that band"
+  },
+  {
+   "id": "invalid",
+   "quantity": "elements that fail the certified Jacobian check",
+   "measure": {
+    "command": "mesh.quality",
+    "pointer": "/invalid/count"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "exact": true
+   },
+   "reason": "every element of a valid mesh has positive volume"
+  }
+ ]
+}

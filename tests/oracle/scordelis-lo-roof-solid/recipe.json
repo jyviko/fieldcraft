@@ -1,0 +1,15 @@
+[
+ {"command": "mesh.block", "params": {"body": "Roof", "kind": "hex20", "corners": [[0, 0.0, 24.875], [25.0, 0.0, 24.875], [25.0, 15.989341790953, 19.055355522585], [0, 15.989341790953, 19.055355522585], [0, 0.0, 25.125], [25.0, 0.0, 25.125], [25.0, 16.150038693374, 19.246866633364], [0, 16.150038693374, 19.246866633364]], "divisions": [16, 16, 1], "edges": [{"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [2, 3], "arc": {"center": [25.0, 0, 0]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 0]}}, {"corners": [6, 7], "arc": {"center": [25.0, 0, 0]}}], "faces": {"6": "x0", "3": "crown", "4": "diaphragm"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Roof"}]}},
+ {"command": "model.set.create", "params": {"name": "x0", "geometry": [{"body": "Roof", "face": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "crown", "geometry": [{"body": "Roof", "face": "crown"}]}},
+ {"command": "model.set.create", "params": {"name": "diaphragm", "geometry": [{"body": "Roof", "face": "diaphragm"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 432000000.0, "poisson": 0.0}}},
+ {"command": "model.section.create", "params": {"name": "roof", "set": "all", "material": "Mat", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sx", "type": "symmetry", "target": {"set": "x0"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sy", "type": "symmetry", "target": {"set": "crown"}, "plane": "y"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "diaphragm", "type": "displacement", "target": {"set": "diaphragm"}, "values": [null, 0, 0, null, null, null]}},
+ {"command": "model.load.create", "params": {"name": "weight", "type": "body_force", "set": "all", "vector": [0, 0, -360.0]}},
+ {"command": "model.step.create", "params": {"name": "Load", "procedure": {"type": "static"}, "boundary_conditions": ["sx", "sy", "diaphragm"], "loads": ["weight"]}},
+ {"command": "solve.static", "params": {}, "id": "solve"}
+]

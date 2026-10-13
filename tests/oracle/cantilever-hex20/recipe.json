@@ -1,0 +1,12 @@
+[
+ {"command": "mesh.block", "params": {"body": "Beam", "kind": "hex20", "corners": [[0, 0, 0], [10.0, 0, 0], [10.0, 1.0, 0], [0, 1.0, 0], [0, 0, 1.0], [10.0, 0, 1.0], [10.0, 1.0, 1.0], [0, 1.0, 1.0]], "divisions": [20, 2, 2], "faces": {"6": "root", "4": "tip"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Beam"}]}},
+ {"command": "model.set.create", "params": {"name": "root", "geometry": [{"body": "Beam", "face": "root"}]}},
+ {"command": "model.set.create", "params": {"name": "tip", "geometry": [{"body": "Beam", "face": "tip"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.0}}},
+ {"command": "model.section.create", "params": {"name": "beam", "set": "all", "material": "Mat", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "clamp", "type": "fixed", "target": {"set": "root"}}},
+ {"command": "model.load.create", "params": {"name": "P", "type": "force", "target": {"set": "tip"}, "vector": [0, 0, -1]}},
+ {"command": "model.step.create", "params": {"name": "Bend", "procedure": {"type": "static"}, "boundary_conditions": ["clamp"], "loads": ["P"]}},
+ {"command": "solve.static", "params": {}, "id": "solve"}
+]

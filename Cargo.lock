@@ -1995,6 +1995,7 @@ dependencies = [
 name = "modelcraft-testkit"
 version = "0.1.0"
 dependencies = [
+ "modelcraft-engine",
  "modelcraft-geometry",
  "modelcraft-mesh",
  "serde_json",

@@ -1,0 +1,46 @@
+{
+ "title": "Constrained Delaunay mesh of a stepped block: exact volume, valid elements",
+ "kind": "theory",
+ "source": "mesh invariants: a tetrahedralization of a polyhedron fills its volume exactly (Si, TetGen paper ACM TOMS 41(2) 2015 for the definition of a CDT; Diazzi et al., ACM TOG 42(6) 2023); the volume is 60·40·10 + 40·40·10 + 20·40·10 − 10·10·10",
+ "quantities": [
+  {
+   "id": "volume",
+   "quantity": "volume of the tetrahedra",
+   "measure": {
+    "from": "tet",
+    "pointer": "/volume"
+   },
+   "value": 47000.0,
+   "tolerance": {
+    "relative": 1e-12
+   },
+   "reason": "a planar boundary is tessellated exactly and the constrained Delaunay mesh fills it exactly: only rounding"
+  },
+  {
+   "id": "invalid",
+   "quantity": "elements that fail the certified Jacobian check",
+   "measure": {
+    "command": "mesh.quality",
+    "pointer": "/invalid/count"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "exact": true
+   },
+   "reason": "every element of a valid mesh has positive volume"
+  },
+  {
+   "id": "undetermined",
+   "quantity": "elements the Jacobian check could not decide",
+   "measure": {
+    "command": "mesh.quality",
+    "pointer": "/undetermined/count"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "exact": true
+   },
+   "reason": "a linear tetrahedron's sign is exact"
+  }
+ ]
+}

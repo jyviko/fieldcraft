@@ -1,0 +1,66 @@
+{
+ "title": "Elastic wave in a bar from a pressure step (explicit)",
+ "kind": "theory",
+ "source": "d'Alembert's solution of the one-dimensional wave equation: c = √(E/ρ), particle velocity v = p/(ρc); Graff, Wave Motion in Elastic Solids, Dover 1991, §2.1",
+ "quantities": [
+  {
+   "id": "u_end",
+   "quantity": "displacement of the loaded end at t = 0.06",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Wave",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": -0.0006,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "the end moves at the particle velocity p/(ρc) from the start; the discrete wave's ringing behind the front changes the end's displacement by well under 1%"
+  },
+  {
+   "id": "v_mid",
+   "quantity": "particle velocity at x = 5, 20 elements behind the front, at t = 0.06",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Wave",
+     "at": [
+      [
+       5.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/velocity/0"
+   },
+   "value": -0.01,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "central differences ring behind a step front (dispersion); bulk viscosity damps it within a few elements, leaving about 1% twenty elements behind"
+  },
+  {
+   "id": "balance",
+   "quantity": "energy balance error",
+   "measure": {
+    "from": "solve",
+    "pointer": "/energy_balance"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 0.01
+   },
+   "reason": "external work = kinetic + internal + dissipated energy; the solver warns above 1%"
+  }
+ ]
+}

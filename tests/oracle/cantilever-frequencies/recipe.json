@@ -1,0 +1,10 @@
+[
+ {"command": "mesh.block", "params": {"body": "Beam", "kind": "hex20", "corners": [[0, 0, 0], [20.0, 0, 0], [20.0, 1.0, 0], [0, 1.0, 0], [0, 0, 1.0], [20.0, 0, 1.0], [20.0, 1.0, 1.0], [0, 1.0, 1.0]], "divisions": [20, 2, 2], "faces": {"6": "root"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Beam"}]}},
+ {"command": "model.set.create", "params": {"name": "root", "geometry": [{"body": "Beam", "face": "root"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.0}, "density": 1.0}},
+ {"command": "model.section.create", "params": {"name": "beam", "set": "all", "material": "Mat", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "clamp", "type": "fixed", "target": {"set": "root"}}},
+ {"command": "model.step.create", "params": {"name": "Modes", "procedure": {"type": "frequency", "modes": 4}, "boundary_conditions": ["clamp"], "loads": []}},
+ {"command": "solve.frequency", "params": {"step": "Modes"}, "id": "modes"}
+]

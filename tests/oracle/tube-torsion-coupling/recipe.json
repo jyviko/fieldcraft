@@ -1,0 +1,17 @@
+[
+ {"command": "mesh.block", "params": {"body": "Tube", "kind": "hex20", "corners": [[8.0, 0.0, 0], [10.0, 0.0, 0], [0.0, 10.0, 0], [0.0, 8.0, 0], [8.0, 0.0, 40.0], [10.0, 0.0, 40.0], [0.0, 10.0, 40.0], [0.0, 8.0, 40.0]], "divisions": [4, 8, 8], "edges": [{"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [2, 3], "arc": {"center": [0, 0, 0]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 40.0]}}, {"corners": [6, 7], "arc": {"center": [0, 0, 40.0]}}], "faces": {"1": "root", "2": "tip"}}},
+ {"command": "mesh.block", "params": {"body": "Tube", "kind": "hex20", "corners": [[0.0, 8.0, 0], [0.0, 10.0, 0], [-10.0, 0.0, 0], [-8.0, 0.0, 0], [0.0, 8.0, 40.0], [0.0, 10.0, 40.0], [-10.0, 0.0, 40.0], [-8.0, 0.0, 40.0]], "divisions": [4, 8, 8], "edges": [{"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [2, 3], "arc": {"center": [0, 0, 0]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 40.0]}}, {"corners": [6, 7], "arc": {"center": [0, 0, 40.0]}}], "faces": {"1": "root", "2": "tip"}}},
+ {"command": "mesh.block", "params": {"body": "Tube", "kind": "hex20", "corners": [[-8.0, 0.0, 0], [-10.0, 0.0, 0], [0.0, -10.0, 0], [0.0, -8.0, 0], [-8.0, 0.0, 40.0], [-10.0, 0.0, 40.0], [0.0, -10.0, 40.0], [0.0, -8.0, 40.0]], "divisions": [4, 8, 8], "edges": [{"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [2, 3], "arc": {"center": [0, 0, 0]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 40.0]}}, {"corners": [6, 7], "arc": {"center": [0, 0, 40.0]}}], "faces": {"1": "root", "2": "tip"}}},
+ {"command": "mesh.block", "params": {"body": "Tube", "kind": "hex20", "corners": [[0.0, -8.0, 0], [0.0, -10.0, 0], [10.0, 0.0, 0], [8.0, 0.0, 0], [0.0, -8.0, 40.0], [0.0, -10.0, 40.0], [10.0, 0.0, 40.0], [8.0, 0.0, 40.0]], "divisions": [4, 8, 8], "edges": [{"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [2, 3], "arc": {"center": [0, 0, 0]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 40.0]}}, {"corners": [6, 7], "arc": {"center": [0, 0, 40.0]}}], "faces": {"1": "root", "2": "tip"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Tube"}]}},
+ {"command": "model.set.create", "params": {"name": "root", "geometry": [{"body": "Tube", "face": "root"}]}},
+ {"command": "model.set.create", "params": {"name": "tip", "geometry": [{"body": "Tube", "face": "tip"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 200000.0, "poisson": 0.3}}},
+ {"command": "model.section.create", "params": {"name": "tube", "set": "all", "material": "Steel", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "clamp", "type": "fixed", "target": {"set": "root"}}},
+ {"command": "model.reference_point.create", "params": {"name": "RP", "xyz": [0, 0, 40.0]}},
+ {"command": "model.coupling.create", "params": {"name": "end", "reference_point": "RP", "set": "tip", "kind": "kinematic"}},
+ {"command": "model.load.create", "params": {"name": "T", "type": "moment", "target": {"reference_point": "RP"}, "vector": [0, 0, 1000000.0]}},
+ {"command": "model.step.create", "params": {"name": "Twist", "procedure": {"type": "static"}, "boundary_conditions": ["clamp"], "loads": ["T"]}},
+ {"command": "solve.static", "params": {}, "id": "solve"}
+]

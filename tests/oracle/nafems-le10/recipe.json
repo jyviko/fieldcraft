@@ -1,0 +1,19 @@
+[
+ {"command": "mesh.block", "params": {"body": "Plate", "kind": "hex20", "corners": [[2, 0, -0.3], [3.25, 0, -0.3], [0, 2.75, -0.3], [0, 1, -0.3], [2, 0, 0.0], [3.25, 0, 0.0], [0, 2.75, 0.0], [0, 1, 0.0]], "divisions": [8, 16, 3], "edges": [{"corners": [1, 4], "ellipse": {"center": [0, 0, -0.3], "axes": [[2, 0, 0], [0, 1, 0]]}}, {"corners": [2, 3], "ellipse": {"center": [0, 0, -0.3], "axes": [[3.25, 0, 0], [0, 2.75, 0]]}}, {"corners": [5, 8], "ellipse": {"center": [0, 0, 0.0], "axes": [[2, 0, 0], [0, 1, 0]]}}, {"corners": [6, 7], "ellipse": {"center": [0, 0, 0.0], "axes": [[3.25, 0, 0], [0, 2.75, 0]]}, "name": "EE"}], "faces": {"5": "AB", "3": "CD", "4": "BC"}}},
+ {"command": "mesh.block", "params": {"body": "Plate", "kind": "hex20", "corners": [[2, 0, 0.0], [3.25, 0, 0.0], [0, 2.75, 0.0], [0, 1, 0.0], [2, 0, 0.3], [3.25, 0, 0.3], [0, 2.75, 0.3], [0, 1, 0.3]], "divisions": [8, 16, 3], "edges": [{"corners": [1, 4], "ellipse": {"center": [0, 0, 0.0], "axes": [[2, 0, 0], [0, 1, 0]]}}, {"corners": [2, 3], "ellipse": {"center": [0, 0, 0.0], "axes": [[3.25, 0, 0], [0, 2.75, 0]]}}, {"corners": [5, 8], "ellipse": {"center": [0, 0, 0.3], "axes": [[2, 0, 0], [0, 1, 0]]}}, {"corners": [6, 7], "ellipse": {"center": [0, 0, 0.3], "axes": [[3.25, 0, 0], [0, 2.75, 0]]}}], "faces": {"5": "AB", "3": "CD", "4": "BC", "2": "top"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Plate"}]}},
+ {"command": "model.set.create", "params": {"name": "AB", "geometry": [{"body": "Plate", "face": "AB"}]}},
+ {"command": "model.set.create", "params": {"name": "CD", "geometry": [{"body": "Plate", "face": "CD"}]}},
+ {"command": "model.set.create", "params": {"name": "BC", "geometry": [{"body": "Plate", "face": "BC"}]}},
+ {"command": "model.set.create", "params": {"name": "top", "geometry": [{"body": "Plate", "face": "top"}]}},
+ {"command": "model.set.create", "params": {"name": "EE", "geometry": [{"body": "Plate", "edge": "EE"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000.0, "poisson": 0.3}}},
+ {"command": "model.section.create", "params": {"name": "plate", "set": "all", "material": "Steel", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "ab", "type": "symmetry", "target": {"set": "AB"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "cd", "type": "symmetry", "target": {"set": "CD"}, "plane": "y"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "bc", "type": "displacement", "target": {"set": "BC"}, "values": [0, 0, null, null, null, null]}},
+ {"command": "model.boundary_condition.create", "params": {"name": "ee", "type": "displacement", "target": {"set": "EE"}, "values": [null, null, 0, null, null, null]}},
+ {"command": "model.load.create", "params": {"name": "p", "type": "pressure", "set": "top", "magnitude": 1.0}},
+ {"command": "model.step.create", "params": {"name": "Load", "procedure": {"type": "static"}, "boundary_conditions": ["ab", "cd", "bc", "ee"], "loads": ["p"]}},
+ {"command": "solve.static", "params": {}, "id": "solve"}
+]

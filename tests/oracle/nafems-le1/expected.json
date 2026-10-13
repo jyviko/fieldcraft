@@ -1,0 +1,30 @@
+{
+ "title": "NAFEMS LE1 elliptic membrane (hex20 plane stress layer)",
+ "kind": "benchmark",
+ "source": "NAFEMS, The Standard NAFEMS Benchmarks, TNSB Rev. 3, October 1990, test LE1 (target σ_yy = 92.7 MPa at D); as reproduced in the Abaqus 2017 Benchmarks Guide, 'LE1: Plane stress elements—elliptic membrane'",
+ "quantities": [
+  {
+   "id": "syy_D",
+   "quantity": "σ_yy at D (2, 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       2,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 92.7,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "the target is published to three figures; plane stress modelled by a thin solid layer and the stress extrapolated to the edge add a few tenths of a percent"
+  }
+ ]
+}

@@ -1,0 +1,10 @@
+[
+ {"command": "mesh.block", "params": {"body": "Bar", "kind": "hex8", "corners": [[0, 0, 0], [10.0, 0, 0], [10.0, 0.1, 0], [0, 0.1, 0], [0, 0, 0.1], [10.0, 0, 0.1], [10.0, 0.1, 0.1], [0, 0.1, 0.1]], "divisions": [200, 1, 1], "faces": {"4": "end"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Bar"}]}},
+ {"command": "model.set.create", "params": {"name": "end", "geometry": [{"body": "Bar", "face": "end"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 10000.0, "poisson": 0.0}, "density": 1.0}},
+ {"command": "model.section.create", "params": {"name": "bar", "set": "all", "material": "Mat", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+ {"command": "model.load.create", "params": {"name": "p", "type": "pressure", "set": "end", "magnitude": 1.0}},
+ {"command": "model.step.create", "params": {"name": "Wave", "procedure": {"type": "explicit_dynamic", "end_time": 0.06}, "boundary_conditions": [], "loads": ["p"]}},
+ {"command": "solve.explicit", "params": {"step": "Wave"}, "id": "solve"}
+]

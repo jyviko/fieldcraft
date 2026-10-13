@@ -1,0 +1,30 @@
+{
+ "title": "NAFEMS LE10 thick plate under pressure (hex20)",
+ "kind": "benchmark",
+ "source": "NAFEMS, The Standard NAFEMS Benchmarks, TNSB Rev. 3, October 1990, test LE10 (target σ_yy = −5.38 MPa at D); as reproduced in the Abaqus 2017 Benchmarks Guide, 'LE10: Thick plate under pressure'",
+ "quantities": [
+  {
+   "id": "syy_D",
+   "quantity": "σ_yy at D (2, 0, 0.3) on the loaded face",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       2,
+       0,
+       0.3
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": -5.38,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "the target is published to three figures; at D the stress is extrapolated to a corner where the hole edge meets the loaded face, and published converged solutions scatter by 1–2% (Abaqus Benchmarks Guide fine meshes: −5.51 to −5.89)"
+  }
+ ]
+}

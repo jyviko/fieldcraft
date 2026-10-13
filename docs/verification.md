@@ -27,3 +27,61 @@ Rules:
   (a better element, a finer default mesh), never to hide a regression.
 - The theory suite is the gate for every PR; experiment and benchmark cases run in CI too, with
   their cited tolerances.
+
+## The case format
+
+`cargo xtask oracle` builds `modelcraft-testkit`'s `oracle` binary (release) once and runs every
+case through the command engine; the results are in [oracle.md](oracle.md).
+
+```
+cargo xtask oracle                      # every case; writes docs/oracle.md
+cargo xtask oracle --case nafems-le1    # one case (repeatable); docs untouched
+cargo xtask oracle --bless nafems-le1   # freeze a passing case's results (or --bless all)
+cargo xtask oracle --quick              # skip cases marked "slow"
+```
+
+- `recipe.json` is a script `modelcraft-cli run` also accepts: a JSON array of
+  `{"command", "params"}`; a step may carry an `"id"` so a quantity can read its output. Meshes
+  come from `mesh.block` (mapped hex, tet or wedge blocks with arcs and elliptical edges, named
+  faces, edges and vertices that sets select), `mesh.tet.generate`, or nodes and elements written
+  one by one; once structured and automatic meshers land, cases may use them.
+- `design.json` (optional) is a SolidCraft script that builds the geometry, opened before the
+  recipe (the test corpus's recipe form).
+- `expected.json`:
+  ```json
+  {"title": "…", "kind": "theory|benchmark|experiment",
+   "source": "document, section/table/figure, page",
+   "status": "active|pending", "requires": "the capability a pending case waits for",
+   "slow": false,
+   "quantities": [{"id": "syy_D", "quantity": "σ_yy at D (2, 0)",
+     "measure": {"command": "solve.probe", "params": {"step": "Load", "at": [[2, 0, 0]]}, "pointer": "/nodes/0/stress/1"},
+     "value": 92.7, "tolerance": {"relative": 0.01}, "reason": "why this tolerance",
+     "known_failure": "optional: why ModelCraft misses the reference today"}]}
+  ```
+  A measure reads a JSON pointer either from a recipe step's output (`"from": "<id>"`) or from a
+  command run after the recipe (`"command"`, `"params"`); an optional `"scale"` multiplies it.
+  A tolerance is `relative` (of the reference), `absolute`, both, or `"exact": true`. A pending
+  case cites its reference values (or `null` until transcribed) and has no recipe yet.
+- `fixture.json` holds each passing quantity's accepted `value` and its `band`
+  (10⁻⁹ of the larger of value and reference, plus 10⁻³ of an absolute tolerance): the result is
+  deterministic, the band only absorbs last-digit differences of the system maths library.
+
+The run fails when a quantity misses its reference (unless it is a `known_failure`, which is
+listed in oracle.md with its reason), when a known failure starts passing (remove the mark),
+when a result leaves its fixture band, when a passing quantity has no fixture, or when a case
+cannot run.
+
+## Adding cases for a new capability
+
+Every capability that lands brings its oracle cases in the same pull request:
+
+1. Turn the pending cases that waited for it into active ones (write `recipe.json`, drop
+   `status`/`requires`, add `measure` and `tolerance` with its reason to each quantity), and add
+   theory cases for its closed-form solutions (patch test and convergence for an element; the
+   analytic problem for a load, constraint or procedure).
+2. Choose meshes that are converged well inside the tolerance (show the refinement in the case's
+   README), or the mesh a benchmark prescribes.
+3. Run `cargo xtask oracle --case <name>`; when it passes, `--bless <name>`; commit the case, its
+   fixture and the regenerated docs/oracle.md.
+4. A case that misses its reference stays honest: keep the tolerance its reason supports and add
+   `known_failure` with what is missing. Never widen a tolerance to make a case pass.

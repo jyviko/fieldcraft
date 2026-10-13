@@ -1,0 +1,43 @@
+{
+ "title": "Torsion of a tube through a kinematically coupled reference point",
+ "kind": "theory",
+ "source": "Saint-Venant torsion of a circular tube, φ = TL/(GJ), τ = Tr/J with J = π(b⁴ − a⁴)/2; Timoshenko and Goodier, Theory of Elasticity, 3rd ed., 1970, §104",
+ "quantities": [
+  {
+   "id": "twist",
+   "quantity": "rotation of the reference point about z",
+   "measure": {
+    "from": "solve",
+    "pointer": "/reference_points/0/displacement/5"
+   },
+   "value": 0.05607084715974633,
+   "tolerance": {
+    "relative": 0.005
+   },
+   "reason": "Saint-Venant torsion of a circular tube is exact in elasticity; the rigid end coupling only stiffens a short zone near the tip; quadratic elements with 16 divisions around are within 0.1%"
+  },
+  {
+   "id": "shear",
+   "quantity": "surface shear stress τ_θz = σ_yz at (10, 0, 20)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Twist",
+     "at": [
+      [
+       10.0,
+       0,
+       20.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/5"
+   },
+   "value": 1078.285522302814,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "stress extrapolated to the outer surface and averaged where two blocks meet: about 0.3% with four radial quadratic elements (two gave 1.1%)"
+  }
+ ]
+}

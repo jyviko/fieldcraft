@@ -1,0 +1,9 @@
+[
+ {"command": "mesh.block", "params": {"body": "Bar", "kind": "hex8", "corners": [[0, 0, 0], [10.0, 0, 0], [10.0, 0.1, 0], [0, 0.1, 0], [0, 0, 0.1], [10.0, 0, 0.1], [10.0, 0.1, 0.1], [0, 0.1, 0.1]], "divisions": [200, 1, 1], "faces": {"6": "front"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Bar"}]}},
+ {"command": "model.set.create", "params": {"name": "front", "geometry": [{"body": "Bar", "face": "front"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 10000.0, "poisson": 0.0}, "density": 1.0}},
+ {"command": "model.section.create", "params": {"name": "bar", "set": "all", "material": "Mat", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+ {"command": "model.step.create", "params": {"name": "Impact", "procedure": {"type": "explicit_dynamic", "end_time": 0.3, "initial_velocities": [{"set": "all", "velocity": [-0.1, 0, 0]}], "rigid_walls": [{"set": "front", "point": [0, 0, 0], "normal": [1, 0, 0]}], "bulk_viscosity": {"linear": 0.0, "quadratic": 1.5}}, "boundary_conditions": [], "loads": []}},
+ {"command": "solve.explicit", "params": {"step": "Impact"}, "id": "solve"}
+]

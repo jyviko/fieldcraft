@@ -16,6 +16,7 @@ pub mod autosave;
 pub mod catalogue;
 pub mod cmd;
 pub mod history;
+pub mod results;
 pub mod sample;
 
 use std::collections::BTreeMap;
@@ -144,6 +145,8 @@ pub struct Session {
     /// The latest result of each solved step, by step name, with the revision it was solved at;
     /// [`Session::result`] hands out only those that describe the current state.
     results: BTreeMap<String, (u64, Arc<StepResult>)>,
+    /// What the results display shows (`results.*`); `None` shows the model.
+    pub results_view: Option<results::ResultsView>,
 }
 
 impl Session {

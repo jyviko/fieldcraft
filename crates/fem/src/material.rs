@@ -71,6 +71,29 @@ pub fn von_mises(s: &[f64; 6]) -> f64 {
     (0.5 * normal + 3.0 * (xy * xy + xz * xz + yz * yz)).sqrt()
 }
 
+/// The principal stresses of a stress 6-vector, largest first: the eigenvalues of the symmetric
+/// stress tensor in closed form (O. K. Smith, "Eigenvalues of a symmetric 3 × 3 matrix",
+/// Commun. ACM 4(4):168, 1961).
+pub fn principal(s: &[f64; 6]) -> [f64; 3] {
+    let [xx, yy, zz, xy, xz, yz] = *s;
+    let off = xy * xy + xz * xz + yz * yz;
+    let q = (xx + yy + zz) / 3.0;
+    let (a, b, c) = (xx - q, yy - q, zz - q);
+    let p = ((a * a + b * b + c * c + 2.0 * off) / 6.0).sqrt();
+    if !(p > 0.0) || off == 0.0 {
+        let mut d = [xx, yy, zz];
+        d.sort_by(|u, v| v.total_cmp(u));
+        return d;
+    }
+    // det(A − qI) / (2 p³), the cosine of three times the angle, within [−1, 1].
+    let det = a * (b * c - yz * yz) - xy * (xy * c - yz * xz) + xz * (xy * yz - b * xz);
+    let r = (det / (2.0 * p * p * p)).clamp(-1.0, 1.0);
+    let phi = r.acos() / 3.0;
+    let first = q + 2.0 * p * phi.cos();
+    let third = q + 2.0 * p * (phi + 2.0 * std::f64::consts::FRAC_PI_3).cos();
+    [first, 3.0 * q - first - third, third]
+}
+
 /// σ = D ε.
 pub fn stress(d: &Elasticity, strain: &[f64; 6]) -> [f64; 6] {
     let mut s = [0.0; 6];
@@ -97,6 +120,31 @@ mod tests {
         }
         assert!(isotropic(1.0, 0.5).is_err());
         assert!(orthotropic([1.0; 3], [0.9; 3], [1.0; 3]).is_err());
+    }
+
+    #[test]
+    fn principal_stresses_are_the_tensor_eigenvalues() {
+        let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9 * (1.0 + y.abs()));
+        // Diagonal: sorted, largest first.
+        assert_eq!(principal(&[1.0, 3.0, -2.0, 0.0, 0.0, 0.0]), [3.0, 1.0, -2.0]);
+        // Pure shear τ in the xy plane: ±τ and 0.
+        assert!(close(principal(&[0.0, 0.0, 0.0, 5.0, 0.0, 0.0]), [5.0, 0.0, -5.0]));
+        // Hydrostatic: three equal.
+        assert!(close(principal(&[-7.0, -7.0, -7.0, 0.0, 0.0, 0.0]), [-7.0; 3]));
+        // A general tensor: the sum is the trace, and each is a root of det(σ − λI) = 0.
+        let s = [10.0, -4.0, 3.0, 2.0, -1.5, 6.0];
+        let l = principal(&s);
+        assert!(l[0] >= l[1] && l[1] >= l[2]);
+        assert!((l.iter().sum::<f64>() - (s[0] + s[1] + s[2])).abs() < 1e-9);
+        for x in l {
+            let (a, b, c) = (s[0] - x, s[1] - x, s[2] - x);
+            let det = a * (b * c - s[5] * s[5]) - s[3] * (s[3] * c - s[5] * s[4]) + s[4] * (s[3] * s[5] - b * s[4]);
+            assert!(det.abs() < 1e-7, "{x}: {det}");
+        }
+        // Von Mises from the principal values agrees.
+        let vm = (0.5 * ((l[0] - l[1]).powi(2) + (l[1] - l[2]).powi(2) + (l[2] - l[0]).powi(2))).sqrt();
+        assert!((vm - von_mises(&s)).abs() < 1e-9);
+        assert!(principal(&[f64::NAN; 6]).iter().all(|v| v.is_nan()));
     }
 
     #[test]

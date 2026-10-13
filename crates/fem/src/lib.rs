@@ -29,7 +29,7 @@ pub mod shape;
 pub mod uniform;
 
 pub use element::{ELEMENT_TYPES, ElementType, Family, Formulation, PointStress, Solid, element_type};
-pub use material::{Elasticity, elasticity, von_mises};
+pub use material::{Elasticity, elasticity, principal, von_mises};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {

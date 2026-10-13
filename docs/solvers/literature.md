@@ -969,6 +969,8 @@ the module docs):
 - Mass lumping: E. Hinton, T. Rock, O. C. Zienkiewicz, Earthquake Eng. Struct. Dyn.
   4(3):245–249, 1976.
 - Stress extrapolation: E. Hinton, J. S. Campbell, IJNME 8(3):461–480, 1974.
+- Principal stresses (results display): O. K. Smith, *Eigenvalues of a symmetric 3 × 3 matrix*,
+  Commun. ACM 4(4):168, 1961 (closed form).
 - Ordering: A. George, SIAM J. Numer. Anal. 10(2):345–363, 1973; H. D. Simon, Computing Systems
   in Engineering 2:135–148, 1991.
 - Sparse Cholesky: T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM 2006; J. W. H.

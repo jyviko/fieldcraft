@@ -3,13 +3,19 @@
 //! camera uniform changes. Nodes are drawn as zero-length lines, which the line shader turns
 //! into squares.
 //!
+//! A large mesh does not fit one vertex buffer (wgpu's default `max_buffer_size`, which eframe
+//! requests, is 256 MiB): geometry is split into batches of at most [`MAX_BATCH_BYTES`] and the
+//! device's limit, each a whole number of primitives, and every batch is drawn. Device errors
+//! (out of memory, validation) go to [`GpuErrors`] and the status bar instead of wgpu's default
+//! handler, which panics.
+//!
 //! Adapted from SolidCraft's `crates/ui-egui/src/gpu.rs` (MIT OR Apache-2.0), see
 //! ATTRIBUTION.md.
 
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use egui_wgpu::wgpu;
-use egui_wgpu::wgpu::util::DeviceExt;
 use modelcraft_render::{Rgb, Scene};
 
 /// Triangle vertex: position (3 × f32), normal (3 × f32), sRGB colour (4 × u8).
@@ -17,6 +23,13 @@ pub const TRI_SIZE: usize = 28;
 /// Line instance: a, b (3 × f32 each), colour (4 × u8), width in physical pixels (f32).
 pub const LINE_SIZE: usize = 32;
 const UNIFORM_SIZE: u64 = 112;
+/// Largest vertex buffer the viewport creates, whatever the device allows.
+pub const MAX_BATCH_BYTES: u64 = 128 << 20;
+/// Longest device error message kept for the status bar.
+const MAX_ERROR_LEN: usize = 500;
+
+/// The last error the GPU device reported, waiting for the UI to show it.
+pub type GpuErrors = Arc<Mutex<Option<String>>>;
 
 /// Scene geometry in the GPU's vertex formats, waiting to be uploaded.
 #[derive(Default, Clone, Debug, PartialEq)]
@@ -88,8 +101,8 @@ struct Resources {
     bind: wgpu::BindGroup,
     linear_out: bool,
     key: Option<u64>,
-    tris: Option<Batch>,
-    lines: Option<Batch>,
+    tris: Vec<Batch>,
+    lines: Vec<Batch>,
 }
 
 const SHADER: &str = r#"
@@ -294,39 +307,74 @@ impl Resources {
             bind,
             linear_out: t.format.is_srgb(),
             key: None,
-            tris: None,
-            lines: None,
+            tris: Vec::new(),
+            lines: Vec::new(),
         }
     }
 
-    fn take(&mut self, device: &wgpu::Device, key: u64, slot: &SceneSlot) {
+    fn take(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, key: u64, slot: &SceneSlot) {
         if self.key == Some(key) {
             return;
         }
         if let Some(sc) = slot.lock().ok().and_then(|mut s| s.take()) {
-            self.tris = upload(device, "mc_tris", &sc.tris, TRI_SIZE);
-            self.lines = upload(device, "mc_lines", &sc.lines, LINE_SIZE);
+            // The old buffers go first, so the new ones don't have to fit beside them.
+            self.tris.clear();
+            self.lines.clear();
+            let max = device.limits().max_buffer_size;
+            self.tris = upload(device, queue, "mc_tris", &sc.tris, TRI_SIZE, 3, max);
+            self.lines = upload(device, queue, "mc_lines", &sc.lines, LINE_SIZE, 1, max);
             self.key = Some(key);
         }
     }
 }
 
-fn upload(device: &wgpu::Device, label: &str, bytes: &[u8], stride: usize) -> Option<Batch> {
-    if bytes.len() < stride {
-        return None;
+/// Byte ranges of `len` bytes of vertex data, `stride` bytes per vertex and `per_primitive`
+/// vertices per primitive, for buffers of at most `max_buffer` bytes (and [`MAX_BATCH_BYTES`]).
+/// Each range holds whole primitives; a trailing partial primitive is dropped. Empty when not
+/// even one primitive fits.
+pub fn batch_ranges(len: usize, stride: usize, per_primitive: usize, max_buffer: u64) -> Vec<Range<usize>> {
+    let Some(unit) = stride.checked_mul(per_primitive).filter(|&u| u > 0) else { return Vec::new() };
+    let limit = usize::try_from(max_buffer.min(MAX_BATCH_BYTES)).unwrap_or(usize::MAX);
+    let chunk = limit / unit * unit;
+    if chunk == 0 {
+        return Vec::new();
     }
-    Some(Batch {
-        buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents: bytes,
-            usage: wgpu::BufferUsages::VERTEX,
-        }),
-        count: u32::try_from(bytes.len() / stride).unwrap_or(0),
-    })
+    let end = len / unit * unit;
+    (0..end).step_by(chunk).map(|start| start..end.min(start.saturating_add(chunk))).collect()
+}
+
+/// Upload vertex data as batches (see [`batch_ranges`]); a failed allocation is reported to the
+/// device's error handler, not a panic.
+fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, bytes: &[u8], stride: usize, per_primitive: usize, max_buffer: u64) -> Vec<Batch> {
+    batch_ranges(bytes.len(), stride, per_primitive, max_buffer)
+        .into_iter()
+        .filter_map(|r| {
+            let data = bytes.get(r)?;
+            let count = u32::try_from(data.len() / stride).ok()?;
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: data.len() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&buffer, 0, data);
+            Some(Batch { buffer, count })
+        })
+        .collect()
 }
 
 /// Create the pipelines. Call once with the app's render state and its depth and MSAA settings.
-pub fn install(rs: &egui_wgpu::RenderState, depth_bits: u8, samples: u32) -> GpuTarget {
+/// Device errors are logged and kept in `errors` for the status bar (`ctx` is repainted so it
+/// shows), replacing wgpu's default handler, which panics.
+pub fn install(rs: &egui_wgpu::RenderState, depth_bits: u8, samples: u32, errors: GpuErrors, ctx: egui::Context) -> GpuTarget {
+    rs.device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+        let text: String = e.to_string().chars().take(MAX_ERROR_LEN).collect();
+        log::error!("graphics device error: {text}");
+        if let Ok(mut slot) = errors.lock() {
+            *slot = Some(text);
+        }
+        ctx.request_repaint();
+    }));
     let t = GpuTarget { format: rs.target_format, depth: egui_wgpu::depth_format_from_bits(depth_bits, 0), samples };
     let res = Resources::new(&rs.device, t);
     rs.renderer.write().callback_resources.insert(res);
@@ -343,7 +391,7 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
-        res.take(device, self.key, &self.slot);
+        res.take(device, queue, self.key, &self.slot);
         queue.write_buffer(&res.uniform, 0, &uniform_bytes(self, res.linear_out));
         Vec::new()
     }
@@ -356,15 +404,19 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         }
         pass.set_viewport(vp.left_px as f32, vp.top_px as f32, vp.width_px as f32, vp.height_px as f32, 0.0, 1.0);
         pass.set_bind_group(0, &res.bind, &[]);
-        if let Some(b) = &res.tris {
+        if !res.tris.is_empty() {
             pass.set_pipeline(&res.tri);
-            pass.set_vertex_buffer(0, b.buffer.slice(..));
-            pass.draw(0..b.count, 0..1);
+            for b in &res.tris {
+                pass.set_vertex_buffer(0, b.buffer.slice(..));
+                pass.draw(0..b.count, 0..1);
+            }
         }
-        if let Some(b) = &res.lines {
+        if !res.lines.is_empty() {
             pass.set_pipeline(&res.line);
-            pass.set_vertex_buffer(0, b.buffer.slice(..));
-            pass.draw(0..6, 0..b.count);
+            for b in &res.lines {
+                pass.set_vertex_buffer(0, b.buffer.slice(..));
+                pass.draw(0..6, 0..b.count);
+            }
         }
     }
 }
@@ -390,6 +442,39 @@ mod tests {
     fn shader_is_valid() {
         let module = naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
+    }
+
+    #[test]
+    fn batches_hold_whole_primitives_within_the_buffer_limit() {
+        let tri = TRI_SIZE * 3;
+        // Small scenes are one batch; nothing, or less than one primitive, is no batch.
+        assert_eq!(batch_ranges(10 * tri, TRI_SIZE, 3, 256 << 20), vec![0..10 * tri]);
+        assert!(batch_ranges(0, TRI_SIZE, 3, 256 << 20).is_empty());
+        assert!(batch_ranges(tri - 1, TRI_SIZE, 3, 256 << 20).is_empty());
+        // A trailing partial triangle is dropped.
+        assert_eq!(batch_ranges(2 * tri + 5, TRI_SIZE, 3, 256 << 20), vec![0..2 * tri]);
+        // A buffer limit smaller than one primitive, or a zero stride, gives nothing.
+        assert!(batch_ranges(10 * tri, TRI_SIZE, 3, (tri - 1) as u64).is_empty());
+        assert!(batch_ranges(10 * tri, 0, 3, 256 << 20).is_empty());
+        assert!(batch_ranges(usize::MAX, usize::MAX, 3, u64::MAX).is_empty());
+        // Ten triangles under a limit of four: 4 + 4 + 2.
+        let r = batch_ranges(10 * tri, TRI_SIZE, 3, (4 * tri + 7) as u64);
+        assert_eq!(r, vec![0..4 * tri, 4 * tri..8 * tri, 8 * tri..10 * tri]);
+        // A few million triangles under the 256 MiB default: every batch is within
+        // MAX_BATCH_BYTES, a whole number of triangles, and together they cover the data.
+        for (len, stride, per, max) in
+            [(5_000_000 * tri, TRI_SIZE, 3, 256u64 << 20), (9_000_000 * LINE_SIZE, LINE_SIZE, 1, u64::MAX), (777 * tri, TRI_SIZE, 3, 1000)]
+        {
+            let r = batch_ranges(len, stride, per, max);
+            assert!(r.len() > 1, "{len}");
+            let mut at = 0;
+            for b in &r {
+                assert_eq!(b.start, at);
+                assert!(b.len() as u64 <= max.min(MAX_BATCH_BYTES) && b.len() % (stride * per) == 0 && !b.is_empty());
+                at = b.end;
+            }
+            assert_eq!(at, len / (stride * per) * (stride * per));
+        }
     }
 
     #[test]

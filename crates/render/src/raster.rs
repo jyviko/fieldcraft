@@ -76,14 +76,77 @@ pub struct Canvas {
 const SS: usize = 2;
 /// Largest output side in pixels.
 pub const MAX_DIM: usize = 8192;
+/// Most output pixels (`w × h`): 16 MP, drawn at 2× into 64 MP of colour and depth (~512 MB).
+pub const MAX_PIXELS: usize = 4096 * 4096;
+/// Most primitives (triangles, lines and points together) one render draws.
+pub const MAX_PRIMITIVES: usize = 20_000_000;
+
+/// Why a render was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RenderError {
+    /// The image size is zero or over [`MAX_DIM`] per side or [`MAX_PIXELS`] in all.
+    Size { w: usize, h: usize },
+    /// The scene has more than [`MAX_PRIMITIVES`] primitives.
+    SceneTooLarge { primitives: usize },
+    /// The image buffers could not be allocated.
+    OutOfMemory,
+    /// The PNG encoder failed.
+    Encode,
+}
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RenderError::Size { w, h } => {
+                write!(f, "image size {w} x {h} is out of range (1..={MAX_DIM} per side, at most {MAX_PIXELS} pixels)")
+            }
+            RenderError::SceneTooLarge { primitives } => {
+                write!(f, "the scene has {primitives} primitives; the CPU renderer draws at most {MAX_PRIMITIVES}")
+            }
+            RenderError::OutOfMemory => f.write_str("not enough memory for the image"),
+            RenderError::Encode => f.write_str("PNG encoding failed"),
+        }
+    }
+}
+
+impl std::error::Error for RenderError {}
+
+/// Whether `w × h` is an image size [`render`] accepts.
+fn size_ok(w: usize, h: usize) -> bool {
+    (1..=MAX_DIM).contains(&w) && (1..=MAX_DIM).contains(&h) && w.checked_mul(h).is_some_and(|n| n <= MAX_PIXELS)
+}
+
+/// The largest size with the aspect of `w × h` that [`render`] accepts (for drawing a window of
+/// any size: the image is scaled up on screen).
+pub fn fit_size(w: usize, h: usize) -> (usize, usize) {
+    let (w, h) = (w.max(1), h.max(1));
+    if size_ok(w, h) {
+        return (w, h);
+    }
+    let by_side = MAX_DIM as f64 / w.max(h) as f64;
+    let by_area = (MAX_PIXELS as f64 / (w as f64 * h as f64)).sqrt();
+    let k = by_side.min(by_area);
+    let fit = |v: usize| ((v as f64 * k).floor() as usize).clamp(1, MAX_DIM);
+    (fit(w), fit(h))
+}
 /// Largest half-width of a line or point, in supersampled pixels.
 const MAX_MARK: f64 = 64.0;
 /// Most samples drawn along one line segment (a segment from far off screen is bounded).
 const MAX_LINE_STEPS: usize = 20_000;
 
 impl Canvas {
-    fn new(w: usize, h: usize) -> Canvas {
-        Canvas { w, h, rgba: vec![255; w * h * 4], depth: vec![f32::INFINITY; w * h] }
+    /// A white canvas; the buffers are reserved fallibly, so a size the machine cannot hold is
+    /// an error rather than an abort.
+    fn new(w: usize, h: usize) -> Result<Canvas, RenderError> {
+        let n = w.checked_mul(h).ok_or(RenderError::Size { w, h })?;
+        let bytes = n.checked_mul(4).ok_or(RenderError::Size { w, h })?;
+        let mut rgba = Vec::new();
+        rgba.try_reserve_exact(bytes).map_err(|_| RenderError::OutOfMemory)?;
+        rgba.resize(bytes, 255);
+        let mut depth = Vec::new();
+        depth.try_reserve_exact(n).map_err(|_| RenderError::OutOfMemory)?;
+        depth.resize(n, f32::INFINITY);
+        Ok(Canvas { w, h, rgba, depth })
     }
     fn put(&mut self, x: usize, y: usize, c: [f64; 3], a: f64) {
         let i = (y * self.w + x) * 4;
@@ -96,12 +159,19 @@ impl Canvas {
     }
 }
 
-/// Render a scene with the camera into an RGBA canvas of `w × h` pixels (each clamped to
-/// 1..=[`MAX_DIM`]).
-pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Canvas {
-    let (w, h) = (w.clamp(1, MAX_DIM), h.clamp(1, MAX_DIM));
+/// Render a scene with the camera into an RGBA canvas of `w × h` pixels. Sizes outside
+/// 1..=[`MAX_DIM`] per side or over [`MAX_PIXELS`], and scenes over [`MAX_PRIMITIVES`], are
+/// refused ([`fit_size`] gives an accepted size).
+pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Canvas, RenderError> {
+    if !size_ok(w, h) {
+        return Err(RenderError::Size { w, h });
+    }
+    let primitives = scene.tris.len().saturating_add(scene.lines.len()).saturating_add(scene.points.len());
+    if primitives > MAX_PRIMITIVES {
+        return Err(RenderError::SceneTooLarge { primitives });
+    }
     let (sw, sh) = (w * SS, h * SS);
-    let mut c = Canvas::new(sw, sh);
+    let mut c = Canvas::new(sw, sh)?;
     let (top, bot) = scene.background.unwrap_or((Rgb(236, 240, 245), Rgb(205, 212, 222)));
     let (a, b) = (top.f(), bot.f());
     for y in 0..sh {
@@ -198,8 +268,8 @@ fn dot(c: &mut Canvas, p: [f64; 3], size: f64, col: [f64; 3], round: bool) {
     }
 }
 
-fn downsample(c: &Canvas, w: usize, h: usize) -> Canvas {
-    let mut out = Canvas::new(w, h);
+fn downsample(c: &Canvas, w: usize, h: usize) -> Result<Canvas, RenderError> {
+    let mut out = Canvas::new(w, h)?;
     for y in 0..h {
         for x in 0..w {
             let mut acc = [0u32; 4];
@@ -219,13 +289,13 @@ fn downsample(c: &Canvas, w: usize, h: usize) -> Canvas {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Render to PNG bytes.
-pub fn render_png(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Option<Vec<u8>> {
-    let c = render(scene, cam, w, h);
-    png(c.w, c.h, &c.rgba)
+pub fn render_png(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Vec<u8>, RenderError> {
+    let c = render(scene, cam, w, h)?;
+    png(c.w, c.h, &c.rgba).ok_or(RenderError::Encode)
 }
 
 /// RGBA pixels (`w × h`, 8 bits per channel) to PNG bytes; `None` when the sizes disagree.
@@ -267,14 +337,14 @@ mod tests {
         let mut scene = red_triangle();
         let mut cam = Camera { distance: 50.0, ..Default::default() };
         cam.set_view(StandardView::Front);
-        let c = render(&scene, &cam, 64, 64);
+        let c = render(&scene, &cam, 64, 64).unwrap();
         let px = |c: &Canvas, x: usize, y: usize| c.rgba[(y * c.w + x) * 4..(y * c.w + x) * 4 + 4].to_vec();
         let centre = px(&c, 32, 32);
         assert!(centre[0] > centre[1] + 50, "centre pixel is red: {centre:?}");
         // A black line across the middle, in front of the triangle, and a point.
         scene.lines.push(SceneLine { a: Vec3::new(-10.0, -0.1, 0.0), b: Vec3::new(10.0, -0.1, 0.0), color: Rgb(0, 0, 0), width: 3.0 });
         scene.points.push(ScenePoint { p: Vec3::new(0.0, -0.1, 5.0), color: Rgb(0, 0, 255), size: 5.0 });
-        let c = render(&scene, &cam, 64, 64);
+        let c = render(&scene, &cam, 64, 64).unwrap();
         assert!(px(&c, 32, 32)[0] < 40, "{:?}", px(&c, 32, 32));
         let (x, y, _) = cam.to_screen(Vec3::new(0.0, 0.0, 5.0), 64.0, 64.0, 20.0).unwrap();
         let p = px(&c, x as usize, y as usize);
@@ -286,7 +356,11 @@ mod tests {
         let scene = red_triangle();
         let cam = Camera::default();
         assert!(render_png(&scene, &cam, 16, 16).unwrap().starts_with(&[0x89, b'P', b'N', b'G']));
-        assert_eq!(render(&scene, &cam, 0, usize::MAX).w, 1);
+        // Out-of-range sizes are refused before anything is allocated.
+        for (w, h) in [(0, 16), (16, 0), (0, usize::MAX), (MAX_DIM + 1, 16), (100_000, 100_000), (usize::MAX, usize::MAX), (8192, 8192)] {
+            assert_eq!(render(&scene, &cam, w, h).err(), Some(RenderError::Size { w, h }));
+        }
+        assert!(render(&scene, &cam, MAX_DIM, MAX_PIXELS / MAX_DIM).is_ok_and(|c| c.w == MAX_DIM));
         assert!(png(2, 2, &[0; 3]).is_none());
         assert!(png(usize::MAX, 2, &[]).is_none());
         // Far-away and non-finite geometry is skipped or bounded, never a panic.
@@ -297,5 +371,25 @@ mod tests {
             ..scene
         };
         let _ = render(&wild, &cam, 32, 32);
+    }
+
+    #[test]
+    fn huge_scenes_are_refused() {
+        let line = SceneLine { a: Vec3::ZERO, b: Vec3::X, color: Rgb(0, 0, 0), width: 1.0 };
+        let scene = Scene { lines: vec![line; MAX_PRIMITIVES + 1], radius: 1.0, ..Default::default() };
+        let r = render_png(&scene, &Camera::default(), 16, 16);
+        assert_eq!(r, Err(RenderError::SceneTooLarge { primitives: MAX_PRIMITIVES + 1 }));
+    }
+
+    #[test]
+    fn fit_size_keeps_the_aspect_within_the_limits() {
+        assert_eq!(fit_size(1280, 800), (1280, 800));
+        assert_eq!(fit_size(0, 0), (1, 1));
+        for (w, h) in [(7680, 4320), (100_000, 100_000), (usize::MAX, 3), (20_000, 10)] {
+            let (fw, fh) = fit_size(w, h);
+            assert!(size_ok(fw, fh), "{w}x{h} -> {fw}x{fh}");
+        }
+        let (fw, fh) = fit_size(7680, 4320);
+        assert!(((fw as f64 / fh as f64) - 16.0 / 9.0).abs() < 1e-2, "{fw}x{fh}");
     }
 }

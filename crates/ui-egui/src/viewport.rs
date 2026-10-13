@@ -107,12 +107,24 @@ fn paint_gpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
 /// changes.
 fn paint_cpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: Rect) {
     let ppp = ui.ctx().pixels_per_point();
-    let size = [((rect.width() * ppp) as usize).max(1), ((rect.height() * ppp) as usize).max(1)];
+    // A window larger than the renderer's limit is drawn smaller and scaled up.
+    let (w, h) = modelcraft_render::fit_size((rect.width() * ppp) as usize, (rect.height() * ppp) as usize);
+    let size = [w, h];
     let cam = app.cam;
     let key = app.scene().0;
     let fresh = app.viewport.cpu.as_ref().is_some_and(|(_, k, c, s)| *k == key && *c == cam && *s == size);
-    if !fresh {
-        let c = modelcraft_render::render(&app.scene.1, &cam, size[0], size[1]);
+    // A scene the renderer refused is reported once and not retried until it changes.
+    if !fresh && app.viewport.cpu_failed != Some(key) {
+        let c = match modelcraft_render::render(&app.scene.1, &cam, w, h) {
+            Ok(c) => c,
+            Err(e) => {
+                app.viewport.cpu = None;
+                app.viewport.cpu_failed = Some(key);
+                app.set_status(format!("Viewport: {e}"), true);
+                return;
+            }
+        };
+        app.viewport.cpu_failed = None;
         let image = egui::ColorImage::from_rgba_unmultiplied([c.w, c.h], &c.rgba);
         let tex = match app.viewport.cpu.take() {
             Some((mut tex, ..)) => {

@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 
 use crate::{ModelApp, UiState};
 
-/// Largest image `ui.render` draws, per side.
-const MAX_RENDER: f64 = 8192.0;
+/// `ui.render`'s image size when none is given.
+const RENDER_DEFAULT: [usize; 2] = [1280, 800];
 
 pub struct ControlRequest {
     pub method: String,
@@ -69,6 +69,19 @@ fn key_from(name: &str) -> Option<egui::Key> {
         "tab" => Some(egui::Key::Tab),
         _ => None,
     })
+}
+
+/// An image side for `ui.render`: absent gives `default`; anything but a whole number of pixels
+/// in 1..=MAX_DIM is an error (the renderer also caps the total pixel count).
+fn render_dim(p: &Value, key: &str, default: usize) -> Result<usize, String> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(v) => v
+            .as_f64()
+            .filter(|x| x.fract() == 0.0 && (1.0..=modelcraft_render::MAX_DIM as f64).contains(x))
+            .map(|x| x as usize)
+            .ok_or_else(|| format!("`{key}` must be a whole number of pixels in 1..={}", modelcraft_render::MAX_DIM)),
+    }
 }
 
 pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
@@ -228,15 +241,18 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
         }
         "ui.screenshot" => Outcome::Screenshot { path: s("path").map(str::to_string) },
         "ui.render" => {
-            let w = f("width").unwrap_or(1280.0).clamp(16.0, MAX_RENDER) as usize;
-            let h = f("height").unwrap_or(800.0).clamp(16.0, MAX_RENDER) as usize;
-            let Some(png) = app.render_png(w, h) else { return err("render failed") };
-            match s("path") {
-                Some(path) => match std::fs::write(path, &png) {
-                    Ok(()) => ok(json!({"path": path, "width": w, "height": h, "bytes": png.len()})),
-                    Err(e) => err(format!("{path}: {e}")),
-                },
-                None => err("missing `path`"),
+            let Some(path) = s("path") else { return err("missing `path`") };
+            let (w, h) = match (render_dim(p, "width", RENDER_DEFAULT[0]), render_dim(p, "height", RENDER_DEFAULT[1])) {
+                (Ok(w), Ok(h)) => (w, h),
+                (Err(e), _) | (_, Err(e)) => return err(e),
+            };
+            let png = match app.render_png(w, h) {
+                Ok(png) => png,
+                Err(e) => return err(e),
+            };
+            match std::fs::write(path, &png) {
+                Ok(()) => ok(json!({"path": path, "width": w, "height": h, "bytes": png.len()})),
+                Err(e) => err(format!("{path}: {e}")),
             }
         }
         "app.quit" => {
@@ -320,6 +336,28 @@ mod tests {
     }
 
     #[test]
+    fn ui_render_refuses_hostile_sizes() {
+        let mut app = ModelApp::new(Session::default());
+        app.run_script(&modelcraft_engine::sample::script()).unwrap();
+        let path = std::env::temp_dir().join(format!("modelcraft-render-hostile-{}.png", std::process::id()));
+        let path = path.to_string_lossy();
+        for (w, h) in [
+            (json!(100_000), json!(100_000)),
+            (json!(8192), json!(8192)),
+            (json!(1e12), json!(10)),
+            (json!(-5), json!(10)),
+            (json!(0), json!(10)),
+            (json!(10.5), json!(10)),
+            (json!("big"), json!(10)),
+            (json!(f64::MAX), json!(f64::MIN)),
+        ] {
+            let r = call(&mut app, "ui.render", json!({"path": path, "width": w, "height": h}));
+            assert_eq!(r["ok"], false, "{w} x {h}: {r}");
+        }
+        assert!(std::fs::metadata(&*path).is_err(), "nothing is written for a refused size");
+    }
+
+    #[test]
     fn hostile_requests_never_panic() {
         let mut app = ModelApp::new(Session::default());
         let hostile = [
@@ -345,6 +383,7 @@ mod tests {
             "ui.text",
             "ui.worldToScreen",
             "ui.resize",
+            "ui.render",
         ] {
             for p in &hostile {
                 let _ = call(&mut app, method, p.clone());

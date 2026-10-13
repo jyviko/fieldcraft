@@ -18,7 +18,7 @@ with `{"ok": false, "error": "request too large"}` and the connection is closed,
 connections that send eight lines that are not JSON. At most 16 connections are served at once,
 at most 64 queued requests run per frame so a flood cannot starve drawing, and a request the UI
 thread has not answered within 60 seconds gets `{"ok": false, "error": "timeout"}`. Numbers are
-checked and clamped (image sizes, drag steps, wheel lines, window size).
+checked and clamped (drag steps, wheel lines, window size); `ui.render` refuses an image size out of range.
 
 ## Engine
 
@@ -48,5 +48,5 @@ Commands never open forms when run this way. `modelcraft-cli commands` prints th
 | `ui.worldToScreen` | `points`: `[[x, y, z]…]` (at most 1000) | screen points in the viewport drawn last frame (null when not on screen) |
 | `ui.resize` | `width`, `height` | window inner size in points |
 | `ui.screenshot` | `path?` | PNG of the window, taken a few frames later; needs a presented frame (a hidden window or a locked screen answers with an error: use `ui.render`). Without `path`: `modelcraft-shot.png` in the temporary folder |
-| `ui.render` | `path`, `width?` (default 1280), `height?` (default 800), each 16–8192 | CPU render of the model with the current camera and view settings (no window or GPU needed) |
+| `ui.render` | `path`, `width?` (default 1280), `height?` (default 800): whole pixels, each 1–8192 and at most 16 megapixels in all | CPU render of the model with the current camera and view settings (no window or GPU needed). A size out of range, or a scene over 20 million primitives, is an error |
 | `app.quit` | — | closes the window |

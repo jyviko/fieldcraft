@@ -89,7 +89,7 @@ fn main() -> eframe::Result {
             if let Some(rs) = &cc.wgpu_render_state {
                 let info = rs.adapter.get_info();
                 eprintln!("modelcraft: graphics {:?} {}, MSAA {}x (requested {MSAA}x)", info.backend, info.name, rs.msaa_samples);
-                app.set_wgpu(rs, DEPTH_BITS, rs.msaa_samples);
+                app.set_wgpu(rs, DEPTH_BITS, rs.msaa_samples, &cc.egui_ctx);
             }
             if let Some(port) = args.control {
                 app = app.with_control(control_server::start(port, cc.egui_ctx.clone()));

@@ -77,6 +77,10 @@ pub struct Viewport {
     pub uploaded: Option<u64>,
     /// CPU fallback: the texture and what it shows (scene key, camera, size).
     cpu: Option<(egui::TextureHandle, u64, Camera, [usize; 2])>,
+    /// CPU fallback: the scene key the renderer last refused.
+    cpu_failed: Option<u64>,
+    /// GPU errors reported by the device (see [`gpu::GpuErrors`]), shown in the status bar.
+    pub gpu_errors: gpu::GpuErrors,
 }
 
 /// A screenshot asked for over the control channel.
@@ -151,9 +155,10 @@ impl ModelApp {
     }
 
     /// Draw the viewport on the GPU (eframe's wgpu render state, with the app's depth buffer
-    /// bits and MSAA sample count). Without it the viewport renders on the CPU.
-    pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState, depth_bits: u8, samples: u32) {
-        self.viewport.gpu = Some(gpu::install(rs, depth_bits, samples));
+    /// bits and MSAA sample count). Without it the viewport renders on the CPU. Device errors
+    /// show in the status bar.
+    pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState, depth_bits: u8, samples: u32, ctx: &egui::Context) {
+        self.viewport.gpu = Some(gpu::install(rs, depth_bits, samples, self.viewport.gpu_errors.clone(), ctx.clone()));
         let info = rs.adapter.get_info();
         self.gpu_info = Some(format!("{} ({:?})", info.name.trim(), info.backend));
     }
@@ -231,6 +236,14 @@ impl ModelApp {
         self.status = Some(Status { text, error });
     }
 
+    /// Move an error the graphics device reported into the status bar.
+    fn show_gpu_errors(&mut self) {
+        let error = self.viewport.gpu_errors.lock().ok().and_then(|mut e| e.take());
+        if let Some(e) = error {
+            self.status = Some(Status { text: format!("Graphics: {e}"), error: true });
+        }
+    }
+
     /// The model may have changed: display data and the scene are rebuilt when next drawn.
     pub fn model_changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
@@ -264,7 +277,7 @@ impl ModelApp {
     }
 
     /// A CPU render of the viewport's scene with the current camera, as PNG bytes.
-    pub fn render_png(&mut self, w: usize, h: usize) -> Option<Vec<u8>> {
+    pub fn render_png(&mut self, w: usize, h: usize) -> Result<Vec<u8>, modelcraft_render::RenderError> {
         let cam = self.cam;
         let (_, scene) = self.scene();
         modelcraft_render::render_png(scene, &cam, w, h)
@@ -324,6 +337,7 @@ impl ModelApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        self.show_gpu_errors();
         panels::menu_bar(self, ui);
         panels::status_bar(self, ui);
         if self.ui.show_tree {
@@ -455,5 +469,16 @@ mod tests {
         assert!(app.cam.target.dist(d.bounds.center()) < 1e-9);
         let png = app.render_png(64, 48).unwrap();
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
+    }
+
+    #[test]
+    fn graphics_device_errors_reach_the_status_bar() {
+        let mut app = ModelApp::new(Session::default());
+        if let Ok(mut e) = app.viewport.gpu_errors.lock() {
+            *e = Some("Out of Memory".into());
+        }
+        app.show_gpu_errors();
+        assert_eq!(app.status, Some(Status { text: "Graphics: Out of Memory".into(), error: true }));
+        assert!(app.viewport.gpu_errors.lock().unwrap().is_none(), "each error is shown once");
     }
 }

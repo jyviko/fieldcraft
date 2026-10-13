@@ -57,7 +57,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Interaction | Contact (general and pairs), friction, automatic pair detection | M7 | | planned |
 | Interaction | Bolt pretension, springs, point masses, connectors | M7 | | planned |
 | Decks | Abaqus input writer (`deck.write`, flat deck; reports what Abaqus cannot express) | M3 | | done |
-| Decks | Nastran bulk data writer (SOL 101, 103) | M3 | | planned |
+| Decks | Nastran bulk data writer (`deck.write`, SOL 101 or 103 per deck; reports what Nastran cannot express) | M3 | | done |
 | Decks | LS-DYNA keyword writer (implicit; explicit in M8) | M3 | | planned |
 | Decks | Readers keeping unknown keywords | M9 | | planned |
 | Solve | Own linear static and modal solver, verified against analytic solutions | M4 | yes | planned |
@@ -81,3 +81,10 @@ products are run, no documentation text is copied). Status: **done**, **started*
   `crates/decks/src/abaqus.rs`). The step table is bridged to Abaqus's propagation: zero-valued
   boundary conditions active in every step go to the initial state, and steps restate their
   boundary conditions and loads with `OP=NEW` when the active set changes.
+- Nastran (`modelcraft_decks::nastran`): entries with a real use large (16-column) fields, the rest
+  small fields; a real is exact when its shortest round-trip form fits 16 columns, else rounded to
+  at least ten significant digits. Linear solids map full integration to `PSOLID` `TWO`/`THREE` +
+  `FULL`, hex20 reduced to `TWO` + `FULL`, hex8 incompatible modes to `BUBBLE`; one-point reduced
+  linear solids, hybrid solids, reduced-integration or one-point shells, body forces, gravity on part
+  of the model, orthotropic beams and rods, and orthotropic shells off planes of constant Z are
+  reported as unsupported. Static and frequency steps need separate decks (`deck.write` `steps`).

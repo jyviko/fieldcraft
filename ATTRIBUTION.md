@@ -14,6 +14,7 @@ is committed and listed here with its exports.
 
 | File | Author | Source | Licence |
 |---|---|---|---|
+| crates/decks/tests/golden/nastran/*.bdf | ModelCraft contributors | Written by our Nastran writer from our own test models (crates/decks/tests/nastran.rs) | MIT OR Apache-2.0 |
 
 ## Adapted code
 

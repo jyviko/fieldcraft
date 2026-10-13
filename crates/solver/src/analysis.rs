@@ -383,3 +383,26 @@ pub fn solve_frequency(model: &Model, step_name: &str, options: &FrequencyOption
         warnings,
     })
 }
+
+/// The result of one step, as a session keeps it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepResult {
+    Static(StaticResult),
+    Frequency(FrequencyResult),
+}
+
+impl StepResult {
+    pub fn step(&self) -> &str {
+        match self {
+            StepResult::Static(r) => &r.step,
+            StepResult::Frequency(r) => &r.step,
+        }
+    }
+
+    pub fn nodes(&self) -> &[u32] {
+        match self {
+            StepResult::Static(r) => &r.nodes,
+            StepResult::Frequency(r) => &r.nodes,
+        }
+    }
+}

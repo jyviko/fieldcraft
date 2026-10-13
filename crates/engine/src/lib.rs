@@ -17,11 +17,13 @@ pub mod cmd;
 pub mod history;
 pub mod sample;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use modelcraft_geometry::Design;
 use modelcraft_geometry::tagged_mesh::TaggedSurface;
 use modelcraft_model::Model;
+use modelcraft_solver::StepResult;
 use serde_json::Value;
 
 use crate::history::History;
@@ -42,6 +44,8 @@ pub enum EngineError {
     File(#[from] modelcraft_io::Error),
     #[error(transparent)]
     Deck(#[from] modelcraft_decks::Error),
+    #[error(transparent)]
+    Solver(#[from] modelcraft_solver::Error),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
@@ -110,6 +114,9 @@ pub struct Session {
     /// The revision last saved to (or opened from) `path`; `None` when the content was never
     /// saved, where only the empty start (revision 0) is clean.
     saved_revision: Option<u64>,
+    /// The latest result of each solved step, by step name, with the revision it was solved at;
+    /// [`Session::result`] hands out only those that describe the current state.
+    results: BTreeMap<String, (u64, Arc<StepResult>)>,
 }
 
 impl Session {
@@ -161,6 +168,22 @@ impl Session {
     /// makes it clean again.
     pub fn is_dirty(&self) -> bool {
         self.saved_revision.unwrap_or(0) != self.revision
+    }
+
+    /// The stored result of a step, if it was solved in the current state (an edit makes it stale;
+    /// undoing back to the solved state makes it current again).
+    pub fn result(&self, step: &str) -> Option<&Arc<StepResult>> {
+        self.results.get(step).filter(|(revision, _)| *revision == self.revision).map(|(_, r)| r)
+    }
+
+    /// The steps with a current result.
+    pub fn solved_steps(&self) -> impl Iterator<Item = &str> {
+        self.results.iter().filter(|(_, (revision, _))| *revision == self.revision).map(|(name, _)| name.as_str())
+    }
+
+    /// Keep a step's result for the current state.
+    pub(crate) fn store_result(&mut self, result: StepResult) {
+        self.results.insert(result.step().to_string(), (self.revision, Arc::new(result)));
     }
 
     /// The current state is what `path` now holds.

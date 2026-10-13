@@ -1860,6 +1860,7 @@ dependencies = [
  "modelcraft-io",
  "modelcraft-mesh",
  "modelcraft-model",
+ "modelcraft-solver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

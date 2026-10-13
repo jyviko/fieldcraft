@@ -29,7 +29,9 @@ pub mod ordering;
 pub mod sparse;
 pub mod system;
 
-pub use analysis::{ElementStress, FrequencyOptions, FrequencyResult, MassKind, Mode, StaticResult, Stats, solve_frequency, solve_static};
+pub use analysis::{
+    ElementStress, FrequencyOptions, FrequencyResult, MassKind, Mode, StaticResult, Stats, StepResult, solve_frequency, solve_static,
+};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {

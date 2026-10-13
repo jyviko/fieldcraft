@@ -7,6 +7,7 @@ pub(crate) mod file;
 mod geometry;
 mod mesh;
 mod model;
+mod solve;
 mod tags;
 
 use modelcraft_model::MAX_LABEL;
@@ -68,6 +69,9 @@ pub static ALL: &[CommandSpec] = &[
     edit::UNDO,
     edit::REDO,
     deck::WRITE,
+    solve::STATIC,
+    solve::FREQUENCY,
+    solve::PROBE,
 ];
 
 /// A required label parameter (1..=u32::MAX; the model checks its own range).

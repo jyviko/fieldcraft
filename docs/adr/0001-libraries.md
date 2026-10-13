@@ -26,8 +26,19 @@ predicates that `robust` lacks). `robust` (georust, MIT OR Apache-2.0) and `num-
 `num-rational` / `num-traits` (MIT OR Apache-2.0) are dev-dependencies only: differential test
 oracles, never linked into ModelCraft.
 
-**Linear algebra:** to be decided in the solver task, among permissively licensed pure-Rust
-crates (for example `faer`, MIT). Record the choice here.
+**Linear algebra: our own.** *Decided 2026-10-13 (implicit solver task):* `modelcraft-solver`
+has its own sparse symmetric storage, nested-dissection ordering (George 1973, by coordinate
+bisection), up-looking sparse Cholesky (Davis 2006, elimination trees per Liu 1990) and
+shift-invert block Lanczos with full reorthogonalization (Ericsson–Ruhe 1980, Grimes–Lewis–Simon
+1994) on a Householder + implicit-QR dense eigensolver (Golub–Van Loan). `faer` (MIT) was the
+alternative and is faster on large problems, but it selects SIMD kernels by CPU feature at run
+time (AVX2, AVX-512, NEON), which changes floating-point reduction order between machines and
+breaks the bit-for-bit determinism rule; it is also a large dependency tree for the browser
+build. Our code is sequential with a fixed operation order, `unsafe`-free and wasm-safe, and its
+factor size is known (and capped) before any value is computed. Cost if this is wrong: large
+models (beyond a few hundred thousand equations) factor slower than they could; the remedy is a
+supernodal factorization of our own, or `faer` behind the same `Factor` interface with a stated
+tolerance instead of bit-identity, as the GPU exception already does.
 
 **Allowed:** MIT, BSD-2/3, Apache-2.0, ISC, Zlib, Unicode, MPL-2.0 (as an unmodified dependency),
 CC0 and public domain.

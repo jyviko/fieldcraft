@@ -1,0 +1,15 @@
+[package]
+name = "modelcraft-solver"
+description = "ModelCraft's implicit solver: assembly, boundary conditions, sparse Cholesky, linear static and frequency analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+modelcraft-model = { workspace = true }
+modelcraft-fem = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }

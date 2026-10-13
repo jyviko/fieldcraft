@@ -404,11 +404,11 @@ mod tests {
         assert_eq!(r["result"]["tab"], "mesh", "{r}");
         let entries = r["result"]["entries"].as_array().unwrap();
         assert_eq!(entries.len(), modelcraft_engine::catalogue::CATALOGUE.len());
-        let tet = entries.iter().find(|e| e["id"] == "mesh.tet.generate").unwrap();
-        assert_eq!((tet["coming_soon"].as_str(), tet["command"].is_null()), (Some("M2"), true));
+        let soon = entries.iter().find(|e| e["id"] == "mesh.order.quadratic").unwrap();
+        assert_eq!((soon["coming_soon"].as_str(), soon["command"].is_null()), (Some("M2"), true));
         assert_eq!(call(&mut app, "ui.set", json!({"tab": "nope"}))["ok"], false);
-        let r = call(&mut app, "ui.start", json!({"command": "mesh.tet.generate"}));
-        assert_eq!((r["ok"].as_bool(), r["error"].as_str()), (Some(false), Some("Tet Mesh is coming soon (M2)")));
+        let r = call(&mut app, "ui.start", json!({"command": "mesh.order.quadratic"}));
+        assert_eq!((r["ok"].as_bool(), r["error"].as_str()), (Some(false), Some("Quadratic is coming soon (M2)")));
     }
 
     #[test]

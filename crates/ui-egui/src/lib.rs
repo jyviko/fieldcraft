@@ -520,8 +520,8 @@ mod tests {
         assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("model.material.create"));
         app.dialog = None;
         let journal = app.session.journal.len();
-        let err = app.start("mesh.tet.generate").unwrap_err();
-        assert_eq!(err, "Tet Mesh is coming soon (M2)");
+        let err = app.start("mesh.order.quadratic").unwrap_err();
+        assert_eq!(err, "Quadratic is coming soon (M2)");
         assert!(app.dialog.is_none());
         assert_eq!(app.session.journal.len(), journal);
         assert_eq!(app.status.as_ref().map(|s| s.error), Some(false));

@@ -8,29 +8,29 @@ clock on the machine that ran it; every other column is deterministic.
 
 ## Results
 
-| part | categories | bodies | faces | triangles | tol. mm | build ms | enclosed mm³ | SolidCraft mm³ | rel. diff | exact mm³ | boundary | genus | feature edges | check ms |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| bent-tube | sweepable, thin-wall, genus | 1 | 18 | 4296 | 0.121 | 432 | 4213.1 | 4159.4 | 1.3e-2 | 4159.8 | ok, 2148 vertices | 1 | 268 | 11.4 |
-| bolted-assembly | assembly, blocky | 3 | 22 | 284 | 0.117 | 57 | 33004.7 | 32999.0 | 1.7e-4 | 32998.9 | ok, 144 vertices | 0, 1, 1 | 104 | 0.7 |
-| cross-cylinders | boolean, sharp | 1 | 10 | 1395 | 0.087 | 7548 | 32197.4 | 32357.8 | -5.0e-3 | 32365.8 | error: Cross: invalid boundary surface: 28 defects; triangles 142 and 184 are oriented inconsistently across edge 0–396 at (-15.488656021315903, 4.577998041166734, 7.853092194999726); triangles 184 and 239 are oriented inconsistently across edge 0–554 at (-18.75000000000002, 5.634596901641276, 7.632255089815496); edge 103–108 at (-0.16007784063084018, 0.03984236936862052, 9.998639270596865) is shared by 3 triangles; … |  |  |  |
-| filleted-bracket | fillet, genus, sweepable | 1 | 13 | 540 | 0.088 | 388 | 32162.3 | 32145.0 | 5.4e-4 | 32144.8 | ok, 268 vertices | 2 | 135 | 1.4 |
-| i-beam | sweepable, thin-wall | 1 | 14 | 44 | 0.208 | 4 | 61600.0 | 61600.0 | 0.0e0 | 61600.0 | ok, 24 vertices | 0 | 36 | 0.1 |
-| loft-transition | organic | 1 | 6 | 292 | 0.075 | 54 | 56390.2 | 56450.6 | -1.1e-3 | – | ok, 148 vertices | 0 | 40 | 0.7 |
-| perforated-plate | genus, thin-wall, sweepable | 1 | 54 | 1644 | 0.144 | 270 | 26822.2 | 26764.6 | 2.2e-3 | 26764.2 | ok, 776 vertices | 24 | 828 | 4.9 |
-| pinhole-block | small-feature, genus | 1 | 38 | 4044 | 0.073 | 206 | 49919.4 | 49909.6 | 2.0e-4 | 49909.5 | ok, 1992 vertices | 16 | 1548 | 12.9 |
-| rounded-box | fillet | 1 | 26 | 2540 | 0.054 | 149 | 23325.7 | 23340.5 | -6.3e-4 | 23340.8 | ok, 1272 vertices | 0 | 216 | 6.7 |
-| shallow-groove | near-tangent, boolean | 1 | 8 | 62 | 0.075 | 11 | 47795.2 | 47782.3 | 2.7e-4 | 47781.5 | ok, 33 vertices | 0 | 24 | 0.1 |
-| sharp-wedge | sharp, thin-wall, sweepable | 1 | 5 | 8 | 0.083 | 2 | 3200.0 | 3200.0 | 0.0e0 | 3200.0 | ok, 6 vertices | 0 | 9 | 0.0 |
-| sphere-on-plate | near-tangent, boolean | 1 | 12 | 2826 | 0.098 | 682 | 69353.3 | 69509.0 | -2.2e-3 | 69509.7 | ok, 1415 vertices | 0 | 124 | 6.1 |
-| spline-vase | organic | 1 | 11 | 3890 | 0.106 | 217 | 94891.2 | 94948.5 | -6.0e-4 | – | ok, 1947 vertices | 0 | 243 | 8.9 |
-| stepped-block | blocky, sharp | 1 | 14 | 96 | 0.078 | 35 | 47000.0 | 47000.0 | 0.0e0 | 47000.0 | ok, 48 vertices | 1 | 60 | 0.4 |
-| thin-ribs | thin-wall, blocky | 1 | 26 | 92 | 0.119 | 69 | 32000.0 | 32000.0 | -4.5e-16 | 32000.0 | ok, 48 vertices | 0 | 72 | 0.5 |
-| thin-wall-enclosure | thin-wall, blocky | 1 | 11 | 36 | 0.108 | 9 | 15564.0 | 15564.0 | 0.0e0 | 15564.0 | ok, 20 vertices | 0 | 28 | 0.1 |
-| analytic-sphere | analytic | 1 | 6 | 2784 | 0.069 | 245 | 33353.4 | 33507.9 | -4.6e-3 | 33510.3 | ok, 1394 vertices | 0 | 96 | 6.1 |
-| analytic-torus | analytic, genus | 1 | 6 | 7230 | 0.109 | 334 | 37644.1 | 37893.7 | -6.6e-3 | 37899.3 | ok, 3615 vertices | 1 | 180 | 16.1 |
-| analytic-cylinder | analytic, sweepable | 1 | 4 | 1004 | 0.049 | 25 | 12533.1 | 12564.7 | -2.5e-3 | 12566.4 | ok, 504 vertices | 0 | 106 | 2.7 |
-| analytic-pipe | analytic, genus, sweepable | 1 | 6 | 1448 | 0.104 | 44 | 94150.9 | 94238.0 | -9.3e-4 | 94247.8 | ok, 724 vertices | 1 | 220 | 3.9 |
-| analytic-plate-hole | analytic, genus, sweepable | 1 | 8 | 112 | 0.224 | 11 | 98449.1 | 98429.5 | 2.0e-4 | 98429.2 | ok, 56 vertices | 1 | 62 | 0.4 |
+| part | categories | bodies | faces | triangles | tol. mm | build ms | enclosed mm³ | SolidCraft mm³ | rel. diff | exact mm³ | boundary | genus | feature edges | check ms | CDT tets | Steiner | cavities | tet gate | CDT ms |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| bent-tube | sweepable, thin-wall, genus | 1 | 18 | 4296 | 0.121 | 435 | 4213.1 | 4159.4 | 1.3e-2 | 4159.8 | ok, 2148 vertices | 1 | 268 | 10.9 | 15550 | 2338 | 0 | pass | 550 |
+| bolted-assembly | assembly, blocky | 3 | 22 | 284 | 0.117 | 54 | 33004.7 | 32999.0 | 1.7e-4 | 32998.9 | ok, 144 vertices | 0, 1, 1 | 104 | 0.7 | 690 | 181 | 0 | pass | 31 |
+| cross-cylinders | boolean, sharp | 1 | 10 | 1395 | 0.087 | 7682 | 32197.4 | 32357.8 | -5.0e-3 | 32365.8 | error: Cross: invalid boundary surface: 28 defects; triangles 142 and 184 are oriented inconsistently across edge 0–396 at (-15.488656021315903, 4.577998041166734, 7.853092194999726); triangles 184 and 239 are oriented inconsistently across edge 0–554 at (-18.75000000000002, 5.634596901641276, 7.632255089815496); edge 103–108 at (-0.16007784063084018, 0.03984236936862052, 9.998639270596865) is shared by 3 triangles; … |  |  |  | error: Cross: invalid boundary surface: 28 defects; triangles 142 and 184 are oriented inconsistently across edge 0–396 at (-15.488656021315903, 4.577998041166734, 7.853092194999726); triangles 184 and 239 are oriented inconsistently across edge 0–554 at (-18.75000000000002, 5.634596901641276, 7.632255089815496); edge 103–108 at (-0.16007784063084018, 0.03984236936862052, 9.998639270596865) is shared by 3 triangles; … |  |  |  |  |
+| filleted-bracket | fillet, genus, sweepable | 1 | 13 | 540 | 0.088 | 381 | 32162.3 | 32145.0 | 5.4e-4 | 32144.8 | ok, 268 vertices | 2 | 135 | 1.4 | 5582 | 1613 | 0 | pass | 187 |
+| i-beam | sweepable, thin-wall | 1 | 14 | 44 | 0.208 | 4 | 61600.0 | 61600.0 | 0.0e0 | 61600.0 | ok, 24 vertices | 0 | 36 | 0.1 | 94 | 24 | 0 | pass | 3 |
+| loft-transition | organic | 1 | 6 | 292 | 0.075 | 55 | 56390.2 | 56450.6 | -1.1e-3 | – | ok, 148 vertices | 0 | 40 | 0.7 | 1329 | 256 | 1 | pass | 33 |
+| perforated-plate | genus, thin-wall, sweepable | 1 | 54 | 1644 | 0.144 | 265 | 26822.2 | 26764.6 | 2.2e-3 | 26764.2 | ok, 776 vertices | 24 | 828 | 4.6 | 33611 | 9798 | 0 | pass | 1195 |
+| pinhole-block | small-feature, genus | 1 | 38 | 4044 | 0.073 | 202 | 49919.4 | 49909.6 | 2.0e-4 | 49909.5 | ok, 1992 vertices | 16 | 1548 | 12.4 | 96411 | 30221 | 0 | pass | 4408 |
+| rounded-box | fillet | 1 | 26 | 2540 | 0.054 | 156 | 23325.7 | 23340.5 | -6.3e-4 | 23340.8 | ok, 1272 vertices | 0 | 216 | 6.3 | 11666 | 1913 | 0 | pass | 371 |
+| shallow-groove | near-tangent, boolean | 1 | 8 | 62 | 0.075 | 11 | 47795.2 | 47782.3 | 2.7e-4 | 47781.5 | ok, 33 vertices | 0 | 24 | 0.2 | 267 | 87 | 0 | pass | 11 |
+| sharp-wedge | sharp, thin-wall, sweepable | 1 | 5 | 8 | 0.083 | 2 | 3200.0 | 3200.0 | 0.0e0 | 3200.0 | ok, 6 vertices | 0 | 9 | 0.0 | 11 | 3 | 0 | pass | 0 |
+| sphere-on-plate | near-tangent, boolean | 1 | 12 | 2826 | 0.098 | 703 | 69353.3 | 69509.0 | -2.2e-3 | 69509.7 | ok, 1415 vertices | 0 | 124 | 5.7 | 4898 | 309 | 9 | pass | 214 |
+| spline-vase | organic | 1 | 11 | 3890 | 0.106 | 230 | 94891.2 | 94948.5 | -6.0e-4 | – | ok, 1947 vertices | 0 | 243 | 8.5 | 12461 | 1512 | 0 | pass | 419 |
+| stepped-block | blocky, sharp | 1 | 14 | 96 | 0.078 | 30 | 47000.0 | 47000.0 | 0.0e0 | 47000.0 | ok, 48 vertices | 1 | 60 | 0.4 | 223 | 41 | 0 | pass | 6 |
+| thin-ribs | thin-wall, blocky | 1 | 26 | 92 | 0.119 | 62 | 32000.0 | 32000.0 | -4.5e-16 | 32000.0 | ok, 48 vertices | 0 | 72 | 0.5 | 171 | 33 | 0 | pass | 6 |
+| thin-wall-enclosure | thin-wall, blocky | 1 | 11 | 36 | 0.108 | 8 | 15564.0 | 15564.0 | 0.0e0 | 15564.0 | ok, 20 vertices | 0 | 28 | 0.1 | 191 | 47 | 2 | pass | 5 |
+| analytic-sphere | analytic | 1 | 6 | 2784 | 0.069 | 263 | 33353.4 | 33507.9 | -4.6e-3 | 33510.3 | ok, 1394 vertices | 0 | 96 | 5.8 | 4211 | 58 | 0 | pass | 258 |
+| analytic-torus | analytic, genus | 1 | 6 | 7230 | 0.109 | 345 | 37644.1 | 37893.7 | -6.6e-3 | 37899.3 | ok, 3615 vertices | 1 | 180 | 15.4 | 19790 | 466 | 0 | pass | 717 |
+| analytic-cylinder | analytic, sweepable | 1 | 4 | 1004 | 0.049 | 25 | 12533.1 | 12564.7 | -2.5e-3 | 12566.4 | ok, 504 vertices | 0 | 106 | 2.7 | 7437 | 1568 | 0 | pass | 259 |
+| analytic-pipe | analytic, genus, sweepable | 1 | 6 | 1448 | 0.104 | 43 | 94150.9 | 94238.0 | -9.3e-4 | 94247.8 | ok, 724 vertices | 1 | 220 | 3.7 | 6238 | 1340 | 0 | pass | 264 |
+| analytic-plate-hole | analytic, genus, sweepable | 1 | 8 | 112 | 0.224 | 11 | 98449.1 | 98429.5 | 2.0e-4 | 98429.2 | ok, 56 vertices | 1 | 62 | 0.4 | 1868 | 543 | 0 | pass | 53 |
 
 ## Categories
 

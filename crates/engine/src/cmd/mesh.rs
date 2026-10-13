@@ -83,6 +83,7 @@ pub const TET_GENERATE: CommandSpec = CommandSpec {
     id: "mesh.tet.generate",
     label: "Generate Tet Mesh",
     params: r#"{"body": "Body1", "tolerance": 0.05} or {"surface": 0}, the boundary options of mesh.surface.check ("weld", "weld_distance", "feature_angle"), optional "max_steiner": 50000 (0..=10000000), "max_tets": 20000000 (1..=50000000) — the constrained Delaunay tetrahedralization of the welded boundary: every boundary triangle is a union of tet faces, Steiner points only on boundary edges, no quality refinement yet. Adds tet4 elements and their nodes (labels after the largest existing ones), tags the elements with the body and each boundary element face with its geometry face, and fails, changing nothing, if the surface is invalid or the mesh rounded to doubles does not pass the validity gate"#,
+    kind: CommandKind::Model,
     run: tet_generate,
 };
 

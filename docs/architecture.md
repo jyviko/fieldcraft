@@ -19,7 +19,7 @@ crates in strictly lower layers.
 | Layer | Crate | Role | Status |
 |---|---|---|---|
 | L0 | `modelcraft-model` | Solver-neutral FE model: nodes, elements by label; materials, sections, sets, BCs, loads and steps as they land. Knows no file format. | started |
-| L1 | `modelcraft-geometry` | The only door to SolidCraft: B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`. No SolidCraft type in its API. | started |
+| L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`. No SolidCraft type in its API. | started |
 | L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
 | L1 | `modelcraft-solver` | Element formulations, assembly, sparse linear static and modal solution. | planned |
 | L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. | planned |
@@ -40,7 +40,9 @@ Rules beyond the layer order:
 ## Meshing pipeline
 
 1. **Boundary surface.** SolidCraft tessellates each body; every triangle carries its B-rep face,
-   so feature edges and face-based loads and BCs survive meshing.
+   so feature edges and face-based loads and BCs survive meshing. Faces of an opened design also
+   carry SolidCraft's persistent names (`F2:side:l4`, from the feature and sketch curve that made
+   them), so a load on a named face follows it when the design is edited and opened again.
 2. **Surface preparation.** Weld coincident vertices, check the surface is closed, manifold and
    consistently oriented, find feature edges (face boundaries, sharp dihedral angles).
 3. **Tetrahedral meshing.** Bowyer–Watson Delaunay on Shewchuk's adaptive predicates (symbolic

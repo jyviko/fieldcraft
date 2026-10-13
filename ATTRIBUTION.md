@@ -23,3 +23,12 @@ is committed and listed here with its exports.
 | xtask/src/assets.rs, xtask/src/licences.rs, xtask/src/test.rs, xtask/src/main.rs | SolidCraft `xtask/src/` | MIT OR Apache-2.0 |
 | clippy.toml, rustfmt.toml | SolidCraft | MIT OR Apache-2.0 |
 | crates/geometry/src/tagged_mesh.rs (package and part reading, transforms, units, caps) | SolidCraft `crates/io/src/threemf.rs` | MIT OR Apache-2.0 |
+
+## Test oracles
+
+Used only by tests (dev-dependencies, not shipped); no code from them is copied or adapted.
+
+| Used in | Oracle | Licence |
+|---|---|---|
+| crates/mesh/src/predicates/tests.rs, crates/mesh/tests/predicates_bench.rs | `robust` (georust), a port of Shewchuk's public-domain `predicates.c` | MIT OR Apache-2.0 |
+| crates/mesh/src/predicates/tests.rs, crates/mesh/src/predicates/dyadic.rs (tests) | `num-bigint`, `num-rational`, `num-traits` (exact rationals) | MIT OR Apache-2.0 |

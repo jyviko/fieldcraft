@@ -48,11 +48,14 @@ fn others<T: Copy, const M: usize, const K: usize>(points: &[T; M], skip: usize,
 /// coplanar. Points must be pairwise distinct for the perturbation to be consistent (a
 /// Delaunay triangulation never passes duplicates); with all five points coplanar it returns
 /// `Zero`.
+#[inline]
 pub fn insphere_sos(a: &Point3, b: &Point3, c: &Point3, d: &Point3, e: &Point3) -> Sign {
     let exact = insphere(a, b, c, d, e);
-    if !exact.is_zero() {
-        return exact;
-    }
+    if exact.is_zero() { insphere_perturbed(a, b, c, d, e) } else { exact }
+}
+
+#[cold]
+fn insphere_perturbed(a: &Point3, b: &Point3, c: &Point3, d: &Point3, e: &Point3) -> Sign {
     let points = [*a, *b, *c, *d, *e];
     for i in ranked(&points.map(|p| p.0)) {
         let [p, q, r, s]: [Point3; 4] = others(&points, i, *a);
@@ -67,11 +70,14 @@ pub fn insphere_sos(a: &Point3, b: &Point3, c: &Point3, d: &Point3, e: &Point3) 
 
 /// [`incircle`] with symbolic perturbation: never [`Sign::Zero`] when `a, b, c` is not
 /// collinear. Same conventions as [`insphere_sos`].
+#[inline]
 pub fn incircle_sos(a: &Point2, b: &Point2, c: &Point2, d: &Point2) -> Sign {
     let exact = incircle(a, b, c, d);
-    if !exact.is_zero() {
-        return exact;
-    }
+    if exact.is_zero() { incircle_perturbed(a, b, c, d) } else { exact }
+}
+
+#[cold]
+fn incircle_perturbed(a: &Point2, b: &Point2, c: &Point2, d: &Point2) -> Sign {
     let points = [*a, *b, *c, *d];
     for i in ranked(&points.map(|p| p.0)) {
         let [p, q, r]: [Point2; 3] = others(&points, i, *a);

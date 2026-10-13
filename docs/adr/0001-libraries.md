@@ -17,7 +17,12 @@ files itself. Only `modelcraft-geometry` may depend on it.
 **Meshing: our own**, implemented from published papers (`docs/meshing/literature.md`).
 Robust predicates follow Shewchuk's adaptive-precision arithmetic (the paper; his reference
 `predicates.c` is public domain). A permissive crate may be adopted instead after review; record
-it here.
+it here. *Decided 2026-10-13:* our own implementation, `modelcraft_mesh::predicates`, written from
+Shewchuk 1997, Devillers–Teillaud 2011 and Attene 2020 (no `unsafe`, deterministic, wasm-safe, a
+validated coordinate domain instead of Shewchuk's overflow/underflow caveat, and indirect
+predicates that `robust` lacks). `robust` (georust, MIT OR Apache-2.0) and `num-bigint` /
+`num-rational` / `num-traits` (MIT OR Apache-2.0) are dev-dependencies only: differential test
+oracles, never linked into ModelCraft.
 
 **Linear algebra:** to be decided in the solver task, among permissively licensed pure-Rust
 crates (for example `faer`, MIT). Record the choice here.

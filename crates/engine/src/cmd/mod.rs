@@ -1,5 +1,6 @@
 //! The command registry. Each area has its own module; [`ALL`] lists every command.
 
+pub(crate) mod deck;
 pub(crate) mod define;
 mod edit;
 pub(crate) mod file;
@@ -66,6 +67,7 @@ pub static ALL: &[CommandSpec] = &[
     file::RECOVERY_DISCARD,
     edit::UNDO,
     edit::REDO,
+    deck::WRITE,
 ];
 
 /// A required label parameter (1..=u32::MAX; the model checks its own range).

@@ -40,6 +40,8 @@ pub enum EngineError {
     Mesh(#[from] modelcraft_mesh::Error),
     #[error(transparent)]
     File(#[from] modelcraft_io::Error),
+    #[error(transparent)]
+    Deck(#[from] modelcraft_decks::Error),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
@@ -229,6 +231,14 @@ mod tests {
             json!({"path": "/dev/zero"}),
             json!({"path": "/no/such/design.solidcraft"}),
             json!({"path": "x".repeat(100_000)}),
+            json!({"format": "abaqus"}),
+            json!({"format": "abaqus", "path": ""}),
+            json!({"format": "abaqus", "path": "/"}),
+            json!({"format": "abaqus", "path": "/no/such/dir/part.inp"}),
+            json!({"format": "abaqus", "path": format!("/no/such/{}", "x".repeat(100_000))}),
+            json!({"format": "abaqus", "path": 7}),
+            json!({"format": "x".repeat(100_000), "path": "/no/such/part.inp"}),
+            json!({"format": null, "path": "/no/such/part.inp"}),
             json!({"path": 7}),
             json!({"body": "Body1", "tolerance": 0.05}),
             json!({"body": null, "tolerance": "fine"}),

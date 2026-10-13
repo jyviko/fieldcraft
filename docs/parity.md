@@ -56,7 +56,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Interaction | Tie between non-matching meshes | M7 | | planned |
 | Interaction | Contact (general and pairs), friction, automatic pair detection | M7 | | planned |
 | Interaction | Bolt pretension, springs, point masses, connectors | M7 | | planned |
-| Decks | Abaqus input writer | M3 | | planned |
+| Decks | Abaqus input writer (`deck.write`, flat deck; reports what Abaqus cannot express) | M3 | | done |
 | Decks | Nastran bulk data writer (SOL 101, 103) | M3 | | planned |
 | Decks | LS-DYNA keyword writer (implicit; explicit in M8) | M3 | | planned |
 | Decks | Readers keeping unknown keywords | M9 | | planned |
@@ -76,3 +76,8 @@ products are run, no documentation text is copied). Status: **done**, **started*
   as degenerate quads. Every mapping is tested by the sign of the element Jacobian after writing.
 - Each format's field widths, continuation rules, number forms and label limits are respected by
   the writer and checked by golden-file tests on our own examples.
+- Abaqus: the model's node order and face numbers are Abaqus's, so connectivity passes through;
+  element types come from the element kind, the section and its formulation (table in
+  `crates/decks/src/abaqus.rs`). The step table is bridged to Abaqus's propagation: zero-valued
+  boundary conditions active in every step go to the initial state, and steps restate their
+  boundary conditions and loads with `OP=NEW` when the active set changes.

@@ -22,7 +22,7 @@ crates in strictly lower layers.
 | L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`; face-tagged 3MF files read into the same type without the kernel (docs/formats/tagged-mesh.md). No SolidCraft type in its API. | started |
 | L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
 | L1 | `modelcraft-solver` | Element formulations, assembly, sparse linear static and modal solution. | planned |
-| L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. | planned |
+| L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. Text out, no file system; `deck.write` saves it. | started |
 | L1 | `modelcraft-render` | Display data without a GPU dependency: the visible faces, element edges and nodes of a model, the orbit camera, a CPU rasterizer for headless snapshots; contour maps later. | started |
 | L2 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
 | L3 | `modelcraft-io` | `.modelcraft` files (docs/formats/modelcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery. Bytes in, bytes out; the file system only in `fs` and `recovery`. Result files later. | started |

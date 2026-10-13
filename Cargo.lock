@@ -1855,6 +1855,7 @@ name = "modelcraft-engine"
 version = "0.1.0"
 dependencies = [
  "log",
+ "modelcraft-decks",
  "modelcraft-geometry",
  "modelcraft-io",
  "modelcraft-mesh",

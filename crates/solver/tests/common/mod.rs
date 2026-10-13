@@ -1,5 +1,5 @@
 //! Structured meshes generated in code for the analytic verification suite: a block of
-//! hexahedra (hex8, hex20) or Kuhn-split tetrahedra (tet4, tet10) on [0, 1]³, mapped to the part
+//! hexahedra (hex8, hex20), of wedges (two per cell) or of Kuhn-split tetrahedra (tet4, tet10) on [0, 1]³, mapped to the part
 //! by a function, and helpers to define the model on it.
 #![allow(dead_code)]
 
@@ -53,6 +53,15 @@ pub fn grid(n: [usize; 3], kind: ElementKind, map: impl Fn([f64; 3]) -> [f64; 3]
                         }
                         model.set_element(next, kind, nodes).unwrap();
                         next += 1;
+                    }
+                    ElementKind::Wedge6 => {
+                        // Two prisms along z, split by the cell's (x, y) diagonal, both counter-clockwise from above.
+                        for tri in [[[0, 0], [2, 0], [2, 2]], [[0, 0], [2, 2], [0, 2]]] {
+                            let nodes: Vec<u32> =
+                                [0, 2].iter().flat_map(|&z| tri.map(|t| [t[0], t[1], z])).map(|c| node(&mut model, at(c))).collect();
+                            model.set_element(next, kind, nodes).unwrap();
+                            next += 1;
+                        }
                     }
                     _ => {
                         // Six tetrahedra around the cell's main diagonal (Kuhn), conforming across cells.
@@ -171,6 +180,7 @@ pub fn variants() -> Vec<(ElementKind, Formulation, &'static str)> {
     vec![
         (ElementKind::Tet4, full(), "tet4"),
         (ElementKind::Tet10, full(), "tet10"),
+        (ElementKind::Wedge6, full(), "wedge6"),
         (ElementKind::Hex8, full(), "hex8"),
         (ElementKind::Hex8, incompatible(), "hex8 incompatible"),
         (ElementKind::Hex20, full(), "hex20"),

@@ -12,6 +12,7 @@ use crate::material::{isotropic, orthotropic, stress};
 fn distorted(kind: ElementKind, curved: bool) -> Vec<[f64; 3]> {
     let corners: Vec<[f64; 3]> = match kind {
         ElementKind::Tet4 | ElementKind::Tet10 => vec![[0.1, -0.05, 0.0], [1.2, 0.1, 0.05], [0.2, 0.9, -0.1], [0.05, 0.15, 1.1]],
+        ElementKind::Wedge6 => vec![[0.0, 0.0, 0.0], [2.1, 0.1, -0.1], [0.2, 1.3, 0.05], [0.1, -0.1, 0.9], [2.0, 0.05, 1.1], [0.15, 1.2, 1.0]],
         _ => vec![
             [0.0, 0.0, 0.0],
             [2.1, 0.1, -0.1],
@@ -33,9 +34,10 @@ fn distorted(kind: ElementKind, curved: bool) -> Vec<[f64; 3]> {
     xyz
 }
 
-const CASES: [(ElementKind, Formulation); 6] = [
+const CASES: [(ElementKind, Formulation); 7] = [
     (ElementKind::Tet4, Formulation::Full),
     (ElementKind::Tet10, Formulation::Full),
+    (ElementKind::Wedge6, Formulation::Full),
     (ElementKind::Hex8, Formulation::Full),
     (ElementKind::Hex8, Formulation::IncompatibleModes),
     (ElementKind::Hex20, Formulation::Full),
@@ -145,6 +147,7 @@ fn extrapolation_reproduces_linear_fields_on_affine_elements() {
     let affine = |kind: ElementKind| -> Vec<[f64; 3]> {
         let mut xyz: Vec<[f64; 3]> = match kind {
             ElementKind::Tet10 => vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]],
+            ElementKind::Wedge6 => vec![[0., 0., 0.], [2., 0., 0.], [0.5, 1., 0.], [0., 0.2, 1.], [2., 0.2, 1.], [0.5, 1.2, 1.]],
             _ => vec![[0., 0., 0.], [2., 0., 0.], [2.5, 1., 0.], [0.5, 1., 0.], [0., 0., 1.], [2., 0., 1.], [2.5, 1., 1.], [0.5, 1., 1.]],
         };
         let c = xyz.clone();
@@ -172,7 +175,8 @@ fn bad_input_is_an_error() {
     assert!(Solid::new(ElementKind::Hex8, &xyz[..7], Formulation::Full).is_err());
     assert!(Solid::new(ElementKind::Hex8, &xyz, Formulation::Reduced).is_err());
     assert!(Solid::new(ElementKind::Tet4, &xyz[..4], Formulation::IncompatibleModes).is_err());
-    assert!(Solid::new(ElementKind::Wedge6, &xyz[..6], Formulation::Full).is_err());
+    assert!(Solid::new(ElementKind::Quad4, &xyz[..4], Formulation::Full).is_err());
+    assert!(Solid::new(ElementKind::Wedge6, &xyz[..6], Formulation::IncompatibleModes).is_err());
     let mut nan = xyz.clone();
     nan[3][1] = f64::NAN;
     assert!(Solid::new(ElementKind::Hex8, &nan, Formulation::Full).is_err());

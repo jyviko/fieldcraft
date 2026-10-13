@@ -7,7 +7,8 @@
 //!
 //! Formulations:
 //! - **full integration**: the rule that integrates the stiffness of an undistorted element
-//!   exactly (1 point for tet4, 4 for tet10, 2 × 2 × 2 for hex8, 3 × 3 × 3 for hex20);
+//!   exactly (1 point for tet4, 4 for tet10, 3 triangle points × 2 for wedge6, 2 × 2 × 2 for
+//!   hex8, 3 × 3 × 3 for hex20);
 //! - **reduced integration** for hex20 (2 × 2 × 2), which avoids locking at the cost of one
 //!   spurious mode that a mesh of more than one element restrains. Reduced hex8 needs hourglass
 //!   control and is not offered here yet (it arrives with the explicit solver, Flanagan &
@@ -43,6 +44,7 @@ use crate::{Error, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
     Tetrahedron,
+    Wedge,
     Hexahedron,
 }
 
@@ -67,7 +69,7 @@ pub struct ElementType {
 }
 
 /// The element table.
-pub static ELEMENT_TYPES: [ElementType; 4] = [
+pub static ELEMENT_TYPES: [ElementType; 5] = [
     ElementType {
         kind: ElementKind::Tet4,
         family: Family::Tetrahedron,
@@ -88,6 +90,17 @@ pub static ELEMENT_TYPES: [ElementType; 4] = [
         full: Rule::Tet4,
         reduced: None,
         mass: Rule::TetConical(4),
+        incompatible_modes: false,
+    },
+    ElementType {
+        kind: ElementKind::Wedge6,
+        family: Family::Wedge,
+        nodes: 6,
+        corners: 6,
+        shape: shape::wedge6,
+        full: Rule::Wedge,
+        reduced: None,
+        mass: Rule::Wedge,
         incompatible_modes: false,
     },
     ElementType {
@@ -119,7 +132,7 @@ pub fn element_type(kind: ElementKind) -> Result<&'static ElementType> {
     ELEMENT_TYPES
         .iter()
         .find(|t| t.kind == kind)
-        .ok_or_else(|| Error::NotSupported(format!("{} elements (the solver has tet4, tet10, hex8 and hex20 so far)", kind.name())))
+        .ok_or_else(|| Error::NotSupported(format!("{} elements (the solver has tet4, tet10, wedge6, hex8 and hex20 so far)", kind.name())))
 }
 
 /// How a solid element is formulated.
@@ -565,6 +578,7 @@ pub fn extrapolation(ty: &ElementType, rule: Rule) -> Result<Extrapolation> {
     let c = ty.corners;
     let corner_basis = |xi: [f64; 3]| match ty.family {
         Family::Tetrahedron => shape::tet4(xi),
+        Family::Wedge => shape::wedge6(xi),
         Family::Hexahedron => shape::hex8(xi),
     };
     let mut corner_rows = vec![0.0; c * g];

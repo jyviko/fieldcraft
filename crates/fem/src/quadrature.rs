@@ -12,6 +12,9 @@
 //! - On the reference triangle {ξ, η ≥ 0, ξ + η ≤ 1}: the same collapsed product in two
 //!   dimensions (Jacobian 1 − u), exact for degree 2n − 2.
 //! - On the reference square [−1, 1]²: tensor Gauss–Legendre.
+//! - On the reference wedge (triangle × [−1, 1]): the symmetric three-point triangle rule
+//!   (points at area coordinates (⅔, ⅙, ⅙) and permutations, degree 2; Zienkiewicz, Taylor &
+//!   Zhu 2013, table 6.3) times two-point Gauss–Legendre in ζ (degree 3).
 
 /// A quadrature point: natural coordinates and weight.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -54,6 +57,9 @@ pub enum Rule {
     Quad(u8),
     /// The collapsed product on the reference triangle, n points per direction (z = 0).
     TriConical(u8),
+    /// Three triangle points times two Gauss points in ζ on the reference wedge: point k of each
+    /// layer sits near corner k, the lower layer first.
+    Wedge,
 }
 
 impl Rule {
@@ -103,6 +109,11 @@ impl Rule {
                     .flat_map(|&(u, wu)| g.iter().map(move |&(v, wv)| Point { xi: [u, v * (1.0 - u), 0.0], weight: wu * wv * (1.0 - u) }))
                     .collect()
             }
+            Rule::Wedge => {
+                let (a, b) = (2.0 / 3.0, 1.0 / 6.0);
+                let tri = [[b, b], [a, b], [b, a]];
+                gauss_legendre(2).iter().flat_map(|&(z, wz)| tri.iter().map(move |t| Point { xi: [t[0], t[1], z], weight: wz / 6.0 })).collect()
+            }
         }
     }
 }
@@ -149,8 +160,18 @@ mod tests {
                 assert!((got - exact_1d * 2.0).abs() < 1e-14, "quad {n} y^{a}");
             }
         }
-        // Triangle: ∫ ξ^a η^b = a! b! / (a + b + 2)!.
+        // Wedge: ∫ ξ^a η^b ζ^c = a! b! / (a + b + 2)! · ∫ ζ^c, for a + b ≤ 2 and c ≤ 3.
         let f = |n: i32| (1..=n).map(f64::from).product::<f64>();
+        for a in 0..=2 {
+            for b in 0..=2 - a {
+                for c in 0..=3 {
+                    let line = if c % 2 == 1 { 0.0 } else { 2.0 / f64::from(c + 1) };
+                    let got = integrate(Rule::Wedge, a, b, c);
+                    assert!((got - f(a) * f(b) / f(a + b + 2) * line).abs() < 1e-15, "wedge ξ^{a} η^{b} ζ^{c}");
+                }
+            }
+        }
+        // Triangle: ∫ ξ^a η^b = a! b! / (a + b + 2)!.
         for a in 0..=4 {
             for b in 0..=4 - a {
                 let got = integrate(Rule::TriConical(3), a, b, 0);

@@ -179,13 +179,14 @@ fn cantilever_tip_deflection_and_convergence() {
     let meshes = [[5, 1, 1], [10, 2, 2], [20, 4, 4], [40, 8, 8]];
     let hex8 = study(ElementKind::Hex8, full(), &meshes, "hex8");
     let tet4 = study(ElementKind::Tet4, full(), &meshes, "tet4");
-    for (name, e) in [("hex8", &hex8), ("tet4", &tet4)] {
+    let wedge6 = study(ElementKind::Wedge6, full(), &meshes, "wedge6");
+    for (name, e) in [("hex8", &hex8), ("tet4", &tet4), ("wedge6", &wedge6)] {
         let rates: Vec<f64> = e.windows(2).map(|w| (w[0] / w[1]).log2()).collect();
         eprintln!("  {name} convergence rates {rates:.2?}");
         assert!(e.windows(2).all(|w| w[1] < w[0]), "{name} converges monotonically");
         assert!(*rates.last().unwrap() > 1.5, "{name} approaches second order: {rates:?}");
     }
-    assert!(hex8[3] < 0.04 && tet4[3] < 0.12, "{hex8:?} {tet4:?}");
+    assert!(hex8[3] < 0.04 && tet4[3] < 0.12 && wedge6[3] < 0.04, "{hex8:?} {tet4:?} {wedge6:?}");
 }
 
 /// Lamé's thick cylinder under internal pressure, plane strain (u_z = 0 on both ends), quarter

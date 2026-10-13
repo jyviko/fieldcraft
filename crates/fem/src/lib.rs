@@ -4,7 +4,7 @@
 //! global state, so the implicit solver (`modelcraft-solver`) and the explicit solver that follows
 //! it use the same element technology:
 //! - [`quadrature`]: Gauss–Legendre and tetrahedron rules;
-//! - [`shape`]: shape functions of tet4, tet10, hex8, hex20 and of their faces;
+//! - [`shape`]: shape functions of tet4, tet10, wedge6, hex8, hex20;
 //! - [`material`]: isotropic and orthotropic elasticity matrices, von Mises stress;
 //! - [`element`]: the element table, stiffness (full, reduced, incompatible modes), consistent
 //!   and lumped mass, body forces, integration-point stresses and their extrapolation to nodes;

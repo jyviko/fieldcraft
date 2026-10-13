@@ -9,7 +9,11 @@
 //!   N = ⅛(1 + ξξᵢ)(1 + ηηᵢ)(1 + ζζᵢ)(ξξᵢ + ηηᵢ + ζζᵢ − 2), a mid-side node with ξᵢ = 0
 //!   N = ¼(1 − ξ²)(1 + ηηᵢ)(1 + ζζᵢ), and likewise), mid-side nodes 9–12 on the bottom edges,
 //!   13–16 on the top edges, 17–20 on the vertical edges (mid-side positions come from
-//!   [`modelcraft_model::ElementKind::edges`], the one place the node order is written down).
+//!   [`modelcraft_model::ElementKind::edges`], the one place the node order is written down);
+//! - the six-node wedge (pentahedron) as the product of the linear triangle {ξ, η ≥ 0,
+//!   ξ + η ≤ 1} (area coordinates L₁ = 1 − ξ − η, L₂ = ξ, L₃ = η) and the linear interval
+//!   ζ ∈ [−1, 1]: nodes 1–3 at ζ = −1 counter-clockwise seen from above, nodes 4–6 above them,
+//!   Nᵢ = Lᵢ (1 − ζ)/2 and Nᵢ₊₃ = Lᵢ (1 + ζ)/2.
 //!
 //! The functions are the textbook ones (O. C. Zienkiewicz, R. L. Taylor, J. Z. Zhu, *The Finite
 //! Element Method: Its Basis and Fundamentals*, 7th ed., Butterworth-Heinemann 2013, ch. 6;
@@ -46,6 +50,9 @@ impl Shape {
 /// Natural coordinates of the hexahedron's corners.
 pub const HEX_CORNERS: [[f64; 3]; 8] =
     [[-1., -1., -1.], [1., -1., -1.], [1., 1., -1.], [-1., 1., -1.], [-1., -1., 1.], [1., -1., 1.], [1., 1., 1.], [-1., 1., 1.]];
+
+/// Natural coordinates of the wedge's corners.
+pub const WEDGE_CORNERS: [[f64; 3]; 6] = [[0., 0., -1.], [1., 0., -1.], [0., 1., -1.], [0., 0., 1.], [1., 0., 1.], [0., 1., 1.]];
 
 /// Natural coordinates of the tetrahedron's corners.
 pub const TET_CORNERS: [[f64; 3]; 4] = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
@@ -91,6 +98,20 @@ pub fn hex8(xi: [f64; 3]) -> Shape {
         let f = [0, 1, 2].map(|k| 1.0 + xi[k] * c[k]);
         s.n[i] = f[0] * f[1] * f[2] / 8.0;
         s.dn[i] = [c[0] * f[1] * f[2] / 8.0, c[1] * f[0] * f[2] / 8.0, c[2] * f[0] * f[1] / 8.0];
+    }
+    s
+}
+
+/// Six-node wedge: the linear triangle times the linear interval.
+pub fn wedge6(xi: [f64; 3]) -> Shape {
+    let mut s = Shape::new(6);
+    let l = [1.0 - xi[0] - xi[1], xi[0], xi[1]];
+    let dl = [[-1.0, -1.0], [1.0, 0.0], [0.0, 1.0]];
+    for (h, f, df) in [(0, (1.0 - xi[2]) / 2.0, -0.5), (3, (1.0 + xi[2]) / 2.0, 0.5)] {
+        for i in 0..3 {
+            s.n[h + i] = l[i] * f;
+            s.dn[h + i] = [dl[i][0] * f, dl[i][1] * f, l[i] * df];
+        }
     }
     s
 }
@@ -147,6 +168,7 @@ mod tests {
                 v
             }
             "hex8" => HEX_CORNERS.to_vec(),
+            "wedge6" => WEDGE_CORNERS.to_vec(),
             _ => {
                 let mut v = HEX_CORNERS.to_vec();
                 for e in ElementKind::Hex20.edges() {
@@ -159,7 +181,7 @@ mod tests {
 
     #[test]
     fn kronecker_delta_partition_of_unity_and_derivatives() {
-        let kinds: [(&str, fn([f64; 3]) -> Shape); 4] = [("tet4", tet4), ("tet10", tet10), ("hex8", hex8), ("hex20", hex20)];
+        let kinds: [(&str, fn([f64; 3]) -> Shape); 5] = [("tet4", tet4), ("tet10", tet10), ("wedge6", wedge6), ("hex8", hex8), ("hex20", hex20)];
         for (name, f) in kinds {
             let nodes = nodes_of(name);
             for (i, p) in nodes.iter().enumerate() {

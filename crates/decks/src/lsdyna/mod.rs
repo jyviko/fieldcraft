@@ -42,7 +42,7 @@ mod elements;
 use std::collections::{BTreeMap, BTreeSet};
 
 use modelcraft_model::{
-    BoundaryCondition, CouplingKind, Diagnostic, Elastic, Element, ElementKind, Load, Model, OutputVariable, Procedure, Resolved, Section,
+    BoundaryCondition, CouplingKind, Diagnostic, Dofs, Elastic, Element, ElementKind, Load, Model, OutputVariable, Procedure, Resolved, Section,
     SectionKind, Step, Target,
 };
 
@@ -224,7 +224,7 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
     let mut segment_sets = BTreeSet::new();
     let mut uniform = BTreeMap::new();
     for (name, c) in model.couplings() {
-        if c.kind == CouplingKind::Kinematic && c.dofs.list().len() < 6 {
+        if c.kind == CouplingKind::Kinematic && c.dofs != Dofs::all() {
             refused.insert(format!(
                 "coupling `{name}`: a kinematic coupling of some degrees of freedom only (LS-DYNA's nodal rigid bodies release degrees of freedom reliably only for two nodes)"
             ));

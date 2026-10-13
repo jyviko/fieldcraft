@@ -120,7 +120,7 @@ pub(crate) fn elform(kind: ElementKind, section: &SectionKind, f: Formulation, s
                 ElementKind::Wedge6 if reduced => plain(15),
                 ElementKind::Wedge6 => plain(2),
                 ElementKind::Tet4 => plain(10),
-                ElementKind::Tet10 | ElementKind::Hex20 if reduced => no("there is no reduced-integration form of"),
+                _ if reduced && kind.is_quadratic() => no("there is no reduced-integration form of"),
                 ElementKind::Tet10 => plain(16),
                 ElementKind::Hex20 => plain(23),
                 _ => no("a solid section cannot hold"),
@@ -130,7 +130,7 @@ pub(crate) fn elform(kind: ElementKind, section: &SectionKind, f: Formulation, s
             ElementKind::Quad4 if reduced => Ok(Elform { elform: 2, hourglass: Some(Hourglass::Shell) }),
             ElementKind::Quad4 => plain(16),
             ElementKind::Tri3 => plain(4),
-            ElementKind::Quad8 | ElementKind::Tri6 if reduced => {
+            _ if reduced && kind.is_quadratic() => {
                 no("reduced integration of quadratic shells is a whole-model setting in LS-DYNA, not written per section, for")
             }
             ElementKind::Quad8 => plain(23),

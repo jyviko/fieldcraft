@@ -25,6 +25,8 @@ is committed and listed here with its exports.
 | crates/geometry/src/tagged_mesh.rs (package and part reading, transforms, units, caps) | SolidCraft `crates/io/src/threemf.rs` | MIT OR Apache-2.0 |
 | crates/render/src/camera.rs, crates/render/src/raster.rs | SolidCraft `crates/render/src/camera.rs`, `raster.rs` | MIT OR Apache-2.0 |
 | crates/ui-egui/src/gpu.rs, crates/ui-egui/src/theme.rs, crates/ui-egui/src/control.rs, crates/ui-egui/src/lib.rs (input injection, screenshots) | SolidCraft `crates/ui-egui/src/` | MIT OR Apache-2.0 |
+| crates/io/src/fs.rs (atomic writes) | SolidCraft `crates/io/src/safe_write.rs` | MIT OR Apache-2.0 |
+| crates/io/src/recovery.rs (recovery folder, entries, locks) | SolidCraft `crates/engine/src/recovery.rs` | MIT OR Apache-2.0 |
 | apps/modelcraft/src/control_server.rs | SolidCraft `apps/solidcraft/src/control_server.rs` | MIT OR Apache-2.0 |
 
 ## Test oracles

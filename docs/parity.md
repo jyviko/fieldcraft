@@ -11,12 +11,12 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | # | Opportunity | Why analysts want it | ModelCraft approach |
 |---|---|---|---|
 | 1 | Hex meshes without manual partitioning | Partitioning a part into sweepable cells by hand is the most cited chore | Sweep and mapped meshing with automatic decomposition that proposes SolidCraft splits (M5); octree all-hex for anything else (M6) |
-| 2 | Undo, redo, replay, crash recovery | No general undo; replay files are hard to reuse; corrupted model files | Every action is a journalled command with rollback |
+| 2 | Undo, redo, replay, crash recovery | No general undo; replay files are hard to reuse; corrupted model files | Every action is a journalled command with rollback, undo and redo; autosave with recovery after a crash |
 | 3 | Sets that survive changes | Sets and loads break when geometry regenerates or is remeshed | Sets bind to SolidCraft's persistent face, edge and body names and resolve after meshing (M3) |
 | 4 | An API that is not a bundled scripting runtime | Version breakage, slow scripts, geometry picked by position | JSON commands over CLI, control channel and MCP |
 | 5 | Located diagnostics | Generic error messages | Errors name the element, face or keyword; `mesh.quality` lists failing elements |
 | 6 | Lossless deck round trip | Unsupported keywords dropped on import | Deck readers keep unknown keywords and write them back (M9) |
-| 7 | Safe, diffable model files | Binary model databases that corrupt or lock to a version | Text `.modelcraft` model, atomic saves, autosave (M3) |
+| 7 | Safe, diffable model files | Binary model databases that corrupt or lock to a version | `.modelcraft`: text, line-diffable definition and journal, checksummed binary mesh, versioned format tag, atomic saves with backup, autosave (M3, done) |
 | 8 | Geometry checked before meshing | Slivers and tiny faces fail late | Surface preparation reports defects with their location (M1) |
 | 9 | No size caps, any solver | Node limits in learning editions; one solver per tool | Free, open source, three deck formats |
 | 10 | Clear step history | Loads and BCs propagate between steps implicitly | An explicit step × load/BC table (M3) |
@@ -66,7 +66,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Results | Readers for public result formats (Nastran OP2, LS-DYNA d3plot, Abaqus `.fil`) | M9 | | planned |
 | Results | Mesh convergence studies | M9 | | planned |
 | App | Desktop viewport, model tree, commands, control channel | continuous | | done |
-| App | Undo/redo on the command journal, autosave, `.modelcraft` file | M3 | | planned |
+| App | Undo/redo on the command journal, autosave, `.modelcraft` file | M3 | | done |
 | App | MCP server, browser build | continuous | | planned |
 
 ## Deck notes for the writers

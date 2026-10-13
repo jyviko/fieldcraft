@@ -25,7 +25,7 @@ crates in strictly lower layers.
 | L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. | planned |
 | L1 | `modelcraft-render` | Display data without a GPU dependency: the visible faces, element edges and nodes of a model, the orbit camera, a CPU rasterizer for headless snapshots; contour maps later. | started |
 | L2 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
-| L3 | `modelcraft-io` | `.modelcraft` files, result files. | planned |
+| L3 | `modelcraft-io` | `.modelcraft` files (docs/formats/modelcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery. Bytes in, bytes out; the file system only in `fs` and `recovery`. Result files later. | started |
 | L4 | `modelcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts. | started |
 | L5 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI (egui + wgpu viewport, model tree, commands, status bar) and control channel requests (docs/control-protocol.md); MCP server. | ui started |
 | testkit | `modelcraft-testkit` | Test tooling, a dev-dependency only: the meshing test corpus (`tests/corpus/*/recipe.json`, analytic shapes) and its runner (`cargo xtask corpus`). | started |
@@ -125,7 +125,12 @@ element names, cards and keywords):
 Every user-visible action is a `CommandSpec` in `crates/engine/src/cmd/<area>.rs` with a JSON
 form. `Session::execute` clones the model, runs the command under `catch_unwind`, and restores
 the model on an error or a panic; commands that changed the model are journalled, so the
-journal replays as a script.
+journal replays as a script. Each journalled command is also an undo step (the state before it):
+`edit.undo` restores that state and moves the command off the journal onto the redo stack,
+`edit.redo` puts it back, so the journal always rebuilds the current model. History is bounded by
+step count and by an estimate of the memory the kept states hold (oldest steps go first).
+Commands of kind `Session` (`file.*`, `edit.*`) are never journalled. `file.save` and `file.open`
+write and read `.modelcraft` files; the desktop app autosaves unsaved work for `file.recover`.
 
 ## Test corpus
 

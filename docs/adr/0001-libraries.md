@@ -57,8 +57,9 @@ sources is in `docs/meshing/literature.md`.
 **Test geometry** follows the same rule as test data: nothing produced with a commercial CAD or
 CAE product. That excludes ABC (Onshape), MAMBO (files from commercial translators) and the HexMe
 models that come from ABC, GrabCAD or Siemens NX; HexMe's Gmsh-made models are allowed (CC-BY-4.0).
-Thingi10K (per-model Creative Commons licences, authoring tool unrecorded) is pending an owner
-decision. The default corpus is generated: SolidCraft-built parts and analytic shapes.
+Thingi10K is not used either (owner decision 2026-10-13: authoring tools unrecorded). **The test
+corpus is our own:** parts built with SolidCraft (scripts or designs authored in SolidCraft,
+committed as their recipes so the geometry is regenerated, not stored) and analytic shapes.
 
 **Commercial products** (Abaqus, Nastran, LS-DYNA, LS-PrePost, HyperMesh, ANSA, Femap, Patran,
 ANSYS) are never run, scripted or used as a source of data. Deck formats come from the vendors'

@@ -7,7 +7,8 @@ asset file is missing from this table.
 **Policy (mandatory):** ModelCraft contains **no iconography, images, artwork, fonts, templates,
 example decks or help text from commercial CAE products.** Every asset is original work by
 ModelCraft contributors or third-party material under an open licence. Screenshots of commercial
-software are never committed.
+software are never committed. Icons are made with VectorCraft; each icon's `.vectorcraft` source
+is committed and listed here with its exports.
 
 ## Files
 

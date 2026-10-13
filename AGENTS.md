@@ -58,9 +58,14 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   sources. Permissively licensed code (MIT, BSD, Apache-2.0, MPL-2.0) may be read for reference;
   anything adapted is noted in ATTRIBUTION.md with its licence.
 - **Assets — absolutely essential.** ModelCraft contains **no iconography, images, fonts or
-  artwork from commercial CAE products — ever.** Icons are drawn in code. Any file asset must be
+  artwork from commercial CAE products — ever.** Icons are original artwork made with VectorCraft:
+  commit the editable `.vectorcraft` source beside the exported SVG/PNG. Any file asset must be
   original or openly licensed and **must have a row in ATTRIBUTION.md** (`cargo xtask assets`
   enforces it). Screenshots of commercial software are never committed.
+- **Test geometry is our own.** Meshing and solver test parts are built with SolidCraft and
+  committed as recipes (scripts or designs) that regenerate them; analytic shapes are generated in
+  code. No public CAD datasets (ABC, MAMBO, Thingi10K, GrabCAD) and nothing made in a commercial
+  CAD or CAE product.
 - **Everything is a command.** User-visible behaviour = a command in `crates/engine/src/cmd/*`
   (`CommandSpec`: our own dotted, lower-case id `<area>.<thing>[.<variant>]` such as
   `mesh.node.add` or `mesh.tet.generate`, never another product's keyword; label; params doc;
@@ -78,8 +83,10 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   MPa); geometry from SolidCraft is in millimetres. Z is up.
 - **Rust only.** **Never break wasm**: everything below the apps builds for
   `wasm32-unknown-unknown` (`cargo xtask wasm`, part of `cargo xtask ci`).
-- **Quality gates** before every commit: `cargo xtask ci` (fmt, assets, licences, layers, clippy
-  -D warnings, tests, wasm).
+- **Quality gates:** GitHub CI runs `cargo xtask ci` (fmt, assets, licences, layers, clippy -D
+  warnings, tests, wasm) on every PR; don't run the full gate locally. Before pushing: `cargo fmt
+  --all`, `cargo check` the touched crates, and run the tests you added or changed. Commit after
+  each working step (a layer that compiles with its tests passing), not one big commit per PR.
 - **Publishing**: `origin` is github.com/jyviko/modelcraft. Changes land through pull requests:
   branch, push, open a PR, let CI run, then `gh pr merge --squash` when green. Rebase onto `main`
   (never merge `main` into a branch); never force-push `main`. Never commit `plan/`,

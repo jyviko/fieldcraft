@@ -13,19 +13,51 @@
 mod control_server;
 
 use modelcraft_engine::Session;
+use modelcraft_engine::autosave::{self, Autosaver};
 use modelcraft_ui_egui::ModelApp;
 
 const USAGE: &str = "usage: modelcraft [--sample] [--control PORT]";
 const DEPTH_BITS: u8 = 24;
 const MSAA: u16 = 4;
 
+/// How often unsaved changes are autosaved for recovery (seconds).
+const AUTOSAVE_SECONDS: f64 = 30.0;
+
 struct App {
     app: ModelApp,
+    /// Autosave for crash recovery (`None` when the recovery folder is unavailable).
+    autosaver: Option<Autosaver>,
+    /// App time of the last autosave check.
+    autosaved_at: f64,
+}
+
+impl App {
+    fn autosave(&mut self) {
+        if let Some(a) = &mut self.autosaver
+            && let Err(e) = a.save(&self.app.session)
+        {
+            log::warn!("autosave: {e}");
+        }
+    }
 }
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.app.logic(ctx);
+        if self.app.now - self.autosaved_at >= AUTOSAVE_SECONDS {
+            self.autosaved_at = self.app.now;
+            self.autosave();
+        }
+        if self.autosaver.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(AUTOSAVE_SECONDS));
+        }
+    }
+    fn on_exit(&mut self) {
+        if let Some(a) = self.autosaver.take()
+            && let Err(e) = a.close(&self.app.session)
+        {
+            log::warn!("autosave: {e}");
+        }
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.app.raw_input_hook(raw);
@@ -98,7 +130,15 @@ fn main() -> eframe::Result {
                 // The status bar reports a failure; the app still opens.
                 let _ = app.run_script(&modelcraft_engine::sample::script());
             }
-            Ok(Box::new(App { app }))
+            let autosaver = autosave::default_dir().and_then(|dir| {
+                let listed = app.session.execute("file.recovery.list", &serde_json::json!({"dir": dir}));
+                let recoverable = listed.ok().and_then(|v| v.as_array().map(Vec::len)).unwrap_or(0);
+                if recoverable > 0 {
+                    app.set_status(format!("{recoverable} autosaved model(s) can be recovered (file.recovery.list, file.recover)"), false);
+                }
+                Autosaver::new(&dir).map_err(|e| log::warn!("autosave unavailable: {e}")).ok()
+            });
+            Ok(Box::new(App { app, autosaver, autosaved_at: 0.0 }))
         }),
     )
 }

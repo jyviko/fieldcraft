@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
 use modelcraft_geometry::tagged_mesh;
-use modelcraft_geometry::{Shape, SurfaceMesh, open_design_file};
+use modelcraft_geometry::{MAX_DESIGN_BYTES, Shape, SurfaceMesh, open_design};
+use modelcraft_io::SourceFile;
 use serde_json::{Value, json};
 
-use crate::{CommandSpec, EngineError, Result, Session};
+use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const OPEN: CommandSpec = CommandSpec {
     id: "geometry.open",
     label: "Open Design",
     params: r#"{"path": "part.solidcraft"} — rebuilds the SolidCraft design and makes its bodies the geometry; opening it again after an edit picks up the change"#,
+    kind: CommandKind::Model,
     run: open,
 };
 
@@ -17,6 +19,7 @@ pub const BODIES: CommandSpec = CommandSpec {
     id: "geometry.bodies",
     label: "Bodies",
     params: "{} — the open design's bodies: measures and persistent face names (by face index)",
+    kind: CommandKind::Model,
     run: bodies,
 };
 
@@ -24,6 +27,7 @@ pub const TESSELLATE: CommandSpec = CommandSpec {
     id: "geometry.tessellate",
     label: "Tessellate Body",
     params: r#"{"body": "Body1", "tolerance": 0.05} — triangulates the body's boundary within the chordal tolerance (mm); reports triangles per face"#,
+    kind: CommandKind::Model,
     run: tessellate,
 };
 
@@ -31,6 +35,7 @@ pub const IMPORT_MESH: CommandSpec = CommandSpec {
     id: "geometry.import.mesh",
     label: "Import Tagged Mesh",
     params: r#"{"path": "part.3mf"} — adds each build item of a 3MF package as a surface; triangles keep their B-rep face tags (docs/formats/tagged-mesh.md)"#,
+    kind: CommandKind::Model,
     run: import_mesh,
 };
 
@@ -40,13 +45,16 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())
         .ok_or_else(|| EngineError::Params("`path` must be the design file's path".into()))?;
-    let design = open_design_file(path)?;
+    let bytes = modelcraft_geometry::read_file(path, MAX_DESIGN_BYTES)?;
+    let source = SourceFile::of(super::file::absolute(path), &bytes)?;
+    let design = open_design(&bytes)?;
     let out = json!({
         "name": design.name,
         "bodies": design.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
         "errors": design.errors.iter().map(|e| json!({"feature": e.feature, "message": e.message})).collect::<Vec<_>>(),
     });
     s.design = Some(Arc::new(design));
+    s.sources.design = Some(source);
     Ok(out)
 }
 
@@ -97,7 +105,12 @@ fn import_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         .and_then(Value::as_str)
         .filter(|x| !x.trim().is_empty() && x.len() < 4096)
         .ok_or_else(|| EngineError::Params("`path` must name a .3mf file".into()))?;
-    let surfaces = tagged_mesh::read_3mf_file(path)?;
+    if s.sources.meshes.len() >= modelcraft_io::MAX_MESH_SOURCES {
+        return Err(EngineError::Params(format!("a model imports at most {} meshes", modelcraft_io::MAX_MESH_SOURCES)));
+    }
+    let bytes = modelcraft_geometry::read_file(path, tagged_mesh::MAX_FILE_BYTES)?;
+    let source = SourceFile::of(super::file::absolute(path), &bytes)?;
+    let surfaces = tagged_mesh::read_3mf(&bytes)?;
     let first = s.surfaces.len();
     let added: Vec<Value> = surfaces
         .iter()
@@ -105,6 +118,7 @@ fn import_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|(k, t)| json!({"index": first + k, "name": t.name, "vertices": t.mesh.positions.len(), "triangles": t.mesh.triangles.len(), "faces": t.faces}))
         .collect();
     s.surfaces.extend(surfaces.into_iter().map(Arc::new));
+    s.sources.meshes.push(source);
     Ok(json!({"path": path, "surfaces": added}))
 }
 

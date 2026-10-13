@@ -8,32 +8,40 @@ use modelcraft_model::{ElementKind, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
 use super::{label, labels, listed, optional_number, points, xyz};
-use crate::{CommandSpec, EngineError, Result, Session};
+use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const NODE_ADD: CommandSpec = CommandSpec {
     id: "mesh.node.add",
     label: "Add Node",
     params: r#"{"label": 1, "xyz": [x, y, z]} — adds the node, or moves it if the label exists"#,
+    kind: CommandKind::Model,
     run: node_add,
 };
 
-pub const NODE_REMOVE: CommandSpec =
-    CommandSpec { id: "mesh.node.remove", label: "Remove Node", params: r#"{"label": 1} — only a node no element uses"#, run: node_remove };
+pub const NODE_REMOVE: CommandSpec = CommandSpec {
+    id: "mesh.node.remove",
+    label: "Remove Node",
+    params: r#"{"label": 1} — only a node no element uses"#,
+    kind: CommandKind::Model,
+    run: node_remove,
+};
 
 pub const ELEMENT_ADD: CommandSpec = CommandSpec {
     id: "mesh.element.add",
     label: "Add Element",
     params: r#"{"label": 1, "kind": "rod2|beam2|tri3|tri6|quad4|quad8|tet4|tet10|wedge6|hex8|hex20", "nodes": [labels]} — adds or replaces"#,
+    kind: CommandKind::Model,
     run: element_add,
 };
 
 pub const ELEMENT_REMOVE: CommandSpec =
-    CommandSpec { id: "mesh.element.remove", label: "Remove Element", params: r#"{"label": 1}"#, run: element_remove };
+    CommandSpec { id: "mesh.element.remove", label: "Remove Element", params: r#"{"label": 1}"#, kind: CommandKind::Model, run: element_remove };
 
 pub const QUALITY: CommandSpec = CommandSpec {
     id: "mesh.quality",
     label: "Mesh Quality",
     params: r#"{"elements": [labels] (optional, default all), "bins": 10 (1..=1000)} — certified validity (det J > 0 everywhere), volume, and min/max/mean/worst/histogram per metric (angles in degrees; histograms over each metric's fixed range, out-of-range values in the end bins)"#,
+    kind: CommandKind::Model,
     run: quality_report,
 };
 
@@ -41,6 +49,7 @@ pub const DELAUNAY_POINTS: CommandSpec = CommandSpec {
     id: "mesh.delaunay.points",
     label: "Delaunay of Points",
     params: r#"{"points": [[x, y, z], ...] (at most 20000)} — the exact Delaunay tetrahedralization (a debugging report; the model is not changed): {"dimension", "vertices", "duplicates": [[point, kept point], ...], "tets": [[i, j, k, l], ...]} with 0-based point indices in tet4 order; collinear or coplanar points give no tets"#,
+    kind: CommandKind::Model,
     run: delaunay_points,
 };
 
@@ -65,6 +74,7 @@ pub const SURFACE_CHECK: CommandSpec = CommandSpec {
     id: "mesh.surface.check",
     label: "Check Boundary Surface",
     params: r#"{"body": "Body1", "tolerance": 0.05} or {"surface": 0}, optional "weld": 1e-9 (0 or 1e-15..=1e-3 of the bounding-box diagonal), "weld_distance": mm (default: the surface's own, twice SolidCraft's linear tolerance for a tessellated body, 0 for an imported mesh), "feature_angle": 45 (degrees, (0, 180]) — welds the tessellated body or imported surface and checks it can bound a volume mesh: closed, manifold, outward, no self-intersections; reports shells, genus, volume and feature edges, or the located defects"#,
+    kind: CommandKind::Model,
     run: surface_check,
 };
 

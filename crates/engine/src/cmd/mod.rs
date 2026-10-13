@@ -1,6 +1,8 @@
 //! The command registry. Each area has its own module; [`ALL`] lists every command.
 
 pub(crate) mod define;
+mod edit;
+pub(crate) mod file;
 mod geometry;
 mod mesh;
 mod model;
@@ -56,6 +58,14 @@ pub static ALL: &[CommandSpec] = &[
     define::STEP_DELETE,
     define::STEP_ACTIVATE,
     define::ACTIVITY,
+    file::OPEN,
+    file::SAVE,
+    file::SAVE_AS,
+    file::RECOVERY_LIST,
+    file::RECOVER,
+    file::RECOVERY_DISCARD,
+    edit::UNDO,
+    edit::REDO,
 ];
 
 /// A required label parameter (1..=u32::MAX; the model checks its own range).

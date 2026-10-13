@@ -5,16 +5,18 @@ use modelcraft_model::{ElementFace, GeometryRef, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
 use super::{opt, req};
-use crate::{CommandSpec, EngineError, Result, Session};
+use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const TAG: CommandSpec = CommandSpec {
     id: "mesh.tag",
     label: "Tag Mesh with Geometry",
     params: r#"{"geometry": {"body": "Body1"} | {"body", "face"} | {"body", "edge"} | {"body", "vertex"}, "elements": [labels] (filling a body, face or edge), "faces": [{"element": 1, "face": 3}] (on a face), "edges": [{"element": 1, "edge": 2}] (on an edge), "nodes": [labels] (on a vertex)} — records where the mesh lies on the geometry, so sets named by geometry resolve"#,
+    kind: CommandKind::Model,
     run: tag,
 };
 
-pub const TAG_CLEAR: CommandSpec = CommandSpec { id: "mesh.tag.clear", label: "Clear Geometry Tags", params: "{}", run: tag_clear };
+pub const TAG_CLEAR: CommandSpec =
+    CommandSpec { id: "mesh.tag.clear", label: "Clear Geometry Tags", params: "{}", kind: CommandKind::Model, run: tag_clear };
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::{name, opt, req};
-use crate::{CommandSpec, EngineError, Result, Session};
+use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 /// The parameters other than `name`, read as a definition's JSON form.
 fn fields<T: DeserializeOwned>(p: &Value, what: &str) -> Result<T> {
@@ -27,26 +27,29 @@ macro_rules! definition_commands {
             id: concat!("model.", $id, ".create"),
             label: concat!("New ", $label),
             params: concat!($doc, " — fails if the name is taken"),
+            kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
                 let n = name(p)?;
-                s.model.$add(n, fields::<$ty>(p, $what)?)?;
-        Ok(json!({"name": n}))
+        s.model.$add(n, fields::<$ty>(p, $what)?)?;
+                Ok(json!({"name": n}))
             },
         };
         pub const $EDIT: CommandSpec = CommandSpec {
             id: concat!("model.", $id, ".edit"),
             label: concat!("Edit ", $label),
             params: concat!($doc, " — replaces the existing definition of that name"),
+            kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
-                let n = name(p)?;
+        let n = name(p)?;
                 s.model.$replace(n, fields::<$ty>(p, $what)?)?;
-        Ok(json!({"name": n}))
+                Ok(json!({"name": n}))
             },
         };
         pub const $DELETE: CommandSpec = CommandSpec {
             id: concat!("model.", $id, ".delete"),
             label: concat!("Delete ", $label),
             params: r#"{"name": "…"} — refused while another definition refers to it"#,
+            kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
                 s.model.$remove(name(p)?)?;
                 Ok(Value::Null)
@@ -157,6 +160,7 @@ pub const STEP_CREATE: CommandSpec = CommandSpec {
     id: "model.step.create",
     label: "New Step",
     params: r#"{"name": "Bend", "procedure": {"type": "static"} | {"type": "frequency", "modes": 10, "min_hz": 0, "max_hz": 500}, "output": ["displacement", "reaction_force", "stress", "strain"] (default by procedure), "boundary_conditions": [names], "loads": [names] (active in this step; nothing carries over between steps), "before": "step" (default: last)}"#,
+    kind: CommandKind::Model,
     run: step_create,
 };
 
@@ -164,6 +168,7 @@ pub const STEP_EDIT: CommandSpec = CommandSpec {
     id: "model.step.edit",
     label: "Edit Step",
     params: r#"{"name": "Bend", "procedure", "output", "boundary_conditions", "loads"} — as model.step.create; what is left out keeps its value"#,
+    kind: CommandKind::Model,
     run: step_edit,
 };
 
@@ -171,6 +176,7 @@ pub const STEP_DELETE: CommandSpec = CommandSpec {
     id: "model.step.delete",
     label: "Delete Step",
     params: r#"{"name": "Bend"}"#,
+    kind: CommandKind::Model,
     run: |s, p| s.model.remove_step(name(p)?).map(|_| Value::Null).map_err(Into::into),
 };
 
@@ -178,10 +184,12 @@ pub const STEP_ACTIVATE: CommandSpec = CommandSpec {
     id: "model.step.activate",
     label: "Activate in Step",
     params: r#"{"step": "Bend", "boundary_conditions": [names], "loads": [names], "active": true} — switches the listed items on (or off with false) in that step only"#,
+    kind: CommandKind::Model,
     run: step_activate,
 };
 
-pub const ACTIVITY: CommandSpec = CommandSpec { id: "model.activity", label: "Step Table", params: "{}", run: |s, _| Ok(activity(&s.model)) };
+pub const ACTIVITY: CommandSpec =
+    CommandSpec { id: "model.activity", label: "Step Table", params: "{}", kind: CommandKind::Model, run: |s, _| Ok(activity(&s.model)) };
 
 fn step_create(s: &mut Session, p: &Value) -> Result<Value> {
     let n = name(p)?;

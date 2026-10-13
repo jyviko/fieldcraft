@@ -167,10 +167,10 @@ impl ModelApp {
     /// do. The result or the error goes to the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         let was_empty = self.session.model.nodes().is_empty();
-        let journal = self.session.journal.len();
+        let revision = self.session.revision();
         let label = command_label(id);
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
-        let changed = self.session.journal.len() != journal;
+        let changed = self.session.revision() != revision;
         if changed {
             self.model_changed();
         }
@@ -301,11 +301,32 @@ impl ModelApp {
             self.styled = Some(self.ui.dark);
         }
         self.drain_control(ctx);
+        self.shortcuts(ctx);
         self.cam.fov = if self.ui.perspective { PERSPECTIVE_FOV } else { 0.0 };
         if !self.synthetic.is_empty() {
             ctx.request_repaint();
         }
         self.screenshots(ctx);
+    }
+
+    /// Undo (Ctrl/Cmd+Z) and redo (Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y), unless a text field has the
+    /// keyboard (it undoes its own typing).
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        let shortcut = |modifiers, key| egui::KeyboardShortcut::new(modifiers, key);
+        // Shift+Z first: the plain shortcut matches it too.
+        let (redo, undo) = ctx.input_mut(|i| {
+            let redo = i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z))
+                || i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::Y));
+            (redo, i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::Z)))
+        });
+        if redo {
+            let _ = self.run("edit.redo", json!({}));
+        } else if undo {
+            let _ = self.run("edit.undo", json!({}));
+        }
     }
 
     /// Inject synthetic events: one pointer event per frame (egui reads a press and release in

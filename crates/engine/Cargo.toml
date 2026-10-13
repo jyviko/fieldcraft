@@ -12,6 +12,7 @@ workspace = true
 modelcraft-model = { workspace = true }
 modelcraft-geometry = { workspace = true }
 modelcraft-mesh = { workspace = true }
+modelcraft-io = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

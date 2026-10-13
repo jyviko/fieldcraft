@@ -3,11 +3,18 @@
 //! Everything a user can do is a command ([`CommandSpec`]) with a JSON form. The desktop UI,
 //! scripts, the CLI and the control channel all run the same commands through
 //! [`Session::execute`], which never lets a failure or a panic damage the session: the model and
-//! the surfaces are restored and an [`EngineError`] comes back.
+//! the geometry are restored and an [`EngineError`] comes back.
+//!
+//! Commands that change the model are journalled and can be undone and redone
+//! (`edit.undo`, `edit.redo`; [`history`]). The session is saved to and opened from `.modelcraft`
+//! files (`file.save`, `file.open`; [`modelcraft_io`]) and autosaved for recovery after a crash
+//! ([`autosave`]).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod autosave;
 pub mod cmd;
+pub mod history;
 pub mod sample;
 
 use std::sync::Arc;
@@ -16,6 +23,8 @@ use modelcraft_geometry::Design;
 use modelcraft_geometry::tagged_mesh::TaggedSurface;
 use modelcraft_model::Model;
 use serde_json::Value;
+
+use crate::history::History;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum EngineError {
@@ -29,12 +38,25 @@ pub enum EngineError {
     Geometry(#[from] modelcraft_geometry::Error),
     #[error(transparent)]
     Mesh(#[from] modelcraft_mesh::Error),
+    #[error(transparent)]
+    File(#[from] modelcraft_io::Error),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+/// What a command works on, which decides how [`Session::execute`] records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandKind {
+    /// Reads or changes the model and its geometry. A run that changes something is journalled
+    /// and becomes an undo step.
+    Model,
+    /// Works on the session itself: opens, saves, undoes and redoes. Never journalled; such a
+    /// command keeps the journal and the undo history in step itself.
+    Session,
+}
 
 /// A command: one user-visible action.
 pub struct CommandSpec {
@@ -43,6 +65,7 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// The JSON parameters, documented for scripts, `modelcraft-cli commands` and agents.
     pub params: &'static str,
+    pub kind: CommandKind,
     pub run: fn(&mut Session, &Value) -> Result<Value>,
 }
 
@@ -55,6 +78,12 @@ pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
     commands().iter().find(|c| c.id == id)
 }
 
+/// A new revision number, unique in the process: every state of every session has its own.
+pub(crate) fn next_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The model being edited, the geometry it is built on and the commands that built it.
 #[derive(Debug, Clone, Default)]
 pub struct Session {
@@ -64,8 +93,20 @@ pub struct Session {
     /// Face-tagged boundary surfaces (`geometry.import.mesh`): the input to volume meshing.
     /// Each is shared, so the per-command snapshot is cheap.
     pub surfaces: Vec<Arc<TaggedSurface>>,
-    /// Commands that changed the model, in order (a script that rebuilds it).
+    /// The files the design and the surfaces were read from, with the hash of what was read:
+    /// what a `.modelcraft` file records to open them again.
+    pub sources: modelcraft_io::Geometry,
+    /// Commands that changed the model, in order (a script that rebuilds it). Undo takes the
+    /// last one off; redo puts it back.
     pub journal: Vec<(String, Value)>,
+    /// The `.modelcraft` file the session was opened from or last saved to.
+    pub path: Option<String>,
+    history: History,
+    /// Identifies the current state: it changes with every edit, undo and redo, and comes back
+    /// when an undo returns to an earlier state.
+    revision: u64,
+    /// The revision last saved to (or opened from) `path`.
+    saved_revision: u64,
 }
 
 impl Session {
@@ -73,9 +114,7 @@ impl Session {
     /// they were.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
-        let before = self.model.clone();
-        let design_before = self.design.clone();
-        let surfaces_before = self.surfaces.clone();
+        let before = self.snapshot();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
         let result = match outcome {
             Ok(r) => r,
@@ -85,17 +124,16 @@ impl Session {
                 Err(EngineError::Internal { command: id.to_string(), message })
             }
         };
-        let design_changed = self.design.as_ref().map(Arc::as_ptr) != design_before.as_ref().map(Arc::as_ptr);
-        let surfaces_changed =
-            self.surfaces.len() != surfaces_before.len() || self.surfaces.iter().zip(&surfaces_before).any(|(a, b)| !Arc::ptr_eq(a, b));
-        match &result {
-            Ok(_) if self.model != before || design_changed || surfaces_changed => self.journal.push((id.to_string(), params.clone())),
-            Ok(_) => {}
-            Err(_) => {
-                self.model = before;
-                self.design = design_before;
-                self.surfaces = surfaces_before;
+        match (&result, spec.kind) {
+            (Err(_), _) => {
+                self.restore(before);
             }
+            (Ok(_), CommandKind::Model) if self.differs_from(&before) => {
+                self.journal.push((id.to_string(), params.clone()));
+                self.revision = next_revision();
+                self.record_undo(before);
+            }
+            (Ok(_), _) => {}
         }
         result
     }
@@ -109,6 +147,23 @@ impl Session {
             self.execute(id, &params).map_err(|e| EngineError::Params(format!("step {} ({id}): {e}", i + 1)))?;
         }
         Ok(())
+    }
+
+    /// Identifies the current state (see [`Session::is_dirty`]).
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Whether the session has changes its file does not hold. Undoing back to the saved state
+    /// makes it clean again.
+    pub fn is_dirty(&self) -> bool {
+        self.revision != self.saved_revision
+    }
+
+    /// The current state is what `path` now holds.
+    pub(crate) fn mark_saved(&mut self, path: String) {
+        self.path = Some(path);
+        self.saved_revision = self.revision;
     }
 }
 

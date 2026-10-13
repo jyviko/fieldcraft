@@ -1855,6 +1855,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "modelcraft-geometry",
+ "modelcraft-io",
  "modelcraft-mesh",
  "modelcraft-model",
  "serde",

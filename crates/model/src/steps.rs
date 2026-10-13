@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Model, Result, check_name, context, finite, require};
+use crate::{Error, Model, Result, check_name, context, finite, positive, require};
 
 /// Most steps in a model.
 pub const MAX_STEPS: usize = 1000;
@@ -18,8 +18,20 @@ pub const MAX_STEPS: usize = 1000;
 /// Most modes a frequency step extracts.
 pub const MAX_MODES: u32 = 100_000;
 
+/// Most time increments an explicit dynamic step may ask for.
+pub const MAX_INCREMENTS: u64 = 1_000_000_000;
+
+/// Most field frames an explicit dynamic step writes (end time over output interval).
+pub const MAX_FRAMES: f64 = 10_000.0;
+
+/// Most history samples an explicit dynamic step records (end time over history interval).
+pub const MAX_HISTORY_SAMPLES: f64 = 1_000_000.0;
+
+/// Most initial velocities or rigid walls an explicit dynamic step lists.
+pub const MAX_STEP_ITEMS: usize = 10_000;
+
 /// What a step solves.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Procedure {
     /// Linear static equilibrium under the active loads and boundary conditions.
@@ -33,6 +45,233 @@ pub enum Procedure {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_hz: Option<f64>,
     },
+    /// Transient dynamics by explicit time integration up to `end_time`.
+    ExplicitDynamic(ExplicitDynamic),
+}
+
+/// The settings of an explicit dynamic step.
+///
+/// Loads act in full from the start of the step; a displacement boundary condition with a value
+/// is reached at constant velocity over the step (value / `end_time`), a zero value holds the
+/// node. The step starts from the undeformed model at rest, apart from `initial_velocities`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplicitDynamic {
+    /// Duration of the step (time units of the unit system).
+    pub end_time: f64,
+    /// Fraction of the stable time increment taken (0 < scale ≤ 1).
+    #[serde(default = "default_dt_scale")]
+    pub dt_scale: f64,
+    /// Cap on the time increments; the run stops early (and says so) when it is reached.
+    #[serde(default = "default_max_increments")]
+    pub max_increments: u64,
+    /// Time between field frames (displacement, velocity, stress); by default a twentieth of the
+    /// step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_interval: Option<f64>,
+    /// Time between history samples (energies, momentum, constraint forces and the histories of
+    /// `history_nodes`); by default a thousandth of the step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_interval: Option<f64>,
+    /// A set whose nodes' displacement and velocity are recorded as histories.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_nodes: Option<String>,
+    /// Velocities of the nodes of sets at the start of the step (a node in several sets takes
+    /// the last one listed).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub initial_velocities: Vec<InitialVelocity>,
+    /// Fixed, frictionless rigid planes the nodes of sets cannot pass through.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rigid_walls: Vec<RigidWall>,
+    /// Hourglass control of one-point hexahedra.
+    #[serde(default)]
+    pub hourglass: Hourglass,
+    /// Artificial bulk viscosity.
+    #[serde(default)]
+    pub bulk_viscosity: BulkViscosity,
+}
+
+fn default_dt_scale() -> f64 {
+    0.9
+}
+
+fn default_max_increments() -> u64 {
+    10_000_000
+}
+
+impl ExplicitDynamic {
+    /// A step of `end_time` with every other setting at its default.
+    pub fn new(end_time: f64) -> ExplicitDynamic {
+        ExplicitDynamic {
+            end_time,
+            dt_scale: default_dt_scale(),
+            max_increments: default_max_increments(),
+            output_interval: None,
+            history_interval: None,
+            history_nodes: None,
+            initial_velocities: Vec::new(),
+            rigid_walls: Vec::new(),
+            hourglass: Hourglass::default(),
+            bulk_viscosity: BulkViscosity::default(),
+        }
+    }
+
+    /// The time between field frames.
+    pub fn output_interval(&self) -> f64 {
+        self.output_interval.unwrap_or(self.end_time / 20.0)
+    }
+
+    /// The time between history samples.
+    pub fn history_interval(&self) -> f64 {
+        self.history_interval.unwrap_or(self.end_time / 1000.0)
+    }
+
+    /// The sets the step refers to.
+    pub fn sets(&self) -> impl Iterator<Item = &str> {
+        self.history_nodes
+            .iter()
+            .map(String::as_str)
+            .chain(self.initial_velocities.iter().map(|v| v.set.as_str()))
+            .chain(self.rigid_walls.iter().map(|w| w.set.as_str()))
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let end = positive("end time", self.end_time)?;
+        if !(self.dt_scale > 0.0 && self.dt_scale <= 1.0) {
+            return Err(Error::Invalid(format!("the time increment scale is in (0, 1], got {}", self.dt_scale)));
+        }
+        if !(1..=MAX_INCREMENTS).contains(&self.max_increments) {
+            return Err(Error::Invalid(format!("an explicit step takes 1 to {MAX_INCREMENTS} increments, got {}", self.max_increments)));
+        }
+        for (what, interval, most) in
+            [("output interval", self.output_interval, MAX_FRAMES), ("history interval", self.history_interval, MAX_HISTORY_SAMPLES)]
+        {
+            if let Some(i) = interval {
+                positive(what, i)?;
+                if end / i > most {
+                    return Err(Error::Invalid(format!("the {what} {i} gives more than {most} samples over the step")));
+                }
+            }
+        }
+        if self.initial_velocities.len() > MAX_STEP_ITEMS || self.rigid_walls.len() > MAX_STEP_ITEMS {
+            return Err(Error::Limit(format!("a step lists at most {MAX_STEP_ITEMS} initial velocities and rigid walls")));
+        }
+        for v in &self.initial_velocities {
+            for c in v.velocity {
+                finite("initial velocity", c)?;
+            }
+        }
+        for w in &self.rigid_walls {
+            for c in w.point.iter().chain(&w.normal) {
+                finite("rigid wall", *c)?;
+            }
+            if !(w.normal.iter().map(|c| c * c).sum::<f64>() > 0.0) {
+                return Err(Error::Invalid("a rigid wall's normal must not be zero".into()));
+            }
+        }
+        self.hourglass.validate()?;
+        self.bulk_viscosity.validate()
+    }
+}
+
+/// A velocity given to the nodes of a set at the start of an explicit step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InitialVelocity {
+    pub set: String,
+    pub velocity: [f64; 3],
+}
+
+/// A fixed, frictionless rigid plane through `point`. Its `normal` points to the side the nodes
+/// of `set` stay on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RigidWall {
+    pub set: String,
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+}
+
+/// How one-point hexahedra resist their hourglass (zero-energy) modes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HourglassKind {
+    /// Forces proportional to the hourglass velocities.
+    #[default]
+    Viscous,
+    /// Forces proportional to the hourglass displacements.
+    Stiffness,
+}
+
+/// Hourglass control: the kind and a dimensionless coefficient.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hourglass {
+    #[serde(rename = "type", default)]
+    pub kind: HourglassKind,
+    #[serde(default = "default_hourglass_coefficient")]
+    pub coefficient: f64,
+}
+
+/// Largest hourglass coefficient.
+pub const MAX_HOURGLASS_COEFFICIENT: f64 = 0.25;
+
+fn default_hourglass_coefficient() -> f64 {
+    0.1
+}
+
+impl Default for Hourglass {
+    fn default() -> Hourglass {
+        Hourglass { kind: HourglassKind::Viscous, coefficient: default_hourglass_coefficient() }
+    }
+}
+
+impl Hourglass {
+    pub fn validate(&self) -> Result<()> {
+        if !(self.coefficient >= 0.0 && self.coefficient <= MAX_HOURGLASS_COEFFICIENT) {
+            return Err(Error::Invalid(format!("the hourglass coefficient is in 0..={MAX_HOURGLASS_COEFFICIENT}, got {}", self.coefficient)));
+        }
+        Ok(())
+    }
+}
+
+/// Artificial bulk viscosity in compression: a pressure `ρ L (quadratic L ε̇ᵥ² − linear c ε̇ᵥ)`
+/// for a volumetric strain rate ε̇ᵥ < 0, element size L and wave speed c.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BulkViscosity {
+    #[serde(default = "default_linear_viscosity")]
+    pub linear: f64,
+    #[serde(default = "default_quadratic_viscosity")]
+    pub quadratic: f64,
+}
+
+/// Largest bulk viscosity coefficient.
+pub const MAX_BULK_VISCOSITY: f64 = 10.0;
+
+fn default_linear_viscosity() -> f64 {
+    0.06
+}
+
+fn default_quadratic_viscosity() -> f64 {
+    1.5
+}
+
+impl Default for BulkViscosity {
+    fn default() -> BulkViscosity {
+        BulkViscosity { linear: default_linear_viscosity(), quadratic: default_quadratic_viscosity() }
+    }
+}
+
+impl BulkViscosity {
+    pub fn validate(&self) -> Result<()> {
+        for (what, v) in [("linear", self.linear), ("quadratic", self.quadratic)] {
+            if !(v >= 0.0 && v <= MAX_BULK_VISCOSITY) {
+                return Err(Error::Invalid(format!("the {what} bulk viscosity coefficient is in 0..={MAX_BULK_VISCOSITY}, got {v}")));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Procedure {
@@ -41,10 +280,14 @@ impl Procedure {
         match self {
             Procedure::Static {} => "static",
             Procedure::Frequency { .. } => "frequency",
+            Procedure::ExplicitDynamic(_) => "explicit_dynamic",
         }
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Procedure::ExplicitDynamic(e) = self {
+            return e.validate();
+        }
         if let Procedure::Frequency { modes, min_hz, max_hz } = *self {
             if !(1..=MAX_MODES).contains(&modes) {
                 return Err(Error::Invalid(format!("a frequency step extracts 1 to {MAX_MODES} modes, got {modes}")));
@@ -68,6 +311,7 @@ impl Procedure {
         match self {
             Procedure::Static {} => OutputVariable::ALL.into_iter().collect(),
             Procedure::Frequency { .. } => [OutputVariable::Displacement].into_iter().collect(),
+            Procedure::ExplicitDynamic(_) => [OutputVariable::Displacement, OutputVariable::Stress].into_iter().collect(),
         }
     }
 }
@@ -131,6 +375,11 @@ impl Model {
 
     fn check_step(&self, step: &Step) -> Result<()> {
         step.procedure.validate().map_err(|e| context("step", &step.name, e))?;
+        if let Procedure::ExplicitDynamic(e) = &step.procedure {
+            for set in e.sets() {
+                require(&self.sets, "set", set).map_err(|e| context("step", &step.name, e))?;
+            }
+        }
         for b in &step.boundary_conditions {
             require(&self.boundary_conditions, "boundary condition", b).map_err(|e| context("step", &step.name, e))?;
         }
@@ -229,5 +478,51 @@ mod tests {
         m.remove_set("base").unwrap();
         m.remove_step("Modes").unwrap();
         assert_eq!(m.steps().len(), 1);
+    }
+
+    #[test]
+    fn explicit_steps_validate_and_hold_their_sets() {
+        let mut m = Model::default();
+        m.add_set("front", Set { nodes: vec![1], ..Set::default() }).unwrap();
+        let json = serde_json::json!({
+            "type": "explicit_dynamic", "end_time": 1e-3, "history_nodes": "front",
+            "initial_velocities": [{"set": "front", "velocity": [-10, 0, 0]}],
+            "rigid_walls": [{"set": "front", "point": [0, 0, 0], "normal": [1, 0, 0]}],
+            "hourglass": {"type": "stiffness"}
+        });
+        let p: Procedure = serde_json::from_value(json).unwrap();
+        let Procedure::ExplicitDynamic(e) = &p else { panic!("{p:?}") };
+        assert_eq!((e.dt_scale, e.hourglass.kind, e.hourglass.coefficient), (0.9, HourglassKind::Stiffness, 0.1));
+        assert_eq!(e.bulk_viscosity, BulkViscosity { linear: 0.06, quadratic: 1.5 });
+        assert!((e.output_interval() - 5e-5).abs() < 1e-18 && (e.history_interval() - 1e-6).abs() < 1e-18);
+        let back: Procedure = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+        assert_eq!(back, p);
+        m.add_step(Step::new("Impact", p.clone()), None).unwrap();
+        assert!(matches!(m.remove_set("front"), Err(Error::InUse(_))), "the step refers to the set");
+        assert!(m.add_step(Step::new("Impact", p), None).is_err(), "names stay unique");
+        let missing = serde_json::json!({"type": "explicit_dynamic", "end_time": 1.0, "history_nodes": "nope"});
+        assert!(m.add_step(Step::new("Bad", serde_json::from_value(missing).unwrap()), None).is_err());
+
+        let base = ExplicitDynamic::new(1.0);
+        let bad = [
+            ExplicitDynamic { end_time: 0.0, ..base.clone() },
+            ExplicitDynamic { end_time: f64::NAN, ..base.clone() },
+            ExplicitDynamic { dt_scale: 1.5, ..base.clone() },
+            ExplicitDynamic { dt_scale: 0.0, ..base.clone() },
+            ExplicitDynamic { max_increments: 0, ..base.clone() },
+            ExplicitDynamic { output_interval: Some(1e-9), ..base.clone() },
+            ExplicitDynamic { history_interval: Some(-1.0), ..base.clone() },
+            ExplicitDynamic { rigid_walls: vec![RigidWall { set: "front".into(), point: [0.0; 3], normal: [0.0; 3] }], ..base.clone() },
+            ExplicitDynamic {
+                initial_velocities: vec![InitialVelocity { set: "front".into(), velocity: [f64::INFINITY, 0.0, 0.0] }],
+                ..base.clone()
+            },
+            ExplicitDynamic { hourglass: Hourglass { kind: HourglassKind::Viscous, coefficient: 2.0 }, ..base.clone() },
+            ExplicitDynamic { bulk_viscosity: BulkViscosity { linear: -1.0, quadratic: 1.0 }, ..base.clone() },
+        ];
+        for b in bad {
+            assert!(Procedure::ExplicitDynamic(b.clone()).validate().is_err(), "{b:?}");
+        }
+        assert!(serde_json::from_value::<Procedure>(serde_json::json!({"type": "explicit_dynamic", "end_time": 1, "dt": 2})).is_err());
     }
 }

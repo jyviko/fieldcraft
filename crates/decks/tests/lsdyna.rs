@@ -674,3 +674,15 @@ fn hostile_numbers_stay_within_their_fields() {
     let deck = read(&w.text);
     assert_eq!(deck.nodes[&1], [1e9, -1e9, 1e-300]);
 }
+
+/// Explicit dynamic steps are not written by any deck format yet: each says so by name.
+#[test]
+fn explicit_steps_are_refused_by_every_format() {
+    let mut m = cantilever();
+    m.add_step(step("Impact", Procedure::ExplicitDynamic(ExplicitDynamic::new(1e-3)), &["clamp"], &[]), None).unwrap();
+    for f in modelcraft_decks::FORMATS {
+        let e = f.write(&m).unwrap_err();
+        assert!(matches!(e, Error::Unsupported { .. }), "{}: {e}", f.name);
+        assert!(e.to_string().contains("step `Impact`: explicit dynamic"), "{}: {e}", f.name);
+    }
+}

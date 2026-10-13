@@ -244,8 +244,14 @@ impl Model {
         let needs_mass = self
             .steps
             .iter()
-            .find(|s| matches!(s.procedure, Procedure::Frequency { .. }))
-            .map(|s| format!("step `{}` extracts frequencies", s.name))
+            .find(|s| matches!(s.procedure, Procedure::Frequency { .. } | Procedure::ExplicitDynamic(_)))
+            .map(|s| {
+                format!(
+                    "step `{}` {}",
+                    s.name,
+                    if matches!(s.procedure, Procedure::Frequency { .. }) { "extracts frequencies" } else { "is dynamic" }
+                )
+            })
             .or_else(|| self.loads.iter().find(|(_, l)| matches!(l, Load::Gravity { .. })).map(|(n, _)| format!("load `{n}` is gravity")));
         if let Some(why) = needs_mass {
             let used: BTreeSet<&str> = self.sections.values().map(|s| s.material.as_str()).collect();
@@ -340,7 +346,7 @@ impl Model {
         }
         for s in &self.steps {
             let subject = format!("step `{}`", s.name);
-            match s.procedure {
+            match &s.procedure {
                 Procedure::Static {} => {
                     let prescribes_motion = s
                         .boundary_conditions
@@ -356,8 +362,25 @@ impl Model {
                         d.warning(&subject, "loads have no effect on natural frequencies");
                     }
                 }
+                Procedure::ExplicitDynamic(e) => {
+                    for set in e.sets() {
+                        if set_of(set).nodes.is_empty() {
+                            d.error(&subject, format!("set `{set}` has no nodes"));
+                        }
+                    }
+                    let prescribes_motion = s
+                        .boundary_conditions
+                        .iter()
+                        .filter_map(|b| self.boundary_conditions.get(b))
+                        .any(|b| (1..=6).any(|dof| b.value(dof).is_some_and(|v| v != 0.0)));
+                    let moves = e.initial_velocities.iter().any(|v| v.velocity.iter().any(|c| *c != 0.0));
+                    if s.loads.is_empty() && !prescribes_motion && !moves {
+                        d.warning(&subject, "nothing loads or moves the model in this step");
+                    }
+                }
             }
-            if s.boundary_conditions.is_empty() {
+            // A free body is a natural case of transient dynamics (flight, impact).
+            if s.boundary_conditions.is_empty() && !matches!(s.procedure, Procedure::ExplicitDynamic(_)) {
                 d.warning(&subject, "no boundary condition is active, so the model is free to move as a rigid body");
             }
         }

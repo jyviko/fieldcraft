@@ -234,6 +234,9 @@ struct Deck<'m> {
 
 /// The solution sequence of a list of steps, or why there is none.
 fn solution(steps: &[&Step]) -> std::result::Result<u32, String> {
+    if let Some(s) = steps.iter().find(|s| matches!(s.procedure, Procedure::ExplicitDynamic(_))) {
+        return Err(format!("step `{}`: explicit dynamic steps (Nastran's linear solutions have none)", s.name));
+    }
     let statics = steps.iter().find(|s| matches!(s.procedure, Procedure::Static {}));
     let modes = steps.iter().find(|s| matches!(s.procedure, Procedure::Frequency { .. }));
     match (statics, modes) {
@@ -581,8 +584,8 @@ impl<'m> Deck<'m> {
             comment(&mut out, "eigenvalue extraction");
         }
         for sub in &self.subcases {
-            if let (Some(sid), Procedure::Frequency { modes, min_hz, max_hz }) = (sub.method, sub.step.procedure) {
-                Card::new("EIGRL").int(sid).opt(min_hz).opt(max_hz).int(modes).write(&mut out)?;
+            if let (Some(sid), Procedure::Frequency { modes, min_hz, max_hz }) = (sub.method, &sub.step.procedure) {
+                Card::new("EIGRL").int(sid).opt(*min_hz).opt(*max_hz).int(*modes).write(&mut out)?;
             }
         }
         out.push_str("ENDDATA\n");

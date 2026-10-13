@@ -235,6 +235,9 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
     }
     let mut gravity_sets: BTreeSet<Option<&str>> = BTreeSet::new();
     for step in model.steps() {
+        if matches!(step.procedure, Procedure::ExplicitDynamic(_)) {
+            refused.insert(format!("step `{}`: explicit dynamic steps (this writer writes implicit analyses so far)", step.name));
+        }
         let is_static = matches!(step.procedure, Procedure::Static {});
         for b in &step.boundary_conditions {
             let Some(bc) = model.boundary_conditions().get(b) else { continue };
@@ -583,6 +586,9 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
                 d.header(&["isolid", "ibeam", "ishell", "itshell", "mstres"]);
                 d.card([Field::Blank, Field::Blank, Field::Blank, Field::Blank, Field::from(1)]);
             }
+        }
+        Procedure::ExplicitDynamic(_) => {
+            return Err(Error::Unsupported { format: FORMAT, what: format!("step `{}`: explicit dynamic steps", step.name) });
         }
     }
     d.line("*CONTROL_TERMINATION");

@@ -216,6 +216,9 @@ fn check_expressible(model: &Model) -> Result<()> {
             ));
         }
     }
+    for step in model.steps().iter().filter(|s| matches!(s.procedure, Procedure::ExplicitDynamic(_))) {
+        bad.insert(format!("step `{}`: explicit dynamic steps (not written to Abaqus input yet)", step.name));
+    }
     for (name, c) in model.couplings() {
         if c.kind == CouplingKind::Distributing && !(1..=3).all(|d| c.dofs.contains(d)) {
             bad.insert(format!("coupling `{name}`: an Abaqus distributing coupling always couples translations 1-3"));
@@ -786,6 +789,9 @@ impl Deck {
                     if !step.loads.is_empty() {
                         self.comment("loads have no effect on natural frequencies and are not written");
                     }
+                }
+                Procedure::ExplicitDynamic(_) => {
+                    return Err(Error::Unsupported { format: FORMAT, what: format!("step `{}`: explicit dynamic steps", step.name) });
                 }
             }
             self.output(step);

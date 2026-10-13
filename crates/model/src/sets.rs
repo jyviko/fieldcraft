@@ -116,6 +116,12 @@ impl Model {
         users
             .extend(self.boundary_conditions.iter().filter(|(_, b)| b.target().set() == Some(set)).map(|(n, _)| format!("boundary condition `{n}`")));
         users.extend(self.loads.iter().filter(|(_, l)| l.set() == Some(set)).map(|(n, _)| format!("load `{n}`")));
+        users.extend(
+            self.steps
+                .iter()
+                .filter(|s| matches!(&s.procedure, crate::Procedure::ExplicitDynamic(e) if e.sets().any(|x| x == set)))
+                .map(|s| format!("step `{}`", s.name)),
+        );
         users
     }
 

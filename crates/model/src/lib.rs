@@ -56,7 +56,7 @@ pub use materials::{Elastic, Material};
 pub use mesh::{Element, ElementFace, ElementKind, Node, check_coordinates};
 pub use sections::{BeamProfile, Formulation, Integration, Section, SectionKind};
 pub use sets::Set;
-pub use steps::{OutputVariable, Procedure, Step};
+pub use steps::{BulkViscosity, ExplicitDynamic, Hourglass, HourglassKind, InitialVelocity, OutputVariable, Procedure, RigidWall, Step};
 pub use units::UnitSystem;
 
 /// The largest node or element label. Nastran's GRID and element ids stop at 99 999 999 (eight

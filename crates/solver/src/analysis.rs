@@ -7,16 +7,17 @@ use modelcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
 use serde::Serialize;
 
 use crate::cholesky::{Factor, FactorError, UpperColumns};
+use crate::constraints::{Reduction, active_dofs, coupling_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
 use crate::ordering::nested_dissection;
 use crate::sparse::{Csr, NodeGraph, add_block, add_diagonal, add_scalar};
-use crate::system::{Mesh, equations, loads, prescribed};
+use crate::system::{Mesh, loads, prescribed};
 use crate::{Error, Limits, Result};
 
 /// Size and effort of a solution.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Stats {
-    /// Degrees of freedom of the mesh (3 per node).
+    /// Degrees of freedom: 3 per mesh node and 6 per coupled reference point.
     pub dofs: usize,
     /// Free degrees of freedom solved for.
     pub equations: usize,
@@ -37,6 +38,16 @@ pub struct ElementStress {
     pub nodal: Vec<[f64; 6]>,
 }
 
+/// The motion and reaction of a coupled reference point: translations along X, Y, Z, then
+/// rotations about them (reactions: forces, then moments). Directions no coupling ties are zero.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointResult {
+    pub name: String,
+    pub label: u32,
+    pub displacement: [f64; 6],
+    pub reaction: [f64; 6],
+}
+
 /// The result of a static step.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StaticResult {
@@ -51,7 +62,9 @@ pub struct StaticResult {
     /// Von Mises stress of the averaged nodal stress.
     pub von_mises: Vec<f64>,
     pub elements: Vec<ElementStress>,
-    /// Sum of the applied loads and of the reactions.
+    /// The coupled reference points, by name.
+    pub reference_points: Vec<PointResult>,
+    /// Sum of the applied forces and of the reaction forces (moments are not included).
     pub applied_total: [f64; 3],
     pub reaction_total: [f64; 3],
     pub stats: Stats,
@@ -71,6 +84,9 @@ pub struct Mode {
     pub participation: [f64; 3],
     /// Effective mass Γ² along X, Y, Z.
     pub effective_mass: [f64; 3],
+    /// The shape at the coupled reference points ([`FrequencyResult::reference_points`] order):
+    /// translations, then rotations.
+    pub point_shape: Vec<[f64; 6]>,
 }
 
 /// The result of a frequency step.
@@ -78,6 +94,8 @@ pub struct Mode {
 pub struct FrequencyResult {
     pub step: String,
     pub nodes: Vec<u32>,
+    /// The coupled reference points' names and labels.
+    pub reference_points: Vec<(String, u32)>,
     pub modes: Vec<Mode>,
     /// Mass of the model.
     pub total_mass: f64,
@@ -156,33 +174,42 @@ fn factor_raw(a: &Csr, limits: &Limits) -> std::result::Result<Factor, FactorErr
     Factor::new(&UpperColumns::from_symmetric(a), limits.max_factor_entries)
 }
 
-/// A factorization failure in the user's terms: the node and direction of a singular pivot.
-fn factor_error(e: FactorError, mesh: &Mesh, map: &[Option<usize>]) -> Error {
+/// A factorization failure in the user's terms: the node (or reference point) and direction of
+/// a singular pivot.
+fn factor_error(e: FactorError, mesh: &Mesh, reduction: &Reduction) -> Error {
     match e {
         FactorError::TooLarge { entries, limit } => {
             Error::Limit(format!("the factorization needs {entries} entries; the limit is {limit} (refine less or raise the limit)"))
         }
         FactorError::NotPositiveDefinite { column } => {
-            let dof = map.iter().position(|m| *m == Some(column)).unwrap_or(0);
-            let label = mesh.labels.get(dof / 3).copied().unwrap_or(0);
-            let axis = ["X", "Y", "Z"].get(dof % 3).copied().unwrap_or("?");
+            let at = reduction.eq_dof.get(column).map_or_else(|| "an unknown degree of freedom".to_string(), |d| mesh.describe_dof(*d));
             Error::Singular(format!(
-                "the stiffness is singular at node {label} in {axis}: the model can move without straining (missing or insufficient boundary conditions, or a part not connected to the rest)"
+                "the stiffness is singular at {at}: the model can move without straining (missing or insufficient boundary conditions, a part not connected to the rest, or a reference point direction nothing holds)"
             ))
         }
     }
 }
 
-/// Spread a free-equation vector over every degree of freedom (`base` holds the prescribed
-/// values) and group it per node.
-fn per_node(x: &[f64], map: &[Option<usize>], base: Vec<f64>) -> Vec<[f64; 3]> {
-    let mut full = base;
-    for (dof, m) in map.iter().enumerate() {
-        if let (Some(eq), Some(v)) = (m, full.get_mut(dof)) {
-            *v = x.get(*eq).copied().unwrap_or(0.0);
-        }
-    }
-    full.as_chunks::<3>().0.to_vec()
+/// The mesh nodes' part of a full vector, per node, and the reference points' part, per point.
+fn split(full: &[f64], mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[f64; 6]>) {
+    let (nodes, points) = full.split_at(mesh.mesh_dofs().min(full.len()));
+    (nodes.as_chunks::<3>().0.to_vec(), points.as_chunks::<6>().0.to_vec())
+}
+
+/// Constraint rows, prescribed values and their elimination for a step.
+fn reduction(
+    model: &Model,
+    resolved: &Resolved,
+    mesh: &Mesh,
+    step: &Step,
+    values: bool,
+    order: &[usize],
+    warnings: &mut Vec<String>,
+) -> Result<(Reduction, Vec<bool>)> {
+    let rows = coupling_rows(model, resolved, mesh)?;
+    let active = active_dofs(mesh, &rows);
+    let fixed = prescribed(model, resolved, mesh, step, values, &active, warnings)?;
+    Ok((Reduction::new(mesh, order, &fixed, &rows, &active)?, active))
 }
 
 /// Solve a linear static step: the step named `step`, or the model's only static step.
@@ -190,49 +217,45 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     let resolved = model.resolve()?;
     let step = select_step(model, step, |p| matches!(p, Procedure::Static {}), "static")?;
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
-    let fixed = prescribed(model, &resolved, &mesh, step, true)?;
-    let f = loads(model, &resolved, &mesh, step)?;
+    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
+    let order = nested_dissection(&mesh.xyz, &graph.adjacency);
+    let (red, active) = reduction(model, &resolved, &mesh, step, true, &order, &mut warnings)?;
+    let f = loads(model, &resolved, &mesh, step, &active)?;
     let k = assemble(&mesh, &graph, None)?.k;
-    let (map, neq) = equations(&nested_dissection(&mesh.xyz, &graph.adjacency), &fixed);
-    if neq == 0 {
+    if red.neq == 0 {
         return Err(Error::Invalid("every degree of freedom is prescribed; there is nothing to solve".into()));
     }
-    let chol = factor_raw(&k.restrict(&map, neq), limits).map_err(|e| factor_error(e, &mesh, &map))?;
-    // Right-hand side: f_free − K_fp u_p (K u_p only when something moves).
-    let up: Vec<f64> = fixed.iter().map(|v| v.unwrap_or(0.0)).collect();
-    let mut kup = vec![0.0; mesh.dofs()];
-    if up.iter().any(|v| *v != 0.0) {
-        k.mul(&up, &mut kup);
-    }
-    let mut rhs = vec![0.0; neq];
-    for (dof, m) in map.iter().enumerate() {
-        if let (Some(eq), Some(fv), Some(kv)) = (m, f.get(dof), kup.get(dof))
-            && let Some(r) = rhs.get_mut(*eq)
-        {
-            *r = fv - kv;
-        }
-    }
-    chol.solve(&mut rhs)?;
-    let displacement = per_node(&rhs, &map, up);
-    if displacement.iter().flatten().any(|x| !x.is_finite()) {
+    let chol = factor_raw(&red.reduce(&k), limits).map_err(|e| factor_error(e, &mesh, &red))?;
+    let mut q = red.rhs(&f, &k);
+    chol.solve(&mut q)?;
+    let u = red.expand(&q, true);
+    if u.iter().any(|x| !x.is_finite()) {
         return Err(Error::Singular("the solution is not finite; the model is ill-conditioned".into()));
     }
-    // Reactions R = K u − f at the prescribed degrees of freedom (only their rows of K).
-    let mut reaction = vec![[0.0; 3]; mesh.labels.len()];
+    let (displacement, point_motion) = split(&u, &mesh);
+    let (reaction, point_reaction) = split(&red.reactions(&k, &u, &f), &mesh);
+    // Force totals: mesh translations and reference point translations.
     let (mut applied_total, mut reaction_total) = ([0.0; 3], [0.0; 3]);
-    for (dof, fv) in f.iter().enumerate() {
-        let (node, c) = (dof / 3, dof % 3);
-        applied_total[c] += fv;
-        if fixed.get(dof).is_some_and(Option::is_some) {
-            let (cols, vals) = k.row(dof);
-            let ku: f64 = cols.iter().zip(vals).map(|(j, v)| v * displacement.get(j / 3).map_or(0.0, |u| u[j % 3])).sum();
-            if let Some(rn) = reaction.get_mut(node) {
-                rn[c] = ku - fv;
-            }
-            reaction_total[c] += ku - fv;
+    for (node_f, node_r) in f.as_chunks::<3>().0.iter().take(mesh.labels.len()).zip(&reaction) {
+        for c in 0..3 {
+            applied_total[c] += node_f[c];
+            reaction_total[c] += node_r[c];
         }
     }
+    let point_loads = f.get(mesh.mesh_dofs()..).unwrap_or_default().as_chunks::<6>().0;
+    for (pf, pr) in point_loads.iter().zip(&point_reaction) {
+        for c in 0..3 {
+            applied_total[c] += pf[c];
+            reaction_total[c] += pr[c];
+        }
+    }
+    let reference_points = mesh
+        .points
+        .iter()
+        .zip(point_motion.iter().zip(&point_reaction))
+        .map(|(p, (d, r))| PointResult { name: p.name.clone(), label: p.label, displacement: *d, reaction: *r })
+        .collect();
     // Stresses: one extrapolation per element type and rule.
     let mut extrapolations: Vec<(ElementKind, Rule, Extrapolation)> = Vec::new();
     let mut elements = Vec::with_capacity(mesh.elements.len());
@@ -266,7 +289,6 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     }
     let stress: Vec<[f64; 6]> = sum.iter().zip(&count).map(|(s, c)| s.map(|v| if *c > 0 { v / f64::from(*c) } else { 0.0 })).collect();
     let von_mises = stress.iter().map(von_mises).collect();
-    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     let scale = applied_total.iter().chain(&reaction_total).fold(0.0f64, |m, v| m.max(v.abs()));
     let imbalance = (0..3).map(|c| (applied_total[c] + reaction_total[c]).abs()).fold(0.0, f64::max);
     if scale > 0.0 && imbalance > 1e-6 * scale {
@@ -280,9 +302,10 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         stress,
         von_mises,
         elements,
+        reference_points,
         applied_total,
         reaction_total,
-        stats: Stats { dofs: mesh.dofs(), equations: neq, factor_entries: chol.entries(), lanczos_vectors: 0 },
+        stats: Stats { dofs: mesh.dofs(), equations: red.neq, factor_entries: chol.entries(), lanczos_vectors: 0 },
         warnings,
     })
 }
@@ -324,21 +347,22 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
         return Err(Error::Invalid(format!("the shift must be a finite number, got {s}")));
     }
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
-    let fixed = prescribed(model, &resolved, &mesh, step, false)?;
+    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
+    let order = nested_dissection(&mesh.xyz, &graph.adjacency);
+    let (red, _) = reduction(model, &resolved, &mesh, step, false, &order, &mut warnings)?;
     let Assembled { k, m } = assemble(&mesh, &graph, Some(options.mass))?;
     let m = m.ok_or_else(|| Error::Internal("mass matrix".into()))?;
     // Every element's mass entries sum to its mass, once per direction.
     let total_mass = m.val.iter().sum::<f64>() / 3.0;
-    let (map, neq) = equations(&nested_dissection(&mesh.xyz, &graph.adjacency), &fixed);
+    let neq = red.neq;
     if neq == 0 {
         return Err(Error::Invalid("every degree of freedom is held; there is nothing to vibrate".into()));
     }
-    let kff = k.restrict(&map, neq);
-    let mff = m.restrict(&map, neq);
+    let kff = red.reduce(&k);
+    let mff = red.reduce(&m);
     drop((k, m));
-    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
-    let shifted = |s: f64| -> Result<Factor> { factor_raw(&kff.add_scaled(-s, &mff)?, limits).map_err(|e| factor_error(e, &mesh, &map)) };
+    let shifted = |s: f64| -> Result<Factor> { factor_raw(&kff.add_scaled(-s, &mff)?, limits).map_err(|e| factor_error(e, &mesh, &red)) };
     let (shift, chol) = match options.shift {
         Some(s) => (s, shifted(s)?),
         None => match factor_raw(&kff, limits) {
@@ -353,7 +377,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
                 warnings.push("the structure is not fully supported; rigid-body modes appear at (near) zero frequency".into());
                 (s, shifted(s)?)
             }
-            Err(e) => return Err(factor_error(e, &mesh, &map)),
+            Err(e) => return Err(factor_error(e, &mesh, &red)),
         },
     };
     drop(kff);
@@ -369,15 +393,13 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let max_basis = limits.max_lanczos_vectors.min(by_memory).max(BLOCK.min(neq));
     let op = ShiftInvert { m: &mff, factor: &chol };
     let pairs = lanczos(&op, shift, wanted, BLOCK, max_basis, TOLERANCE)?;
-    // Participation: Γ_d = φᵀ M r_d with r_d the unit translation along d on the free dofs.
+    // Participation: Γ_d = φᵀ M r_d with r_d the unit translation along d on the free equations
+    // (mesh and reference point translations).
+    let mesh_dofs = mesh.mesh_dofs();
+    let direction = |dof: usize| if dof < mesh_dofs { dof % 3 } else { (dof - mesh_dofs) % 6 };
     let mr: Vec<Vec<f64>> = (0..3)
         .map(|d| {
-            let mut r = vec![0.0; neq];
-            for (dof, mm) in map.iter().enumerate() {
-                if let Some(x) = mm.filter(|_| dof % 3 == d).and_then(|eq| r.get_mut(eq)) {
-                    *x = 1.0;
-                }
-            }
+            let r: Vec<f64> = red.eq_dof.iter().map(|dof| if direction(*dof) == d { 1.0 } else { 0.0 }).collect();
             let mut y = vec![0.0; neq];
             mff.mul(&r, &mut y);
             y
@@ -386,12 +408,14 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let mut out = Vec::with_capacity(pairs.values.len());
     for (lambda, phi) in pairs.values.iter().zip(&pairs.vectors) {
         let participation = [0, 1, 2].map(|d| mr.get(d).map_or(0.0, |y| y.iter().zip(phi).map(|(a, b)| a * b).sum()));
+        let (shape, point_shape) = split(&red.expand(phi, false), &mesh);
         out.push(Mode {
             eigenvalue: *lambda,
             frequency: lambda.max(0.0).sqrt() / two_pi,
-            shape: per_node(phi, &map, vec![0.0; mesh.dofs()]),
+            shape,
             participation,
             effective_mass: participation.map(|g| g * g),
+            point_shape,
         });
     }
     if out.len() < wanted.count && max_hz.is_none() {
@@ -400,6 +424,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     Ok(FrequencyResult {
         step: step.name.clone(),
         nodes: mesh.labels.clone(),
+        reference_points: mesh.points.iter().map(|p| (p.name.clone(), p.label)).collect(),
         modes: out,
         total_mass,
         stats: Stats { dofs: mesh.dofs(), equations: neq, factor_entries: chol.entries(), lanczos_vectors: pairs.basis },

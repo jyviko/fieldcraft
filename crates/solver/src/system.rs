@@ -1,8 +1,14 @@
 //! From the resolved model to the discrete system: the solid elements with their materials and
-//! formulations, the degrees of freedom, prescribed values and the load vector of a step.
+//! formulations, the coupled reference points, the degrees of freedom, prescribed values and the
+//! load vector of a step.
+//!
+//! Degrees of freedom: three translations per mesh node (nodes by label), then six per coupled
+//! reference point (points by name): translations along X, Y, Z and rotations about them.
 
 use modelcraft_fem::element::{Formulation, Solid};
 use modelcraft_fem::{Elasticity, elasticity, face};
+use std::collections::BTreeSet;
+
 use modelcraft_model::{ElementKind, Load, Model, Resolved, SectionKind, Step, Target};
 
 use crate::{Error, Result};
@@ -26,13 +32,27 @@ impl Elem {
     }
 }
 
+/// A reference point some coupling ties to the mesh.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Point {
+    pub name: String,
+    pub label: u32,
+    pub xyz: [f64; 3],
+}
+
 /// The analysed mesh: the nodes that carry degrees of freedom (those of the solid elements),
-/// sorted by label, and the elements sorted by label.
+/// sorted by label, the elements sorted by label, and the coupled reference points by name.
 #[derive(Debug, Clone)]
 pub struct Mesh {
     pub labels: Vec<u32>,
     pub xyz: Vec<[f64; 3]>,
     pub elements: Vec<Elem>,
+    pub points: Vec<Point>,
+}
+
+/// The name of a reference point degree of freedom (0–5).
+pub fn point_dof_name(c: usize) -> &'static str {
+    ["X", "Y", "Z", "rotation about X", "rotation about Y", "rotation about Z"].get(c).copied().unwrap_or("?")
 }
 
 impl Mesh {
@@ -44,17 +64,39 @@ impl Mesh {
         self.elements.binary_search_by_key(&label, |e| e.label).ok().and_then(|i| self.elements.get(i))
     }
 
-    pub fn dofs(&self) -> usize {
+    pub fn point(&self, name: &str) -> Option<usize> {
+        self.points.binary_search_by(|p| p.name.as_str().cmp(name)).ok()
+    }
+
+    /// The translational degrees of freedom of the mesh nodes.
+    pub fn mesh_dofs(&self) -> usize {
         3 * self.labels.len()
+    }
+
+    /// Every degree of freedom: the mesh's, then six per reference point.
+    pub fn dofs(&self) -> usize {
+        self.mesh_dofs() + 6 * self.points.len()
+    }
+
+    /// Degree of freedom `c` (0–5) of reference point `k`.
+    pub fn point_dof(&self, k: usize, c: usize) -> usize {
+        self.mesh_dofs() + 6 * k + c
+    }
+
+    /// What a degree of freedom is, in the user's terms.
+    pub fn describe_dof(&self, dof: usize) -> String {
+        if dof < self.mesh_dofs() {
+            let label = self.labels.get(dof / 3).copied().unwrap_or(0);
+            format!("node {label} in {}", point_dof_name(dof % 3))
+        } else {
+            let k = (dof - self.mesh_dofs()) / 6;
+            let name = self.points.get(k).map_or("?", |p| p.name.as_str());
+            format!("reference point `{name}` in {}", point_dof_name((dof - self.mesh_dofs()) % 6))
+        }
     }
 
     /// Build it from the model and its resolved view, refusing what the solver cannot represent.
     pub fn new(model: &Model, resolved: &Resolved, max_dofs: usize) -> Result<Mesh> {
-        if let Some(name) = model.couplings().keys().next() {
-            return Err(Error::NotSupported(format!(
-                "couplings (coupling `{name}`); the solver handles solid elements without reference points so far"
-            )));
-        }
         let mut elements = Vec::new();
         for (name, section) in model.sections() {
             if !matches!(section.kind, SectionKind::Solid {}) {
@@ -80,14 +122,24 @@ impl Mesh {
         let mut labels: Vec<u32> = elements.iter().flat_map(|e| e.2.iter().copied()).collect();
         labels.sort_unstable();
         labels.dedup();
-        if 3 * labels.len() > max_dofs {
-            return Err(Error::Limit(format!("the model has {} degrees of freedom; the limit is {max_dofs}", 3 * labels.len())));
+        let coupled: BTreeSet<&str> = model.couplings().values().map(|c| c.reference_point.as_str()).collect();
+        let points: Vec<Point> = coupled
+            .into_iter()
+            .map(|name| {
+                let p = model.reference_point(name).ok_or_else(|| Error::Invalid(format!("reference point `{name}` is missing")))?;
+                let label = resolved.reference_point_nodes.get(name).copied().unwrap_or(p.label);
+                Ok(Point { name: name.to_string(), label, xyz: p.xyz })
+            })
+            .collect::<Result<_>>()?;
+        let dofs = 3 * labels.len() + 6 * points.len();
+        if dofs > max_dofs {
+            return Err(Error::Limit(format!("the model has {dofs} degrees of freedom; the limit is {max_dofs}")));
         }
         let xyz: Vec<[f64; 3]> = labels
             .iter()
             .map(|l| model.node(*l).map(|n| n.xyz).ok_or_else(|| Error::Invalid(format!("node {l} is missing"))))
             .collect::<Result<_>>()?;
-        let mut mesh = Mesh { labels, xyz, elements: Vec::with_capacity(elements.len()) };
+        let mut mesh = Mesh { labels, xyz, elements: Vec::with_capacity(elements.len()), points };
         for (label, kind, nodes, formulation, d, density) in elements {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
@@ -98,24 +150,49 @@ impl Mesh {
 }
 
 /// The prescribed value of every degree of freedom (`None` = free) under a step's boundary
-/// conditions. Rotational degrees of freedom do not exist on solid nodes and are ignored.
-pub fn prescribed(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, values: bool) -> Result<Vec<Option<f64>>> {
+/// conditions; `values: false` holds them at zero (frequency steps). Rotations of solid nodes do
+/// not exist and are ignored, like the directions of a reference point no coupling ties
+/// (`active`); a boundary condition on a reference point that no coupling ties to the mesh holds
+/// nothing and is reported in `warnings`.
+pub fn prescribed(
+    model: &Model,
+    resolved: &Resolved,
+    mesh: &Mesh,
+    step: &Step,
+    values: bool,
+    active: &[bool],
+    warnings: &mut Vec<String>,
+) -> Result<Vec<Option<f64>>> {
     let mut out: Vec<Option<f64>> = vec![None; mesh.dofs()];
     for name in &step.boundary_conditions {
         let bc = model.boundary_condition(name).ok_or_else(|| Error::Invalid(format!("boundary condition `{name}` is missing")))?;
-        if let Target::ReferencePoint(rp) = bc.target() {
-            return Err(Error::NotSupported(format!("boundary conditions on reference points (`{name}` on `{rp}`)")));
-        }
-        for &label in resolved.target_nodes(bc.target()) {
-            let Some(node) = mesh.node(label) else { continue };
-            for dof in 1..=3u8 {
+        // (first degree of freedom, how many) per target node.
+        let targets: Vec<(usize, u8)> = match bc.target() {
+            Target::ReferencePoint(rp) => match mesh.point(rp) {
+                Some(k) => vec![(mesh.point_dof(k, 0), 6)],
+                None => {
+                    warnings.push(format!(
+                        "boundary condition `{name}` acts on reference point `{rp}`, which no coupling ties to the mesh; it holds nothing"
+                    ));
+                    continue;
+                }
+            },
+            target => resolved.target_nodes(target).iter().filter_map(|l| mesh.node(*l)).map(|n| (3 * n, 3)).collect(),
+        };
+        for (first, count) in targets {
+            for dof in 1..=count {
                 let Some(v) = bc.value(dof) else { continue };
+                let index = first + usize::from(dof - 1);
+                if !active.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
                 let v = if values { v } else { 0.0 };
-                let slot = out.get_mut(3 * node + usize::from(dof - 1)).ok_or_else(|| Error::Internal("dof index".into()))?;
+                let slot = out.get_mut(index).ok_or_else(|| Error::Internal("dof index".into()))?;
                 match *slot {
                     Some(old) if old != v => {
                         return Err(Error::Invalid(format!(
-                            "node {label} direction {dof} is prescribed both {old} and {v} (boundary condition `{name}` and another)"
+                            "{} is prescribed both {old} and {v} (boundary condition `{name}` and another)",
+                            mesh.describe_dof(index)
                         )));
                     }
                     _ => *slot = Some(v),
@@ -135,14 +212,33 @@ fn add(f: &mut [f64], node: usize, v: [f64; 3]) {
 }
 
 /// The load vector of a static step: nodal forces and tractions as the model distributes them,
-/// consistent pressure loads, gravity and body forces.
-pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step) -> Result<Vec<f64>> {
+/// forces and moments on coupled reference points, consistent pressure loads, gravity and body
+/// forces.
+pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, active: &[bool]) -> Result<Vec<f64>> {
     let mut f = vec![0.0; mesh.dofs()];
     for name in &step.loads {
         let load = model.load(name).ok_or_else(|| Error::Invalid(format!("load `{name}` is missing")))?;
         match load {
-            Load::Force { target: Target::ReferencePoint(rp), .. } => {
-                return Err(Error::NotSupported(format!("loads on reference points (`{name}` on `{rp}`)")));
+            Load::Force { target: Target::ReferencePoint(rp), vector, .. } | Load::Moment { target: Target::ReferencePoint(rp), vector, .. } => {
+                let k = mesh
+                    .point(rp)
+                    .ok_or_else(|| Error::Invalid(format!("load `{name}` acts on reference point `{rp}`, which no coupling ties to the mesh")))?;
+                let offset = if matches!(load, Load::Moment { .. }) { 3 } else { 0 };
+                for (c, v) in vector.iter().enumerate() {
+                    let dof = mesh.point_dof(k, offset + c);
+                    if *v == 0.0 {
+                        continue;
+                    }
+                    if !active.get(dof).copied().unwrap_or(false) {
+                        return Err(Error::Invalid(format!(
+                            "load `{name}`: {} is not coupled to the mesh (its coupling leaves that direction free)",
+                            mesh.describe_dof(dof)
+                        )));
+                    }
+                    if let Some(x) = f.get_mut(dof) {
+                        *x += v;
+                    }
+                }
             }
             Load::Force { .. } | Load::Traction { .. } => {
                 for (label, v) in resolved.nodal_loads.get(name).map(Vec::as_slice).unwrap_or_default() {
@@ -151,7 +247,7 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step) -> Re
                 }
             }
             Load::Moment { .. } => {
-                return Err(Error::NotSupported(format!("moments (`{name}`): solid nodes have no rotations; a coupled reference point is needed")));
+                return Err(Error::Invalid(format!("moment `{name}`: solid nodes have no rotations; apply it to a coupled reference point")));
             }
             Load::Pressure { set, magnitude } => {
                 let faces = resolved.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default();
@@ -197,22 +293,4 @@ fn body(f: &mut [f64], e: &Elem, b: [f64; 3]) -> Result<()> {
         add(f, *node, v);
     }
     Ok(())
-}
-
-/// Equation numbers of the free degrees of freedom, following a node order.
-pub fn equations(order: &[usize], prescribed: &[Option<f64>]) -> (Vec<Option<usize>>, usize) {
-    let mut map = vec![None; prescribed.len()];
-    let mut next = 0;
-    for &node in order {
-        for c in 0..3 {
-            let dof = 3 * node + c;
-            if prescribed.get(dof).is_some_and(Option::is_none) {
-                if let Some(m) = map.get_mut(dof) {
-                    *m = Some(next);
-                }
-                next += 1;
-            }
-        }
-    }
-    (map, next)
 }

@@ -783,6 +783,73 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 - **Knupp 2001.** *Algebraic mesh quality metrics.* SIAM J. Sci. Comput. 23(1):193–218. Corner-Jacobian scaled Jacobian and
   shape metrics for hexes, wedges and quads.
 
+
+### B7. Planar quadrilateral meshing (implemented in `modelcraft-mesh::quad`)
+
+The face meshers under mapped and swept hex meshing and shell meshing. All quads on prescribed
+boundary nodes, so faces sharing an edge share its nodes. DOIs below were checked through
+`doi.org/api/handles` and Crossref on 2026-10-13; papers without a DOI are cited by venue only.
+
+**B7.1 Gordon and Hall 1973, transfinite interpolation.** **Verdict: BUILD ON (mapped meshing).**
+- **Citation.** W. J. Gordon, C. A. Hall. *Construction of curvilinear co-ordinate systems and applications to mesh
+  generation.* IJNME 7(4):461–477, 1973. DOI [10.1002/nme.1620070405](https://doi.org/10.1002/nme.1620070405).
+- **Use.** The bilinearly blended Coons map of a four-sided region, dimension-generic (`quad::transfinite_grid`),
+  with arc-length blending parameters for unequal spacing on opposite sides.
+
+**B7.2 Free all-quad: the methods compared.**
+- **Paving.** T. D. Blacker, M. B. Stephenson. *Paving: a new approach to automated quadrilateral mesh generation.*
+  IJNME 32(4):811–847, 1991. DOI [10.1002/nme.1620320410](https://doi.org/10.1002/nme.1620320410). **Verdict:
+  reference.** Best boundary rows; front collisions are its failure mode.
+- **Q-Morph.** S. J. Owen, M. L. Staten, S. A. Canann, S. Saigal. *Q-Morph: an indirect approach to advancing front
+  quad meshing.* IJNME 44(9):1317–1340, 1999. DOI
+  [10.1002/(SICI)1097-0207(19990330)44:9<1317::AID-NME532>3.0.CO;2-N](https://doi.org/10.1002/(SICI)1097-0207(19990330)44:9%3C1317::AID-NME532%3E3.0.CO;2-N).
+  **Verdict: reference (upgrade path for boundary alignment).** Front states, side-edge recovery by swaps, seam
+  closing.
+- **Blossom-Quad.** J.-F. Remacle, J. Lambrechts, B. Seny, E. Marchandise, A. Johnen, C. Geuzaine. *Blossom-Quad: a
+  non-uniform quadrilateral mesh generator using a minimum-cost perfect-matching algorithm.* IJNME 89(9):1102–1119,
+  2012. DOI [10.1002/nme.3279](https://doi.org/10.1002/nme.3279). **Verdict: reference (upgrade path for the
+  matching).** Paper only: the implementation lives in Gmsh, which is GPL and forbidden.
+- **Recombination and split.** D. T. Lee, S. H. Lo. *A new scheme for the generation of a graded quadrilateral
+  mesh.* Computers & Structures 52(5):847–857, 1994. DOI
+  [10.1016/0045-7949(94)90070-1](https://doi.org/10.1016/0045-7949(94)90070-1). **Verdict: BUILD ON.** Triangles
+  merged into quads, then every element split once, which makes the mesh all-quad whatever the merge found.
+  The split topology is that of E. Catmull, J. Clark, CAD 10(6):350–355, 1978, DOI
+  [10.1016/0010-4485(78)90110-0](https://doi.org/10.1016/0010-4485(78)90110-0).
+- **Why the split method.** All-quad by construction given an even point count per loop; robustness is that of the
+  constrained Delaunay triangulation (exists for every valid input; exact predicates); low implementation risk.
+  Its cost is irregular nodes and 120° corners in triangle-born quads, reduced by smoothing. The reasoning in full
+  is in the `quad` module docs.
+
+**B7.3 Planar constrained Delaunay triangulation and refinement.** **Verdict: BUILD ON.**
+- A. Bowyer, *Computing Dirichlet tessellations*, Comput. J. 24(2):162–166, 1981,
+  DOI [10.1093/comjnl/24.2.162](https://doi.org/10.1093/comjnl/24.2.162); D. F. Watson, *Computing the n-dimensional
+  Delaunay tessellation…*, Comput. J. 24(2):167–172, 1981, DOI
+  [10.1093/comjnl/24.2.167](https://doi.org/10.1093/comjnl/24.2.167).
+- S. W. Sloan. *A fast algorithm for generating constrained Delaunay triangulations.* Computers & Structures
+  47(3):441–450, 1993. DOI [10.1016/0045-7949(93)90239-A](https://doi.org/10.1016/0045-7949(93)90239-A). Edge
+  recovery by flipping.
+- J. Ruppert. *A Delaunay refinement algorithm for quality 2-dimensional mesh generation.* J. Algorithms
+  18(3):548–585, 1995. DOI [10.1006/jagm.1995.1021](https://doi.org/10.1006/jagm.1995.1021); J. R. Shewchuk,
+  *Delaunay refinement algorithms for triangular mesh generation*, CGTA 22:21–74, 2002, DOI
+  [10.1016/S0925-7721(01)00047-5](https://doi.org/10.1016/S0925-7721(01)00047-5). Used without segment splitting
+  (boundary nodes are prescribed).
+
+**B7.4 Smoothing and untangling of the quads.** **Verdict: BUILD ON.**
+- L. A. Freitag. *On combining Laplacian and optimization-based mesh smoothing techniques.* AMD-Vol. 220, ASME 1997;
+  S. A. Canann, J. R. Tristano, M. L. Staten, *An approach to combined Laplacian and optimization-based smoothing for
+  triangular, quadrilateral, and quad-dominant meshes*, IMR 1998. Laplacian moves kept only when the worst element
+  does not get worse.
+- L. A. Freitag, P. Plassmann. *Local optimization-based simplicial mesh untangling and improvement.* IJNME
+  49(1–2):109–125, 2000. DOI
+  [10.1002/1097-0207(20000910/20)49:1/2<109::AID-NME925>3.0.CO;2-U](https://doi.org/10.1002/1097-0207(20000910/20)49:1/2%3C109::AID-NME925%3E3.0.CO;2-U).
+  Untangling by maximizing the smallest (linear) corner area.
+
+**B7.5 Quadrilateral quality.** **Verdict: BUILD ON.**
+- Knupp 2001 (B6.6) for the scaled Jacobian. J. Robinson, *CRE method of element testing and the Jacobian shape
+  parameters*, Eng. Comput. 4(2):113–118, 1987, for aspect ratio and skew from the principal axes. Planar validity
+  is exact: a planar bilinear quad's Jacobian is affine in each reference coordinate, so four exact `orient2d` corner
+  tests decide it.
+
 ---
 
 ## Part C: Datasets and benchmarks

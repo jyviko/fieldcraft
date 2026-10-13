@@ -68,7 +68,14 @@ Rules beyond the layer order:
    recombination (Pellerin et al. 2018), then polycube (DualCube labelling) for blocky parts;
    frame-field/integer-grid-map methods stay research. Validity uses a certified trilinear Jacobian
    check (Marschner et al. 2020), not corner Jacobians alone.
-5. **Quality.** Scaled Jacobian, aspect ratio, dihedral angles; every generated mesh is checked
+5. **Structured hex and face meshing.** Faces get all-quad meshes on shared, prescribed edge
+   nodes (`modelcraft-mesh::quad`): transfinite interpolation for four-sided faces (Gordon and
+   Hall 1973), and for free faces a half-resolution constrained Delaunay triangulation,
+   recombination (Lee and Lo 1994) and one uniform split that lands on the boundary nodes, then
+   smoothing and untangling; every quad is checked with exact predicates. One `SizeField` trait
+   (`modelcraft-mesh::size`) sets interior sizes and edge divisions, with even counts per loop.
+   Mapped and swept hex build on these face meshes.
+6. **Quality.** Scaled Jacobian, aspect ratio, dihedral angles; every generated mesh is checked
    for positive Jacobians and conserved volume before it reaches the model.
 
 ## Commands

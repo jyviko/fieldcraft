@@ -39,6 +39,26 @@ CC0 and public domain.
 | Elmer | GPL-2.0 / LGPL-2.1 | multiphysics solver |
 | deal.II, FreeFEM, Salome | LGPL | FE libraries, pre-processing |
 | OpenCASCADE | LGPL-2.1 | B-rep kernel |
+| Attene's CDT, Indirect_Predicates, VolumeMesher | GPL / LGPL | robust CDT, indirect predicates (implement from the papers) |
+| TetWild (original), Evocube, robustPolycube, ultimaille, invertible-maps | GPL-3.0 / AGPL-3.0 | tet meshing, polycube, injective maps |
+| libHexEx, libHexHex, QGP3D, MC3D, CoMISo, Graphite | GPL | integer-grid-map hex extraction, quantization |
+| Shewchuk's Triangle | non-commercial only | 2D meshing |
+| geogram `third_party/tetgen`, `third_party/triangle` and their wrappers | AGPL / non-commercial | (the rest of geogram is BSD-3 and readable) |
+| libigl `copyleft/` modules | GPL | (libigl core is MPL-2.0 and readable) |
+| OpenVolumeMesh, CGoGN | believed LGPL, unverified | treat as forbidden until checked |
+
+**Repositories without a licence are all rights reserved: never read them** (for example Gao
+2019's octree hex code, LoopyCuts). Readable references for the meshing work (re-implement from
+the paper, note anything adapted in ATTRIBUTION.md): Shewchuk's `predicates.c` (public domain),
+`georust/robust` (Apache-2.0), geogram (BSD-3, exclusions above), fTetWild (MPL-2.0), CinoLib,
+Gen-Adapt-Ref, HexaLab, robust_hex_dominant_meshing (MIT), quartet (ISC). The full table with
+sources is in `docs/meshing/literature.md`.
+
+**Test geometry** follows the same rule as test data: nothing produced with a commercial CAD or
+CAE product. That excludes ABC (Onshape), MAMBO (files from commercial translators) and the HexMe
+models that come from ABC, GrabCAD or Siemens NX; HexMe's Gmsh-made models are allowed (CC-BY-4.0).
+Thingi10K (per-model Creative Commons licences, authoring tool unrecorded) is pending an owner
+decision. The default corpus is generated: SolidCraft-built parts and analytic shapes.
 
 **Commercial products** (Abaqus, Nastran, LS-DYNA, LS-PrePost, HyperMesh, ANSA, Femap, Patran,
 ANSYS) are never run, scripted or used as a source of data. Deck formats come from the vendors'

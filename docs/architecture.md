@@ -43,12 +43,18 @@ Rules beyond the layer order:
    so feature edges and face-based loads and BCs survive meshing.
 2. **Surface preparation.** Weld coincident vertices, check the surface is closed, manifold and
    consistently oriented, find feature edges (face boundaries, sharp dihedral angles).
-3. **Tetrahedral meshing.** 3D Delaunay tetrahedralization of the boundary points with exact
-   predicates, boundary recovery, Delaunay refinement to a size field, then Voronoi-based
-   optimization (centroidal Voronoi / optimal Delaunay) and sliver removal.
-4. **Hexahedral meshing (the core).** All-hex first where it can be guaranteed valid, with
-   hex-dominant as the fallback; the method is chosen from the literature survey
-   (`docs/meshing/literature.md`).
+3. **Tetrahedral meshing.** Bowyer–Watson Delaunay on Shewchuk's adaptive predicates (symbolic
+   perturbation for degeneracies), boundary recovery by the robust constrained Delaunay method of
+   Diazzi et al. 2023 (implicit Steiner points on indirect predicates, gift-wrapping fallback), so
+   every boundary triangle and its B-rep face tag survives. Then constrained Delaunay refinement to a
+   size field, ODT smoothing interleaved as in Tournois et al. 2009, and the Klingner–Shewchuk 2007
+   improvement schedule against slivers.
+4. **Hexahedral meshing (the core).** Octree/grid dual all-hex first, the one family that meshes
+   any input validly (Livesu et al. 2021 dual schemes, Pitzalis et al. 2021 refinement, Gao et al.
+   2019 feature projection and padding, Garanzha et al. 2021 untangling). Then hex-dominant by tet
+   recombination (Pellerin et al. 2018), then polycube (DualCube labelling) for blocky parts;
+   frame-field/integer-grid-map methods stay research. Validity uses a certified trilinear Jacobian
+   check (Marschner et al. 2020), not corner Jacobians alone.
 5. **Quality.** Scaled Jacobian, aspect ratio, dihedral angles; every generated mesh is checked
    for positive Jacobians and conserved volume before it reaches the model.
 

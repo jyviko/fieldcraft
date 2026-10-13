@@ -90,13 +90,9 @@ $                 a1                  o1
                    1clamp
 $               nsid                 cid                dofx                dofy                dofz               dofrx               dofry               dofrz
                    2                                       1                   1                   1                   1                   1                   1
-$ load `push`
 *LOAD_NODE_POINT
 $                nid                 dof                lcid                  sf
             99999999                   2                   1               -10.0
-$ load `twist`
-*LOAD_NODE_POINT
-$                nid                 dof                lcid                  sf
             99999999                   5                   1               250.0
 *DATABASE_BINARY_D3PLOT
 $                 dt

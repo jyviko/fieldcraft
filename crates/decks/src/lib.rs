@@ -87,6 +87,7 @@ pub fn with_steps(model: &Model, names: &[String]) -> Result<Model> {
 pub const FORMATS: &[Format] = &[
     Format { name: "abaqus", extension: "inp", writer: abaqus::write_resolved },
     Format { name: "nastran", extension: "bdf", writer: nastran::write_resolved },
+    Format { name: "lsdyna", extension: "k", writer: lsdyna::write_resolved },
 ];
 
 /// The format called `name`.

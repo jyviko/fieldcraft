@@ -77,4 +77,26 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn writes_lsdyna_keyword_decks() {
+        let dir = std::env::temp_dir().join(format!("modelcraft-deck-lsdyna-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bar.k");
+        let mut s = Session::default();
+        crate::cmd::define::tests::defined_bar(&mut s);
+        let out = s.execute("deck.write", &json!({"format": "lsdyna", "path": path.to_string_lossy()})).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written, modelcraft_decks::lsdyna::write(&s.model).unwrap().text);
+        assert_eq!(out["format"], "lsdyna");
+        assert!(written.starts_with("*KEYWORD long=y\n") && written.contains("*CASE_BEGIN_2"), "two steps, two cases");
+        // What LS-DYNA cannot take is named and nothing is written.
+        s.execute("model.load.create", &json!({"name": "heat", "type": "body_force", "set": "all", "vector": [0, 0, 1]})).unwrap();
+        s.execute("model.step.activate", &json!({"step": "Bend", "loads": ["heat"]})).unwrap();
+        let other = dir.join("heat.k");
+        let e = s.execute("deck.write", &json!({"format": "lsdyna", "path": other.to_string_lossy()})).unwrap_err().to_string();
+        assert!(e.contains("not supported by LS-DYNA") && e.contains("load `heat`"), "{e}");
+        assert!(!other.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

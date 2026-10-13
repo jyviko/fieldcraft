@@ -19,9 +19,6 @@
 
 use modelcraft_model::{ElementKind, Formulation, Integration, SectionKind};
 
-use super::unsupported;
-use crate::Result;
-
 /// How an element is written: its keyword and its node list in LS-DYNA order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Keyword {
@@ -101,10 +98,11 @@ pub(crate) struct Elform {
 /// tetrahedron), hybrid 13 (nodal pressure); tet10 16; hex20 23. Shells: quad4 16 (fully
 /// integrated), reduced 2 (one-point) with hourglass control; tri3 4 (C0 triangle); quad8 23;
 /// tri6 24. Rods: 3 (truss).
-pub(crate) fn elform(kind: ElementKind, section: &SectionKind, f: Formulation, section_name: &str) -> Result<Elform> {
+/// What it cannot express is the reason, naming the section.
+pub(crate) fn elform(kind: ElementKind, section: &SectionKind, f: Formulation, section_name: &str) -> Result<Elform, String> {
     let plain = |elform| Ok(Elform { elform, hourglass: None });
     let reduced = f.integration == Integration::Reduced;
-    let no = |what: &str| Err(unsupported(format!("section `{section_name}`: {what} {}", kind.name())));
+    let no = |what: &str| Err(format!("section `{section_name}`: {what} {}", kind.name()));
     match section {
         SectionKind::Solid {} => {
             if f.hybrid {
@@ -179,8 +177,8 @@ mod tests {
         assert_eq!(elform(ElementKind::Tet10, &solid, full, "s").unwrap().elform, 16);
         assert_eq!(elform(ElementKind::Hex20, &solid, full, "s").unwrap().elform, 23);
         for (k, f) in [(ElementKind::Hex8, hybrid), (ElementKind::Tet10, reduced), (ElementKind::Hex20, reduced)] {
-            let e = elform(k, &solid, f, "web").unwrap_err().to_string();
-            assert!(e.contains("not supported by LS-DYNA") && e.contains("section `web`") && e.contains(k.name()), "{e}");
+            let e = elform(k, &solid, f, "web").unwrap_err();
+            assert!(e.contains("section `web`") && e.contains(k.name()), "{e}");
         }
         let shell = SectionKind::Shell { thickness: 1.0, offset: 0.0, points: 5 };
         assert_eq!(elform(ElementKind::Quad4, &shell, full, "s").unwrap().elform, 16);

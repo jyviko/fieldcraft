@@ -80,10 +80,6 @@ pub const MAX_DECK_BYTES: usize = 1 << 31;
 /// Most shell integration points LS-DYNA's Gauss rule takes.
 const MAX_SHELL_POINTS: u32 = 10;
 
-pub(crate) fn unsupported(what: impl Into<String>) -> Error {
-    Error::Unsupported { format: FORMAT, what: what.into() }
-}
-
 /// A resolved model that breaks its own invariants (unreachable after `resolve`).
 fn broken(what: String) -> Error {
     Error::Model(modelcraft_model::Error::Invalid(format!("inconsistent resolved model: {what}")))
@@ -121,11 +117,20 @@ struct Plan<'a> {
 /// Write the model as an LS-DYNA keyword deck.
 pub fn write(model: &Model) -> Result<Written> {
     let r = model.resolve()?;
+    write_with(model, &r)
+}
+
+/// The writer of [`crate::FORMATS`]: the deck's text from a resolved model.
+pub(crate) fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
+    write_with(model, r).map(|w| w.text)
+}
+
+fn write_with(model: &Model, r: &Resolved) -> Result<Written> {
     let estimate = (model.nodes().len() + model.reference_points().len()) * 130 + model.elements().len() * 260;
     if estimate > MAX_DECK_BYTES {
         return Err(Error::Limit(format!("the deck would be about {estimate} bytes; at most {MAX_DECK_BYTES} are written")));
     }
-    let plan = plan(model, &r)?;
+    let plan = plan(model, r)?;
     let mut d = Deck { text: String::with_capacity(estimate), rounded: 0 };
     let steps = model.steps();
     let cases = if steps.len() > 1 { steps.len() } else { 0 };
@@ -140,8 +145,8 @@ pub fn write(model: &Model) -> Result<Written> {
     materials(&mut d, model, &plan)?;
     parts(&mut d, &plan)?;
     element_cards(&mut d, &plan)?;
-    sets(&mut d, model, &r, &plan)?;
-    couplings(&mut d, model, &r, &plan)?;
+    sets(&mut d, model, r, &plan)?;
+    couplings(&mut d, model, r, &plan)?;
     if let Some(parts) = &plan.gravity_parts {
         d.line("*SET_PART_LIST");
         d.header(&["sid"]);
@@ -157,7 +162,7 @@ pub fn write(model: &Model) -> Result<Written> {
         if cases > 0 {
             d.line(&format!("*CASE_BEGIN_{n}"));
         }
-        write_step(&mut d, model, &r, &plan, step, n, &mut constraint_id)?;
+        write_step(&mut d, model, r, &plan, step, n, &mut constraint_id)?;
         if cases > 0 {
             d.line(&format!("*CASE_END_{n}"));
         }
@@ -166,12 +171,14 @@ pub fn write(model: &Model) -> Result<Written> {
     if d.text.len() > MAX_DECK_BYTES {
         return Err(Error::Limit(format!("the deck is {} bytes; at most {MAX_DECK_BYTES} are written", d.text.len())));
     }
-    Ok(Written { text: d.text, rounded_values: d.rounded, cases, warnings: r.warnings })
+    Ok(Written { text: d.text, rounded_values: d.rounded, cases, warnings: r.warnings.clone() })
 }
 
 fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
     let used: BTreeSet<&str> = model.sections().values().map(|s| s.material.as_str()).collect();
     let materials: BTreeMap<&str, u32> = used.into_iter().enumerate().map(|(i, m)| Ok((m, id(i)?))).collect::<Result<_>>()?;
+    // Everything LS-DYNA cannot express, reported at once.
+    let mut refused = BTreeSet::new();
     let mut parts = Vec::new();
     let mut hourglasses: BTreeMap<Hourglass, u32> = BTreeMap::new();
     for (name, sec) in model.sections() {
@@ -183,12 +190,18 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
         if let SectionKind::Shell { points, .. } = sec.kind
             && points > MAX_SHELL_POINTS
         {
-            return Err(unsupported(format!(
+            refused.insert(format!(
                 "section `{name}`: {points} integration points through the thickness (LS-DYNA's Gauss rule takes at most {MAX_SHELL_POINTS})"
-            )));
+            ));
         }
         for (kind, list) in by_kind {
-            let f = elements::elform(kind, &sec.kind, sec.formulation, name)?;
+            let f = match elements::elform(kind, &sec.kind, sec.formulation, name) {
+                Ok(f) => f,
+                Err(why) => {
+                    refused.insert(why);
+                    continue;
+                }
+            };
             let next = id(hourglasses.len())?;
             let hourglass = f.hourglass.map(|h| *hourglasses.entry(h).or_insert(next));
             parts.push(Part {
@@ -212,9 +225,9 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
     let mut uniform = BTreeMap::new();
     for (name, c) in model.couplings() {
         if c.kind == CouplingKind::Kinematic && c.dofs.list().len() < 6 {
-            return Err(unsupported(format!(
+            refused.insert(format!(
                 "coupling `{name}`: a kinematic coupling of some degrees of freedom only (LS-DYNA's nodal rigid bodies release degrees of freedom reliably only for two nodes)"
-            )));
+            ));
         }
         if c.kind == CouplingKind::Distributing {
             node_sets.insert(c.set.as_str());
@@ -230,9 +243,9 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
                     node_sets.insert(s.as_str());
                 }
                 Target::ReferencePoint(p) if coupled.contains(p.as_str()) => {
-                    return Err(unsupported(format!(
+                    refused.insert(format!(
                         "boundary condition `{b}`: reference point `{p}` is coupled, and LS-DYNA takes no constraint on a node of a nodal rigid body or on an interpolation's dependent node; constrain the coupled set instead"
-                    )));
+                    ));
                 }
                 Target::ReferencePoint(_) => {}
             }
@@ -260,23 +273,25 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
                     gravity_sets.insert(set.as_deref());
                 }
                 Load::BodyForce { .. } => {
-                    return Err(unsupported(format!(
-                        "load `{l}`: a body force per unit volume (LS-DYNA's body loads are accelerations; use gravity)"
-                    )));
+                    refused.insert(format!("load `{l}`: a body force per unit volume (LS-DYNA's body loads are accelerations; use gravity)"));
                 }
             }
         }
     }
     let gravity_parts = match gravity_sets.into_iter().collect::<Vec<_>>().as_slice() {
         [] | [None] => None,
-        [Some(set)] => Some(parts_of_set(r, &parts, set)?),
-        _ => return Err(unsupported("gravity on different sets (LS-DYNA applies every body load to one part subset per deck)")),
+        [Some(set)] => parts_of_set(r, &parts, set).map_err(|why| refused.insert(why)).ok(),
+        _ => {
+            refused.insert("gravity on different sets (LS-DYNA applies every body load to one part subset per deck)".into());
+            None
+        }
     };
     for m in materials.keys() {
         if model.material(m).is_some_and(|m| m.density.is_none()) {
-            return Err(unsupported(format!("material `{m}` has no density, and LS-DYNA requires a mass density on every material")));
+            refused.insert(format!("material `{m}` has no density, and LS-DYNA requires a mass density on every material"));
         }
     }
+    crate::unsupported(FORMAT, refused)?;
     Ok(Plan { parts, materials, hourglasses, sets, node_sets, segment_sets, uniform, gravity_parts })
 }
 
@@ -286,7 +301,7 @@ fn id(i: usize) -> Result<u32> {
 }
 
 /// The parts that make up a set's elements exactly, or why not.
-fn parts_of_set(r: &Resolved, parts: &[Part], set: &str) -> Result<Vec<u32>> {
+fn parts_of_set(r: &Resolved, parts: &[Part], set: &str) -> std::result::Result<Vec<u32>, String> {
     let elements: BTreeSet<u32> = r.sets.get(set).map(|s| s.elements.iter().copied().collect()).unwrap_or_default();
     let mut ids = Vec::new();
     let mut covered = 0;
@@ -296,14 +311,14 @@ fn parts_of_set(r: &Resolved, parts: &[Part], set: &str) -> Result<Vec<u32>> {
             ids.push(p.id);
             covered += inside;
         } else if inside > 0 {
-            return Err(unsupported(format!(
+            return Err(format!(
                 "gravity on set `{set}`, which holds part of section `{}`'s elements (LS-DYNA applies body loads to whole parts)",
                 p.name
-            )));
+            ));
         }
     }
     if covered != elements.len() || ids.is_empty() {
-        return Err(unsupported(format!("gravity on set `{set}`, whose elements are not whole sections")));
+        return Err(format!("gravity on set `{set}`, whose elements are not whole sections"));
     }
     Ok(ids)
 }
@@ -597,10 +612,13 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
     }
     if is_static {
         let mut gravity = [0.0f64; 3];
+        let mut pointwise = Vec::new();
         for (name, load) in &loads {
             match load {
-                Load::Force { .. } | Load::Traction { .. } => nodal_load(d, r, plan, name, false, n),
-                Load::Moment { .. } => nodal_load(d, r, plan, name, true, n),
+                Load::Force { .. } | Load::Moment { .. } if plan.uniform.contains_key(name.as_str()) => {
+                    on_node_set(d, plan, name, matches!(load, Load::Moment { .. }), n);
+                }
+                Load::Force { .. } | Load::Moment { .. } | Load::Traction { .. } => pointwise.push(*name),
                 Load::Pressure { set, magnitude } => {
                     let sid = plan.sets.get(set.as_str()).copied().unwrap_or_default();
                     d.comment(&format!("load `{name}`"));
@@ -614,6 +632,15 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
                     }
                 }
                 Load::BodyForce { .. } => return Err(broken(format!("load `{name}`: a body force"))),
+            }
+        }
+        // The other concentrated loads node by node, summed where they share a node.
+        let point = crate::concentrated_loads(model, r, pointwise);
+        if !point.is_empty() {
+            d.line("*LOAD_NODE_POINT");
+            d.header(&["nid", "dof", "lcid", "sf"]);
+            for ((node, dof), v) in point {
+                d.card([Field::from(node), Field::from(dof_code(dof)), Field::from(n), Field::from(v)]);
             }
         }
         // A base acceleration loads the model against its direction, so gravity g is written
@@ -687,26 +714,16 @@ fn id_card(d: &mut Deck, id: &mut u32, heading: &str) {
     d.line(&format!("{id:>WIDTH$}{heading}"));
 }
 
-/// A force, moment or traction from its resolved nodal values: on the node set when every node
-/// of the set takes the same value ([`Plan::uniform`]), else node by node.
-fn nodal_load(d: &mut Deck, r: &Resolved, plan: &Plan, name: &str, moment: bool, lcid: u32) {
-    let offset = if moment { 4 } else { 0 };
+/// A force or moment with one value on every node of its set ([`Plan::uniform`]), on the node set.
+fn on_node_set(d: &mut Deck, plan: &Plan, name: &str, moment: bool, lcid: u32) {
+    let Some(&(v, sid)) = plan.uniform.get(name) else { return };
     d.comment(&format!("load `{name}`"));
-    let uniform;
-    let (keyword, entity, values) = match plan.uniform.get(name) {
-        Some(&(v, sid)) => {
-            uniform = [(sid, v)];
-            ("*LOAD_NODE_SET", "nsid", &uniform[..])
-        }
-        None => ("*LOAD_NODE_POINT", "nid", r.nodal_loads.get(name).map(Vec::as_slice).unwrap_or_default()),
-    };
-    d.line(keyword);
-    d.header(&[entity, "dof", "lcid", "sf"]);
-    for (entity, v) in values {
-        for (i, c) in (1i64..).zip(v) {
-            if *c != 0.0 {
-                d.card([Field::from(*entity), Field::Int(i + offset), Field::from(lcid), Field::from(*c)]);
-            }
+    d.line("*LOAD_NODE_SET");
+    d.header(&["nsid", "dof", "lcid", "sf"]);
+    let first = if moment { 4 } else { 1 };
+    for (dof, c) in (first..).zip(v) {
+        if c != 0.0 {
+            d.card([Field::from(sid), Field::from(dof_code(dof)), Field::from(lcid), Field::from(c)]);
         }
     }
 }

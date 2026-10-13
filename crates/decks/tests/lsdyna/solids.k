@@ -139,7 +139,6 @@ $               nsid                 cid                dofx                dofy
                    2lift
 $               nsid                 dof                 vad                lcid                  sf
                    4                   3                   2                   1               0.001
-$ load `drag`
 *LOAD_NODE_POINT
 $                nid                 dof                lcid                  sf
                   25                   1                   1  -83.33333333333337
@@ -150,9 +149,6 @@ $                nid                 dof                lcid                  sf
                   34                   1                   1  333.33333333333337
                   35                   1                   1   333.3333333333334
                   36                   1                   1   333.3333333333333
-$ load `pull`
-*LOAD_NODE_POINT
-$                nid                 dof                lcid                  sf
             99999999                   3                   1                50.0
 *DATABASE_BINARY_D3PLOT
 $                 dt

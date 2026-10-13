@@ -10,6 +10,7 @@ const ASSET_EXT: &[&str] = &[
     "svg",
     "ico",
     "icns",
+    "car",
     "ttf",
     "otf",
     "woff",

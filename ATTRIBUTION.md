@@ -115,6 +115,26 @@ is committed and listed here with its exports.
 | assets/icons/solve.frequency.svg, assets/icons/solve.frequency.vectorcraft | ModelCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/solve.frequency.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
 | assets/icons/solve.fsi.svg, assets/icons/solve.fsi.vectorcraft | ModelCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/solve.fsi.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
 | assets/icons/solve.static.svg, assets/icons/solve.static.vectorcraft | ModelCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/solve.static.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
+| assets/app-icon/icon.vectorcraft, assets/app-icon/icon.svg, assets/app-icon/icon.png | ModelCraft contributors | Original application icon (an L bracket with a bolt hole under a structured hexahedral mesh, on a rounded-square backdrop), drawn with VectorCraft by `cargo xtask app-icon` (xtask/src/app_icon.rs); editable source, SVG and 1024 × 1024 PNG export | MIT OR Apache-2.0 |
+| assets/app-icon/icon-small.vectorcraft, assets/app-icon/icon-small.svg, assets/app-icon/icon-small.png | ModelCraft contributors | Original simplified application icon for 16–32 px (no mesh or floor grid), drawn with VectorCraft by `cargo xtask app-icon` (xtask/src/app_icon.rs) | MIT OR Apache-2.0 |
+| assets/app-icon/layers/01-floor.vectorcraft, assets/app-icon/ModelCraft.icon/Assets/01-floor.svg | ModelCraft contributors | Original isometric floor grid with a radial fade (Default appearance), drawn with VectorCraft by `cargo xtask app-icon` (xtask/src/app_icon.rs) | MIT OR Apache-2.0 |
+| assets/app-icon/layers/01-floor-dark.vectorcraft, assets/app-icon/ModelCraft.icon/Assets/01-floor-dark.svg | ModelCraft contributors | Original isometric floor grid with a radial fade (Dark appearance), drawn with VectorCraft by `cargo xtask app-icon` (xtask/src/app_icon.rs) | MIT OR Apache-2.0 |
+| assets/app-icon/layers/02-part.vectorcraft, assets/app-icon/ModelCraft.icon/Assets/02-part.svg | ModelCraft contributors | Original bracket faces with transparent gaps at the shared edges, drawn with VectorCraft by `cargo xtask app-icon` (xtask/src/app_icon.rs) | MIT OR Apache-2.0 |
+| assets/app-icon/layers/03-mesh.vectorcraft, assets/app-icon/ModelCraft.icon/Assets/03-mesh.svg | ModelCraft contributors | Original hexahedral mesh lines (O-grid around the hole) clipped to the bracket's faces, drawn with VectorCraft by `cargo xtask app-icon` (xtask/src/app_icon.rs) | MIT OR Apache-2.0 |
+| assets/app-icon/ModelCraft.icon/icon.json | ModelCraft contributors | Icon Composer composition of the layers above (Default and Dark floor grid), written by `cargo xtask app-icon` (xtask/src/app_icon.rs) | MIT OR Apache-2.0 |
+| assets/app-icon/Assets.car | ModelCraft contributors | Apple actool compilation of assets/app-icon/ModelCraft.icon; contains original artwork only | MIT OR Apache-2.0 |
+| assets/app-icon/icon.icns | ModelCraft contributors | iconutil compilation of assets/app-icon/icon.iconset | MIT OR Apache-2.0 |
+| assets/app-icon/icon.ico | ModelCraft contributors | ImageMagick compilation (16–256 px) of sips exports of assets/app-icon/icon-small.png (≤ 32 px) and assets/app-icon/icon.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_16x16.png | ModelCraft contributors | sips export (16 px) of assets/app-icon/icon-small.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_16x16@2x.png | ModelCraft contributors | sips export (32 px) of assets/app-icon/icon-small.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_32x32.png | ModelCraft contributors | sips export (32 px) of assets/app-icon/icon-small.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_32x32@2x.png | ModelCraft contributors | sips export (64 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_128x128.png | ModelCraft contributors | sips export (128 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_128x128@2x.png | ModelCraft contributors | sips export (256 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_256x256.png | ModelCraft contributors | sips export (256 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_256x256@2x.png | ModelCraft contributors | sips export (512 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_512x512.png | ModelCraft contributors | sips export (512 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
+| assets/app-icon/icon.iconset/icon_512x512@2x.png | ModelCraft contributors | sips export (1024 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
 
 ## Adapted code
 

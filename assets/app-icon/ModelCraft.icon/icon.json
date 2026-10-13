@@ -1,0 +1,116 @@
+{
+  "fill": "system-light",
+  "groups": [
+    {
+      "layers": [
+        {
+          "glass-specializations": [
+            {
+              "appearance": "tinted",
+              "value": true
+            }
+          ],
+          "image-name": "03-mesh.svg",
+          "name": "03-mesh",
+          "position": {
+            "scale": 0.9,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "name": "03 Mesh",
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "glass-specializations": [
+            {
+              "appearance": "tinted",
+              "value": true
+            }
+          ],
+          "image-name": "02-part.svg",
+          "name": "02-part",
+          "position": {
+            "scale": 0.9,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "name": "02 Part",
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "fill": "none",
+          "glass-specializations": [
+            {
+              "value": false
+            },
+            {
+              "appearance": "tinted",
+              "value": true
+            }
+          ],
+          "image-name-specializations": [
+            {
+              "value": "01-floor.svg"
+            },
+            {
+              "appearance": "dark",
+              "value": "01-floor-dark.svg"
+            }
+          ],
+          "name": "01-floor",
+          "position": {
+            "scale": 0.9,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "name": "01 Floor",
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

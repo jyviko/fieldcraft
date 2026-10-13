@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <filter id="filter-1" filterUnits="userSpaceOnUse" x="67" y="67" width="890" height="890" data-vc-blend="multiply" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="7"/><feOffset dx="0" dy="10" result="shadow"/><feFlood flood-color="#1d3b38" flood-opacity="0.22"/><feComposite in2="shadow" operator="in" result="paint"/><feMerge><feMergeNode in="paint"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="linear-gradient-1" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbfdfd"/>
+      <stop offset="1" stop-color="#dbe5e4"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="512" y1="141" x2="512" y2="385.86" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#86e3d3"/>
+      <stop offset="1" stop-color="#4cc4b1"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="512" y1="452.64" x2="512" y2="764.28" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#86e3d3"/>
+      <stop offset="1" stop-color="#4cc4b1"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-4" x1="512" y1="200.36" x2="512" y2="638.14" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#20b39f"/>
+      <stop offset="1" stop-color="#118c7c"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-5" x1="512" y1="578.78" x2="512" y2="883" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#20b39f"/>
+      <stop offset="1" stop-color="#118c7c"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-6" x1="512" y1="326.5" x2="512" y2="883" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f786d"/>
+      <stop offset="1" stop-color="#0a544e"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-7" x1="512" y1="558.616" x2="512" y2="658.304" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0b665e"/>
+      <stop offset="1" stop-color="#04302c"/>
+    </linearGradient>
+  </defs>
+  <title>ModelCraft application icon, small sizes</title>
+  <g id="Backdrop">
+    <g filter="url(#filter-1)">
+      <path id="backdrop" d="M320 100 L704 100 C854 100 924 170 924 320 L924 704 C924 854 854 924 704 924 L320 924 C170 924 100 854 100 704 L100 320 C100 170 170 100 320 100 Z" fill="url(#linear-gradient-1)"/>
+    </g>
+  </g>
+  <g id="Part">
+    <path id="wall_top" data-name="wall top" d="M512 141 L833.3 326.5 L730.48 385.86 L409.19 200.36 Z" fill="url(#linear-gradient-2)"/>
+    <path id="base_top" data-name="base top" d="M409.19 452.64 L730.48 638.14 L512 764.28 L190.7 578.78 Z M521.64 643.71 C555.35 624.24 555.35 592.68 521.64 573.22 C487.92 553.75 433.26 553.75 399.55 573.22 C365.83 592.68 365.83 624.24 399.55 643.71 C433.26 663.17 487.92 663.17 521.64 643.71 Z" fill="url(#linear-gradient-3)"/>
+    <path id="wall_front" data-name="wall front" d="M409.19 200.36 L730.48 385.86 L730.48 638.14 L409.19 452.64 Z" fill="url(#linear-gradient-4)"/>
+    <path id="base_front" data-name="base front" d="M190.7 578.78 L512 764.28 L512 883 L190.7 697.5 Z" fill="url(#linear-gradient-5)"/>
+    <path id="end" d="M833.3 697.5 L512 883 L512 764.28 L730.48 638.14 L730.48 385.86 L833.3 326.5 Z" fill="url(#linear-gradient-6)"/>
+    <path id="bolt_hole" data-name="bolt hole" d="M521.64 643.71 C487.92 663.17 433.26 663.17 399.55 643.71 C365.83 624.24 365.83 592.68 399.55 573.22 C433.26 553.75 487.92 553.75 521.64 573.22 C555.35 592.68 555.35 624.24 521.64 643.71 Z" fill="url(#linear-gradient-7)"/>
+  </g>
+</svg>

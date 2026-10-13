@@ -20,6 +20,17 @@ const USAGE: &str = "usage: modelcraft [--sample] [--control PORT]";
 const DEPTH_BITS: u8 = 24;
 const MSAA: u16 = 4;
 
+/// The window and Dock icon: the 256 px export of the application icon (assets/app-icon).
+const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/icon.iconset/icon_128x128@2x.png");
+
+/// The application icon for the window; eframe's default icon if the PNG cannot be decoded.
+fn app_icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(ICON_PNG).unwrap_or_else(|e| {
+        log::warn!("app icon: {e}");
+        egui::IconData::default()
+    })
+}
+
 /// How often unsaved changes are autosaved for recovery (seconds).
 const AUTOSAVE_SECONDS: f64 = 30.0;
 
@@ -108,7 +119,11 @@ fn main() -> eframe::Result {
         }
     };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("ModelCraft").with_inner_size([1400.0, 900.0]).with_min_inner_size([800.0, 500.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_title("ModelCraft")
+            .with_icon(app_icon())
+            .with_inner_size([1400.0, 900.0])
+            .with_min_inner_size([800.0, 500.0]),
         depth_buffer: DEPTH_BITS,
         multisampling: MSAA,
         ..Default::default()
@@ -145,6 +160,13 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_app_icon_decodes() {
+        let icon = super::app_icon();
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+    }
+
     use super::*;
 
     fn parse(a: &[&str], env: Option<&str>) -> Result<Option<Args>, String> {

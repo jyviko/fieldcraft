@@ -5,6 +5,7 @@
 //! ATTRIBUTION.md.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod app_icon;
 mod assets;
 mod icons;
 mod layers;
@@ -23,6 +24,9 @@ commands:
   icons [ID…]     draw the toolbar icons from their recipes (assets/icons/src/*.json) with
                   VectorCraft (VECTORCRAFT_CLI, else vectorcraft-cli on the PATH): writes each
                   icon's .vectorcraft source and .svg export
+  app-icon        draw the application icon family (assets/app-icon) with VectorCraft, then
+                  write the iconset, icns, ico and Icon Composer document (macOS: sips,
+                  iconutil, magick; actool for Assets.car when available)
   licences [--check]
                   write THIRD-PARTY-LICENSES.txt (the licences of every shipped crate);
                   --check fails when it is out of date
@@ -44,6 +48,7 @@ fn main() -> ExitCode {
         Some("layers") => cmd_layers(),
         Some("assets") => assets::run(&root()),
         Some("icons") => icons::run(&root(), &rest),
+        Some("app-icon") => app_icon::run(&root()),
         Some("licences") => licences::run(&root(), rest.contains(&"--check")),
         Some("test") => {
             let (cargo_args, test_args) = rest.iter().position(|a| *a == "--").map_or((&rest[..], &[][..]), |i| (&rest[..i], &rest[i + 1..]));

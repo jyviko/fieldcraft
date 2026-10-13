@@ -10,7 +10,7 @@ use crate::{Error, Model, Result, finite, insert_new, replace_existing, require}
 
 /// A load.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Load {
     /// A force vector applied at every node of the target (not divided among them: to apply a
     /// total force to a face, put it on a reference point coupled to the face).

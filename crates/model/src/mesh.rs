@@ -173,6 +173,7 @@ impl ElementKind {
 /// One face of an element, a member of a surface: the element's label and its face number
 /// (1-based, [`ElementKind::faces`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ElementFace {
     pub element: u32,
     pub face: u8,

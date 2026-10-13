@@ -19,7 +19,7 @@ pub const MAX_SHELL_POINTS: u32 = 15;
 /// A beam's cross-section shape. Dimensions are in the section's local axes: `width` along the
 /// beam's orientation vector (local 1), `height` across it (local 2).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BeamProfile {
     Rectangle {
         width: f64,
@@ -101,10 +101,10 @@ impl BeamProfile {
 
 /// What a section describes.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SectionKind {
     /// Continuum solid elements.
-    Solid,
+    Solid {},
     /// Shell elements: thickness, the reference surface's offset from the mid-surface as a
     /// fraction of the thickness (0 mid-surface, 0.5 on the side the normal points to, -0.5 on
     /// the other), and integration points through the thickness.
@@ -131,7 +131,7 @@ impl SectionKind {
     /// The element dimension this section applies to.
     pub fn dimension(&self) -> u8 {
         match self {
-            SectionKind::Solid => 3,
+            SectionKind::Solid {} => 3,
             SectionKind::Shell { .. } => 2,
             SectionKind::Beam { .. } | SectionKind::Rod { .. } => 1,
         }
@@ -140,7 +140,7 @@ impl SectionKind {
     /// `solid`, `shell`, `beam` or `rod`.
     pub fn name(&self) -> &'static str {
         match self {
-            SectionKind::Solid => "solid",
+            SectionKind::Solid {} => "solid",
             SectionKind::Shell { .. } => "shell",
             SectionKind::Beam { .. } => "beam",
             SectionKind::Rod { .. } => "rod",
@@ -149,7 +149,7 @@ impl SectionKind {
 
     pub fn validate(&self) -> Result<()> {
         match self {
-            SectionKind::Solid => {}
+            SectionKind::Solid {} => {}
             SectionKind::Shell { thickness, offset, points } => {
                 positive("thickness", *thickness)?;
                 if !(finite("offset", *offset)?.abs() <= 0.5) {
@@ -283,9 +283,9 @@ mod tests {
         let shell = SectionKind::Shell { thickness: 2.0, offset: 0.0, points: 5 };
         assert!(Formulation { hybrid: true, ..Formulation::default() }.validate_for(&shell).is_err());
         assert!(
-            Formulation { incompatible_modes: true, integration: Integration::Reduced, hybrid: false }.validate_for(&SectionKind::Solid).is_err()
+            Formulation { incompatible_modes: true, integration: Integration::Reduced, hybrid: false }.validate_for(&SectionKind::Solid {}).is_err()
         );
-        Formulation { incompatible_modes: true, hybrid: true, ..Formulation::default() }.validate_for(&SectionKind::Solid).unwrap();
+        Formulation { incompatible_modes: true, hybrid: true, ..Formulation::default() }.validate_for(&SectionKind::Solid {}).unwrap();
         for bad in [
             SectionKind::Shell { thickness: 2.0, offset: 0.6, points: 5 },
             SectionKind::Shell { thickness: 2.0, offset: 0.0, points: 0 },
@@ -295,7 +295,13 @@ mod tests {
         ] {
             assert!(bad.validate().is_err(), "{bad:?}");
         }
-        let parsed: SectionKind = serde_json::from_value(serde_json::json!({"shell": {"thickness": 1.5}})).unwrap();
+        let parsed: SectionKind = serde_json::from_value(serde_json::json!({"type": "shell", "thickness": 1.5})).unwrap();
         assert_eq!(parsed, SectionKind::Shell { thickness: 1.5, offset: 0.0, points: 5 });
+        assert!(
+            serde_json::from_value::<SectionKind>(serde_json::json!({"type": "shell", "thickness": 1.5, "thicknes": 2})).is_err(),
+            "typos are errors"
+        );
+        assert!(serde_json::from_value::<SectionKind>(serde_json::json!({"type": "solid", "x": 1})).is_err());
+        assert!(serde_json::from_value::<SectionKind>(serde_json::json!({"type": "membrane"})).is_err());
     }
 }

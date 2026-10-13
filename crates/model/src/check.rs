@@ -180,7 +180,7 @@ impl Model {
                 d.error(&subject, format!("set `{}` has no elements", sec.set));
             }
             let fits = |k: crate::ElementKind| match sec.kind {
-                SectionKind::Solid => k.dimension() == 3,
+                SectionKind::Solid {} => k.dimension() == 3,
                 SectionKind::Shell { .. } => k.dimension() == 2,
                 SectionKind::Beam { .. } => k == crate::ElementKind::Beam2,
                 SectionKind::Rod { .. } => k == crate::ElementKind::Rod2,
@@ -313,7 +313,7 @@ impl Model {
         for s in &self.steps {
             let subject = format!("step `{}`", s.name);
             match s.procedure {
-                Procedure::Static => {
+                Procedure::Static {} => {
                     let prescribes_motion = s
                         .boundary_conditions
                         .iter()

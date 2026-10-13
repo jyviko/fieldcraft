@@ -1,8 +1,10 @@
 //! The command registry. Each area has its own module; [`ALL`] lists every command.
 
+pub(crate) mod define;
 mod geometry;
 mod mesh;
 mod model;
+mod tags;
 
 use modelcraft_model::MAX_LABEL;
 use serde_json::Value;
@@ -22,6 +24,37 @@ pub static ALL: &[CommandSpec] = &[
     mesh::QUALITY,
     mesh::DELAUNAY_POINTS,
     mesh::SURFACE_CHECK,
+    tags::TAG,
+    tags::TAG_CLEAR,
+    model::UNITS,
+    model::CHECK,
+    model::SET_RESOLVE,
+    define::SET_CREATE,
+    define::SET_EDIT,
+    define::SET_DELETE,
+    define::MATERIAL_CREATE,
+    define::MATERIAL_EDIT,
+    define::MATERIAL_DELETE,
+    define::SECTION_CREATE,
+    define::SECTION_EDIT,
+    define::SECTION_DELETE,
+    define::REFERENCE_POINT_CREATE,
+    define::REFERENCE_POINT_EDIT,
+    define::REFERENCE_POINT_DELETE,
+    define::COUPLING_CREATE,
+    define::COUPLING_EDIT,
+    define::COUPLING_DELETE,
+    define::BOUNDARY_CONDITION_CREATE,
+    define::BOUNDARY_CONDITION_EDIT,
+    define::BOUNDARY_CONDITION_DELETE,
+    define::LOAD_CREATE,
+    define::LOAD_EDIT,
+    define::LOAD_DELETE,
+    define::STEP_CREATE,
+    define::STEP_EDIT,
+    define::STEP_DELETE,
+    define::STEP_ACTIVATE,
+    define::ACTIVITY,
 ];
 
 /// A required label parameter (1..=u32::MAX; the model checks its own range).

@@ -131,7 +131,7 @@ impl Symmetry {
 
 /// A boundary condition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BoundaryCondition {
     /// Every degree of freedom held at zero.
     Fixed { target: Target },
@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(BoundaryCondition::Fixed { target: t.clone() }.value(6), Some(0.0));
         assert!(BoundaryCondition::Displacement { target: t.clone(), values: [None; 6] }.validate().is_err());
         assert!(BoundaryCondition::Displacement { target: t, values: [Some(f64::NAN), None, None, None, None, None] }.validate().is_err());
-        let json = serde_json::json!({"symmetry": {"target": {"reference_point": "RP"}, "plane": "z"}});
+        let json = serde_json::json!({"type": "symmetry", "target": {"reference_point": "RP"}, "plane": "z"});
         let parsed: BoundaryCondition = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(serde_json::to_value(&parsed).unwrap(), json);
     }

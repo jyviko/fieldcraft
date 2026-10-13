@@ -188,6 +188,36 @@ mod tests {
             json!({"surface": -1}),
             json!({"surface": 1e300}),
             json!({"surface": "0", "weld": -1, "feature_angle": 1e300}),
+            // Model definitions.
+            json!({"name": "x".repeat(100_000)}),
+            json!({"name": "A\u{0}"}),
+            json!({"name": 7, "nodes": [1]}),
+            json!({"name": "A", "nodes": [0, -1, 1e300]}),
+            json!({"name": "A", "nodes": vec![u32::MAX; 3], "faces": [{"element": 1, "face": 0}]}),
+            json!({"name": "A", "geometry": [{"body": ""}, {"body": "B", "face": "f", "edge": "e"}]}),
+            json!({"name": "A", "geometry": [{"body": "x".repeat(10_000)}]}),
+            json!({"name": "A", "elastic": {"type": "isotropic", "young": 1e308, "poisson": 0.49999999}}),
+            json!({"name": "A", "elastic": {"type": "engineering_constants", "young": [1e-300, 1e300, 1], "poisson": [1e300, 0, 0], "shear": [0, 0, 0]}}),
+            json!({"name": "A", "elastic": {"type": "isotropic", "young": "stiff"}, "density": -0.0}),
+            json!({"name": "A", "set": "A", "material": "A", "kind": {"type": "solid"}}),
+            json!({"name": "A", "set": "all", "material": "Steel", "kind": {"type": "beam", "profile": {"type": "pipe", "radius": 1, "thickness": 2}, "orientation": [0, 0, 0]}}),
+            json!({"name": "A", "set": "all", "material": "Steel", "kind": {"type": "shell", "thickness": 1e308, "offset": -0.5, "points": 4294967295u64}}),
+            json!({"name": "A", "xyz": [1e308, 0, 0]}),
+            json!({"name": "A", "reference_point": "RP", "set": "end", "kind": "rigid", "dofs": [0, 7]}),
+            json!({"name": "A", "type": "fixed", "target": {"set": "nope"}}),
+            json!({"name": "A", "type": "displacement", "target": {"reference_point": "RP"}, "values": [null, null, null, null, null, null]}),
+            json!({"name": "A", "type": "displacement", "target": {"set": "root"}, "values": [1e308, -1e308, 0, 0, 0, 0, 0]}),
+            json!({"name": "A", "type": "pressure", "set": "end", "magnitude": -1e308}),
+            json!({"name": "A", "type": "gravity", "acceleration": [0, 0, 0]}),
+            json!({"name": "A", "type": "body_force", "set": "all", "vector": [1, 2]}),
+            json!({"name": "A", "procedure": {"type": "frequency", "modes": 4294967295u64, "min_hz": -1}}),
+            json!({"name": "A", "procedure": {"type": "frequency", "modes": 5}, "output": ["everything"], "before": 3}),
+            json!({"name": "Bend", "procedure": {"type": "static"}, "loads": "push"}),
+            json!({"step": "Bend", "loads": ["nope"], "active": "yes"}),
+            json!({"step": "Bend", "boundary_conditions": [], "loads": []}),
+            json!({"system": "furlongs"}),
+            json!({"geometry": {"body": "Bar"}, "elements": [1, 99], "faces": [{"element": 1, "face": 200}]}),
+            json!({"geometry": {"body": "Bar", "vertex": "v"}, "nodes": [1], "edges": [{"element": 1, "edge": 0}]}),
         ];
         for spec in commands() {
             for p in &hostile {
@@ -196,6 +226,19 @@ mod tests {
             }
         }
         assert!(Session::default().execute("no.such", &json!({})).is_err());
+
+        // The same against a defined model, so edits and deletes reach existing definitions.
+        let mut defined = Session::default();
+        crate::cmd::define::tests::defined_bar(&mut defined);
+        for spec in commands() {
+            for p in &hostile {
+                let mut s = defined.clone();
+                let before = s.model.clone();
+                if s.execute(spec.id, p).is_err() {
+                    assert_eq!(s.model, before, "{} {p}", spec.id);
+                }
+            }
+        }
 
         // The same against an open design.
         let (_dir, path) = sample_design_file(&Plate::default());

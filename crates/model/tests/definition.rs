@@ -57,7 +57,7 @@ fn defined() -> Model {
     m.add_set("root", Set::of_geometry(vec![GeometryRef::face("Bar", "left").unwrap()])).unwrap();
     m.add_set("end", Set::of_geometry(vec![GeometryRef::face("Bar", "right").unwrap()])).unwrap();
     m.add_material("Steel", Material { elastic: Some(Elastic::Isotropic { young: 2.1e5, poisson: 0.3 }), density: Some(7.85e-9) }).unwrap();
-    m.add_section("bar", Section { set: "all".into(), material: "Steel".into(), kind: SectionKind::Solid, formulation: Formulation::default() })
+    m.add_section("bar", Section { set: "all".into(), material: "Steel".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
         .unwrap();
     m.add_reference_point("RP", ReferencePoint { xyz: [3.0, 0.5, 0.5] }).unwrap();
     m.add_coupling("load-pad", Coupling { reference_point: "RP".into(), set: "end".into(), kind: CouplingKind::Distributing, dofs: Dofs::all() })
@@ -65,7 +65,7 @@ fn defined() -> Model {
     m.add_boundary_condition("clamp", BoundaryCondition::Fixed { target: Target::Set("root".into()) }).unwrap();
     m.add_load("push", Load::Force { target: Target::ReferencePoint("RP".into()), vector: [0.0, 0.0, -100.0] }).unwrap();
     m.add_load("press", Load::Pressure { set: "end".into(), magnitude: 1.0 }).unwrap();
-    let mut s = Step::new("Bend", Procedure::Static);
+    let mut s = Step::new("Bend", Procedure::Static {});
     s.boundary_conditions.insert("clamp".into());
     s.loads.extend(["push".to_string(), "press".to_string()]);
     m.add_step(s, None).unwrap();
@@ -120,7 +120,7 @@ fn the_check_names_what_is_missing() {
     m.add_load("ghost-load", Load::Pressure { set: "ghost".into(), magnitude: 1.0 }).unwrap();
     m.add_load("twist", Load::Moment { target: Target::Set("end".into()), vector: [1.0, 0.0, 0.0] }).unwrap();
     m.add_material("Soft", Material { elastic: Some(Elastic::Isotropic { young: 2.1e11, poisson: 0.3 }), density: None }).unwrap();
-    m.add_section("again", Section { set: "side".into(), material: "Soft".into(), kind: SectionKind::Solid, formulation: Formulation::default() })
+    m.add_section("again", Section { set: "side".into(), material: "Soft".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
         .unwrap();
     m.add_section(
         "shell",
@@ -150,7 +150,7 @@ fn the_check_names_what_is_missing() {
 
     // Two sections over the same elements, and an element with none.
     let mut m = defined();
-    m.add_section("twice", Section { set: "all".into(), material: "Steel".into(), kind: SectionKind::Solid, formulation: Formulation::default() })
+    m.add_section("twice", Section { set: "all".into(), material: "Steel".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
         .unwrap();
     m.set_node(50, [9.0, 9.0, 9.0]).unwrap();
     m.set_node(51, [10.0, 9.0, 9.0]).unwrap();
@@ -166,7 +166,7 @@ fn the_check_names_what_is_missing() {
         Section {
             set: "all".into(),
             material: "Steel".into(),
-            kind: SectionKind::Solid,
+            kind: SectionKind::Solid {},
             formulation: Formulation { incompatible_modes: true, ..Formulation::default() },
         },
     )
@@ -198,7 +198,7 @@ fn definitions_refer_only_to_existing_items_and_cannot_be_deleted_while_used() {
     let section = |set: &str, material: &str| Section {
         set: set.into(),
         material: material.into(),
-        kind: SectionKind::Solid,
+        kind: SectionKind::Solid {},
         formulation: Formulation::default(),
     };
     assert!(matches!(m.add_section("x", section("nope", "Steel")), Err(Error::NotFound(_))));

@@ -21,10 +21,10 @@ pub const MAX_MODES: u32 = 100_000;
 
 /// What a step solves.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Procedure {
     /// Linear static equilibrium under the active loads and boundary conditions.
-    Static,
+    Static {},
     /// Natural frequencies and mode shapes: the lowest `modes` modes, optionally only those
     /// between `min_hz` and `max_hz` (cycles per time unit of the unit system).
     Frequency {
@@ -40,7 +40,7 @@ impl Procedure {
     /// `static` or `frequency`.
     pub fn name(&self) -> &'static str {
         match self {
-            Procedure::Static => "static",
+            Procedure::Static {} => "static",
             Procedure::Frequency { .. } => "frequency",
         }
     }
@@ -67,7 +67,7 @@ impl Procedure {
     /// The output a step of this procedure requests unless told otherwise.
     pub fn default_output(&self) -> BTreeSet<OutputVariable> {
         match self {
-            Procedure::Static => OutputVariable::ALL.into_iter().collect(),
+            Procedure::Static {} => OutputVariable::ALL.into_iter().collect(),
             Procedure::Frequency { .. } => [OutputVariable::Displacement].into_iter().collect(),
         }
     }
@@ -223,13 +223,14 @@ mod tests {
         let mut m = Model::default();
         m.add_set("base", Set { nodes: vec![1], ..Set::default() }).unwrap();
         m.add_boundary_condition("fix", BoundaryCondition::Fixed { target: Target::Set("base".into()) }).unwrap();
-        m.add_step(Step::new("Load", Procedure::Static), None).unwrap();
+        m.add_step(Step::new("Load", Procedure::Static {}), None).unwrap();
         m.add_step(Step::new("Modes", Procedure::Frequency { modes: 10, min_hz: None, max_hz: None }), Some("Load")).unwrap();
         assert_eq!(m.steps().iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Modes", "Load"]);
-        assert!(m.add_step(Step::new("Load", Procedure::Static), None).is_err());
-        assert!(m.add_step(Step::new("X", Procedure::Static), Some("Nope")).is_err());
+        assert!(m.add_step(Step::new("Load", Procedure::Static {}), None).is_err());
+        assert!(m.add_step(Step::new("X", Procedure::Static {}), Some("Nope")).is_err());
         assert!(m.add_step(Step::new("Y", Procedure::Frequency { modes: 0, min_hz: None, max_hz: None }), None).is_err());
         assert!(m.add_step(Step::new("Y", Procedure::Frequency { modes: 5, min_hz: Some(10.0), max_hz: Some(1.0) }), None).is_err());
+        assert!(serde_json::from_value::<Procedure>(serde_json::json!({"type": "static", "modes": 3})).is_err(), "typos are errors");
 
         m.set_boundary_condition_active("Load", "fix", true).unwrap();
         assert!(m.step("Load").unwrap().boundary_conditions.contains("fix"));

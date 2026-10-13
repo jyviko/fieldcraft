@@ -6,7 +6,7 @@ use crate::{Error, Model, Result, insert_new, not_in_use, positive, replace_exis
 
 /// Linear elastic behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Elastic {
     /// Young's modulus and Poisson's ratio.
     Isotropic { young: f64, poisson: f64 },

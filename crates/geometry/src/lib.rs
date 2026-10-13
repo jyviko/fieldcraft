@@ -78,6 +78,39 @@ pub struct Face {
     pub exact: bool,
 }
 
+/// The analytic surface a B-rep face lies on, when it is one of the elementary kinds. Directions
+/// are unit vectors; lengths are millimetres and angles radians.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FaceSurface {
+    /// The outward unit normal and a point on the plane.
+    Plane {
+        normal: [f64; 3],
+        point: [f64; 3],
+    },
+    Cylinder {
+        origin: [f64; 3],
+        axis: [f64; 3],
+        radius: f64,
+    },
+    /// The apex, the axis pointing into the cone and the half-angle.
+    Cone {
+        apex: [f64; 3],
+        axis: [f64; 3],
+        half_angle: f64,
+    },
+    Sphere {
+        center: [f64; 3],
+        radius: f64,
+    },
+    /// The centre of the ring, its axis, and the ring (major) and tube (minor) radii.
+    Torus {
+        center: [f64; 3],
+        axis: [f64; 3],
+        major: f64,
+        minor: f64,
+    },
+}
+
 /// Mass properties and extent of a [`Shape`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Measure {
@@ -125,6 +158,31 @@ impl Shape {
     /// triangles carry.
     pub fn face_index(&self, name: &str) -> Option<u32> {
         self.faces.iter().position(|f| f.name == name).and_then(|i| u32::try_from(i).ok())
+    }
+
+    /// The analytic surface of each B-rep face, by face index (the [`SurfaceMesh::tri_face`]
+    /// tags): `None` for a free-form face. Meshers project nodes onto these surfaces.
+    pub fn face_surfaces(&self) -> Result<Vec<Option<FaceSurface>>> {
+        guard("face surfaces", || {
+            Ok((0..self.body.face_count())
+                .map(|f| {
+                    solidcraft_kernel::face_surface(&self.body, f).map(|s| match s {
+                        solidcraft_kernel::FaceSurface::Plane { normal, point } => FaceSurface::Plane { normal: xyz(normal), point: xyz(point) },
+                        solidcraft_kernel::FaceSurface::Cylinder { origin, axis, radius } => {
+                            FaceSurface::Cylinder { origin: xyz(origin), axis: xyz(axis), radius }
+                        }
+                        solidcraft_kernel::FaceSurface::Cone { apex, axis, half_angle } => {
+                            FaceSurface::Cone { apex: xyz(apex), axis: xyz(axis), half_angle }
+                        }
+                        solidcraft_kernel::FaceSurface::Sphere { center, radius } => FaceSurface::Sphere { center: xyz(center), radius },
+                        solidcraft_kernel::FaceSurface::Torus { center, axis, major, minor } => {
+                            FaceSurface::Torus { center: xyz(center), axis: xyz(axis), major, minor }
+                        }
+                    })
+                })
+                .collect())
+        })
+        .map_err(Error::from)
     }
 
     pub fn measure(&self) -> Result<Measure> {
@@ -182,6 +240,19 @@ mod tests {
         assert!((m.area - 2200.0).abs() < 1e-6, "{}", m.area);
         assert_eq!(m.faces, 6);
         assert_eq!(m.bbox_max, [10., 20., 30.]);
+    }
+
+    #[test]
+    fn block_faces_are_planes_through_the_box() {
+        let surfaces = block([0., 0., 0.], [10., 20., 30.]).unwrap().face_surfaces().unwrap();
+        assert_eq!(surfaces.len(), 6);
+        for s in surfaces {
+            let Some(FaceSurface::Plane { normal, point }) = s else { panic!("{s:?}") };
+            // Each plane holds one of the box's faces: the point's coordinate along the normal is
+            // 0 or the box's extent there.
+            let along: f64 = normal.iter().zip(point).map(|(n, p)| n * p).sum();
+            assert!([0.0, 10.0, 20.0, 30.0].iter().any(|v| (along.abs() - v).abs() < 1e-9), "{normal:?} {point:?}");
+        }
     }
 
     #[test]

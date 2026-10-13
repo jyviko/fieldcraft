@@ -13,8 +13,10 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::corpus::{self, CATEGORIES, Part};
-use modelcraft_geometry::{Design, Measure, SurfaceMesh};
+use modelcraft_geometry::{Design, FaceSurface, Measure, SurfaceMesh};
 use modelcraft_mesh::cdt::{CdtOptions, tetrahedralize};
+use modelcraft_mesh::hex::{HexOptions, Surface, hex_mesh};
+use modelcraft_mesh::size::UniformSize;
 use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 
 pub const FILE: &str = "docs/meshing/corpus.md";
@@ -42,7 +44,7 @@ pub trait Stage {
 
 /// The stages, in column order. Meshers add theirs here.
 fn stages() -> Vec<Box<dyn Stage>> {
-    vec![Box::new(SurfaceVolume), Box::new(BoundaryCheck), Box::new(TetCdt)]
+    vec![Box::new(SurfaceVolume), Box::new(BoundaryCheck), Box::new(TetCdt), Box::new(StructuredHex)]
 }
 
 /// The boundary surface's enclosed volume against SolidCraft's measured volume and the closed
@@ -111,6 +113,70 @@ impl Stage for TetCdt {
         }
         let ms = start.elapsed().as_secs_f64() * 1e3;
         Ok(vec![tets.to_string(), steiner.to_string(), cavities.to_string(), "pass".into(), format!("{ms:.0}")])
+    }
+}
+
+/// Element size of the structured hex stage, relative to the part's bounding-box diagonal.
+const HEX_RELATIVE_SIZE: f64 = 1.0 / 25.0;
+/// Characters of a "not meshed" reason kept in the table.
+const REASON_CHARS: usize = 240;
+
+/// Structured all-hex meshing (`modelcraft_mesh::hex`): the method that meshed each body, the
+/// element count and the smallest scaled Jacobian, or why no structured method fits.
+struct StructuredHex;
+
+impl Stage for StructuredHex {
+    fn headers(&self) -> &'static [&'static str] {
+        &["hex", "hex elements", "hex min SJ", "hex ms"]
+    }
+
+    fn run(&self, l: &Loaded) -> Result<Vec<String>, String> {
+        let start = Instant::now();
+        let (lo, hi) = l.measures.iter().fold(([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]), |(mut lo, mut hi), m| {
+            for i in 0..3 {
+                lo[i] = lo[i].min(m.bbox_min[i]);
+                hi[i] = hi[i].max(m.bbox_max[i]);
+            }
+            (lo, hi)
+        });
+        let diagonal = (0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f64>().sqrt();
+        let size = UniformSize(HEX_RELATIVE_SIZE * diagonal);
+        let options = HexOptions { chordal_tolerance: l.tolerance, ..HexOptions::default() };
+        let (mut methods, mut elements, mut min_sj) = (Vec::new(), 0usize, f64::INFINITY);
+        for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
+            let surface_options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
+            let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &surface_options)
+                .map_err(|e| format!("{}: {e}", body.name))?;
+            let faces: Vec<Option<Surface>> =
+                body.face_surfaces().map_err(|e| format!("{}: {e}", body.name))?.into_iter().map(|f| f.map(analytic)).collect();
+            match hex_mesh(&s, &faces, &size, &options) {
+                Ok(m) => {
+                    methods.push(m.report.method.name());
+                    elements += m.element_count();
+                    min_sj = min_sj.min(m.report.min_scaled_jacobian);
+                }
+                Err(e) => {
+                    let reason: String = e.to_string().chars().take(REASON_CHARS).collect();
+                    let ms = start.elapsed().as_secs_f64() * 1e3;
+                    return Ok(vec![format!("no: {}: {reason}", body.name), String::new(), String::new(), format!("{ms:.0}")]);
+                }
+            }
+        }
+        methods.sort_unstable();
+        methods.dedup();
+        let ms = start.elapsed().as_secs_f64() * 1e3;
+        Ok(vec![methods.join(", "), elements.to_string(), format!("{min_sj:.3}"), format!("{ms:.0}")])
+    }
+}
+
+/// The geometry's analytic face surface in the mesher's terms.
+pub fn analytic(s: FaceSurface) -> Surface {
+    match s {
+        FaceSurface::Plane { normal, point } => Surface::Plane { point, normal },
+        FaceSurface::Cylinder { origin, axis, radius } => Surface::Cylinder { origin, axis, radius },
+        FaceSurface::Cone { apex, axis, half_angle } => Surface::Cone { apex, axis, half_angle },
+        FaceSurface::Sphere { center, radius } => Surface::Sphere { center, radius },
+        FaceSurface::Torus { center, axis, major, minor } => Surface::Torus { center, axis, major, minor },
     }
 }
 

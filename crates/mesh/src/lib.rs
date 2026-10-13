@@ -10,6 +10,7 @@
 pub mod block;
 pub mod cdt;
 pub mod delaunay;
+pub mod hex;
 pub mod join;
 pub mod planar;
 pub mod quad;
@@ -26,6 +27,10 @@ pub enum Error {
     Limit(String),
     #[error("meshing failed: {0}")]
     Failed(String),
+    /// The input is valid but outside what the mesher handles yet (a body that is not
+    /// sweepable, …); the message says why.
+    #[error("not supported yet: {0}")]
+    Unsupported(String),
     /// The boundary surface has defects ([`surface::BoundarySurface::new`]).
     #[error("invalid boundary surface: {0}")]
     Surface(surface::Defects),

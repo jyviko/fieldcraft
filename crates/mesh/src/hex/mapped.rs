@@ -1,0 +1,246 @@
+//! Mapped meshing of a logical cube: six faces with one loop of four edges each, three edges at
+//! each of eight corners.
+//!
+//! The corners get logical coordinates `(i, j, k) ∈ {0, 1}³` from the edge graph; the four edges
+//! along each logical direction share one division count (interval assignment). Edges are divided
+//! on the geometry (nodes on both faces of each edge), each face gets the transfinite grid of its
+//! four edges projected onto its surface (Gordon and Hall 1973), and the volume is the trivariate
+//! transfinite interpolation of the six face grids: faces blended linearly, minus edges blended
+//! bilinearly, plus corners blended trilinearly (W. J. Gordon, L. C. Thiel, *Transfinite
+//! mappings and their application to grid generation*, Applied Mathematics and Computation
+//! 10–11:171–233, 1982).
+
+use std::collections::BTreeMap;
+
+use super::geom::{add, scale};
+use super::interval::Intervals;
+use super::{Ctx, Raw, project_to_face, project_to_faces};
+use crate::quad::transfinite_grid;
+use crate::size::{divide_polyline, ideal_divisions};
+use crate::vec3::{P, det, sub};
+use crate::{Error, Result};
+
+/// The most nodes of a mapped block.
+const MAX_NODES: usize = 1 << 26;
+
+pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
+    let brep = ctx.brep;
+    if brep.faces.len() != 6 || brep.edges.len() != 12 {
+        return Err(Error::Unsupported(format!("not a logical cube: {} faces and {} edges (6 and 12 needed)", brep.faces.len(), brep.edges.len())));
+    }
+    if let Some(f) = brep.faces.iter().find(|f| f.loops.len() != 1 || f.loops.first().map(Vec::len) != Some(4)) {
+        return Err(Error::Unsupported(format!("not a logical cube: face {} is not bounded by one loop of four edges", f.id)));
+    }
+    // Corner graph.
+    let mut adj: BTreeMap<u32, Vec<(u32, usize)>> = BTreeMap::new();
+    for (e, edge) in brep.edges.iter().enumerate() {
+        if edge.closed() {
+            return Err(Error::Unsupported("not a logical cube: a closed edge".into()));
+        }
+        adj.entry(edge.first()).or_default().push((edge.last(), e));
+        adj.entry(edge.last()).or_default().push((edge.first(), e));
+    }
+    if adj.len() != 8 || adj.values().any(|v| v.len() != 3) {
+        return Err(Error::Unsupported("not a logical cube: the corners do not each have three edges".into()));
+    }
+    let neighbours = |v: u32| -> Vec<u32> { adj.get(&v).map(|l| l.iter().map(|x| x.0).collect()).unwrap_or_default() };
+    let common = |a: u32, b: u32, not: u32| -> Option<u32> {
+        let nb = neighbours(b);
+        neighbours(a).into_iter().find(|x| *x != not && nb.contains(x))
+    };
+    let c000 = *adj.keys().next().ok_or_else(|| Error::Failed("no corner".into()))?;
+    let n = neighbours(c000);
+    let (Some(&a), Some(&b), Some(&c)) = (n.first(), n.get(1), n.get(2)) else { return Err(Error::Failed("corner".into())) };
+    // Right-handed: (a, b, c) along (i, j, k) when the triple product is positive.
+    let p = |v: u32| brep.point(v);
+    let (a, b, c) = if det(sub(p(a), p(c000)), sub(p(b), p(c000)), sub(p(c), p(c000))) > 0.0 { (a, b, c) } else { (a, c, b) };
+    let c110 = common(a, b, c000);
+    let c101 = common(a, c, c000);
+    let c011 = common(b, c, c000);
+    let (Some(c110), Some(c101), Some(c011)) = (c110, c101, c011) else {
+        return Err(Error::Unsupported("not a logical cube: the corner graph is not a cube".into()));
+    };
+    let c111 = common(c110, c101, a).filter(|&x| neighbours(c011).contains(&x));
+    let Some(c111) = c111 else { return Err(Error::Unsupported("not a logical cube: the corner graph is not a cube".into())) };
+    // corner[i][j][k]
+    let corner = [[[c000, c], [b, c011]], [[a, c101], [c110, c111]]];
+    let at = |i: usize, j: usize, k: usize| -> u32 { corner[i][j][k] };
+    let mut distinct: Vec<u32> = corner.iter().flatten().flatten().copied().collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if distinct.len() != 8 {
+        return Err(Error::Unsupported("not a logical cube: corners repeat".into()));
+    }
+    // The edge between two corners, oriented from the first.
+    let edge_between = |u: u32, v: u32| -> Option<(usize, bool)> {
+        adj.get(&u)?.iter().find(|x| x.0 == v).map(|x| (x.1, brep.edges.get(x.1).is_some_and(|e| e.first() == u)))
+    };
+    // The four edges along each direction, from the low corner to the high one.
+    let mut groups: [Vec<(usize, bool)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for (d, group) in groups.iter_mut().enumerate() {
+        for s in 0..2 {
+            for t in 0..2 {
+                let (lo, hi) = match d {
+                    0 => (at(0, s, t), at(1, s, t)),
+                    1 => (at(s, 0, t), at(s, 1, t)),
+                    _ => (at(s, t, 0), at(s, t, 1)),
+                };
+                group.push(edge_between(lo, hi).ok_or_else(|| Error::Unsupported("not a logical cube: a corner pair has no edge".into()))?);
+            }
+        }
+    }
+    let mut ia = Intervals::default();
+    for e in 0..brep.edges.len() {
+        ia.var(ideal_divisions(ctx.field, &brep.edge_points(e, true))?, 1);
+    }
+    for g in &groups {
+        let first = g.first().map(|x| x.0).unwrap_or(0);
+        for &(e, _) in g.iter().skip(1) {
+            ia.equal.push((vec![first], vec![e]));
+        }
+    }
+    let counts = ia.solve()?;
+    let count = |g: &Vec<(usize, bool)>| g.first().and_then(|x| counts.get(x.0)).copied().unwrap_or(1);
+    let (ni, nj, nk) = (count(&groups[0]), count(&groups[1]), count(&groups[2]));
+    let total = (ni + 1).checked_mul(nj + 1).and_then(|x| x.checked_mul(nk + 1)).filter(|&x| x <= MAX_NODES);
+    let total = total.ok_or_else(|| Error::Limit(format!("a {ni} × {nj} × {nk} block exceeds {MAX_NODES} nodes")))?;
+    if ni * nj * nk > ctx.opts.max_elements {
+        return Err(Error::Limit(format!("the mesh would have {} hexahedra; the limit is {}", ni * nj * nk, ctx.opts.max_elements)));
+    }
+    // Edge node positions, low corner to high.
+    let edge_pts = |(e, fwd): (usize, bool), n: usize| -> Result<Vec<P>> {
+        let pts = divide_polyline(ctx.field, &brep.edge_points(e, fwd), n)?;
+        let faces = brep.edges.get(e).map(|x| x.faces.to_vec()).unwrap_or_default();
+        let last = pts.len().saturating_sub(1);
+        Ok(pts.iter().enumerate().map(|(k, q)| if k == 0 || k == last { *q } else { project_to_faces(ctx, &faces, *q) }).collect())
+    };
+    let idx = |i: usize, j: usize, k: usize| (k * (nj + 1) + j) * (ni + 1) + i;
+    let mut x: Vec<Option<P>> = vec![None; total];
+    // Edges: E[d][s][t] along direction d at the other two coordinates (s, t) ∈ {0, 1}².
+    for (d, g) in groups.iter().enumerate() {
+        let n = [ni, nj, nk][d];
+        for (m, &use_) in g.iter().enumerate() {
+            let (s, t) = (m / 2, m % 2);
+            for (q, pt) in edge_pts(use_, n)?.into_iter().enumerate() {
+                let (i, j, k) = match d {
+                    0 => (q, s * nj, t * nk),
+                    1 => (s * ni, q, t * nk),
+                    _ => (s * ni, t * nj, q),
+                };
+                if let Some(slot) = x.get_mut(idx(i, j, k)) {
+                    *slot = Some(*slot.as_ref().unwrap_or(&pt));
+                }
+            }
+        }
+    }
+    let get = |x: &[Option<P>], i: usize, j: usize, k: usize| -> Result<P> {
+        x.get(idx(i, j, k)).copied().flatten().ok_or_else(|| Error::Failed("mapped grid node".into()))
+    };
+    // Faces: grids from their edges, projected onto the face found at the face's centre.
+    for d in 0..3 {
+        for side in 0..2 {
+            // Face d = side·n_d; its parameters (a, b) run along the other two directions.
+            let (da, db) = match d {
+                0 => (1, 2),
+                1 => (0, 2),
+                _ => (0, 1),
+            };
+            let (na, nb) = ([ni, nj, nk][da], [ni, nj, nk][db]);
+            let ijk = |a: usize, b: usize| -> (usize, usize, usize) {
+                let mut c = [0usize; 3];
+                c[d] = side * [ni, nj, nk][d];
+                c[da] = a;
+                c[db] = b;
+                (c[0], c[1], c[2])
+            };
+            let line = |f: &dyn Fn(usize) -> (usize, usize, usize), n: usize| -> Result<Vec<P>> {
+                (0..=n)
+                    .map(|q| {
+                        let (i, j, k) = f(q);
+                        get(&x, i, j, k)
+                    })
+                    .collect()
+            };
+            let bottom = line(&|a| ijk(a, 0), na)?;
+            let top = line(&|a| ijk(a, nb), na)?;
+            let left = line(&|b| ijk(0, b), nb)?;
+            let right = line(&|b| ijk(na, b), nb)?;
+            let grid = transfinite_grid(&bottom, &right, &top, &left)?;
+            // The B-rep face bounded by this side's four edges.
+            let logical = |a: usize, b: usize| {
+                let (i, j, k) = ijk(a, b);
+                at(usize::from(i > 0), usize::from(j > 0), usize::from(k > 0))
+            };
+            let ring = [logical(0, 0), logical(na, 0), logical(na, nb), logical(0, nb)];
+            let mut bounding: Vec<usize> = (0..4).filter_map(|m| edge_between(ring[m], ring[(m + 1) % 4]).map(|x| x.0)).collect();
+            bounding.sort_unstable();
+            let face = brep.faces.iter().position(|f| {
+                let mut es: Vec<usize> = f.loops.iter().flatten().map(|x| x.0).collect();
+                es.sort_unstable();
+                es == bounding
+            });
+            for b in 1..nb {
+                for a in 1..na {
+                    let q = grid.get(b * (na + 1) + a).copied().unwrap_or([0.0; 3]);
+                    let q = face.and_then(|f| project_to_face(ctx, f, q)).unwrap_or(q);
+                    let (i, j, k) = ijk(a, b);
+                    if let Some(slot) = x.get_mut(idx(i, j, k)) {
+                        *slot = Some(q);
+                    }
+                }
+            }
+        }
+    }
+    // Volume: trivariate transfinite interpolation.
+    let (fi, fj, fk) = (ni as f64, nj as f64, nk as f64);
+    for k in 1..nk {
+        for j in 1..nj {
+            for i in 1..ni {
+                let (u, v, w) = (i as f64 / fi, j as f64 / fj, k as f64 / fk);
+                let g = |i: usize, j: usize, k: usize| get(&x, i, j, k);
+                let lin = |t: f64, a: P, b: P| add(scale(a, 1.0 - t), scale(b, t));
+                // Faces.
+                let faces = add(add(lin(u, g(0, j, k)?, g(ni, j, k)?), lin(v, g(i, 0, k)?, g(i, nj, k)?)), lin(w, g(i, j, 0)?, g(i, j, nk)?));
+                // Edges.
+                let bil = |s: f64, t: f64, p00: P, p10: P, p01: P, p11: P| lin(t, lin(s, p00, p10), lin(s, p01, p11));
+                let edges = add(
+                    add(
+                        bil(v, w, g(i, 0, 0)?, g(i, nj, 0)?, g(i, 0, nk)?, g(i, nj, nk)?),
+                        bil(u, w, g(0, j, 0)?, g(ni, j, 0)?, g(0, j, nk)?, g(ni, j, nk)?),
+                    ),
+                    bil(u, v, g(0, 0, k)?, g(ni, 0, k)?, g(0, nj, k)?, g(ni, nj, k)?),
+                );
+                // Corners.
+                let corners = lin(
+                    w,
+                    bil(u, v, g(0, 0, 0)?, g(ni, 0, 0)?, g(0, nj, 0)?, g(ni, nj, 0)?),
+                    bil(u, v, g(0, 0, nk)?, g(ni, 0, nk)?, g(0, nj, nk)?, g(ni, nj, nk)?),
+                );
+                let p = add(sub(faces, edges), corners);
+                if let Some(slot) = x.get_mut(idx(i, j, k)) {
+                    *slot = Some(p);
+                }
+            }
+        }
+    }
+    let nodes: Vec<P> = x.into_iter().map(|p| p.ok_or_else(|| Error::Failed("mapped grid node missing".into()))).collect::<Result<_>>()?;
+    let id = |i: usize, j: usize, k: usize| idx(i, j, k) as u32;
+    let mut hexes = Vec::with_capacity(ni * nj * nk);
+    for k in 0..nk {
+        for j in 0..nj {
+            for i in 0..ni {
+                hexes.push([
+                    id(i, j, k),
+                    id(i + 1, j, k),
+                    id(i + 1, j + 1, k),
+                    id(i, j + 1, k),
+                    id(i, j, k + 1),
+                    id(i + 1, j, k + 1),
+                    id(i + 1, j + 1, k + 1),
+                    id(i, j + 1, k + 1),
+                ]);
+            }
+        }
+    }
+    Ok(Raw { nodes, hexes, description: format!("mapped block of {ni} × {nj} × {nk}") })
+}

@@ -21,10 +21,11 @@ crates in strictly lower layers.
 | L0 | `modelcraft-model` | Solver-neutral FE model: nodes and elements by label, their geometry tags, sets, materials, sections, couplings, BCs, loads and steps, the model check and the resolved view the writers read. Knows no file format and no geometry type. | started |
 | L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`; face-tagged 3MF files read into the same type without the kernel (docs/formats/tagged-mesh.md). No SolidCraft type in its API. | started |
 | L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
-| L1 | `modelcraft-fem` | Element kernels shared by every structural solver: the element table (tet4, tet10, wedge6, hex8 full and incompatible modes, hex20 full and reduced), shape functions, quadrature, element stiffness, consistent and lumped mass, body and pressure loads, stresses and their extrapolation, isotropic and orthotropic elasticity. Pure functions, no solver loop. | started |
+| L1 | `modelcraft-fem` | Element kernels shared by every structural solver: the element table (tet4, tet10, wedge6, hex8 full and incompatible modes, hex20 full and reduced), shape functions, quadrature, element stiffness, consistent and lumped mass, body and pressure loads, stresses and their extrapolation, isotropic and orthotropic elasticity, and the uniform-strain (one-point) hex8 and tet4 kinematics, hourglass shape vectors and element frequency bounds of the explicit solver. Pure functions, no solver loop. | started |
 | L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. Text out, no file system; `deck.write` saves it. | started |
 | L1 | `modelcraft-render` | Display data without a GPU dependency: the visible faces, element edges and nodes of a model, the orbit camera, a CPU rasterizer for headless snapshots; contour maps later. | started |
-| L2 | `modelcraft-solver` | Implicit solver: assembly from the resolved model, boundary conditions, sparse direct solution, linear static and modal analysis, stresses and reactions. The explicit (`modelcraft-explicit`) and lattice Boltzmann (`modelcraft-lbm`) solvers join this layer. | started |
+| L2 | `modelcraft-solver` | Implicit solver: assembly from the resolved model, boundary conditions, sparse direct solution, linear static and modal analysis, stresses and reactions. The lattice Boltzmann solver (`modelcraft-lbm`) joins this layer. | started |
+| L2 | `modelcraft-explicit` | Explicit dynamics: central-difference time integration with lumped mass, one-point hex8 with hourglass control, nodal-pressure tet4, bulk viscosity, rigid walls, energy account, histories and field frames. | started |
 | L3 | `modelcraft-fsi` | Fluid–structure coupling between the L2 solvers (later). | planned |
 | L4 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
 | L5 | `modelcraft-io` | `.modelcraft` files (docs/formats/modelcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery. Bytes in, bytes out; the file system only in `fs` and `recovery`. Result files later. | started |
@@ -169,6 +170,39 @@ plate with a hole (Kt → 3), cantilever and free–free beam frequencies with s
 modes), tension through a distributing coupling against the equivalent pressure away from the
 end, pure bending by a moment through a distributing coupling, torsion of a tube by a moment on
 a kinematically coupled point (twist and shear stress).
+
+## Explicit solver
+
+`modelcraft-explicit` integrates a model's `explicit_dynamic` steps in time (`solve.explicit`;
+`solve.history` and `solve.probe` read the stored histories and frames). Methods and papers are
+cited in the module docs and in docs/solvers/literature.md (Part H).
+
+1. **System.** `Model::resolve()`; hex8 sections with reduced integration become one-point
+   uniform-strain hexahedra with Flanagan–Belytschko hourglass control, tet4 sections Bonet–Burton
+   average nodal pressure tetrahedra (`modelcraft_fem::uniform` holds their kinematics). Other
+   element kinds and formulations, couplings, reference points and moments return "not supported
+   yet". Masses are row-sum lumped. A zero-valued boundary condition holds a degree of freedom; a
+   displacement value is reached at constant velocity over the step. Loads act in full from the
+   start. The step lists initial velocities and fixed frictionless rigid planes by set.
+2. **Time step.** Each element's highest frequency is bounded in closed form (exact for a cube);
+   the increment is the step's scale (0.9 by default) times the smallest element increment with
+   Wilkins' bulk-viscosity correction, recomputed every increment. The ten controlling elements
+   are reported; a step that would need more increments than its cap is refused before it runs.
+3. **Integration.** Central differences in the half-step form, elements in label order, no
+   parallel reductions (bit-for-bit repeatable). Rigid walls and prescribed degrees of freedom are
+   kinematic velocity constraints whose impulses are the reactions.
+4. **Energy account.** Kinetic, internal (stress work), hourglass, bulk viscosity, external and
+   constraint work, and their balance; a run warns when the balance is off by more than 1% of the
+   largest energy or the hourglass energy exceeds 10% of the internal energy.
+5. **Results.** Histories (energies, momentum, constraint force, chosen nodes) at the history
+   interval and field frames (displacement, velocity, element stress and strain) at the output
+   interval, capped in size; kept in the session like the implicit results.
+
+The first version is geometrically linear with linear elastic materials. Verification
+(`crates/explicit/tests/verification.rs`, analytic only): stress waves in hex8 and tet4 bars
+(front at c·t, σ = ρ c v, work input), a bar striking a rigid wall (contact time 2L/c, rebound
+speed, plateau force ρ c v₀ A), the energy balance, bit-for-bit repeatability; in the engine
+(`solve.rs`), a cantilever's free-vibration period against `solve.frequency`.
 
 ## Commands
 

@@ -991,3 +991,34 @@ the module docs):
   element accuracy*, Finite Elem. Anal. Des. 1(1):3–20, 1985 (patch tests); Lamé, Kirsch,
   Timoshenko and Euler–Bernoulli closed forms; Saint-Venant's principle (tension through a
   coupling), pure bending σ = M z / I, torsion of a circular tube φ = T L / (G J), τ = T r / J.
+
+## Part H: Explicit solver core (X1), as implemented
+
+The papers and books `modelcraft-explicit` and `modelcraft_fem::uniform` are written from (cited
+again in the module docs):
+
+- Time integration, energy balance, element eigenvalue inequality: T. Belytschko, W. K. Liu,
+  B. Moran, K. Elkhodary, *Nonlinear Finite Elements for Continua and Structures*, 2nd ed., Wiley
+  2014 (ch. 6: central differences in the half-step form with variable increments, the energy
+  balance check, the critical time step).
+- One-point hexahedron and hourglass control: D. P. Flanagan, T. Belytschko, IJNME
+  17(5):679–706, 1981 (integrated gradients b, mean strain, the γ hourglass shape vectors
+  orthogonal to linear fields, viscous and stiffness resisting forces). Our scaling of the
+  coefficient with ρ, c and the element size is our own: κ is the fraction of critical damping
+  (viscous) or the squared frequency ratio (stiffness) of a cube's hourglass modes at 2c/h.
+- Element frequency bound: in the spirit of D. P. Flanagan, T. Belytschko, J. Appl. Mech.
+  51(1):35–40, 1984; we bound uᵀKu ≤ (k/V) λ_max(Σ b bᵀ) ‖u‖² with k = max(3λ + 2μ, 2μ)
+  (isotropic) or 2 λ_max(D), which is exact for a cube; the 3 × 3 eigenvalue in closed form after
+  O. K. Smith, Commun. ACM 4(4):168, 1961.
+- Average nodal pressure tetrahedron: J. Bonet, A. J. Burton, Commun. Numer. Methods Eng.
+  14(5):437–449, 1998.
+- Bulk viscosity and its time-step correction: J. von Neumann, R. D. Richtmyer, J. Appl. Phys.
+  21(3):232–237, 1950; M. L. Wilkins, J. Comput. Phys. 36(3):281–303, 1980.
+- Rigid walls as kinematic velocity constraints: T. J. R. Hughes, R. L. Taylor, J. L. Sackman,
+  A. Curnier, W. Kanoknukulchai, CMAME 8(3):249–276, 1976.
+- Verification: d'Alembert's solution of the 1D wave equation (front at c t, σ = ρ c v), the
+  elastic bar impact on a rigid wall (contact 2L/c, rebound at the impact speed; Hughes et al.
+  1976), Euler–Bernoulli and the implicit modal solver for the cantilever period. The one-point
+  element keeps 1 − 1/n² of the bending energy with n elements through the depth, which predicts
+  its period with viscous hourglass control to 0.03%.
+

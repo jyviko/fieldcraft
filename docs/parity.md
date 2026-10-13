@@ -61,6 +61,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Decks | LS-DYNA keyword writer (implicit; explicit in M8) | M3 | | done (implicit static and eigenvalue; beam sections planned) |
 | Decks | Readers keeping unknown keywords | M9 | | planned |
 | Solve | Own linear static and modal solver, verified against analytic solutions | M4 | yes | started (solid elements: tet4, tet10, wedge6, hex8, hex20; reference points, kinematic and distributing couplings, moments) |
+| Solve | Own explicit dynamics solver (central differences, one-point hex8 with hourglass control, nodal-pressure tet4, bulk viscosity, energy balance), verified against analytic wave and impact solutions | M10 | yes | started (X1 core: small-strain elastic, rigid walls; large deformation, plasticity and contact planned) |
 | Results | Deformed shape, contours, mode shapes, probes, reaction sums | M4 | | started (results in the session, `solve.probe`, reaction sums; display planned) |
 | Results | XY and path plots, cuts, display groups, free-body forces, animation | M9 | | planned |
 | Results | Readers for public result formats (Nastran OP2, LS-DYNA d3plot, Abaqus `.fil`) | M9 | | planned |

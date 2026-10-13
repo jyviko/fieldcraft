@@ -178,7 +178,8 @@ fn pressure_wave_in_a_hex_bar() {
     assert!(r.warnings.iter().all(|w| w.contains("unit system")), "{:?}", r.warnings);
     // The exact energy input is p A (c t)(p / E) = p² A c t / E; half is kinetic, half strain.
     let input = p * p * WIDTH * WIDTH * c * t / YOUNG;
-    assert!((r.energy.external - input).abs() < 0.02 * input, "{} vs {input}", r.energy.external);
+    eprintln!("hex8 pressure wave: work {:.6e} vs p² A c t / E = {input:.6e}", r.energy.external);
+    assert!((r.energy.external - input).abs() < 0.005 * input, "{} vs {input}", r.energy.external);
 }
 
 /// A velocity v prescribed at one end of a tetrahedral bar (nodal-pressure tet4): front at c t,
@@ -211,7 +212,8 @@ fn velocity_wave_in_a_tet_bar() {
     assert!(r.energy.relative_error(r.initial_kinetic) < 0.01, "{:?}", r.energy);
     // The boundary condition does the work: ρ c v² A t (kinetic and strain energy).
     let input = DENSITY * c * v * v * WIDTH * WIDTH * t;
-    assert!((r.energy.constraint - input).abs() < 0.02 * input, "{} vs {input}", r.energy.constraint);
+    eprintln!("tet4 velocity wave: work {:.6e} vs ρ c v² A t = {input:.6e}", r.energy.constraint);
+    assert!((r.energy.constraint - input).abs() < 0.01 * input, "{} vs {input}", r.energy.constraint);
 }
 
 /// A bar moving at v₀ strikes a rigid wall: it stays in contact for 2L/c, then leaves at v₀ in

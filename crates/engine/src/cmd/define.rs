@@ -159,7 +159,7 @@ definition_commands!(
 pub const STEP_CREATE: CommandSpec = CommandSpec {
     id: "model.step.create",
     label: "New Step",
-    params: r#"{"name": "Bend", "procedure": {"type": "static"} | {"type": "frequency", "modes": 10, "min_hz": 0, "max_hz": 500}, "output": ["displacement", "reaction_force", "stress", "strain"] (default by procedure), "boundary_conditions": [names], "loads": [names] (active in this step; nothing carries over between steps), "before": "step" (default: last)}"#,
+    params: r#"{"name": "Bend", "procedure": {"type": "static"} | {"type": "frequency", "modes": 10, "min_hz": 0, "max_hz": 500} | {"type": "explicit_dynamic", "end_time": 0.001, "dt_scale": 0.9, "max_increments": 10000000, "output_interval", "history_interval", "history_nodes": "set", "initial_velocities": [{"set", "velocity": [vx, vy, vz]}], "rigid_walls": [{"set", "point", "normal"}], "hourglass": {"type": "viscous|stiffness", "coefficient": 0.1}, "bulk_viscosity": {"linear": 0.06, "quadratic": 1.5}}, "output": ["displacement", "reaction_force", "stress", "strain"] (default by procedure), "boundary_conditions": [names], "loads": [names] (active in this step; nothing carries over between steps), "before": "step" (default: last)}"#,
     kind: CommandKind::Model,
     run: step_create,
 };

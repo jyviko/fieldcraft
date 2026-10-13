@@ -19,6 +19,7 @@ modelcraft-decks = { path = "crates/decks" }
 modelcraft-io = { path = "crates/io" }
 modelcraft-fem = { path = "crates/fem" }
 modelcraft-solver = { path = "crates/solver" }
+modelcraft-explicit = { path = "crates/explicit" }
 modelcraft-engine = { path = "crates/engine" }
 modelcraft-testkit = { path = "crates/testkit" }
 modelcraft-render = { path = "crates/render" }

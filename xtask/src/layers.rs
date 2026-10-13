@@ -43,8 +43,9 @@ pub const TABLE: &[(&str, Class)] = &[
     ("fem", Class::Layer(1)),
     ("decks", Class::Layer(1)),
     ("render", Class::Layer(1)),
-    // L2: solvers (the explicit and lattice Boltzmann solvers join here).
+    // L2: solvers (the lattice Boltzmann solver joins here).
     ("solver", Class::Layer(2)),
+    ("explicit", Class::Layer(2)),
     // L3: coupling between solvers (`fsi`, later).
     // L4 and up: the document, files, commands, UI.
     ("doc", Class::Layer(4)),

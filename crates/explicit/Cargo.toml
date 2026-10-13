@@ -1,0 +1,15 @@
+[package]
+name = "modelcraft-explicit"
+description = "ModelCraft's explicit dynamics solver: central-difference time integration with lumped mass, one-point hexahedra with hourglass control, nodal-pressure tetrahedra, bulk viscosity and energy accounting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+modelcraft-model = { workspace = true }
+modelcraft-fem = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }

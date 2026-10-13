@@ -228,7 +228,7 @@ impl Default for Hourglass {
 
 impl Hourglass {
     pub fn validate(&self) -> Result<()> {
-        if !(self.coefficient >= 0.0 && self.coefficient <= MAX_HOURGLASS_COEFFICIENT) {
+        if !(0.0..=MAX_HOURGLASS_COEFFICIENT).contains(&self.coefficient) {
             return Err(Error::Invalid(format!("the hourglass coefficient is in 0..={MAX_HOURGLASS_COEFFICIENT}, got {}", self.coefficient)));
         }
         Ok(())
@@ -266,7 +266,7 @@ impl Default for BulkViscosity {
 impl BulkViscosity {
     pub fn validate(&self) -> Result<()> {
         for (what, v) in [("linear", self.linear), ("quadratic", self.quadratic)] {
-            if !(v >= 0.0 && v <= MAX_BULK_VISCOSITY) {
+            if !(0.0..=MAX_BULK_VISCOSITY).contains(&v) {
                 return Err(Error::Invalid(format!("the {what} bulk viscosity coefficient is in 0..={MAX_BULK_VISCOSITY}, got {v}")));
             }
         }

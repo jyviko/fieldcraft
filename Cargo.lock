@@ -1892,6 +1892,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "modelcraft-explicit"
+version = "0.1.0"
+dependencies = [
+ "modelcraft-fem",
+ "modelcraft-model",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "modelcraft-fem"
 version = "0.1.0"
 dependencies = [

@@ -99,8 +99,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "ModelData")]
 pub struct Model {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     nodes: BTreeMap<u32, Node>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     elements: BTreeMap<u32, Element>,
+    #[serde(skip_serializing_if = "Classification::is_unused")]
     classification: Classification,
     units: UnitSystem,
     sets: BTreeMap<String, Set>,
@@ -280,6 +283,25 @@ impl Model {
     /// Label the unit system the model's numbers are in (nothing is converted).
     pub fn set_units(&mut self, units: UnitSystem) {
         self.units = units;
+    }
+
+    /// A copy with the unit system and every definition but no mesh: no nodes, elements or
+    /// geometry tags. A `.modelcraft` file stores this part as text and the mesh in binary.
+    pub fn without_mesh(&self) -> Model {
+        Model {
+            nodes: BTreeMap::new(),
+            elements: BTreeMap::new(),
+            classification: Classification::default(),
+            units: self.units,
+            sets: self.sets.clone(),
+            materials: self.materials.clone(),
+            sections: self.sections.clone(),
+            reference_points: self.reference_points.clone(),
+            couplings: self.couplings.clone(),
+            boundary_conditions: self.boundary_conditions.clone(),
+            loads: self.loads.clone(),
+            steps: self.steps.clone(),
+        }
     }
 
     /// Counts of each kind of definition, for summaries.

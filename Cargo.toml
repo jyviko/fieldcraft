@@ -16,6 +16,7 @@ modelcraft-model = { path = "crates/model" }
 modelcraft-geometry = { path = "crates/geometry" }
 modelcraft-mesh = { path = "crates/mesh" }
 modelcraft-decks = { path = "crates/decks" }
+modelcraft-io = { path = "crates/io" }
 modelcraft-engine = { path = "crates/engine" }
 modelcraft-testkit = { path = "crates/testkit" }
 modelcraft-render = { path = "crates/render" }
@@ -30,6 +31,9 @@ log = "0.4"
 # 3MF packages (docs/formats/tagged-mesh.md): the same versions SolidCraft uses.
 zip = { version = "3", default-features = false, features = ["deflate"] }
 quick-xml = "0.41"
+
+# content hashes and part checksums of .modelcraft files (the version SolidCraft uses)
+sha2 = "0.10"
 
 # images (PNG snapshots and screenshots)
 png = "0.18"

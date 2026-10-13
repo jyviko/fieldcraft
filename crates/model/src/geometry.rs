@@ -230,6 +230,11 @@ impl Classification {
         self.elements.is_empty() && self.nodes.is_empty()
     }
 
+    /// No entity interned and nothing tagged (left out of a model's JSON form).
+    pub(crate) fn is_unused(&self) -> bool {
+        self.entities.is_empty() && self.is_empty()
+    }
+
     /// The tags of every entity `reference` selects ([`GeometryRef::selects`]).
     pub fn tags_selected_by(&self, reference: &GeometryRef) -> Vec<u32> {
         self.entities.iter().enumerate().filter(|(_, e)| reference.selects(e)).filter_map(|(i, _)| u32::try_from(i).ok()).collect()

@@ -368,6 +368,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "modelcraft-mesh"
+version = "0.1.0"
+dependencies = [
+ "modelcraft-model",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "modelcraft-model"
 version = "0.1.0"
 dependencies = [

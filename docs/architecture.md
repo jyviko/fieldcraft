@@ -20,7 +20,7 @@ crates in strictly lower layers.
 |---|---|---|---|
 | L0 | `modelcraft-model` | Solver-neutral FE model: nodes, elements by label; materials, sections, sets, BCs, loads and steps as they land. Knows no file format. | started |
 | L1 | `modelcraft-geometry` | The only door to SolidCraft: B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`. No SolidCraft type in its API. | started |
-| L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | planned |
+| L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
 | L1 | `modelcraft-solver` | Element formulations, assembly, sparse linear static and modal solution. | planned |
 | L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. | planned |
 | L1 | `modelcraft-render` | Display data (meshes, contour maps) without a GPU dependency. | planned |

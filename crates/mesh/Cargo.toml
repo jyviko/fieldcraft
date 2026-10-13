@@ -1,0 +1,13 @@
+[package]
+name = "modelcraft-mesh"
+description = "ModelCraft's meshing: robust predicates, surface preparation, tetrahedral and hexahedral meshing, quality metrics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+modelcraft-model = { workspace = true }
+thiserror = { workspace = true }

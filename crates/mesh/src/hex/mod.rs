@@ -49,7 +49,7 @@ use brep::Brep;
 use geom::{TriangleTree, add, dist, scale, unit};
 
 use crate::quad::QuadOptions;
-use crate::quality::{GateOptions, GateReport, Metric, element_quality, validity_gate_elements};
+use crate::quality::{GateOptions, GateReport, Metric, element_quality, validity_gate_checks};
 use crate::size::SizeField;
 use crate::surface::BoundarySurface;
 use crate::vec3::{P, cross, dot, sub};
@@ -343,13 +343,19 @@ fn finish(ctx: &Ctx, raw: Raw, method: HexMethod) -> Result<HexMesh> {
         let face: Vec<P> = local.iter().filter_map(|&i| x.get(i).copied()).collect();
         enclosed += face_flux(&face);
     }
-    let elements: Vec<(u32, ElementKind, Vec<P>)> = (0..hexes.len()).map(|e| Ok((e as u32 + 1, kind, coords(e)?))).collect::<Result<_>>()?;
-    let gate = validity_gate_elements(
-        elements.iter().map(|(l, k, x)| (*l, *k, x)),
-        &GateOptions { expected_volume: Some(enclosed), volume_tolerance: 1e-9 },
-    )?
-    .into_result()
-    .map_err(|e| Error::Failed(format!("{} ({description})", plain(&e))))?;
+    // One certified pass: every element's quality, with its Jacobian check for the gate.
+    let (mut min_sj, mut sum_sj) = (f64::INFINITY, 0.0);
+    let mut checks = Vec::with_capacity(hexes.len());
+    for e in 0..hexes.len() {
+        let q = element_quality(kind, &coords(e)?)?;
+        let sj = q.get(Metric::ScaledJacobian).unwrap_or(-1.0);
+        min_sj = min_sj.min(sj);
+        sum_sj += sj;
+        checks.push((e as u32 + 1, q.jacobian.ok_or_else(|| Error::Failed("an element was not certified".into()))?));
+    }
+    let gate = validity_gate_checks(checks.iter().map(|(l, c)| (*l, c)), &GateOptions { expected_volume: Some(enclosed), volume_tolerance: 1e-9 })?
+        .into_result()
+        .map_err(|e| Error::Failed(format!("{} ({description})", plain(&e))))?;
     let surface_volume = ctx.brep.surface.volume();
     let slack = 2.0 * fidelity + 1e-9 * surface_volume.abs();
     if (gate.volume - surface_volume).abs() > slack {
@@ -358,17 +364,11 @@ fn finish(ctx: &Ctx, raw: Raw, method: HexMethod) -> Result<HexMesh> {
             gate.volume
         )));
     }
-    let (mut min_sj, mut sum_sj) = (f64::INFINITY, 0.0);
-    for (_, _, x) in &elements {
-        let sj = element_quality(kind, x)?.get(Metric::ScaledJacobian).unwrap_or(-1.0);
-        min_sj = min_sj.min(sj);
-        sum_sj += sj;
-    }
     let report = HexReport {
         method,
         description,
         min_scaled_jacobian: min_sj,
-        mean_scaled_jacobian: sum_sj / elements.len().max(1) as f64,
+        mean_scaled_jacobian: sum_sj / hexes.len().max(1) as f64,
         volume: gate.volume,
         surface_volume,
         gate,

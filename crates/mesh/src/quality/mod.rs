@@ -26,7 +26,9 @@ pub(crate) mod shape;
 use modelcraft_model::{ElementKind, check_coordinates};
 
 pub use jacobian::{JacobianCheck, Validity};
-pub use report::{GateOptions, GateReport, MetricStats, QualityReport, enclosed_volume, quality_report, validity_gate, validity_gate_elements};
+pub use report::{
+    GateOptions, GateReport, MetricStats, QualityReport, enclosed_volume, quality_report, validity_gate, validity_gate_checks, validity_gate_elements,
+};
 pub(crate) use shape::{planar_corner, quad_axes};
 
 use crate::predicates::{Point2, Point3, Sign, orient2d, snap_to_domain, tet_volume_sign};

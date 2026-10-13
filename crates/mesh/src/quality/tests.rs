@@ -284,7 +284,13 @@ fn report_and_gate() {
     // The same gate straight from a mesher's arrays.
     let raw = validity_gate_elements([(7, ElementKind::Hex8, inside_out_hex()), (8, ElementKind::Hex8, UNIT_CUBE.to_vec())], &GateOptions::default())
         .unwrap();
-    assert_eq!((raw.checked, raw.invalid), (2, vec![7]));
+    assert_eq!((raw.checked, raw.invalid.clone()), (2, vec![7]));
+    // And from checks a mesher already made with element_quality.
+    let checks: Vec<(u32, JacobianCheck)> = [(7, inside_out_hex()), (8, UNIT_CUBE.to_vec())]
+        .into_iter()
+        .map(|(l, x)| (l, element_quality(ElementKind::Hex8, &x).unwrap().jacobian.unwrap()))
+        .collect();
+    assert_eq!(validity_gate_checks(checks.iter().map(|(l, c)| (*l, c)), &GateOptions::default()).unwrap(), raw);
 
     // A unit cube split into six tetrahedra around the 1-7 diagonal passes against its boundary.
     let c = UNIT_CUBE;

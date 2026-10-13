@@ -6,6 +6,7 @@ pub(crate) mod define;
 mod edit;
 pub(crate) mod file;
 mod geometry;
+mod hex;
 mod mesh;
 mod model;
 mod results;
@@ -36,6 +37,7 @@ pub static ALL: &[CommandSpec] = &[
     mesh::PLANAR,
     mesh::TET_GENERATE,
     block::BLOCK,
+    hex::HEX_GENERATE,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

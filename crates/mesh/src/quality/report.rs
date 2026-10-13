@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use modelcraft_model::{Element, ElementKind, Model, check_coordinates};
 
-use super::{ElementQuality, Metric, Validity, element_quality, element_validity, is_measured};
+use super::{ElementQuality, JacobianCheck, Metric, Validity, element_quality, element_validity, is_measured};
 use crate::{Error, Result};
 
 /// The most histogram bins a report may ask for.
@@ -218,7 +218,11 @@ impl Gate {
         if kind.dimension() != 3 {
             return Ok(());
         }
-        let check = element_validity(kind, xyz)?;
+        self.add_check(label, &element_validity(kind, xyz)?);
+        Ok(())
+    }
+
+    fn add_check(&mut self, label: u32, check: &JacobianCheck) {
         let r = &mut self.0;
         r.checked += 1;
         r.volume += check.volume;
@@ -227,8 +231,21 @@ impl Gate {
             Validity::Invalid => r.invalid.push(label),
             Validity::Undetermined => r.undetermined.push(label),
         }
-        Ok(())
     }
+}
+
+/// [`validity_gate_elements`] over certified checks already made, for a mesher that measured its
+/// elements with [`super::element_quality`] (which certifies them too) and should not certify
+/// them twice: `(label, check)` per solid element.
+pub fn validity_gate_checks<'a, I>(checks: I, options: &GateOptions) -> Result<GateReport>
+where
+    I: IntoIterator<Item = (u32, &'a JacobianCheck)>,
+{
+    let mut gate = Gate::new(options)?;
+    for (label, check) in checks {
+        gate.add_check(label, check);
+    }
+    Ok(gate.0)
 }
 
 /// The validity gate every mesher runs on its output before it reaches the model: each solid

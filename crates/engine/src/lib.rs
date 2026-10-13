@@ -375,6 +375,11 @@ mod tests {
             json!({"polygon": [["a", 0], [1, null], {}], "size": "big", "kind": 7}),
             json!({"polygon": [[0, 0], [1, 0], [0, 1]], "size": 1e300, "kind": "tri6", "max_elements": 1e300}),
             json!({"body": "Body1", "face": "", "tolerance": 0.05, "size": 1}),
+            // Structured hex meshing.
+            json!({"size": -1, "order": 9, "method": "x"}),
+            json!({"size": 1e-300}),
+            json!({"order": 2, "method": "mapped", "tolerance": 1e300}),
+            json!({"surface": 0, "size": 1e300, "order": 2}),
             // Model definitions.
             json!({"name": "x".repeat(100_000)}),
             json!({"name": "A\u{0}"}),
@@ -506,6 +511,10 @@ mod tests {
             json!({"body": "Body1", "tolerance": 0.5, "weld_distance": 0.05}),
             json!({"body": "Body1", "tolerance": 0.5, "feature_angle": 1e-300}),
             json!({"body": "Body1", "tolerance": 0.5, "feature_angle": null}),
+            json!({"body": "Body1", "size": 1e-300}),
+            json!({"body": "Body1", "size": 1e300, "order": 2}),
+            json!({"body": "Body1", "size": 4, "method": "sweep", "order": 2}),
+            json!({"body": "Body1", "method": "revolve"}),
         ];
         for p in tess.iter().chain(&hostile) {
             for spec in commands() {
@@ -516,14 +525,14 @@ mod tests {
     }
 
     /// A design file in a fresh temporary directory (removed when the guard drops).
-    fn sample_design_file(plate: &Plate) -> (TempDir, String) {
+    pub(crate) fn sample_design_file(plate: &Plate) -> (TempDir, String) {
         let dir = TempDir::new();
         let path = dir.0.join("plate.solidcraft");
         std::fs::write(&path, plate_design(plate).unwrap()).unwrap();
         (dir, path.to_string_lossy().into_owned())
     }
 
-    struct TempDir(std::path::PathBuf);
+    pub(crate) struct TempDir(std::path::PathBuf);
     impl TempDir {
         fn new() -> Self {
             static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

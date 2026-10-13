@@ -185,6 +185,12 @@ impl Shape {
         .map_err(Error::from)
     }
 
+    /// A characteristic size: the diagonal of the bounding box of the body's B-rep vertices
+    /// (cached by the kernel; curved faces may bulge past it). For default tolerances and sizes.
+    pub fn size(&self) -> Result<f64> {
+        Ok(guard("size", || Ok(self.body.size()))?)
+    }
+
     pub fn measure(&self) -> Result<Measure> {
         let m = guard("measure", || solidcraft_kernel::measure(&self.body))?;
         Ok(Measure {

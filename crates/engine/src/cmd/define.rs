@@ -30,8 +30,8 @@ macro_rules! definition_commands {
             kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
                 let n = name(p)?;
-        s.model.$add(n, fields::<$ty>(p, $what)?)?;
-                Ok(json!({"name": n}))
+                s.model.$add(n, fields::<$ty>(p, $what)?)?;
+        Ok(json!({"name": n}))
             },
         };
         pub const $EDIT: CommandSpec = CommandSpec {
@@ -40,9 +40,9 @@ macro_rules! definition_commands {
             params: concat!($doc, " — replaces the existing definition of that name"),
             kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
-        let n = name(p)?;
+                let n = name(p)?;
                 s.model.$replace(n, fields::<$ty>(p, $what)?)?;
-                Ok(json!({"name": n}))
+        Ok(json!({"name": n}))
             },
         };
         pub const $DELETE: CommandSpec = CommandSpec {

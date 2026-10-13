@@ -109,6 +109,14 @@ pub(crate) fn labels(p: &Value, key: &str, max_len: usize) -> Result<Vec<u32>> {
         .ok_or_else(|| EngineError::Params(format!("`{key}` must be labels in 1..={MAX_LABEL}")))
 }
 
+/// A required path parameter.
+pub(crate) fn path_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
+    p.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty() && s.len() <= modelcraft_io::MAX_PATH_LEN && !s.contains('\0'))
+        .ok_or_else(|| EngineError::Params(format!("`{key}` must be a file path")))
+}
+
 /// An optional number parameter.
 pub(crate) fn optional_number(p: &Value, key: &str, default: f64) -> Result<f64> {
     match p.get(key) {

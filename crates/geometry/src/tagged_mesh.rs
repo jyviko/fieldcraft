@@ -347,8 +347,7 @@ fn surface(mut o: Object, k: usize, id: u32, xf: &Xf, unit: f64) -> Result<Tagge
 /// [`read_3mf`] of a file: a regular file of at most [`MAX_FILE_BYTES`] (SolidCraft's virtual
 /// file system, so the browser's in-memory files work too).
 pub fn read_3mf_file(path: &str) -> Result<Vec<TaggedSurface>> {
-    let bytes = solidcraft_io::vfs::read(path, MAX_FILE_BYTES).map_err(|e| Error::Invalid(format!("cannot read `{path}`: {e}")))?;
-    read_3mf(&bytes)
+    read_3mf(&crate::read_file(path, MAX_FILE_BYTES)?)
 }
 
 /// The surfaces of a 3MF package, one per build item, in millimetres.

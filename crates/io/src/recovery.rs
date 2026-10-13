@@ -63,6 +63,15 @@ fn file(dir: &Path, id: &str, ext: &str) -> PathBuf {
     dir.join(format!("{id}.{ext}"))
 }
 
+/// Whether a running app holds entry `id`'s lock.
+fn held(dir: &Path, id: &str) -> bool {
+    File::open(file(dir, id, "lock")).is_ok_and(|l| l.try_lock().is_err())
+}
+
+fn missing(id: &str) -> Error {
+    Error::Io(format!("no recovered model `{}`", id.chars().take(64).collect::<String>()))
+}
+
 /// Largest entry description read.
 const MAX_ENTRY_BYTES: u64 = 64 << 10;
 
@@ -90,12 +99,7 @@ pub fn orphans(dir: &Path) -> Vec<Entry> {
                 return None;
             }
             // Held by a running app: not an orphan.
-            if let Ok(l) = File::open(file(dir, &entry.id, "lock"))
-                && l.try_lock().is_err()
-            {
-                return None;
-            }
-            Some(entry)
+            (!held(dir, &entry.id)).then_some(entry)
         })
         .take(MAX_LISTED)
         .collect();
@@ -105,11 +109,10 @@ pub fn orphans(dir: &Path) -> Vec<Entry> {
 
 /// An entry's autosaved file bytes and its description.
 pub fn load(dir: &Path, id: &str) -> Result<(Vec<u8>, Entry)> {
-    let missing = || Error::Io(format!("no recovered model `{}`", id.chars().take(64).collect::<String>()));
     if !valid_id(id) {
-        return Err(missing());
+        return Err(missing(id));
     }
-    let entry = read_entry(&file(dir, id, "json")).filter(|e| e.id == id).ok_or_else(missing)?;
+    let entry = read_entry(&file(dir, id, "json")).filter(|e| e.id == id).ok_or_else(|| missing(id))?;
     let bytes = read_capped(&file(dir, id, EXTENSION), MAX_FILE_BYTES)?;
     Ok((bytes, entry))
 }
@@ -117,11 +120,9 @@ pub fn load(dir: &Path, id: &str) -> Result<(Vec<u8>, Entry)> {
 /// Delete an entry (unless a running app holds it).
 pub fn remove(dir: &Path, id: &str) -> Result<()> {
     if !valid_id(id) {
-        return Err(Error::Io(format!("no recovered model `{}`", id.chars().take(64).collect::<String>())));
+        return Err(missing(id));
     }
-    if let Ok(l) = File::open(file(dir, id, "lock"))
-        && l.try_lock().is_err()
-    {
+    if held(dir, id) {
         return Err(Error::Io(format!("recovered model `{id}` belongs to a running app")));
     }
     for ext in ["json", EXTENSION, "lock"] {
@@ -166,10 +167,6 @@ impl Slot {
 
     pub fn id(&self) -> &str {
         &self.id
-    }
-
-    pub fn dir(&self) -> &Path {
-        &self.dir
     }
 
     /// Whether the slot holds an autosave.

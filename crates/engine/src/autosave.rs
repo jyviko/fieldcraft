@@ -5,19 +5,13 @@
 //! the recovery folder ([`modelcraft_io::recovery`]); once nothing is unsaved the entry goes. After
 //! a crash the next launch lists the entry (`file.recovery.list`) and opens it (`file.recover`).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use modelcraft_io::recovery::Slot;
 
 use crate::{Result, Session};
 
-/// The recovery folder ([`modelcraft_io::recovery::default_dir`]); tests use a folder of their own.
-pub fn default_dir() -> Option<PathBuf> {
-    if cfg!(test) {
-        return Some(std::env::temp_dir().join(format!("modelcraft-test-recovery-{}", std::process::id())));
-    }
-    modelcraft_io::recovery::default_dir()
-}
+pub use modelcraft_io::recovery::default_dir;
 
 /// One app's autosaver.
 #[derive(Debug)]

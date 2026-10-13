@@ -199,12 +199,19 @@ struct Part {
     sha256: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct JournalLine {
     command: String,
     #[serde(default)]
     params: Value,
+}
+
+/// A journal entry as written (borrowed, so saving copies no parameters).
+#[derive(Serialize)]
+struct JournalLineRef<'a> {
+    command: &'a str,
+    params: &'a Value,
 }
 
 fn json_error(part: &str, e: serde_json::Error) -> Error {
@@ -216,8 +223,7 @@ fn journal_text(journal: &[JournalEntry]) -> Result<Vec<u8>> {
     let mut out = b"[".to_vec();
     for (i, (command, params)) in journal.iter().enumerate() {
         out.extend_from_slice(if i == 0 { b"\n  " } else { b",\n  " });
-        let line = serde_json::json!({"command": command, "params": params});
-        serde_json::to_writer(&mut out, &line).map_err(|e| json_error(JOURNAL, e))?;
+        serde_json::to_writer(&mut out, &JournalLineRef { command, params }).map_err(|e| json_error(JOURNAL, e))?;
     }
     out.extend_from_slice(if journal.is_empty() { b"]\n" } else { b"\n]\n" });
     Ok(out)
@@ -285,9 +291,6 @@ pub fn read(bytes: &[u8]) -> Result<ModelFile> {
     }
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Invalid(format!("not a ModelCraft file: {e}")))?;
     let names = [MANIFEST, MODEL, MESH, JOURNAL];
-    if zip.len() > 4 * names.len() {
-        return invalid(format!("not a ModelCraft file: {} parts", zip.len()));
-    }
     let mut seen = Vec::with_capacity(zip.len());
     for name in zip.file_names() {
         if !names.contains(&name) {
@@ -343,15 +346,14 @@ pub fn read(bytes: &[u8]) -> Result<ModelFile> {
 }
 
 fn read_journal(bytes: &[u8]) -> Result<Vec<JournalEntry>> {
-    let lines: Vec<Value> = serde_json::from_slice(bytes).map_err(|e| json_error(JOURNAL, e))?;
+    let lines: Vec<JournalLine> = serde_json::from_slice(bytes).map_err(|e| json_error(JOURNAL, e))?;
     if lines.len() > MAX_JOURNAL_ENTRIES {
         return Err(Error::Limit(format!("a journal holds at most {MAX_JOURNAL_ENTRIES} commands")));
     }
     lines
         .into_iter()
         .enumerate()
-        .map(|(i, v)| {
-            let line: JournalLine = serde_json::from_value(v).map_err(|e| Error::Invalid(format!("{JOURNAL}: entry {}: {e}", i + 1)))?;
+        .map(|(i, line)| {
             if line.command.is_empty() || line.command.len() > MAX_COMMAND_LEN || line.command.chars().any(char::is_control) {
                 return invalid(format!("{JOURNAL}: entry {}: not a command id", i + 1));
             }

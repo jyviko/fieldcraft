@@ -9,7 +9,7 @@
 use solidcraft_doc::{Document, Model, naming};
 use solidcraft_kernel::{KernelError, guard};
 
-use crate::{Error, Face, Result, Shape};
+use crate::{Face, Result, Shape};
 
 /// Largest design file opened (SolidCraft's own limit).
 pub const MAX_DESIGN_BYTES: usize = solidcraft_io::MAX_DESIGN_BYTES;
@@ -47,8 +47,7 @@ pub fn open_design(bytes: &[u8]) -> Result<Design> {
 
 /// Read a design file (a regular file of at most [`MAX_DESIGN_BYTES`]) and rebuild it.
 pub fn open_design_file(path: &str) -> Result<Design> {
-    let bytes = solidcraft_io::vfs::read(path, MAX_DESIGN_BYTES).map_err(|e| Error::Invalid(format!("cannot read `{path}`: {e}")))?;
-    open_design(&bytes)
+    open_design(&crate::read_file(path, MAX_DESIGN_BYTES)?)
 }
 
 /// Rebuild an in-memory document (the design half of [`open_design`]).

@@ -14,6 +14,7 @@ use modelcraft_geometry::{Design, MAX_DESIGN_BYTES, open_design};
 use modelcraft_io::{Geometry, ModelFile, SourceFile};
 use serde_json::{Value, json};
 
+use super::{path_param, req};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session, next_revision};
 
 pub const OPEN: CommandSpec = CommandSpec {
@@ -63,14 +64,6 @@ pub const RECOVERY_DISCARD: CommandSpec = CommandSpec {
     kind: CommandKind::Session,
     run: recovery_discard,
 };
-
-/// A required path parameter.
-fn path_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
-    p.get(key)
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty() && s.len() <= modelcraft_io::MAX_PATH_LEN && !s.contains('\0'))
-        .ok_or_else(|| EngineError::Params(format!("`{key}` must be a file path")))
-}
 
 /// `path` made absolute against the working folder (as given where there is none).
 pub(crate) fn absolute(path: &str) -> String {
@@ -156,9 +149,8 @@ impl Session {
             surfaces.extend(opened.into_iter().flatten().map(Arc::new));
             sources.meshes.push(source);
         }
-        let revision = next_revision();
         let session =
-            Session { model: file.model, design, surfaces, sources, journal: file.journal, revision, saved_revision: revision, ..Session::default() };
+            Session { model: file.model, design, surfaces, sources, journal: file.journal, revision: next_revision(), ..Session::default() };
         (session, warnings)
     }
 
@@ -182,15 +174,24 @@ fn summary(s: &Session, warnings: &[String]) -> Value {
     })
 }
 
-fn open(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = absolute(path_param(p, "path")?);
-    let bytes = modelcraft_io::fs::read_capped(Path::new(&path), modelcraft_io::MAX_FILE_BYTES)?;
-    let file = modelcraft_io::read(&bytes).map_err(|e| EngineError::Params(format!("{path}: {e}")))?;
-    drop(bytes);
-    let (mut opened, warnings) = Session::from_file(file, Path::new(&path).parent());
-    opened.mark_saved(path);
+/// Replace the session with a `.modelcraft` file's content; `path` is its own file (geometry
+/// paths are relative to its folder), `saved` whether that file holds this content.
+fn load(s: &mut Session, bytes: &[u8], path: Option<String>, saved: bool) -> Result<Value> {
+    let file = modelcraft_io::read(bytes)?;
+    let (mut opened, warnings) = Session::from_file(file, path.as_deref().and_then(|p| Path::new(p).parent()));
+    opened.path = path;
+    if saved {
+        opened.saved_revision = Some(opened.revision);
+    }
     s.replace_with(opened);
     Ok(summary(s, &warnings))
+}
+
+fn open(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = absolute(path_param(p, "path")?);
+    let max = usize::try_from(modelcraft_io::MAX_FILE_BYTES).unwrap_or(usize::MAX);
+    let bytes = modelcraft_geometry::read_file(&path, max)?;
+    load(s, &bytes, Some(path.clone()), true).map_err(|e| EngineError::Params(format!("{path}: {e}")))
 }
 
 /// Save to `path` (as given by the caller).
@@ -235,17 +236,9 @@ fn recovery_list(_: &mut Session, p: &Value) -> Result<Value> {
 
 fn recover(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = recovery_dir(p)?;
-    let id = p.get("id").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`id` must be an id from file.recovery.list".into()))?;
-    let (bytes, entry) = modelcraft_io::recovery::load(&dir, id)?;
-    let file = modelcraft_io::read(&bytes)?;
-    drop(bytes);
-    // Autosaves store geometry paths as they were in the session.
-    let (mut opened, warnings) = Session::from_file(file, entry.path.as_deref().and_then(|p| Path::new(p).parent()));
-    opened.path = entry.path;
-    // Recovered work is unsaved until it is saved.
-    opened.saved_revision = 0;
-    s.replace_with(opened);
-    Ok(summary(s, &warnings))
+    let (bytes, entry) = modelcraft_io::recovery::load(&dir, req::<&str>(p, "id")?)?;
+    // Recovered work is unsaved until it is saved. Autosaves keep geometry paths absolute.
+    load(s, &bytes, entry.path, false)
 }
 
 fn recovery_discard(_: &mut Session, p: &Value) -> Result<Value> {
@@ -257,7 +250,7 @@ fn recovery_discard(_: &mut Session, p: &Value) -> Result<Value> {
         }
         return Ok(json!({"discarded": ids}));
     }
-    let id = p.get("id").and_then(Value::as_str).ok_or_else(|| EngineError::Params("give `id` (from file.recovery.list) or `all`: true".into()))?;
+    let id = req::<&str>(p, "id")?;
     modelcraft_io::recovery::remove(&dir, id)?;
     Ok(json!({"discarded": [id]}))
 }

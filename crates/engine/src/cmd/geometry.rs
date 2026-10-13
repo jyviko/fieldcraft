@@ -40,11 +40,7 @@ pub const IMPORT_MESH: CommandSpec = CommandSpec {
 };
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = p
-        .get("path")
-        .and_then(Value::as_str)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| EngineError::Params("`path` must be the design file's path".into()))?;
+    let path = super::path_param(p, "path")?;
     let bytes = modelcraft_geometry::read_file(path, MAX_DESIGN_BYTES)?;
     let source = SourceFile::of(super::file::absolute(path), &bytes)?;
     let design = open_design(&bytes)?;
@@ -100,11 +96,7 @@ fn tessellate(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn import_mesh(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = p
-        .get("path")
-        .and_then(Value::as_str)
-        .filter(|x| !x.trim().is_empty() && x.len() < 4096)
-        .ok_or_else(|| EngineError::Params("`path` must name a .3mf file".into()))?;
+    let path = super::path_param(p, "path")?;
     if s.sources.meshes.len() >= modelcraft_io::MAX_MESH_SOURCES {
         return Err(EngineError::Params(format!("a model imports at most {} meshes", modelcraft_io::MAX_MESH_SOURCES)));
     }

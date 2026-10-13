@@ -70,7 +70,10 @@ fn write_steps(path: &Path, bytes: &[u8], backup: bool, stop: Step) -> std::io::
     if backup && path.is_file() {
         // Copy (not move) the old file, so the target exists at every moment.
         let bak_tmp = temp_beside(path, "bak");
-        let r = fs::read(path).and_then(|old| write_synced(&bak_tmp, &old)).and_then(|_| fs::rename(&bak_tmp, backup_path(path)));
+        let r = fs::copy(path, &bak_tmp)
+            .and_then(|_| OpenOptions::new().write(true).open(&bak_tmp))
+            .and_then(|f| f.sync_all())
+            .and_then(|_| fs::rename(&bak_tmp, backup_path(path)));
         if let Err(e) = r {
             let _ = fs::remove_file(&bak_tmp);
             let _ = fs::remove_file(&tmp);

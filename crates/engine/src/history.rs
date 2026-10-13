@@ -85,6 +85,24 @@ impl History {
         self.trim();
     }
 
+    fn pop_undo(&mut self) -> Option<UndoStep> {
+        let step = self.undo.pop_back()?;
+        self.bytes -= step.bytes;
+        Some(step)
+    }
+
+    fn pop_redo(&mut self) -> Option<RedoStep> {
+        let step = self.redo.pop()?;
+        self.bytes -= step.bytes;
+        Some(step)
+    }
+
+    fn push_redo(&mut self, step: RedoStep) {
+        self.bytes += step.bytes;
+        self.redo.push(step);
+        self.trim();
+    }
+
     fn clear_redo(&mut self) {
         self.bytes -= self.redo.iter().map(|r| r.bytes).sum::<usize>();
         self.redo.clear();
@@ -97,10 +115,12 @@ impl History {
                 self.bytes -= old.bytes;
             }
         }
-        while self.bytes > self.limit && !self.redo.is_empty() {
-            let far = self.redo.remove(0);
-            self.bytes -= far.bytes;
+        let mut cut = 0;
+        while self.bytes > self.limit && cut < self.redo.len() {
+            self.bytes -= self.redo.get(cut).map_or(0, |r| r.bytes);
+            cut += 1;
         }
+        self.redo.drain(..cut);
     }
 }
 
@@ -195,23 +215,19 @@ impl Session {
         if self.history.undo.is_empty() || self.journal.is_empty() {
             return Err(EngineError::Params("nothing to undo".into()));
         }
-        let (Some(step), Some(entry)) = (self.history.undo.pop_back(), self.journal.pop()) else {
+        let (Some(step), Some(entry)) = (self.history.pop_undo(), self.journal.pop()) else {
             return Err(EngineError::Params("nothing to undo".into()));
         };
-        self.history.bytes -= step.bytes;
         let after = self.restore(step.state);
         let bytes = self.kept_bytes(&after);
         let command = entry.0.clone();
-        self.history.bytes += bytes;
-        self.history.redo.push(RedoStep { state: after, entry, bytes });
-        self.history.trim();
+        self.history.push_redo(RedoStep { state: after, entry, bytes });
         Ok(self.history_report("undone", &command))
     }
 
     /// Redo the last undone command.
     pub fn redo(&mut self) -> Result<Value> {
-        let step = self.history.redo.pop().ok_or_else(|| EngineError::Params("nothing to redo".into()))?;
-        self.history.bytes -= step.bytes;
+        let step = self.history.pop_redo().ok_or_else(|| EngineError::Params("nothing to redo".into()))?;
         let before = self.restore(step.state);
         let bytes = self.kept_bytes(&before);
         let command = step.entry.0.clone();

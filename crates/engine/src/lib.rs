@@ -105,8 +105,9 @@ pub struct Session {
     /// Identifies the current state: it changes with every edit, undo and redo, and comes back
     /// when an undo returns to an earlier state.
     revision: u64,
-    /// The revision last saved to (or opened from) `path`.
-    saved_revision: u64,
+    /// The revision last saved to (or opened from) `path`; `None` when the content was never
+    /// saved, where only the empty start (revision 0) is clean.
+    saved_revision: Option<u64>,
 }
 
 impl Session {
@@ -114,7 +115,9 @@ impl Session {
     /// they were.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
-        let before = self.snapshot();
+        // Session commands (open, save, undo, redo) change the session only in their last step,
+        // after everything that can fail, so they need no copy of the model to restore.
+        let before = (spec.kind == CommandKind::Model).then(|| self.snapshot());
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
         let result = match outcome {
             Ok(r) => r,
@@ -124,16 +127,14 @@ impl Session {
                 Err(EngineError::Internal { command: id.to_string(), message })
             }
         };
-        match (&result, spec.kind) {
-            (Err(_), _) => {
+        if let Some(before) = before {
+            if result.is_err() {
                 self.restore(before);
-            }
-            (Ok(_), CommandKind::Model) if self.differs_from(&before) => {
+            } else if self.differs_from(&before) {
                 self.journal.push((id.to_string(), params.clone()));
                 self.revision = next_revision();
                 self.record_undo(before);
             }
-            (Ok(_), _) => {}
         }
         result
     }
@@ -157,13 +158,13 @@ impl Session {
     /// Whether the session has changes its file does not hold. Undoing back to the saved state
     /// makes it clean again.
     pub fn is_dirty(&self) -> bool {
-        self.revision != self.saved_revision
+        self.saved_revision.unwrap_or(0) != self.revision
     }
 
     /// The current state is what `path` now holds.
     pub(crate) fn mark_saved(&mut self, path: String) {
         self.path = Some(path);
-        self.saved_revision = self.revision;
+        self.saved_revision = Some(self.revision);
     }
 }
 

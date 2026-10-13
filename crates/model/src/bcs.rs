@@ -8,8 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::materials::context;
-use crate::{Error, Model, Result, finite, insert_new, replace_existing, require};
+use crate::{Error, Model, Result, context, finite, insert_new, not_in_use, remove_existing, replace_existing, require};
 
 /// A set of degrees of freedom (1–6), written as a sorted list such as `[1, 2, 3]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -17,8 +16,6 @@ use crate::{Error, Model, Result, finite, insert_new, replace_existing, require}
 pub struct Dofs(u8);
 
 impl Dofs {
-    pub const TRANSLATIONS: Dofs = Dofs(0b000_111);
-
     pub fn all() -> Dofs {
         Dofs(0b111_111)
     }
@@ -38,11 +35,6 @@ impl Dofs {
     /// The degrees of freedom in order.
     pub fn list(self) -> Vec<u8> {
         (1..=6).filter(|d| self.contains(*d)).collect()
-    }
-
-    /// Whether any rotation (4–6) is included.
-    pub fn has_rotations(self) -> bool {
-        self.0 & 0b111_000 != 0
     }
 }
 
@@ -209,13 +201,11 @@ impl Model {
         replace_existing(&mut self.boundary_conditions, "boundary condition", name, bc)
     }
 
-    /// Remove a boundary condition and its entries in the step table.
+    /// Remove a boundary condition that no step lists.
     pub fn remove_boundary_condition(&mut self, name: &str) -> Result<()> {
-        self.boundary_conditions.remove(name).ok_or_else(|| Error::NotFound(format!("boundary condition `{name}`")))?;
-        for s in &mut self.steps {
-            s.boundary_conditions.remove(name);
-        }
-        Ok(())
+        let users = self.steps.iter().filter(|s| s.boundary_conditions.contains(name)).map(|s| format!("step `{}`", s.name)).collect();
+        not_in_use("boundary condition", name, users)?;
+        remove_existing(&mut self.boundary_conditions, "boundary condition", name).map(|_| ())
     }
 }
 

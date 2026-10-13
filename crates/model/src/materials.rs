@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Model, Result, insert_new, not_in_use, positive, replace_existing};
+use crate::{Error, Model, Result, context, insert_new, not_in_use, positive, remove_existing, replace_existing};
+
+/// Names of the engineering constants' shear moduli, in order.
+pub(crate) const SHEAR_MODULI: [&str; 3] = ["G12", "G13", "G23"];
 
 /// Linear elastic behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -31,8 +34,8 @@ impl Elastic {
                 for (i, e) in young.iter().enumerate() {
                     positive(&format!("E{}", i + 1), *e)?;
                 }
-                for (i, g) in shear.iter().enumerate() {
-                    positive(["G12", "G13", "G23"].get(i).copied().unwrap_or("G"), *g)?;
+                for (what, g) in SHEAR_MODULI.iter().zip(shear) {
+                    positive(what, g)?;
                 }
                 let [e1, e2, e3] = young;
                 let [n12, n13, n23] = poisson;
@@ -105,18 +108,7 @@ impl Model {
     pub fn remove_material(&mut self, name: &str) -> Result<()> {
         let users = self.sections.iter().filter(|(_, s)| s.material == name).map(|(n, _)| format!("section `{n}`")).collect();
         not_in_use("material", name, users)?;
-        self.materials.remove(name).map(|_| ()).ok_or_else(|| Error::NotFound(format!("material `{name}`")))
-    }
-}
-
-/// Prefix an error with the definition it is about.
-pub(crate) fn context(what: &str, name: &str, e: Error) -> Error {
-    let shown: String = name.chars().take(crate::MAX_NAME_LEN).collect();
-    match e {
-        Error::Invalid(m) => Error::Invalid(format!("{what} `{shown}`: {m}")),
-        Error::NotFound(m) => Error::NotFound(format!("{what} `{shown}`: {m}")),
-        Error::Limit(m) => Error::Limit(format!("{what} `{shown}`: {m}")),
-        Error::InUse(m) => Error::InUse(format!("{what} `{shown}`: {m}")),
+        remove_existing(&mut self.materials, "material", name).map(|_| ())
     }
 }
 

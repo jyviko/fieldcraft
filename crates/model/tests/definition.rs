@@ -87,7 +87,6 @@ fn a_complete_model_resolves_and_survives_a_remesh() {
     assert_eq!(r.sets["root"].nodes, vec![1, 2, 3, 4]);
     assert!(r.sets["root"].elements.is_empty(), "a face holds no solid elements");
     assert_eq!(r.sets["end"].nodes, vec![9, 10, 11, 12]);
-    assert_eq!(r.element_sections.values().collect::<Vec<_>>(), ["bar", "bar"]);
     assert_eq!(r.reference_point_nodes["RP"], 13);
     assert_eq!(r.target_nodes(&Target::ReferencePoint("RP".into())), vec![13]);
 
@@ -212,10 +211,11 @@ fn definitions_refer_only_to_existing_items_and_cannot_be_deleted_while_used() {
     assert!(e.contains("coupling `load-pad`") && e.contains("load `press`"), "{e}");
     assert!(m.remove_material("Steel").unwrap_err().to_string().contains("section `bar`"));
     assert!(m.remove_reference_point("RP").unwrap_err().to_string().contains("load `push`"));
+    assert!(m.remove_load("push").unwrap_err().to_string().contains("step `Bend`"));
+    m.set_load_active("Bend", "push", false).unwrap();
     m.remove_load("push").unwrap();
     m.remove_coupling("load-pad").unwrap();
     m.remove_reference_point("RP").unwrap();
-    assert!(!m.step("Bend").unwrap().loads.contains("push"));
 
     // Removing a tagged element drops its tags; a new element under the label starts untagged.
     m.remove_element(1).unwrap();
@@ -229,6 +229,20 @@ fn the_model_round_trips_through_json() {
     let back: Model = serde_json::from_str(&json).unwrap();
     assert_eq!(back, m);
     assert_eq!(serde_json::to_string(&back).unwrap(), json, "deterministic");
+    // Reading checks what commands check: a dangling reference, a bad tag, a typo.
+    let mut v = serde_json::to_value(&m).unwrap();
+    v["sections"]["bar"]["material"] = serde_json::json!("Nope");
+    assert!(serde_json::from_value::<Model>(v).unwrap_err().to_string().contains("material `Nope`"));
+    let mut v = serde_json::to_value(&m).unwrap();
+    v["classification"]["elements"]["1"]["faces"]["6"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<Model>(v).is_err(), "tag 0 is the body, not a face");
+    let mut v = serde_json::to_value(&m).unwrap();
+    v["materials"]["Steel"]["elastic"]["young"] = serde_json::json!(-1.0);
+    assert!(serde_json::from_value::<Model>(v).is_err());
+    let mut v = serde_json::to_value(&m).unwrap();
+    v["stepz"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<Model>(v).is_err());
+
     // A model file from before the definitions existed still reads.
     let old: Model = serde_json::from_value(serde_json::json!({"nodes": {}, "elements": {}})).unwrap();
     assert_eq!(old, Model::default());

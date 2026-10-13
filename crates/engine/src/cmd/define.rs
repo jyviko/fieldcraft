@@ -5,18 +5,12 @@
 //! file stores), plus its `name`. `create` fails when the name is taken, `edit` replaces an
 //! existing definition, `delete` refuses while another definition refers to it.
 
-use std::collections::BTreeSet;
-
-use modelcraft_model::{BoundaryCondition, Coupling, Load, Material, Model, OutputVariable, Procedure, ReferencePoint, Section, Set, Step};
+use modelcraft_model::{BoundaryCondition, Coupling, Load, Material, Model, ReferencePoint, Section, Set, Step};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use super::{name, opt, req};
 use crate::{CommandSpec, EngineError, Result, Session};
-
-/// The `name` parameter.
-fn name(p: &Value) -> Result<&str> {
-    p.get("name").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`name` must be the definition's name".into()))
-}
 
 /// The parameters other than `name`, read as a definition's JSON form.
 fn fields<T: DeserializeOwned>(p: &Value, what: &str) -> Result<T> {
@@ -159,30 +153,6 @@ definition_commands!(
     LOAD_DELETE
 );
 
-/// An optional list of names.
-fn names(p: &Value, key: &str) -> Result<Option<BTreeSet<String>>> {
-    match p.get(key) {
-        None => Ok(None),
-        Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|_| EngineError::Params(format!("`{key}` must be a list of names"))),
-    }
-}
-
-fn procedure(p: &Value) -> Result<Procedure> {
-    let v = p
-        .get("procedure")
-        .ok_or_else(|| EngineError::Params("`procedure` must be {\"type\": \"static\"} or {\"type\": \"frequency\", \"modes\": 10}".into()))?;
-    serde_json::from_value(v.clone()).map_err(|e| EngineError::Params(format!("procedure: {e}")))
-}
-
-fn output(p: &Value) -> Result<Option<BTreeSet<OutputVariable>>> {
-    match p.get("output") {
-        None => Ok(None),
-        Some(v) => serde_json::from_value(v.clone())
-            .map(Some)
-            .map_err(|_| EngineError::Params("`output` must be a list of displacement, reaction_force, stress, strain".into())),
-    }
-}
-
 pub const STEP_CREATE: CommandSpec = CommandSpec {
     id: "model.step.create",
     label: "New Step",
@@ -215,34 +185,29 @@ pub const ACTIVITY: CommandSpec = CommandSpec { id: "model.activity", label: "St
 
 fn step_create(s: &mut Session, p: &Value) -> Result<Value> {
     let n = name(p)?;
-    let procedure = procedure(p)?;
-    let mut step = Step::new(n, procedure);
-    if let Some(o) = output(p)? {
+    let mut step = Step::new(n, req(p, "procedure")?);
+    if let Some(o) = opt(p, "output")? {
         step.output = o;
     }
-    step.boundary_conditions = names(p, "boundary_conditions")?.unwrap_or_default();
-    step.loads = names(p, "loads")?.unwrap_or_default();
-    let before = match p.get("before") {
-        None => None,
-        Some(v) => Some(v.as_str().ok_or_else(|| EngineError::Params("`before` must be a step name".into()))?),
-    };
-    s.model.add_step(step, before)?;
+    step.boundary_conditions = opt(p, "boundary_conditions")?.unwrap_or_default();
+    step.loads = opt(p, "loads")?.unwrap_or_default();
+    s.model.add_step(step, opt(p, "before")?)?;
     Ok(json!({"name": n}))
 }
 
 fn step_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let n = name(p)?;
     let mut step = s.model.step(n).cloned().ok_or_else(|| EngineError::Params(format!("no step `{n}`")))?;
-    if p.get("procedure").is_some() {
-        step.procedure = procedure(p)?;
+    if let Some(procedure) = opt(p, "procedure")? {
+        step.procedure = procedure;
     }
-    if let Some(o) = output(p)? {
+    if let Some(o) = opt(p, "output")? {
         step.output = o;
     }
-    if let Some(b) = names(p, "boundary_conditions")? {
+    if let Some(b) = opt(p, "boundary_conditions")? {
         step.boundary_conditions = b;
     }
-    if let Some(l) = names(p, "loads")? {
+    if let Some(l) = opt(p, "loads")? {
         step.loads = l;
     }
     s.model.replace_step(step)?;
@@ -250,13 +215,10 @@ fn step_edit(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn step_activate(s: &mut Session, p: &Value) -> Result<Value> {
-    let step = p.get("step").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`step` must be a step name".into()))?;
-    let active = match p.get("active") {
-        None => true,
-        Some(v) => v.as_bool().ok_or_else(|| EngineError::Params("`active` must be true or false".into()))?,
-    };
-    let bcs = names(p, "boundary_conditions")?.unwrap_or_default();
-    let loads = names(p, "loads")?.unwrap_or_default();
+    let step: &str = req(p, "step")?;
+    let active = opt(p, "active")?.unwrap_or(true);
+    let bcs: Vec<&str> = opt(p, "boundary_conditions")?.unwrap_or_default();
+    let loads: Vec<&str> = opt(p, "loads")?.unwrap_or_default();
     if bcs.is_empty() && loads.is_empty() {
         return Err(EngineError::Params("list `boundary_conditions` or `loads` to switch".into()));
     }
@@ -388,9 +350,10 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(s.model.steps().iter().map(|st| st.name.as_str()).collect::<Vec<_>>(), ["Pre", "Bend", "Modes"]);
 
-        // Deleting a load clears it from every step.
+        // A load listed by a step is not deleted until no step lists it.
+        assert!(s.execute("model.load.delete", &json!({"name": "press"})).unwrap_err().to_string().contains("step `Pre`"));
+        s.execute("model.step.activate", &json!({"step": "Pre", "loads": ["press"], "active": false})).unwrap();
         s.execute("model.load.delete", &json!({"name": "press"})).unwrap();
-        assert!(s.model.step("Pre").unwrap().loads.is_empty());
         s.execute("model.coupling.delete", &json!({"name": "pad"})).unwrap();
         s.execute("model.set.delete", &json!({"name": "end"})).unwrap();
         s.execute("model.step.delete", &json!({"name": "Pre"})).unwrap();

@@ -5,8 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::bcs::Target;
-use crate::materials::context;
-use crate::{Error, Model, Result, finite, insert_new, replace_existing, require};
+use crate::{Error, Model, Result, context, finite, insert_new, not_in_use, remove_existing, replace_existing, require};
 
 /// A load.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -110,12 +109,10 @@ impl Model {
         replace_existing(&mut self.loads, "load", name, load)
     }
 
-    /// Remove a load and its entries in the step table.
+    /// Remove a load that no step lists.
     pub fn remove_load(&mut self, name: &str) -> Result<()> {
-        self.loads.remove(name).ok_or_else(|| Error::NotFound(format!("load `{name}`")))?;
-        for s in &mut self.steps {
-            s.loads.remove(name);
-        }
-        Ok(())
+        let users = self.steps.iter().filter(|s| s.loads.contains(name)).map(|s| format!("step `{}`", s.name)).collect();
+        not_in_use("load", name, users)?;
+        remove_existing(&mut self.loads, "load", name).map(|_| ())
     }
 }

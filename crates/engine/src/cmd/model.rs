@@ -1,6 +1,7 @@
 use modelcraft_model::{Severity, UnitSystem};
 use serde_json::{Value, json};
 
+use super::{listed, name};
 use crate::{CommandSpec, EngineError, Result, Session};
 
 pub const INFO: CommandSpec = CommandSpec { id: "model.info", label: "Model Info", params: "{}", run: info };
@@ -55,16 +56,7 @@ fn check(s: &mut Session, _: &Value) -> Result<Value> {
     }))
 }
 
-/// Entries listed in a report: the first ones, and how many there are.
-const LISTED: usize = 100;
-
 fn set_resolve(s: &mut Session, p: &Value) -> Result<Value> {
-    let name = p.get("name").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`name` must be a set name".into()))?;
-    let r = s.model.resolve_set(name)?;
-    let listed = |v: Value, count: usize| json!({"count": count, "labels": v});
-    Ok(json!({
-        "nodes": listed(json!(r.nodes.iter().take(LISTED).collect::<Vec<_>>()), r.nodes.len()),
-        "elements": listed(json!(r.elements.iter().take(LISTED).collect::<Vec<_>>()), r.elements.len()),
-        "faces": listed(json!(r.faces.iter().take(LISTED).collect::<Vec<_>>()), r.faces.len()),
-    }))
+    let r = s.model.resolve_set(name(p)?)?;
+    Ok(json!({"nodes": listed(&r.nodes), "elements": listed(&r.elements), "faces": listed(&r.faces)}))
 }

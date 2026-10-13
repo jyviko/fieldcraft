@@ -10,8 +10,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::materials::context;
-use crate::{Error, Model, Result, finite, insert_new, positive, replace_existing, require};
+use crate::{Error, Model, Result, context, finite, insert_new, positive, remove_existing, replace_existing, require};
 
 /// Most integration points through a shell's thickness.
 pub const MAX_SHELL_POINTS: u32 = 15;
@@ -261,7 +260,7 @@ impl Model {
     }
 
     pub fn remove_section(&mut self, name: &str) -> Result<()> {
-        self.sections.remove(name).map(|_| ()).ok_or_else(|| Error::NotFound(format!("section `{name}`")))
+        remove_existing(&mut self.sections, "section", name).map(|_| ())
     }
 }
 

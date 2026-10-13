@@ -4,7 +4,7 @@
 use modelcraft_model::{ElementFace, GeometryRef, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
-use super::labels;
+use super::{opt, req};
 use crate::{CommandSpec, EngineError, Result, Session};
 
 pub const TAG: CommandSpec = CommandSpec {
@@ -23,23 +23,18 @@ struct ElementEdge {
     edge: u8,
 }
 
-fn list<T: serde::de::DeserializeOwned>(p: &Value, key: &str) -> Result<Vec<T>> {
-    match p.get(key) {
-        None => Ok(Vec::new()),
-        Some(v) if v.as_array().is_some_and(|a| a.len() <= MAX_ELEMENTS) => {
-            serde_json::from_value(v.clone()).map_err(|e| EngineError::Params(format!("`{key}`: {e}")))
-        }
-        Some(_) => Err(EngineError::Params(format!("`{key}` must be a list of at most {MAX_ELEMENTS} entries"))),
+/// An optional list parameter of at most [`MAX_ELEMENTS`] entries.
+fn list<'a, T: serde::Deserialize<'a>>(p: &'a Value, key: &str) -> Result<Vec<T>> {
+    if p.get(key).and_then(Value::as_array).is_some_and(|a| a.len() > MAX_ELEMENTS) {
+        return Err(EngineError::Params(format!("`{key}` must be a list of at most {MAX_ELEMENTS} entries")));
     }
+    Ok(opt(p, key)?.unwrap_or_default())
 }
 
 fn tag(s: &mut Session, p: &Value) -> Result<Value> {
-    let geometry: GeometryRef = p
-        .get("geometry")
-        .ok_or_else(|| EngineError::Params("`geometry` must name a body, face, edge or vertex".into()))
-        .and_then(|g| serde_json::from_value(g.clone()).map_err(|e| EngineError::Params(format!("`geometry`: {e}"))))?;
-    let elements = if p.get("elements").is_some() { labels(p, "elements", MAX_ELEMENTS)? } else { Vec::new() };
-    let nodes = if p.get("nodes").is_some() { labels(p, "nodes", MAX_ELEMENTS)? } else { Vec::new() };
+    let geometry: GeometryRef = req(p, "geometry")?;
+    let elements: Vec<u32> = list(p, "elements")?;
+    let nodes: Vec<u32> = list(p, "nodes")?;
     let faces: Vec<ElementFace> = list(p, "faces")?;
     let edges: Vec<ElementEdge> = list(p, "edges")?;
     let count = elements.len() + nodes.len() + faces.len() + edges.len();

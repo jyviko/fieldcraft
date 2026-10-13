@@ -15,13 +15,15 @@
 //! - node labels: those nodes; element labels: those elements and their nodes; element faces:
 //!   those faces and their nodes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::check::ResolvedSet;
-use crate::materials::context;
-use crate::{ElementFace, Error, GeometryRef, MAX_ELEMENTS, MAX_NODES, Model, Result, insert_new, not_in_use, replace_existing};
+use crate::mesh::check_label;
+use crate::{
+    ElementFace, Error, GeometryRef, MAX_ELEMENTS, MAX_NODES, Model, Result, context, insert_new, not_in_use, remove_existing, replace_existing,
+};
 
 /// Most geometry references in one set.
 pub const MAX_SET_REFERENCES: usize = 100_000;
@@ -61,9 +63,11 @@ impl Set {
         if self.nodes.len() > MAX_NODES || self.elements.len() > MAX_ELEMENTS || self.faces.len() > MAX_ELEMENTS {
             return Err(Error::Limit("a set lists at most as many members as a model holds".into()));
         }
-        let bad_label = |l: &u32| *l == 0 || *l > crate::MAX_LABEL;
-        if let Some(l) = self.nodes.iter().chain(&self.elements).chain(self.faces.iter().map(|f| &f.element)).find(|l| bad_label(l)) {
-            return Err(Error::Invalid(format!("label {l} is outside 1..={}", crate::MAX_LABEL)));
+        for &l in &self.nodes {
+            check_label("node", l)?;
+        }
+        for &l in self.elements.iter().chain(self.faces.iter().map(|f| &f.element)) {
+            check_label("element", l)?;
         }
         if let Some(f) = self.faces.iter().find(|f| f.face == 0) {
             return Err(Error::Invalid(format!("element {} face 0: faces are numbered from 1", f.element)));
@@ -101,7 +105,7 @@ impl Model {
 
     pub fn remove_set(&mut self, name: &str) -> Result<()> {
         not_in_use("set", name, self.set_users(name))?;
-        self.sets.remove(name).map(|_| ()).ok_or_else(|| Error::NotFound(format!("set `{name}`")))
+        remove_existing(&mut self.sets, "set", name).map(|_| ())
     }
 
     /// The definitions that refer to a set, as `kind \`name\`` strings.
@@ -126,16 +130,19 @@ impl Model {
     /// Resolve a definition, and list the members that are not on the mesh.
     pub(crate) fn resolve_definition(&self, set: &Set) -> (ResolvedSet, Vec<String>) {
         let c = &self.classification;
-        let mut nodes = BTreeSet::new();
-        let mut elements = BTreeSet::new();
-        let mut faces = BTreeSet::new();
+        let mut nodes = Vec::new();
+        let mut elements = Vec::new();
+        let mut faces = Vec::new();
         let mut missing = Vec::new();
 
-        // Geometry: the selected tags of each dimension, then one pass over the tagged elements.
-        let mut regions = BTreeSet::new();
-        let mut face_tags = BTreeSet::new();
-        let mut edge_tags = BTreeSet::new();
-        let mut vertex_tags = BTreeSet::new();
+        // Geometry: mark the selected tags by role, then make one pass over the tagged elements.
+        let n = c.entities().len();
+        let (mut regions, mut face_tags, mut edge_tags, mut vertex_tags) = (vec![false; n], vec![false; n], vec![false; n], vec![false; n]);
+        let mark = |marks: &mut Vec<bool>, tag: u32| {
+            if let Some(m) = marks.get_mut(tag as usize) {
+                *m = true;
+            }
+        };
         for r in &set.geometry {
             let tags = c.tags_selected_by(r);
             if tags.is_empty() {
@@ -146,57 +153,56 @@ impl Model {
                 });
                 continue;
             }
-            match r.entity.dimension() {
-                3 => {
-                    regions.extend(tags);
-                    // A body's skin: every tagged face of the body.
-                    face_tags.extend(
-                        c.entities()
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, e)| e.body == r.body && e.entity.dimension() == 2)
-                            .filter_map(|(i, _)| u32::try_from(i).ok()),
-                    );
+            for &t in &tags {
+                match r.entity.dimension() {
+                    0 => mark(&mut vertex_tags, t),
+                    1 => {
+                        mark(&mut regions, t);
+                        mark(&mut edge_tags, t);
+                    }
+                    2 => {
+                        mark(&mut regions, t);
+                        mark(&mut face_tags, t);
+                    }
+                    _ => mark(&mut regions, t),
                 }
-                2 => {
-                    regions.extend(&tags);
-                    face_tags.extend(tags);
-                }
-                1 => {
-                    regions.extend(&tags);
-                    edge_tags.extend(tags);
-                }
-                _ => vertex_tags.extend(tags),
             }
-        }
-        if !(regions.is_empty() && face_tags.is_empty() && edge_tags.is_empty()) {
-            for (&label, tags) in c.elements() {
-                let Some(element) = self.elements.get(&label) else { continue };
-                if tags.region.is_some_and(|t| regions.contains(&t)) {
-                    elements.insert(label);
-                    nodes.extend(&element.nodes);
-                }
-                for (&face, t) in &tags.faces {
-                    if face_tags.contains(t) {
-                        faces.insert(ElementFace { element: label, face });
+            if r.entity.dimension() == 3 {
+                // A body's skin: every tagged face of the body.
+                for (i, e) in c.entities().iter().enumerate() {
+                    if e.body == r.body && e.entity.dimension() == 2 {
+                        mark(&mut face_tags, u32::try_from(i).unwrap_or(u32::MAX));
                     }
                 }
-                for (&edge, t) in &tags.edges {
-                    if edge_tags.contains(t) {
+            }
+        }
+        let on = |marks: &[bool], tag: u32| marks.get(tag as usize).copied().unwrap_or(false);
+        if !set.geometry.is_empty() {
+            for (&label, tags) in c.elements() {
+                let Some(element) = self.elements.get(&label) else { continue };
+                if tags.region.is_some_and(|t| on(&regions, t)) {
+                    elements.push(label);
+                    nodes.extend_from_slice(&element.nodes);
+                }
+                for (&face, &t) in &tags.faces {
+                    if on(&face_tags, t) {
+                        faces.push(ElementFace { element: label, face });
+                    }
+                }
+                for (&edge, &t) in &tags.edges {
+                    if on(&edge_tags, t) {
                         let local = usize::from(edge).checked_sub(1).and_then(|i| element.kind.edges().get(i)).copied().unwrap_or_default();
                         nodes.extend(local.iter().filter_map(|&i| element.nodes.get(i)));
                     }
                 }
             }
-        }
-        if !vertex_tags.is_empty() {
-            nodes.extend(c.nodes().iter().filter(|(_, t)| vertex_tags.contains(t)).map(|(n, _)| n));
+            nodes.extend(c.nodes().iter().filter(|(_, t)| on(&vertex_tags, **t)).map(|(n, _)| n));
         }
 
         // Explicit labels.
         for &n in &set.nodes {
             if self.nodes.contains_key(&n) {
-                nodes.insert(n);
+                nodes.push(n);
             } else {
                 missing.push(format!("node {n} is not in the mesh"));
             }
@@ -204,31 +210,38 @@ impl Model {
         for &l in &set.elements {
             match self.elements.get(&l) {
                 Some(e) => {
-                    elements.insert(l);
-                    nodes.extend(&e.nodes);
+                    elements.push(l);
+                    nodes.extend_from_slice(&e.nodes);
                 }
                 None => missing.push(format!("element {l} is not in the mesh")),
             }
         }
         for &f in &set.faces {
             match self.elements.get(&f.element) {
-                Some(_) if self.face_nodes(f).is_some() => {
-                    faces.insert(f);
-                }
+                Some(e) if usize::from(f.face) <= e.kind.faces().len() => faces.push(f),
                 Some(e) => missing.push(format!("element {} ({}) has no face {}", f.element, e.kind.name(), f.face)),
                 None => missing.push(format!("element {} is not in the mesh", f.element)),
             }
         }
+        elements.sort_unstable();
+        elements.dedup();
+        faces.sort_unstable();
+        faces.dedup();
         for f in &faces {
-            nodes.extend(self.face_nodes(*f).unwrap_or_default());
+            if let Some(e) = self.elements.get(&f.element) {
+                let local = usize::from(f.face).checked_sub(1).and_then(|i| e.kind.faces().get(i)).copied().unwrap_or_default();
+                nodes.extend(local.iter().filter_map(|&i| e.nodes.get(i)));
+            }
         }
+        nodes.sort_unstable();
+        nodes.dedup();
         // Long lists of missing labels are summarised.
         if missing.len() > 20 {
             let more = missing.len() - 20;
             missing.truncate(20);
             missing.push(format!("and {more} more"));
         }
-        (ResolvedSet { nodes: nodes.into_iter().collect(), elements: elements.into_iter().collect(), faces: faces.into_iter().collect() }, missing)
+        (ResolvedSet { nodes, elements, faces }, missing)
     }
 
     /// The node labels of an element face, in the face's order ([`crate::ElementKind::faces`]).

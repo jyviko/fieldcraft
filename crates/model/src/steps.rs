@@ -10,8 +10,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::materials::context;
-use crate::{Error, Model, Result, check_name, finite, require};
+use crate::{Error, Model, Result, check_name, context, finite, require};
 
 /// Most steps in a model.
 pub const MAX_STEPS: usize = 1000;
@@ -88,19 +87,6 @@ pub enum OutputVariable {
 impl OutputVariable {
     pub const ALL: [OutputVariable; 4] =
         [OutputVariable::Displacement, OutputVariable::ReactionForce, OutputVariable::Stress, OutputVariable::Strain];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            OutputVariable::Displacement => "displacement",
-            OutputVariable::ReactionForce => "reaction_force",
-            OutputVariable::Stress => "stress",
-            OutputVariable::Strain => "strain",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<OutputVariable> {
-        OutputVariable::ALL.into_iter().find(|v| v.name() == name)
-    }
 }
 
 /// An analysis step.
@@ -139,6 +125,10 @@ impl Model {
         self.steps.iter().position(|s| s.name == name).ok_or_else(|| Error::NotFound(format!("step `{name}`")))
     }
 
+    fn step_mut(&mut self, name: &str) -> Result<&mut Step> {
+        self.steps.iter_mut().find(|s| s.name == name).ok_or_else(|| Error::NotFound(format!("step `{name}`")))
+    }
+
     fn check_step(&self, step: &Step) -> Result<()> {
         step.procedure.validate().map_err(|e| context("step", &step.name, e))?;
         for b in &step.boundary_conditions {
@@ -170,11 +160,9 @@ impl Model {
 
     /// Replace a step's definition (procedure, output and table entries), keeping its place.
     pub fn replace_step(&mut self, step: Step) -> Result<()> {
-        let i = self.step_index(&step.name)?;
         self.check_step(&step)?;
-        if let Some(slot) = self.steps.get_mut(i) {
-            *slot = step;
-        }
+        let name = step.name.clone();
+        *self.step_mut(&name)? = step;
         Ok(())
     }
 
@@ -187,29 +175,23 @@ impl Model {
     /// Make a boundary condition active or inactive in a step.
     pub fn set_boundary_condition_active(&mut self, step: &str, name: &str, active: bool) -> Result<()> {
         require(&self.boundary_conditions, "boundary condition", name)?;
-        let i = self.step_index(step)?;
-        if let Some(s) = self.steps.get_mut(i) {
-            if active {
-                s.boundary_conditions.insert(name.to_string());
-            } else {
-                s.boundary_conditions.remove(name);
-            }
-        }
+        switch(&mut self.step_mut(step)?.boundary_conditions, name, active);
         Ok(())
     }
 
     /// Make a load active or inactive in a step.
     pub fn set_load_active(&mut self, step: &str, name: &str, active: bool) -> Result<()> {
         require(&self.loads, "load", name)?;
-        let i = self.step_index(step)?;
-        if let Some(s) = self.steps.get_mut(i) {
-            if active {
-                s.loads.insert(name.to_string());
-            } else {
-                s.loads.remove(name);
-            }
-        }
+        switch(&mut self.step_mut(step)?.loads, name, active);
         Ok(())
+    }
+}
+
+fn switch(active: &mut BTreeSet<String>, name: &str, on: bool) {
+    if on {
+        active.insert(name.to_string());
+    } else {
+        active.remove(name);
     }
 }
 
@@ -238,10 +220,12 @@ mod tests {
         assert!(m.set_boundary_condition_active("Load", "nope", true).is_err());
         assert!(m.set_load_active("Load", "fix", true).is_err(), "loads and boundary conditions are separate");
 
-        // Deleting a boundary condition clears its row; a referenced set cannot be deleted.
+        // Nothing still referred to can be deleted: the set by the boundary condition, the
+        // boundary condition by the step that lists it.
         assert!(matches!(m.remove_set("base"), Err(Error::InUse(_))));
+        assert!(m.remove_boundary_condition("fix").unwrap_err().to_string().contains("step `Load`"));
+        m.set_boundary_condition_active("Load", "fix", false).unwrap();
         m.remove_boundary_condition("fix").unwrap();
-        assert!(m.step("Load").unwrap().boundary_conditions.is_empty());
         m.remove_set("base").unwrap();
         m.remove_step("Modes").unwrap();
         assert_eq!(m.steps().len(), 1);

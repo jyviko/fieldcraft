@@ -182,12 +182,30 @@ pub struct ElementTags {
 }
 
 /// Where the mesh lies on the geometry. Tags are indices into [`Classification::entities`].
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+///
+/// It is read back from a file through [`Model`]'s deserializer, which replays every tag through
+/// the checked `tag_*` methods.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Classification {
     entities: Vec<GeometryRef>,
+    /// Entity → tag, so interning is a lookup.
+    #[serde(skip)]
+    index: BTreeMap<GeometryRef, u32>,
     elements: BTreeMap<u32, ElementTags>,
     /// Node → the geometry vertex it lies on.
     nodes: BTreeMap<u32, u32>,
+}
+
+/// A [`Classification`] as stored, before its tags are checked against the mesh.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ClassificationData {
+    #[serde(default)]
+    pub entities: Vec<GeometryRef>,
+    #[serde(default)]
+    pub elements: BTreeMap<u32, ElementTags>,
+    #[serde(default)]
+    pub nodes: BTreeMap<u32, u32>,
 }
 
 impl Classification {
@@ -235,57 +253,61 @@ impl Model {
     /// then tag mesh entities with the number.
     pub fn geometry_tag(&mut self, entity: &GeometryRef) -> Result<u32> {
         let c = &mut self.classification;
-        if let Some(i) = c.entities.iter().position(|e| e == entity) {
-            return u32::try_from(i).map_err(|_| Error::Limit("too many geometry entities".into()));
+        if let Some(&tag) = c.index.get(entity) {
+            return Ok(tag);
         }
         if c.entities.len() >= MAX_ENTITIES {
             return Err(Error::Limit(format!("a mesh is tagged with at most {MAX_ENTITIES} geometry entities")));
         }
         let tag = u32::try_from(c.entities.len()).map_err(|_| Error::Limit("too many geometry entities".into()))?;
         c.entities.push(entity.clone());
+        c.index.insert(entity.clone(), tag);
         Ok(tag)
     }
 
-    fn tagged_entity(&self, tag: u32, dimension: u8) -> Result<&GeometryRef> {
+    /// Check a tag names an entity of the given dimension.
+    fn check_tag(&self, tag: u32, dimension: u8) -> Result<()> {
         let e = self.classification.entity(tag).ok_or_else(|| Error::NotFound(format!("geometry tag {tag}")))?;
         if e.entity.dimension() != dimension {
-            let want = match dimension {
-                0 => "vertex",
-                1 => "edge",
-                2 => "face",
-                _ => "body",
-            };
-            return Err(Error::Invalid(format!("{e} is a {}, not a {want}", e.entity.kind())));
+            return Err(Error::Invalid(format!("{e} is a {}, not a {}-dimensional entity", e.entity.kind(), dimension)));
         }
-        Ok(e)
+        Ok(())
+    }
+
+    fn element_kind(&self, element: u32) -> Result<crate::ElementKind> {
+        Ok(self.element(element).ok_or_else(|| Error::NotFound(format!("element {element}")))?.kind)
+    }
+
+    /// Check that `number` (1-based) is one of `parts` of an element, naming `what` in the error.
+    fn check_part(element: u32, kind: crate::ElementKind, what: &str, number: u8, parts: usize) -> Result<()> {
+        if number == 0 || usize::from(number) > parts {
+            return Err(Error::Invalid(format!("element {element} ({}) has no {what} {number}", kind.name())));
+        }
+        Ok(())
     }
 
     /// Record that an element fills a body (solids), a face (shells) or an edge (line elements).
     pub fn tag_element(&mut self, element: u32, tag: u32) -> Result<()> {
-        let kind = self.element(element).ok_or_else(|| Error::NotFound(format!("element {element}")))?.kind;
-        self.tagged_entity(tag, kind.dimension())?;
+        let kind = self.element_kind(element)?;
+        self.check_tag(tag, kind.dimension())?;
         self.classification.elements.entry(element).or_default().region = Some(tag);
         Ok(())
     }
 
     /// Record that face `face` (1-based) of an element lies on a geometry face.
     pub fn tag_element_face(&mut self, element: u32, face: u8, tag: u32) -> Result<()> {
-        let kind = self.element(element).ok_or_else(|| Error::NotFound(format!("element {element}")))?.kind;
-        if face == 0 || usize::from(face) > kind.faces().len() {
-            return Err(Error::Invalid(format!("element {element} ({}) has no face {face}", kind.name())));
-        }
-        self.tagged_entity(tag, 2)?;
+        let kind = self.element_kind(element)?;
+        Self::check_part(element, kind, "face", face, kind.faces().len())?;
+        self.check_tag(tag, 2)?;
         self.classification.elements.entry(element).or_default().faces.insert(face, tag);
         Ok(())
     }
 
     /// Record that edge `edge` (1-based) of an element lies on a geometry edge.
     pub fn tag_element_edge(&mut self, element: u32, edge: u8, tag: u32) -> Result<()> {
-        let kind = self.element(element).ok_or_else(|| Error::NotFound(format!("element {element}")))?.kind;
-        if edge == 0 || usize::from(edge) > kind.edges().len() {
-            return Err(Error::Invalid(format!("element {element} ({}) has no edge {edge}", kind.name())));
-        }
-        self.tagged_entity(tag, 1)?;
+        let kind = self.element_kind(element)?;
+        Self::check_part(element, kind, "edge", edge, kind.edges().len())?;
+        self.check_tag(tag, 1)?;
         self.classification.elements.entry(element).or_default().edges.insert(edge, tag);
         Ok(())
     }
@@ -295,7 +317,7 @@ impl Model {
         if self.node(node).is_none() {
             return Err(Error::NotFound(format!("node {node}")));
         }
-        self.tagged_entity(tag, 0)?;
+        self.check_tag(tag, 0)?;
         self.classification.nodes.insert(node, tag);
         Ok(())
     }

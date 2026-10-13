@@ -7,7 +7,8 @@ mod model;
 mod tags;
 
 use modelcraft_model::MAX_LABEL;
-use serde_json::Value;
+use serde::Deserialize;
+use serde_json::{Value, json};
 
 use crate::{CommandSpec, EngineError, Result};
 
@@ -104,4 +105,26 @@ pub(crate) fn optional_number(p: &Value, key: &str, default: f64) -> Result<f64>
         None => Ok(default),
         Some(v) => v.as_f64().ok_or_else(|| EngineError::Params(format!("`{key}` must be a number"))),
     }
+}
+
+/// The `name` parameter.
+pub(crate) fn name(p: &Value) -> Result<&str> {
+    p.get("name").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`name` must be a name".into()))
+}
+
+/// An optional parameter read as `T`'s JSON form; `None` when it is absent.
+pub(crate) fn opt<'a, T: Deserialize<'a>>(p: &'a Value, key: &str) -> Result<Option<T>> {
+    p.get(key).map(|v| T::deserialize(v).map_err(|e| EngineError::Params(format!("`{key}`: {e}")))).transpose()
+}
+
+/// A required parameter read as `T`'s JSON form.
+pub(crate) fn req<'a, T: Deserialize<'a>>(p: &'a Value, key: &str) -> Result<T> {
+    opt(p, key)?.ok_or_else(|| EngineError::Params(format!("`{key}` is required")))
+}
+
+/// Entries listed in a report: the first ones, and how many there are.
+pub(crate) const LISTED: usize = 100;
+
+pub(crate) fn listed<T: serde::Serialize>(v: &[T]) -> Value {
+    json!({"count": v.len(), "labels": v.get(..LISTED).unwrap_or(v)})
 }

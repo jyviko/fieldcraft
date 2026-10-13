@@ -9,8 +9,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::bcs::Dofs;
-use crate::materials::context;
-use crate::{Error, MAX_LABEL, Model, Result, check_coordinates, insert_new, not_in_use, replace_existing, require};
+use crate::{Error, MAX_LABEL, Model, Result, check_coordinates, context, insert_new, not_in_use, remove_existing, replace_existing, require};
 
 /// A reference point.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -72,7 +71,7 @@ impl Model {
         );
         users.extend(self.loads.iter().filter(|(_, l)| l.reference_point() == Some(name)).map(|(n, _)| format!("load `{n}`")));
         not_in_use("reference point", name, users)?;
-        self.reference_points.remove(name).map(|_| ()).ok_or_else(|| Error::NotFound(format!("reference point `{name}`")))
+        remove_existing(&mut self.reference_points, "reference point", name).map(|_| ())
     }
 
     /// The node label each reference point takes in a deck: after the largest mesh node label, in
@@ -118,6 +117,6 @@ impl Model {
     }
 
     pub fn remove_coupling(&mut self, name: &str) -> Result<()> {
-        self.couplings.remove(name).map(|_| ()).ok_or_else(|| Error::NotFound(format!("coupling `{name}`")))
+        remove_existing(&mut self.couplings, "coupling", name).map(|_| ())
     }
 }

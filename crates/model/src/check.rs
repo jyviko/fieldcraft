@@ -55,13 +55,12 @@ impl ResolvedSet {
 }
 
 /// The model resolved against its mesh: what writers and the solver read besides the
-/// definitions themselves.
+/// definitions themselves. When resolution succeeds, every element is in exactly one section's
+/// set (`sets[&section.set].elements`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Resolved {
     /// Every set, by name.
     pub sets: BTreeMap<String, ResolvedSet>,
-    /// The section of every element.
-    pub element_sections: BTreeMap<u32, String>,
     /// The node label of every reference point ([`Model::reference_point_nodes`]).
     pub reference_point_nodes: BTreeMap<String, u32>,
     /// The check's warnings (a resolved model has no errors).
@@ -70,10 +69,10 @@ pub struct Resolved {
 
 impl Resolved {
     /// The nodes a boundary condition, force or moment acts on.
-    pub fn target_nodes(&self, target: &Target) -> Vec<u32> {
+    pub fn target_nodes(&self, target: &Target) -> &[u32] {
         match target {
-            Target::Set(s) => self.sets.get(s).map(|r| r.nodes.clone()).unwrap_or_default(),
-            Target::ReferencePoint(r) => self.reference_point_nodes.get(r).map(|n| vec![*n]).unwrap_or_default(),
+            Target::Set(s) => self.sets.get(s).map(|r| r.nodes.as_slice()).unwrap_or_default(),
+            Target::ReferencePoint(r) => self.reference_point_nodes.get(r).map(std::slice::from_ref).unwrap_or_default(),
         }
     }
 }
@@ -100,6 +99,13 @@ impl Diagnostics {
     fn warning(&mut self, subject: impl Into<String>, message: impl Into<String>) {
         self.0.push(Diagnostic { severity: Severity::Warning, subject: subject.into(), message: message.into() });
     }
+
+    /// A warning when a magnitude check found one.
+    fn warning_if(&mut self, subject: &str, message: Option<String>) {
+        if let Some(m) = message {
+            self.warning(subject, m);
+        }
+    }
 }
 
 impl Model {
@@ -112,8 +118,7 @@ impl Model {
     /// Resolve the model for writing or solving. Fails with every error the check finds.
     pub fn resolve(&self) -> Result<Resolved> {
         let (mut resolved, diagnostics) = self.analyze();
-        let errors: Vec<String> =
-            diagnostics.iter().filter(|d| d.severity == Severity::Error).map(|d| format!("{}: {}", d.subject, d.message)).collect();
+        let errors: Vec<String> = diagnostics.iter().filter(|d| d.severity == Severity::Error).map(ToString::to_string).collect();
         if !errors.is_empty() {
             return Err(Error::Invalid(format!("the model is not ready for analysis: {}", errors.join("; "))));
         }
@@ -155,19 +160,19 @@ impl Model {
         for (name, m) in &self.materials {
             let subject = format!("material `{name}`");
             match m.elastic {
-                Some(Elastic::Isotropic { young, .. }) => d.0.extend(units.check_modulus("Young's modulus", young).map(|w| warn(&subject, w))),
+                Some(Elastic::Isotropic { young, .. }) => d.warning_if(&subject, units.check_modulus("Young's modulus", young)),
                 Some(Elastic::EngineeringConstants { young, shear, .. }) => {
                     for (i, e) in young.iter().enumerate() {
-                        d.0.extend(units.check_modulus(&format!("E{}", i + 1), *e).map(|w| warn(&subject, w)));
+                        d.warning_if(&subject, units.check_modulus(&format!("E{}", i + 1), *e));
                     }
-                    for (n, g) in ["G12", "G13", "G23"].iter().zip(shear) {
-                        d.0.extend(units.check_modulus(n, g).map(|w| warn(&subject, w)));
+                    for (n, g) in crate::materials::SHEAR_MODULI.iter().zip(shear) {
+                        d.warning_if(&subject, units.check_modulus(n, g));
                     }
                 }
                 None => {}
             }
             if let Some(rho) = m.density {
-                d.0.extend(units.check_density(rho).map(|w| warn(&subject, w)));
+                d.warning_if(&subject, units.check_density(rho));
             }
         }
 
@@ -229,7 +234,6 @@ impl Model {
         if !unsectioned.is_empty() {
             d.error("model", format!("elements {} have no section", first_labels(&unsectioned)));
         }
-        resolved.element_sections = owner.into_iter().map(|(e, s)| (e, s.to_string())).collect();
 
         // Mass: frequency steps and gravity need a density in every material in use.
         let needs_mass = self
@@ -258,11 +262,21 @@ impl Model {
             }
         }
 
-        // Nodes with rotational degrees of freedom: those of shells and beams, and reference points.
-        let rotational: BTreeSet<u32> = self.elements.values().filter(|e| e.kind.dimension() < 3).flat_map(|e| e.nodes.iter().copied()).collect();
+        // Nodes with rotational degrees of freedom: those of shells and beams, and reference points
+        // (worked out only when a boundary condition or load needs it).
+        let rotational = std::cell::OnceCell::new();
         let has_rotations = |t: &Target| match t {
             Target::ReferencePoint(_) => true,
-            Target::Set(s) => set_of(s).nodes.iter().any(|n| rotational.contains(n)),
+            Target::Set(s) => {
+                let rotational: &BTreeSet<u32> = rotational.get_or_init(|| {
+                    self.elements
+                        .values()
+                        .filter(|e| e.kind.dimension() == 2 || e.kind == crate::ElementKind::Beam2)
+                        .flat_map(|e| e.nodes.iter().copied())
+                        .collect()
+                });
+                set_of(s).nodes.iter().any(|n| rotational.contains(n))
+            }
         };
 
         // Boundary conditions.
@@ -295,7 +309,7 @@ impl Model {
                 Load::BodyForce { set, .. } if set_of(set).elements.is_empty() => d.error(&subject, format!("set `{set}` has no elements")),
                 Load::Gravity { acceleration, set } => {
                     let g = acceleration.iter().map(|c| c * c).sum::<f64>().sqrt();
-                    d.0.extend(units.check_gravity(g).map(|w| warn(&subject, w)));
+                    d.warning_if(&subject, units.check_gravity(g));
                     if let Some(s) = set
                         && set_of(s).elements.is_empty()
                     {
@@ -356,8 +370,4 @@ impl Model {
         let norm = |x: [f64; 3]| (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
         !(norm(c) > 1e-9 * norm(t) * norm(v))
     }
-}
-
-fn warn(subject: &str, message: String) -> Diagnostic {
-    Diagnostic { severity: Severity::Warning, subject: subject.to_string(), message }
 }

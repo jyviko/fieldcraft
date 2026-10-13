@@ -92,12 +92,37 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// The finite element model.
+///
+/// It deserializes by replaying what it reads through the same checked methods commands use, so
+/// a model read from a file holds the same invariants as one built by commands.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ModelData")]
 pub struct Model {
     nodes: BTreeMap<u32, Node>,
     elements: BTreeMap<u32, Element>,
-    #[serde(default)]
     classification: Classification,
+    units: UnitSystem,
+    sets: BTreeMap<String, Set>,
+    materials: BTreeMap<String, Material>,
+    sections: BTreeMap<String, Section>,
+    reference_points: BTreeMap<String, ReferencePoint>,
+    couplings: BTreeMap<String, Coupling>,
+    boundary_conditions: BTreeMap<String, BoundaryCondition>,
+    loads: BTreeMap<String, Load>,
+    /// In analysis order.
+    steps: Vec<Step>,
+}
+
+/// A [`Model`] as stored, before it is checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelData {
+    #[serde(default)]
+    nodes: BTreeMap<u32, Node>,
+    #[serde(default)]
+    elements: BTreeMap<u32, Element>,
+    #[serde(default)]
+    classification: geometry::ClassificationData,
     #[serde(default)]
     units: UnitSystem,
     #[serde(default)]
@@ -114,9 +139,66 @@ pub struct Model {
     boundary_conditions: BTreeMap<String, BoundaryCondition>,
     #[serde(default)]
     loads: BTreeMap<String, Load>,
-    /// In analysis order.
     #[serde(default)]
     steps: Vec<Step>,
+}
+
+impl TryFrom<ModelData> for Model {
+    type Error = Error;
+
+    fn try_from(d: ModelData) -> Result<Model> {
+        let mut m = Model { units: d.units, ..Model::default() };
+        for (label, node) in d.nodes {
+            m.set_node(label, node.xyz)?;
+        }
+        for (label, e) in d.elements {
+            m.set_element(label, e.kind, e.nodes)?;
+        }
+        for (i, entity) in d.classification.entities.iter().enumerate() {
+            if usize::try_from(m.geometry_tag(entity)?).ok() != Some(i) {
+                return Err(Error::Invalid(format!("{entity} is listed twice among the geometry tags")));
+            }
+        }
+        for (element, tags) in d.classification.elements {
+            if let Some(t) = tags.region {
+                m.tag_element(element, t)?;
+            }
+            for (face, t) in tags.faces {
+                m.tag_element_face(element, face, t)?;
+            }
+            for (edge, t) in tags.edges {
+                m.tag_element_edge(element, edge, t)?;
+            }
+        }
+        for (node, t) in d.classification.nodes {
+            m.tag_node(node, t)?;
+        }
+        for (n, v) in d.sets {
+            m.add_set(&n, v)?;
+        }
+        for (n, v) in d.materials {
+            m.add_material(&n, v)?;
+        }
+        for (n, v) in d.sections {
+            m.add_section(&n, v)?;
+        }
+        for (n, v) in d.reference_points {
+            m.add_reference_point(&n, v)?;
+        }
+        for (n, v) in d.couplings {
+            m.add_coupling(&n, v)?;
+        }
+        for (n, v) in d.boundary_conditions {
+            m.add_boundary_condition(&n, v)?;
+        }
+        for (n, v) in d.loads {
+            m.add_load(&n, v)?;
+        }
+        for s in d.steps {
+            m.add_step(s, None)?;
+        }
+        Ok(m)
+    }
 }
 
 /// Check a definition's name: 1..=[`MAX_NAME_LEN`] ASCII characters, a letter first, then
@@ -162,6 +244,22 @@ fn replace_existing<T>(map: &mut BTreeMap<String, T>, what: &str, name: &str, va
     let slot = map.get_mut(name).ok_or_else(|| Error::NotFound(format!("{what} `{name}`")))?;
     *slot = value;
     Ok(())
+}
+
+/// Prefix an error with the definition it is about.
+pub(crate) fn context(what: &str, name: &str, e: Error) -> Error {
+    let shown: String = name.chars().take(MAX_NAME_LEN).collect();
+    match e {
+        Error::Invalid(m) => Error::Invalid(format!("{what} `{shown}`: {m}")),
+        Error::NotFound(m) => Error::NotFound(format!("{what} `{shown}`: {m}")),
+        Error::Limit(m) => Error::Limit(format!("{what} `{shown}`: {m}")),
+        Error::InUse(m) => Error::InUse(format!("{what} `{shown}`: {m}")),
+    }
+}
+
+/// Remove an existing definition.
+fn remove_existing<T>(map: &mut BTreeMap<String, T>, what: &str, name: &str) -> Result<T> {
+    map.remove(name).ok_or_else(|| Error::NotFound(format!("{what} `{name}`")))
 }
 
 /// Fail with [`Error::InUse`] when any referrer is listed.

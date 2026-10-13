@@ -195,7 +195,7 @@ pub fn check_coordinates(xyz: &[f64]) -> Result<()> {
     }
 }
 
-fn check_label(what: &str, label: u32) -> Result<()> {
+pub(crate) fn check_label(what: &str, label: u32) -> Result<()> {
     if label == 0 || label > MAX_LABEL {
         return Err(Error::Invalid(format!("{what} label {label} is outside 1..={MAX_LABEL}")));
     }

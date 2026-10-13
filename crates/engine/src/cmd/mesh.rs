@@ -7,7 +7,7 @@ use modelcraft_mesh::surface::{BoundarySurface, Defect, FeatureKind, SurfaceOpti
 use modelcraft_model::{ElementKind, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
-use super::{label, labels, optional_number, points, xyz};
+use super::{label, labels, listed, optional_number, points, xyz};
 use crate::{CommandSpec, EngineError, Result, Session};
 
 pub const NODE_ADD: CommandSpec = CommandSpec {
@@ -96,16 +96,9 @@ fn element_remove(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
-/// Labels listed in a report: the first ones, and how many there are.
-const LISTED: usize = 100;
-
 /// A JSON number, or a string for ±∞ (JSON has no infinity).
 fn number(v: f64) -> Value {
     if v.is_finite() { json!(v) } else { json!(if v > 0.0 { "inf" } else { "-inf" }) }
-}
-
-fn listed(v: &[u32]) -> Value {
-    json!({"count": v.len(), "labels": v.iter().take(LISTED).collect::<Vec<_>>()})
 }
 
 fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {

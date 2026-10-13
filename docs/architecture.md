@@ -97,7 +97,8 @@ element names, cards and keywords):
   the right-hand normal pointing out; shells have a positive and a negative side.
 - **Definitions** (materials, sections with their element formulation, reference points,
   couplings, boundary conditions, loads, steps) refer to each other by name. A reference must
-  exist when it is made, and a definition still referred to cannot be deleted; what depends on
+  exist when it is made, and a definition still referred to (a load listed by a step included)
+  cannot be deleted; what depends on
   the mesh is checked when the model is resolved.
 - **Steps** list the boundary conditions and loads active in them. Nothing propagates from one
   step to the next.
@@ -106,9 +107,11 @@ element names, cards and keywords):
 - **Check and resolve.** `Model::check` lists errors and warnings, each naming its item (a set
   member not on the mesh, an element with no section or in two, a moment on solid nodes, a
   missing density for a frequency step, …). `Model::resolve` returns what writers and the solver
-  read besides the definitions: every set resolved, the section of every element, and the node
-  label of every reference point (after the largest mesh node, in name order). It fails when the
-  check finds an error.
+  read besides the definitions: every set resolved (each element then lies in exactly one
+  section's set) and the node label of every reference point (after the largest mesh node, in
+  name order). It fails when the check finds an error.
+- **Files.** A model deserializes by replaying its contents through the same checked methods the
+  commands use, so a file cannot hold what commands would refuse.
 
 ## Commands
 

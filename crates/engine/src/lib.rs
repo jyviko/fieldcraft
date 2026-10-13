@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cmd;
+pub mod sample;
 
 use std::sync::Arc;
 

@@ -1,0 +1,10 @@
+{"corpus": {"categories": ["fillet", "genus", "sweepable"], "volume_mm3": 32144.778925},
+ "commands": [
+  {"command": "sketch.create", "params": {"plane": "XY", "name": "Profile"}},
+  {"command": "sketch.line", "params": {"points": [[0, 0], [60, 0], [60, 8], [8, 8], [8, 50], [0, 50]], "closed": true}},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "solid.extrude", "params": {"distance": 40, "body_name": "Bracket"}},
+  {"command": "solid.fillet", "params": {"edges": [[8, 8, 20]], "radius": 6}},
+  {"command": "solid.hole", "params": {"position": [40, 8, 20], "diameter": 8}},
+  {"command": "solid.hole", "params": {"position": [8, 32, 20], "diameter": 8}}
+ ]}

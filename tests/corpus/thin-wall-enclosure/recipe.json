@@ -1,0 +1,5 @@
+{"corpus": {"categories": ["thin-wall", "blocky"], "volume_mm3": 15564},
+ "commands": [
+  {"command": "solid.box", "params": {"corner": [0, 0, 0], "length": 80, "width": 60, "height": 40, "body_name": "Enclosure"}},
+  {"command": "solid.shell", "params": {"faces": [[40, 30, 40]], "thickness": 1}}
+ ]}

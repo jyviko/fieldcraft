@@ -25,6 +25,9 @@ commands:
   test [CARGO ARGS] [-- TEST ARGS]
                   build the tests with the ci profile, then run every test binary at once
                   (and the doc tests alongside)
+  corpus [--part NAME] [--no-write]
+                  build every meshing test corpus part (tests/corpus, analytic shapes), tessellate
+                  and mesh it, and write the results to docs/meshing/corpus.md (release build)
   wasm            cargo check every library crate for wasm32-unknown-unknown
   ci              fmt --check, assets, licences --check, layers, clippy -D warnings, then the tests
                   with the wasm check alongside (stops at the first failing step)
@@ -42,6 +45,12 @@ fn main() -> ExitCode {
             test::run(cargo_args, test_args, vec![test::doc_tests(cargo_args, test_args)])
         }
         Some("ci") => cmd_ci(),
+        Some("corpus") => {
+            // A binary of the testkit, so xtask itself stays free of SolidCraft.
+            let mut c = cargo();
+            c.args(["run", "--release", "-p", "modelcraft-testkit", "--bin", "corpus", "--"]).args(&rest);
+            run(c, "corpus")
+        }
         Some("wasm") => cmd_wasm(),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");

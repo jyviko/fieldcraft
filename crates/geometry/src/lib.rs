@@ -133,6 +133,23 @@ impl Shape {
     }
 }
 
+impl SurfaceMesh {
+    /// The volume the triangles enclose (divergence theorem: the sum of the signed tetrahedra each
+    /// triangle spans with the origin). Equals the solid's volume for a closed, outward-oriented
+    /// surface; a triangle with a vertex index out of range counts as nothing.
+    pub fn enclosed_volume(&self) -> f64 {
+        let six_v: f64 = self
+            .triangles
+            .iter()
+            .filter_map(|t| {
+                let [a, b, c] = [self.positions.get(t[0] as usize)?, self.positions.get(t[1] as usize)?, self.positions.get(t[2] as usize)?];
+                Some(a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]))
+            })
+            .sum();
+        six_v / 6.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,17 +171,8 @@ mod tests {
         faces.sort_unstable();
         faces.dedup();
         assert_eq!(faces.len(), 6);
-        // Divergence theorem: the outward-oriented triangles enclose the block's volume.
-        let p = |i: u32| mesh.positions[i as usize];
-        let six_v: f64 = mesh
-            .triangles
-            .iter()
-            .map(|t| {
-                let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
-                a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])
-            })
-            .sum();
-        assert!((six_v / 6.0 - 24.0).abs() < 1e-9, "{}", six_v / 6.0);
+        // The outward-oriented triangles enclose the block's volume.
+        assert!((mesh.enclosed_volume() - 24.0).abs() < 1e-9, "{}", mesh.enclosed_volume());
     }
 
     #[test]

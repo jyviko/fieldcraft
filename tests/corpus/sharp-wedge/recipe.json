@@ -1,0 +1,7 @@
+{"corpus": {"categories": ["sharp", "thin-wall", "sweepable"], "volume_mm3": 3200.0},
+ "commands": [
+  {"command": "sketch.create", "params": {"plane": "XY", "name": "Profile"}},
+  {"command": "sketch.line", "params": {"points": [[0, 0], [80, 0], [80, 4]], "closed": true}},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "solid.extrude", "params": {"distance": 20, "body_name": "Wedge"}}
+ ]}

@@ -1,0 +1,9 @@
+{"corpus": {"categories": ["thin-wall", "blocky"], "volume_mm3": 32000.0},
+ "commands": [
+  {"command": "solid.box", "params": {"corner": [0, 0, 0], "length": 100, "width": 60, "height": 4, "body_name": "Plate"}},
+  {"command": "solid.box", "params": {"corner": [0, 9.6, 4], "length": 100, "width": 0.8, "height": 20, "operation": "join", "targets": ["Plate"]}},
+  {"command": "solid.box", "params": {"corner": [0, 19.6, 4], "length": 100, "width": 0.8, "height": 20, "operation": "join", "targets": ["Plate"]}},
+  {"command": "solid.box", "params": {"corner": [0, 29.6, 4], "length": 100, "width": 0.8, "height": 20, "operation": "join", "targets": ["Plate"]}},
+  {"command": "solid.box", "params": {"corner": [0, 39.6, 4], "length": 100, "width": 0.8, "height": 20, "operation": "join", "targets": ["Plate"]}},
+  {"command": "solid.box", "params": {"corner": [0, 49.6, 4], "length": 100, "width": 0.8, "height": 20, "operation": "join", "targets": ["Plate"]}}
+ ]}

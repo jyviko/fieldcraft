@@ -1,0 +1,11 @@
+{"corpus": {"categories": ["organic"]},
+ "commands": [
+  {"command": "sketch.create", "params": {"plane": "XY", "name": "Bottom"}},
+  {"command": "sketch.rectangle.center", "params": {"center": [0, 0], "corner": [20, 20]}},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "construct.plane.offset", "params": {"base": "XY", "offset": "50 mm", "name": "TopPlane"}},
+  {"command": "sketch.create", "params": {"plane": "TopPlane", "name": "Top"}},
+  {"command": "sketch.circle.center", "params": {"center": [0, 0], "radius": 15}},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "solid.loft", "params": {"sections": [{"sketch": "Bottom"}, {"sketch": "Top"}], "body_name": "Transition"}}
+ ]}

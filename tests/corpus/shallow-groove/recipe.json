@@ -1,0 +1,5 @@
+{"corpus": {"categories": ["near-tangent", "boolean"], "volume_mm3": 47781.459517},
+ "commands": [
+  {"command": "solid.box", "params": {"corner": [0, 0, 0], "length": 60, "width": 40, "height": 20, "body_name": "Block"}},
+  {"command": "solid.cylinder", "params": {"base": [0, 20, 49.5], "axis": "X", "radius": 30, "height": 60, "operation": "cut", "targets": ["Block"]}}
+ ]}

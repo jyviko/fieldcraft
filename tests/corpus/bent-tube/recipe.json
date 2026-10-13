@@ -1,0 +1,9 @@
+{"corpus": {"categories": ["sweepable", "thin-wall", "genus"], "volume_mm3": 4159.829982},
+ "commands": [
+  {"command": "sketch.create", "params": {"plane": "XY", "name": "Path"}},
+  {"command": "sketch.line", "params": {"points": [[0, 0], [50, 0]], "ids": ["l1"]}},
+  {"command": "sketch.arc.center_point", "params": {"center": [50, 30], "start": "l1.end", "sweep": 90, "id": "a1"}},
+  {"command": "sketch.line", "params": {"points": ["a1.end", [80, 80]], "ids": ["l2"]}},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "solid.pipe", "params": {"path_sketch": "Path", "path": ["l1", "a1", "l2"], "diameter": 10, "wall": 1, "body_name": "Tube"}}
+ ]}

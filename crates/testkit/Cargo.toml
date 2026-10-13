@@ -1,0 +1,15 @@
+[package]
+name = "modelcraft-testkit"
+description = "ModelCraft test tooling: the meshing test corpus (SolidCraft recipes and analytic shapes)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+modelcraft-geometry = { workspace = true, features = ["scripts"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

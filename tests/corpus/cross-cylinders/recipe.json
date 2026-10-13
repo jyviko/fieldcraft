@@ -1,0 +1,5 @@
+{"corpus": {"categories": ["boolean", "sharp"], "volume_mm3": 32365.77851},
+ "commands": [
+  {"command": "solid.cylinder", "params": {"base": [-30, 0, 0], "axis": "X", "radius": 10, "height": 60, "body_name": "Cross"}},
+  {"command": "solid.cylinder", "params": {"base": [0, -30, 0], "axis": "Y", "radius": 10, "height": 60, "operation": "join", "targets": ["Cross"]}}
+ ]}

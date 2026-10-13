@@ -1,0 +1,23 @@
+{"corpus": {"categories": ["small-feature", "genus"], "volume_mm3": 49909.522132},
+ "commands": [
+  {"command": "solid.box", "params": {"corner": [0, 0, 0], "length": 50, "width": 50, "height": 20, "body_name": "Block"}},
+  {"command": "sketch.create", "params": {"plane": "XY", "name": "Pinholes"}},
+  {"command": "sketch.circle.center", "params": {"center": [10, 10], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [10, 20], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [10, 30], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [10, 40], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [20, 10], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [20, 20], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [20, 30], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [20, 40], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [30, 10], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [30, 20], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [30, 30], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [30, 40], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [40, 10], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [40, 20], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [40, 30], "diameter": 0.6}},
+  {"command": "sketch.circle.center", "params": {"center": [40, 40], "diameter": 0.6}},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "solid.extrude", "params": {"distance": 20, "operation": "cut"}}
+ ]}

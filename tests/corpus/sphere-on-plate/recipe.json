@@ -1,0 +1,5 @@
+{"corpus": {"categories": ["near-tangent", "boolean"], "volume_mm3": 69509.694367},
+ "commands": [
+  {"command": "solid.box", "params": {"corner": [-30, -30, -10], "length": 60, "width": 60, "height": 10, "body_name": "Plate"}},
+  {"command": "solid.sphere", "params": {"center": [0, 0, 19.9], "radius": 20, "operation": "join", "targets": ["Plate"]}}
+ ]}

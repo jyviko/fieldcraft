@@ -1,0 +1,9 @@
+{"corpus": {"categories": ["organic"]},
+ "commands": [
+  {"command": "sketch.create", "params": {"plane": "XZ", "name": "Profile"}},
+  {"command": "sketch.line", "params": {"points": [[0, 0], [20, 0]], "ids": ["base"]}},
+  {"command": "sketch.spline.fit_point", "params": {"points": ["base.end", [28, 20], [14, 45], [18, 70]]}},
+  {"command": "sketch.line", "params": {"points": [[18, 70], [0, 70], [0, 0]]}},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "solid.revolve", "params": {"axis": "Z", "body_name": "Vase"}}
+ ]}

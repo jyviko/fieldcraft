@@ -12,7 +12,7 @@
 //! - **minimum sums** `Σ_L x ≥ m`: a loop needs enough points to be meshed.
 //!
 //! Mitchell's *incremental interval assignment* (Mitchell, *Incremental interval assignment by
-//! integer linear algebra*, Proc. 29th International Meshing Roundtable, 2021) starts from a
+//! integer linear algebra*, International Meshing Roundtable 2021; Computer-Aided Design 158:103485, 2023) starts from a
 //! rounded solution and repairs violated constraints by unit steps chosen by a priority on the
 //! change in relative error. This module uses that scheme with increments only: start from the
 //! rounded goals, then repeatedly take the first violated constraint and raise the variable whose

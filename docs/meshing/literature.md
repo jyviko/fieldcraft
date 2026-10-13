@@ -878,6 +878,65 @@ input points), Steiner points kept half the local spacing from the boundary.
 
 ---
 
+### B8. Mapped and swept hexahedral meshing (implemented in `modelcraft-mesh::hex`)
+
+`mesh.hex.generate` (and `mesh.hex.sweep`, `mesh.hex.mapped`). Every method below is implemented from
+its paper; no code was read. DOIs marked "checked" were confirmed on 2026-10-13 through a repository
+record or the publisher; the others are cited by venue only.
+
+**B8.1 Blacker 1996, the Cooper tool.** **Verdict: BUILD ON (sweep recognition).**
+- **Citation.** T. D. Blacker. *The Cooper tool.* Proc. 5th International Meshing Roundtable, 1996, pp. 13–29.
+- **Use.** Source, target and linking faces from B-rep topology: rings of logically rectangular
+  linking faces followed from the source loops until they close on one target (`hex::sweep`).
+
+**B8.2 Lai, Benzley, White 2000, many-to-many sweeping.** **Verdict: BUILD ON (multi-level extrusions).**
+- **Citation.** M. Lai, S. Benzley, D. White. *Automated hexahedral mesh generation by generalized multiple
+  source to multiple target sweeping.* IJNME 49(1–2):261–275, 2000.
+- **Use.** Imprinting every level's outline into one projection plane so each region of the arrangement
+  is a one-to-one column (`hex::layered`, `hex::arrangement`); here done in a straight or rotating
+  frame, with the regions' fill decided by the generalized winding number (Jacobson et al. 2013).
+
+**B8.3 Knupp 1998, next-generation sweep tool.** **Verdict: BUILD ON (residual correction).**
+- **Citation.** P. M. Knupp. *Next-generation sweep tool: a method for generating all-hex meshes on
+  two-and-one-half dimensional geometries.* Proc. 7th International Meshing Roundtable, 1998, pp. 505–513.
+- **Use.** The boundary residual of each layer's map interpolated into the interior.
+
+**B8.4 Roca and Sarrate 2010, least-squares sweeping.** **Verdict: BUILD ON (inner nodes).**
+- **Citation.** X. Roca, J. Sarrate. *An automatic and general least-squares projection procedure for sweep
+  meshing.* Engineering with Computers 26(4):391–406, 2010. DOI 10.1007/s00366-009-0172-z (checked, repository
+  record). Conference version: Proc. 15th IMR, 2006, pp. 487–506.
+- **Use.** Each layer's interior nodes from the source mesh by the least-squares affine map of the source
+  ring onto the layer's ring (`hex::sweep::Affine`). Related: Roca, Sarrate, Huerta, *A new least-squares
+  approximation of affine mappings for sweep algorithms*, Eng. Comput. 26(3):327–337, 2010.
+
+**B8.5 Interval assignment: Tam and Armstrong 1993; Mitchell 1997/2021.** **Verdict: BUILD ON.**
+- **Citations.** T. K. H. Tam, C. G. Armstrong. *Finite element mesh control by integer programming.* IJNME
+  36:2581–2605, 1993. S. A. Mitchell. *High fidelity interval assignment.* Proc. 6th IMR, 1997 (IJCGA
+  10(4):399–415, 2000). S. A. Mitchell. *Incremental interval assignment by integer linear algebra.*
+  International Meshing Roundtable 2021 (Zenodo 5559025); extended in Computer-Aided Design 158:103485, 2023.
+- **Use.** Division counts of all curves together: side equalities of mapped faces and linking faces,
+  even (or multiple-of-four) loop sums, minimum loop sums. `hex::interval` uses incremental repair from the
+  rounded goals with increments only, chosen by squared relative error; it is bounded and reports an
+  infeasible system instead of looping. Mitchell's integer-linear-algebra solver (Hermite normal form plus
+  nullspace improvement) is the upgrade if the increment-only scheme proves too coarse.
+
+**B8.6 Whiteley, White, Benzley, Blacker 1996, submapping.** **Verdict: BUILD ON (vertex classification).**
+- **Citation.** M. Whiteley, D. White, S. Benzley, T. Blacker. *Two and three-quarter dimensional meshing
+  facilitators.* Engineering with Computers 12:144–154, 1996.
+- **Use.** Corners by interior angle (≤ 135° end, ≥ 225° reflex); cross-section regions are cut from
+  their reflex corners to the boundary, which decomposes rectilinear sections into rectangles (an explicit
+  form of submapping's virtual decomposition), then mapped.
+
+**B8.7 Gordon and Thiel 1982, trivariate transfinite interpolation.** **Verdict: BUILD ON (mapped blocks).**
+- **Citation.** W. J. Gordon, L. C. Thiel. *Transfinite mappings and their application to grid generation.*
+  Applied Mathematics and Computation 10–11:171–233, 1982.
+- **Use.** Interior nodes of a logical cube from its six face grids (`hex::mapped`).
+
+**B8.8 Support.** Generalized winding number for the inside test (A. Jacobson, L. Kavan, O. Sorkine-Hornung,
+*Robust inside-outside segmentation using generalized winding numbers*, ACM TOG 32(4):33, 2013; solid angle
+of a triangle: Van Oosterom and Strackee 1983); closest point on a triangle (C. Ericson, *Real-Time
+Collision Detection*, 2005, §5.1.5).
+
 ## Part C: Datasets and benchmarks
 
 | Dataset | Content | Licence | Usable for ModelCraft? |

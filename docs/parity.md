@@ -34,8 +34,8 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Mesh | Free tet meshing (tet4, tet10 with mid-side nodes on the geometry) | M2 | | started |
 | Mesh | Quality metrics, certified validity, verify per set | M1–M2 | yes | done (metrics, gate) |
 | Mesh | 2D quad meshing of faces | M5 | yes | started (`modelcraft_mesh::quad`; `mesh.planar`: 2D models of a polygon or a planar face, quad4/quad8/tri3/tri6, edges tagged by their neighbouring face) |
-| Mesh | Mapped hex of six-sided regions | M5 | yes | planned |
-| Mesh | Sweep hex (extrusions, revolutions) | M5 | yes | planned |
+| Mesh | Mapped hex of six-sided regions | M5 | yes | done (`mesh.hex.mapped`) |
+| Mesh | Sweep hex (extrusions, revolutions) | M5 | yes | done (`mesh.hex.sweep`: multi-level extrusions, revolutions, one-to-one sweeps) |
 | Mesh | Automatic decomposition into sweepable and mappable regions | M5 | yes | planned |
 | Mesh | Conforming interfaces, tet–hex transition with pyramids | M5 | yes | planned |
 | Mesh | Octree/grid-dual all-hex for any part | M6 | yes | planned |

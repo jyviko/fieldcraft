@@ -79,7 +79,17 @@ Rules beyond the layer order:
    recombination (Lee and Lo 1994) and one uniform split that lands on the boundary nodes, then
    smoothing and untangling; every quad is checked with exact predicates. One `SizeField` trait
    (`modelcraft-mesh::size`) sets interior sizes and edge divisions, with even counts per loop.
-   Mapped and swept hex build on these face meshes. Without geometry, `mesh.block`
+   Mapped and swept hex build on these face meshes (`modelcraft-mesh::hex`, `mesh.hex.generate`):
+   the B-rep topology is recovered from the face-tagged surface; a body is extruded (straight
+   multi-level sweep: the levels' outlines imprinted into one cross-section, cut at reflex corners,
+   regions mapped, O-gridded or free-meshed, then stacked), revolved (the same in a rotating
+   frame), swept one-to-one through rings of linking faces (least-squares affine layers, Roca and
+   Sarrate 2010), or mapped as a logical cube (Gordon and Thiel 1982); interval assignment
+   couples the counts of shared curves. Nodes on analytic faces (`Shape::face_surfaces`) are
+   exact, hex20 mid-edge nodes go onto the faces, boundary quads carry B-rep face tags, and the
+   result passes the certified validity gate plus tiling and fidelity checks. A body no method
+   fits gets each method's reason.
+   Without geometry, `mesh.block`
    (`modelcraft-mesh::block`) meshes one six-sided block from its eight corners and optional
    circular or elliptical edges by the same edge-based transfinite interpolation, as hex8, hex20,
    tet4/tet10 (Kuhn's six tetrahedra per cell) or wedge6, with grading; blocks join where their

@@ -1,0 +1,1 @@
+{"shapes": [{"d": "M4 3 L4 20 L21 20", "stroke": "line"}, {"d": "M4 20 L9 8 C11 5 14 5 21 4.5", "stroke": "accent", "width": 1.75}, {"d": "M9 8 L14 20", "stroke": "line", "width": 1, "dash": [1.5, 2]}]}

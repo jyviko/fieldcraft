@@ -1,0 +1,1 @@
+{"shapes": [{"d": "M8 16 L20 16 M17.19 17.53 L20 16 L17.19 14.47", "stroke": "accent", "width": 1.75}, {"d": "M8 16 L8 3 M9.53 5.81 L8 3 L6.47 5.81", "stroke": "line"}, {"d": "M8 16 L3 21 M3.9 17.93 L3 21 L6.07 20.1", "stroke": "line"}, {"circle": [8, 16, 1.5], "fill": "line", "stroke": null}]}

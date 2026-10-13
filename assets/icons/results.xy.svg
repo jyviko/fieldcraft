@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>results.xy</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M4 3 L4 20 L21 20" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M5 17 L9 12 L13 13 L17 7 L21 5" fill="none" stroke="#4f9ce8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M7.6 12 C7.6 11.227 8.227 10.6 9 10.6 C9.773 10.6 10.4 11.227 10.4 12 C10.4 12.773 9.773 13.4 9 13.4 C8.227 13.4 7.6 12.773 7.6 12 Z" fill="#4f9ce8"/>
+    <path d="M11.6 13 C11.6 12.227 12.227 11.6 13 11.6 C13.773 11.6 14.4 12.227 14.4 13 C14.4 13.773 13.773 14.4 13 14.4 C12.227 14.4 11.6 13.773 11.6 13 Z" fill="#4f9ce8"/>
+    <path d="M15.6 7 C15.6 6.227 16.227 5.6 17 5.6 C17.773 5.6 18.4 6.227 18.4 7 C18.4 7.773 17.773 8.4 17 8.4 C16.227 8.4 15.6 7.773 15.6 7 Z" fill="#4f9ce8"/>
+  </g>
+</svg>

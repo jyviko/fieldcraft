@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>mesh.tag</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M3 3 L12 3 L21 12 L12 21 L3 12 Z" fill="#2d4e70" stroke="#4f9ce8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M5.9 7.5 C5.9 6.616 6.616 5.9 7.5 5.9 C8.384 5.9 9.1 6.616 9.1 7.5 C9.1 8.384 8.384 9.1 7.5 9.1 C6.616 9.1 5.9 8.384 5.9 7.5 Z" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M10 12 L14 16 M12 10 L16 14" fill="none" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

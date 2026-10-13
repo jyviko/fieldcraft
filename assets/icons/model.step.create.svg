@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.step.create</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M3 20 L8 20 L8 14 L13 14 L13 8 L18 8 L18 3" fill="none" stroke="#4f9ce8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M3 20 L21 20 M3 20 L3 3" fill="none" stroke="#dde2ea" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

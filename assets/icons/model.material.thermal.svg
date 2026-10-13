@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.material.thermal</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M10 15 L10 5 C10 3.895 10.895 3 12 3 C13.105 3 14 3.895 14 5 L14 15" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M8.5 17.5 C8.5 15.567 10.067 14 12 14 C13.933 14 15.5 15.567 15.5 17.5 C15.5 19.433 13.933 21 12 21 C10.067 21 8.5 19.433 8.5 17.5 Z" fill="#f0b44a" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 9 L12 15" fill="none" stroke="#f0b44a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M16 6 L18 6 M16 9 L18 9 M16 12 L18 12" fill="none" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.step.activate</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M8 7 L16 7 C18.761 7 21 9.239 21 12 L21 12 C21 14.761 18.761 17 16 17 L8 17 C5.239 17 3 14.761 3 12 L3 12 C3 9.239 5.239 7 8 7 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12.8 12 C12.8 10.233 14.233 8.8 16 8.8 C17.767 8.8 19.2 10.233 19.2 12 C19.2 13.767 17.767 15.2 16 15.2 C14.233 15.2 12.8 13.767 12.8 12 Z" fill="#4f9ce8" stroke="#4f9ce8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

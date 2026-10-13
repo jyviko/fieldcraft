@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>solve.frequency</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M3 12 L21 12" fill="none" stroke="#dde2ea" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1.5 1.5"/>
+    <path d="M3 12 C7 3 17 3 21 12" fill="none" stroke="#4f9ce8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M3 12 C7 21 17 21 21 12" fill="none" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1.4 12 C1.4 11.116 2.116 10.4 3 10.4 C3.884 10.4 4.6 11.116 4.6 12 C4.6 12.884 3.884 13.6 3 13.6 C2.116 13.6 1.4 12.884 1.4 12 Z" fill="#dde2ea"/>
+    <path d="M19.4 12 C19.4 11.116 20.116 10.4 21 10.4 C21.884 10.4 22.6 11.116 22.6 12 C22.6 12.884 21.884 13.6 21 13.6 C20.116 13.6 19.4 12.884 19.4 12 Z" fill="#dde2ea"/>
+  </g>
+</svg>

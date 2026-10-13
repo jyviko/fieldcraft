@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.amplitude</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M3 12 L21 12 M3 4 L3 20" fill="none" stroke="#dde2ea" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M3 12 L3.38 10.83 L3.75 9.7 L4.12 8.67 L4.5 7.76 L4.88 7.01 L5.25 6.46 L5.62 6.12 L6 6 L6.38 6.12 L6.75 6.46 L7.12 7.01 L7.5 7.76 L7.88 8.67 L8.25 9.7 L8.62 10.83 L9 12 L9.38 13.17 L9.75 14.3 L10.12 15.33 L10.5 16.24 L10.88 16.99 L11.25 17.54 L11.62 17.88 L12 18 L12.38 17.88 L12.75 17.54 L13.12 16.99 L13.5 16.24 L13.88 15.33 L14.25 14.3 L14.62 13.17 L15 12 L15.38 10.83 L15.75 9.7 L16.12 8.67 L16.5 7.76 L16.88 7.01 L17.25 6.46 L17.62 6.12 L18 6 L18.38 6.12 L18.75 6.46 L19.12 7.01 L19.5 7.76 L19.88 8.67 L20.25 9.7 L20.62 10.83 L21 12" fill="none" stroke="#4f9ce8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

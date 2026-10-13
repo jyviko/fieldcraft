@@ -1,0 +1,1 @@
+{"shapes": [{"rect": [3, 3, 18, 18], "fill": "soft", "stroke": "line"}, {"d": "M12 3 L12 21 M3 12 L21 12", "stroke": "line", "width": 1.25}, {"d": "M16.5 3 L16.5 12 M12 7.5 L21 7.5 M14.25 3 L14.25 7.5 M12 5.25 L16.5 5.25", "stroke": "accent", "width": 1}]}

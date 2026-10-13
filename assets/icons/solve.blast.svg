@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>solve.blast</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M12 2.5 L14.645 8.359 L21.035 9.064 L16.28 13.391 L17.584 19.686 L12 16.5 L6.416 19.686 L7.72 13.391 L2.965 9.064 L9.355 8.359 Z" fill="#f0b44a" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M10 12 C10 10.895 10.895 10 12 10 C13.105 10 14 10.895 14 12 C14 13.105 13.105 14 12 14 C10.895 14 10 13.105 10 12 Z" fill="#2d4e70"/>
+  </g>
+</svg>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.material.eos</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M4 3 L4 20 L21 20" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M6 4 C7 13 11 17 21 18" fill="none" stroke="#4f9ce8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M7.8 12.6 C7.8 11.661 8.561 10.9 9.5 10.9 C10.439 10.9 11.2 11.661 11.2 12.6 C11.2 13.539 10.439 14.3 9.5 14.3 C8.561 14.3 7.8 13.539 7.8 12.6 Z" fill="#f0b44a"/>
+  </g>
+</svg>

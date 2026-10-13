@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>mesh.quality</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M3 17 C3 12.029 7.029 8 12 8 C16.971 8 21 12.029 21 17" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 17 L17 10" fill="none" stroke="#4f9ce8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M10.2 17 C10.2 16.006 11.006 15.2 12 15.2 C12.994 15.2 13.8 16.006 13.8 17 C13.8 17.994 12.994 18.8 12 18.8 C11.006 18.8 10.2 17.994 10.2 17 Z" fill="#4f9ce8"/>
+    <path d="M5.5 12.5 L7 13.5 M12 8 L12 9.8 M18.5 12.5 L17 13.5" fill="none" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

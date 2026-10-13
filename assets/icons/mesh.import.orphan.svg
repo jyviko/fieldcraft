@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>mesh.import.orphan</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M3 10 L21 10 L21 21 L3 21 Z" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M9 10 L9 21 M3 13.67 L21 13.67 M15 10 L15 21 M3 17.33 L21 17.33 M3 13.67 L9 10 M3 17.33 L9 13.67 M3 21 L9 17.33 M9 13.67 L15 10 M9 17.33 L15 13.67 M9 21 L15 17.33 M15 13.67 L21 10 M15 17.33 L21 13.67 M15 21 L21 17.33" fill="none" stroke="#dde2ea" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 2 L12 8 M10.47 5.19 L12 8 L13.53 5.19" fill="none" stroke="#4f9ce8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

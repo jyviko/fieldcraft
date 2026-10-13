@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.boundary_condition.create</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M12 6 L6 16 L18 16 Z" fill="#2d4e70" stroke="#4f9ce8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M10.2 6 C10.2 5.006 11.006 4.2 12 4.2 C12.994 4.2 13.8 5.006 13.8 6 C13.8 6.994 12.994 7.8 12 7.8 C11.006 7.8 10.2 6.994 10.2 6 Z" fill="#4f9ce8"/>
+    <path d="M4 19 L20 19 M5 19 L3 21.5 M8 19 L6 21.5 M11 19 L9 21.5 M14 19 L12 21.5 M17 19 L15 21.5 M20 19 L18 21.5" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

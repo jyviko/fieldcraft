@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>interaction.rigid_wall</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M18 3 L18 21" fill="none" stroke="#dde2ea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M18 4 L21 6.5 M18 8 L21 10.5 M18 12 L21 14.5 M18 16 L21 18.5" fill="none" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M3 12 C3 9.791 4.791 8 7 8 C9.209 8 11 9.791 11 12 C11 14.209 9.209 16 7 16 C4.791 16 3 14.209 3 12 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M11.5 12 L15.5 12 M13.22 13.25 L15.5 12 L13.22 10.75" fill="none" stroke="#f0b44a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M2 9 L4 9 M1.5 15 L3.5 15" fill="none" stroke="#dde2ea" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.orientation</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M8 16 L20 16 M17.19 17.53 L20 16 L17.19 14.47" fill="none" stroke="#4f9ce8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M8 16 L8 3 M9.53 5.81 L8 3 L6.47 5.81" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M8 16 L3 21 M3.9 17.93 L3 21 L6.07 20.1" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M6.5 16 C6.5 15.172 7.172 14.5 8 14.5 C8.828 14.5 9.5 15.172 9.5 16 C9.5 16.828 8.828 17.5 8 17.5 C7.172 17.5 6.5 16.828 6.5 16 Z" fill="#dde2ea"/>
+  </g>
+</svg>

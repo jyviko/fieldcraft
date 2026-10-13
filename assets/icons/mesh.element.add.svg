@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>mesh.element.add</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M3 7 L13 4 L15 15 L5 17 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1.5 7 C1.5 6.172 2.172 5.5 3 5.5 C3.828 5.5 4.5 6.172 4.5 7 C4.5 7.828 3.828 8.5 3 8.5 C2.172 8.5 1.5 7.828 1.5 7 Z" fill="#dde2ea"/>
+    <path d="M11.5 4 C11.5 3.172 12.172 2.5 13 2.5 C13.828 2.5 14.5 3.172 14.5 4 C14.5 4.828 13.828 5.5 13 5.5 C12.172 5.5 11.5 4.828 11.5 4 Z" fill="#dde2ea"/>
+    <path d="M13.5 15 C13.5 14.172 14.172 13.5 15 13.5 C15.828 13.5 16.5 14.172 16.5 15 C16.5 15.828 15.828 16.5 15 16.5 C14.172 16.5 13.5 15.828 13.5 15 Z" fill="#dde2ea"/>
+    <path d="M3.5 17 C3.5 16.172 4.172 15.5 5 15.5 C5.828 15.5 6.5 16.172 6.5 17 C6.5 17.828 5.828 18.5 5 18.5 C4.172 18.5 3.5 17.828 3.5 17 Z" fill="#dde2ea"/>
+    <path d="M15.5 18.5 L21.5 18.5 M18.5 15.5 L18.5 21.5" fill="none" stroke="#4f9ce8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

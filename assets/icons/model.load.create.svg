@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.load.create</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M3 16 L21 16 L21 20 L3 20 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 3 L12 14 M10.32 10.93 L12 14 L13.68 10.93" fill="none" stroke="#f0b44a" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M6 7 L6 14 M4.8 11.81 L6 14 L7.2 11.81" fill="none" stroke="#f0b44a" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M18 7 L18 14 M16.8 11.81 L18 14 L19.2 11.81" fill="none" stroke="#f0b44a" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

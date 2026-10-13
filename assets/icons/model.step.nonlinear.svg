@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.step.nonlinear</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M4 3 L4 20 L21 20" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M4 20 C10 12 14 8 21 6" fill="none" stroke="#4f9ce8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M6.7 15.5 C6.7 14.782 7.282 14.2 8 14.2 C8.718 14.2 9.3 14.782 9.3 15.5 C9.3 16.218 8.718 16.8 8 16.8 C7.282 16.8 6.7 16.218 6.7 15.5 Z" fill="#dde2ea"/>
+    <path d="M11.2 11.3 C11.2 10.582 11.782 10 12.5 10 C13.218 10 13.8 10.582 13.8 11.3 C13.8 12.018 13.218 12.6 12.5 12.6 C11.782 12.6 11.2 12.018 11.2 11.3 Z" fill="#dde2ea"/>
+    <path d="M15.7 8.2 C15.7 7.482 16.282 6.9 17 6.9 C17.718 6.9 18.3 7.482 18.3 8.2 C18.3 8.918 17.718 9.5 17 9.5 C16.282 9.5 15.7 8.918 15.7 8.2 Z" fill="#dde2ea"/>
+  </g>
+</svg>

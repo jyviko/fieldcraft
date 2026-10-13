@@ -1,5 +1,5 @@
 //! `cargo xtask assets`: every non-code asset in the repository must have a row in
-//! ATTRIBUTION.md (author, source, licence). Icons are drawn in code and need no file.
+//! ATTRIBUTION.md (author, source, licence), toolbar icons (`assets/icons`) included.
 
 use std::path::Path;
 

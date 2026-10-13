@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.set.create</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M5 7 C8 2 18 3 20 8 C22 13 19 21 12 20 C5 19 2 12 5 7 Z" fill="#2d4e70" stroke="#4f9ce8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2.2 2"/>
+    <path d="M7.4 9 C7.4 8.116 8.116 7.4 9 7.4 C9.884 7.4 10.6 8.116 10.6 9 C10.6 9.884 9.884 10.6 9 10.6 C8.116 10.6 7.4 9.884 7.4 9 Z" fill="#dde2ea"/>
+    <path d="M13.4 8 C13.4 7.116 14.116 6.4 15 6.4 C15.884 6.4 16.6 7.116 16.6 8 C16.6 8.884 15.884 9.6 15 9.6 C14.116 9.6 13.4 8.884 13.4 8 Z" fill="#dde2ea"/>
+    <path d="M11.4 14 C11.4 13.116 12.116 12.4 13 12.4 C13.884 12.4 14.6 13.116 14.6 14 C14.6 14.884 13.884 15.6 13 15.6 C12.116 15.6 11.4 14.884 11.4 14 Z" fill="#dde2ea"/>
+    <path d="M6.4 15 C6.4 14.116 7.116 13.4 8 13.4 C8.884 13.4 9.6 14.116 9.6 15 C9.6 15.884 8.884 16.6 8 16.6 C7.116 16.6 6.4 15.884 6.4 15 Z" fill="#dde2ea"/>
+  </g>
+</svg>

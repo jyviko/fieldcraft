@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>results.path</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M5 3 L19 3 C20.105 3 21 3.895 21 5 L21 19 C21 20.105 20.105 21 19 21 L5 21 C3.895 21 3 20.105 3 19 L3 5 C3 3.895 3.895 3 5 3 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M6 18 L10 9 L14 14 L18 6" fill="none" stroke="#4f9ce8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M4.4 18 C4.4 17.116 5.116 16.4 6 16.4 C6.884 16.4 7.6 17.116 7.6 18 C7.6 18.884 6.884 19.6 6 19.6 C5.116 19.6 4.4 18.884 4.4 18 Z" fill="#4f9ce8"/>
+    <path d="M8.4 9 C8.4 8.116 9.116 7.4 10 7.4 C10.884 7.4 11.6 8.116 11.6 9 C11.6 9.884 10.884 10.6 10 10.6 C9.116 10.6 8.4 9.884 8.4 9 Z" fill="#4f9ce8"/>
+    <path d="M12.4 14 C12.4 13.116 13.116 12.4 14 12.4 C14.884 12.4 15.6 13.116 15.6 14 C15.6 14.884 14.884 15.6 14 15.6 C13.116 15.6 12.4 14.884 12.4 14 Z" fill="#4f9ce8"/>
+    <path d="M16.4 6 C16.4 5.116 17.116 4.4 18 4.4 C18.884 4.4 19.6 5.116 19.6 6 C19.6 6.884 18.884 7.6 18 7.6 C17.116 7.6 16.4 6.884 16.4 6 Z" fill="#4f9ce8"/>
+  </g>
+</svg>

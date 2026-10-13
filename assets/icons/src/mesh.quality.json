@@ -1,0 +1,1 @@
+{"shapes": [{"d": "M3 17 A9 9 0 0 1 21 17", "stroke": "line"}, {"d": "M12 17 L17 10", "stroke": "accent", "width": 2}, {"circle": [12, 17, 1.8], "fill": "accent", "stroke": null}, {"d": "M5.5 12.5 L7 13.5 M12 8 L12 9.8 M18.5 12.5 L17 13.5", "stroke": "line", "width": 1.25}]}

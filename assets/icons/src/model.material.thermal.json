@@ -1,0 +1,1 @@
+{"shapes": [{"d": "M10 15 V5 A2 2 0 0 1 14 5 V15", "stroke": "line"}, {"circle": [12, 17.5, 3.5], "fill": "warm", "stroke": "line"}, {"d": "M12 9 L12 15", "stroke": "warm", "width": 2}, {"d": "M16 6 L18 6 M16 9 L18 9 M16 12 L18 12", "stroke": "line", "width": 1.25}]}

@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod assets;
+mod icons;
 mod layers;
 mod licences;
 mod test;
@@ -19,6 +20,9 @@ usage: cargo xtask <command>
 commands:
   layers          enforce the crate dependency layering (docs/architecture.md)
   assets          check that every non-code asset file is attributed in ATTRIBUTION.md
+  icons [ID…]     draw the toolbar icons from their recipes (assets/icons/src/*.json) with
+                  VectorCraft (VECTORCRAFT_CLI, else vectorcraft-cli on the PATH): writes each
+                  icon's .vectorcraft source and .svg export
   licences [--check]
                   write THIRD-PARTY-LICENSES.txt (the licences of every shipped crate);
                   --check fails when it is out of date
@@ -39,6 +43,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("layers") => cmd_layers(),
         Some("assets") => assets::run(&root()),
+        Some("icons") => icons::run(&root(), &rest),
         Some("licences") => licences::run(&root(), rest.contains(&"--check")),
         Some("test") => {
             let (cargo_args, test_args) = rest.iter().position(|a| *a == "--").map_or((&rest[..], &[][..]), |i| (&rest[..i], &rest[i + 1..]));

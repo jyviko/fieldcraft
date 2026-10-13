@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>mesh.size.global</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M4 9 L20 9 L20 21 L4 21 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M9.33 9 L9.33 21 M4 13 L20 13 M14.67 9 L14.67 21 M4 17 L20 17" fill="none" stroke="#dde2ea" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M4 3 L4 7 M20 3 L20 7" fill="none" stroke="#4f9ce8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 5 L5.2 5 M8.01 3.47 L5.2 5 L8.01 6.53" fill="none" stroke="#4f9ce8" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 5 L18.8 5 M15.99 6.53 L18.8 5 L15.99 3.47" fill="none" stroke="#4f9ce8" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

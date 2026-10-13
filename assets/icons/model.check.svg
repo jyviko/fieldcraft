@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>model.check</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M6.5 4 L17.5 4 C18.328 4 19 4.672 19 5.5 L19 19.5 C19 20.328 18.328 21 17.5 21 L6.5 21 C5.672 21 5 20.328 5 19.5 L5 5.5 C5 4.672 5.672 4 6.5 4 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M10 2.5 L14 2.5 C14.552 2.5 15 2.948 15 3.5 L15 4.5 C15 5.052 14.552 5.5 14 5.5 L10 5.5 C9.448 5.5 9 5.052 9 4.5 L9 3.5 C9 2.948 9.448 2.5 10 2.5 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M8.5 13.5 L11 16 L16 10.5" fill="none" stroke="#4f9ce8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

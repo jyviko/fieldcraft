@@ -1,0 +1,17 @@
+[package]
+name = "modelcraft-render"
+description = "ModelCraft display data: the visible faces, edges and nodes of a finite element model, an orbit camera, and a CPU rasterizer for headless snapshots (no GPU dependency)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+modelcraft-model = { workspace = true }
+serde = { workspace = true }
+png = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

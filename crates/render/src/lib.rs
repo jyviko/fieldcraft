@@ -1,0 +1,16 @@
+//! Display data for ModelCraft, with no GPU dependency: what a finite element model looks like
+//! on screen ([`DisplayMesh`]: the visible faces, element edges, line elements and nodes), an
+//! orbit camera with perspective or orthographic projection, and a CPU rasterizer for headless
+//! snapshots. The desktop viewport draws the same [`Scene`] on the GPU.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![forbid(unsafe_code)]
+
+mod camera;
+mod display;
+mod raster;
+mod vec;
+
+pub use camera::{Camera, Mat4, StandardView};
+pub use display::{DisplayLine, DisplayMesh, DisplayTri};
+pub use raster::{Canvas, MAX_DIM, Rgb, Scene, SceneLine, ScenePoint, SceneTri, png, render, render_png, shade};
+pub use vec::{Aabb3, Vec3};

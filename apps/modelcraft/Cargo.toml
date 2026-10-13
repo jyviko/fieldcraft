@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 modelcraft-engine = { workspace = true }
 modelcraft-ui-egui = { workspace = true }
+modelcraft-io = { workspace = true }
+rfd = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

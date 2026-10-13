@@ -1,6 +1,6 @@
 //! ModelCraft desktop app.
 //!
-//! Usage: `modelcraft [--sample] [--control PORT]`
+//! Usage: `modelcraft [--sample] [--control PORT] [FILE…]` (files open as if dropped on the window)
 //!
 //! `--sample` opens a sample model (`modelcraft_engine::sample`). `--control PORT` (or
 //! `MODELCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
@@ -14,9 +14,9 @@ mod control_server;
 
 use modelcraft_engine::Session;
 use modelcraft_engine::autosave::{self, Autosaver};
-use modelcraft_ui_egui::ModelApp;
+use modelcraft_ui_egui::{Filter, ModelApp, Services};
 
-const USAGE: &str = "usage: modelcraft [--sample] [--control PORT]";
+const USAGE: &str = "usage: modelcraft [--sample] [--control PORT] [FILE…]  (FILE: .modelcraft, .solidcraft or .3mf)";
 const DEPTH_BITS: u8 = 24;
 const MSAA: u16 = 4;
 
@@ -78,11 +78,26 @@ impl eframe::App for App {
     }
 }
 
+/// Native file pickers and the recent-files file, for the UI.
+fn services() -> Services {
+    let dialog = |filters: &[Filter]| filters.iter().fold(rfd::FileDialog::new(), |d, f| d.add_filter(f.name, f.extensions));
+    Services {
+        pick_open: Some(Box::new(move |filters: &[Filter]| dialog(filters).pick_file().map(|p| p.to_string_lossy().to_string()))),
+        pick_save: Some(Box::new(move |name: &str, filters: &[Filter]| {
+            dialog(filters).set_file_name(name).save_file().map(|p| p.to_string_lossy().to_string())
+        })),
+        // Beside the recovery folder in the per-user data folder.
+        recent_path: modelcraft_io::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("recent.json"))),
+    }
+}
+
 /// Command-line options.
 #[derive(Debug, Default, PartialEq)]
 struct Args {
     sample: bool,
     control: Option<u16>,
+    /// Files to open (models, designs, tagged meshes).
+    files: Vec<String>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>, env_port: Option<String>) -> Result<Option<Args>, String> {
@@ -103,7 +118,8 @@ fn parse_args(args: impl IntoIterator<Item = String>, env_port: Option<String>) 
                 println!("{USAGE}");
                 return Ok(None);
             }
-            other => return Err(format!("unknown argument `{other}`\n{USAGE}")),
+            other if other.starts_with('-') => return Err(format!("unknown argument `{other}`\n{USAGE}")),
+            file => out.files.push(file.to_string()),
         }
     }
     Ok(Some(out))
@@ -123,7 +139,8 @@ fn main() -> eframe::Result {
             .with_title("ModelCraft")
             .with_icon(app_icon())
             .with_inner_size([1400.0, 900.0])
-            .with_min_inner_size([800.0, 500.0]),
+            .with_min_inner_size([800.0, 500.0])
+            .with_drag_and_drop(true),
         depth_buffer: DEPTH_BITS,
         multisampling: MSAA,
         ..Default::default()
@@ -132,7 +149,7 @@ fn main() -> eframe::Result {
         "ModelCraft",
         options,
         Box::new(move |cc| {
-            let mut app = ModelApp::new(Session::default());
+            let mut app = ModelApp::new(Session::default()).with_services(services());
             if let Some(rs) = &cc.wgpu_render_state {
                 let info = rs.adapter.get_info();
                 eprintln!("modelcraft: graphics {:?} {}, MSAA {}x (requested {MSAA}x)", info.backend, info.name, rs.msaa_samples);
@@ -144,6 +161,9 @@ fn main() -> eframe::Result {
             if args.sample {
                 // The status bar reports a failure; the app still opens.
                 let _ = app.run_script(&modelcraft_engine::sample::script());
+            }
+            for f in &args.files {
+                app.open_path(f);
             }
             let autosaver = autosave::default_dir().and_then(|dir| {
                 let listed = app.session.execute("file.recovery.list", &serde_json::json!({"dir": dir}));
@@ -176,12 +196,13 @@ mod tests {
     #[test]
     fn arguments() {
         assert_eq!(parse(&[], None), Ok(Some(Args::default())));
-        assert_eq!(parse(&["--sample", "--control", "7070"], None), Ok(Some(Args { sample: true, control: Some(7070) })));
-        assert_eq!(parse(&[], Some("9000")), Ok(Some(Args { sample: false, control: Some(9000) })));
+        assert_eq!(parse(&["--sample", "--control", "7070"], None), Ok(Some(Args { sample: true, control: Some(7070), files: vec![] })));
+        assert_eq!(parse(&[], Some("9000")), Ok(Some(Args { control: Some(9000), ..Default::default() })));
         assert_eq!(parse(&[], Some("nope")), Ok(Some(Args::default())));
         assert!(parse(&["--control"], None).is_err());
         assert!(parse(&["--control", "99999"], None).is_err());
         assert!(parse(&["--frobnicate"], None).is_err());
+        assert_eq!(parse(&["a.modelcraft", "--sample"], None).map(|a| a.map(|a| a.files)), Ok(Some(vec!["a.modelcraft".to_string()])));
         assert_eq!(parse(&["--help"], None), Ok(None));
     }
 }

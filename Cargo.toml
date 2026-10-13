@@ -48,6 +48,8 @@ resvg = { version = "0.48", default-features = false }
 egui = "0.36"
 eframe = { version = "0.36", default-features = false }
 egui-wgpu = "0.36"
+# native file pickers (the desktop app only; the UI crate takes them as services)
+rfd = "0.17"
 
 # Geometry: SolidCraft's B-rep kernel (MIT OR Apache-2.0), pinned. Only crates/geometry uses it
 # (plan/adr/0001-libraries.md).

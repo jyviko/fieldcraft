@@ -13,6 +13,7 @@ pub fn menu_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.label(RichText::new("ModelCraft").strong());
             ui.add_space(8.0);
+            ui.menu_button("File", |ui| crate::files::file_menu(app, ui));
             ui.menu_button("View", |ui| {
                 for s in Style::ALL {
                     ui.radio_value(&mut app.ui.style, s, s.label());
@@ -181,18 +182,21 @@ pub fn params_dialog(app: &mut ModelApp, ctx: &egui::Context) {
         return;
     };
     let (mut run, mut cancel) = (false, false);
-    egui::Window::new(spec.label).id(egui::Id::new("mc_params")).collapsible(false).resizable(true).default_width(360.0).show(ctx, |ui| {
-        ui.label(RichText::new(spec.id).color(t.text_dim).small());
-        ui.label(RichText::new(spec.params).color(t.text_dim));
-        ui.add(egui::TextEdit::multiline(&mut d.text).code_editor().desired_rows(4).desired_width(f32::INFINITY));
-        if let Some(e) = &d.error {
-            ui.label(RichText::new(e).color(t.error));
-        }
-        ui.horizontal(|ui| {
-            run = ui.button("Run").clicked();
-            cancel = ui.button("Cancel").clicked();
-        });
-    });
+    crate::frame::window(ctx, spec.label, crate::frame::Width::Normal).id(egui::Id::new("mc_params")).resizable(true).default_width(360.0).show(
+        ctx,
+        |ui| {
+            ui.label(RichText::new(spec.id).color(t.text_dim).small());
+            ui.label(RichText::new(spec.params).color(t.text_dim));
+            ui.add(egui::TextEdit::multiline(&mut d.text).code_editor().desired_rows(4).desired_width(f32::INFINITY));
+            if let Some(e) = &d.error {
+                ui.label(RichText::new(e).color(t.error));
+            }
+            ui.horizontal(|ui| {
+                run = ui.button("Run").clicked();
+                cancel = ui.button("Cancel").clicked();
+            });
+        },
+    );
     if cancel {
         app.dialog = None;
     } else if run {

@@ -13,6 +13,8 @@
 
 pub mod capture;
 pub mod control;
+pub mod files;
+pub mod frame;
 pub mod gpu;
 pub mod icons;
 pub mod panels;
@@ -34,6 +36,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub use control::ControlRequest;
+pub use files::{Filter, Services};
 pub use scene::Style;
 
 /// The version shown in Help and over the control channel.
@@ -179,6 +182,15 @@ pub struct ModelApp {
     /// The app time (seconds) of the current frame.
     pub now: f64,
     pub quit_requested: bool,
+    /// Host services: native file pickers, the recent-files file.
+    pub services: files::Services,
+    /// Recently opened and saved files.
+    pub recent: files::Recent,
+    /// The file opening in the background, and files waiting to open after it.
+    pub loading: Option<files::Loading>,
+    pub queued: std::collections::VecDeque<String>,
+    /// The question the window is asking (unsaved changes, recover).
+    pub prompt: Option<files::Prompt>,
 }
 
 impl ModelApp {
@@ -211,6 +223,11 @@ impl ModelApp {
             offscreen: None,
             now: 0.0,
             quit_requested: false,
+            services: files::Services::default(),
+            recent: files::Recent::default(),
+            loading: None,
+            queued: std::collections::VecDeque::new(),
+            prompt: None,
         };
         app.fit_view();
         app
@@ -219,6 +236,13 @@ impl ModelApp {
     /// Serve control-channel requests (see [`control`]).
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
+        self
+    }
+
+    /// Use the host's services (file pickers, the recent-files file) and load the recent list.
+    pub fn with_services(mut self, services: files::Services) -> Self {
+        self.recent = files::Recent::load(services.recent_path.clone());
+        self.services = services;
         self
     }
 
@@ -234,6 +258,11 @@ impl ModelApp {
     /// Run a command with JSON parameters: what every panel, the control channel and scripts
     /// do. The result or the error goes to the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if let Some(path) = self.loading_path() {
+            let e = format!("{} is still opening: wait for it or cancel it", files::file_name(path));
+            self.set_status(e.clone(), true);
+            return Err(e);
+        }
         let revision = self.session.revision();
         let label = command_label(id);
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
@@ -262,11 +291,22 @@ impl ModelApp {
         r
     }
 
-    /// What clicking a toolbar entry or a command in the Commands panel does: a command without
-    /// parameters runs, one with parameters opens its form. `id` is a command or a catalogue
-    /// entry; an entry that is coming soon does nothing and says when it comes. Programmatic calls
-    /// use [`ModelApp::run`] instead.
+    /// What a click on a toolbar entry, a menu row or a palette result does: a command without
+    /// parameters runs, one with parameters opens its form, and the file entries (open, save,
+    /// write a deck, recover) go through the host's file pickers. `id` is a command or a
+    /// catalogue entry; an entry that is coming soon does nothing and says when it comes.
+    /// Programmatic calls use [`ModelApp::run`] or [`ModelApp::start_programmatic`].
     pub fn start(&mut self, id: &str) -> Result<(), String> {
+        self.begin(id, true)
+    }
+
+    /// `ui.start` from the control channel: as a click, but never a native file picker (file
+    /// entries open their command's form).
+    pub fn start_programmatic(&mut self, id: &str) -> Result<(), String> {
+        self.begin(id, false)
+    }
+
+    fn begin(&mut self, id: &str, interactive: bool) -> Result<(), String> {
         let (command, preset) = match catalogue::find(id) {
             Some(c) => match c.command() {
                 Some(command) => (command, c.preset()),
@@ -279,13 +319,24 @@ impl ModelApp {
             None => (id, json!({})),
         };
         let spec = modelcraft_engine::find_command(command).ok_or_else(|| format!("unknown command `{command}`"))?;
+        if interactive && self.file_action(spec.id, &preset) {
+            self.dialog = None;
+            return Ok(());
+        }
         if spec.params.trim() == "{}" {
             self.dialog = None;
             self.run(spec.id, json!({})).map(|_| ())
         } else {
             // The form starts with the entry's preset; the rest (a path…) is filled in there.
-            self.dialog = Some(ParamsDialog { command: spec.id, text: preset.to_string(), error: None });
+            self.open_form(spec.id, preset);
             Ok(())
+        }
+    }
+
+    /// Open a command's parameter form with `params` filled in.
+    pub fn open_form(&mut self, command: &str, params: Value) {
+        if let Some(spec) = modelcraft_engine::find_command(command) {
+            self.dialog = Some(ParamsDialog { command: spec.id, text: params.to_string(), error: None });
         }
     }
 
@@ -491,6 +542,10 @@ impl ModelApp {
             self.styled = Some(self.ui.dark);
         }
         self.drain_control(ctx);
+        if self.poll_loading() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        self.dropped_files(ctx);
         self.shortcuts(ctx);
         self.cam.fov = if self.ui.perspective { PERSPECTIVE_FOV } else { 0.0 };
         if !self.synthetic.is_empty() {
@@ -508,23 +563,35 @@ impl ModelApp {
         self.screenshots(ctx);
     }
 
-    /// Undo (Ctrl/Cmd+Z) and redo (Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y), unless a text field has the
-    /// keyboard (it undoes its own typing).
+    /// Undo (Ctrl/Cmd+Z), redo (Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y), open (Ctrl/Cmd+O), save
+    /// (Ctrl/Cmd+S) and save as (Ctrl/Cmd+Shift+S), unless a text field has the keyboard (it
+    /// undoes its own typing).
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.memory(|m| m.focused().is_some()) {
             return;
         }
         let shortcut = |modifiers, key| egui::KeyboardShortcut::new(modifiers, key);
-        // Shift+Z first: the plain shortcut matches it too.
-        let (redo, undo) = ctx.input_mut(|i| {
-            let redo = i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z))
-                || i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::Y));
-            (redo, i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::Z)))
+        let shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+        // Shift first: the plain shortcut matches it too.
+        let (redo, undo, save_as, save, open) = ctx.input_mut(|i| {
+            let redo = i.consume_shortcut(&shortcut(shift, egui::Key::Z)) || i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::Y));
+            let undo = i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::Z));
+            let save_as = i.consume_shortcut(&shortcut(shift, egui::Key::S));
+            let save = i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::S));
+            (redo, undo, save_as, save, i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::O)))
         });
         if redo {
             let _ = self.run("edit.redo", json!({}));
         } else if undo {
             let _ = self.run("edit.undo", json!({}));
+        }
+        if save_as {
+            self.save_as();
+        } else if save {
+            self.save();
+        }
+        if open {
+            self.open_dialog(None);
         }
     }
 
@@ -569,6 +636,7 @@ impl ModelApp {
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| viewport::show(self, ui));
         panels::params_dialog(self, ui.ctx());
+        files::show(self, ui.ctx());
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {

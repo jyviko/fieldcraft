@@ -115,6 +115,12 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "model": {"nodes": app.session.model.nodes().len(), "elements": app.session.model.elements().len()},
             "results": app.session.results_report(),
             "probe": app.probe,
+            "loading": app.loading_path(),
+            "prompt": app.prompt.as_ref().map(|p| match p {
+                crate::files::Prompt::Unsaved { path } => json!({"unsaved": path}),
+                crate::files::Prompt::Recover => json!("recover"),
+            }),
+            "recent": app.recent.paths,
             "version": crate::VERSION,
         })),
         "ui.toolbar" => ok(crate::toolbar::describe(app)),
@@ -152,7 +158,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
         }
         "ui.start" => {
             let Some(id) = s("command") else { return err("missing `command`") };
-            match app.start(id) {
+            match app.start_programmatic(id) {
                 Ok(()) => ok(json!({"dialog": app.dialog.as_ref().map(|d| d.command)})),
                 Err(e) => err(e),
             }
@@ -172,6 +178,34 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 return wrap(app.run_dialog());
             }
             ok(json!(app.dialog.as_ref().map(|d| json!({"command": d.command, "text": d.text, "error": d.error}))))
+        }
+        "ui.prompt" => {
+            let Some(prompt) = app.prompt.clone() else { return err("no prompt is open") };
+            match (prompt, s("answer")) {
+                (crate::files::Prompt::Unsaved { .. }, Some(a @ ("save" | "discard" | "cancel"))) => {
+                    let answer = match a {
+                        "save" => crate::files::Answer::Save,
+                        "discard" => crate::files::Answer::Discard,
+                        _ => crate::files::Answer::Cancel,
+                    };
+                    app.answer_unsaved(answer);
+                    ok(json!({"loading": app.loading_path()}))
+                }
+                (crate::files::Prompt::Recover, Some("close" | "cancel")) => {
+                    app.prompt = None;
+                    ok(Value::Null)
+                }
+                (crate::files::Prompt::Recover, Some("recover")) => match s("id") {
+                    Some(id) => {
+                        app.recover(id);
+                        ok(json!({"loading": app.loading_path()}))
+                    }
+                    None => err("missing `id` (from file.recovery.list)"),
+                },
+                (_, a) => {
+                    err(format!("`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; recover: recover with id, close)"))
+                }
+            }
         }
         "ui.move" | "ui.click" => {
             let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
@@ -432,6 +466,7 @@ mod tests {
             "ui.render",
             "ui.capture",
             "ui.toolbar",
+            "ui.prompt",
         ] {
             for p in &hostile {
                 let _ = call(&mut app, method, p.clone());

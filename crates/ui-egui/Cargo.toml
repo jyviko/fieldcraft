@@ -14,6 +14,7 @@ modelcraft-engine = { workspace = true }
 modelcraft-render = { workspace = true }
 modelcraft-explicit = { workspace = true }
 modelcraft-geometry = { workspace = true }
+modelcraft-decks = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 serde = { workspace = true }

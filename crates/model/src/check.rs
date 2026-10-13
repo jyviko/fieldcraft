@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::loads::Distribution;
 use crate::{BoundaryCondition, Elastic, Error, Load, Model, Procedure, Result, SectionKind, Target};
 
 /// How serious a [`Diagnostic`] is.
@@ -63,6 +64,10 @@ pub struct Resolved {
     pub sets: BTreeMap<String, ResolvedSet>,
     /// The node label of every reference point ([`Model::reference_point_nodes`]).
     pub reference_point_nodes: BTreeMap<String, u32>,
+    /// Forces, moments and tractions as nodal values, sorted by node: what writers and the solver
+    /// apply, so every one of them distributes a load the same way. A force or traction gives
+    /// force components, a moment moment components.
+    pub nodal_loads: BTreeMap<String, Vec<(u32, [f64; 3])>>,
     /// The check's warnings (a resolved model has no errors).
     pub warnings: Vec<Diagnostic>,
 }
@@ -252,9 +257,11 @@ impl Model {
         }
 
         // Reference points and couplings.
-        match self.reference_point_nodes() {
-            Ok(nodes) => resolved.reference_point_nodes = nodes,
-            Err(e) => d.error("model", e.to_string()),
+        resolved.reference_point_nodes = self.reference_point_nodes();
+        for (name, label) in &resolved.reference_point_nodes {
+            if self.nodes.contains_key(label) {
+                d.error(format!("reference point `{name}`"), format!("its node label {label} is also a mesh node"));
+            }
         }
         for (name, c) in &self.couplings {
             if set_of(&c.set).nodes.is_empty() {
@@ -296,10 +303,17 @@ impl Model {
         }
 
         // Loads.
+        let mut nodal_loads = BTreeMap::new();
         for (name, load) in &self.loads {
             let subject = format!("load `{name}`");
+            match self.nodal_values(load, &resolved) {
+                Ok(Some(values)) => {
+                    nodal_loads.insert(name.clone(), values);
+                }
+                Ok(None) => {}
+                Err(m) => d.error(&subject, m),
+            }
             match load {
-                Load::Force { target: Target::Set(s), .. } if set_of(s).nodes.is_empty() => d.error(&subject, format!("set `{s}` has no nodes")),
                 Load::Moment { target, .. } if !has_rotations(target) => {
                     d.error(&subject, format!("{target} has no nodes with rotations; apply the moment to a reference point coupled to it"))
                 }
@@ -356,9 +370,58 @@ impl Model {
             d.warning(format!("load `{n}`"), "is not active in any step");
         }
 
+        resolved.nodal_loads = nodal_loads;
         let mut out = d.0;
         out.sort_by_key(|a| a.severity);
         (resolved, out)
+    }
+
+    /// A force, moment or traction as nodal values (`None` for other loads), or why it cannot be
+    /// distributed.
+    fn nodal_values(&self, load: &Load, r: &Resolved) -> std::result::Result<Option<Vec<(u32, [f64; 3])>>, String> {
+        let scale = |v: [f64; 3], k: f64| v.map(|c| c * k);
+        let (target, vector, distribution) = match load {
+            Load::Force { target, vector, distribution } | Load::Moment { target, vector, distribution } => (target, *vector, *distribution),
+            Load::Traction { set, vector } => {
+                let faces = r.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default();
+                if faces.is_empty() {
+                    return Err(format!("set `{set}` has no element faces to load"));
+                }
+                let w = self.surface_weights(faces).map_err(|e| e.to_string())?;
+                return Ok(Some(w.into_iter().map(|(n, a)| (n, scale(*vector, a))).collect()));
+            }
+            _ => return Ok(None),
+        };
+        let empty = ResolvedSet::default();
+        let set = match target {
+            Target::ReferencePoint(rp) => {
+                return r
+                    .reference_point_nodes
+                    .get(rp)
+                    .map(|n| Some(vec![(*n, vector)]))
+                    .ok_or_else(|| format!("reference point `{rp}` has no node"));
+            }
+            Target::Set(s) => r.sets.get(s).unwrap_or(&empty),
+        };
+        let name = target.set().unwrap_or_default();
+        if set.nodes.is_empty() {
+            return Err(format!("set `{name}` has no nodes"));
+        }
+        Ok(Some(match distribution {
+            Distribution::PerNode => set.nodes.iter().map(|n| (*n, vector)).collect(),
+            Distribution::Total if set.faces.is_empty() => {
+                let share = 1.0 / set.nodes.len() as f64;
+                set.nodes.iter().map(|n| (*n, scale(vector, share))).collect()
+            }
+            Distribution::Total => {
+                let w = self.surface_weights(&set.faces).map_err(|e| e.to_string())?;
+                let area: f64 = w.values().sum();
+                if !(area > 0.0 && area.is_finite()) {
+                    return Err(format!("the faces of set `{name}` have no area to share the load by"));
+                }
+                w.into_iter().map(|(n, a)| (n, scale(vector, a / area))).collect()
+            }
+        }))
     }
 
     /// Whether a vector is parallel to the axis of a two-node element (or the element has no

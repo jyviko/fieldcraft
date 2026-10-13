@@ -59,11 +59,12 @@ fn defined() -> Model {
     m.add_material("Steel", Material { elastic: Some(Elastic::Isotropic { young: 2.1e5, poisson: 0.3 }), density: Some(7.85e-9) }).unwrap();
     m.add_section("bar", Section { set: "all".into(), material: "Steel".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
         .unwrap();
-    m.add_reference_point("RP", ReferencePoint { xyz: [3.0, 0.5, 0.5] }).unwrap();
+    m.add_reference_point("RP", ReferencePoint { xyz: [3.0, 0.5, 0.5], label: 0 }).unwrap();
     m.add_coupling("load-pad", Coupling { reference_point: "RP".into(), set: "end".into(), kind: CouplingKind::Distributing, dofs: Dofs::all() })
         .unwrap();
     m.add_boundary_condition("clamp", BoundaryCondition::Fixed { target: Target::Set("root".into()) }).unwrap();
-    m.add_load("push", Load::Force { target: Target::ReferencePoint("RP".into()), vector: [0.0, 0.0, -100.0] }).unwrap();
+    m.add_load("push", Load::Force { target: Target::ReferencePoint("RP".into()), vector: [0.0, 0.0, -100.0], distribution: Distribution::Total })
+        .unwrap();
     m.add_load("press", Load::Pressure { set: "end".into(), magnitude: 1.0 }).unwrap();
     let mut s = Step::new("Bend", Procedure::Static {});
     s.boundary_conditions.insert("clamp".into());
@@ -87,8 +88,9 @@ fn a_complete_model_resolves_and_survives_a_remesh() {
     assert_eq!(r.sets["root"].nodes, vec![1, 2, 3, 4]);
     assert!(r.sets["root"].elements.is_empty(), "a face holds no solid elements");
     assert_eq!(r.sets["end"].nodes, vec![9, 10, 11, 12]);
-    assert_eq!(r.reference_point_nodes["RP"], 13);
-    assert_eq!(r.target_nodes(&Target::ReferencePoint("RP".into())), vec![13]);
+    assert_eq!(r.reference_point_nodes["RP"], MAX_LABEL, "from the top of the label range");
+    assert_eq!(r.nodal_loads["push"], vec![(MAX_LABEL, [0.0, 0.0, -100.0])]);
+    assert_eq!(r.target_nodes(&Target::ReferencePoint("RP".into())), [MAX_LABEL]);
 
     // The pressure acts on the end face's outward-oriented nodes (x = 2).
     let face = m.face_nodes(ElementFace { element: 2, face: 4 }).unwrap();
@@ -101,7 +103,7 @@ fn a_complete_model_resolves_and_survives_a_remesh() {
     assert_eq!(r.sets["all"].elements, vec![101, 102, 103, 104]);
     assert_eq!(r.sets["end"].faces, vec![ElementFace { element: 104, face: 4 }]);
     assert_eq!(r.sets["end"].nodes, vec![117, 118, 119, 120]);
-    assert_eq!(r.reference_point_nodes["RP"], 121);
+    assert_eq!(r.reference_point_nodes["RP"], MAX_LABEL, "a remesh does not renumber reference points");
 
     // Vertex members resolve to their node.
     m.add_set("tip", Set::of_geometry(vec![GeometryRef::new("Bar", Entity::Vertex("tip".into())).unwrap()])).unwrap();
@@ -117,7 +119,7 @@ fn the_check_names_what_is_missing() {
     assert!(e.contains("face top of body Bar is not on the mesh") && e.contains("node 999"), "{e}");
     m.add_set("side", Set { faces: vec![ElementFace { element: 1, face: 3 }], ..Set::default() }).unwrap();
     m.add_load("ghost-load", Load::Pressure { set: "ghost".into(), magnitude: 1.0 }).unwrap();
-    m.add_load("twist", Load::Moment { target: Target::Set("end".into()), vector: [1.0, 0.0, 0.0] }).unwrap();
+    m.add_load("twist", Load::Moment { target: Target::Set("end".into()), vector: [1.0, 0.0, 0.0], distribution: Distribution::Total }).unwrap();
     m.add_material("Soft", Material { elastic: Some(Elastic::Isotropic { young: 2.1e11, poisson: 0.3 }), density: None }).unwrap();
     m.add_section("again", Section { set: "side".into(), material: "Soft".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
         .unwrap();
@@ -202,7 +204,10 @@ fn definitions_refer_only_to_existing_items_and_cannot_be_deleted_while_used() {
     };
     assert!(matches!(m.add_section("x", section("nope", "Steel")), Err(Error::NotFound(_))));
     assert!(matches!(m.add_section("x", section("all", "Nope")), Err(Error::NotFound(_))));
-    assert!(m.add_load("x", Load::Force { target: Target::ReferencePoint("nope".into()), vector: [1.0, 0.0, 0.0] }).is_err());
+    assert!(
+        m.add_load("x", Load::Force { target: Target::ReferencePoint("nope".into()), vector: [1.0, 0.0, 0.0], distribution: Distribution::Total })
+            .is_err()
+    );
     assert!(
         m.add_coupling("x", Coupling { reference_point: "RP".into(), set: "end".into(), kind: CouplingKind::Kinematic, dofs: Dofs::none() }).is_err()
     );
@@ -262,4 +267,130 @@ fn tags_are_checked() {
     assert!(m.tag_element(1, 9999).is_err());
     assert!(m.tag_element(77, body).is_err());
     assert_eq!(m.geometry_tag(&GeometryRef::face("Bar", "left").unwrap()).unwrap(), face, "interned once");
+}
+
+/// A block `[0, 1] × [0, 1] × [0, 1]` of `n × n × n` hex8 with graded spacing (so area weighting
+/// matters), tagged as body `Block` with its face `end` at x = 1.
+fn block(m: &mut Model, n: u32) {
+    m.clear_geometry_tags();
+    for e in m.elements().keys().copied().collect::<Vec<_>>() {
+        m.remove_element(e).unwrap();
+    }
+    for v in m.nodes().keys().copied().collect::<Vec<_>>() {
+        m.remove_node(v).unwrap();
+    }
+    let at = |i: u32| (f64::from(i) / f64::from(n)).powi(2);
+    let node = |i: u32, j: u32, k: u32| 1 + i + j * (n + 1) + k * (n + 1) * (n + 1);
+    for k in 0..=n {
+        for j in 0..=n {
+            for i in 0..=n {
+                m.set_node(node(i, j, k), [at(i), at(j), at(k)]).unwrap();
+            }
+        }
+    }
+    let body = m.geometry_tag(&GeometryRef::body("Block").unwrap()).unwrap();
+    let end = m.geometry_tag(&GeometryRef::face("Block", "end").unwrap()).unwrap();
+    let mut label = 0;
+    for k in 0..n {
+        for j in 0..n {
+            for i in 0..n {
+                label += 1;
+                let nodes = vec![
+                    node(i, j, k),
+                    node(i + 1, j, k),
+                    node(i + 1, j + 1, k),
+                    node(i, j + 1, k),
+                    node(i, j, k + 1),
+                    node(i + 1, j, k + 1),
+                    node(i + 1, j + 1, k + 1),
+                    node(i, j + 1, k + 1),
+                ];
+                m.set_element(label, ElementKind::Hex8, nodes).unwrap();
+                m.tag_element(label, body).unwrap();
+                if i + 1 == n {
+                    m.tag_element_face(label, 4, end).unwrap();
+                }
+            }
+        }
+    }
+}
+
+fn sum(values: &[(u32, [f64; 3])]) -> [f64; 3] {
+    values.iter().fold([0.0; 3], |s, (_, v)| [s[0] + v[0], s[1] + v[1], s[2] + v[2]])
+}
+
+#[test]
+fn a_total_force_on_a_face_is_the_same_on_every_mesh() {
+    let mut m = Model::default();
+    block(&mut m, 2);
+    m.set_units(UnitSystem::MmTonneS);
+    m.add_set("all", Set::of_geometry(vec![GeometryRef::body("Block").unwrap()])).unwrap();
+    m.add_set("end", Set::of_geometry(vec![GeometryRef::face("Block", "end").unwrap()])).unwrap();
+    m.add_material("Steel", Material { elastic: Some(Elastic::Isotropic { young: 2.1e5, poisson: 0.3 }), density: Some(7.85e-9) }).unwrap();
+    m.add_section("block", Section { set: "all".into(), material: "Steel".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
+        .unwrap();
+    let force = |distribution| Load::Force { target: Target::Set("end".into()), vector: [100.0, 0.0, -50.0], distribution };
+    m.add_load("total", force(Distribution::Total)).unwrap();
+    m.add_load("each", force(Distribution::PerNode)).unwrap();
+    m.add_load("drag", Load::Traction { set: "end".into(), vector: [0.0, 2.0, 0.0] }).unwrap();
+    let mut s = Step::new("Pull", Procedure::Static {});
+    s.loads.extend(["total".to_string(), "each".to_string(), "drag".to_string()]);
+    m.add_step(s, None).unwrap();
+
+    let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9);
+    let coarse = m.resolve().unwrap();
+    block(&mut m, 5);
+    let fine = m.resolve().unwrap();
+    for r in [&coarse, &fine] {
+        assert!(close(sum(&r.nodal_loads["total"]), [100.0, 0.0, -50.0]), "{:?}", sum(&r.nodal_loads["total"]));
+        // Traction × area (the end face is 1 × 1).
+        assert!(close(sum(&r.nodal_loads["drag"]), [0.0, 2.0, 0.0]));
+        assert_eq!(r.nodal_loads["total"].len(), r.sets["end"].nodes.len());
+    }
+    // A per-node force multiplies with the node count, by request.
+    assert!(close(sum(&coarse.nodal_loads["each"]), [900.0, 0.0, -450.0]));
+    assert!(close(sum(&fine.nodal_loads["each"]), [3600.0, 0.0, -1800.0]));
+    let weights: Vec<f64> = fine.nodal_loads["total"].iter().map(|(_, v)| v[0]).collect();
+    assert!(weights.iter().any(|w| (w - weights[0]).abs() > 1e-6), "graded faces give unequal shares");
+
+    // A node set without faces splits a total force equally.
+    m.add_set("pins", Set { nodes: vec![1, 2, 3, 4], ..Set::default() }).unwrap();
+    m.add_load("pinned", Load::Force { target: Target::Set("pins".into()), vector: [4.0, 0.0, 0.0], distribution: Distribution::Total }).unwrap();
+    assert_eq!(
+        m.resolve().unwrap().nodal_loads["pinned"],
+        vec![(1, [1.0, 0.0, 0.0]), (2, [1.0, 0.0, 0.0]), (3, [1.0, 0.0, 0.0]), (4, [1.0, 0.0, 0.0])]
+    );
+
+    // A traction needs faces.
+    m.add_load("nowhere", Load::Traction { set: "pins".into(), vector: [1.0, 0.0, 0.0] }).unwrap();
+    assert!(m.check().iter().any(|d| d.subject == "load `nowhere`" && d.message.contains("no element faces")));
+}
+
+#[test]
+fn reference_point_labels_are_stable() {
+    let mut m = defined();
+    m.add_reference_point("A", ReferencePoint { xyz: [0.0; 3], label: 0 }).unwrap();
+    m.add_reference_point("Z", ReferencePoint { xyz: [0.0; 3], label: 0 }).unwrap();
+    let before = m.reference_point_nodes();
+    assert_eq!((before["RP"], before["A"], before["Z"]), (MAX_LABEL, MAX_LABEL - 1, MAX_LABEL - 2), "in creation order");
+    // Another point, more nodes, a remesh and an edit renumber nothing.
+    m.add_reference_point("B", ReferencePoint { xyz: [1.0; 3], label: 0 }).unwrap();
+    m.set_node(5000, [9.0; 3]).unwrap();
+    bar(&mut m, 3, 40);
+    m.replace_reference_point("A", ReferencePoint { xyz: [2.0; 3], label: 0 }).unwrap();
+    let after = m.reference_point_nodes();
+    for name in ["RP", "A", "Z"] {
+        assert_eq!(after[name], before[name], "{name}");
+    }
+    // Removing one frees its label for the next; explicit labels are checked.
+    m.remove_reference_point("Z").unwrap();
+    m.add_reference_point("C", ReferencePoint { xyz: [0.0; 3], label: 0 }).unwrap();
+    assert_eq!(m.reference_point_nodes()["C"], MAX_LABEL - 2);
+    assert!(m.add_reference_point("D", ReferencePoint { xyz: [0.0; 3], label: MAX_LABEL }).is_err(), "taken");
+    assert!(m.add_reference_point("D", ReferencePoint { xyz: [0.0; 3], label: MAX_LABEL + 1 }).is_err());
+    m.add_reference_point("D", ReferencePoint { xyz: [0.0; 3], label: 41 }).unwrap();
+    assert!(
+        m.check().iter().any(|d| d.subject == "reference point `D`" && d.message.contains("also a mesh node")),
+        "41 is a node of the remeshed bar"
+    );
 }

@@ -3,6 +3,12 @@
 //! A reference point is a single node off the mesh with three translations and three rotations.
 //! A coupling ties it to a set's nodes, so a force, moment or boundary condition on the point acts
 //! on a whole face (a bolt hole, a mounting pad) without hand-picked nodes.
+//!
+//! Each reference point keeps the node label it is written under in every deck. Unless one is
+//! given, it gets the highest free label at the top of the label range when it is created, far
+//! above the labels meshers use (they count up from 1), so remeshing, adding nodes and adding or
+//! removing other reference points never renumber it. A mesh node on the same label is an error
+//! of the check.
 
 use std::collections::BTreeMap;
 
@@ -16,6 +22,9 @@ use crate::{Error, MAX_LABEL, Model, Result, check_coordinates, context, insert_
 #[serde(deny_unknown_fields)]
 pub struct ReferencePoint {
     pub xyz: [f64; 3],
+    /// Its node label in decks; 0 when creating means "choose one" (see the module docs).
+    #[serde(default)]
+    pub label: u32,
 }
 
 /// How a coupling ties the reference point to the set's nodes.
@@ -50,13 +59,38 @@ impl Model {
         self.reference_points.get(name)
     }
 
-    pub fn add_reference_point(&mut self, name: &str, point: ReferencePoint) -> Result<()> {
+    /// Check a reference point's coordinates and label, choosing a label when it has none.
+    fn place_reference_point(&self, name: &str, mut point: ReferencePoint, current: Option<u32>) -> Result<ReferencePoint> {
         check_coordinates(&point.xyz).map_err(|e| context("reference point", name, e))?;
+        let taken = |l: u32| self.reference_points.iter().any(|(n, p)| n != name && p.label == l);
+        if point.label == 0 {
+            point.label = match current {
+                Some(l) => l,
+                None => (1..=MAX_LABEL)
+                    .rev()
+                    .take(crate::MAX_DEFINITIONS + 1)
+                    .find(|l| !taken(*l))
+                    .ok_or_else(|| Error::Limit(format!("no node label left for reference point `{name}`")))?,
+            };
+        }
+        if point.label > MAX_LABEL {
+            return Err(context("reference point", name, Error::Invalid(format!("label {} is outside 1..={MAX_LABEL}", point.label))));
+        }
+        if let Some((other, _)) = self.reference_points.iter().find(|(n, p)| *n != name && p.label == point.label) {
+            return Err(context("reference point", name, Error::Invalid(format!("label {} is taken by reference point `{other}`", point.label))));
+        }
+        Ok(point)
+    }
+
+    pub fn add_reference_point(&mut self, name: &str, point: ReferencePoint) -> Result<()> {
+        let point = self.place_reference_point(name, point, None)?;
         insert_new(&mut self.reference_points, "reference point", name, point)
     }
 
+    /// Replace a reference point; a label of 0 keeps its current one.
     pub fn replace_reference_point(&mut self, name: &str, point: ReferencePoint) -> Result<()> {
-        check_coordinates(&point.xyz).map_err(|e| context("reference point", name, e))?;
+        let current = self.reference_points.get(name).map(|p| p.label).ok_or_else(|| Error::NotFound(format!("reference point `{name}`")))?;
+        let point = self.place_reference_point(name, point, Some(current))?;
         replace_existing(&mut self.reference_points, "reference point", name, point)
     }
 
@@ -74,20 +108,9 @@ impl Model {
         remove_existing(&mut self.reference_points, "reference point", name).map(|_| ())
     }
 
-    /// The node label each reference point takes in a deck: after the largest mesh node label, in
-    /// name order. Every writer uses these, so the decks agree.
-    pub fn reference_point_nodes(&self) -> Result<BTreeMap<String, u32>> {
-        let first = self.nodes.keys().next_back().copied().unwrap_or(0);
-        let mut out = BTreeMap::new();
-        for (i, name) in self.reference_points.keys().enumerate() {
-            let label = u32::try_from(i)
-                .ok()
-                .and_then(|i| first.checked_add(1)?.checked_add(i))
-                .filter(|l| *l <= MAX_LABEL)
-                .ok_or_else(|| Error::Limit(format!("no node label left for reference point `{name}` (labels stop at {MAX_LABEL})")))?;
-            out.insert(name.clone(), label);
-        }
-        Ok(out)
+    /// The node label of each reference point in decks.
+    pub fn reference_point_nodes(&self) -> BTreeMap<String, u32> {
+        self.reference_points.iter().map(|(n, p)| (n.clone(), p.label)).collect()
     }
 
     pub fn couplings(&self) -> &BTreeMap<String, Coupling> {

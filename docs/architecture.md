@@ -108,8 +108,15 @@ element names, cards and keywords):
   member not on the mesh, an element with no section or in two, a moment on solid nodes, a
   missing density for a frequency step, …). `Model::resolve` returns what writers and the solver
   read besides the definitions: every set resolved (each element then lies in exactly one
-  section's set) and the node label of every reference point (after the largest mesh node, in
-  name order). It fails when the check finds an error.
+  section's set), the node label of every reference point, and every force, moment and traction
+  as nodal values. It fails when the check finds an error.
+- **Loads that keep their meaning on any mesh.** A force or moment on a set is a total by
+  default: split by the consistent nodal weights `∫ N_i dA` of the set's faces (Gauss quadrature
+  on each face's own linear or quadratic geometry), or equally over a set of nodes only. Applying
+  it at every node is an explicit, mesh-dependent opt-in (`per_node`). A traction is force per
+  area on faces. The expansion lives in `resolve`, so the deck writers and the solver share it.
+- **Reference point labels** are stored with the point: chosen from the top of the label range
+  when it is created, so remeshing or adding nodes and points never renumbers them.
 - **Files.** A model deserializes by replaying its contents through the same checked methods the
   commands use, so a file cannot hold what commands would refuse.
 

@@ -7,16 +7,42 @@ use serde::{Deserialize, Serialize};
 use crate::bcs::Target;
 use crate::{Error, Model, Result, context, finite, insert_new, not_in_use, remove_existing, replace_existing, require};
 
+/// How a force or moment on a set is shared among the set's nodes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Distribution {
+    /// The vector is the total. On a set with element faces it is split by the faces' consistent
+    /// nodal weights (area-weighted, [`Model::surface_weights`]); on a set of nodes only, equally.
+    /// The total is the same on every mesh of the set.
+    #[default]
+    Total,
+    /// The vector is applied at every node of the set, so the total grows with the number of
+    /// nodes: it depends on the mesh.
+    PerNode,
+}
+
 /// A load.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Load {
-    /// A force vector applied at every node of the target (not divided among them: to apply a
-    /// total force to a face, put it on a reference point coupled to the face).
-    Force { target: Target, vector: [f64; 3] },
-    /// A moment vector applied at every node of the target. Solid elements have no rotations, so
-    /// a moment on a solid goes through a coupled reference point.
-    Moment { target: Target, vector: [f64; 3] },
+    /// A force on the target's nodes, shared as `distribution` says (a reference point takes it
+    /// whole).
+    Force {
+        target: Target,
+        vector: [f64; 3],
+        #[serde(default)]
+        distribution: Distribution,
+    },
+    /// A moment on the target's nodes, shared as `distribution` says. Solid elements have no
+    /// rotations, so a moment on a solid goes through a coupled reference point.
+    Moment {
+        target: Target,
+        vector: [f64; 3],
+        #[serde(default)]
+        distribution: Distribution,
+    },
+    /// A force per area on the set's element faces, as consistent nodal forces.
+    Traction { set: String, vector: [f64; 3] },
     /// Uniform pressure on the set's element faces, positive pushing into the elements (against
     /// the outward normal).
     Pressure { set: String, magnitude: f64 },
@@ -32,11 +58,12 @@ pub enum Load {
 }
 
 impl Load {
-    /// `force`, `moment`, `pressure`, `gravity` or `body_force`.
+    /// `force`, `moment`, `traction`, `pressure`, `gravity` or `body_force`.
     pub fn kind(&self) -> &'static str {
         match self {
             Load::Force { .. } => "force",
             Load::Moment { .. } => "moment",
+            Load::Traction { .. } => "traction",
             Load::Pressure { .. } => "pressure",
             Load::Gravity { .. } => "gravity",
             Load::BodyForce { .. } => "body_force",
@@ -47,7 +74,7 @@ impl Load {
     pub fn set(&self) -> Option<&str> {
         match self {
             Load::Force { target, .. } | Load::Moment { target, .. } => target.set(),
-            Load::Pressure { set, .. } | Load::BodyForce { set, .. } => Some(set),
+            Load::Pressure { set, .. } | Load::BodyForce { set, .. } | Load::Traction { set, .. } => Some(set),
             Load::Gravity { set, .. } => set.as_deref(),
         }
     }
@@ -62,7 +89,7 @@ impl Load {
 
     pub fn validate(&self) -> Result<()> {
         let vector = match self {
-            Load::Force { vector, .. } | Load::Moment { vector, .. } | Load::BodyForce { vector, .. } => vector,
+            Load::Force { vector, .. } | Load::Moment { vector, .. } | Load::BodyForce { vector, .. } | Load::Traction { vector, .. } => vector,
             Load::Gravity { acceleration, .. } => acceleration,
             Load::Pressure { magnitude, .. } => {
                 finite("pressure", *magnitude)?;

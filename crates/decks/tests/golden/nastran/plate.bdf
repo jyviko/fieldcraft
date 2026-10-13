@@ -1,0 +1,64 @@
+$ Nastran bulk data written by ModelCraft
+$ units: mm-t-s-N-MPa
+SOL 101
+CEND
+TITLE = ModelCraft model
+ECHO = NONE
+SUBCASE 1
+  SUBTITLE = Sag
+  SPC = 1
+  LOAD = 4
+  DISPLACEMENT = ALL
+  SPCFORCES = ALL
+  STRESS = ALL
+  STRAIN = ALL
+BEGIN BULK
+PARAM       POST      -1
+PARAM    AUTOSPC     YES
+$ nodes
+GRID*                  1                              0.              0.
+*                     0.
+GRID*                  2                              5.              0.
+*                     0.
+GRID*                  3                             10.              0.
+*                     0.
+GRID*                  4                              0.              5.
+*                     0.
+GRID*                  5                              5.              5.
+*                     0.
+GRID*                  6                             10.              5.
+*                     0.
+GRID*                  7                              0.             10.
+*                     0.
+GRID*                  8                              5.             10.
+*                     0.
+GRID*                  9                             10.             10.
+*                     0.
+$ materials
+$ material Aluminium: MAT1 1
+MAT1*                  1          70000.                            0.33
+*                 2.7E-9
+$ properties
+$ section skin: PSHELL 1
+PSHELL*                1               1              2.               1
+*                                      1
+$ elements
+CQUAD4         1       1       1       2       5       4
+CQUAD4         2       1       2       3       6       5
+CQUAD4         3       1       4       5       8       7
+CQUAD4         4       1       5       6       9       8
+$ boundary conditions
+$ step Sag: SPC 1
+SPC1           1  123456       1       4       7
+$ loads
+$ load press: PLOAD4 2
+PLOAD4*                2               1           -0.01
+PLOAD4*                2               2           -0.01
+PLOAD4*                2               3           -0.01
+PLOAD4*                2               4           -0.01
+$ load weight: GRAV 3
+GRAV*                  3                              1.              0.
+*                     0.          -9810.
+LOAD*                  4              1.              1.               2
+*                     1.               3
+ENDDATA

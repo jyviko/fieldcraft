@@ -490,6 +490,9 @@ impl<'m> Deck<'m> {
     fn plan_constraints(&mut self) -> Result<()> {
         let model = self.model;
         let r = self.r;
+        // Conflicts, one problem per pair of definitions: the nodes they meet on.
+        let mut clashes: BTreeMap<(&str, &str, &str), BTreeSet<u32>> = BTreeMap::new();
+        let mut on_dependent: BTreeMap<(&str, &str), BTreeSet<u32>> = BTreeMap::new();
         for i in 0..self.steps.len() {
             let Some(step) = self.steps.get(i).copied() else { continue };
             let modes = matches!(step.procedure, Procedure::Frequency { .. });
@@ -506,10 +509,7 @@ impl<'m> Deck<'m> {
                         match *slot {
                             Some(v) if v != value => {
                                 let other = by.get(&(node, dof)).copied().unwrap_or_default();
-                                self.problem(format!(
-                                    "step `{}`: boundary conditions `{other}` and `{name}` prescribe different values for degree of freedom {dof} of node {node}",
-                                    step.name
-                                ));
+                                clashes.entry((step.name.as_str(), other, name.as_str())).or_default().insert(node);
                             }
                             _ => {
                                 *slot = Some(value);
@@ -519,12 +519,7 @@ impl<'m> Deck<'m> {
                         if let Some((mask, coupling)) = self.dependent.get(&node).copied()
                             && mask & (1 << (dof - 1)) != 0
                         {
-                            let p = format!(
-                                "boundary condition `{name}` constrains degree of freedom {dof} of node {node}, which coupling `{coupling}` makes follow another node (Nastran cannot constrain a dependent degree of freedom)"
-                            );
-                            if !self.problems.contains(&p) {
-                                self.problem(p);
-                            }
+                            on_dependent.entry((name.as_str(), coupling)).or_default().insert(node);
                         }
                     }
                 }
@@ -542,6 +537,18 @@ impl<'m> Deck<'m> {
                 }
             };
             self.step_spc.push(Some(sid));
+        }
+        for ((step, a, b), nodes) in clashes {
+            self.problem(format!(
+                "step `{step}`: boundary conditions `{a}` and `{b}` prescribe different values at nodes {} (Nastran takes one value per degree of freedom)",
+                labels(&nodes)
+            ));
+        }
+        for ((bc, coupling), nodes) in on_dependent {
+            self.problem(format!(
+                "boundary condition `{bc}` constrains nodes {} whose motion coupling `{coupling}` prescribes (Nastran cannot constrain a dependent degree of freedom)",
+                labels(&nodes)
+            ));
         }
         Ok(())
     }
@@ -907,6 +914,16 @@ fn load_card(l: &Load) -> &'static str {
         Load::Pressure { .. } => "PLOAD4",
         Load::Gravity { .. } => "GRAV",
         Load::BodyForce { .. } => "-",
+    }
+}
+
+/// The first few labels of a list, and how many more there are.
+fn labels(nodes: &BTreeSet<u32>) -> String {
+    const SHOWN: usize = 5;
+    let shown: Vec<String> = nodes.iter().take(SHOWN).map(u32::to_string).collect();
+    match nodes.len().saturating_sub(SHOWN) {
+        0 => shown.join(", "),
+        more => format!("{}, and {more} more", shown.join(", ")),
     }
 }
 

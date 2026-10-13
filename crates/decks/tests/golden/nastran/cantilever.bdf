@@ -1,0 +1,78 @@
+$ Nastran bulk data written by ModelCraft
+$ units: mm-t-s-N-MPa
+SOL 101
+CEND
+TITLE = ModelCraft model
+ECHO = NONE
+SUBCASE 1
+  SUBTITLE = Bend
+  SPC = 1
+  LOAD = 2
+  DISPLACEMENT = ALL
+  SPCFORCES = ALL
+  STRESS = ALL
+  STRAIN = ALL
+BEGIN BULK
+PARAM       POST      -1
+PARAM    AUTOSPC     YES
+$ nodes
+GRID*                  1                              0.              0.
+*                     0.
+GRID*                  2                              0.              0.
+*                     1.
+GRID*                  3                              0.              1.
+*                     0.
+GRID*                  4                              0.              1.
+*                     1.
+GRID*                  5                              1.              0.
+*                     0.
+GRID*                  6                              1.              0.
+*                     1.
+GRID*                  7                              1.              1.
+*                     0.
+GRID*                  8                              1.              1.
+*                     1.
+GRID*                  9                              2.              0.
+*                     0.
+GRID*                 10                              2.              0.
+*                     1.
+GRID*                 11                              2.              1.
+*                     0.
+GRID*                 12                              2.              1.
+*                     1.
+GRID*                 13                              3.              0.
+*                     0.
+GRID*                 14                              3.              0.
+*                     1.
+GRID*                 15                              3.              1.
+*                     0.
+GRID*                 16                              3.              1.
+*                     1.
+$ materials
+$ material Steel: MAT1 1
+MAT1*                  1         210000.                             0.3
+*                7.85E-9
+$ properties
+$ section bar: PSOLID 1
+PSOLID         1       1             TWO            FULL
+$ elements
+CHEXA          1       1       1       5       7       3       2       6
+               8       4
+CHEXA          2       1       5       9      11       7       6      10
+              12       8
+CHEXA          3       1       9      13      15      11      10      14
+              16      12
+$ boundary conditions
+$ step Bend: SPC 1
+SPC1           1  123456       1       2       3       4
+$ loads
+$ load tip: FORCE 2
+FORCE*                 2              13                              1.
+*                     0.              0.            -25.
+FORCE*                 2              14                              1.
+*                     0.              0.            -25.
+FORCE*                 2              15                              1.
+*                     0.              0.            -25.
+FORCE*                 2              16                              1.
+*                     0.              0.            -25.
+ENDDATA

@@ -1,0 +1,82 @@
+$ Nastran bulk data written by ModelCraft
+$ units: unspecified
+SOL 103
+CEND
+TITLE = ModelCraft model
+ECHO = NONE
+SUBCASE 1
+  SUBTITLE = Modes
+  SPC = 1
+  METHOD = 2
+  DISPLACEMENT = ALL
+BEGIN BULK
+PARAM       POST      -1
+PARAM    AUTOSPC     YES
+PARAM   COUPMASS       1
+$ nodes
+GRID*                 81                           -0.05            1.45
+*                   0.45
+GRID*                 82                            2.15             1.5
+*                   0.65
+GRID*                 83                              2.            0.15
+*                   0.55
+GRID*                 84                            0.05              0.
+*                    0.5
+GRID*                 85                            0.05             0.7
+*                   0.95
+GRID*                 86                            1.05             1.5
+*                   1.05
+GRID*                 87                            2.05             0.9
+*                   1.15
+GRID*                 88                            1.05             0.1
+*                   1.05
+GRID*                 89                           -0.05            0.75
+*                     0.
+GRID*                 90                            1.05            1.45
+*                   0.05
+GRID*                 91                             2.1            0.75
+*                   0.05
+GRID*                 92                              1.            0.05
+*                     0.
+GRID*                 93                              0.             1.4
+*                    0.9
+GRID*                 94                             2.1             1.6
+*                    1.2
+GRID*                 95                              2.             0.2
+*                    1.1
+GRID*                 96                             0.1              0.
+*                     1.
+GRID*                 97                            -0.1             1.5
+*                     0.
+GRID*                 98                             2.2             1.4
+*                    0.1
+GRID*                 99                              2.             0.1
+*                     0.
+GRID*                100                              0.              0.
+*                     0.
+$ reference points
+$ reference point RP: GRID 99999999
+GRID*           99999999                              1.            0.75
+*                     2.
+$ materials
+$ material Steel: MAT1 1
+MAT1*                  1         210000.                             0.3
+*                7.85E-9
+$ properties
+$ section s: PSOLID 1
+PSOLID         1       1           THREE            FULL
+$ elements
+CHEXA          7       1     100      99      98      97      96      95
+              94      93      92      91      90      89      84      83
+              82      81      88      87      86      85
+$ couplings
+$ coupling lid: RBE2 8
+RBE2           899999999  123456      85      86      87      88      93
+              94      95      96
+$ boundary conditions
+$ step Modes: SPC 1
+SPC1           1  123456      89      90      91      92      97      98
+              99     100
+$ eigenvalue extraction
+EIGRL*                 2                           5000.               6
+ENDDATA

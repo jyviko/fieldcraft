@@ -5,11 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use super::cdt::{Cdt, Triangulation};
+use super::cdt::{CLEARANCE, Cdt, Triangulation};
 use super::domain::{self, Region};
 use super::guard::Guard;
 use super::{QuadMesh, QuadOptions, finish};
-use crate::predicates::{Point2, Sign, orient2d};
+use crate::predicates::{Sign, orient2d};
+use crate::quality::{planar_corner, turns_left};
 use crate::size::SizeField;
 use crate::{Error, Result};
 
@@ -59,24 +60,17 @@ pub(crate) fn mesh(loops: &[Vec<[f64; 2]>], size: &dyn SizeField, opts: &QuadOpt
 /// One run of the pipeline on one half-resolution region.
 fn attempt(region: &Region, coarse: Coarse, size: &dyn SizeField, opts: &QuadOptions) -> Result<QuadMesh> {
     let Coarse { region: coarse, to_input, skipped, before } = coarse;
-    let boundary_mid = boundary_midpoints(&coarse, &skipped)?;
+    let chords = chords(&coarse, &skipped)?;
+    // For each coarse boundary edge (coarse ids, smaller first), the input point it skips.
+    let boundary_mid: BTreeMap<(u32, u32), u32> = chords.iter().map(|&(a, b, m)| ((a.min(b), a.max(b)), m)).collect();
+    let guard =
+        Guard::new(&chords.iter().map(|&(a, b, m)| Ok((*coarse.point(a)?, *coarse.point(b)?, *region.point(m)?))).collect::<Result<Vec<_>>>()?)?;
     let need = fan_needs(region, &to_input, &before, &skipped)?;
     let max_tris = opts.max_elements / 2 + 4 * region.pts.len() + 16;
     let mut cdt = Cdt::build(&coarse, max_tris)?;
-    let guard = guard(region, &coarse, &skipped)?;
-    #[cfg(test)]
-    cdt.verify().map_err(|e| Error::Failed(format!("after build: {e}")))?;
-    cdt.refine(size, 2.0, &guard)?;
-    #[cfg(test)]
-    cdt.verify().map_err(|e| Error::Failed(format!("after refine: {e}")))?;
-    for (v, &k) in need.iter().enumerate() {
-        if k > 1 {
-            cdt.ensure_fan(v as u32, k)?;
-        }
-    }
-    #[cfg(test)]
-    cdt.verify().map_err(|e| Error::Failed(format!("after fans: {e}")))?;
-    let tri = cdt.triangulation();
+    cdt.refine(size, 2.0, &|p, h| guard.allows(p, CLEARANCE * h))?;
+    cdt.ensure_fans(&need)?;
+    let tri = cdt.into_triangulation();
     let (quads, leftovers) = recombine(&tri, &need)?;
     let count = 4 * quads.len() + 3 * leftovers.len();
     if count > opts.max_elements {
@@ -168,48 +162,21 @@ fn pick(region: &Region, offsets: &[usize]) -> Result<Coarse> {
     Ok(Coarse { region: Region { pts, p2, loops }, to_input, skipped, before })
 }
 
+/// The coarse loops must be simple, keep their orientation and nesting.
 fn check_coarse(coarse: &Region) -> Result<()> {
     domain::check_simple(coarse)?;
-    for (k, l) in coarse.loops.iter().enumerate() {
-        let want = if k == 0 { Sign::Positive } else { Sign::Negative };
-        if domain::loop_orientation(coarse, l)? != want {
-            return Err(Error::Invalid(format!("loop {k} turns inside out")));
-        }
-    }
-    let outer = coarse.loops.first().cloned().unwrap_or_default();
-    for (k, hole) in coarse.loops.iter().enumerate().skip(1) {
-        let first = hole.first().copied().ok_or_else(|| Error::Invalid("empty loop".into()))?;
-        if domain::winding(coarse, &outer, coarse.point(first)?)? == 0 {
-            return Err(Error::Invalid(format!("hole {k} leaves the outer loop")));
-        }
-    }
-    Ok(())
+    domain::check_orientation(coarse)?;
+    domain::check_nesting(coarse)
 }
 
-/// The Steiner-point guard of the true boundary around each coarse boundary edge.
-fn guard(region: &Region, coarse: &Region, skipped: &[u32]) -> Result<Guard> {
-    let mut chords = Vec::with_capacity(coarse.pts.len());
-    for cl in &coarse.loops {
-        for (k, &c) in cl.iter().enumerate() {
-            let d = cl.get((k + 1) % cl.len()).copied().ok_or_else(|| Error::Failed("coarse loop".into()))?;
-            let m = skipped.get(c as usize).copied().ok_or_else(|| Error::Failed("coarse id".into()))?;
-            chords.push((*coarse.point(c)?, *coarse.point(d)?, *region.point(m)?));
-        }
+/// The coarse boundary edges `(a, b, m)`: coarse ids in loop order and the input point `m` the
+/// edge skips.
+fn chords(coarse: &Region, skipped: &[u32]) -> Result<Vec<(u32, u32, u32)>> {
+    let mut out = Vec::with_capacity(coarse.pts.len());
+    for (a, b) in domain::segments(&coarse.loops) {
+        out.push((a, b, skipped.get(a as usize).copied().ok_or_else(|| Error::Failed("coarse id".into()))?));
     }
-    Guard::new(&chords)
-}
-
-/// For each coarse boundary edge (coarse ids, smaller first), the input point it skips.
-fn boundary_midpoints(coarse: &Region, skipped: &[u32]) -> Result<BTreeMap<(u32, u32), u32>> {
-    let mut map = BTreeMap::new();
-    for cl in &coarse.loops {
-        for (k, &c) in cl.iter().enumerate() {
-            let d = cl.get((k + 1) % cl.len()).copied().ok_or_else(|| Error::Failed("coarse loop".into()))?;
-            let mid = skipped.get(c as usize).copied().ok_or_else(|| Error::Failed("coarse id".into()))?;
-            map.insert((c.min(d), c.max(d)), mid);
-        }
-    }
-    Ok(map)
+    Ok(out)
 }
 
 /// How many coarse elements each coarse boundary vertex needs around it. A coarse vertex `v`
@@ -240,21 +207,9 @@ fn fan_needs(region: &Region, to_input: &[u32], before: &[u32], after: &[u32]) -
 
 /// The smallest corner scaled Jacobian of a planar quadrilateral (corner `i`:
 /// `cross(p[i+1] − p[i], p[i−1] − p[i]) / (|…| |…|)`), in `[-1, 1]`.
+/// A degenerate corner (zero-length edge) scores −1, the worst, so optimizers move away from it.
 pub(crate) fn min_scaled_jacobian(p: [[f64; 2]; 4]) -> f64 {
-    let mut m = f64::INFINITY;
-    for i in 0..4 {
-        let (a, b, c) = (p[(i + 3) % 4], p[i], p[(i + 1) % 4]);
-        let (u, w) = ([c[0] - b[0], c[1] - b[1]], [a[0] - b[0], a[1] - b[1]]);
-        let den = (u[0] * u[0] + u[1] * u[1]).sqrt() * (w[0] * w[0] + w[1] * w[1]).sqrt();
-        let r = (u[0] * w[1] - u[1] * w[0]) / den;
-        m = m.min(if den > 0.0 && r.is_finite() { r } else { -1.0 });
-    }
-    m
-}
-
-/// Exact: every corner of the quadrilateral turns left.
-pub(crate) fn is_valid(p: [&Point2; 4]) -> bool {
-    (0..4).all(|i| orient2d(p[(i + 3) % 4], p[i], p[(i + 1) % 4]) == Sign::Positive)
+    (0..4).fold(f64::INFINITY, |m, i| m.min(planar_corner(&p, i).1.unwrap_or(-1.0)))
 }
 
 /// The smallest corner scaled Jacobian of a recombined quadrilateral (sin 15°): a flatter corner
@@ -285,8 +240,7 @@ fn recombine(tri: &Triangulation, need: &[usize]) -> Result<(Vec<[u32; 4]>, Vec<
         }
     }
     edges.sort_unstable();
-    let p2 = tri.pts.iter().map(|c| Point2::new(c[0], c[1])).collect::<Result<Vec<_>>>()?;
-    let pt = |v: u32| p2.get(v as usize).ok_or_else(|| Error::Failed("point index".into()));
+    let pt = |v: u32| tri.p2.get(v as usize).ok_or_else(|| Error::Failed("point index".into()));
     let xy = |v: u32| tri.pts.get(v as usize).copied().ok_or_else(|| Error::Failed("point index".into()));
     let mut candidates: Vec<(f64, u32, u32, [u32; 4], (u32, u32))> = Vec::new();
     for w in edges.windows(2) {
@@ -300,7 +254,7 @@ fn recombine(tri: &Triangulation, need: &[usize]) -> Result<(Vec<[u32; 4]>, Vec<
         };
         let (p, q, r, s) = (v1[*i], v1[(i + 1) % 3], v1[(i + 2) % 3], v2[*j]);
         let quad = [p, q, s, r];
-        if !is_valid([pt(p)?, pt(q)?, pt(s)?, pt(r)?]) {
+        if !turns_left([pt(p)?, pt(q)?, pt(s)?, pt(r)?]) {
             continue;
         }
         let quality = min_scaled_jacobian([xy(p)?, xy(q)?, xy(s)?, xy(r)?]);
@@ -373,18 +327,17 @@ fn split(
         for (i, &a) in e.iter().enumerate() {
             let b = e.get((i + 1) % e.len()).copied().ok_or_else(|| Error::Failed("element".into()))?;
             let key = (a.min(b), a.max(b));
-            if mids.contains_key(&key) {
-                continue;
+            if let std::collections::btree_map::Entry::Vacant(slot) = mids.entry(key) {
+                let id = match boundary_mid.get(&key) {
+                    Some(&m) => m,
+                    None => {
+                        let (pa, pb) = (xy(a)?, xy(b)?);
+                        nodes.push([0.5 * (pa[0] + pb[0]), 0.5 * (pa[1] + pb[1])]);
+                        nodes.len() as u32 - 1
+                    }
+                };
+                slot.insert(id);
             }
-            let id = match boundary_mid.get(&key) {
-                Some(&m) => m,
-                None => {
-                    let (pa, pb) = (xy(a)?, xy(b)?);
-                    nodes.push([0.5 * (pa[0] + pb[0]), 0.5 * (pa[1] + pb[1])]);
-                    nodes.len() as u32 - 1
-                }
-            };
-            mids.insert(key, id);
         }
     }
     let mid = |a: u32, b: u32| mids.get(&(a.min(b), a.max(b))).copied().ok_or_else(|| Error::Failed("mid node".into()));

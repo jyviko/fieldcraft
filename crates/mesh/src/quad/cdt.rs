@@ -13,7 +13,7 @@
 //!   large for the size field or have a circumradius-to-shortest-edge ratio above √2), with one
 //!   change: boundary segments carry prescribed nodes and are never split, so a circumcentre that
 //!   falls outside the region, comes closer than a fraction of the local size to a vertex, or is
-//!   refused by the caller's [`Guard`] (clearance from the true boundary) is not inserted (a
+//!   refused by the caller's guard (clearance from the true boundary) is not inserted (a
 //!   too-large triangle gets its centroid instead). Ruppert's encroachment rule (diametral
 //!   circles) would forbid any refinement next to a boundary coarser than the size field; the
 //!   clearances keep the packing argument for termination.
@@ -25,7 +25,6 @@
 use std::collections::VecDeque;
 
 use super::domain::Region;
-use super::guard::Guard;
 use crate::predicates::{Point2, Sign, incircle, orient2d, snap_to_domain};
 use crate::size::{SizeField, checked_size};
 use crate::{Error, Result};
@@ -52,6 +51,7 @@ struct Tri {
 #[derive(Debug, Clone)]
 pub(crate) struct Triangulation {
     pub pts: Vec<[f64; 2]>,
+    pub p2: Vec<Point2>,
     pub tris: Vec<[u32; 3]>,
 }
 
@@ -67,23 +67,35 @@ pub(crate) struct Cdt {
     max_tris: usize,
 }
 
+/// Steiner points keep this fraction of the local size from vertices (and, through the
+/// caller's guard, from the boundary).
+pub(crate) const CLEARANCE: f64 = 0.3;
+
+/// A constructed point snapped into the predicates' domain, or `None` when it is outside the
+/// model's coordinate range.
+fn steiner_point(c: [f64; 2]) -> Option<Point2> {
+    let c = [snap_to_domain(c[0]), snap_to_domain(c[1])];
+    if !(c[0].abs() <= modelcraft_model::MAX_COORD && c[1].abs() <= modelcraft_model::MAX_COORD) {
+        return None;
+    }
+    Point2::new(c[0], c[1]).ok()
+}
+
 fn err(what: &str) -> Error {
     Error::Failed(format!("triangulation: {what}"))
 }
 
-/// What an insertion did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Inserted {
-    Yes,
-    /// Rejected (Steiner points only): outside the region, on or encroaching a segment, too close
-    /// to a vertex, or a cavity that could not be made valid.
-    No,
+/// The edge index `i` of `tri` that runs from `a` to `b` (opposite `v[i]`).
+fn edge_index(tri: &Tri, a: u32, b: u32) -> Option<usize> {
+    (0..3).find(|&i| tri.v[(i + 1) % 3] == a && tri.v[(i + 2) % 3] == b)
 }
 
-/// The rules a Steiner point must pass.
-#[derive(Debug, Clone, Copy)]
-struct Steiner {
-    min_distance: f64,
+/// Every edge of `tri` keeps `p` on its left or on it (exact).
+fn contains(tri: &Tri, p2: &[Point2], p: &Point2) -> bool {
+    (0..3).all(|i| match (p2.get(tri.v[(i + 1) % 3] as usize), p2.get(tri.v[(i + 2) % 3] as usize)) {
+        (Some(a), Some(b)) => orient2d(a, b, p) != Sign::Negative,
+        _ => false,
+    })
 }
 
 impl Cdt {
@@ -104,11 +116,7 @@ impl Cdt {
     /// constrained edges; triangles inside the region are marked.
     pub fn build(region: &Region, max_tris: usize) -> Result<Cdt> {
         let n = region.pts.len();
-        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for p in &region.pts {
-            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
-            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
-        }
+        let (lo, hi) = super::domain::bbox(region.pts.iter().copied());
         let c = [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1])];
         let d = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1.0);
         let corners = [[c[0] - 20.0 * d, c[1] - 10.0 * d], [c[0] + 20.0 * d, c[1] - 10.0 * d], [c[0], c[1] + 20.0 * d]];
@@ -152,7 +160,7 @@ impl Cdt {
         let mut order: Vec<(u64, u32)> = region.pts.iter().enumerate().map(|(i, p)| (key(p), i as u32)).collect();
         order.sort_unstable();
         for (_, v) in order {
-            if cdt.insert(v, None)? != Inserted::Yes {
+            if !cdt.insert(v, None)? {
                 return Err(err("a boundary point could not be inserted"));
             }
         }
@@ -163,6 +171,8 @@ impl Cdt {
             }
         }
         cdt.classify()?;
+        #[cfg(test)]
+        assert_eq!(cdt.verify(), Ok(()), "after build");
         Ok(cdt)
     }
 
@@ -200,45 +210,31 @@ impl Cdt {
             }
             return Ok(t);
         }
-        for (i, tri) in self.tris.iter().enumerate() {
-            if !tri.alive {
-                continue;
-            }
-            let mut inside = true;
-            for e in 0..3 {
-                let (a, b) = (tri.v[(e + 1) % 3], tri.v[(e + 2) % 3]);
-                if orient2d(self.p(a)?, self.p(b)?, p) == Sign::Negative {
-                    inside = false;
-                    break;
-                }
-            }
-            if inside {
-                return Ok(i as u32);
-            }
-        }
-        Err(err("point location failed"))
+        self.tris.iter().position(|tri| tri.alive && contains(tri, &self.p2, p)).map(|i| i as u32).ok_or_else(|| err("point location failed"))
     }
 
     fn any_alive(&self) -> Result<u32> {
         self.tris.iter().position(|t| t.alive).map(|i| i as u32).ok_or_else(|| err("no triangles"))
     }
 
-    /// Insert vertex `v` (already in `pts`). Boundary points (`steiner == None`) must be inserted;
-    /// Steiner points may be rejected, leaving the triangulation unchanged.
-    fn insert(&mut self, v: u32, steiner: Option<Steiner>) -> Result<Inserted> {
+    /// Insert vertex `v` (already in `pts`). Boundary points (`steiner == None`) must be inserted.
+    /// Steiner points (`Some(min_distance)`) may be rejected (outside the region, closer than
+    /// `min_distance` to a vertex, or no valid cavity), leaving the triangulation unchanged;
+    /// returns whether the point went in.
+    fn insert(&mut self, v: u32, steiner: Option<f64>) -> Result<bool> {
         let p = *self.p(v)?;
         let t0 = self.locate(&p, self.last)?;
         let tri0 = *self.t(t0)?;
         for &u in &tri0.v {
             if self.p(u)?.coords() == p.coords() {
                 return match steiner {
-                    Some(_) => Ok(Inserted::No),
+                    Some(_) => Ok(false),
                     None => Err(err("repeated point")),
                 };
             }
         }
         if steiner.is_some() && !tri0.inside {
-            return Ok(Inserted::No);
+            return Ok(false);
         }
         let mut excluded: Vec<u32> = Vec::new();
         for _ in 0..MAX_CAVITY_ROUNDS {
@@ -262,19 +258,18 @@ impl Cdt {
                     bad.push(owner);
                 }
             }
-            if let Some(rule) = steiner {
+            if let Some(min_distance) = steiner {
                 let pc = p.coords();
                 for &(a, _, _, _, _) in &edges {
                     let pa = self.xy(a)?;
-                    let d2 = (pa[0] - pc[0]).powi(2) + (pa[1] - pc[1]).powi(2);
-                    if d2 < rule.min_distance * rule.min_distance {
-                        return Ok(Inserted::No);
+                    if (pa[0] - pc[0]).powi(2) + (pa[1] - pc[1]).powi(2) < min_distance * min_distance {
+                        return Ok(false);
                     }
                 }
             }
             if bad.is_empty() && edges.len() == cavity.len() + 2 {
                 self.retriangulate(v, &cavity, &edges, tri0.inside)?;
-                return Ok(Inserted::Yes);
+                return Ok(true);
             }
             if bad.contains(&t0) || bad.is_empty() {
                 break;
@@ -284,7 +279,7 @@ impl Cdt {
             excluded.dedup();
         }
         match steiner {
-            Some(_) => Ok(Inserted::No),
+            Some(_) => Ok(false),
             None => Err(err("no valid cavity for a boundary point")),
         }
     }
@@ -332,11 +327,9 @@ impl Cdt {
             let tri = *self.t(t)?;
             for i in 0..3 {
                 let nb = tri.n[i];
-                if nb != NONE && !tri.fixed[i] && self.marked(nb) {
+                // Shared with another cavity triangle (a constrained one is reported by `insert`).
+                if nb != NONE && self.marked(nb) {
                     continue;
-                }
-                if nb != NONE && tri.fixed[i] && self.marked(nb) {
-                    continue; // reported as a constrained edge inside the cavity
                 }
                 edges.push((tri.v[(i + 1) % 3], tri.v[(i + 2) % 3], nb, tri.fixed[i], t));
             }
@@ -384,25 +377,21 @@ impl Cdt {
     /// In triangle `t`, point the edge from `b` to `a` at `to`.
     fn relink(&mut self, t: u32, a: u32, b: u32, to: u32) -> Result<()> {
         let tri = self.tm(t)?;
-        for i in 0..3 {
-            if tri.v[(i + 1) % 3] == b && tri.v[(i + 2) % 3] == a {
-                tri.n[i] = to;
-                return Ok(());
-            }
-        }
-        Err(err("neighbour does not share the edge"))
+        let i = edge_index(tri, b, a).ok_or_else(|| err("neighbour does not share the edge"))?;
+        tri.n[i] = to;
+        Ok(())
     }
 
-    /// The triangle and local index of the directed edge `a → b` (the edge opposite `v[i]` runs
-    /// from `v[i+1]` to `v[i+2]`).
-    fn find_edge(&self, a: u32, b: u32) -> Result<Option<(u32, usize)>> {
-        let start = self.vt.get(a as usize).copied().ok_or_else(|| err("vertex"))?;
+    /// Visit the triangles around vertex `v` counterclockwise, each with `v`'s local index,
+    /// until `visit` returns a value (or the rotation closes: `None`).
+    fn around<R>(&self, v: u32, mut visit: impl FnMut(u32, &Tri, usize) -> Result<Option<R>>) -> Result<Option<R>> {
+        let start = self.vt.get(v as usize).copied().ok_or_else(|| err("vertex"))?;
         let mut t = start;
         for _ in 0..self.tris.len() + 1 {
             let tri = self.t(t)?;
-            let k = tri.v.iter().position(|&x| x == a).ok_or_else(|| err("vertex map is stale"))?;
-            if tri.v[(k + 1) % 3] == b {
-                return Ok(Some((t, (k + 2) % 3)));
+            let k = tri.v.iter().position(|&x| x == v).ok_or_else(|| err("vertex map is stale"))?;
+            if let Some(r) = visit(t, tri, k)? {
+                return Ok(Some(r));
             }
             t = tri.n[(k + 1) % 3];
             if t == NONE || t == start {
@@ -412,13 +401,19 @@ impl Cdt {
         Err(err("vertex rotation did not close"))
     }
 
+    /// The triangle and local index of the directed edge `a → b` (the edge opposite `v[i]` runs
+    /// from `v[i+1]` to `v[i+2]`).
+    fn find_edge(&self, a: u32, b: u32) -> Result<Option<(u32, usize)>> {
+        self.around(a, |t, tri, k| Ok((tri.v[(k + 1) % 3] == b).then_some((t, (k + 2) % 3))))
+    }
+
     /// Flip the edge opposite `v[i]` of `t`. Returns the new edge's end points.
     fn flip(&mut self, t: u32, i: usize) -> Result<(u32, u32)> {
         let a = *self.t(t)?;
         let (p, q, r) = (a.v[i], a.v[(i + 1) % 3], a.v[(i + 2) % 3]);
         let t2 = a.n[i];
         let b = *self.t(t2)?;
-        let j = (0..3).find(|&j| b.v[(j + 1) % 3] == r && b.v[(j + 2) % 3] == q).ok_or_else(|| err("flip: neighbour mismatch"))?;
+        let j = edge_index(&b, r, q).ok_or_else(|| err("flip: neighbour mismatch"))?;
         let s = b.v[j];
         let (n_pq, f_pq) = (a.n[(i + 2) % 3], a.fixed[(i + 2) % 3]);
         let (n_rp, f_rp) = (a.n[(i + 1) % 3], a.fixed[(i + 1) % 3]);
@@ -450,10 +445,7 @@ impl Cdt {
         }
         let (p, q, r) = (a.v[i], a.v[(i + 1) % 3], a.v[(i + 2) % 3]);
         let b = *self.t(t2)?;
-        let s = match (0..3).find(|&j| b.v[(j + 1) % 3] == r && b.v[(j + 2) % 3] == q) {
-            Some(j) => b.v[j],
-            None => return Err(err("neighbour mismatch")),
-        };
+        let s = b.v[edge_index(&b, r, q).ok_or_else(|| err("neighbour mismatch"))?];
         let (pp, ps) = (self.p(p)?, self.p(s)?);
         Ok((orient2d(pp, ps, self.p(q)?) * orient2d(pp, ps, self.p(r)?) == Sign::Negative).then_some(s))
     }
@@ -485,10 +477,9 @@ impl Cdt {
             }
             self.mark_fixed(a, b)?;
             self.lawson(fresh)?;
-        } else {
-            self.mark_fixed(a, b)?;
+            return Ok(());
         }
-        Ok(())
+        self.mark_fixed(a, b)
     }
 
     fn mark_fixed(&mut self, a: u32, b: u32) -> Result<()> {
@@ -497,10 +488,8 @@ impl Cdt {
         self.tm(t)?.fixed[i] = true;
         if nb != NONE {
             let tri = self.tm(nb)?;
-            for k in 0..3 {
-                if tri.v[(k + 1) % 3] == b && tri.v[(k + 2) % 3] == a {
-                    tri.fixed[k] = true;
-                }
+            if let Some(k) = edge_index(tri, b, a) {
+                tri.fixed[k] = true;
             }
         }
         Ok(())
@@ -509,12 +498,7 @@ impl Cdt {
     /// The edges crossed by the open segment `a–b`, from `a` to `b`.
     fn crossing_edges(&self, a: u32, b: u32) -> Result<Vec<(u32, u32)>> {
         let (pa, pb) = (*self.p(a)?, *self.p(b)?);
-        let start = self.vt.get(a as usize).copied().ok_or_else(|| err("vertex"))?;
-        let mut t = start;
-        let mut found = None;
-        for _ in 0..self.tris.len() + 1 {
-            let tri = *self.t(t)?;
-            let k = tri.v.iter().position(|&x| x == a).ok_or_else(|| err("vertex map is stale"))?;
+        let found = self.around(a, |t, tri, k| {
             let (u, w) = (tri.v[(k + 1) % 3], tri.v[(k + 2) % 3]);
             let (ou, ow) = (orient2d(&pa, self.p(u)?, &pb), orient2d(&pa, self.p(w)?, &pb));
             if ou.is_zero() || ow.is_zero() {
@@ -525,15 +509,8 @@ impl Cdt {
                     return Err(Error::Invalid("a point lies on a boundary edge".into()));
                 }
             }
-            if ou == Sign::Positive && ow == Sign::Negative {
-                found = Some((t, u, w));
-                break;
-            }
-            t = tri.n[(k + 1) % 3];
-            if t == NONE || t == start {
-                break;
-            }
-        }
+            Ok((ou == Sign::Positive && ow == Sign::Negative).then_some((t, u, w)))
+        })?;
         let (mut t, mut right, mut left) = found.ok_or_else(|| err("segment start not found"))?;
         let mut out = vec![(right, left)];
         for _ in 0..self.tris.len() + 1 {
@@ -635,19 +612,15 @@ impl Cdt {
         Ok(())
     }
 
-    /// Add a Steiner point and try to insert it.
-    fn try_steiner(&mut self, c: [f64; 2], hint: u32, rule: Steiner) -> Result<bool> {
-        let c = [snap_to_domain(c[0]), snap_to_domain(c[1])];
-        if !(c[0].abs() <= modelcraft_model::MAX_COORD && c[1].abs() <= modelcraft_model::MAX_COORD) {
-            return Ok(false);
-        }
-        let Ok(p) = Point2::new(c[0], c[1]) else { return Ok(false) };
+    /// Try to insert Steiner point `p` (located from `hint`), at least `min_distance` from the
+    /// vertices of its cavity.
+    fn try_steiner(&mut self, p: Point2, hint: u32, min_distance: f64) -> Result<bool> {
         let v = self.pts.len() as u32;
-        self.pts.push(c);
+        self.pts.push(p.coords());
         self.p2.push(p);
         self.vt.push(NONE);
         self.last = hint;
-        let ok = self.insert(v, Some(rule))? == Inserted::Yes;
+        let ok = self.insert(v, Some(min_distance))?;
         if !ok {
             self.pts.pop();
             self.p2.pop();
@@ -656,9 +629,10 @@ impl Cdt {
         Ok(ok)
     }
 
-    /// Delaunay refinement of the inside triangles to `scale × size field`.
-    /// Steiner points the `guard` refuses (too close to the true boundary) are skipped.
-    pub fn refine(&mut self, size: &dyn SizeField, scale: f64, guard: &Guard) -> Result<()> {
+    /// Delaunay refinement of the inside triangles to `scale × size field`. A Steiner point `p`
+    /// for local size `h` is skipped when `allows(p, h)` refuses it (the caller's clearance from
+    /// the true boundary) or when it comes closer than [`CLEARANCE`]` × h` to a vertex.
+    pub fn refine(&mut self, size: &dyn SizeField, scale: f64, allows: &dyn Fn(&Point2, f64) -> bool) -> Result<()> {
         for _ in 0..MAX_REFINE_PASSES {
             let mut inserted = 0usize;
             let n = self.tris.len();
@@ -684,42 +658,52 @@ impl Cdt {
                 if !too_big && !poor {
                     continue;
                 }
-                let rule = Steiner { min_distance: 0.3 * h };
-                let allowed = |c: [f64; 2]| Point2::new(snap_to_domain(c[0]), snap_to_domain(c[1])).is_ok_and(|p| guard.allows(&p, 0.3 * h));
-                let centre = [a[0] + ux, a[1] + uy];
-                if (allowed(centre) && self.try_steiner(centre, t, rule)?) || (too_big && allowed(centroid) && self.try_steiner(centroid, t, rule)?) {
-                    inserted += 1;
+                let candidates = [Some([a[0] + ux, a[1] + uy]), too_big.then_some(centroid)];
+                for c in candidates.into_iter().flatten() {
+                    if let Some(p) = steiner_point(c).filter(|p| allows(p, h))
+                        && self.try_steiner(p, t, CLEARANCE * h)?
+                    {
+                        inserted += 1;
+                        break;
+                    }
                 }
             }
             if inserted == 0 {
-                return Ok(());
+                break;
             }
         }
+        #[cfg(test)]
+        assert_eq!(self.verify(), Ok(()), "after refinement");
         Ok(())
     }
 
     /// The inside triangles around vertex `v`.
     fn inside_fan(&self, v: u32) -> Result<Vec<u32>> {
-        let start = self.vt.get(v as usize).copied().ok_or_else(|| err("vertex"))?;
-        let mut t = start;
         let mut fan = Vec::new();
-        for _ in 0..self.tris.len() + 1 {
-            let tri = self.t(t)?;
+        self.around(v, |t, tri, _| {
             if tri.inside {
                 fan.push(t);
             }
-            let k = tri.v.iter().position(|&x| x == v).ok_or_else(|| err("vertex map is stale"))?;
-            t = tri.n[(k + 1) % 3];
-            if t == NONE || t == start {
-                return Ok(fan);
+            Ok(None::<()>)
+        })?;
+        Ok(fan)
+    }
+
+    /// [`Cdt::ensure_fan`] for every vertex with its count in `need`.
+    pub fn ensure_fans(&mut self, need: &[usize]) -> Result<()> {
+        for (v, &k) in need.iter().enumerate() {
+            if k > 1 {
+                self.ensure_fan(v as u32, k)?;
             }
         }
-        Err(err("vertex rotation did not close"))
+        #[cfg(test)]
+        assert_eq!(self.verify(), Ok(()), "after fans");
+        Ok(())
     }
 
     /// Give boundary vertex `v` at least `count` inside triangles by inserting the centroid of
     /// its widest triangle (bounded attempts; the caller's validity gate judges the result).
-    pub fn ensure_fan(&mut self, v: u32, count: usize) -> Result<()> {
+    fn ensure_fan(&mut self, v: u32, count: usize) -> Result<()> {
         for _ in 0..count + 2 {
             let fan = self.inside_fan(v)?;
             if fan.len() >= count {
@@ -738,8 +722,8 @@ impl Cdt {
                     widest = Some((cos, t, c));
                 }
             }
-            let Some((_, t, c)) = widest else { return Ok(()) };
-            if !self.try_steiner(c, t, Steiner { min_distance: 0.0 })? {
+            let Some((t, p)) = widest.and_then(|(_, t, c)| steiner_point(c).map(|p| (t, p))) else { return Ok(()) };
+            if !self.try_steiner(p, t, 0.0)? {
                 return Ok(());
             }
         }
@@ -784,7 +768,8 @@ impl Cdt {
     }
 
     /// The inside triangles.
-    pub fn triangulation(&self) -> Triangulation {
-        Triangulation { pts: self.pts.clone(), tris: self.tris.iter().filter(|t| t.alive && t.inside).map(|t| t.v).collect() }
+    pub fn into_triangulation(self) -> Triangulation {
+        let tris = self.tris.iter().filter(|t| t.alive && t.inside).map(|t| t.v).collect();
+        Triangulation { pts: self.pts, p2: self.p2, tris }
     }
 }

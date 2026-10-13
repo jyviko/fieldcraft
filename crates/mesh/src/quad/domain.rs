@@ -30,6 +30,12 @@ impl Region {
     }
 }
 
+/// The bounding box `(lo, hi)` of points (`lo > hi` when there are none).
+pub(crate) fn bbox(pts: impl IntoIterator<Item = [f64; 2]>) -> ([f64; 2], [f64; 2]) {
+    pts.into_iter()
+        .fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]))
+}
+
 /// Admissible exact-predicate point from user coordinates (finite, within the model limit; tiny
 /// magnitudes rounded to zero).
 pub(crate) fn admissible(c: [f64; 2]) -> Result<[f64; 2]> {
@@ -133,7 +139,7 @@ fn on_segment(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> bool {
 
 /// Whether two boundary segments conflict: they cross or touch, or (when they share an end
 /// point) they fold back on each other.
-pub(crate) fn segments_conflict(r: &Region, s: (u32, u32), t: (u32, u32)) -> Result<bool> {
+fn segments_conflict(r: &Region, s: (u32, u32), t: (u32, u32)) -> Result<bool> {
     let (a, b, c, d) = (r.point(s.0)?, r.point(s.1)?, r.point(t.0)?, r.point(t.1)?);
     let shared = [(s.0 == t.0, b, d, a), (s.0 == t.1, b, c, a), (s.1 == t.0, a, d, b), (s.1 == t.1, a, c, b)];
     if let Some(&(_, x, y, o)) = shared.iter().find(|e| e.0) {
@@ -160,11 +166,7 @@ pub(crate) fn segments_conflict(r: &Region, s: (u32, u32), t: (u32, u32)) -> Res
 pub(crate) fn check_simple(r: &Region) -> Result<()> {
     let segs = segments(&r.loops);
     let n = segs.len();
-    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-    for p in &r.pts {
-        lo = [lo[0].min(p[0]), lo[1].min(p[1])];
-        hi = [hi[0].max(p[0]), hi[1].max(p[1])];
-    }
+    let (lo, hi) = bbox(r.pts.iter().copied());
     let g = ((n as f64).sqrt().ceil() as usize).clamp(1, 1024);
     let cell = |x: f64, axis: usize| -> usize {
         let (l, h) = (lo[axis], hi[axis]);
@@ -237,6 +239,17 @@ pub(crate) fn loop_orientation(r: &Region, l: &[u32]) -> Result<Sign> {
     Ok(orient2d(r.point(at(i + n - 1)?)?, r.point(at(i)?)?, r.point(at(i + 1)?)?))
 }
 
+/// The outer loop is counterclockwise and the holes clockwise (no repair).
+pub(crate) fn check_orientation(r: &Region) -> Result<()> {
+    for (k, l) in r.loops.iter().enumerate() {
+        let want = if k == 0 { Sign::Positive } else { Sign::Negative };
+        if loop_orientation(r, l)? != want {
+            return Err(Error::Invalid(format!("loop {k} has the wrong orientation")));
+        }
+    }
+    Ok(())
+}
+
 /// Outer loop counterclockwise, holes clockwise.
 fn orient(r: &mut Region) -> Result<()> {
     for k in 0..r.loops.len() {
@@ -274,7 +287,7 @@ pub(crate) fn winding(r: &Region, l: &[u32], p: &Point2) -> Result<i64> {
 
 /// Every hole lies inside the outer loop and outside every other hole. The loops do not
 /// intersect, so one point per hole decides.
-fn check_nesting(r: &Region) -> Result<()> {
+pub(crate) fn check_nesting(r: &Region) -> Result<()> {
     let holes = r.loops.len().saturating_sub(1);
     if holes.saturating_mul(r.pts.len()) > MAX_CHECK_WORK {
         return Err(Error::Limit(format!("{holes} holes on {} boundary points exceed the nesting-check limit", r.pts.len())));

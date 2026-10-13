@@ -37,14 +37,7 @@ impl Guard {
     /// The guard of chords `(a, b, m)`: coarse boundary edge `a → b` (region on its left) and the
     /// skipped boundary point `m`.
     pub fn new(chords: &[(Point2, Point2, Point2)]) -> Result<Guard> {
-        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for (a, b, m) in chords {
-            for p in [a, b, m] {
-                let c = p.coords();
-                lo = [lo[0].min(c[0]), lo[1].min(c[1])];
-                hi = [hi[0].max(c[0]), hi[1].max(c[1])];
-            }
-        }
+        let (lo, hi) = super::domain::bbox(chords.iter().flat_map(|(a, b, m)| [a.coords(), b.coords(), m.coords()]));
         if chords.is_empty() {
             return Err(Error::Failed("guard without a boundary".into()));
         }

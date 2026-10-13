@@ -50,10 +50,8 @@ pub fn transfinite_grid<const D: usize>(bottom: &[[f64; D]], right: &[[f64; D]],
     let (nu, nv) = (bottom.len().saturating_sub(1), left.len().saturating_sub(1));
     if nu == 0 || nv == 0 || top.len() != bottom.len() || right.len() != left.len() {
         return Err(Error::Invalid(format!(
-            "opposite sides need the same number of divisions (at least 1): bottom {}, top {}, left {}, right {}",
-            bottom.len().saturating_sub(1),
+            "opposite sides need the same number of divisions (at least 1): bottom {nu}, top {}, left {nv}, right {}",
             top.len().saturating_sub(1),
-            left.len().saturating_sub(1),
             right.len().saturating_sub(1)
         )));
     }

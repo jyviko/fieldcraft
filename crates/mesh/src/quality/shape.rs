@@ -150,6 +150,19 @@ pub(crate) fn quad(p: [P; 4]) -> (f64, Vec<(Metric, f64)>) {
     )
 }
 
+/// Corner `i` of a planar quadrilateral: the cross product `(p[i+1] − p[i]) × (p[i−1] − p[i])`
+/// (twice the corner triangle's signed area, positive for a left turn of a counterclockwise quad)
+/// and that cross over the two edge lengths (the corner's scaled Jacobian, `None` when an edge
+/// has zero length).
+pub(crate) fn planar_corner(p: &[[f64; 2]; 4], i: usize) -> (f64, Option<f64>) {
+    let (a, b, c) = (p[(i + 3) % 4], p[i % 4], p[(i + 1) % 4]);
+    let (u, w) = ([c[0] - b[0], c[1] - b[1]], [a[0] - b[0], a[1] - b[1]]);
+    let cross = u[0] * w[1] - u[1] * w[0];
+    let den = (u[0] * u[0] + u[1] * u[1]).sqrt() * (w[0] * w[0] + w[1] * w[1]).sqrt();
+    let scaled = cross / den;
+    (cross, (den > 0.0 && scaled.is_finite()).then_some(scaled))
+}
+
 /// Robinson's aspect ratio and skew of a quadrilateral from its principal axes; `(+∞, 1)` when
 /// an axis vanishes.
 pub(crate) fn quad_axes(p: [P; 4]) -> (f64, f64) {

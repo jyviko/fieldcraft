@@ -21,8 +21,8 @@
 //!
 //! Gauss–Seidel order by node id; bounded sweeps; deterministic.
 
-use super::free::{is_valid, min_scaled_jacobian};
 use crate::predicates::{Point2, snap_to_domain};
+use crate::quality::{planar_corner, turns_left};
 use crate::{Error, Result};
 
 /// Compressed adjacency: `items[start[v]..start[v + 1]]`.
@@ -105,17 +105,18 @@ fn local(nodes: &[[f64; 2]], quads: &[[u32; 4]], incident: &[u32], v: u32, at: [
     for &e in incident {
         let quad = quads.get(e as usize).ok_or_else(|| Error::Failed("quad index".into()))?;
         let c = corners(nodes, quad, v, at)?;
-        l.sj = l.sj.min(min_scaled_jacobian(c));
-        if let Some(k) = quad.iter().position(|&u| u == v) {
-            for i in [k + 3, k, k + 1] {
-                let (a, b, d) = (c[(i + 3) % 4], c[i % 4], c[(i + 1) % 4]);
-                let cross = (d[0] - b[0]) * (a[1] - b[1]) - (d[1] - b[1]) * (a[0] - b[0]);
+        let k = quad.iter().position(|&u| u == v).unwrap_or(0);
+        for i in 0..4 {
+            let (cross, scaled) = planar_corner(&c, i);
+            l.sj = l.sj.min(scaled.unwrap_or(-1.0));
+            // The corner opposite `v` does not move with it.
+            if i != (k + 2) % 4 {
                 l.area = l.area.min(cross);
             }
         }
         if l.valid {
             let [a, b, c, d] = c.map(|x| Point2::new(x[0], x[1]));
-            l.valid = is_valid([&a?, &b?, &c?, &d?]);
+            l.valid = turns_left([&a?, &b?, &c?, &d?]);
         }
     }
     Ok(l)
@@ -130,14 +131,14 @@ const SEARCH_STEPS: usize = 48;
 /// the smallest scaled Jacobian). Returns the new position when it improves.
 fn optimize(nodes: &[[f64; 2]], quads: &[[u32; 4]], incident: &[u32], neighbours: &[u32], v: u32) -> Result<Option<[f64; 2]>> {
     let old = nodes.get(v as usize).copied().ok_or_else(|| Error::Failed("node index".into()))?;
+    let start = local(nodes, quads, incident, v, old)?;
+    if start.valid && start.sj >= POOR {
+        return Ok(None);
+    }
     let mut reach = 0.0_f64;
     for &u in neighbours {
         let p = nodes.get(u as usize).copied().ok_or_else(|| Error::Failed("node index".into()))?;
         reach = reach.max(((p[0] - old[0]).powi(2) + (p[1] - old[1]).powi(2)).sqrt());
-    }
-    let start = local(nodes, quads, incident, v, old)?;
-    if start.valid && start.sj >= POOR {
-        return Ok(None);
     }
     let (mut at, mut best) = (old, start);
     let mut step = 0.25 * reach;

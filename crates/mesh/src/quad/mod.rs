@@ -77,8 +77,8 @@ pub mod tfi;
 pub use domain::{MAX_BOUNDARY_POINTS, MAX_LOOPS};
 pub use tfi::{MAX_GRID_NODES, transfinite_grid};
 
-use crate::predicates::Sign;
-use crate::quality::{Metric, Validity, planar_quad_quality};
+use crate::predicates::{Point2, Sign, snap_to_domain};
+use crate::quality::{planar_corner, quad_axes, turns_left};
 use crate::size::SizeField;
 use crate::{Error, Result};
 
@@ -241,6 +241,10 @@ pub(crate) fn finish(
     opts: &QuadOptions,
     mut stats: QuadStats,
 ) -> Result<QuadMesh> {
+    // Constructed nodes (mid nodes, centres) stay in the predicates' domain.
+    for n in nodes.iter_mut() {
+        *n = [snap_to_domain(n[0]), snap_to_domain(n[1])];
+    }
     if opts.smoothing_sweeps > 0 {
         let (sweeps, converged) = smooth::smooth(&mut nodes, &quads, boundary_nodes, opts.smoothing_sweeps)?;
         stats.smoothing_sweeps = sweeps;
@@ -254,14 +258,15 @@ pub(crate) fn finish(
         for (k, &v) in q.iter().enumerate() {
             c[k] = nodes.get(v as usize).copied().ok_or_else(|| Error::Failed("node index".into()))?;
         }
-        let quality = planar_quad_quality(&c)?;
-        if quality.validity() != Some(Validity::Valid) {
+        let [a, b, d, f] = c.map(|x| Point2::new(x[0], x[1]));
+        if !turns_left([&a?, &b?, &d?, &f?]) {
             invalid += 1;
             first_invalid.get_or_insert(e);
         }
-        sj = sj.min(quality.get(Metric::ScaledJacobian).unwrap_or(-1.0));
-        skew = skew.max(quality.get(Metric::Skew).unwrap_or(1.0));
-        aspect = aspect.max(quality.get(Metric::AspectRatio).unwrap_or(f64::INFINITY));
+        sj = sj.min((0..4).fold(f64::INFINITY, |m, i| m.min(planar_corner(&c, i).1.unwrap_or(0.0))));
+        let (r, k) = quad_axes(c.map(|x| [x[0], x[1], 0.0]));
+        aspect = aspect.max(r);
+        skew = skew.max(k);
     }
     if invalid > 0 {
         let at = first_invalid.and_then(|e| quads.get(e)).and_then(|q| nodes.get(q[0] as usize)).copied().unwrap_or_default();

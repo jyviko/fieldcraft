@@ -27,6 +27,7 @@ use modelcraft_model::{ElementKind, check_coordinates};
 
 pub use jacobian::{JacobianCheck, Validity};
 pub use report::{GateOptions, GateReport, MetricStats, QualityReport, enclosed_volume, quality_report, validity_gate, validity_gate_elements};
+pub(crate) use shape::{planar_corner, quad_axes};
 
 use crate::predicates::{Point2, Point3, Sign, orient2d, snap_to_domain, tet_volume_sign};
 use crate::{Error, Result};
@@ -231,16 +232,14 @@ pub fn element_quality(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<ElementQua
 /// smallest magnitude are rounded to zero first.
 pub fn planar_quad_validity(p: &[[f64; 2]; 4]) -> Result<Validity> {
     check_coordinates(p.as_flattened())?;
-    let q = p.map(|c| Point2::new(snap_to_domain(c[0]), snap_to_domain(c[1])));
-    let mut pts = Vec::with_capacity(4);
-    for c in q {
-        pts.push(c?);
-    }
-    let ok = (0..4).all(|i| match (pts.get((i + 3) % 4), pts.get(i), pts.get((i + 1) % 4)) {
-        (Some(a), Some(b), Some(c)) => orient2d(a, b, c) == Sign::Positive,
-        _ => false,
-    });
-    Ok(if ok { Validity::Valid } else { Validity::Invalid })
+    let [a, b, c, d] = p.map(|c| Point2::new(snap_to_domain(c[0]), snap_to_domain(c[1])));
+    Ok(if turns_left([&a?, &b?, &c?, &d?]) { Validity::Valid } else { Validity::Invalid })
+}
+
+/// The exact corner test of [`planar_quad_validity`] on admissible points: every corner of the
+/// quadrilateral turns left.
+pub(crate) fn turns_left(p: [&Point2; 4]) -> bool {
+    (0..4).all(|i| orient2d(p[(i + 3) % 4], p[i], p[(i + 1) % 4]) == Sign::Positive)
 }
 
 /// Every metric of a planar quadrilateral (counterclockwise corners in the xy plane) with its
@@ -251,11 +250,8 @@ pub fn planar_quad_quality(p: &[[f64; 2]; 4]) -> Result<ElementQuality> {
     let validity = planar_quad_validity(p)?;
     let o = p[0];
     let l = p.map(|c| [c[0] - o[0], c[1] - o[1]]);
-    let corner = |i: usize| {
-        let (a, b, c) = (l[(i + 3) % 4], l[i], l[(i + 1) % 4]);
-        (c[0] - b[0]) * (a[1] - b[1]) - (c[1] - b[1]) * (a[0] - b[0])
-    };
-    let dets = [0, 1, 2, 3].map(corner);
+    let corners = [0, 1, 2, 3].map(|i| shape::planar_corner(&l, i));
+    let dets = corners.map(|c| c.0);
     let lo = dets.iter().fold(f64::INFINITY, |m, &d| m.min(d));
     let hi = dets.iter().fold(0.0_f64, |m, &d| m.max(d.abs()));
     let ratio = if hi > 0.0 { (lo / hi).clamp(-1.0, 1.0) } else { 0.0 };
@@ -264,16 +260,7 @@ pub fn planar_quad_quality(p: &[[f64; 2]; 4]) -> Result<ElementQuality> {
     let (_, mut metrics) = shape::quad(lifted);
     // Corner scaled Jacobians measured against +z (the 3D form measures against the diagonals'
     // normal, which flips with a clockwise quad).
-    let scaled = [0, 1, 2, 3]
-        .map(|i| {
-            let (a, b, c) = (l[(i + 3) % 4], l[i], l[(i + 1) % 4]);
-            let (u, v) = ([c[0] - b[0], c[1] - b[1]], [a[0] - b[0], a[1] - b[1]]);
-            let den = (u[0] * u[0] + u[1] * u[1]).sqrt() * (v[0] * v[0] + v[1] * v[1]).sqrt();
-            let r = corner(i) / den;
-            if den > 0.0 && r.is_finite() { r } else { 0.0 }
-        })
-        .iter()
-        .fold(f64::INFINITY, |m, &x| m.min(x));
+    let scaled = corners.iter().fold(f64::INFINITY, |m, c| m.min(c.1.unwrap_or(0.0)));
     for (m, v) in metrics.iter_mut() {
         if *m == Metric::ScaledJacobian {
             *v = scaled;

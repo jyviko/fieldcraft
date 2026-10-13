@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use super::*;
+use crate::quality::Validity;
 use crate::size::{UniformSize, divide_polyline, even_divisions, ideal_divisions, loop_divisions};
 
 fn opts() -> QuadOptions {

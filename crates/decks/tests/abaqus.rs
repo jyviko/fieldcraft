@@ -239,7 +239,7 @@ fn the_written_mesh_and_sets_read_back() {
             assert_eq!(p.nsets.get(name).cloned().unwrap_or_default(), s.nodes, "nset {name}");
             assert_eq!(p.elsets.get(name).cloned().unwrap_or_default(), s.elements, "elset {name}");
             let faces: Vec<(u32, String)> =
-                s.faces.iter().map(|f| (f.element, abaqus::face_id(model.element(f.element).unwrap().kind, f.face).unwrap())).collect();
+                s.faces.iter().map(|f| (f.element, abaqus::face_id(model.element(f.element).unwrap().kind, f.face).unwrap().to_string())).collect();
             assert_eq!(p.surfaces.get(name).cloned().unwrap_or_default(), faces, "surface {name}");
         }
     }
@@ -472,13 +472,13 @@ fn model_faces_are_abaqus_faces() {
             let ours: BTreeSet<usize> = ours.iter().map(|p| p + 1).collect();
             let theirs: BTreeSet<usize> = theirs.iter().copied().collect();
             assert_eq!(ours, theirs, "{kind:?} face {}", i + 1);
-            assert_eq!(abaqus::face_id(kind, i as u8 + 1), Some(format!("S{}", i + 1)));
+            assert_eq!(abaqus::face_id(kind, i as u8 + 1), Some(format!("S{}", i + 1).as_str()));
         }
         assert_eq!(abaqus::face_id(kind, 0), None);
         assert_eq!(abaqus::face_id(kind, faces.len() as u8 + 1), None);
     }
-    assert_eq!(abaqus::face_id(ElementKind::Quad4, 1).as_deref(), Some("SPOS"));
-    assert_eq!(abaqus::face_id(ElementKind::Tri3, 2).as_deref(), Some("SNEG"));
+    assert_eq!(abaqus::face_id(ElementKind::Quad4, 1), Some("SPOS"));
+    assert_eq!(abaqus::face_id(ElementKind::Tri3, 2), Some("SNEG"));
     assert_eq!(abaqus::face_id(ElementKind::Beam2, 1), None);
 }
 

@@ -74,13 +74,14 @@
 //! model's face numbers are Abaqus's S1–S6 for solids, and SPOS/SNEG for shell faces 1/2.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use modelcraft_model::{
-    BeamProfile, BoundaryCondition, CouplingKind, Elastic, ElementKind, Integration, Load, Model, OutputVariable, Procedure, Resolved, Section,
-    SectionKind, Step, Symmetry, Target,
+    BeamProfile, BoundaryCondition, CouplingKind, Elastic, Element, ElementKind, Integration, Load, Model, OutputVariable, Procedure, Resolved,
+    Section, SectionKind, Step, Symmetry, Target,
 };
 
-use crate::{Error, Result};
+use crate::{Error, Result, unsupported};
 
 const FORMAT: &str = "Abaqus";
 
@@ -98,91 +99,77 @@ const CONTINUATION_NODES: usize = 16;
 /// finds an error) or has something the format cannot express ([`Error::Unsupported`], every such
 /// item named).
 pub fn write(model: &Model) -> Result<String> {
-    let resolved = model.resolve()?;
-    let types = element_types(model, &resolved)?;
+    write_resolved(model, &model.resolve()?)
+}
+
+/// [`write`] for a model already resolved.
+pub fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
+    let by_type = elements_by_type(model, r)?;
     check_expressible(model)?;
     let mut d = Deck::default();
     d.heading(model);
     d.nodes(model)?;
-    d.elements(model, &types)?;
-    d.sets(model, &resolved)?;
+    d.elements(&by_type);
+    d.sets(model, r)?;
     d.materials(model)?;
     d.sections(model)?;
-    let surfaces = coupling_surfaces(model, &resolved);
-    d.couplings(model, &resolved, &surfaces)?;
-    d.steps(model, &resolved)?;
+    d.couplings(model, r);
+    d.steps(model, r)?;
     Ok(d.out)
 }
 
-fn unsupported(items: BTreeSet<String>) -> Result<()> {
-    if items.is_empty() { Ok(()) } else { Err(Error::Unsupported { format: FORMAT, what: items.into_iter().collect::<Vec<_>>().join("; ") }) }
-}
-
 /// The Abaqus element type of an element of `kind` in `section`, or why there is none.
-pub fn element_type(kind: ElementKind, section: &Section) -> std::result::Result<&'static str, String> {
+pub fn element_type(kind: ElementKind, section: &Section) -> std::result::Result<String, String> {
     use ElementKind as K;
+    use SectionKind as S;
     let f = section.formulation;
     let reduced = f.integration == Integration::Reduced;
-    let hybrid = |plain: &'static str, h: &'static str| if f.hybrid { h } else { plain };
-    let t = match (&section.kind, kind) {
-        (SectionKind::Solid {}, K::Tet4) if !f.incompatible_modes => hybrid("C3D4", "C3D4H"),
-        (SectionKind::Solid {}, K::Tet10 | K::Wedge6) if reduced => {
+    if (f.hybrid || f.incompatible_modes) && section.kind.dimension() != 3 {
+        return Err(format!("hybrid or incompatible-mode {} sections", section.kind.name()));
+    }
+    let plain = match (&section.kind, kind, reduced, f.incompatible_modes) {
+        (S::Solid {}, K::Hex8, false, true) => "C3D8I",
+        (S::Solid {}, _, true, true) => return Err("incompatible modes with reduced integration".into()),
+        (S::Solid {}, _, _, true) => return Err(format!("incompatible modes on {} elements (hex8 only)", kind.name())),
+        (S::Solid {}, K::Tet4, ..) => "C3D4",
+        (S::Solid {}, K::Tet10 | K::Wedge6, true, _) => {
             return Err(format!("reduced integration of {} elements (Abaqus has no reduced-integration variant)", kind.name()));
         }
-        (SectionKind::Solid {}, K::Tet10) if !f.incompatible_modes => hybrid("C3D10", "C3D10H"),
-        (SectionKind::Solid {}, K::Wedge6) if !f.incompatible_modes => hybrid("C3D6", "C3D6H"),
-        (SectionKind::Solid {}, K::Hex8) => match (reduced, f.incompatible_modes) {
-            (false, false) => hybrid("C3D8", "C3D8H"),
-            (true, false) => hybrid("C3D8R", "C3D8RH"),
-            (false, true) => hybrid("C3D8I", "C3D8IH"),
-            (true, true) => return Err("incompatible modes with reduced integration".into()),
-        },
-        (SectionKind::Solid {}, K::Hex20) if !f.incompatible_modes => {
-            if reduced {
-                hybrid("C3D20R", "C3D20RH")
-            } else {
-                hybrid("C3D20", "C3D20H")
-            }
+        (S::Solid {}, K::Tet10, ..) => "C3D10",
+        (S::Solid {}, K::Wedge6, ..) => "C3D6",
+        (S::Solid {}, K::Hex8, r, _) => ["C3D8", "C3D8R"][usize::from(r)],
+        (S::Solid {}, K::Hex20, r, _) => ["C3D20", "C3D20R"][usize::from(r)],
+        (S::Shell { .. }, K::Tri3, r, _) => ["S3", "S3R"][usize::from(r)],
+        (S::Shell { .. }, K::Quad4, r, _) => ["S4", "S4R"][usize::from(r)],
+        (S::Shell { .. }, K::Quad8, true, _) => "S8R",
+        (S::Shell { .. }, K::Quad8, false, _) => {
+            return Err("full integration of quad8 shells (Abaqus's eight-node shell, S8R, uses reduced integration)".into());
         }
-        (SectionKind::Shell { .. }, K::Tri3) if !f.hybrid && !f.incompatible_modes => {
-            if reduced {
-                "S3R"
-            } else {
-                "S3"
-            }
-        }
-        (SectionKind::Shell { .. }, K::Quad4) if !f.hybrid && !f.incompatible_modes => {
-            if reduced {
-                "S4R"
-            } else {
-                "S4"
-            }
-        }
-        (SectionKind::Shell { .. }, K::Quad8) if !f.hybrid && !f.incompatible_modes => {
-            if !reduced {
-                return Err("full integration of quad8 shells (Abaqus's eight-node shell, S8R, uses reduced integration)".into());
-            }
-            "S8R"
-        }
-        (SectionKind::Shell { .. }, K::Tri6) => return Err("tri6 shells (Abaqus has no general-purpose six-node triangular shell)".into()),
-        (SectionKind::Beam { .. }, K::Beam2) if !f.hybrid && !f.incompatible_modes => "B31",
-        (SectionKind::Rod { .. }, K::Rod2) if !f.hybrid && !f.incompatible_modes => "T3D2",
-        (k, _) => return Err(format!("{} elements in a {} section with this formulation", kind.name(), k.name())),
+        (S::Shell { .. }, K::Tri6, ..) => return Err("tri6 shells (Abaqus has no general-purpose six-node triangular shell)".into()),
+        (S::Beam { .. }, K::Beam2, ..) => "B31",
+        (S::Rod { .. }, K::Rod2, ..) => "T3D2",
+        (s, ..) => return Err(format!("{} elements in a {} section", kind.name(), s.name())),
     };
-    Ok(t)
+    Ok(if f.hybrid { format!("{plain}H") } else { plain.to_string() })
 }
 
-/// The element type of every element, from its section.
-fn element_types(model: &Model, r: &Resolved) -> Result<BTreeMap<u32, &'static str>> {
-    let mut types = BTreeMap::new();
+/// Every element, grouped by element type (from its section) and sorted by label.
+fn elements_by_type<'m>(model: &'m Model, r: &Resolved) -> Result<BTreeMap<String, Vec<(u32, &'m Element)>>> {
+    let mut by_type: BTreeMap<String, Vec<(u32, &Element)>> = BTreeMap::new();
     let mut bad = BTreeSet::new();
+    let mut count = 0;
     for (name, section) in model.sections() {
-        let Some(set) = r.sets.get(&section.set) else { continue };
-        for &e in &set.elements {
-            let Some(element) = model.element(e) else { continue };
-            match element_type(element.kind, section) {
+        let mut by_kind: BTreeMap<ElementKind, Vec<(u32, &Element)>> = BTreeMap::new();
+        for &e in r.sets.get(&section.set).map(|s| s.elements.as_slice()).unwrap_or_default() {
+            if let Some(element) = model.element(e) {
+                by_kind.entry(element.kind).or_default().push((e, element));
+            }
+        }
+        for (kind, elements) in by_kind {
+            match element_type(kind, section) {
                 Ok(t) => {
-                    types.insert(e, t);
+                    count += elements.len();
+                    by_type.entry(t).or_default().extend(elements);
                 }
                 Err(why) => {
                     bad.insert(format!("section `{name}`: {why}"));
@@ -190,12 +177,15 @@ fn element_types(model: &Model, r: &Resolved) -> Result<BTreeMap<u32, &'static s
             }
         }
     }
-    unsupported(bad)?;
-    // A resolved model gives every element a section; this guards the writer, not the model.
-    if let Some(e) = model.elements().keys().find(|e| !types.contains_key(e)) {
-        return Err(Error::Unsupported { format: FORMAT, what: format!("element {e} has no section") });
+    unsupported(FORMAT, bad)?;
+    // A resolved model puts every element in exactly one section; this guards the writer.
+    if count != model.elements().len() {
+        return Err(Error::Unsupported { format: FORMAT, what: "elements without exactly one section".into() });
     }
-    Ok(types)
+    for elements in by_type.values_mut() {
+        elements.sort_unstable_by_key(|(e, _)| *e);
+    }
+    Ok(by_type)
 }
 
 /// Everything else the format cannot express: case-only name clashes, orthotropic materials
@@ -231,37 +221,47 @@ fn check_expressible(model: &Model) -> Result<()> {
             bad.insert(format!("coupling `{name}`: an Abaqus distributing coupling always couples translations 1-3"));
         }
     }
-    unsupported(bad)
+    unsupported(FORMAT, bad)
 }
 
-/// A real number in the shortest form that reads back to the same value: `0.1`, `210000.0`,
-/// `7.85E-9`, `1.0E300`.
-pub fn number(v: f64) -> Result<String> {
+/// Append a real number in the shortest form that reads back to the same value: `0.1`,
+/// `210000.0`, `7.85E-9`, `1.0E300`.
+fn push_number(out: &mut String, v: f64) -> Result<()> {
     if !v.is_finite() {
         return Err(Error::Unsupported { format: FORMAT, what: format!("the value {v} (not a finite number)") });
     }
     // Rust's `Debug` for f64 is the shortest round-trip form, switching to an exponent for very
-    // large and small magnitudes.
-    let s = format!("{v:?}");
-    Ok(match s.split_once('e') {
-        Some((mantissa, exponent)) if mantissa.contains('.') => format!("{mantissa}E{exponent}"),
-        Some((mantissa, exponent)) => format!("{mantissa}.0E{exponent}"),
-        None => s,
-    })
+    // large and small magnitudes; Abaqus wants the marker `E`, and a mantissa with a point reads
+    // the same everywhere.
+    let start = out.len();
+    let _ = write!(out, "{v:?}");
+    if let Some(at) = out.get(start..).and_then(|s| s.find('e')).map(|i| start + i) {
+        let point = out.get(start..at).is_some_and(|m| m.contains('.'));
+        out.replace_range(at..at + 1, if point { "E" } else { ".0E" });
+    }
+    Ok(())
+}
+
+/// [`push_number`] into a new string.
+pub fn number(v: f64) -> Result<String> {
+    let mut s = String::new();
+    push_number(&mut s, v)?;
+    Ok(s)
 }
 
 /// The surface face identifier of face `face` (1-based) of an element of `kind`.
-pub fn face_id(kind: ElementKind, face: u8) -> Option<String> {
-    let count = kind.faces().len();
-    if face == 0 || usize::from(face) > count {
+pub fn face_id(kind: ElementKind, face: u8) -> Option<&'static str> {
+    const SOLID: [&str; 6] = ["S1", "S2", "S3", "S4", "S5", "S6"];
+    const SHELL: [&str; 2] = ["SPOS", "SNEG"];
+    let i = usize::from(face).checked_sub(1)?;
+    if i >= kind.faces().len() {
         return None;
     }
-    Some(match kind.dimension() {
-        3 => format!("S{face}"),
-        2 if face == 1 => "SPOS".into(),
-        2 => "SNEG".into(),
-        _ => return None,
-    })
+    match kind.dimension() {
+        3 => SOLID.get(i).copied(),
+        2 => SHELL.get(i).copied(),
+        _ => None,
+    }
 }
 
 /// The node surface each coupling ties its reference point to: a fresh name per coupling that
@@ -300,27 +300,39 @@ fn holds_at_zero(bc: &BoundaryCondition) -> bool {
     (1..=6).all(|d| bc.value(d).is_none_or(|v| v == 0.0))
 }
 
-/// The loads of one step, as the deck writes them.
-#[derive(Default)]
-struct StepLoads {
-    /// (node, degree of freedom) → summed value.
-    concentrated: BTreeMap<(u32, u8), f64>,
-    /// Surface (set name) → summed pressure.
-    pressure: BTreeMap<String, f64>,
-    /// Element-load data lines (gravity and body forces), already formatted.
-    element: Vec<String>,
+/// Where an element load acts: an element set, or one element.
+#[derive(Clone, Copy)]
+enum ElementTarget<'a> {
+    Set(&'a str),
+    Element(u32),
+}
+
+/// Gravity (an acceleration) or a body force (a force per volume).
+#[derive(Clone, Copy, PartialEq)]
+enum BodyKind {
+    Gravity,
+    Force,
 }
 
 /// A gravity or body force on some elements, before it is written.
 struct ElementLoad<'a> {
     /// The element sets that hold exactly its elements.
     elsets: Vec<&'a str>,
-    elements: Vec<u32>,
+    elements: &'a [u32],
     vector: [f64; 3],
+}
+
+impl<'a> ElementLoad<'a> {
+    fn on_set(r: &'a Resolved, set: &'a str, vector: [f64; 3]) -> ElementLoad<'a> {
+        ElementLoad { elsets: vec![set], elements: r.sets.get(set).map(|s| s.elements.as_slice()).unwrap_or_default(), vector }
+    }
 }
 
 /// Whether no element is in two of the loads.
 fn disjoint(loads: &[ElementLoad]) -> bool {
+    if loads.len() < 2 {
+        return true;
+    }
     let mut all: Vec<u32> = loads.iter().flat_map(|l| l.elements.iter().copied()).collect();
     let n = all.len();
     all.sort_unstable();
@@ -328,98 +340,70 @@ fn disjoint(loads: &[ElementLoad]) -> bool {
     all.len() == n
 }
 
-fn gravity_line(target: &str, a: [f64; 3]) -> Result<Option<String>> {
-    let g = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
-    if !(g > 0.0) {
-        return Ok(None);
-    }
-    Ok(Some(format!("{target}, GRAV, {}, {}, {}, {}", number(g)?, number(a[0] / g)?, number(a[1] / g)?, number(a[2] / g)?)))
-}
-
-fn body_lines(target: &str, v: [f64; 3], out: &mut Vec<String>) -> Result<()> {
-    for (label, c) in ["BX", "BY", "BZ"].into_iter().zip(v) {
-        if c != 0.0 {
-            out.push(format!("{target}, {label}, {}", number(c)?));
-        }
-    }
-    Ok(())
-}
-
-/// Element-load lines for one kind of load (gravity or body force): by element set when the loads
-/// share no element, otherwise summed per element.
-fn element_load_lines(loads: &[ElementLoad], gravity: bool, out: &mut Vec<String>) -> Result<()> {
-    let emit = |target: &str, v: [f64; 3], out: &mut Vec<String>| -> Result<()> {
-        if gravity {
-            if let Some(l) = gravity_line(target, v)? {
-                out.push(l);
-            }
-            Ok(())
-        } else {
-            body_lines(target, v, out)
-        }
-    };
+/// Element loads of one kind: by element set when the loads share no element, otherwise summed
+/// per element. Zero vectors are left out.
+fn element_loads<'a>(loads: &[ElementLoad<'a>], kind: BodyKind, out: &mut Vec<(ElementTarget<'a>, BodyKind, [f64; 3])>) {
     if disjoint(loads) {
         for l in loads {
-            for s in &l.elsets {
-                emit(s, l.vector, out)?;
-            }
+            out.extend(l.elsets.iter().map(|s| (ElementTarget::Set(s), kind, l.vector)));
         }
     } else {
         let mut summed: BTreeMap<u32, [f64; 3]> = BTreeMap::new();
         for l in loads {
-            for &e in &l.elements {
-                let v = summed.entry(e).or_default();
-                for (c, add) in v.iter_mut().zip(l.vector) {
+            for &e in l.elements {
+                for (c, add) in summed.entry(e).or_default().iter_mut().zip(l.vector) {
                     *c += add;
                 }
             }
         }
-        for (e, v) in summed {
-            emit(&e.to_string(), v, out)?;
-        }
+        out.extend(summed.into_iter().map(|(e, v)| (ElementTarget::Element(e), kind, v)));
     }
-    Ok(())
+    out.retain(|(_, _, v)| v.iter().any(|c| *c != 0.0));
 }
 
-impl StepLoads {
-    fn new(model: &Model, r: &Resolved, step: &Step) -> Result<StepLoads> {
-        let mut s = StepLoads::default();
-        let mut gravity = Vec::new();
-        let mut body = Vec::new();
-        let section_sets: Vec<&str> = model.sections().values().map(|sec| sec.set.as_str()).collect();
-        let all_elements: Vec<u32> = model.elements().keys().copied().collect();
+/// The loads of one general step, as the deck writes them.
+#[derive(Default)]
+struct StepLoads<'a> {
+    /// (node, degree of freedom) → summed value.
+    concentrated: BTreeMap<(u32, u8), f64>,
+    /// Surface (set name) → summed pressure.
+    pressure: BTreeMap<&'a str, f64>,
+    element: Vec<(ElementTarget<'a>, BodyKind, [f64; 3])>,
+}
+
+/// Which load keywords a step wrote entries for, so the next step knows what to remove.
+#[derive(Default, Clone, Copy)]
+struct Written {
+    concentrated: bool,
+    pressure: bool,
+    element: bool,
+}
+
+impl<'a> StepLoads<'a> {
+    /// `everything` is every element and the section sets that hold them (gravity on the whole
+    /// model).
+    fn new(model: &'a Model, r: &'a Resolved, step: &'a Step, everything: &'a (Vec<&'a str>, Vec<u32>)) -> StepLoads<'a> {
+        let mut s = StepLoads { concentrated: crate::concentrated_loads(model, r, &step.loads), ..StepLoads::default() };
+        let (mut gravity, mut body) = (Vec::new(), Vec::new());
         for name in &step.loads {
-            let Some(load) = model.load(name) else { continue };
-            match load {
-                Load::Force { .. } | Load::Moment { .. } | Load::Traction { .. } => {
-                    let first_dof = if matches!(load, Load::Moment { .. }) { 4 } else { 1 };
-                    for (node, v) in r.nodal_loads.get(name).map(Vec::as_slice).unwrap_or_default() {
-                        for (k, c) in (first_dof..).zip(v) {
-                            *s.concentrated.entry((*node, k)).or_default() += c;
-                        }
-                    }
+            match model.load(name) {
+                Some(Load::Pressure { set, magnitude }) => *s.pressure.entry(set.as_str()).or_default() += magnitude,
+                Some(Load::Gravity { acceleration, set: Some(set) }) => gravity.push(ElementLoad::on_set(r, set, *acceleration)),
+                Some(Load::Gravity { acceleration, set: None }) => {
+                    gravity.push(ElementLoad { elsets: everything.0.clone(), elements: &everything.1, vector: *acceleration })
                 }
-                Load::Pressure { set, magnitude } => *s.pressure.entry(set.clone()).or_default() += magnitude,
-                Load::Gravity { acceleration, set } => gravity.push(match set {
-                    Some(set) => ElementLoad {
-                        elsets: vec![set.as_str()],
-                        elements: r.sets.get(set).map(|x| x.elements.clone()).unwrap_or_default(),
-                        vector: *acceleration,
-                    },
-                    None => ElementLoad { elsets: section_sets.clone(), elements: all_elements.clone(), vector: *acceleration },
-                }),
-                Load::BodyForce { set, vector } => body.push(ElementLoad {
-                    elsets: vec![set.as_str()],
-                    elements: r.sets.get(set).map(|x| x.elements.clone()).unwrap_or_default(),
-                    vector: *vector,
-                }),
+                Some(Load::BodyForce { set, vector }) => body.push(ElementLoad::on_set(r, set, *vector)),
+                _ => {}
             }
         }
-        element_load_lines(&gravity, true, &mut s.element)?;
-        element_load_lines(&body, false, &mut s.element)?;
-        s.concentrated.retain(|_, v| *v != 0.0);
-        s.pressure.retain(|_, v| *v != 0.0);
-        Ok(s)
+        s.pressure.retain(|_, p| *p != 0.0);
+        element_loads(&gravity, BodyKind::Gravity, &mut s.element);
+        element_loads(&body, BodyKind::Force, &mut s.element);
+        s
+    }
+
+    fn written(&self) -> Written {
+        Written { concentrated: !self.concentrated.is_empty(), pressure: !self.pressure.is_empty(), element: !self.element.is_empty() }
     }
 }
 
@@ -436,15 +420,29 @@ impl Deck {
 
     fn comment(&mut self, s: &str) {
         self.out.push_str("** ");
-        self.out.push_str(s);
+        self.line(s);
+    }
+
+    /// `, value` for each value, then the end of the line.
+    fn numbers_line(&mut self, head: &str, values: &[f64]) -> Result<()> {
+        self.out.push_str(head);
+        for (i, v) in values.iter().enumerate() {
+            if i > 0 || !head.is_empty() {
+                self.out.push_str(", ");
+            }
+            push_number(&mut self.out, *v)?;
+        }
         self.out.push('\n');
+        Ok(())
     }
 
     /// Labels, [`SET_LABELS_PER_LINE`] per line.
     fn labels(&mut self, labels: &[u32]) {
         for chunk in labels.chunks(SET_LABELS_PER_LINE) {
-            let line: Vec<String> = chunk.iter().map(u32::to_string).collect();
-            self.line(&line.join(", "));
+            for (i, l) in chunk.iter().enumerate() {
+                let _ = write!(self.out, "{}{l}", if i > 0 { ", " } else { "" });
+            }
+            self.out.push('\n');
         }
     }
 
@@ -458,56 +456,39 @@ impl Deck {
         self.comment("Written by ModelCraft. The numbers are in one consistent unit system and are not converted.");
     }
 
-    fn node_line(&mut self, label: u32, xyz: [f64; 3]) -> Result<()> {
-        let line = format!("{label}, {}, {}, {}", number(xyz[0])?, number(xyz[1])?, number(xyz[2])?);
-        self.line(&line);
-        Ok(())
-    }
-
     fn nodes(&mut self, model: &Model) -> Result<()> {
         self.comment("Nodes");
         self.line("*NODE");
         for (label, node) in model.nodes() {
-            self.node_line(*label, node.xyz)?;
+            self.numbers_line(&label.to_string(), &node.xyz)?;
         }
         if !model.reference_points().is_empty() {
             self.comment("Reference points");
-            let mut points: Vec<(&String, _)> = model.reference_points().iter().collect();
+            let mut points: Vec<_> = model.reference_points().iter().collect();
             points.sort_by_key(|(_, p)| p.label);
             self.line("*NODE");
             for (name, p) in points {
                 self.comment(&format!("reference point {name}"));
-                self.node_line(p.label, p.xyz)?;
+                self.numbers_line(&p.label.to_string(), &p.xyz)?;
             }
         }
         Ok(())
     }
 
-    fn elements(&mut self, model: &Model, types: &BTreeMap<u32, &'static str>) -> Result<()> {
-        let mut by_type: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
-        for (e, t) in types {
-            by_type.entry(t).or_default().push(*e);
-        }
+    fn elements(&mut self, by_type: &BTreeMap<String, Vec<(u32, &Element)>>) {
         self.comment("Elements");
-        for (t, labels) in by_type {
+        for (t, elements) in by_type {
             self.line(&format!("*ELEMENT, TYPE={t}"));
-            for e in labels {
-                let Some(element) = model.element(e) else { continue };
-                let (first, rest) = element.nodes.split_at(element.nodes.len().min(FIRST_LINE_NODES));
-                let mut line = e.to_string();
-                for n in first {
-                    line.push_str(&format!(", {n}"));
-                }
-                for chunk in rest.chunks(CONTINUATION_NODES) {
+            for (e, element) in elements {
+                let _ = write!(self.out, "{e}");
+                for (i, n) in element.nodes.iter().enumerate() {
                     // A trailing comma continues the data line.
-                    line.push(',');
-                    self.line(&line);
-                    line = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+                    let continues = i >= FIRST_LINE_NODES && (i - FIRST_LINE_NODES).is_multiple_of(CONTINUATION_NODES);
+                    let _ = write!(self.out, "{}{n}", if continues { ",\n" } else { ", " });
                 }
-                self.line(&line);
+                self.out.push('\n');
             }
         }
-        Ok(())
     }
 
     fn sets(&mut self, model: &Model, r: &Resolved) -> Result<()> {
@@ -535,7 +516,7 @@ impl Deck {
                         format: FORMAT,
                         what: format!("set `{name}`: element {} has no face {}", f.element, f.face),
                     })?;
-                    self.line(&format!("{}, {id}", f.element));
+                    let _ = writeln!(self.out, "{}, {id}", f.element);
                 }
             }
         }
@@ -552,20 +533,20 @@ impl Deck {
             match m.elastic {
                 Some(Elastic::Isotropic { young, poisson }) => {
                     self.line("*ELASTIC, TYPE=ISOTROPIC");
-                    self.line(&format!("{}, {}", number(young)?, number(poisson)?));
+                    self.numbers_line("", &[young, poisson])?;
                 }
                 Some(Elastic::EngineeringConstants { young, poisson, shear }) => {
                     // E1, E2, E3, ν12, ν13, ν23, G12, G13 on the first line, G23 on the second.
                     self.line("*ELASTIC, TYPE=ENGINEERING CONSTANTS");
-                    let first: Vec<String> = young.iter().chain(&poisson).chain(&shear[..2]).map(|v| number(*v)).collect::<Result<_>>()?;
-                    self.line(&first.join(", "));
-                    self.line(&number(shear[2])?);
+                    let [g12, g13, g23] = shear;
+                    self.numbers_line("", &[young[0], young[1], young[2], poisson[0], poisson[1], poisson[2], g12, g13])?;
+                    self.numbers_line("", &[g23])?;
                 }
                 None => {}
             }
             if let Some(rho) = m.density {
                 self.line("*DENSITY");
-                self.line(&number(rho)?);
+                self.numbers_line("", &[rho])?;
             }
         }
         Ok(())
@@ -586,12 +567,13 @@ impl Deck {
                 }
                 SectionKind::Rod { area } => {
                     self.line(&format!("*SOLID SECTION, ELSET={set}, MATERIAL={material}"));
-                    self.line(&number(area)?);
+                    self.numbers_line("", &[area])?;
                 }
                 SectionKind::Shell { thickness, offset, points } => {
                     let offset = if offset == 0.0 { String::new() } else { format!(", OFFSET={}", number(offset)?) };
                     self.line(&format!("*SHELL SECTION, ELSET={set}, MATERIAL={material}{offset}"));
-                    self.line(&format!("{}, {points}", number(thickness)?));
+                    push_number(&mut self.out, thickness)?;
+                    let _ = writeln!(self.out, ", {points}");
                 }
                 SectionKind::Beam { profile, orientation } => {
                     // Abaqus profiles: RECT a, b; CIRC r; PIPE r, t; I l, h, b1, b2, t1, t2, t3
@@ -604,20 +586,19 @@ impl Deck {
                         BeamProfile::Box { width, height, thickness } => ("BOX", vec![width, height, thickness, thickness, thickness, thickness]),
                     };
                     self.line(&format!("*BEAM SECTION, SECTION={shape}, ELSET={set}, MATERIAL={material}"));
-                    let dims: Vec<String> = dims.into_iter().map(number).collect::<Result<_>>()?;
-                    self.line(&dims.join(", "));
-                    let n1: Vec<String> = orientation.into_iter().map(number).collect::<Result<_>>()?;
-                    self.line(&n1.join(", "));
+                    self.numbers_line("", &dims)?;
+                    self.numbers_line("", &orientation)?;
                 }
             }
         }
         Ok(())
     }
 
-    fn couplings(&mut self, model: &Model, r: &Resolved, surfaces: &BTreeMap<String, String>) -> Result<()> {
+    fn couplings(&mut self, model: &Model, r: &Resolved) {
         if model.couplings().is_empty() {
-            return Ok(());
+            return;
         }
+        let surfaces = coupling_surfaces(model, r);
         self.comment("Couplings: every node of the set weighted equally");
         for (name, c) in model.couplings() {
             let (Some(surface), Some(node)) = (surfaces.get(name), r.reference_point_nodes.get(&c.reference_point)) else { continue };
@@ -632,10 +613,9 @@ impl Deck {
                 self.line(&format!("{a}, {b}"));
             }
         }
-        Ok(())
     }
 
-    fn boundary_lines(&mut self, model: &Model, r: &Resolved, names: &BTreeSet<String>) -> Result<()> {
+    fn boundary_lines<'n>(&mut self, model: &Model, r: &Resolved, names: impl IntoIterator<Item = &'n String>) -> Result<()> {
         for name in names {
             let Some(bc) = model.boundary_condition(name) else { continue };
             let target = match bc.target() {
@@ -659,7 +639,7 @@ impl Deck {
                 BoundaryCondition::Displacement { values, .. } => {
                     for (dof, v) in (1u8..).zip(values) {
                         if let Some(v) = v {
-                            self.line(&format!("{target}, {dof}, {dof}, {}", number(*v)?));
+                            self.numbers_line(&format!("{target}, {dof}, {dof}"), &[*v])?;
                         }
                     }
                 }
@@ -672,60 +652,66 @@ impl Deck {
     fn step_boundaries(&mut self, model: &Model, r: &Resolved, base: &BTreeSet<String>, active: &BTreeSet<String>) -> Result<()> {
         if active == base {
             self.comment("boundary conditions: as in the base state");
+            Ok(())
         } else if active.is_superset(base) {
             self.line("*BOUNDARY");
-            let added: BTreeSet<String> = active.difference(base).cloned().collect();
-            self.boundary_lines(model, r, &added)?;
+            self.boundary_lines(model, r, active.difference(base))
         } else {
             self.line("*BOUNDARY, OP=NEW");
-            self.boundary_lines(model, r, active)?;
+            self.boundary_lines(model, r, active)
         }
-        Ok(())
     }
 
-    fn step_loads(&mut self, loads: &StepLoads, had: &mut [bool; 3]) -> Result<()> {
-        let has = [!loads.concentrated.is_empty(), !loads.pressure.is_empty(), !loads.element.is_empty()];
-        if has[0] || had[0] {
-            self.line("*CLOAD, OP=NEW");
+    /// The keyword of one load family with `OP=NEW`, when the step has entries for it or the
+    /// previous one had some to remove.
+    fn op_new(&mut self, keyword: &str, now: bool, before: bool) -> bool {
+        if now || before {
+            self.line(&format!("{keyword}, OP=NEW"));
+        }
+        now
+    }
+
+    fn step_loads(&mut self, loads: &StepLoads, before: Written) -> Result<()> {
+        if self.op_new("*CLOAD", !loads.concentrated.is_empty(), before.concentrated) {
             for ((node, dof), v) in &loads.concentrated {
-                self.line(&format!("{node}, {dof}, {}", number(*v)?));
+                self.numbers_line(&format!("{node}, {dof}"), &[*v])?;
             }
         }
-        if has[1] || had[1] {
-            self.line("*DSLOAD, OP=NEW");
+        if self.op_new("*DSLOAD", !loads.pressure.is_empty(), before.pressure) {
             for (surface, p) in &loads.pressure {
-                self.line(&format!("{surface}, P, {}", number(*p)?));
+                self.numbers_line(&format!("{surface}, P"), &[*p])?;
             }
         }
-        if has[2] || had[2] {
-            self.line("*DLOAD, OP=NEW");
-            for l in &loads.element {
-                self.line(l);
+        if self.op_new("*DLOAD", !loads.element.is_empty(), before.element) {
+            for (target, kind, v) in &loads.element {
+                let target = match target {
+                    ElementTarget::Set(s) => s.to_string(),
+                    ElementTarget::Element(e) => e.to_string(),
+                };
+                match kind {
+                    BodyKind::Gravity => {
+                        let g = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                        self.numbers_line(&format!("{target}, GRAV"), &[g, v[0] / g, v[1] / g, v[2] / g])?;
+                    }
+                    BodyKind::Force => {
+                        for (label, c) in ["BX", "BY", "BZ"].into_iter().zip(v) {
+                            if *c != 0.0 {
+                                self.numbers_line(&format!("{target}, {label}"), &[*c])?;
+                            }
+                        }
+                    }
+                }
             }
         }
-        *had = has;
         Ok(())
     }
 
     fn output(&mut self, step: &Step) {
-        let node: Vec<&str> = step
-            .output
-            .iter()
-            .filter_map(|v| match v {
-                OutputVariable::Displacement => Some("U"),
-                OutputVariable::ReactionForce => Some("RF"),
-                _ => None,
-            })
-            .collect();
-        let element: Vec<&str> = step
-            .output
-            .iter()
-            .filter_map(|v| match v {
-                OutputVariable::Stress => Some("S"),
-                OutputVariable::Strain => Some("E"),
-                _ => None,
-            })
-            .collect();
+        let pick = |names: [(OutputVariable, &'static str); 2]| -> Vec<&'static str> {
+            names.into_iter().filter(|(v, _)| step.output.contains(v)).map(|(_, n)| n).collect()
+        };
+        let node = pick([(OutputVariable::Displacement, "U"), (OutputVariable::ReactionForce, "RF")]);
+        let element = pick([(OutputVariable::Stress, "S"), (OutputVariable::Strain, "E")]);
         if node.is_empty() && element.is_empty() {
             self.line("*OUTPUT, FIELD, OP=NEW, FREQUENCY=0");
             return;
@@ -744,20 +730,27 @@ impl Deck {
     fn steps(&mut self, model: &Model, r: &Resolved) -> Result<()> {
         let steps = model.steps();
         // The initial state: zero-valued boundary conditions active in every step.
-        let initial: BTreeSet<String> = model
-            .boundary_conditions()
-            .iter()
-            .filter(|(n, bc)| holds_at_zero(bc) && !steps.is_empty() && steps.iter().all(|s| s.boundary_conditions.contains(*n)))
-            .map(|(n, _)| n.clone())
-            .collect();
+        let initial: BTreeSet<String> = if steps.is_empty() {
+            BTreeSet::new()
+        } else {
+            let in_every_step = |n: &String| steps.iter().all(|s| s.boundary_conditions.contains(n));
+            model.boundary_conditions().iter().filter(|(n, bc)| holds_at_zero(bc) && in_every_step(n)).map(|(n, _)| n.clone()).collect()
+        };
         if !initial.is_empty() {
             self.comment("Initial state: boundary conditions active in every step");
             self.line("*BOUNDARY");
             self.boundary_lines(model, r, &initial)?;
         }
+        // Gravity on the whole model acts on every element, through the section sets.
+        let whole_model_gravity = model.loads().values().any(|l| matches!(l, Load::Gravity { set: None, .. }));
+        let everything: (Vec<&str>, Vec<u32>) = if whole_model_gravity {
+            (model.sections().values().map(|s| s.set.as_str()).collect(), model.elements().keys().copied().collect())
+        } else {
+            Default::default()
+        };
         let mut base_bcs = initial;
         let mut base_loads: BTreeSet<String> = BTreeSet::new();
-        let mut had = [false; 3];
+        let mut written = Written::default();
         for step in steps {
             self.comment(&format!("Step {}", step.name));
             match step.procedure {
@@ -769,24 +762,26 @@ impl Deck {
                     if step.loads == base_loads {
                         self.comment("loads: as in the previous general step");
                     } else {
-                        let loads = StepLoads::new(model, r, step)?;
-                        self.step_loads(&loads, &mut had)?;
+                        let loads = StepLoads::new(model, r, step, &everything);
+                        self.step_loads(&loads, written)?;
+                        written = loads.written();
                     }
-                    base_bcs = step.boundary_conditions.clone();
-                    base_loads = step.loads.clone();
+                    base_bcs.clone_from(&step.boundary_conditions);
+                    base_loads.clone_from(&step.loads);
                 }
                 Procedure::Frequency { modes, min_hz, max_hz } => {
                     self.line(&format!("*STEP, NAME={}", step.name));
                     self.line("*FREQUENCY, EIGENSOLVER=LANCZOS");
                     // Modes, then the frequency range; empty trailing fields are left off.
-                    let mut fields = vec![modes.to_string()];
-                    for f in [min_hz, max_hz] {
-                        fields.push(f.map(number).transpose()?.unwrap_or_default());
+                    let _ = write!(self.out, "{modes}");
+                    let range: Vec<Option<f64>> = [min_hz, max_hz].into_iter().rev().skip_while(Option::is_none).collect();
+                    for f in range.into_iter().rev() {
+                        self.out.push_str(", ");
+                        if let Some(f) = f {
+                            push_number(&mut self.out, f)?;
+                        }
                     }
-                    while fields.last().is_some_and(String::is_empty) {
-                        fields.pop();
-                    }
-                    self.line(&fields.join(", "));
+                    self.out.push('\n');
                     self.step_boundaries(model, r, &base_bcs, &step.boundary_conditions)?;
                     if !step.loads.is_empty() {
                         self.comment("loads have no effect on natural frequencies and are not written");

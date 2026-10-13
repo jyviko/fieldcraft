@@ -2,42 +2,30 @@
 
 use std::path::Path;
 
-use modelcraft_model::Severity;
 use serde_json::{Value, json};
 
+use super::req;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const WRITE: CommandSpec = CommandSpec {
     id: "deck.write",
     label: "Write Solver Deck",
-    params: r#"{"format": "abaqus", "path": "part.inp"} — writes the model as a solver deck; fails naming every error of the model check and everything the format cannot express"#,
+    params: r#"{"format": "abaqus", "path": "part.inp"} — writes the model as a solver deck (formats: modelcraft_decks::FORMATS); fails naming every error of the model check and everything the format cannot express"#,
     kind: CommandKind::Session,
     run: write,
 };
 
-/// The deck formats `deck.write` knows, by the name its `format` parameter takes.
-pub const FORMATS: &[&str] = &["abaqus"];
-
-/// The deck's text in `format`.
-fn render(format: &str, s: &Session) -> Result<String> {
-    match format {
-        "abaqus" => Ok(modelcraft_decks::abaqus::write(&s.model)?),
-        other => {
-            let shown: String = other.chars().take(32).collect();
-            Err(EngineError::Params(format!("unknown deck format `{shown}`; known: {}", FORMATS.join(", "))))
-        }
-    }
-}
-
 fn write(s: &mut Session, p: &Value) -> Result<Value> {
-    let format =
-        p.get("format").and_then(Value::as_str).ok_or_else(|| EngineError::Params(format!("`format` must be one of {}", FORMATS.join(", "))))?;
-    let path =
-        p.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or_else(|| EngineError::Params("`path` must be a file path".into()))?;
-    let deck = render(format, s)?;
-    modelcraft_io::fs::write_atomic(Path::new(path), deck.as_bytes(), false)?;
-    let warnings: Vec<_> = s.model.check().into_iter().filter(|d| d.severity == Severity::Warning).collect();
-    Ok(json!({"format": format, "path": path, "bytes": deck.len(), "warnings": warnings}))
+    let name: &str = req(p, "format")?;
+    let format = modelcraft_decks::format(name).ok_or_else(|| {
+        let shown: String = name.chars().take(32).collect();
+        let known: Vec<&str> = modelcraft_decks::FORMATS.iter().map(|f| f.name).collect();
+        EngineError::Params(format!("unknown deck format `{shown}`; known: {}", known.join(", ")))
+    })?;
+    let path = super::path_param(p, "path")?;
+    let deck = format.write(&s.model)?;
+    modelcraft_io::fs::write_atomic(Path::new(path), deck.text.as_bytes(), false)?;
+    Ok(json!({"format": format.name, "path": path, "bytes": deck.text.len(), "warnings": deck.warnings}))
 }
 
 #[cfg(test)]

@@ -8,10 +8,19 @@
 //! be replaced without touching the rest of the workspace. Only this crate may depend on
 //! `solidcraft-*` (`cargo xtask layers` enforces it).
 //!
+//! Geometry enters two ways: shapes built in code (such as [`block`]) and SolidCraft designs
+//! opened with [`open_design`], which rebuilds the design's parametric timeline and gives its
+//! bodies with persistent face names (a boundary condition on a named face follows that face
+//! through an edit of the design).
+//!
 //! Lengths are millimetres.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod design;
+pub mod sample;
+
+pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design};
 use solidcraft_kernel::{Body, KernelError, guard};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -38,6 +47,19 @@ impl From<KernelError> for Error {
 pub struct Shape {
     pub name: String,
     body: Body,
+    /// By B-rep face index (the [`SurfaceMesh::tri_face`] tags); empty for shapes built in code.
+    faces: Vec<Face>,
+}
+
+/// A B-rep face's persistent identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Face {
+    /// Stable across rebuilds of the design: named after the feature and sketch curve that made
+    /// the face (`F2:side:l4`, `F2:top`, …), not after its position in the body.
+    pub name: String,
+    /// The name follows the history SolidCraft recorded; `false` when it was worked out from the
+    /// geometry, which an upstream edit can fool.
+    pub exact: bool,
 }
 
 /// Mass properties and extent of a [`Shape`].
@@ -69,10 +91,21 @@ fn xyz(v: solidcraft_geom::Vec3) -> [f64; 3] {
 pub fn block(a: [f64; 3], b: [f64; 3]) -> Result<Shape> {
     let v = |p: [f64; 3]| solidcraft_geom::Vec3 { x: p[0], y: p[1], z: p[2] };
     let body = guard("block", || solidcraft_kernel::box_solid(v(a), v(b)))?;
-    Ok(Shape { name: "Block".into(), body })
+    Ok(Shape { name: "Block".into(), body, faces: Vec::new() })
 }
 
 impl Shape {
+    /// The persistent identities of the faces, by B-rep face index (empty for shapes built in code).
+    pub fn faces(&self) -> &[Face] {
+        &self.faces
+    }
+
+    /// The index of the face with this persistent name: the [`SurfaceMesh::tri_face`] tag its
+    /// triangles carry.
+    pub fn face_index(&self, name: &str) -> Option<u32> {
+        self.faces.iter().position(|f| f.name == name).and_then(|i| u32::try_from(i).ok())
+    }
+
     pub fn measure(&self) -> Result<Measure> {
         let m = guard("measure", || solidcraft_kernel::measure(&self.body))?;
         Ok(Measure {

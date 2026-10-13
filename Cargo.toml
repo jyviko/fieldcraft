@@ -27,6 +27,8 @@ log = "0.4"
 # (plan/adr/0001-libraries.md).
 solidcraft-geom = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
 solidcraft-kernel = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
+solidcraft-doc = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
+solidcraft-io = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

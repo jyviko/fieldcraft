@@ -1,7 +1,6 @@
-use std::io::Read;
 use std::sync::Arc;
 
-use modelcraft_geometry::{MAX_DESIGN_BYTES, Shape, open_design};
+use modelcraft_geometry::{Shape, open_design_file};
 use serde_json::{Value, json};
 
 use crate::{CommandSpec, EngineError, Result, Session};
@@ -27,32 +26,13 @@ pub const TESSELLATE: CommandSpec = CommandSpec {
     run: tessellate,
 };
 
-/// Longest path accepted.
-const MAX_PATH: usize = 4096;
-
-fn read_design_file(path: &str) -> Result<Vec<u8>> {
-    let fail = |e: std::io::Error| EngineError::Params(format!("cannot read `{path}`: {e}"));
-    let file = std::fs::File::open(path).map_err(fail)?;
-    let meta = file.metadata().map_err(fail)?;
-    if !meta.is_file() {
-        return Err(EngineError::Params(format!("`{path}` is not a file")));
-    }
-    if meta.len() > MAX_DESIGN_BYTES as u64 {
-        return Err(EngineError::Params(format!("`{path}` is larger than {} MB", MAX_DESIGN_BYTES >> 20)));
-    }
-    let mut bytes = Vec::new();
-    // The file may grow after the size check.
-    file.take(MAX_DESIGN_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(fail)?;
-    Ok(bytes)
-}
-
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p
         .get("path")
         .and_then(Value::as_str)
-        .filter(|v| !v.is_empty() && v.len() <= MAX_PATH)
+        .filter(|v| !v.is_empty())
         .ok_or_else(|| EngineError::Params("`path` must be the design file's path".into()))?;
-    let design = open_design(&read_design_file(path)?)?;
+    let design = open_design_file(path)?;
     let out = json!({
         "name": design.name,
         "bodies": design.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),

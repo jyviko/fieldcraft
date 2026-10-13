@@ -53,6 +53,10 @@ fn extrude(sketch: u64, distance: &str, operation: Operation) -> FeatureKind {
     }
 }
 
+fn sketch_on_xy(doc: &mut Document, sketch: Sketch, name: &str) -> Result<u64> {
+    doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch }, Some(name)).map_err(failed)
+}
+
 /// The plate as `.solidcraft` file bytes.
 pub fn plate_design(p: &Plate) -> Result<Vec<u8>> {
     let ok = |v: f64| v.is_finite() && v > 0.0 && v <= 1e6;
@@ -65,34 +69,28 @@ pub fn plate_design(p: &Plate) -> Result<Vec<u8>> {
 
     let mut sk = Sketch::new();
     let corners = [Vec2::new(0.0, 0.0), Vec2::new(p.width, 0.0), Vec2::new(p.width, p.depth), Vec2::new(0.0, p.depth)];
-    let mut pts = [0usize; 4];
-    for (id, c) in pts.iter_mut().zip(corners) {
-        *id = sk.add_point(c, None).map_err(failed)?;
-    }
-    let mut lines = [0usize; 4];
-    for (i, l) in lines.iter_mut().enumerate() {
-        *l = sk.add_line_pts(pts[i], pts[(i + 1) % 4], None).map_err(failed)?;
-    }
-    let [l0, l1, l2, l3] = lines;
+    let [p0, p1, p2, p3] = corners.map(|c| sk.add_point(c, None));
+    let (p0, p1, p2, p3) = (p0.map_err(failed)?, p1.map_err(failed)?, p2.map_err(failed)?, p3.map_err(failed)?);
+    let l0 = sk.add_line_pts(p0, p1, None).map_err(failed)?;
+    let l1 = sk.add_line_pts(p1, p2, None).map_err(failed)?;
+    let l2 = sk.add_line_pts(p2, p3, None).map_err(failed)?;
+    let l3 = sk.add_line_pts(p3, p0, None).map_err(failed)?;
+    use ConstraintKind::{Coincident, Horizontal, Vertical};
     // Point 0 of a sketch is its origin.
-    sk.add_constraint(ConstraintKind::Coincident { p: pts[0], q: 0 }, None).map_err(failed)?;
-    sk.add_constraint(ConstraintKind::Horizontal { l: l0 }, None).map_err(failed)?;
-    sk.add_constraint(ConstraintKind::Horizontal { l: l2 }, None).map_err(failed)?;
-    sk.add_constraint(ConstraintKind::Vertical { l: l1 }, None).map_err(failed)?;
-    sk.add_constraint(ConstraintKind::Vertical { l: l3 }, None).map_err(failed)?;
+    for c in [Coincident { p: p0, q: 0 }, Horizontal { l: l0 }, Horizontal { l: l2 }, Vertical { l: l1 }, Vertical { l: l3 }] {
+        sk.add_constraint(c, None).map_err(failed)?;
+    }
     let width = doc.new_model_param("width", "mm");
     sk.add_constraint(ConstraintKind::Length { l: l0, value: p.width }, Some(width)).map_err(failed)?;
     let depth = doc.new_model_param(&format!("{} mm", p.depth), "mm");
     sk.add_constraint(ConstraintKind::Length { l: l1, value: p.depth }, Some(depth)).map_err(failed)?;
-    let outline =
-        doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch: sk }, Some("Outline")).map_err(failed)?;
+    let outline = sketch_on_xy(&mut doc, sk, "Outline")?;
     doc.add_feature(extrude(outline, "thickness", Operation::NewBody), Some("Plate")).map_err(failed)?;
 
     let mut sk = Sketch::new();
     let c = p.depth / 2.0;
     sk.add_circle(Vec2::new(c, c), p.hole_diameter / 2.0, None, None).map_err(failed)?;
-    let hole =
-        doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch: sk }, Some("Hole sketch")).map_err(failed)?;
+    let hole = sketch_on_xy(&mut doc, sk, "Hole sketch")?;
     // Past the top face, so the cut never ends on it.
     doc.add_feature(extrude(hole, "thickness + 1 mm", Operation::Cut), Some("Hole")).map_err(failed)?;
 

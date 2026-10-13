@@ -76,10 +76,7 @@ impl Session {
                 Err(EngineError::Internal { command: id.to_string(), message })
             }
         };
-        let design_changed = match (&self.design, &design_before) {
-            (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
-            (a, b) => a.is_some() != b.is_some(),
-        };
+        let design_changed = self.design.as_ref().map(Arc::as_ptr) != design_before.as_ref().map(Arc::as_ptr);
         match &result {
             Ok(_) if self.model != before || design_changed => self.journal.push((id.to_string(), params.clone())),
             Ok(_) => {}

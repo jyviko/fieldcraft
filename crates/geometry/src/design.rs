@@ -2,7 +2,9 @@
 //! with SolidCraft, and hand back its bodies with persistent face names.
 //!
 //! The design is rebuilt from its authoritative inputs (sketches, features, parameters); cached
-//! display meshes in the file are never used. Bytes, not paths, so this works in the browser.
+//! display meshes in the file are never used. [`open_design`] takes bytes; [`open_design_file`]
+//! reads a path through SolidCraft's file access, which in the browser is the in-memory files the
+//! web host loaded.
 
 use solidcraft_doc::{Document, Model, naming};
 use solidcraft_kernel::{KernelError, guard};
@@ -38,11 +40,14 @@ impl Design {
 
 /// Open a design from its file bytes (a `.solidcraft` container or a JSON design) and rebuild it.
 pub fn open_design(bytes: &[u8]) -> Result<Design> {
-    if bytes.len() > MAX_DESIGN_BYTES {
-        return Err(Error::Invalid(format!("design file too large ({} MB, limit {} MB)", bytes.len() >> 20, MAX_DESIGN_BYTES >> 20)));
-    }
     let doc = guard("read design", || solidcraft_io::read_design(bytes).map_err(|e| KernelError::Invalid(format!("not a readable design: {e}"))))?;
     rebuild(&doc)
+}
+
+/// Read a design file (a regular file of at most [`MAX_DESIGN_BYTES`]) and rebuild it.
+pub fn open_design_file(path: &str) -> Result<Design> {
+    let bytes = solidcraft_io::vfs::read(path, MAX_DESIGN_BYTES).map_err(|e| Error::Invalid(format!("cannot read `{path}`: {e}")))?;
+    open_design(&bytes)
 }
 
 /// Rebuild an in-memory document (the design half of [`open_design`]).
@@ -79,10 +84,11 @@ mod tests {
         let mesh = shape.tessellate(0.01).unwrap();
         let mut areas = vec![0.0; shape.faces().len()];
         for (t, f) in mesh.triangles.iter().zip(&mesh.tri_face) {
-            let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
-            let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
-            let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-            areas[*f as usize] += 0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let [a, b, c] = t.map(|i| {
+                let [x, y, z] = mesh.positions[i as usize];
+                solidcraft_geom::Vec3 { x, y, z }
+            });
+            areas[*f as usize] += 0.5 * (b - a).cross(c - a).len();
         }
         areas
     }
@@ -157,5 +163,8 @@ mod tests {
             assert!(open_design(bytes).is_err(), "{bytes:?}");
         }
         assert!(open_design(&vec![b' '; MAX_DESIGN_BYTES + 1]).is_err());
+        for path in ["", "/", "/dev/zero", "/no/such/design.solidcraft"] {
+            assert!(open_design_file(path).is_err(), "{path}");
+        }
     }
 }

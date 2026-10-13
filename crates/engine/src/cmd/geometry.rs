@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use modelcraft_geometry::tagged_mesh::{self, MAX_FILE_BYTES};
+use modelcraft_geometry::tagged_mesh;
 use modelcraft_geometry::{Shape, open_design_file};
 use serde_json::{Value, json};
 
-use super::read_capped;
 use crate::{CommandSpec, EngineError, Result, Session};
 
 pub const OPEN: CommandSpec = CommandSpec {
@@ -93,7 +92,7 @@ fn import_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         .and_then(Value::as_str)
         .filter(|x| !x.trim().is_empty() && x.len() < 4096)
         .ok_or_else(|| EngineError::Params("`path` must name a .3mf file".into()))?;
-    let surfaces = tagged_mesh::read_3mf(&read_capped(path, MAX_FILE_BYTES)?)?;
+    let surfaces = tagged_mesh::read_3mf_file(path)?;
     let first = s.surfaces.len();
     let added: Vec<Value> = surfaces
         .iter()
@@ -139,7 +138,15 @@ mod tests {
         assert_eq!(s.surfaces[0].mesh.tri_face, vec![0, 1, 1, 1]);
         assert_eq!(s.journal.len(), 1);
 
-        for p in [json!({"path": junk.to_str().unwrap()}), json!({"path": dir.join("missing.3mf").to_str().unwrap()}), json!({"path": ""})] {
+        let hostile = [
+            json!({"path": junk.to_str().unwrap()}),
+            json!({"path": dir.join("missing.3mf").to_str().unwrap()}),
+            json!({"path": dir.to_str().unwrap()}),
+            json!({"path": "/dev/zero"}),
+            json!({"path": ""}),
+            json!({"path": "x".repeat(5000)}),
+        ];
+        for p in hostile {
             assert!(s.execute("geometry.import.mesh", &p).is_err(), "{p}");
         }
         assert_eq!(s.surfaces.len(), 1);

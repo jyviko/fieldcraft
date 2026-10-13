@@ -466,6 +466,7 @@ dependencies = [
 name = "modelcraft-geometry"
 version = "0.1.0"
 dependencies = [
+ "modelcraft-model",
  "quick-xml",
  "solidcraft-doc",
  "solidcraft-geom",

@@ -38,17 +38,3 @@ pub(crate) fn xyz(p: &Value, key: &str) -> Result<[f64; 3]> {
     }
     Ok(out)
 }
-
-/// A file's bytes, refusing anything over `cap`.
-pub(crate) fn read_capped(path: &str, cap: usize) -> Result<Vec<u8>> {
-    use std::io::Read;
-    let err = |e: std::io::Error| EngineError::File(format!("{path}: {e}"));
-    let f = std::fs::File::open(path).map_err(err)?;
-    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
-    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0).min(cap));
-    f.take(cap as u64 + 1).read_to_end(&mut bytes).map_err(err)?;
-    if bytes.len() > cap {
-        return Err(EngineError::File(format!("{path}: larger than {} MB", cap >> 20)));
-    }
-    Ok(bytes)
-}

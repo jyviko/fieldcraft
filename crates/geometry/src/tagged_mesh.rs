@@ -28,8 +28,12 @@ const MAX_ENTRIES: usize = 10_000;
 pub const MAX_ELEMENTS: usize = 20_000_000;
 const MAX_BUILD_ITEMS: usize = 10_000;
 const MAX_XML_DEPTH: usize = 256;
-/// Largest coordinate magnitude accepted, after units and transforms (mm).
-const MAX_COORD: f64 = 1e12;
+/// Largest coordinate magnitude accepted, in the file and after units and transforms: the FE
+/// model's own limit, so every imported vertex can become a node.
+use modelcraft_model::MAX_COORD;
+/// A transform whose determinant is below this fraction of its largest row length cubed
+/// flattens the object (relative, so a uniform scale is never refused).
+const MIN_RELATIVE_DET: f64 = 1e-12;
 
 const CORE_NS: &[u8] = b"http://schemas.microsoft.com/3dmanufacturing/core/2015/02";
 /// The face-tag namespace, version 1.
@@ -312,6 +316,11 @@ fn parse_model(xml: &[u8]) -> Result<Model> {
 
 /// Build item `k` as a surface: object `o` (checked) placed by `xf` and scaled to millimetres.
 fn surface(mut o: Object, k: usize, id: u32, xf: &Xf, unit: f64) -> Result<TaggedSurface> {
+    let d = det(xf);
+    let scale = (0..3).map(|r| (xf[r * 3].powi(2) + xf[r * 3 + 1].powi(2) + xf[r * 3 + 2].powi(2)).sqrt()).fold(0.0, f64::max);
+    if !(d.abs() > MIN_RELATIVE_DET * scale.powi(3)) {
+        return bad(format!("build item {}: its transform is singular (it flattens object {id} to zero volume)", k + 1));
+    }
     if o.components {
         return bad(format!("not supported yet: object {id} is made of components"));
     }
@@ -324,7 +333,7 @@ fn surface(mut o: Object, k: usize, id: u32, xf: &Xf, unit: f64) -> Result<Tagge
             return bad(format!("object {id}: a placed vertex is out of range"));
         }
     }
-    if det(xf) < 0.0 {
+    if d < 0.0 {
         o.triangles.iter_mut().for_each(|t| t.swap(1, 2));
     }
     if o.tags.is_empty() {
@@ -333,6 +342,13 @@ fn surface(mut o: Object, k: usize, id: u32, xf: &Xf, unit: f64) -> Result<Tagge
     let faces = o.faces.unwrap_or_else(|| o.tags.iter().max().map_or(1, |f| f.saturating_add(1)));
     let name = if o.name.is_empty() { format!("Mesh{}", k + 1) } else { o.name };
     Ok(TaggedSurface { name, mesh: SurfaceMesh { positions: o.positions, triangles: o.triangles, tri_face: o.tags }, faces })
+}
+
+/// [`read_3mf`] of a file: a regular file of at most [`MAX_FILE_BYTES`] (SolidCraft's virtual
+/// file system, so the browser's in-memory files work too).
+pub fn read_3mf_file(path: &str) -> Result<Vec<TaggedSurface>> {
+    let bytes = solidcraft_io::vfs::read(path, MAX_FILE_BYTES).map_err(|e| Error::Invalid(format!("cannot read `{path}`: {e}")))?;
+    read_3mf(&bytes)
 }
 
 /// The surfaces of a 3MF package, one per build item, in millimetres.
@@ -476,6 +492,10 @@ mod tests {
     #[test]
     fn untagged_units_and_transforms() {
         let s = read_3mf(&package(&tet(""))).unwrap();
+        // Uniform and uneven (but not flattening) scales are fine.
+        for xf in ["0.001 0 0 0 0.001 0 0 0 0.001 0 0 0", "1000 0 0 0 1 0 0 0 0.001 5 5 5"] {
+            assert!(read_3mf(&package(&tet(&format!(" transform=\"{xf}\"")))).is_ok(), "{xf}");
+        }
         assert_eq!((s[0].faces, s[0].mesh.tri_face.clone()), (1, vec![0; 4]));
         let cm = tet(" transform=\"-1 0 0 0 1 0 0 0 1 0 0 2\"").replace("millimeter", "centimeter");
         let s = read_3mf(&package(&cm)).unwrap();
@@ -540,7 +560,11 @@ mod tests {
             // transforms, units, components, duplicates
             tet(" transform=\"1 2\""),
             tet(" transform=\"1e300 0 0 0 1 0 0 0 1 0 0 0\""),
-            tet(" transform=\"1e12 0 0 0 1 0 0 0 1 0 0 0\"").replace("millimeter", "meter"),
+            tet(" transform=\"1e9 0 0 0 1 0 0 0 1 0 0 0\"").replace("millimeter", "meter"),
+            tet(" transform=\"0 0 0 0 0 0 0 0 0 0 0 0\""),
+            tet(" transform=\"1 0 0 0 1 0 0 0 1e-300 0 0 0\""),
+            tet(" transform=\"1 0 0 1 0 0 0 0 1 0 0 0\""),
+            tet("").replace("<vertex x=\"1\"", "<vertex x=\"2e9\""),
             tet("").replace("millimeter", "parsec"),
             format!(
                 "{HEAD}<object id=\"1\"><components><component objectid=\"1\"/></components></object></resources><build><item objectid=\"1\"/></build></model>"

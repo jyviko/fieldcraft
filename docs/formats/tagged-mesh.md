@@ -87,10 +87,11 @@ as one face (tag 0). A file mixing tagged and untagged triangles in one object i
 
 - Every build item becomes one `SurfaceMesh`, in millimetres (`unit` converted), named after its
   object (`Mesh<n>` when unnamed). An item's `transform` is applied; a mirroring transform reverses
-  the winding. Components are not read yet (an error that says so).
+  the winding; a singular transform (one that flattens the object) is refused. Components are
+  not read yet (an error that says so).
 - Untrusted input: file ≤ 512 MB, a part ≤ 1 GB uncompressed, ≤ 10 000 zip entries, ≤ 20 million
   vertices and 20 million triangles in total, XML nesting ≤ 256. Coordinates must be finite with
-  magnitude ≤ 10¹²; vertex indices must exist; tags must be below `ft:faces` when it is given.
+  magnitude ≤ 10⁹ mm (the FE model's limit), in the file and once placed; vertex indices must exist; tags must be below `ft:faces` when it is given.
   Any violation is an error naming the problem; nothing panics.
 
 ## Versions

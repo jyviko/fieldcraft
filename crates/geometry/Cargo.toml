@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+modelcraft-model = { workspace = true }
 solidcraft-geom = { workspace = true }
 solidcraft-kernel = { workspace = true }
 solidcraft-doc = { workspace = true }

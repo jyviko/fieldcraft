@@ -26,9 +26,6 @@ pub enum EngineError {
     Model(#[from] modelcraft_model::Error),
     #[error(transparent)]
     Geometry(#[from] modelcraft_geometry::Error),
-    /// A file could not be read or written.
-    #[error("{0}")]
-    File(String),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },

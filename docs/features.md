@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-39 ready, 61 coming soon.
+44 ready, 56 coming soon.
 
 ## Geometry
 
@@ -131,12 +131,12 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
 | Panel | Capability | Status | Command |
 |---|---|---|---|
-| Display | Deformed — The deformed shape | coming soon (M4) |  |
-| Display | Contours — Contour plots of stress, strain and displacement | coming soon (M4) |  |
-| Display | Mode Shapes — Mode shapes of a frequency step | coming soon (M4) |  |
-| Display | Animate — Animate modes and time histories | coming soon (M9) |  |
-| Query | Probe — Displacement, reaction and stress at nodes, a mode shape, or an explicit field frame | ready | `solve.probe`, `solve.history` |
-| Query | Reactions — Reaction force and moment sums | coming soon (M4) |  |
+| Display | Deformed — The deformed shape of a solved step, to scale | ready | `results.deformed`, `results.clear` |
+| Display | Contours — Contours of displacement and stress, with a legend | ready | `results.contour` |
+| Display | Mode Shapes — Mode shapes and frequencies of a frequency step | ready | `results.modes` |
+| Display | Animate — Animate the deformed shape, a mode or an explicit step's frames | ready | `results.animate`, `results.frame` |
+| Query | Probe — Displacement, reaction and stress at nodes, a mode shape, or an explicit field frame (or click the model) | ready | `solve.probe`, `solve.history` |
+| Query | Reactions — Reaction force and moment sums per set | ready | `results.reactions` |
 | Query | Free Body — Free-body forces across a cut | coming soon (M9) |  |
 | Plots | XY Plot — Plot a quantity against time or another | coming soon (M9) |  |
 | Plots | Path Plot — Plot a quantity along a path | coming soon (M9) |  |

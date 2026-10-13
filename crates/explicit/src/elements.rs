@@ -35,9 +35,10 @@
 //! square of the mean), so the plain tetrahedron's bound holds.
 
 use modelcraft_fem::material::stress;
+use modelcraft_fem::uniform::UniformStrain;
 use modelcraft_model::{BulkViscosity, HourglassKind};
 
-use crate::system::System;
+use crate::system::{Material, System};
 
 /// Scratch vectors and the element state of the latest evaluation.
 #[derive(Debug, Clone)]
@@ -49,10 +50,10 @@ pub struct Workspace {
     /// Per element (in [`System::elements`] order): the material stress and the strain.
     pub stress: Vec<[f64; 6]>,
     pub strain: Vec<[f64; 6]>,
-    /// Nodal volumetric strain sums and the nodes' tetrahedron volumes.
+    /// Per node: the mean volumetric strain of its tetrahedra (a volume-weighted sum until it is
+    /// divided by `tet_volume`).
     theta: Vec<f64>,
     tet_volume: Vec<f64>,
-    tet_strain: Vec<[f64; 6]>,
 }
 
 impl Workspace {
@@ -76,28 +77,26 @@ impl Workspace {
             strain: vec![[0.0; 6]; elements],
             theta: vec![0.0; n],
             tet_volume,
-            tet_strain: vec![[0.0; 6]; sys.tets.len()],
         }
-    }
-
-    /// The total internal force at a degree of freedom.
-    pub fn internal(&self, dof: usize) -> f64 {
-        let at = |v: &[f64]| v.get(dof).copied().unwrap_or(0.0);
-        at(&self.stress_force) + at(&self.hourglass_force) + at(&self.viscous_force)
     }
 }
 
-fn gather<const N: usize>(x: &[f64], nodes: &[usize; N]) -> [[f64; 3]; N] {
+pub(crate) fn gather<const N: usize>(x: &[f64], nodes: &[usize; N]) -> [[f64; 3]; N] {
     nodes.map(|n| [0, 1, 2].map(|k| x.get(3 * n + k).copied().unwrap_or(0.0)))
+}
+
+/// Add a node's vector into a per-degree-of-freedom vector.
+pub(crate) fn add_at(f: &mut [f64], node: usize, v: &[f64; 3]) {
+    for (k, c) in v.iter().enumerate() {
+        if let Some(x) = f.get_mut(3 * node + k) {
+            *x += c;
+        }
+    }
 }
 
 fn scatter<const N: usize>(f: &mut [f64], nodes: &[usize; N], v: &[[f64; 3]; N]) {
     for (n, vi) in nodes.iter().zip(v) {
-        for (k, c) in vi.iter().enumerate() {
-            if let Some(x) = f.get_mut(3 * n + k) {
-                *x += c;
-            }
-        }
+        add_at(f, *n, vi);
     }
 }
 
@@ -113,91 +112,101 @@ pub fn critical_increment(rate: f64, length: f64, wave_speed: f64, b: &BulkVisco
     length / (q + (q * q + wave_speed * wave_speed).sqrt())
 }
 
-/// The forces of a uniform pressure q (compression positive).
-fn pressure_stress(q: f64) -> [f64; 6] {
-    [-q, -q, -q, 0.0, 0.0, 0.0]
+/// What the hexahedron and the tetrahedron share once their stress is known: the stress and bulk
+/// viscosity forces, the element state and the critical increment.
+struct Finish<'a, const N: usize> {
+    kinematics: &'a UniformStrain<N>,
+    nodes: &'a [usize; N],
+    index: usize,
+    length: f64,
+}
+
+impl<const N: usize> Finish<'_, N> {
+    fn apply(&self, ws: &mut Workspace, mat: &Material, v: &[f64], sigma: [f64; 6], strain: [f64; 6], bulk: &BulkViscosity) -> f64 {
+        let k = self.kinematics;
+        let rate = k.divergence(&gather(v, self.nodes));
+        let q = bulk_pressure(rate, mat.density, self.length, mat.wave_speed, bulk);
+        scatter(&mut ws.stress_force, self.nodes, &k.forces(&sigma));
+        if q != 0.0 {
+            scatter(&mut ws.viscous_force, self.nodes, &k.pressure_forces(q));
+        }
+        if let Some(s) = ws.stress.get_mut(self.index) {
+            *s = sigma;
+        }
+        if let Some(s) = ws.strain.get_mut(self.index) {
+            *s = strain;
+        }
+        critical_increment(rate, self.length, mat.wave_speed, bulk)
+    }
 }
 
 /// Evaluate the internal forces at displacements `u` and velocities `v` into `ws` and return the
 /// smallest critical increment of the elements.
 pub fn internal_forces(sys: &System, u: &[f64], v: &[f64], bulk: &BulkViscosity, ws: &mut Workspace) -> f64 {
     for f in [&mut ws.stress_force, &mut ws.hourglass_force, &mut ws.viscous_force] {
-        f.iter_mut().for_each(|x| *x = 0.0);
+        f.fill(0.0);
     }
     let mut critical = f64::INFINITY;
     for h in &sys.hexes {
         let Some(mat) = sys.materials.get(h.material) else { continue };
-        let k = &h.kinematics;
-        let (ue, ve) = (gather(u, &h.nodes), gather(v, &h.nodes));
-        let strain = k.strain(&ue);
-        let rate = k.strain(&ve);
+        let ue = gather(u, &h.nodes);
+        let strain = h.kinematics.strain(&ue);
         let sigma = stress(&mat.elasticity, &strain);
-        let volumetric = rate[0] + rate[1] + rate[2];
-        let q = bulk_pressure(volumetric, mat.density, h.length, mat.wave_speed, bulk);
-        scatter(&mut ws.stress_force, &h.nodes, &k.forces(&sigma));
-        if q != 0.0 {
-            scatter(&mut ws.viscous_force, &h.nodes, &k.forces(&pressure_stress(q)));
-        }
+        // Hourglass forces on the displacement (stiffness) or velocity (viscous) modes.
         let modes = match sys.hourglass {
-            HourglassKind::Viscous => &ve,
-            HourglassKind::Stiffness => &ue,
+            HourglassKind::Viscous => gather(v, &h.nodes),
+            HourglassKind::Stiffness => ue,
         };
         let mut f = [[0.0; 3]; 8];
         for g in &h.gamma {
-            let generalized = [0, 1, 2].map(|i| h.hourglass * modes.iter().zip(g).map(|(x, gk)| x[i] * gk).sum::<f64>());
+            let mut generalized = [0.0; 3];
+            for (x, gk) in modes.iter().zip(g) {
+                for i in 0..3 {
+                    generalized[i] += x[i] * gk;
+                }
+            }
             for (fk, gk) in f.iter_mut().zip(g) {
                 for i in 0..3 {
-                    fk[i] += generalized[i] * gk;
+                    fk[i] += h.hourglass * generalized[i] * gk;
                 }
             }
         }
         scatter(&mut ws.hourglass_force, &h.nodes, &f);
-        if let Some(s) = ws.stress.get_mut(h.index) {
-            *s = sigma;
-        }
-        if let Some(s) = ws.strain.get_mut(h.index) {
-            *s = strain;
-        }
-        critical = critical.min(critical_increment(volumetric, h.length, mat.wave_speed, bulk));
+        let finish = Finish { kinematics: &h.kinematics, nodes: &h.nodes, index: h.index, length: h.length };
+        critical = critical.min(finish.apply(ws, mat, v, sigma, strain, bulk));
     }
     if !sys.tets.is_empty() {
-        // Pass 1: each node's volume-weighted sum of its tetrahedra's volumetric strains.
-        ws.theta.iter_mut().for_each(|x| *x = 0.0);
-        for (t, saved) in sys.tets.iter().zip(ws.tet_strain.iter_mut()) {
+        // Pass 1: each tetrahedron's strain, and each node's mean volumetric strain.
+        ws.theta.fill(0.0);
+        for t in &sys.tets {
             let strain = t.kinematics.strain(&gather(u, &t.nodes));
             for node in t.nodes {
                 if let Some(x) = ws.theta.get_mut(node) {
                     *x += t.kinematics.volume * (strain[0] + strain[1] + strain[2]);
                 }
             }
-            *saved = strain;
+            if let Some(s) = ws.strain.get_mut(t.index) {
+                *s = strain;
+            }
+        }
+        for (x, v) in ws.theta.iter_mut().zip(&ws.tet_volume) {
+            if *v > 0.0 {
+                *x /= v;
+            }
         }
         // Pass 2: each tetrahedron's pressure from the mean of its nodes' volumetric strains.
-        for (t, strain) in sys.tets.iter().zip(&ws.tet_strain) {
+        for t in &sys.tets {
             let Some(mat) = sys.materials.get(t.material) else { continue };
-            let k = &t.kinematics;
-            let nodal = t.nodes.map(|n| ws.theta.get(n).copied().unwrap_or(0.0) / ws.tet_volume.get(n).copied().unwrap_or(1.0));
-            let averaged = nodal.iter().sum::<f64>() / 4.0;
+            let strain = ws.strain.get(t.index).copied().unwrap_or_default();
+            let averaged = t.nodes.iter().map(|n| ws.theta.get(*n).copied().unwrap_or(0.0)).sum::<f64>() / 4.0;
             let own = strain[0] + strain[1] + strain[2];
-            let mut sigma = stress(&mat.elasticity, strain);
+            let mut sigma = stress(&mat.elasticity, &strain);
             let shift = mat.bulk.unwrap_or(0.0) * (averaged - own);
             for s in sigma.iter_mut().take(3) {
                 *s += shift;
             }
-            let rate = k.strain(&gather(v, &t.nodes));
-            let volumetric = rate[0] + rate[1] + rate[2];
-            let q = bulk_pressure(volumetric, mat.density, t.length, mat.wave_speed, bulk);
-            scatter(&mut ws.stress_force, &t.nodes, &k.forces(&sigma));
-            if q != 0.0 {
-                scatter(&mut ws.viscous_force, &t.nodes, &k.forces(&pressure_stress(q)));
-            }
-            if let Some(s) = ws.stress.get_mut(t.index) {
-                *s = sigma;
-            }
-            if let Some(s) = ws.strain.get_mut(t.index) {
-                *s = *strain;
-            }
-            critical = critical.min(critical_increment(volumetric, t.length, mat.wave_speed, bulk));
+            let finish = Finish { kinematics: &t.kinematics, nodes: &t.nodes, index: t.index, length: t.length };
+            critical = critical.min(finish.apply(ws, mat, v, sigma, strain, bulk));
         }
     }
     critical

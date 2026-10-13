@@ -5,7 +5,7 @@ use modelcraft_explicit::{ExplicitResult, solve_explicit};
 use modelcraft_solver::{FrequencyOptions, Limits, Location, MassKind, StepResult as ImplicitResult, solve_frequency, solve_static};
 use serde_json::{Value, json};
 
-use super::{labels, opt};
+use super::{labels, opt, req};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session, StepResult};
 
 pub const STATIC: CommandSpec = CommandSpec {
@@ -55,24 +55,14 @@ const MAX_PROBE: usize = 10_000;
 const MAX_HISTORY_SAMPLES: usize = 10_000;
 
 /// An optional cap that may only lower the default.
-fn cap(p: &Value, key: &str, default: usize) -> Result<usize> {
+fn cap<T: Copy + TryInto<u64> + TryFrom<u64> + std::fmt::Display>(p: &Value, key: &str, default: T) -> Result<T> {
+    let most: u64 = default.try_into().unwrap_or(u64::MAX);
     match p.get(key) {
         None => Ok(default),
         Some(v) => v
             .as_u64()
-            .and_then(|n| usize::try_from(n).ok())
-            .filter(|n| (1..=default).contains(n))
-            .ok_or_else(|| EngineError::Params(format!("`{key}` must be a whole number from 1 to {default}"))),
-    }
-}
-
-/// An optional cap on a 64-bit count that may only lower the default.
-fn cap64(p: &Value, key: &str, default: u64) -> Result<u64> {
-    match p.get(key) {
-        None => Ok(default),
-        Some(v) => v
-            .as_u64()
-            .filter(|n| (1..=default).contains(n))
+            .filter(|n| (1..=most).contains(n))
+            .and_then(|n| T::try_from(n).ok())
             .ok_or_else(|| EngineError::Params(format!("`{key}` must be a whole number from 1 to {default}"))),
     }
 }
@@ -146,7 +136,7 @@ fn run_explicit(s: &mut Session, p: &Value) -> Result<Value> {
     use modelcraft_explicit::Limits as ExplicitLimits;
     let limits = ExplicitLimits {
         max_dofs: cap(p, "max_dofs", ExplicitLimits::MAX_DOFS)?,
-        max_increments: cap64(p, "max_increments", ExplicitLimits::MAX_INCREMENTS)?,
+        max_increments: cap(p, "max_increments", ExplicitLimits::MAX_INCREMENTS)?,
         max_output_values: cap(p, "max_output_values", ExplicitLimits::MAX_OUTPUT_VALUES)?,
     };
     let step = opt::<String>(p, "step")?;
@@ -159,7 +149,7 @@ fn run_explicit(s: &mut Session, p: &Value) -> Result<Value> {
 fn explicit_summary(r: &ExplicitResult) -> Value {
     json!({
         "step": r.step,
-        "dofs": r.dofs,
+        "dofs": 3 * r.nodes.len(),
         "elements": r.elements.len(),
         "increments": r.increments,
         "time": r.time,
@@ -175,14 +165,9 @@ fn explicit_summary(r: &ExplicitResult) -> Value {
     })
 }
 
-fn explicit_result(s: &Session, step: &str) -> Result<std::sync::Arc<StepResult>> {
-    let result = s.result(step).ok_or_else(|| EngineError::Params(format!("step `{step}` has no result; solve it first")))?;
-    Ok(result.clone())
-}
-
 fn history(s: &mut Session, p: &Value) -> Result<Value> {
-    let step = opt::<String>(p, "step")?.ok_or_else(|| EngineError::Params("`step` is required".into()))?;
-    let result = explicit_result(s, &step)?;
+    let step: String = req(p, "step")?;
+    let result = s.result(&step).ok_or_else(|| EngineError::Params(format!("step `{step}` has no result; solve it first")))?;
     let StepResult::Explicit(r) = result.as_ref() else {
         return Err(EngineError::Params(format!("step `{step}` is not an explicit dynamic step; it has no histories")));
     };

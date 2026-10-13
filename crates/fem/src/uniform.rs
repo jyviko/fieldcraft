@@ -79,11 +79,11 @@ impl UniformStrain<8> {
             }
             let w = det * p.weight;
             volume += w;
-            for (i, (d, n)) in s.derivatives().iter().zip(s.values()).enumerate() {
+            for (((bi, vi), d), n) in b.iter_mut().zip(nodal_volume.iter_mut()).zip(s.derivatives()).zip(s.values()) {
                 for c in 0..3 {
-                    b[i][c] += w * (inv[c][0] * d[0] + inv[c][1] * d[1] + inv[c][2] * d[2]);
+                    bi[c] += w * (inv[c][0] * d[0] + inv[c][1] * d[1] + inv[c][2] * d[2]);
                 }
-                nodal_volume[i] += w * n;
+                *vi += w * n;
             }
         }
         Ok(UniformStrain { b, volume, nodal_volume })
@@ -153,6 +153,23 @@ impl<const N: usize> UniformStrain<N> {
     pub fn strain(&self, u: &[[f64; 3]; N]) -> [f64; 6] {
         let g = self.gradient(u);
         [g[0][0], g[1][1], g[2][2], g[0][1] + g[1][0], g[0][2] + g[2][0], g[1][2] + g[2][1]]
+    }
+
+    /// The trace of the mean gradient (1/V) Σ_I u_I · b_I: the volumetric strain of nodal
+    /// displacements, or its rate of nodal velocities.
+    pub fn divergence(&self, u: &[[f64; 3]; N]) -> f64 {
+        let mut d = [0.0; 3];
+        for (ui, bi) in u.iter().zip(&self.b) {
+            for i in 0..3 {
+                d[i] += ui[i] * bi[i];
+            }
+        }
+        (d[0] + d[1] + d[2]) / self.volume
+    }
+
+    /// The nodal forces of a uniform pressure p (positive in compression): f_I = −p b_I.
+    pub fn pressure_forces(&self, p: f64) -> [[f64; 3]; N] {
+        self.b.map(|bi| bi.map(|c| -p * c))
     }
 
     /// The nodal forces that balance a uniform stress (xx, yy, zz, xy, xz, yz): f_iI = σ_ij b_jI,

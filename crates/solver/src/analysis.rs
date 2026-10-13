@@ -3,7 +3,7 @@
 use modelcraft_fem::element::{Extrapolation, extrapolation};
 use modelcraft_fem::quadrature::Rule;
 use modelcraft_fem::{PointStress, von_mises};
-use modelcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
+use modelcraft_model::{ElementKind, Model, Procedure, Resolved};
 use serde::Serialize;
 
 use crate::cholesky::{Factor, FactorError, UpperColumns};
@@ -121,29 +121,6 @@ pub struct FrequencyOptions {
     pub shift: Option<f64>,
 }
 
-/// The step named `name`, or the only step of the procedure when no name is given; it must be
-/// of that procedure.
-fn select_step<'m>(model: &'m Model, name: Option<&str>, wanted: fn(&Procedure) -> bool, what: &str) -> Result<&'m Step> {
-    let step = match name {
-        Some(n) => model.step(n).ok_or_else(|| Error::Invalid(format!("step `{n}` does not exist")))?,
-        None => {
-            let matching: Vec<&Step> = model.steps().iter().filter(|s| wanted(&s.procedure)).collect();
-            match matching.as_slice() {
-                [one] => *one,
-                [] => return Err(Error::Invalid(format!("the model has no {what} step"))),
-                many => {
-                    let names: Vec<&str> = many.iter().map(|s| s.name.as_str()).collect();
-                    return Err(Error::Invalid(format!("name the step: the model has {what} steps {}", names.join(", "))));
-                }
-            }
-        }
-    };
-    if !wanted(&step.procedure) {
-        return Err(Error::Invalid(format!("step `{}` is a {} step, not a {what} one", step.name, step.procedure.name())));
-    }
-    Ok(step)
-}
-
 /// The assembled matrices and the model's mass.
 struct Assembled {
     k: Csr,
@@ -218,7 +195,7 @@ fn budget(limits: &Limits, graph: &NodeGraph, matrices: usize) -> Budget {
 /// Solve a linear static step: the step named `step`, or the model's only static step.
 pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Result<StaticResult> {
     let resolved = model.resolve()?;
-    let step = select_step(model, step, |p| matches!(p, Procedure::Static {}), "static")?;
+    let step = model.select_step(step, |p| matches!(p, Procedure::Static {}), "static")?;
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
@@ -337,7 +314,7 @@ const TOLERANCE: f64 = 1e-9;
 /// lowest natural modes within the step's frequency range.
 pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOptions, limits: &Limits) -> Result<FrequencyResult> {
     let resolved: Resolved = model.resolve()?;
-    let step = select_step(model, step, |p| matches!(p, Procedure::Frequency { .. }), "frequency")?;
+    let step = model.select_step(step, |p| matches!(p, Procedure::Frequency { .. }), "frequency")?;
     let Procedure::Frequency { modes, min_hz, max_hz } = step.procedure else {
         return Err(Error::Internal("frequency step".into()));
     };

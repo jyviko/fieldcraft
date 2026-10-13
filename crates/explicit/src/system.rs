@@ -7,6 +7,7 @@ use modelcraft_fem::material::Elasticity;
 use modelcraft_fem::uniform::{Hex8, Tet4, modulus_bound};
 use modelcraft_model::{Elastic, ElementKind, ExplicitDynamic, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step, Target};
 
+use crate::elements::add_at;
 use crate::{Error, Result};
 
 /// Most nodes whose histories a step records.
@@ -235,11 +236,7 @@ impl System {
                             stiffness
                         }
                     };
-                    for (node, v) in nodes.iter().zip(k.nodal_volume) {
-                        if let Some(m) = sys.mass.get_mut(*node) {
-                            *m += rho * v;
-                        }
-                    }
+                    sys.lump(&nodes, &k.nodal_volume, rho);
                     sys.hexes.push(Hex { label, index, nodes, material: mi, kinematics: k, gamma, hourglass, length: 2.0 * c / omega2.sqrt() });
                 }
                 ElementKind::Tet4 => {
@@ -247,11 +244,7 @@ impl System {
                     let x = nodes.map(|i| sys.xyz.get(i).copied().unwrap_or_default());
                     let k = Tet4::tet4(&x).map_err(at)?;
                     let omega2 = k.frequency_bound(mat.modulus, rho);
-                    for (node, v) in nodes.iter().zip(k.nodal_volume) {
-                        if let Some(m) = sys.mass.get_mut(*node) {
-                            *m += rho * v;
-                        }
-                    }
+                    sys.lump(&nodes, &k.nodal_volume, rho);
                     sys.tets.push(Tet { label, index, nodes, material: mi, kinematics: k, length: 2.0 * c / omega2.sqrt() });
                 }
                 other => return Err(Error::Internal(format!("{} element kind", other.name()))),
@@ -261,6 +254,15 @@ impl System {
         sys.load(model, resolved, step)?;
         sys.conditions(resolved, settings)?;
         Ok(sys)
+    }
+
+    /// Add an element's row-sum lumped masses.
+    fn lump(&mut self, nodes: &[usize], nodal_volume: &[f64], density: f64) {
+        for (node, v) in nodes.iter().zip(nodal_volume) {
+            if let Some(m) = self.mass.get_mut(*node) {
+                *m += density * v;
+            }
+        }
     }
 
     pub fn node(&self, label: u32) -> Option<usize> {
@@ -306,13 +308,6 @@ impl System {
     /// pressure loads, gravity and body forces with the lumped (row-sum) weights.
     fn load(&mut self, model: &Model, resolved: &Resolved, step: &Step) -> Result<()> {
         let mut f = std::mem::take(&mut self.external);
-        let add = |f: &mut [f64], node: usize, v: [f64; 3]| {
-            for (k, c) in v.iter().enumerate() {
-                if let Some(x) = f.get_mut(3 * node + k) {
-                    *x += c;
-                }
-            }
-        };
         for name in &step.loads {
             let load = model.load(name).ok_or_else(|| invalid(format!("load `{name}` is missing")))?;
             let off_mesh = |l: u32| invalid(format!("load `{name}`: node {l} belongs to no element"));
@@ -326,7 +321,7 @@ impl System {
                 Load::Force { .. } | Load::Traction { .. } => {
                     for (label, v) in resolved.nodal_loads.get(name).map(Vec::as_slice).unwrap_or_default() {
                         let node = self.node(*label).ok_or_else(|| off_mesh(*label))?;
-                        add(&mut f, node, *v);
+                        add_at(&mut f, node, v);
                     }
                 }
                 Load::Pressure { set, magnitude } => {
@@ -338,7 +333,7 @@ impl System {
                         let xyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| self.xyz.get(*i).copied()).collect();
                         let forces = face::pressure(&xyz, *magnitude).map_err(|e| Error::element(fc.element, e))?;
                         for (i, v) in idx.iter().zip(forces) {
-                            add(&mut f, *i, v);
+                            add_at(&mut f, *i, &v);
                         }
                     }
                 }
@@ -346,7 +341,7 @@ impl System {
                     let chosen: Option<&[u32]> = set.as_ref().map(|s| resolved.sets.get(s).map(|r| r.elements.as_slice()).unwrap_or_default());
                     self.each_element(chosen, |nodes, weights, rho| {
                         for (node, w) in nodes.iter().zip(weights) {
-                            add(&mut f, *node, acceleration.map(|a| rho * w * a));
+                            add_at(&mut f, *node, &acceleration.map(|a| rho * w * a));
                         }
                     });
                 }
@@ -354,7 +349,7 @@ impl System {
                     let chosen = resolved.sets.get(set).map(|r| r.elements.as_slice()).unwrap_or_default();
                     self.each_element(Some(chosen), |nodes, weights, _| {
                         for (node, w) in nodes.iter().zip(weights) {
-                            add(&mut f, *node, vector.map(|b| w * b));
+                            add_at(&mut f, *node, &vector.map(|b| w * b));
                         }
                     });
                 }

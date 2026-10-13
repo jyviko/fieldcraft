@@ -284,6 +284,20 @@ impl Procedure {
         }
     }
 
+    /// Whether the procedure is transient dynamics (it needs mass; a free body is legitimate).
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, Procedure::ExplicitDynamic(_))
+    }
+
+    /// The sets the procedure's own settings refer to.
+    pub fn sets(&self) -> impl Iterator<Item = &str> {
+        let explicit = match self {
+            Procedure::ExplicitDynamic(e) => Some(e),
+            Procedure::Static {} | Procedure::Frequency { .. } => None,
+        };
+        explicit.into_iter().flat_map(ExplicitDynamic::sets)
+    }
+
     pub fn validate(&self) -> Result<()> {
         if let Procedure::ExplicitDynamic(e) = self {
             return e.validate();
@@ -365,6 +379,29 @@ impl Model {
         self.steps.iter().find(|s| s.name == name)
     }
 
+    /// The step named `name`, or the only step whose procedure is `wanted` when no name is
+    /// given; it must be such a step (`what` names the kind in messages, e.g. "static").
+    pub fn select_step(&self, name: Option<&str>, wanted: fn(&Procedure) -> bool, what: &str) -> Result<&Step> {
+        let step = match name {
+            Some(n) => self.step(n).ok_or_else(|| Error::Invalid(format!("step `{n}` does not exist")))?,
+            None => {
+                let matching: Vec<&Step> = self.steps.iter().filter(|s| wanted(&s.procedure)).collect();
+                match matching.as_slice() {
+                    [one] => *one,
+                    [] => return Err(Error::Invalid(format!("the model has no {what} step"))),
+                    many => {
+                        let names: Vec<&str> = many.iter().map(|s| s.name.as_str()).collect();
+                        return Err(Error::Invalid(format!("name the step: the model has {what} steps {}", names.join(", "))));
+                    }
+                }
+            }
+        };
+        if !wanted(&step.procedure) {
+            return Err(Error::Invalid(format!("step `{}` is a {} step, not a {what} one", step.name, step.procedure.name())));
+        }
+        Ok(step)
+    }
+
     fn step_index(&self, name: &str) -> Result<usize> {
         self.steps.iter().position(|s| s.name == name).ok_or_else(|| Error::NotFound(format!("step `{name}`")))
     }
@@ -375,10 +412,8 @@ impl Model {
 
     fn check_step(&self, step: &Step) -> Result<()> {
         step.procedure.validate().map_err(|e| context("step", &step.name, e))?;
-        if let Procedure::ExplicitDynamic(e) = &step.procedure {
-            for set in e.sets() {
-                require(&self.sets, "set", set).map_err(|e| context("step", &step.name, e))?;
-            }
+        for set in step.procedure.sets() {
+            require(&self.sets, "set", set).map_err(|e| context("step", &step.name, e))?;
         }
         for b in &step.boundary_conditions {
             require(&self.boundary_conditions, "boundary condition", b).map_err(|e| context("step", &step.name, e))?;

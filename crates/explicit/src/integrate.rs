@@ -39,23 +39,10 @@ pub const HOURGLASS_TOLERANCE: f64 = 0.1;
 
 /// The step named `name`, or the model's only explicit dynamic step.
 fn select_step<'m>(model: &'m Model, name: Option<&str>) -> Result<(&'m Step, &'m ExplicitDynamic)> {
-    let step = match name {
-        Some(n) => model.step(n).ok_or_else(|| Error::Invalid(format!("step `{n}` does not exist")))?,
-        None => {
-            let matching: Vec<&Step> = model.steps().iter().filter(|s| matches!(s.procedure, Procedure::ExplicitDynamic(_))).collect();
-            match matching.as_slice() {
-                [one] => *one,
-                [] => return Err(Error::Invalid("the model has no explicit dynamic step".into())),
-                many => {
-                    let names: Vec<&str> = many.iter().map(|s| s.name.as_str()).collect();
-                    return Err(Error::Invalid(format!("name the step: the model has explicit dynamic steps {}", names.join(", "))));
-                }
-            }
-        }
-    };
+    let step = model.select_step(name, Procedure::is_dynamic, "explicit dynamic")?;
     match &step.procedure {
         Procedure::ExplicitDynamic(e) => Ok((step, e)),
-        other => Err(Error::Invalid(format!("step `{}` is a {} step, not an explicit dynamic one", step.name, other.name()))),
+        _ => Err(Error::Internal("an explicit dynamic step".into())),
     }
 }
 
@@ -110,24 +97,23 @@ fn constrain(sys: &System, u: &[f64], v: &mut [f64], dt: f64) {
     }
 }
 
-/// a = M⁻¹ (f_ext − f_int).
-fn accelerations(sys: &System, ws: &Workspace, mass: &[f64], acc: &mut [f64]) {
-    for (d, (a, m)) in acc.iter_mut().zip(mass).enumerate() {
-        *a = (sys.external.get(d).copied().unwrap_or(0.0) - ws.internal(d)) / m;
+/// v_out = v_in + dt M⁻¹ (f_ext − f_int).
+fn accelerate(sys: &System, ws: &Workspace, mass: &[f64], v_in: &[f64], dt: f64, v_out: &mut [f64]) {
+    let internal = ws.stress_force.iter().zip(&ws.hourglass_force).zip(&ws.viscous_force);
+    for ((((out, v), m), e), ((s, h), q)) in v_out.iter_mut().zip(v_in).zip(mass).zip(&sys.external).zip(internal) {
+        *out = v + dt * ((e - (s + h + q)) / m);
     }
 }
 
-/// The constraint reactions M (v_constrained − v_free) / Δt.
-fn impulses(mass: &[f64], free: &[f64], constrained: &[f64], dt: f64) -> Vec<f64> {
-    mass.iter().zip(free.iter().zip(constrained)).map(|(m, (f, c))| if c == f { 0.0 } else { m * (c - f) / dt }).collect()
+/// The constraint reactions M (v_constrained − v_free) / Δt, into `r`.
+fn impulses(mass: &[f64], free: &[f64], constrained: &[f64], dt: f64, r: &mut [f64]) {
+    for (r, (m, (f, c))) in r.iter_mut().zip(mass.iter().zip(free.iter().zip(constrained))) {
+        *r = if c == f { 0.0 } else { m * (c - f) / dt };
+    }
 }
 
 fn per_node(x: &[f64]) -> Vec<[f64; 3]> {
     x.as_chunks::<3>().0.to_vec()
-}
-
-fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
 /// Solve an explicit dynamic step: the step named `step`, or the model's only one.
@@ -201,12 +187,12 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     let crit = internal_forces(&sys, &u, &v0, &bulk, &mut ws);
     let mut dt_half = (scale * crit).min(end);
     let initial_increment = dt_half;
-    let mut acc = vec![0.0; n];
-    accelerations(&sys, &ws, &mass, &mut acc);
-    let mut v_half: Vec<f64> = v0.iter().zip(&acc).map(|(v, a)| v + 0.5 * dt_half * a).collect();
+    let mut v_half = vec![0.0; n];
+    accelerate(&sys, &ws, &mass, &v0, 0.5 * dt_half, &mut v_half);
     let mut free = v_half.clone();
     constrain(&sys, &u, &mut v_half, dt_half);
-    let mut reaction: Vec<f64> = impulses(&mass, &free, &v_half, 0.5 * dt_half);
+    let mut reaction = vec![0.0; n];
+    impulses(&mass, &free, &v_half, 0.5 * dt_half, &mut reaction);
     // The constraints' work is that of their impulses on the mean of the velocities before
     // and after the increment, Δt r · ½(v^{n−½} + v^{n+½}): exact for the kinetic energy a
     // kinematic constraint removes or adds (a node stopped by a wall loses ½ m v²).
@@ -221,15 +207,17 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         history.time.push(t);
         history.increment.push(dt);
         history.energies.push(e);
-        let sum = |x: &[f64], weight: bool| {
+        let sum = |x: &[f64], weight: &dyn Fn(usize) -> f64| {
             let mut s = [0.0; 3];
-            for (d, c) in x.iter().enumerate() {
-                s[d % 3] += if weight { mass[d] * c } else { *c };
+            for (node, c) in x.as_chunks::<3>().0.iter().enumerate() {
+                for k in 0..3 {
+                    s[k] += weight(node) * c[k];
+                }
             }
             s
         };
-        history.momentum.push(sum(v, true));
-        history.constraint_force.push(sum(r, false));
+        history.momentum.push(sum(v, &|node| sys.mass.get(node).copied().unwrap_or(0.0)));
+        history.constraint_force.push(sum(r, &|_| 1.0));
         let pick = |x: &[f64]| sys.history_nodes.iter().map(|i| [0, 1, 2].map(|k| x.get(3 * i + k).copied().unwrap_or(0.0))).collect();
         history.displacement.push(pick(u));
         history.velocity.push(pick(v));
@@ -241,10 +229,8 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         stress: if output.stress { ws.stress.clone() } else { Vec::new() },
         strain: if output.strain { ws.strain.clone() } else { Vec::new() },
     };
-    let mut histories = Schedule { interval: settings.history_interval(), next: 0.0 };
-    let mut frames_due = Schedule { interval: settings.output_interval(), next: 0.0 };
-    histories.due(0.0);
-    frames_due.due(0.0);
+    let mut histories = Schedule { interval: settings.history_interval(), next: settings.history_interval() };
+    let mut frames_due = Schedule { interval: settings.output_interval(), next: settings.output_interval() };
     sample(&mut history, 0.0, dt_half, energy, &u, &v0, &reaction);
     out_frames.push(frame(0.0, &u, &v0, &ws));
 
@@ -272,32 +258,38 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         let last = remaining <= 1e-12 * end;
         let dt_next = if last { 0.0 } else { (scale * crit).min(remaining) };
         let dt_n = 0.5 * (dt_half + dt_next);
-        accelerations(&sys, &ws, &mass, &mut acc);
-        for ((vn, vh), a) in v_new.iter_mut().zip(&v_half).zip(&acc) {
-            *vn = vh + dt_n * a;
-        }
+        accelerate(&sys, &ws, &mass, &v_half, dt_n, &mut v_new);
         free.clone_from(&v_new);
         constrain(&sys, &u, &mut v_new, dt_next);
-        let r_new = impulses(&mass, &free, &v_new, dt_n);
-        // v^n = v^{n−½} + ½Δt^{n−½} a^n, with the constrained a^n = (v^{n+½} − v^{n−½}) / Δt^n.
+        impulses(&mass, &free, &v_new, dt_n, &mut reaction);
+        // One pass over the degrees of freedom: v^n = v^{n−½} + ½Δt^{n−½} a^n with the constrained
+        // a^n = (v^{n+½} − v^{n−½}) / Δt^n, and the works (trapezoidal over the displacement for
+        // the internal and external forces).
         let weight = 0.5 * dt_half / dt_n;
-        for ((now, vh), vn) in v_now.iter_mut().zip(&v_half).zip(&v_new) {
+        let [mut internal, mut hourglass, mut viscous, mut external, mut constraint, mut kinetic] = [0.0; 6];
+        let forces = ws.stress_force.iter().zip(&ws.hourglass_force).zip(&ws.viscous_force);
+        let before = previous.stress_force.iter().zip(&previous.hourglass_force).zip(&previous.viscous_force);
+        let state = v_now.iter_mut().zip(&v_half).zip(&v_new).zip(&mass).zip(&du).zip(&sys.external).zip(&reaction);
+        for ((((((((now, vh), vn), m), dx), e), r), ((s, h), q)), ((s0, h0), q0)) in state.zip(forces).zip(before) {
             *now = vh + weight * (vn - vh);
+            internal += dx * (s0 + s);
+            hourglass += dx * (h0 + h);
+            viscous += dx * (q0 + q);
+            external += dx * e;
+            constraint += r * 0.5 * (vh + vn);
+            kinetic += m * *now * *now;
         }
-        // Trapezoidal works over the increment's displacement.
-        let work = |a: &[f64], b: &[f64]| 0.5 * du.iter().zip(a.iter().zip(b)).map(|(x, (p, q))| x * (p + q)).sum::<f64>();
-        energy.internal += work(&previous.stress_force, &ws.stress_force);
-        energy.hourglass += work(&previous.hourglass_force, &ws.hourglass_force);
-        energy.viscous += work(&previous.viscous_force, &ws.viscous_force);
-        energy.external += dot(&du, &sys.external);
-        energy.constraint += impulse_work(&r_new, &v_half, &v_new, dt_n);
-        energy.kinetic = 0.5 * v_now.iter().zip(&mass).map(|(v, m)| m * v * v).sum::<f64>();
+        energy.internal += 0.5 * internal;
+        energy.hourglass += 0.5 * hourglass;
+        energy.viscous += 0.5 * viscous;
+        energy.external += external;
+        energy.constraint += dt_n * constraint;
+        energy.kinetic = 0.5 * kinetic;
         peak_internal = peak_internal.max(energy.internal.abs());
         energy.balance = energy.kinetic + energy.internal + energy.hourglass + energy.viscous - energy.external - energy.constraint - initial_kinetic;
         if !(energy.balance.is_finite() && crit.is_finite()) {
             return Err(Error::Unstable(format!("the solution is not finite at time {t:.6e} (increment {increments})")));
         }
-        reaction = r_new;
         if histories.due(t) || last {
             sample(&mut history, t, dt_half, energy, &u, &v_now, &reaction);
         }
@@ -346,7 +338,6 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         total_mass,
         energy,
         initial_kinetic,
-        dofs: n,
         warnings,
     })
 }

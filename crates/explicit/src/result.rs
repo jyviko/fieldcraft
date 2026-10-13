@@ -95,6 +95,5 @@ pub struct ExplicitResult {
     /// The energy account at the end.
     pub energy: Energies,
     pub initial_kinetic: f64,
-    pub dofs: usize,
     pub warnings: Vec<String>,
 }

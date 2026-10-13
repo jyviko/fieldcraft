@@ -5,7 +5,7 @@ Generated from the capability catalogue (`crates/engine/src/catalogue.rs`) by
 Every entry is a toolbar button. **Ready** entries run their command; **coming soon** entries are
 shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 
-35 ready, 65 coming soon.
+36 ready, 64 coming soon.
 
 ## Geometry
 
@@ -121,7 +121,7 @@ shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 | Decks | Read Deck — Read a deck, keeping keywords ModelCraft does not know | coming soon (M9) |  |
 | Implicit | Static — Linear static solve of a step with ModelCraft's own solver | ready | `solve.static` |
 | Implicit | Frequency — Natural frequencies and mode shapes of a frequency step | ready | `solve.frequency` |
-| Explicit | Explicit — Explicit dynamics: central differences, contact, erosion | coming soon (M10) |  |
+| Explicit | Explicit — Transient dynamics of an explicit step by central differences (contact and erosion coming in M10) | ready | `solve.explicit` |
 | Explicit | Blast & Impact — EOS-driven fluids with fluid–structure contact (ALE or SPH) | coming soon (M14) |  |
 | Fluids | Lattice Boltzmann — Lattice Boltzmann flow on the CPU or the GPU | coming soon (M12) |  |
 | Fluids | Fluid–Structure — Coupled fluid and structure solve | coming soon (M13) |  |
@@ -134,7 +134,7 @@ shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 | Display | Contours — Contour plots of stress, strain and displacement | coming soon (M4) |  |
 | Display | Mode Shapes — Mode shapes of a frequency step | coming soon (M4) |  |
 | Display | Animate — Animate modes and time histories | coming soon (M9) |  |
-| Query | Probe — Displacement, reaction and stress at nodes, or a mode shape | ready | `solve.probe` |
+| Query | Probe — Displacement, reaction and stress at nodes, a mode shape, or an explicit field frame | ready | `solve.probe`, `solve.history` |
 | Query | Reactions — Reaction force and moment sums | coming soon (M4) |  |
 | Query | Free Body — Free-body forces across a cut | coming soon (M9) |  |
 | Plots | XY Plot — Plot a quantity against time or another | coming soon (M9) |  |

@@ -114,8 +114,8 @@ fn local(nodes: &[[f64; 2]], quads: &[[u32; 4]], incident: &[u32], v: u32, at: [
             }
         }
         if l.valid {
-            let p: Vec<Point2> = c.iter().map(|x| Point2::new(x[0], x[1])).collect::<Result<_>>()?;
-            l.valid = matches!(p.as_slice(), [a, b, c, d] if is_valid([a, b, c, d]));
+            let [a, b, c, d] = c.map(|x| Point2::new(x[0], x[1]));
+            l.valid = is_valid([&a?, &b?, &c?, &d?]);
         }
     }
     Ok(l)
@@ -166,7 +166,7 @@ fn optimize(nodes: &[[f64; 2]], quads: &[[u32; 4]], incident: &[u32], neighbours
 }
 
 /// Smooth the nodes from `first_free` on for at most `sweeps` sweeps. Returns the sweeps run and
-/// whether the largest move of the last sweep fell below `1e-6` of the mean edge length.
+/// whether the largest move of the last sweep fell below `1e-4` of the mean edge length.
 pub(crate) fn smooth(nodes: &mut [[f64; 2]], quads: &[[u32; 4]], first_free: usize, sweeps: usize) -> Result<(usize, bool)> {
     let n = nodes.len();
     let mut edges = Vec::with_capacity(8 * quads.len());
@@ -186,7 +186,7 @@ pub(crate) fn smooth(nodes: &mut [[f64; 2]], quads: &[[u32; 4]], first_free: usi
     if quads.is_empty() {
         return Ok((0, true));
     }
-    let tolerance = 1e-6 * total / (4 * quads.len()) as f64;
+    let tolerance = 1e-4 * total / (4 * quads.len()) as f64;
     let neighbours = Csr::of(n, &mut edges);
     let incident = Csr::of(n, &mut inc);
     for sweep in 0..sweeps {

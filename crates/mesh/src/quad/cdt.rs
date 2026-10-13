@@ -746,6 +746,43 @@ impl Cdt {
         Ok(())
     }
 
+    /// Consistency check for tests: every live triangle counterclockwise (exact), neighbours
+    /// mutual, constrained flags matching on both sides.
+    #[cfg(test)]
+    pub fn verify(&self) -> std::result::Result<(), String> {
+        for (t, tri) in self.tris.iter().enumerate() {
+            if !tri.alive {
+                continue;
+            }
+            let [a, b, c] = tri.v;
+            let o = orient2d(&self.p2[a as usize], &self.p2[b as usize], &self.p2[c as usize]);
+            if o != Sign::Positive {
+                return Err(format!("triangle {t} {:?} has orientation {o:?} (inside {})", tri.v, tri.inside));
+            }
+            for i in 0..3 {
+                let nb = tri.n[i];
+                if nb == NONE {
+                    continue;
+                }
+                let o = &self.tris[nb as usize];
+                let (p, q) = (tri.v[(i + 1) % 3], tri.v[(i + 2) % 3]);
+                let back = (0..3).find(|&j| o.v[(j + 1) % 3] == q && o.v[(j + 2) % 3] == p);
+                match back {
+                    Some(j) if o.n[j] == t as u32 && o.alive && o.fixed[j] == tri.fixed[i] => {
+                        let s = o.v[j];
+                        if !tri.fixed[i]
+                            && incircle(&self.p2[a as usize], &self.p2[b as usize], &self.p2[c as usize], &self.p2[s as usize]) == Sign::Positive
+                        {
+                            return Err(format!("triangle {t} edge {i} is not locally Delaunay (inside {})", tri.inside));
+                        }
+                    }
+                    _ => return Err(format!("triangle {t} edge {i}: neighbour {nb} does not match")),
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The inside triangles.
     pub fn triangulation(&self) -> Triangulation {
         Triangulation { pts: self.pts.clone(), tris: self.tris.iter().filter(|t| t.alive && t.inside).map(|t| t.v).collect() }

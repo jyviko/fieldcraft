@@ -93,7 +93,7 @@ pub struct QuadOptions {
 
 impl Default for QuadOptions {
     fn default() -> Self {
-        QuadOptions { max_elements: 4_000_000, smoothing_sweeps: 20 }
+        QuadOptions { max_elements: 4_000_000, smoothing_sweeps: 10 }
     }
 }
 

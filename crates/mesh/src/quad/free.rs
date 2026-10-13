@@ -64,12 +64,18 @@ fn attempt(region: &Region, coarse: Coarse, size: &dyn SizeField, opts: &QuadOpt
     let max_tris = opts.max_elements / 2 + 4 * region.pts.len() + 16;
     let mut cdt = Cdt::build(&coarse, max_tris)?;
     let guard = guard(region, &coarse, &skipped)?;
+    #[cfg(test)]
+    cdt.verify().map_err(|e| Error::Failed(format!("after build: {e}")))?;
     cdt.refine(size, 2.0, &guard)?;
+    #[cfg(test)]
+    cdt.verify().map_err(|e| Error::Failed(format!("after refine: {e}")))?;
     for (v, &k) in need.iter().enumerate() {
         if k > 1 {
             cdt.ensure_fan(v as u32, k)?;
         }
     }
+    #[cfg(test)]
+    cdt.verify().map_err(|e| Error::Failed(format!("after fans: {e}")))?;
     let tri = cdt.triangulation();
     let (quads, leftovers) = recombine(&tri, &need)?;
     let count = 4 * quads.len() + 3 * leftovers.len();
@@ -251,6 +257,11 @@ pub(crate) fn is_valid(p: [&Point2; 4]) -> bool {
     (0..4).all(|i| orient2d(p[(i + 3) % 4], p[i], p[(i + 1) % 4]) == Sign::Positive)
 }
 
+/// The smallest corner scaled Jacobian of a recombined quadrilateral (sin 15°): a flatter corner
+/// would survive the split as a nearly straight angle, which rounding of the mid nodes can turn
+/// degenerate.
+const MIN_RECOMBINED_QUALITY: f64 = 0.258_819_045_102_520_74;
+
 /// Greedy recombination of adjacent triangle pairs into strictly convex quadrilaterals, best
 /// first by the smallest corner scaled Jacobian (Lee and Lo 1994; Knupp 2001). Returns the
 /// quadrilaterals (coarse ids, counterclockwise) and the triangles left over.
@@ -293,6 +304,9 @@ fn recombine(tri: &Triangulation, need: &[usize]) -> Result<(Vec<[u32; 4]>, Vec<
             continue;
         }
         let quality = min_scaled_jacobian([xy(p)?, xy(q)?, xy(s)?, xy(r)?]);
+        if quality < MIN_RECOMBINED_QUALITY {
+            continue;
+        }
         candidates.push((quality, *t1, *t2, quad, (q, r)));
     }
     candidates.sort_by(|x, y| y.0.total_cmp(&x.0).then((x.1, x.2).cmp(&(y.1, y.2))));

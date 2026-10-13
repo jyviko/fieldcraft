@@ -184,6 +184,58 @@ fn concave_star() {
     check(&m, &loops);
 }
 
+/// A polygon with every side divided evenly at about `h` (even counts, so corners stay at even
+/// positions).
+fn divided(corners: &[[f64; 2]], h: f64) -> Vec<[f64; 2]> {
+    let mut l = Vec::new();
+    for (i, a) in corners.iter().enumerate() {
+        let b = corners[(i + 1) % corners.len()];
+        let n = even_divisions(((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt() / h).unwrap();
+        l.extend((0..n).map(|k| k as f64 / n as f64).map(|t| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]));
+    }
+    l
+}
+
+#[test]
+fn i_beam_end_face() {
+    // Flanges 10 × 1, web 1 thick, 12 deep overall: thin walls meeting at reflex corners.
+    let c = [
+        [0.0, 0.0],
+        [10.0, 0.0],
+        [10.0, 1.0],
+        [5.5, 1.0],
+        [5.5, 11.0],
+        [10.0, 11.0],
+        [10.0, 12.0],
+        [0.0, 12.0],
+        [0.0, 11.0],
+        [4.5, 11.0],
+        [4.5, 1.0],
+        [0.0, 1.0],
+    ];
+    for h in [0.5, 0.25] {
+        let loops = vec![divided(&c, h)];
+        let m = free_quad_mesh(&loops, &UniformSize(h), &opts()).unwrap();
+        check(&m, &loops);
+        assert!(m.stats.min_scaled_jacobian > 0.2, "{h}: {:?}", m.stats);
+    }
+}
+
+#[test]
+fn perforated_plate() {
+    // A 40 × 20 plate with a 7 × 3 grid of holes of radius 1 on a 5 mm pitch.
+    let h = 0.5;
+    let mut loops = vec![divided(&[[0.0, 0.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]], h)];
+    for i in 0..7 {
+        for j in 0..3 {
+            loops.push(circle(5.0 + 5.0 * i as f64, 5.0 + 5.0 * j as f64, 1.0, 2 * (PI / h).ceil() as usize));
+        }
+    }
+    let m = free_quad_mesh(&loops, &UniformSize(h), &opts()).unwrap();
+    check(&m, &loops);
+    assert!(m.stats.min_scaled_jacobian > 0.2, "{:?}", m.stats);
+}
+
 #[test]
 fn comb_with_deep_slots() {
     // Teeth of width 1 between slots of width 1, 4 deep: strongly concave.
@@ -455,4 +507,32 @@ fn planar_quad_metrics() {
     assert!(planar_quad_validity(&[[0.0, 0.0], [1.0, f64::NAN], [1.0, 1.0], [0.0, 1.0]]).is_err());
     let q = planar_quad_quality(&[[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [0.0, 1.0]]).unwrap();
     assert_eq!(q.get(Metric::JacobianRatio), Some(0.0));
+}
+
+#[test]
+#[ignore = "timing and quality report: cargo test --release -p modelcraft-mesh quad_report -- --ignored --nocapture"]
+fn quad_report() {
+    let cases: Vec<(&str, Vec<Vec<[f64; 2]>>, f64)> = vec![
+        ("rectangle", vec![rect(0.0, 0.0, 10.0, 5.0, 20, 10)], 0.5),
+        ("plate with hole", vec![rect(0.0, 0.0, 20.0, 10.0, 40, 20), circle(10.0, 5.0, 2.5, 32)], 0.5),
+        ("star", vec![subdivide(&star(10.0, 4.0), 4)], 1.0),
+        ("large plate", vec![rect(0.0, 0.0, 200.0, 100.0, 1000, 500), circle(50.0, 50.0, 20.0, 400), circle(150.0, 50.0, 20.0, 400)], 0.2),
+    ];
+    for (name, loops, h) in cases {
+        let t = std::time::Instant::now();
+        let m = free_quad_mesh(&loops, &UniformSize(h), &opts()).unwrap();
+        println!("{name}: {} quads in {:?}, {:?}", m.quads.len(), t.elapsed(), m.stats);
+        let t = std::time::Instant::now();
+        let _ = free_quad_mesh(&loops, &UniformSize(h), &QuadOptions { smoothing_sweeps: 0, ..opts() }).unwrap();
+        println!("  without smoothing {:?}", t.elapsed());
+    }
+}
+
+#[test]
+fn unsmoothed_meshes_are_valid() {
+    // Regression: recombination once accepted nearly straight corners that the split turned
+    // degenerate after rounding the mid nodes (this plate had one before the quality floor).
+    let loops = vec![rect(0.0, 0.0, 60.0, 30.0, 300, 150), circle(15.0, 15.0, 6.0, 240)];
+    let m = free_quad_mesh(&loops, &UniformSize(0.2), &QuadOptions { smoothing_sweeps: 0, ..opts() }).unwrap();
+    check(&m, &loops);
 }

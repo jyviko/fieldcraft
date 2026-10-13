@@ -249,7 +249,9 @@ fn check_conforming(model: &Model, kind: ElementKind, mesh: &BlockMesh, elements
     // The block's boundary faces, by sorted corners, with their full node lists.
     let mut new_faces: BTreeMap<Vec<u32>, Vec<u32>> = BTreeMap::new();
     for &(e, f, _) in &mesh.faces {
-        let (Some(nodes), Some(local)) = (elements.get(e as usize), usize::from(f).checked_sub(1).and_then(|i| kind.faces().get(i))) else { continue };
+        let (Some(nodes), Some(local)) = (elements.get(e as usize), usize::from(f).checked_sub(1).and_then(|i| kind.faces().get(i))) else {
+            continue;
+        };
         new_faces.insert(corners_of(kind, nodes, local), key(local.iter().filter_map(|&i| nodes.get(i).copied())));
     }
     let mut old_faces: BTreeMap<Vec<u32>, Vec<u32>> = BTreeMap::new();
@@ -271,11 +273,17 @@ fn check_conforming(model: &Model, kind: ElementKind, mesh: &BlockMesh, elements
     }
     // Hanging nodes: boundary nodes of either side on the other side's element edges.
     let xyz = |label: u32| model.node(label).map(|n| n.xyz);
-    let block_points: BTreeMap<u32, [f64; 3]> =
-        mesh.elements.iter().zip(elements).flat_map(|(pts, labels)| pts.iter().zip(labels).filter_map(|(&p, &l)| Some((l, *mesh.points.get(p as usize)?)))).collect();
+    let block_points: BTreeMap<u32, [f64; 3]> = mesh
+        .elements
+        .iter()
+        .zip(elements)
+        .flat_map(|(pts, labels)| pts.iter().zip(labels).filter_map(|(&p, &l)| Some((l, *mesh.points.get(p as usize)?))))
+        .collect();
     let mut new_edges: BTreeSet<[u32; 2]> = BTreeSet::new();
     for &(e, f, _) in &mesh.faces {
-        let (Some(nodes), Some(local)) = (elements.get(e as usize), usize::from(f).checked_sub(1).and_then(|i| kind.faces().get(i))) else { continue };
+        let (Some(nodes), Some(local)) = (elements.get(e as usize), usize::from(f).checked_sub(1).and_then(|i| kind.faces().get(i))) else {
+            continue;
+        };
         let cs: Vec<u32> = local.iter().filter(|&&i| i < kind.corner_count()).filter_map(|&i| nodes.get(i).copied()).collect();
         for (i, &a) in cs.iter().enumerate() {
             let b = cs.get((i + 1) % cs.len()).copied().unwrap_or(a);
@@ -389,9 +397,19 @@ mod tests {
                 let c = |v: f64| if v.abs() < 1e-12 { 0.0 } else { v };
                 json!([c(r * a.cos()), c(r * a.sin()), z])
             };
-            let corners = json!([at(1.0, k, 0.0), at(2.0, k, 0.0), at(2.0, k + 1, 0.0), at(1.0, k + 1, 0.0), at(1.0, k, 1.0), at(2.0, k, 1.0), at(2.0, k + 1, 1.0), at(1.0, k + 1, 1.0)]);
+            let corners = json!([
+                at(1.0, k, 0.0),
+                at(2.0, k, 0.0),
+                at(2.0, k + 1, 0.0),
+                at(1.0, k + 1, 0.0),
+                at(1.0, k, 1.0),
+                at(2.0, k, 1.0),
+                at(2.0, k + 1, 1.0),
+                at(1.0, k + 1, 1.0)
+            ]);
             let edges = json!([{"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [2, 3], "arc": {"center": [0, 0, 0]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 1]}}, {"corners": [6, 7], "arc": {"center": [0, 0, 1]}}]);
-            ring.execute("mesh.block", &json!({"body": "Ring", "kind": "hex20", "corners": corners, "divisions": [2, 3, 2], "edges": edges})).unwrap();
+            ring.execute("mesh.block", &json!({"body": "Ring", "kind": "hex20", "corners": corners, "divisions": [2, 3, 2], "edges": edges}))
+                .unwrap();
         }
         assert_eq!(ring.model.elements().len(), 48);
         assert!(t.execute("mesh.block", &json!({"body": "B", "kind": "hex8", "corners": cube(1.0), "divisions": [1, 1, 1], "merge": 0})).is_ok());

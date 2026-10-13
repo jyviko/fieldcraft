@@ -79,7 +79,13 @@ Rules beyond the layer order:
    recombination (Lee and Lo 1994) and one uniform split that lands on the boundary nodes, then
    smoothing and untangling; every quad is checked with exact predicates. One `SizeField` trait
    (`modelcraft-mesh::size`) sets interior sizes and edge divisions, with even counts per loop.
-   Mapped and swept hex build on these face meshes.
+   Mapped and swept hex build on these face meshes. Without geometry, `mesh.block`
+   (`modelcraft-mesh::block`) meshes one six-sided block from its eight corners and optional
+   circular or elliptical edges by the same edge-based transfinite interpolation, as hex8, hex20,
+   tet4/tet10 (Kuhn's six tetrahedra per cell) or wedge6, with grading; blocks join where their
+   nodes coincide, face to face (mismatched divisions or kinds are refused), and their named
+   faces, edges and vertices become geometry tags that sets select. It meshes the analytic
+   shapes of the verification cases.
 6. **Quality.** Scaled Jacobian, aspect ratio, dihedral angles; every generated mesh is checked
    for positive Jacobians and conserved volume before it reaches the model.
 
@@ -291,3 +297,13 @@ geometry is stored. `cargo xtask corpus` (a release build of the testkit's `corp
 builds every part, tessellates it and runs each stage of `modelcraft_testkit::runner`, writing
 docs/meshing/corpus.md. A mesher joins by implementing `runner::Stage` (its columns, and a run
 over the part's tessellated surfaces) and adding itself to `runner::stages()`.
+
+## Verification oracle
+
+`tests/oracle/<case>/` holds the verification and validation cases (docs/verification.md): our
+own model of each problem as a command recipe (`recipe.json`, optionally a SolidCraft
+`design.json`), its cited reference values with tolerances and reasons (`expected.json`), and our
+frozen results (`fixture.json`). `cargo xtask oracle` runs the testkit's `oracle` binary
+(`modelcraft_testkit::oracle`): one `Session` per case, quantities read by JSON pointer from step
+outputs or commands such as `solve.probe {"at": [[x, y, z]]}`, compared with the reference and the
+fixture; it writes docs/oracle.md. CI runs it as its own job.

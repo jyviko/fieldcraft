@@ -108,7 +108,11 @@ pub struct Expected {
 }
 
 fn text(v: &Value, key: &str) -> Result<String, String> {
-    v.get(key).and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_string).ok_or_else(|| format!("`{key}` must be a non-empty string"))
+    v.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("`{key}` must be a non-empty string"))
 }
 
 impl Expected {
@@ -137,7 +141,11 @@ impl Expected {
                 Some(t) => Tolerance::from_json(t).map_err(context)?,
                 None => return Err(context("`tolerance` is required".into())),
             };
-            let reason = if pending.is_some() { q.get("reason").and_then(Value::as_str).unwrap_or_default().to_string() } else { text(q, "reason").map_err(context)? };
+            let reason = if pending.is_some() {
+                q.get("reason").and_then(Value::as_str).unwrap_or_default().to_string()
+            } else {
+                text(q, "reason").map_err(context)?
+            };
             let measure = q.get("measure").cloned().unwrap_or(Value::Null);
             if pending.is_none() && measure.get("pointer").and_then(Value::as_str).is_none() {
                 return Err(context("`measure` needs a JSON `pointer` into a step's output or a command's".into()));
@@ -238,11 +246,7 @@ pub fn run_case(dir: &Path, expected: &Expected) -> Result<Vec<Measured>, String
             outputs.insert(id.to_string(), out);
         }
     }
-    Ok(expected
-        .quantities
-        .iter()
-        .map(|q| Measured { id: q.id.clone(), value: measure(&mut session, &outputs, &q.measure) })
-        .collect())
+    Ok(expected.quantities.iter().map(|q| Measured { id: q.id.clone(), value: measure(&mut session, &outputs, &q.measure) }).collect())
 }
 
 /// Read one number: from a recipe step's output (`"from": id`) or a command run now
@@ -283,7 +287,9 @@ pub enum Verdict {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FixtureCheck {
     Matches,
-    Moved { frozen: f64 },
+    Moved {
+        frozen: f64,
+    },
     Missing,
     /// No fixture is kept (pending, failing or known-failing quantity).
     NotKept,
@@ -366,7 +372,8 @@ pub fn run(root: &Path, options: &Options) -> Result<(), String> {
             expected.quantities.iter().map(|q| Measured { id: q.id.clone(), value: Err("pending".into()) }).collect()
         } else {
             let start = Instant::now();
-            let m = run_case(dir, &expected).unwrap_or_else(|e| expected.quantities.iter().map(|q| Measured { id: q.id.clone(), value: Err(e.clone()) }).collect());
+            let m = run_case(dir, &expected)
+                .unwrap_or_else(|e| expected.quantities.iter().map(|q| Measured { id: q.id.clone(), value: Err(e.clone()) }).collect());
             eprintln!("oracle: {case} ({:.2} s)", start.elapsed().as_secs_f64());
             m
         };
@@ -405,7 +412,9 @@ pub fn run(root: &Path, options: &Options) -> Result<(), String> {
         for r in &case_rows {
             let id = format!("{case}/{}", r.quantity.id);
             match &r.verdict {
-                Verdict::Fail => problems.push(format!("{id}: {} vs reference {} ({})", show(r.ours), show(r.quantity.reference), r.quantity.tolerance.describe())),
+                Verdict::Fail => {
+                    problems.push(format!("{id}: {} vs reference {} ({})", show(r.ours), show(r.quantity.reference), r.quantity.tolerance.describe()))
+                }
                 Verdict::Fixed => problems.push(format!("{id}: passes now; remove its `known_failure` mark")),
                 Verdict::Error(e) => problems.push(format!("{id}: {e}")),
                 _ => {}
@@ -428,11 +437,7 @@ pub fn run(root: &Path, options: &Options) -> Result<(), String> {
     if !skipped.is_empty() {
         eprintln!("oracle: skipped slow cases: {}", skipped.join(", "));
     }
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("{} problem(s):\n  {}", problems.len(), problems.join("\n  ")))
-    }
+    if problems.is_empty() { Ok(()) } else { Err(format!("{} problem(s):\n  {}", problems.len(), problems.join("\n  "))) }
 }
 
 fn print_summary(rows: &[Row]) {
@@ -562,7 +567,10 @@ benchmark, {} experiment; {} pending cases wait for capabilities still being bui
             "benchmark" => "Published benchmarks",
             _ => "Experiments",
         };
-        let _ = write!(md, "## {heading}\n\n| Case | Quantity | Reference | ModelCraft | Error | Tolerance | Result | Fixture |\n|---|---|---|---|---|---|---|---|\n");
+        let _ = write!(
+            md,
+            "## {heading}\n\n| Case | Quantity | Reference | ModelCraft | Error | Tolerance | Result | Fixture |\n|---|---|---|---|---|---|---|---|\n"
+        );
         for (case, _) in &in_kind {
             for r in rows.iter().filter(|r| &r.case == case) {
                 let mut result = verdict_text(&r.verdict);
@@ -597,8 +605,11 @@ benchmark, {} experiment; {} pending cases wait for capabilities still being bui
     if !pending.is_empty() {
         md += "\n## Pending cases\n\nReference values already cited; each case gets its recipe when the capability it needs lands.\n\n| Case | Kind | Problem | Needs | Reference values | Source |\n|---|---|---|---|---|---|\n";
         for (case, e) in pending {
-            let values: Vec<String> =
-                e.quantities.iter().map(|q| format!("{} = {}", cell(&q.description), q.reference.map(number).unwrap_or_else(|| "to be transcribed".into()))).collect();
+            let values: Vec<String> = e
+                .quantities
+                .iter()
+                .map(|q| format!("{} = {}", cell(&q.description), q.reference.map(number).unwrap_or_else(|| "to be transcribed".into())))
+                .collect();
             let _ = writeln!(
                 md,
                 "| [{case}](../tests/oracle/{case}/) | {} | {} | {} | {} | {} |",
@@ -655,17 +666,14 @@ mod tests {
         let pending = json!({"title": "t", "kind": "benchmark", "source": "s", "status": "pending", "requires": "shells",
             "quantities": [{"id": "a", "quantity": "a", "value": null}]});
         assert!(Expected::parse(&pending).unwrap().pending.is_some());
-        for (key, bad) in [
-            ("kind", json!("guess")),
-            ("quantities", json!([])),
-            ("status", json!("maybe")),
-            ("title", json!("")),
-        ] {
+        for (key, bad) in [("kind", json!("guess")), ("quantities", json!([])), ("status", json!("maybe")), ("title", json!(""))] {
             let mut v = good.clone();
             v[key] = bad;
             assert!(Expected::parse(&v).is_err(), "{key}");
         }
-        for (key, bad) in [("tolerance", json!({})), ("tolerance", json!({"relative": -1})), ("value", json!("x")), ("reason", json!("")), ("measure", json!({}))] {
+        for (key, bad) in
+            [("tolerance", json!({})), ("tolerance", json!({"relative": -1})), ("value", json!("x")), ("reason", json!("")), ("measure", json!({}))]
+        {
             let mut v = good.clone();
             v["quantities"][0][key] = bad;
             assert!(Expected::parse(&v).is_err(), "{key}");

@@ -1,7 +1,7 @@
 //! The capability catalogue: everything ModelCraft does or will do, in one table.
 //!
 //! Each [`Capability`] is a toolbar entry: its tab and panel, its label and one-line tip, and
-//! either the command it runs ([`Status::Ready`]) or the milestone that brings it
+//! either the command of the same id it runs ([`Status::Ready`]) or the milestone that brings it
 //! ([`Status::Planned`], shown greyed as "Coming soon"). Planned entries are not commands: a
 //! command always runs. The icon of an entry is `assets/icons/<id>.svg`.
 //!
@@ -9,6 +9,8 @@
 //! commands ([`Capability::more`], the entry's drop-down); the tests check it. A new command
 //! claims its place by turning its planned entry into a ready one (or by adding an entry with
 //! an icon), see `docs/features.md`.
+
+use std::fmt::Write;
 
 use serde::{Deserialize, Serialize};
 
@@ -52,8 +54,8 @@ impl Tab {
 /// Whether an entry runs today.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
-    /// Runs `command`; its form starts with `preset` (JSON parameters).
-    Ready { command: &'static str, preset: &'static str },
+    /// Runs the command whose id is the entry's.
+    Ready,
     /// Coming in this roadmap milestone (`M2`…).
     Planned { milestone: &'static str },
 }
@@ -75,7 +77,7 @@ pub struct Capability {
 impl Capability {
     pub fn command(&self) -> Option<&'static str> {
         match self.status {
-            Status::Ready { command, .. } => Some(command),
+            Status::Ready => Some(self.id),
             Status::Planned { .. } => None,
         }
     }
@@ -83,21 +85,21 @@ impl Capability {
     pub fn milestone(&self) -> Option<&'static str> {
         match self.status {
             Status::Planned { milestone } => Some(milestone),
-            Status::Ready { .. } => None,
+            Status::Ready => None,
         }
     }
 
-    /// The hover text: the tip, and when it is planned, its milestone.
+    /// The hover text: label, tip and command, or when it comes.
     pub fn tooltip(&self) -> String {
         match self.status {
-            Status::Ready { command, .. } => format!("{}\n{}", self.tip, command),
-            Status::Planned { milestone } => format!("Coming soon — {milestone}\n{}", self.tip),
+            Status::Ready => format!("{}\n{}\n{}", self.label, self.tip, self.id),
+            Status::Planned { milestone } => format!("{} — coming soon ({milestone})\n{}", self.label, self.tip),
         }
     }
 }
 
 const fn ready(id: &'static str, label: &'static str, tab: Tab, panel: &'static str, tip: &'static str) -> Capability {
-    Capability { id, label, tab, panel, tip, status: Status::Ready { command: id, preset: "{}" }, more: &[] }
+    Capability { id, label, tab, panel, tip, status: Status::Ready, more: &[] }
 }
 
 const fn ready_more(
@@ -117,7 +119,7 @@ const fn soon(id: &'static str, label: &'static str, tab: Tab, panel: &'static s
 
 use Tab::*;
 
-/// Every capability, by tab and panel in toolbar order.
+/// Every capability in toolbar order: grouped by tab (in [`Tab::ALL`] order), then by panel.
 pub static CATALOGUE: &[Capability] = &[
     // ---- Geometry ----
     ready("geometry.open", "Open Design", Geometry, "Import", "Open a SolidCraft design: its bodies with persistent face names"),
@@ -303,20 +305,16 @@ pub fn find(id: &str) -> Option<&'static Capability> {
     CATALOGUE.iter().find(|c| c.id == id)
 }
 
-/// The panels of a tab, in order.
-pub fn panels(tab: Tab) -> Vec<&'static str> {
-    let mut out: Vec<&'static str> = Vec::new();
-    for c in CATALOGUE.iter().filter(|c| c.tab == tab) {
-        if !out.contains(&c.panel) {
-            out.push(c.panel);
-        }
-    }
-    out
+/// The entries of a tab (one run of the catalogue).
+pub fn tab_entries(tab: Tab) -> &'static [Capability] {
+    let start = CATALOGUE.iter().position(|c| c.tab == tab).unwrap_or(CATALOGUE.len());
+    let rest = CATALOGUE.get(start..).unwrap_or_default();
+    rest.get(..rest.iter().take_while(|c| c.tab == tab).count()).unwrap_or_default()
 }
 
-/// The entries of one panel of a tab, in order.
-pub fn entries(tab: Tab, panel: &str) -> impl Iterator<Item = &'static Capability> {
-    CATALOGUE.iter().filter(move |c| c.tab == tab && c.panel == panel)
+/// The panels of a tab in order, each the run of its entries (never empty).
+pub fn panels(tab: Tab) -> impl Iterator<Item = &'static [Capability]> {
+    tab_entries(tab).chunk_by(|a, b| a.panel == b.panel)
 }
 
 /// `docs/features.md`: every capability by tab and panel, ready or coming soon.
@@ -329,21 +327,13 @@ pub fn features_page() -> String {
          Every entry is a toolbar button. **Ready** entries run their command; **coming soon** entries are\n\
          shown greyed with the roadmap milestone that brings them (ROADMAP.md).\n\n",
     );
-    md.push_str(&format!("{ready} ready, {} coming soon.\n", CATALOGUE.len() - ready));
+    let _ = writeln!(md, "{ready} ready, {} coming soon.", CATALOGUE.len() - ready);
     for tab in Tab::ALL {
-        md.push_str(&format!("\n## {}\n\n| Panel | Capability | Status | Command |\n|---|---|---|---|\n", tab.label()));
-        for panel in panels(tab) {
-            for c in entries(tab, panel) {
-                let (status, command) = match c.status {
-                    Status::Ready { command, .. } => {
-                        let mut cmds = vec![format!("`{command}`")];
-                        cmds.extend(c.more.iter().map(|m| format!("`{m}`")));
-                        ("ready".to_string(), cmds.join(", "))
-                    }
-                    Status::Planned { milestone } => (format!("coming soon ({milestone})"), String::new()),
-                };
-                md.push_str(&format!("| {panel} | {} — {} | {status} | {command} |\n", c.label, c.tip));
-            }
+        let _ = write!(md, "\n## {}\n\n| Panel | Capability | Status | Command |\n|---|---|---|---|\n", tab.label());
+        for c in tab_entries(tab) {
+            let status = c.milestone().map_or_else(|| "ready".to_string(), |m| format!("coming soon ({m})"));
+            let commands: Vec<String> = c.command().into_iter().chain(c.more.iter().copied()).map(|id| format!("`{id}`")).collect();
+            let _ = writeln!(md, "| {} | {} — {} | {status} | {} |", c.panel, c.label, c.tip, commands.join(", "));
         }
     }
     md
@@ -358,9 +348,8 @@ mod tests {
     fn every_command_is_claimed_once_and_every_ready_entry_runs_a_command() {
         let mut claimed: Vec<&str> = Vec::new();
         for c in CATALOGUE {
-            if let Status::Ready { command, preset } = c.status {
+            if let Some(command) = c.command() {
                 assert!(find_command(command).is_some(), "{}: `{command}` is not a registered command", c.id);
-                assert!(serde_json::from_str::<serde_json::Value>(preset).is_ok_and(|v| v.is_object()), "{}: preset", c.id);
                 claimed.push(command);
             } else {
                 assert!(c.more.is_empty(), "{}: a planned entry has no commands", c.id);
@@ -390,8 +379,16 @@ mod tests {
         let n = ids.len();
         ids.dedup();
         assert_eq!(ids.len(), n, "catalogue ids are unique");
+        // Tabs are runs in Tab::ALL order, and each panel is one run within its tab.
+        let total: usize = Tab::ALL.iter().map(|t| tab_entries(*t).len()).sum();
+        assert_eq!(total, CATALOGUE.len(), "every tab's entries are together, in Tab::ALL order");
+        let order: Vec<Tab> =
+            CATALOGUE.iter().map(|c| c.tab).collect::<Vec<_>>().chunk_by(|a, b| a == b).filter_map(|r| r.first().copied()).collect();
+        assert_eq!(order, Tab::ALL);
         for tab in Tab::ALL {
-            assert!(!panels(tab).is_empty(), "{tab:?} has no entries");
+            let names: Vec<&str> = panels(tab).filter_map(|p| p.first().map(|c| c.panel)).collect();
+            assert!(!names.is_empty(), "{tab:?} has no entries");
+            assert!(names.iter().enumerate().all(|(i, n)| !names[..i].contains(n)), "{tab:?}: a panel's entries are together: {names:?}");
         }
     }
 

@@ -54,18 +54,23 @@ pub fn rasterise(svg: &str, px: u32) -> Result<egui::ColorImage, String> {
     Ok(egui::ColorImage::from_rgba_premultiplied([px as usize, px as usize], pixmap.data()))
 }
 
-/// Icon textures by (id, dark theme, enabled, pixels); `None` when the icon is missing or does
-/// not rasterise, so it is not tried again every frame.
+/// Icon textures by (id, enabled) for one theme and pixel size; `None` when the icon is missing
+/// or does not rasterise, so it is not tried again every frame. A change of theme or size
+/// (zoom) drops the old textures.
 #[derive(Default)]
 pub struct IconCache {
-    textures: HashMap<(&'static str, bool, bool, u32), Option<TextureHandle>>,
+    theme_px: Option<(bool, u32)>,
+    textures: HashMap<(&'static str, bool), Option<TextureHandle>>,
 }
 
 impl IconCache {
     pub fn get(&mut self, ctx: &egui::Context, id: &'static str, dark: bool, enabled: bool, px: u32) -> Option<TextureHandle> {
-        let px = px.clamp(1, MAX_PX);
+        if self.theme_px != Some((dark, px)) {
+            self.textures.clear();
+            self.theme_px = Some((dark, px));
+        }
         self.textures
-            .entry((id, dark, enabled, px))
+            .entry((id, enabled))
             .or_insert_with(|| {
                 let svg = svg(id)?;
                 let image = rasterise(&recolour(svg, colours(&Tokens::get(dark), enabled)), px).map_err(|e| log::warn!("icon {id}: {e}")).ok()?;
@@ -103,6 +108,13 @@ mod tests {
             let image = rasterise(text, 24).unwrap();
             assert!(image.pixels.iter().any(|p| p.a() > 0), "{id} draws nothing");
         }
+    }
+
+    /// The SVG colours are the dark theme's own, so the dark theme draws icons as authored.
+    #[test]
+    fn the_palette_is_the_dark_themes_colours() {
+        let hex: Vec<String> = colours(&Tokens::dark(), true).iter().map(|c| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())).collect();
+        assert_eq!(hex, PALETTE);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::ModelApp;
 use crate::theme::Tokens;
 
 /// Icon side (points).
-pub const ICON: f32 = 24.0;
+const ICON: f32 = 24.0;
 /// Button height and the width its label wraps at (points).
 const BUTTON_H: f32 = 60.0;
 const LABEL_W: f32 = 64.0;
@@ -37,14 +37,15 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
         app.toolbar_rects.clear();
         egui::ScrollArea::horizontal().id_salt("mc_toolbar_scroll").show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (i, panel) in catalogue::panels(app.ui.tab).into_iter().enumerate() {
+                for (i, entries) in catalogue::panels(app.ui.tab).enumerate() {
+                    let Some(panel) = entries.first().map(|c| c.panel) else { continue };
                     if i > 0 {
                         ui.separator();
                     }
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
-                            for c in catalogue::entries(app.ui.tab, panel) {
+                            for c in entries {
                                 if let Some(a) = button(app, ui, &t, c) {
                                     action = Some(a);
                                 }
@@ -99,11 +100,9 @@ fn button(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, c: &'static Capabil
         p.rect_stroke(badge, 3.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
         p.galley(badge.min + vec2(2.0, 0.0), text, t.text);
     }
-    let tip = match c.milestone() {
-        Some(m) => format!("{} — coming soon ({m})\n{}", c.label, c.tip),
-        None => format!("{}\n{}\n{}", c.label, c.tip, c.command().unwrap_or_default()),
-    };
-    let resp = resp.on_hover_text(tip);
+    let resp = resp.on_hover_ui(|ui| {
+        ui.label(c.tooltip());
+    });
     let mut action = resp.clicked().then_some(c.id);
     if enabled && !c.more.is_empty() {
         let (arrow, arrow_resp) = ui.allocate_exact_size(vec2(ARROW_W, BUTTON_H), Sense::click());

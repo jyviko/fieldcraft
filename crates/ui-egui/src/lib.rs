@@ -223,21 +223,17 @@ impl ModelApp {
     /// entry; an entry that is coming soon does nothing and says when it comes. Programmatic calls
     /// use [`ModelApp::run`] instead.
     pub fn start(&mut self, id: &str) -> Result<(), String> {
-        let (command, preset) = match catalogue::find(id).map(|c| (c, c.status)) {
-            Some((_, catalogue::Status::Ready { command, preset })) => (command, preset),
-            Some((c, catalogue::Status::Planned { milestone })) => {
-                let e = format!("{} is coming soon ({milestone})", c.label);
-                self.set_status(e.clone(), false);
-                return Err(e);
-            }
-            None => (id, "{}"),
-        };
-        let spec = modelcraft_engine::find_command(command).ok_or_else(|| format!("unknown command `{command}`"))?;
+        if let Some((c, milestone)) = catalogue::find(id).and_then(|c| c.milestone().map(|m| (c, m))) {
+            let e = format!("{} is coming soon ({milestone})", c.label);
+            self.set_status(e.clone(), false);
+            return Err(e);
+        }
+        let spec = modelcraft_engine::find_command(id).ok_or_else(|| format!("unknown command `{id}`"))?;
         if spec.params.trim() == "{}" {
             self.dialog = None;
             self.run(spec.id, json!({})).map(|_| ())
         } else {
-            self.dialog = Some(ParamsDialog { command: spec.id, text: preset.into(), error: None });
+            self.dialog = Some(ParamsDialog { command: spec.id, text: "{}".into(), error: None });
             Ok(())
         }
     }

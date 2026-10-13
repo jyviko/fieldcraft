@@ -122,7 +122,7 @@ pub fn model_tree(app: &mut ModelApp, ui: &mut egui::Ui) {
     );
     if let Some(step) = show {
         // Errors show in the status bar.
-        let _ = app.show_result(&step);
+        let _ = app.run("results.deformed", serde_json::json!({"step": step}));
     }
 }
 

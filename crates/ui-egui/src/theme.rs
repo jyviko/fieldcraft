@@ -141,6 +141,11 @@ impl Tokens {
         }
     }
 
+    /// The contour colour scale for the renderer, low to high.
+    pub fn contour_stops(&self) -> [Rgb; 5] {
+        self.contour.map(rgb)
+    }
+
     /// The colour elements of this kind are drawn in.
     pub fn element(&self, kind: ElementKind) -> Color32 {
         match kind {

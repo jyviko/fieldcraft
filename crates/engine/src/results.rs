@@ -132,8 +132,14 @@ pub struct ResultsView {
 }
 
 impl ResultsView {
-    pub fn new(step: &str) -> ResultsView {
-        ResultsView { step: step.to_string(), deformed: true, scale: None, contour: None, bands: DEFAULT_BANDS, mode: 1, animate: false }
+    /// How a step's result is shown first: deformed, with von Mises contours for a static step
+    /// and the first mode with displacement contours for a frequency step.
+    pub fn for_result(r: &StepResult) -> ResultsView {
+        let contour = match r {
+            StepResult::Static(_) => Field::VonMises,
+            StepResult::Frequency(_) => Field::Displacement,
+        };
+        ResultsView { step: r.step().to_string(), deformed: true, scale: None, contour: Some(contour), bands: DEFAULT_BANDS, mode: 1, animate: false }
     }
 }
 
@@ -152,34 +158,31 @@ pub fn displacements(r: &StepResult, mode: usize) -> Result<&[[f64; 3]]> {
 
 /// A field's value at every node of the result, in [`StepResult::nodes`] order.
 pub fn field_values(r: &StepResult, field: Field, mode: usize) -> Result<Vec<f64>> {
-    let u = |c: usize| -> Result<Vec<f64>> { Ok(displacements(r, mode)?.iter().map(|v| v.get(c).copied().unwrap_or(f64::NAN)).collect()) };
-    let StepResult::Static(s) = r else {
-        return match field {
-            Field::Displacement => Ok(displacements(r, mode)?.iter().map(|v| magnitude(*v)).collect()),
-            Field::DisplacementX => u(0),
-            Field::DisplacementY => u(1),
-            Field::DisplacementZ => u(2),
-            _ => Err(EngineError::Params(format!("{} is not available for a frequency step (mode shapes have no stress scale)", field.label()))),
-        };
+    let component = |f: fn(&[f64; 3]) -> f64| -> Result<Vec<f64>> { Ok(displacements(r, mode)?.iter().map(f).collect()) };
+    let stresses = || match r {
+        StepResult::Static(s) => Ok(&s.stress),
+        StepResult::Frequency(_) => {
+            Err(EngineError::Params(format!("{} is not available for a frequency step (mode shapes have no stress scale)", field.label())))
+        }
     };
-    let stress = |c: usize| s.stress.iter().map(|t| t.get(c).copied().unwrap_or(f64::NAN)).collect();
-    let principal = |k: usize| s.stress.iter().map(|t| modelcraft_fem::principal(t).get(k).copied().unwrap_or(f64::NAN)).collect();
-    Ok(match field {
-        Field::Displacement => s.displacement.iter().map(|v| magnitude(*v)).collect(),
-        Field::DisplacementX => u(0)?,
-        Field::DisplacementY => u(1)?,
-        Field::DisplacementZ => u(2)?,
-        Field::VonMises => s.von_mises.clone(),
+    let each = |f: &dyn Fn(&[f64; 6]) -> f64| -> Result<Vec<f64>> { Ok(stresses()?.iter().map(f).collect()) };
+    let principal = |k: usize| each(&|t| modelcraft_fem::principal(t).get(k).copied().unwrap_or(f64::NAN));
+    match field {
+        Field::Displacement => component(|v| magnitude(*v)),
+        Field::DisplacementX => component(|v| v[0]),
+        Field::DisplacementY => component(|v| v[1]),
+        Field::DisplacementZ => component(|v| v[2]),
+        Field::VonMises => each(&modelcraft_fem::von_mises),
         Field::MaxPrincipal => principal(0),
         Field::MidPrincipal => principal(1),
         Field::MinPrincipal => principal(2),
-        Field::StressXx => stress(0),
-        Field::StressYy => stress(1),
-        Field::StressZz => stress(2),
-        Field::StressXy => stress(3),
-        Field::StressXz => stress(4),
-        Field::StressYz => stress(5),
-    })
+        Field::StressXx => each(&|t| t[0]),
+        Field::StressYy => each(&|t| t[1]),
+        Field::StressZz => each(&|t| t[2]),
+        Field::StressXy => each(&|t| t[3]),
+        Field::StressXz => each(&|t| t[4]),
+        Field::StressYz => each(&|t| t[5]),
+    }
 }
 
 /// The smallest and largest finite value, with the nodes they are at (`labels` in the same

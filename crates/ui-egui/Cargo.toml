@@ -13,6 +13,7 @@ modelcraft-model = { workspace = true }
 modelcraft-engine = { workspace = true }
 modelcraft-render = { workspace = true }
 modelcraft-solver = { workspace = true }
+modelcraft-geometry = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 serde = { workspace = true }
@@ -20,5 +21,3 @@ serde_json = { workspace = true }
 log = { workspace = true }
 resvg = { workspace = true }
 
-[dev-dependencies]
-modelcraft-geometry = { workspace = true }

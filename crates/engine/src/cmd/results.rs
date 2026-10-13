@@ -6,7 +6,7 @@ use modelcraft_solver::StepResult;
 use serde_json::{Value, json};
 
 use super::{opt, xyz};
-use crate::results::{DEFAULT_BANDS, Field, MAX_BANDS, MIN_BANDS, ResultsView};
+use crate::results::{Field, MAX_BANDS, MIN_BANDS, ResultsView};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const DEFORMED: CommandSpec = CommandSpec {
@@ -98,20 +98,14 @@ fn step_for(s: &Session, p: &Value, frequency: bool) -> Result<String> {
         .ok_or_else(|| EngineError::Params(if frequency { format!("no frequency step has a result; {}", solved_list(s)) } else { solved_list(s) }))
 }
 
-/// The view of `step`, made when another step (or none) is shown; a new view keeps the
-/// contour field when the step has it.
-fn view_of<'a>(s: &'a mut Session, step: &str) -> &'a mut ResultsView {
-    let keep = s.results_view.as_ref().filter(|v| v.step != step).map(|v| (v.contour, v.bands));
-    let has = |f: Field| s.latest_result(step).is_some_and(|(r, _)| Field::available(r).any(|a| a == f));
+/// The view of `step`: the one shown, or the step's first look ([`ResultsView::for_result`])
+/// when another step (or none) is shown.
+fn view_of<'a>(s: &'a mut Session, step: &str) -> Result<&'a mut ResultsView> {
     if s.results_view.as_ref().is_none_or(|v| v.step != step) {
-        let mut v = ResultsView::new(step);
-        if let Some((contour, bands)) = keep {
-            v.contour = contour.filter(|f| has(*f));
-            v.bands = bands;
-        }
-        s.results_view = Some(v);
+        let fresh = s.latest_result(step).map(|(r, _)| ResultsView::for_result(r)).ok_or_else(|| EngineError::Params(solved_list(s)))?;
+        s.results_view = Some(fresh);
     }
-    s.results_view.get_or_insert_with(|| ResultsView::new(step))
+    s.results_view.as_mut().ok_or_else(|| EngineError::Params("no results are shown".into()))
 }
 
 fn deformed(s: &mut Session, p: &Value) -> Result<Value> {
@@ -126,7 +120,7 @@ fn deformed(s: &mut Session, p: &Value) -> Result<Value> {
                 .ok_or_else(|| EngineError::Params(format!("`scale` must be \"auto\" or a factor above 0 and at most {MAX_SCALE}")))?,
         )),
     };
-    let v = view_of(s, &step);
+    let v = view_of(s, &step)?;
     v.deformed = show;
     if let Some(scale) = scale {
         v.scale = scale;
@@ -158,9 +152,11 @@ fn contour(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(EngineError::Params(format!("{} is not available for step `{step}` (mode shapes have no stress scale)", f.label())));
     }
-    let v = view_of(s, &step);
+    let v = view_of(s, &step)?;
     v.contour = field;
-    v.bands = bands.unwrap_or(if v.bands == 0 { DEFAULT_BANDS } else { v.bands });
+    if let Some(b) = bands {
+        v.bands = b;
+    }
     Ok(s.results_report())
 }
 
@@ -178,7 +174,7 @@ fn modes(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|n| (1..=count).contains(n))
             .ok_or_else(|| EngineError::Params(format!("`mode` must be from 1 to {count}")))?,
     };
-    let v = view_of(s, &step);
+    let v = view_of(s, &step)?;
     v.mode = mode;
     v.deformed = true;
     Ok(s.results_report())
@@ -193,7 +189,7 @@ fn animate(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(s.results_report());
     }
     let step = step_for(s, &json!({}), false)?;
-    let v = view_of(s, &step);
+    let v = view_of(s, &step)?;
     v.animate = true;
     v.deformed = true;
     Ok(s.results_report())
@@ -280,7 +276,9 @@ mod tests {
     fn the_display_follows_the_commands_and_is_not_an_edit() {
         let mut s = solved();
         let (journal, revision) = (s.journal.len(), s.revision());
-        assert!(s.results_view.is_none());
+        // Solving showed the first solved step.
+        assert_eq!(s.results_view.as_ref().map(|v| (v.step.as_str(), v.contour)), Some(("Bend", Some(Field::VonMises))));
+        s.execute("results.clear", &json!({})).unwrap();
         let r = s.execute("results.contour", &json!({"field": "von_mises"})).unwrap();
         assert_eq!(r["view"]["step"], "Bend", "{r}");
         assert_eq!(r["contour"]["field"], "von_mises");
@@ -289,12 +287,11 @@ mod tests {
         assert_eq!((r["view"]["deformed"].as_bool(), r["view"]["scale"].as_f64()), (Some(true), Some(2.5)));
         s.execute("results.deformed", &json!({"scale": "auto", "show": false})).unwrap();
         assert_eq!(s.results_view.as_ref().map(|v| (v.deformed, v.scale)), Some((false, None)));
-        // Modes switch to the frequency step and list the frequencies; the contour field moves
-        // along only when the step has it.
+        // Modes switch to the frequency step (its own first look) and list the frequencies.
         let r = s.execute("results.modes", &json!({"mode": 3})).unwrap();
         assert_eq!((r["view"]["step"].as_str(), r["view"]["mode"].as_u64()), (Some("Modes"), Some(3)));
         assert_eq!(r["modes"].as_array().map(Vec::len), Some(4));
-        assert_eq!(s.results_view.as_ref().and_then(|v| v.contour), None);
+        assert_eq!(s.results_view.as_ref().and_then(|v| v.contour), Some(Field::Displacement));
         assert!(s.execute("results.contour", &json!({"field": "von_mises"})).is_err());
         s.execute("results.contour", &json!({"field": "displacement", "bands": 6})).unwrap();
         s.execute("results.animate", &json!({})).unwrap();

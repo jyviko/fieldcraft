@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::ModelApp;
 use crate::results::{Plot, number};
-use crate::theme::{Tokens, rgb};
+use crate::theme::Tokens;
 
 /// Width of the results panel and of the legend's colour swatches (points).
 const PANEL_WIDTH: f32 = 260.0;
@@ -28,7 +28,7 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
 /// The legend, top left under the view buttons.
 fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
     let mut lines: Vec<(String, Color32)> = Vec::new();
-    let title = match (&plot.legend, plot.mode()) {
+    let title = match (&plot.contour, plot.mode()) {
         (Some(l), _) => l.field.label().to_string(),
         (None, Some(_)) => "Mode shape".into(),
         (None, None) => "Deformed shape".into(),
@@ -49,7 +49,7 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
     let origin = rect.left_top() + vec2(12.0, 44.0);
     let font = FontId::proportional(12.0);
     let line_h = 16.0;
-    let bands = plot.legend.as_ref().map_or(0, |l| l.bands.count) as f32;
+    let bands = plot.contour.as_ref().map_or(0, |l| l.bands.count) as f32;
     let width = 250.0;
     // Padding and title, the lines, then the swatches with the range lines under them.
     let height = 36.0 + line_h * lines.len() as f32 + if bands > 0.0 { 16.0 + bands * SWATCH.y + 2.0 * line_h } else { 0.0 };
@@ -62,9 +62,9 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
         painter.text(pos2(origin.x + 10.0, y), Align2::LEFT_TOP, text, font.clone(), *color);
         y += line_h;
     }
-    let Some(l) = &plot.legend else { return };
+    let Some(l) = &plot.contour else { return };
     y += 6.0;
-    let stops: Vec<modelcraft_render::Rgb> = t.contour.iter().map(|c| rgb(*c)).collect();
+    let stops = t.contour_stops();
     // High values on top, each band's lower boundary written beside its swatch's bottom edge.
     for k in (0..l.bands.count).rev() {
         let row = (l.bands.count - 1 - k) as f32;
@@ -93,12 +93,10 @@ fn probe(app: &ModelApp, plot: &Plot, painter: &egui::Painter, t: &Tokens) {
     let Some(at) = plot.node_position(p.node).and_then(|w| crate::viewport::to_screen(app, w)) else { return };
     painter.circle(at, 5.0, t.accent, Stroke::new(2.0, t.overlay_text));
     let font = FontId::proportional(12.0);
-    let width = p.lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f32 * 6.6 + 16.0;
-    let box_rect = Rect::from_min_size(at + vec2(12.0, -10.0), vec2(width, 8.0 + 16.0 * p.lines.len() as f32));
+    let galley = painter.layout_no_wrap(p.lines.join("\n"), font, t.overlay_text);
+    let box_rect = Rect::from_min_size(at + vec2(12.0, -10.0), galley.size() + vec2(16.0, 8.0));
     painter.rect_filled(box_rect, 4.0, t.overlay);
-    for (i, line) in p.lines.iter().enumerate() {
-        painter.text(box_rect.left_top() + vec2(8.0, 4.0 + 16.0 * i as f32), Align2::LEFT_TOP, line, font.clone(), t.overlay_text);
-    }
+    painter.galley(box_rect.left_top() + vec2(8.0, 4.0), galley, t.overlay_text);
 }
 
 /// The results panel, top right: step, contour field, deformation, modes, animation, reaction

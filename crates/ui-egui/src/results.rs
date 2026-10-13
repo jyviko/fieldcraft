@@ -10,7 +10,7 @@ use std::sync::Arc;
 use modelcraft_engine::Session;
 use modelcraft_engine::results::{Field, ResultsView, displacements, field_values, magnitude, range};
 use modelcraft_render::contour::{Bands, band_color, split_triangle};
-use modelcraft_render::{DisplayMesh, Rgb, Scene, SceneLine, ScenePoint, SceneTri, Vec3};
+use modelcraft_render::{DisplayMesh, Scene, SceneTri, Vec3};
 use modelcraft_solver::StepResult;
 
 use crate::Style;
@@ -21,18 +21,24 @@ pub const FRAMES: u64 = 24;
 pub const PERIOD: f64 = 2.0;
 /// The automatic scale draws the largest displacement this fraction of the model's size.
 const AUTO_FRACTION: f64 = 0.1;
-const EDGE_WIDTH: f64 = 1.0;
-const LINE_ELEMENT_WIDTH: f64 = 3.0;
-const NODE_SIZE: f64 = 5.0;
 
-/// The legend of a contour plot.
+/// A contour plot: its field, bands, extremes and the value at every node.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Legend {
+pub struct Contour {
     pub field: Field,
     pub bands: Bands,
     /// The smallest and largest value and their nodes.
     pub min: (u32, f64),
     pub max: (u32, f64),
+    /// The value at every node, in the result's node order.
+    pub values: Vec<f64>,
+}
+
+impl Contour {
+    /// The value at a node (NaN when it has none).
+    pub fn at(&self, nodes: &[u32], label: u32) -> f64 {
+        nodes.binary_search(&label).ok().and_then(|i| self.values.get(i).copied()).unwrap_or(f64::NAN)
+    }
 }
 
 /// A results plot ready to draw.
@@ -46,9 +52,14 @@ pub struct Plot {
     pub scale: f64,
     /// The elements as drawn (deformed at the current animation frame).
     pub display: DisplayMesh,
-    pub legend: Option<Legend>,
-    /// The contour value at every node, in the result's node order.
-    pub values: Option<Vec<f64>>,
+    pub contour: Option<Arc<Contour>>,
+}
+
+/// The part of a plot that does not change with the animation frame.
+#[derive(Clone, Debug, Default)]
+pub struct Prepared {
+    pub scale: f64,
+    pub contour: Option<Arc<Contour>>,
 }
 
 impl Plot {
@@ -103,65 +114,49 @@ pub fn scale(view: &ResultsView, result: &StepResult, base: &DisplayMesh) -> f64
     if largest > 0.0 && size.is_finite() && size > 0.0 { AUTO_FRACTION * size / largest } else { 0.0 }
 }
 
-/// The plot of the session's results view on the model's display data, at animation `frame`.
-pub fn plot(session: &Session, base: &DisplayMesh, frame: Option<u64>) -> Option<Plot> {
-    let (view, result, current) = shown(session)?;
-    let nodes = result.nodes();
-    let scale = scale(view, result, base);
-    let factor = scale * swing(result, frame);
-    let u = displacements(result, view.mode).unwrap_or(&[]);
-    let display = if factor != 0.0 {
-        base.displaced(|label| {
-            let i = nodes.binary_search(&label).ok()?;
-            u.get(i).map(|d| Vec3::from(*d) * factor)
-        })
-    } else {
-        base.displaced(|_| None)
-    };
-    let values = view.contour.and_then(|f| field_values(result, f, view.mode).ok().map(|v| (f, v)));
-    let legend = values.as_ref().and_then(|(f, v)| {
-        let (min, max) = range(nodes, v)?;
-        Some(Legend { field: *f, bands: Bands::new(min.1, max.1, view.bands), min, max })
+/// The frame-independent part of the session's results plot: the deformation scale and the
+/// contour values.
+pub fn prepare(session: &Session, base: &DisplayMesh) -> Option<Prepared> {
+    let (view, result, _) = shown(session)?;
+    let contour = view.contour.and_then(|field| {
+        let values = field_values(result, field, view.mode).ok()?;
+        let (min, max) = range(result.nodes(), &values)?;
+        Some(Arc::new(Contour { field, bands: Bands::new(min.1, max.1, view.bands), min, max, values }))
     });
-    Some(Plot { view: view.clone(), result: result.clone(), stale: !current, scale, display, legend, values: values.map(|(_, v)| v) })
+    Some(Prepared { scale: scale(view, result, base), contour })
 }
 
-/// The scene of a plot: faces in contour bands (or element colours), the element edges on the
-/// deformed shape, line elements and nodes.
+/// The plot of the session's results view on the model's display data, at animation `frame`,
+/// with its [`prepare`]d part.
+pub fn plot(session: &Session, base: &DisplayMesh, frame: Option<u64>, prepared: &Prepared) -> Option<Plot> {
+    let (view, result, current) = shown(session)?;
+    let nodes = result.nodes();
+    let factor = prepared.scale * swing(result, frame);
+    let u = displacements(result, view.mode).unwrap_or(&[]);
+    let display = base.displaced(|label| {
+        let i = nodes.binary_search(&label).ok()?;
+        u.get(i).map(|d| Vec3::from(*d) * factor)
+    });
+    Some(Plot { view: view.clone(), result: result.clone(), stale: !current, scale: prepared.scale, display, contour: prepared.contour.clone() })
+}
+
+/// The scene of a plot: the deformed elements drawn as the model is ([`scene::build`]), with
+/// their faces split into contour bands when a field is shown.
 pub fn scene(plot: &Plot, style: Style, show_nodes: bool, t: &Tokens) -> Scene {
-    let d = &plot.display;
-    let mut s = Scene { background: Some((rgb(t.viewport_top), rgb(t.viewport_bottom))), ..Default::default() };
+    let mut s = crate::scene::build(&plot.display, style, show_nodes, t);
+    let Some(c) = plot.contour.as_ref().filter(|_| style != Style::Wireframe) else { return s };
     let nodes = plot.result.nodes();
-    let value = |label: u32| -> f64 {
-        let v = plot.values.as_deref().zip(nodes.binary_search(&label).ok()).and_then(|(v, i)| v.get(i).copied());
-        v.unwrap_or(f64::NAN)
-    };
-    if style != Style::Wireframe {
-        match (&plot.legend, &plot.values) {
-            (Some(legend), Some(_)) => {
-                let stops: Vec<Rgb> = t.contour.iter().map(|c| rgb(*c)).collect();
-                for tri in &d.tris {
-                    let v = tri.nodes.map(value);
-                    split_triangle(tri.p, v, &legend.bands, &mut |piece, band| {
-                        let color = band.map_or(rgb(t.no_result), |k| band_color(&stops, k, legend.bands.count));
-                        for k in 1..piece.len().saturating_sub(1) {
-                            if let (Some(&a), Some(&b), Some(&c)) = (piece.first(), piece.get(k), piece.get(k + 1)) {
-                                s.tris.push(SceneTri { p: [a, b, c], normal: tri.normal, color });
-                            }
-                        }
-                    });
+    let stops = t.contour_stops();
+    s.tris.clear();
+    for tri in &plot.display.tris {
+        split_triangle(tri.p, tri.nodes.map(|l| c.at(nodes, l)), &c.bands, &mut |piece, band| {
+            let color = band.map_or(rgb(t.no_result), |k| band_color(&stops, k, c.bands.count));
+            for k in 1..piece.len().saturating_sub(1) {
+                if let (Some(&a), Some(&b), Some(&cc)) = (piece.first(), piece.get(k), piece.get(k + 1)) {
+                    s.tris.push(SceneTri { p: [a, b, cc], normal: tri.normal, color });
                 }
             }
-            _ => s.tris = d.tris.iter().map(|tri| SceneTri { p: tri.p, normal: tri.normal, color: rgb(t.element(tri.kind)) }).collect(),
-        }
-    }
-    if style != Style::Shaded {
-        let color = rgb(if style == Style::Wireframe { t.hex } else { t.mesh_edge });
-        s.lines = d.edges.iter().map(|e| SceneLine { a: e.p[0], b: e.p[1], color, width: EDGE_WIDTH }).collect();
-    }
-    s.lines.extend(d.lines.iter().map(|l| SceneLine { a: l.a, b: l.b, color: rgb(t.element(l.kind)), width: LINE_ELEMENT_WIDTH }));
-    if show_nodes {
-        s.points = d.nodes.iter().map(|n| ScenePoint { p: n.p, color: rgb(t.node), size: NODE_SIZE }).collect();
+        });
     }
     s
 }
@@ -184,10 +179,14 @@ pub fn number(v: f64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn plot_at(s: &Session, base: &DisplayMesh, frame: Option<u64>) -> Option<Plot> {
+        plot(s, base, frame, &prepare(s, base)?)
+    }
 
     /// The sample cantilever, solved (static step `Load`, frequency step `Modes`).
     pub(crate) fn solved_cantilever() -> Session {
@@ -199,7 +198,7 @@ mod tests {
     }
 
     /// The label of the node at `xyz`.
-    fn node_at(s: &Session, xyz: [f64; 3]) -> u32 {
+    pub(crate) fn node_at(s: &Session, xyz: [f64; 3]) -> u32 {
         *s.model.nodes().iter().find(|(_, n)| n.xyz == xyz).unwrap().0
     }
 
@@ -207,9 +206,10 @@ mod tests {
     fn the_deformed_shape_moves_by_the_scaled_displacement() {
         let mut s = solved_cantilever();
         let base = DisplayMesh::from_model(&s.model);
-        assert!(plot(&s, &base, None).is_none(), "nothing shown before a results command");
+        s.execute("results.clear", &json!({})).unwrap();
+        assert!(plot_at(&s, &base, None).is_none(), "nothing shown after results.clear");
         s.execute("results.deformed", &json!({"scale": 2.0})).unwrap();
-        let p = plot(&s, &base, None).unwrap();
+        let p = plot_at(&s, &base, None).unwrap();
         assert_eq!(p.scale, 2.0);
         // A tip corner moves twice its displacement.
         let tip = node_at(&s, [100.0, 0.0, 0.0]);
@@ -219,11 +219,11 @@ mod tests {
         assert!((at.z - 2.0 * u[2]).abs() < 1e-12 && u[2] < -0.2, "{at:?} {u:?}");
         // Automatic: the largest displacement is a tenth of the model's size.
         s.execute("results.deformed", &json!({"scale": "auto"})).unwrap();
-        let p = plot(&s, &base, None).unwrap();
+        let p = plot_at(&s, &base, None).unwrap();
         let largest = r.displacement.iter().map(|v| magnitude(*v)).fold(0.0, f64::max);
         assert!((p.scale * largest / base.bounds.diagonal() - AUTO_FRACTION).abs() < 1e-12, "{}", p.scale);
         s.execute("results.deformed", &json!({"show": false})).unwrap();
-        assert_eq!(plot(&s, &base, None).unwrap().display.tris, base.tris);
+        assert_eq!(plot_at(&s, &base, None).unwrap().display.tris, base.tris);
     }
 
     #[test]
@@ -232,13 +232,13 @@ mod tests {
         s.execute("results.contour", &json!({"field": "displacement_z", "bands": 4})).unwrap();
         s.execute("results.deformed", &json!({"show": false})).unwrap();
         let base = DisplayMesh::from_model(&s.model);
-        let p = plot(&s, &base, None).unwrap();
-        let legend = p.legend.clone().unwrap();
+        let p = plot_at(&s, &base, None).unwrap();
+        let legend = p.contour.clone().unwrap();
         // The tip moves most (lowest band), the clamped root not at all (highest band).
         assert!(legend.min.1 < -0.2 && legend.max.1.abs() < 1e-12, "{legend:?}");
         let t = Tokens::dark();
         let scene = scene(&p, Style::Shaded, false, &t);
-        let stops: Vec<Rgb> = t.contour.iter().map(|c| rgb(*c)).collect();
+        let stops = t.contour_stops();
         let (low, high) = (band_color(&stops, 0, 4), band_color(&stops, 3, 4));
         // Faces whose corners are all near the root are in the top band; near the tip, the bottom.
         let root_end = scene.tris.iter().filter(|tri| tri.p.iter().all(|q| q.x < 0.5)).map(|tri| tri.color).collect::<Vec<_>>();
@@ -266,8 +266,8 @@ mod tests {
         assert!((swing(result, Some(FRAMES / 4)) - 1.0).abs() < 1e-12);
         assert!((swing(result, Some(3 * FRAMES / 4)) + 1.0).abs() < 1e-12);
         // At frame 0 a mode is undeformed; a quarter cycle later fully deformed.
-        let p0 = plot(&s, &base, Some(0)).unwrap();
-        let p1 = plot(&s, &base, Some(FRAMES / 4)).unwrap();
+        let p0 = plot_at(&s, &base, Some(0)).unwrap();
+        let p1 = plot_at(&s, &base, Some(FRAMES / 4)).unwrap();
         assert_eq!(p0.display.tris, base.tris);
         assert_ne!(p1.display.tris, base.tris);
         assert_eq!(p1.mode().map(|(m, _)| m), Some(1));

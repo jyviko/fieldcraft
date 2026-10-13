@@ -86,13 +86,13 @@ fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
     let limits = limits(p)?;
     let step = opt::<String>(p, "step")?;
     let r = solve_static(&s.model, step.as_deref(), &limits)?;
-    let magnitude = |u: &[f64; 3]| (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]).sqrt();
+
     let summary = json!({
         "step": r.step,
         "dofs": r.stats.dofs,
         "equations": r.stats.equations,
         "factor_entries": r.stats.factor_entries,
-        "max_displacement": largest(r.nodes.iter().zip(&r.displacement).map(|(l, u)| (*l, magnitude(u)))),
+        "max_displacement": largest(r.nodes.iter().zip(&r.displacement).map(|(l, u)| (*l, crate::results::magnitude(*u)))),
         "max_von_mises": largest(r.nodes.iter().zip(&r.von_mises).map(|(l, v)| (*l, *v))),
         "applied_total": r.applied_total,
         "reaction_total": r.reaction_total,

@@ -29,8 +29,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use modelcraft_engine::Session;
 use modelcraft_engine::catalogue::{self, Tab};
-use modelcraft_render::{Camera, DisplayMesh, Scene, StandardView};
-use modelcraft_solver::StepResult;
+use modelcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -111,6 +110,17 @@ pub struct Probe {
     pub lines: Vec<String>,
 }
 
+/// What a results plot was built for.
+#[derive(Clone, Debug, PartialEq)]
+struct PlotKey {
+    revision: u64,
+    /// The result's identity: every solve stores a new one.
+    result: usize,
+    current: bool,
+    view: modelcraft_engine::results::ResultsView,
+    frame: Option<u64>,
+}
+
 /// A screenshot asked for over the control channel.
 struct Shot {
     token: u64,
@@ -138,12 +148,18 @@ pub struct ModelApp {
     /// Bumped whenever the model may have changed.
     revision: u64,
     display: (Option<u64>, DisplayMesh),
-    /// The results plot and its key.
-    plot: (Option<u64>, Option<Arc<results::Plot>>),
+    /// The results plot and what it was built for.
+    plot: (Option<PlotKey>, Option<Arc<results::Plot>>),
     /// The node probed last (a click on a results plot).
     pub probe: Option<Probe>,
     /// The reaction sums asked for last in the results panel.
     pub reactions: Option<Value>,
+    /// Whether results were shown last frame (the Results tab comes up when they appear).
+    results_shown: bool,
+    /// Tessellated design bodies, kept while the same design is open.
+    bodies: (Option<Arc<modelcraft_geometry::Design>>, Vec<modelcraft_geometry::SurfaceMesh>),
+    /// The frame-independent part of the results plot (scale, contour) and what it was built for.
+    prepared: (Option<PlotKey>, results::Prepared),
     /// The built scene and its key.
     scene: (Option<u64>, Scene),
     /// The theme last applied to the context.
@@ -178,6 +194,9 @@ impl ModelApp {
             plot: (None, None),
             probe: None,
             reactions: None,
+            results_shown: false,
+            bodies: (None, Vec::new()),
+            prepared: (None, results::Prepared::default()),
             scene: (None, Scene::default()),
             styled: None,
             synthetic: Vec::new(),
@@ -211,7 +230,6 @@ impl ModelApp {
     /// Run a command with JSON parameters: what every panel, the control channel and scripts
     /// do. The result or the error goes to the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        let was_empty = self.display().bounds.is_empty();
         let revision = self.session.revision();
         let label = command_label(id);
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
@@ -226,23 +244,16 @@ impl ModelApp {
             Ok(v) => self.set_status(format!("{label}: {v}"), false),
             Err(e) => self.set_status(format!("{label}: {e}"), true),
         }
-        if was_empty && !self.display().bounds.is_empty() {
-            self.fit_view();
-        }
         r
     }
 
     /// Run a script (a JSON array of `{command, params}`), stopping at the first error.
     pub fn run_script(&mut self, script: &Value) -> Result<(), String> {
-        let was_empty = self.display().bounds.is_empty();
         let r = self.session.run_script(script).map_err(|e| e.to_string());
         self.model_changed();
         match &r {
             Ok(()) => self.set_status("Script done", false),
             Err(e) => self.set_status(format!("Script: {e}"), true),
-        }
-        if was_empty && !self.display().bounds.is_empty() {
-            self.fit_view();
         }
         r
     }
@@ -274,19 +285,12 @@ impl ModelApp {
         }
     }
 
-    /// Run the open parameter form; it closes when the command succeeds. A solve started from
-    /// the form shows its result.
+    /// Run the open parameter form; it closes when the command succeeds.
     pub fn run_dialog(&mut self) -> Result<Value, String> {
         let Some(d) = self.dialog.clone() else { return Err("no command form is open".into()) };
         let r = serde_json::from_str::<Value>(&d.text).map_err(|e| format!("the parameters are not JSON: {e}")).and_then(|p| self.run(d.command, p));
         match &r {
-            Ok(v) => {
-                self.dialog = None;
-                if let ("solve.static" | "solve.frequency", Some(step)) = (d.command, v.get("step").and_then(Value::as_str)) {
-                    // A failure shows in the status bar; the solve itself succeeded.
-                    let _ = self.show_result(step);
-                }
-            }
+            Ok(_) => self.dialog = None,
             Err(e) => {
                 if let Some(open) = self.dialog.as_mut() {
                     open.error = Some(e.clone());
@@ -294,22 +298,6 @@ impl ModelApp {
             }
         }
         r
-    }
-
-    /// Show a solved step: a static step deformed with von Mises contours, a frequency step's
-    /// first mode with displacement contours; the toolbar switches to the Results tab.
-    pub fn show_result(&mut self, step: &str) -> Result<(), String> {
-        let frequency = matches!(self.session.latest_result(step).map(|(r, _)| r.as_ref()), Some(StepResult::Frequency(_)));
-        if frequency {
-            self.run("results.modes", json!({"step": step, "mode": 1}))?;
-            self.run("results.contour", json!({"step": step, "field": "displacement"}))?;
-        } else {
-            self.run("results.deformed", json!({"step": step}))?;
-            self.run("results.contour", json!({"step": step, "field": "von_mises"}))?;
-        }
-        self.ui.tab = Tab::Results;
-        self.set_status(format!("Showing the results of step {step}"), false);
-        Ok(())
     }
 
     /// Probe a node of the results shown (`solve.probe`) and keep its values for the viewport.
@@ -338,11 +326,7 @@ impl ModelApp {
         if let Some(shape) = vector("shape") {
             lines.push(format!("Mode {} shape {}", view.mode, triple(shape)));
         }
-        let contour = self.plot().and_then(|p| {
-            let field = p.legend.as_ref()?.field;
-            let i = p.result.nodes().binary_search(&node).ok()?;
-            Some((field, *p.values.as_ref()?.get(i)?))
-        });
+        let contour = self.plot().and_then(|p| p.contour.as_ref().map(|c| (c.field, c.at(p.result.nodes(), node))));
         if let Some((field, v)) = contour.filter(|(f, _)| *f != modelcraft_engine::results::Field::VonMises) {
             lines.push(format!("{} {}", field.label(), results::number(v)));
         }
@@ -372,56 +356,74 @@ impl ModelApp {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// The model's display data with its geometry (the open design's bodies, tessellated, and
-    /// the imported surfaces), rebuilt when the model changed.
+    /// The model's display data with its geometry (the open design's bodies, tessellated once
+    /// per design, and the imported surfaces), rebuilt when the model changed. The first content
+    /// to appear is framed.
     pub fn display(&mut self) -> &DisplayMesh {
         if self.display.0 != Some(self.revision) {
             let mut d = DisplayMesh::from_model(&self.session.model);
-            let mut failed = Vec::new();
-            if let Some(design) = &self.session.design {
-                for body in &design.bodies {
-                    match body.measure().and_then(|m| body.tessellate(display_tolerance(m.bbox_min, m.bbox_max))) {
-                        Ok(mesh) => d.add_surface(&mesh.positions, &mesh.triangles, &mesh.tri_face),
-                        Err(e) => failed.push(format!("{}: {e}", body.name)),
-                    }
+            let design = self.session.design.clone();
+            if !match (&design, &self.bodies.0) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            } {
+                let mut failed = Vec::new();
+                let meshes: Vec<_> = design
+                    .iter()
+                    .flat_map(|d| &d.bodies)
+                    .filter_map(|body| {
+                        let tolerance = body.measure().map(|m| display_tolerance(&Aabb3 { min: m.bbox_min.into(), max: m.bbox_max.into() }));
+                        tolerance.and_then(|t| body.tessellate(t)).map_err(|e| failed.push(format!("{}: {e}", body.name))).ok()
+                    })
+                    .collect();
+                self.bodies = (design, meshes);
+                if !failed.is_empty() {
+                    self.set_status(format!("Some bodies cannot be drawn: {}", failed.join("; ")), true);
                 }
             }
-            for surface in &self.session.surfaces {
-                d.add_surface(&surface.mesh.positions, &surface.mesh.triangles, &surface.mesh.tri_face);
+            for mesh in self.bodies.1.iter().chain(self.session.surfaces.iter().map(|s| &s.mesh)) {
+                d.add_surface(&mesh.positions, &mesh.triangles, &mesh.tri_face);
             }
-            if !failed.is_empty() {
-                self.set_status(format!("Some bodies cannot be drawn: {}", failed.join("; ")), true);
-            }
+            let was_empty = self.display.1.bounds.is_empty();
             self.display = (Some(self.revision), d);
+            if was_empty && !self.display.1.bounds.is_empty() {
+                self.cam.fit(&self.display.1.bounds);
+            }
         }
         &self.display.1
     }
 
     /// The key of the current scene: the model revision, every setting the scene depends on and
-    /// the results plot's key.
+    /// the results plot shown.
     pub fn scene_key(&self) -> u64 {
         let mut h = std::hash::DefaultHasher::new();
-        (self.revision, self.ui.style, self.ui.show_nodes, self.ui.dark, self.plot_key()).hash(&mut h);
+        let plot = self.plot.1.as_ref().map(|p| Arc::as_ptr(p) as usize);
+        (self.revision, self.ui.style, self.ui.show_nodes, self.ui.dark, plot).hash(&mut h);
         h.finish()
     }
 
-    /// The key of the results plot: the result, its view and the animation frame; `None` when
-    /// no results are shown.
-    fn plot_key(&self) -> Option<u64> {
+    /// What the results plot is built for: the model, the result, its view and the animation
+    /// frame; `None` when no results are shown.
+    fn plot_key(&self) -> Option<PlotKey> {
         let (view, result, current) = results::shown(&self.session)?;
-        let mut h = std::hash::DefaultHasher::new();
-        (self.revision, Arc::as_ptr(result) as usize, current, results::frame(view, self.now)).hash(&mut h);
-        serde_json::to_string(view).unwrap_or_default().hash(&mut h);
-        Some(h.finish())
+        let frame = results::frame(view, self.now);
+        Some(PlotKey { revision: self.revision, result: Arc::as_ptr(result) as usize, current, view: view.clone(), frame })
     }
 
-    /// The results plot the viewport draws, rebuilt when its key changes; `None` shows the model.
+    /// The results plot the viewport draws, rebuilt when its key changes; `None` shows the
+    /// model. Only the deformation follows the animation frame; the scale and contour values are
+    /// kept while the rest of the key stays.
     pub fn plot(&mut self) -> Option<Arc<results::Plot>> {
         let key = self.plot_key();
         if self.plot.0 != key {
             self.display();
-            let frame = self.session.results_view.as_ref().and_then(|v| results::frame(v, self.now));
-            let p = key.and_then(|_| results::plot(&self.session, &self.display.1, frame));
+            let still = key.as_ref().map(|k| PlotKey { frame: None, ..k.clone() });
+            if self.prepared.0 != still {
+                self.prepared = (still, results::prepare(&self.session, &self.display.1).unwrap_or_default());
+            }
+            let frame = key.as_ref().and_then(|k| k.frame);
+            let p = key.as_ref().and_then(|_| results::plot(&self.session, &self.display.1, frame, &self.prepared.1));
             self.plot = (key, p.map(Arc::new));
         }
         self.plot.1.clone()
@@ -429,9 +431,9 @@ impl ModelApp {
 
     /// The scene the viewport draws, rebuilt when its key changes; its radius fits the camera.
     pub fn scene(&mut self) -> (u64, &Scene) {
-        let key = self.scene_key();
         self.display();
         self.plot();
+        let key = self.scene_key();
         if self.scene.0 != Some(key) {
             let t = theme::Tokens::get(self.ui.dark);
             let (style, nodes) = (self.ui.style, self.ui.show_nodes);
@@ -480,6 +482,12 @@ impl ModelApp {
         if !self.synthetic.is_empty() {
             ctx.request_repaint();
         }
+        // Results coming up (a solve, a results command) bring the Results tab.
+        let shown = self.session.results_view.is_some();
+        if shown && !self.results_shown {
+            self.ui.tab = Tab::Results;
+        }
+        self.results_shown = shown;
         if self.session.results_view.as_ref().is_some_and(|v| v.animate) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(results::PERIOD / results::FRAMES as f64));
         }
@@ -618,8 +626,8 @@ impl ModelApp {
 }
 
 /// The chordal tolerance bodies are drawn with: a thousandth of their size, within 1 µm–1 mm.
-fn display_tolerance(min: [f64; 3], max: [f64; 3]) -> f64 {
-    let d = ((max[0] - min[0]).powi(2) + (max[1] - min[1]).powi(2) + (max[2] - min[2]).powi(2)).sqrt();
+fn display_tolerance(b: &Aabb3) -> f64 {
+    let d = b.diagonal();
     if d.is_finite() { (d * 1e-3).clamp(1e-3, 1.0) } else { 0.1 }
 }
 
@@ -722,28 +730,25 @@ mod tests {
 
     /// The sample cantilever in an app, solved (static step `Load`, frequency step `Modes`).
     fn solved_app() -> ModelApp {
-        let mut app = ModelApp::new(Session::default());
-        app.run_script(&modelcraft_engine::sample::cantilever()).unwrap();
-        app.run("solve.static", json!({})).unwrap();
-        app.run("solve.frequency", json!({})).unwrap();
-        app
+        ModelApp::new(results::tests::solved_cantilever())
     }
 
     fn node_at(app: &ModelApp, xyz: [f64; 3]) -> u32 {
-        *app.session.model.nodes().iter().find(|(_, n)| n.xyz == xyz).unwrap().0
+        results::tests::node_at(&app.session, xyz)
     }
 
     #[test]
-    fn solving_from_the_form_shows_the_result_on_the_results_tab() {
+    fn solving_shows_the_result_on_the_results_tab() {
         let mut app = ModelApp::new(Session::default());
         app.run_script(&modelcraft_engine::sample::cantilever()).unwrap();
         app.start("solve.static").unwrap();
         app.run_dialog().unwrap();
         let view = app.session.results_view.clone().unwrap();
         assert_eq!((view.step.as_str(), view.contour, view.deformed), ("Load", Some(modelcraft_engine::results::Field::VonMises), true));
+        app.logic(&egui::Context::default());
         assert_eq!(app.ui.tab, Tab::Results);
-        app.start("solve.frequency").unwrap();
-        app.run_dialog().unwrap();
+        app.run("solve.frequency", json!({})).unwrap();
+        app.run("results.deformed", json!({"step": "Modes"})).unwrap();
         let view = app.session.results_view.clone().unwrap();
         assert_eq!((view.step.as_str(), view.mode, view.contour), ("Modes", 1, Some(modelcraft_engine::results::Field::Displacement)));
         // The plot draws contour bands: more triangles than the model's faces.
@@ -783,7 +788,7 @@ mod tests {
     #[test]
     fn probing_a_node_reads_its_values_and_stale_results_say_so() {
         let mut app = solved_app();
-        app.show_result("Load").unwrap();
+        app.run("results.deformed", json!({"step": "Load"})).unwrap();
         let tip = node_at(&app, [100.0, 0.0, 0.0]);
         app.probe_node(tip).unwrap();
         let probe = app.probe.clone().unwrap();
@@ -810,7 +815,7 @@ mod tests {
     #[test]
     fn the_capture_shows_the_legend_and_panel_over_the_plot() {
         let mut app = solved_app();
-        app.show_result("Load").unwrap();
+        app.run("results.deformed", json!({"step": "Load"})).unwrap();
         let image = app.capture(capture::CaptureSize { width: 1200.0, height: 800.0, scale: 1.0 }).unwrap();
         let t = theme::Tokens::dark();
         // The legend's top swatch (the highest band, red) is drawn left of the middle.
@@ -826,10 +831,11 @@ mod tests {
 
     #[test]
     fn display_tolerance_follows_the_size() {
-        assert_eq!(display_tolerance([0.0; 3], [100.0, 0.0, 0.0]), 0.1);
-        assert_eq!(display_tolerance([0.0; 3], [0.0; 3]), 1e-3);
-        assert_eq!(display_tolerance([0.0; 3], [1e9, 0.0, 0.0]), 1.0);
-        assert_eq!(display_tolerance([f64::NAN; 3], [0.0; 3]), 0.1);
+        let b = |max: [f64; 3]| Aabb3 { min: Vec3::ZERO, max: max.into() };
+        assert_eq!(display_tolerance(&b([100.0, 0.0, 0.0])), 0.1);
+        assert_eq!(display_tolerance(&b([0.0; 3])), 1e-3);
+        assert_eq!(display_tolerance(&b([1e9, 0.0, 0.0])), 1.0);
+        assert_eq!(display_tolerance(&Aabb3::EMPTY), 1e-3);
     }
 
     #[test]

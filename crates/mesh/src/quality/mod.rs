@@ -28,7 +28,7 @@ use modelcraft_model::{ElementKind, check_coordinates};
 pub use jacobian::{JacobianCheck, Validity};
 pub use report::{GateOptions, GateReport, MetricStats, QualityReport, enclosed_volume, quality_report, validity_gate, validity_gate_elements};
 
-use crate::predicates::{Point3, Sign, tet_volume_sign};
+use crate::predicates::{Point2, Point3, Sign, orient2d, snap_to_domain, tet_volume_sign};
 use crate::{Error, Result};
 
 /// A quality metric. Angles are in degrees.
@@ -60,6 +60,9 @@ pub enum Metric {
     MinAngle,
     /// Largest corner angle of a triangle or quadrilateral.
     MaxAngle,
+    /// Skew of a quadrilateral: `|cos θ|` of the angle between its principal axes, in `[0, 1]`;
+    /// 0 for a rectangle, 1 when degenerate.
+    Skew,
 }
 
 impl Metric {
@@ -76,19 +79,20 @@ impl Metric {
             Metric::EdgeRatio => "edge_ratio",
             Metric::MinAngle => "min_angle",
             Metric::MaxAngle => "max_angle",
+            Metric::Skew => "skew",
         }
     }
 
     /// Whether a larger value is a better element.
     pub fn higher_is_better(self) -> bool {
-        !matches!(self, Metric::MaxDihedral | Metric::AspectRatio | Metric::EdgeRatio | Metric::MaxAngle)
+        !matches!(self, Metric::MaxDihedral | Metric::AspectRatio | Metric::EdgeRatio | Metric::MaxAngle | Metric::Skew)
     }
 
     /// The fixed histogram range; values outside it fall in the first or last bin.
     pub fn range(self) -> (f64, f64) {
         match self {
             Metric::ScaledJacobian | Metric::JacobianRatio | Metric::RadiusRatio | Metric::VolumeLength => (-1.0, 1.0),
-            Metric::Shape => (0.0, 1.0),
+            Metric::Shape | Metric::Skew => (0.0, 1.0),
             Metric::MinDihedral | Metric::MaxDihedral | Metric::MinAngle | Metric::MaxAngle => (0.0, 180.0),
             Metric::AspectRatio | Metric::EdgeRatio => (1.0, 11.0),
         }
@@ -216,6 +220,67 @@ pub fn element_quality(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<ElementQua
     }
     metrics.push((Metric::JacobianRatio, check.ratio));
     Ok(ElementQuality { kind, size: check.volume, jacobian: Some(check), metrics })
+}
+
+/// The exact validity of a planar bilinear quadrilateral with corners `p` in counterclockwise
+/// order. Its Jacobian determinant is affine in each reference coordinate (the `ξη` term of a
+/// planar bilinear map cancels), so it is positive on the whole element exactly when it is
+/// positive at the four corners, i.e. when every corner turns left: `orient2d(p[i-1], p[i],
+/// p[i+1]) > 0`, decided by the exact predicate. A zero corner (degenerate) or a negative one
+/// (concave, bow-tie or clockwise) is [`Validity::Invalid`]. Coordinates below the predicates'
+/// smallest magnitude are rounded to zero first.
+pub fn planar_quad_validity(p: &[[f64; 2]; 4]) -> Result<Validity> {
+    check_coordinates(p.as_flattened())?;
+    let q = p.map(|c| Point2::new(snap_to_domain(c[0]), snap_to_domain(c[1])));
+    let mut pts = Vec::with_capacity(4);
+    for c in q {
+        pts.push(c?);
+    }
+    let ok = (0..4).all(|i| match (pts.get((i + 3) % 4), pts.get(i), pts.get((i + 1) % 4)) {
+        (Some(a), Some(b), Some(c)) => orient2d(a, b, c) == Sign::Positive,
+        _ => false,
+    });
+    Ok(if ok { Validity::Valid } else { Validity::Invalid })
+}
+
+/// Every metric of a planar quadrilateral (counterclockwise corners in the xy plane) with its
+/// exact validity ([`planar_quad_validity`]): the Jacobian ratio is the smallest corner
+/// determinant over the largest magnitude (exact bounds, see there) and the size is the signed
+/// area. The shape metrics are those of [`element_quality`] for a `Quad4`.
+pub fn planar_quad_quality(p: &[[f64; 2]; 4]) -> Result<ElementQuality> {
+    let validity = planar_quad_validity(p)?;
+    let o = p[0];
+    let l = p.map(|c| [c[0] - o[0], c[1] - o[1]]);
+    let corner = |i: usize| {
+        let (a, b, c) = (l[(i + 3) % 4], l[i], l[(i + 1) % 4]);
+        (c[0] - b[0]) * (a[1] - b[1]) - (c[1] - b[1]) * (a[0] - b[0])
+    };
+    let dets = [0, 1, 2, 3].map(corner);
+    let lo = dets.iter().fold(f64::INFINITY, |m, &d| m.min(d));
+    let hi = dets.iter().fold(0.0_f64, |m, &d| m.max(d.abs()));
+    let ratio = if hi > 0.0 { (lo / hi).clamp(-1.0, 1.0) } else { 0.0 };
+    let area = 0.5 * ((l[2][0] - l[0][0]) * (l[3][1] - l[1][1]) - (l[2][1] - l[0][1]) * (l[3][0] - l[1][0]));
+    let lifted = l.map(|c| [c[0], c[1], 0.0]);
+    let (_, mut metrics) = shape::quad(lifted);
+    // Corner scaled Jacobians measured against +z (the 3D form measures against the diagonals'
+    // normal, which flips with a clockwise quad).
+    let scaled = [0, 1, 2, 3]
+        .map(|i| {
+            let (a, b, c) = (l[(i + 3) % 4], l[i], l[(i + 1) % 4]);
+            let (u, v) = ([c[0] - b[0], c[1] - b[1]], [a[0] - b[0], a[1] - b[1]]);
+            let den = (u[0] * u[0] + u[1] * u[1]).sqrt() * (v[0] * v[0] + v[1] * v[1]).sqrt();
+            let r = corner(i) / den;
+            if den > 0.0 && r.is_finite() { r } else { 0.0 }
+        })
+        .iter()
+        .fold(f64::INFINITY, |m, &x| m.min(x));
+    for (m, v) in metrics.iter_mut() {
+        if *m == Metric::ScaledJacobian {
+            *v = scaled;
+        }
+    }
+    metrics.push((Metric::JacobianRatio, ratio));
+    Ok(ElementQuality { kind: ElementKind::Quad4, size: area, jacobian: Some(JacobianCheck { validity, ratio, volume: area }), metrics })
 }
 
 #[cfg(test)]

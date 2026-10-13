@@ -8,7 +8,9 @@
 #![forbid(unsafe_code)]
 
 pub mod delaunay;
+pub mod quad;
 pub mod quality;
+pub mod size;
 pub mod surface;
 mod vec3;
 

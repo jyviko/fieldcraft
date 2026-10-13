@@ -117,6 +117,13 @@ pub fn is_admissible(x: f64) -> bool {
     x == 0.0 || (x.abs() >= MIN_MAGNITUDE && x.abs() <= MAX_MAGNITUDE)
 }
 
+/// `x` with a magnitude below [`MIN_MAGNITUDE`] rounded to zero (tessellation and construction
+/// noise); other values unchanged. The result is admissible when `|x| <= MAX_MAGNITUDE`.
+#[inline]
+pub fn snap_to_domain(x: f64) -> f64 {
+    if x.abs() < MIN_MAGNITUDE { 0.0 } else { x }
+}
+
 fn check<const N: usize>(c: [f64; N]) -> Result<[f64; N]> {
     match c.iter().find(|x| !is_admissible(**x)) {
         None => Ok(c),

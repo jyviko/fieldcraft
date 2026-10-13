@@ -6,6 +6,10 @@
 //! - Hexahedra, wedges and quadrilaterals: Knupp's algebraic metrics built on the corner Jacobian
 //!   matrices (Knupp, *Algebraic mesh quality metrics*, SIAM J. Sci. Comput. 23(1), 2001): the
 //!   scaled Jacobian `det(A) / (|a1| |a2| |a3|)` and the shape metric `3 det(A)^{2/3} / |A|²_F`.
+//! - Quadrilateral aspect ratio and skew from the principal axes `X1 = (p1 − p0) + (p2 − p3)`,
+//!   `X2 = (p2 − p1) + (p3 − p0)` (Robinson, *CRE method of element testing and the Jacobian
+//!   shape parameters*, Eng. Comput. 4(2):113–118, 1987): aspect `max(|X1|, |X2|) / min(…)`, skew
+//!   `|X1 · X2| / (|X1| |X2|)`.
 //!
 //! Every metric is defined for degenerate input (no division by zero, no NaN): a degenerate
 //! element scores 0 on bounded metrics and `+∞` on aspect and edge ratios.
@@ -132,6 +136,7 @@ pub(crate) fn quad(p: [P; 4]) -> (f64, Vec<(Metric, f64)>) {
         angles = (angles.0.min(a), angles.1.max(a));
     }
     let edges = [(0, 1), (1, 2), (2, 3), (3, 0)];
+    let (aspect, skew) = quad_axes(p);
     (
         area,
         vec![
@@ -139,8 +144,21 @@ pub(crate) fn quad(p: [P; 4]) -> (f64, Vec<(Metric, f64)>) {
             (Metric::MinAngle, angles.0),
             (Metric::MaxAngle, angles.1),
             (Metric::EdgeRatio, edge_ratio(&p, &edges)),
+            (Metric::AspectRatio, aspect),
+            (Metric::Skew, skew),
         ],
     )
+}
+
+/// Robinson's aspect ratio and skew of a quadrilateral from its principal axes; `(+∞, 1)` when
+/// an axis vanishes.
+pub(crate) fn quad_axes(p: [P; 4]) -> (f64, f64) {
+    let x1 = [p[1][0] - p[0][0] + p[2][0] - p[3][0], p[1][1] - p[0][1] + p[2][1] - p[3][1], p[1][2] - p[0][2] + p[2][2] - p[3][2]];
+    let x2 = [p[2][0] - p[1][0] + p[3][0] - p[0][0], p[2][1] - p[1][1] + p[3][1] - p[0][1], p[2][2] - p[1][2] + p[3][2] - p[0][2]];
+    let (l1, l2) = (norm(x1), norm(x2));
+    let aspect = ratio(l1.max(l2), l1.min(l2), f64::INFINITY).max(1.0);
+    let skew = ratio(dot(x1, x2).abs(), l1 * l2, 1.0).min(1.0);
+    (aspect, skew)
 }
 
 /// Wedge scaled Jacobian: the smallest determinant of the three unit edge vectors at a corner,

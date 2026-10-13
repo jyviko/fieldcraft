@@ -61,7 +61,7 @@ mod verify;
 #[cfg(test)]
 mod tests;
 
-use crate::predicates::{Point2, Point3, Sign, insphere_sos, orient2d, orient3d};
+use crate::predicates::{Axis, GenericPoint, Point3, Sign, generic_orient2d, insphere_sos, orient3d, tet_volume_sign};
 use crate::{Error, Result};
 
 /// The infinite vertex of the ghost tetrahedra that close the convex hull.
@@ -146,33 +146,22 @@ fn corrupt(what: &str) -> Error {
     Error::Failed(format!("Delaunay triangulation is inconsistent: {what}"))
 }
 
-/// The sign of the volume `det[b − a, c − a, d − a]` (Shewchuk's `orient3d` has the opposite
-/// sign).
+/// The sign of the volume `det[b − a, c − a, d − a]` (the tet4 convention).
 #[inline]
 fn volume_sign(p: [&Point3; 4]) -> Sign {
     let [a, b, c, d] = p;
-    -orient3d(a, b, c, d)
+    tet_volume_sign(a, b, c, d)
 }
 
+/// Whether three points are collinear: all three axis projections are (exactly).
 fn collinear(a: &Point3, b: &Point3, c: &Point3) -> bool {
-    let project = |p: &Point3, i: usize, j: usize| {
-        let q = p.coords();
-        // Projections of admissible points are admissible.
-        Point2::new(q.get(i).copied().unwrap_or(0.0), q.get(j).copied().unwrap_or(0.0))
-    };
-    [(0, 1), (1, 2), (2, 0)].iter().all(|&(i, j)| match (project(a, i, j), project(b, i, j), project(c, i, j)) {
-        (Ok(a), Ok(b), Ok(c)) => orient2d(&a, &b, &c).is_zero(),
-        _ => false,
-    })
+    let [a, b, c] = [a, b, c].map(|p| GenericPoint::from(*p));
+    [Axis::X, Axis::Y, Axis::Z].into_iter().all(|axis| generic_orient2d(&a, &b, &c, axis).is_zero())
 }
 
-/// The point coordinates as [`Point3`]s, with `-0.0` made `+0.0` so equal points have equal bits.
-fn admit(coords: &[[f64; 3]]) -> Result<Vec<Point3>> {
-    coords
-        .iter()
-        .enumerate()
-        .map(|(i, &[x, y, z])| Point3::new(x + 0.0, y + 0.0, z + 0.0).map_err(|e| Error::Invalid(format!("point {i}: {e}"))))
-        .collect()
+/// A coordinate triple as a [`Point3`], with `-0.0` made `+0.0` so equal points have equal bits.
+fn admit([x, y, z]: [f64; 3]) -> Result<Point3> {
+    Point3::new(x + 0.0, y + 0.0, z + 0.0)
 }
 
 impl Triangulation {
@@ -201,7 +190,8 @@ impl Triangulation {
             return Err(Error::Limit(format!("{} points; a triangulation takes at most {MAX_POINTS}", points.len())));
         }
         let mut tri = Self::empty();
-        tri.points = admit(points)?;
+        tri.points =
+            points.iter().enumerate().map(|(i, &c)| admit(c).map_err(|e| Error::Invalid(format!("point {i}: {e}")))).collect::<Result<_>>()?;
         let n = tri.points.len();
         tri.duplicate_of = vec![NONE; n];
         tri.vertex_tet = vec![NONE; n];
@@ -211,15 +201,13 @@ impl Triangulation {
         let key = |v: u32| tri.points.get(v as usize).map(|p| p.coords().map(f64::to_bits)).unwrap_or_default();
         // Equal values have equal bits after `admit`; the bit order is total and deterministic.
         by_coords.sort_unstable_by_key(|&v| (key(v), v));
-        let mut first = NONE;
-        for w in 0..by_coords.len() {
-            let v = by_coords.get(w).copied().unwrap_or(NONE);
-            if w > 0 && first != NONE && key(v) == key(first) {
-                if let Some(d) = tri.duplicate_of.get_mut(v as usize) {
-                    *d = first;
+        for run in by_coords.chunk_by(|&a, &b| key(a) == key(b)) {
+            if let [keep, rest @ ..] = run {
+                for &v in rest {
+                    if let Some(d) = tri.duplicate_of.get_mut(v as usize) {
+                        *d = *keep;
+                    }
                 }
-            } else {
-                first = v;
             }
         }
         let unique: Vec<u32> = (0..n as u32).filter(|&v| tri.duplicate_of.get(v as usize) == Some(&NONE)).collect();
@@ -229,7 +217,7 @@ impl Triangulation {
         tri.adj.reserve(expected);
         tri.mark.reserve(expected);
         for v in order::brio_hilbert(&tri.points, &unique) {
-            tri.add(v)?;
+            tri.add(v, true)?;
         }
         Ok(tri)
     }
@@ -240,24 +228,11 @@ impl Triangulation {
         if self.points.len() >= MAX_POINTS {
             return Err(Error::Limit(format!("a triangulation takes at most {MAX_POINTS} points")));
         }
-        let point = admit(&[p])?.into_iter().next().ok_or_else(|| corrupt("point"))?;
-        if self.tets.is_empty() {
-            // Below 3D: compare with the (few or degenerate) vertices directly.
-            if let Some(&u) = self.basis.iter().chain(&self.pending).find(|&&u| self.points.get(u as usize) == Some(&point)) {
-                self.push_point(point, u);
-                return Ok(Insertion::Duplicate(u));
-            }
-        }
-        let v = self.push_point(point, NONE);
-        self.add(v)
-    }
-
-    fn push_point(&mut self, p: Point3, duplicate_of: u32) -> u32 {
         let v = self.points.len() as u32;
-        self.points.push(p);
-        self.duplicate_of.push(duplicate_of);
+        self.points.push(admit(p)?);
+        self.duplicate_of.push(NONE);
         self.vertex_tet.push(NONE);
-        v
+        self.add(v, false)
     }
 
     /// The points, by vertex id (including duplicates).
@@ -318,7 +293,7 @@ impl Triangulation {
         if self.tets.is_empty() {
             return Ok(None);
         }
-        let point = admit(&[p])?.into_iter().next().ok_or_else(|| corrupt("point"))?;
+        let point = admit(p)?;
         let mut rng = self.rng;
         self.walk(&point, self.hint, &mut rng).map(Some)
     }
@@ -353,12 +328,20 @@ impl Triangulation {
         Ok(out)
     }
 
-    /// Add vertex `v` (already in `points`, not a known duplicate).
-    fn add(&mut self, v: u32) -> Result<Insertion> {
+    /// Add vertex `v` (already in `points`). A duplicate is detected and recorded: in 3D by the
+    /// walk, below 3D by comparing with the vertices so far unless the caller knows `v` is
+    /// `unique` (the sort-based merge of [`Triangulation::new`]).
+    fn add(&mut self, v: u32, unique: bool) -> Result<Insertion> {
         if !self.tets.is_empty() {
             return self.insert_vertex(v);
         }
         let p = *self.pt(v)?;
+        if !unique && let Some(&u) = self.basis.iter().chain(&self.pending).find(|&&u| self.points.get(u as usize) == Some(&p)) {
+            if let Some(d) = self.duplicate_of.get_mut(v as usize) {
+                *d = u;
+            }
+            return Ok(Insertion::Duplicate(u));
+        }
         match self.basis.as_slice() {
             [] | [_] => self.basis.push(v),
             &[a, b] => {
@@ -397,12 +380,7 @@ impl Triangulation {
         for vs in all {
             let t = self.alloc(vs)?;
             for k in 0..4 {
-                let mut f = [0; 3];
-                for (o, &v) in f.iter_mut().zip(vs.iter().enumerate().filter(|&(i, _)| i != k).map(|(_, v)| v)) {
-                    *o = v;
-                }
-                f.sort_unstable();
-                faces.push((f, t, k));
+                faces.push((verify::face(vs, k), t, k));
             }
             self.hint = t;
         }
@@ -457,7 +435,8 @@ impl Triangulation {
         Ok(())
     }
 
-    /// Whether `p`'s (perturbed) circumsphere test puts it in conflict with tetrahedron `t`.
+    /// Whether `p` is in conflict with tetrahedron `t` (inside its perturbed circumsphere). Only
+    /// `dig` calls it: it reads the current cavity marks.
     fn conflict(&self, t: u32, p: &Point3) -> Result<bool> {
         let vs = self.tet_at(t)?;
         let Some(g) = vs.iter().position(|&v| v == GHOST) else {
@@ -471,6 +450,12 @@ impl Triangulation {
             // On the hull face's plane: the finite tetrahedron across that face decides.
             Sign::Zero => {
                 let o = self.adj_at(t)?.get(g).copied().ok_or_else(|| corrupt("slot"))?;
+                // During `dig` the finite tetrahedron may already be decided.
+                match self.mark_of(o) {
+                    m if m == self.epoch => return Ok(true),
+                    m if m == self.epoch + 1 => return Ok(false),
+                    _ => {}
+                }
                 let ws = self.tet_at(o)?;
                 if ws.contains(&GHOST) {
                     return Err(corrupt("two ghost tetrahedra share a hull face"));
@@ -495,6 +480,7 @@ impl Triangulation {
                 return Ok(Location::Outside(t));
             }
             let adj = self.adj_at(t)?;
+            let ps = self.pts(vs)?;
             // xorshift64 (Marsaglia 2003): which face to try first.
             *rng ^= *rng << 13;
             *rng ^= *rng >> 7;
@@ -507,23 +493,32 @@ impl Triangulation {
                 if n == prev {
                     continue;
                 }
-                if volume_sign(self.with_point(vs, k, p)?) == Sign::Negative {
+                let mut q = ps;
+                if let Some(slot) = q.get_mut(k) {
+                    *slot = p;
+                }
+                if volume_sign(q) == Sign::Negative {
                     next = n;
                     break;
                 }
             }
             if next == NONE {
-                for v in vs {
-                    if self.pt(v)? == p {
-                        return Ok(Location::Vertex(v));
-                    }
-                }
-                return Ok(Location::Inside(t));
+                return self.inside(vs, t, p);
             }
             prev = t;
             t = next;
         }
         self.locate_by_scan(p)
+    }
+
+    /// `p` lies in the closed finite tetrahedron `t`: one of its vertices, or inside.
+    fn inside(&self, vs: [u32; 4], t: u32, p: &Point3) -> Result<Location> {
+        for v in vs {
+            if self.pt(v)? == p {
+                return Ok(Location::Vertex(v));
+            }
+        }
+        Ok(Location::Inside(t))
     }
 
     /// Point location by testing every tetrahedron (the walk's fallback).
@@ -542,15 +537,13 @@ impl Triangulation {
                 None => {
                     let mut inside = true;
                     for k in 0..4 {
-                        inside &= volume_sign(self.with_point(vs, k, p)?) != Sign::Negative;
+                        if volume_sign(self.with_point(vs, k, p)?) == Sign::Negative {
+                            inside = false;
+                            break;
+                        }
                     }
                     if inside {
-                        for v in vs {
-                            if self.pt(v)? == p {
-                                return Ok(Location::Vertex(v));
-                            }
-                        }
-                        return Ok(Location::Inside(t as u32));
+                        return self.inside(vs, t as u32, p);
                     }
                 }
             }
@@ -644,7 +637,8 @@ impl Triangulation {
         // Each edge of the cavity boundary is shared by exactly two boundary faces; their new
         // tetrahedra meet across the face spanned by that edge and `v`. Pair them through a
         // small open-addressing table keyed by the edge (lookups only, so no order leaks out).
-        let size = (s.new_tets.len() * 4).next_power_of_two().max(16);
+        // 1.5 edges per new tetrahedron: at most 75% load.
+        let size = (s.new_tets.len() * 2).next_power_of_two().max(16);
         s.edges.clear();
         s.edges.resize(size, (EMPTY_EDGE, NONE, 0));
         let mask = size - 1;

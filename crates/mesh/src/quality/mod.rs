@@ -21,14 +21,14 @@
 mod bernstein;
 pub mod jacobian;
 mod report;
-mod shape;
+pub(crate) mod shape;
 
 use modelcraft_model::{ElementKind, check_coordinates};
 
 pub use jacobian::{JacobianCheck, Validity};
 pub use report::{GateOptions, GateReport, MetricStats, QualityReport, enclosed_volume, quality_report, validity_gate, validity_gate_elements};
 
-use crate::predicates::{Point3, Sign, orient3d};
+use crate::predicates::{Point3, Sign, tet_volume_sign};
 use crate::{Error, Result};
 
 /// A quality metric. Angles are in degrees.
@@ -164,13 +164,7 @@ fn checked(kind: ElementKind, xyz: &[[f64; 3]], p: &[[f64; 3]]) -> Result<(Optio
 /// right-hand normal), or `None` when a coordinate is outside the predicates' domain.
 fn exact_tet_sign(xyz: &[[f64; 3]]) -> Option<Sign> {
     let p = |i: usize| xyz.get(i).and_then(|c| Point3::try_from(*c).ok());
-    // orient3d(a, b, c, d) is positive when d lies below the plane of a, b, c seen
-    // counterclockwise, i.e. opposite to our convention.
-    Some(match orient3d(&p(0)?, &p(1)?, &p(2)?, &p(3)?) {
-        Sign::Positive => Sign::Negative,
-        Sign::Negative => Sign::Positive,
-        Sign::Zero => Sign::Zero,
-    })
+    Some(tet_volume_sign(&p(0)?, &p(1)?, &p(2)?, &p(3)?))
 }
 
 /// The certified Jacobian check and exact volume of a solid element (tet4, tet10, wedge6, hex8,

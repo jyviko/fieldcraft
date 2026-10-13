@@ -1,7 +1,7 @@
 use modelcraft_model::ElementKind;
 
 use super::*;
-use crate::quality::{GateOptions, validity_gate_elements};
+use crate::quality::{GateOptions, enclosed_volume, validity_gate_elements};
 
 struct Rng(u64);
 
@@ -59,6 +59,23 @@ fn gate(tri: &Triangulation, expected: f64) -> f64 {
     report.into_result().unwrap().volume
 }
 
+/// The volume enclosed by the hull faces, outward oriented, through the quality module.
+fn hull_volume(tri: &Triangulation) -> f64 {
+    let points: Vec<[f64; 3]> = tri.points().iter().map(Point3::coords).collect();
+    let mut triangles = Vec::new();
+    for t in 0..tri.slots() as u32 {
+        let Some(vs) = tri.tet(t) else { continue };
+        let Some(g) = vs.iter().position(|&v| v == GHOST) else { continue };
+        // Moving the ghost's slot to the end takes 3 - g transpositions.
+        let mut f: Vec<usize> = vs.iter().filter(|&&v| v != GHOST).map(|&v| v as usize).collect();
+        if (3 - g) % 2 == 1 {
+            f.swap(0, 1);
+        }
+        triangles.push([f[0], f[1], f[2]]);
+    }
+    enclosed_volume(&points, &triangles).unwrap()
+}
+
 /// Full check: invariants, brute-force empty spheres, the tet4 validity gate.
 fn check(tri: &Triangulation, hull_volume: f64) {
     tri.verify().unwrap();
@@ -110,9 +127,8 @@ fn random_points_are_delaunay_and_valid() {
     let tri = Triangulation::new(&points).unwrap();
     tri.verify().unwrap();
     tri.verify_empty_spheres().unwrap();
-    // The hull volume, independently: the gate's volume equals the one the hull faces enclose
-    // (checked by verify); here it is below the unit cube and close to it.
-    let vol: f64 = tri.finite_tets().map(|(_, vs)| verify::volume(tri.pts(vs).unwrap())).sum();
+    // The tetrahedra fill the volume the hull faces (the ghosts' finite faces) enclose.
+    let vol = hull_volume(&tri);
     assert!(vol > 0.9 && vol < 1.0, "{vol}");
     gate(&tri, vol);
 }
@@ -168,6 +184,7 @@ fn deterministic_bit_for_bit() {
 fn grids_are_cospherical_everywhere() {
     let tri = Triangulation::new(&grid(7, 6, 5)).unwrap();
     check(&tri, 6.0 * 5.0 * 4.0);
+    assert_eq!(hull_volume(&tri), 120.0);
     // A rotated-in-place grid with non-integer spacing.
     let skew: Vec<[f64; 3]> = grid(6, 6, 6).into_iter().map(|[x, y, z]| [0.1 * x, 0.3 * y + 1e3, 0.7 * z - 5.0]).collect();
     let tri = Triangulation::new(&skew).unwrap();

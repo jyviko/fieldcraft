@@ -104,6 +104,13 @@ impl std::ops::Mul for Sign {
     }
 }
 
+/// The sign of the volume `det[b − a, c − a, d − a]`: positive when `d` lies on the side of
+/// face `a, b, c`'s right-hand normal (the tet4 node order). It is [`orient3d`] negated.
+#[inline]
+pub fn tet_volume_sign(a: &Point3, b: &Point3, c: &Point3, d: &Point3) -> Sign {
+    -orient3d(a, b, c, d)
+}
+
 /// Whether `x` may be a point coordinate (see the module docs).
 #[inline]
 pub fn is_admissible(x: f64) -> bool {

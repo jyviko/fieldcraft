@@ -3,7 +3,7 @@ use modelcraft_mesh::quality::{self, QualityReport};
 use modelcraft_model::{ElementKind, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
-use super::{label, labels, xyz};
+use super::{label, labels, points, xyz};
 use crate::{CommandSpec, EngineError, Result, Session};
 
 pub const NODE_ADD: CommandSpec = CommandSpec {
@@ -44,9 +44,7 @@ pub const DELAUNAY_POINTS: CommandSpec = CommandSpec {
 const DELAUNAY_MAX_POINTS: usize = 20_000;
 
 fn delaunay_points(_: &mut Session, p: &Value) -> Result<Value> {
-    let bad = || EngineError::Params(format!("`points` must be a list of at most {DELAUNAY_MAX_POINTS} [x, y, z]"));
-    let raw = p.get("points").and_then(Value::as_array).filter(|a| a.len() <= DELAUNAY_MAX_POINTS).ok_or_else(bad)?;
-    let points = raw.iter().map(|v| xyz(&json!({ "p": v }), "p")).collect::<Result<Vec<[f64; 3]>>>().map_err(|_| bad())?;
+    let points = points(p, "points", DELAUNAY_MAX_POINTS)?;
     let tri = Triangulation::new(&points)?;
     tri.verify()?;
     let duplicates: Vec<[u32; 2]> = (0..points.len() as u32).filter_map(|v| tri.duplicate_of(v).map(|d| [v, d])).collect();

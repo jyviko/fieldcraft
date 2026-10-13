@@ -1,8 +1,9 @@
 //! Independent checks of a triangulation: they re-derive every property from the arrays with
-//! the exact predicates and share no code with the insertion.
+//! the exact predicates; nothing here relies on how the insertion built them.
 
 use super::{DEAD, GHOST, NONE, Triangulation, volume_sign};
 use crate::predicates::{Point3, Sign, insphere, insphere_sos};
+use crate::quality::shape::{det, sub};
 use crate::{Error, Result};
 
 fn failed<T>(what: String) -> Result<T> {
@@ -12,14 +13,22 @@ fn failed<T>(what: String) -> Result<T> {
 /// `det[b − a, c − a, d − a] / 6` in floating point (a measure for the volume balance only).
 pub(super) fn volume(p: [&Point3; 4]) -> f64 {
     let [a, b, c, d] = p.map(Point3::coords);
-    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    let w = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
-    (u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0]) + u[2] * (v[0] * w[1] - v[1] * w[0])) / 6.0
+    det(sub(b, a), sub(c, a), sub(d, a)) / 6.0
+}
+
+/// Whether `e` is outside the circumsphere of the positive-volume tetrahedron `[a, b, c, d]`:
+/// never inside exactly, and outside with the perturbation.
+fn outside_sphere([a, b, c, d]: [&Point3; 4], e: &Point3) -> bool {
+    // `insphere` wants Shewchuk-positive orientation: swap the first two vertices.
+    match insphere(b, a, c, d, e) {
+        Sign::Positive => false,
+        Sign::Negative => true,
+        Sign::Zero => insphere_sos(b, a, c, d, e) == Sign::Negative,
+    }
 }
 
 /// The face of `vs` opposite slot `k`, sorted.
-fn face(vs: [u32; 4], k: usize) -> [u32; 3] {
+pub(super) fn face(vs: [u32; 4], k: usize) -> [u32; 3] {
     let mut f = [NONE; 3];
     for (o, (_, &v)) in f.iter_mut().zip(vs.iter().enumerate().filter(|&(i, _)| i != k)) {
         *o = v;
@@ -36,6 +45,10 @@ impl Triangulation {
         }
     }
 
+    fn points_of(&self, [a, b, c, d]: [u32; 4]) -> Result<[&Point3; 4]> {
+        Ok([self.point_of(a)?, self.point_of(b)?, self.point_of(c)?, self.point_of(d)?])
+    }
+
     fn points_with<'a>(&'a self, vs: [u32; 4], k: usize, p: &'a Point3) -> Result<[&'a Point3; 4]> {
         let mut out = [p; 4];
         for (i, o) in out.iter_mut().enumerate() {
@@ -50,9 +63,8 @@ impl Triangulation {
     fn across(&self, t: u32, o: u32) -> Result<([u32; 4], usize)> {
         let Some(ws) = self.tet(o) else { return failed(format!("tetrahedron {t} has a deleted neighbour {o}")) };
         let adj = self.adj.get(o as usize).copied().unwrap_or([NONE; 4]);
-        let back: Vec<usize> = (0..4).filter(|&k| adj.get(k) == Some(&t)).collect();
-        match back.as_slice() {
-            [k] => Ok((ws, *k)),
+        match (adj.iter().position(|&n| n == t), adj.iter().rposition(|&n| n == t)) {
+            (Some(k), Some(l)) if k == l => Ok((ws, k)),
             _ => failed(format!("tetrahedra {t} and {o} are not mutual neighbours exactly once")),
         }
     }
@@ -60,8 +72,9 @@ impl Triangulation {
     /// Check the triangulation: adjacency is mutual and matches shared faces, every finite
     /// tetrahedron has positive volume, the hull is convex, every interior face is locally
     /// Delaunay (the opposite vertex is not inside the circumsphere, exactly, and is outside
-    /// with the perturbation), every vertex is in a tetrahedron, and the finite volume equals the
-    /// volume the hull faces enclose. By Delaunay's lemma, local Delaunay faces in a
+    /// with the perturbation), and every vertex is in a tetrahedron. As a floating-point sanity
+    /// check against a hull covered twice, the finite volume must match the volume the hull faces
+    /// enclose to 1e-9. By Delaunay's lemma, local Delaunay faces in a
     /// triangulation of the hull make every circumsphere empty. `O(tetrahedra)`.
     pub fn verify(&self) -> Result<()> {
         let n = self.points.len();
@@ -89,7 +102,9 @@ impl Triangulation {
                     None => return failed(format!("tetrahedron {t} has vertex {v}, which does not exist")),
                 }
             }
-            for (j, &o) in adj.iter().enumerate() {
+            // Per face: the neighbour's vertices and the slot of the shared face in it.
+            let mut across = [([NONE; 4], 0); 4];
+            for (j, (&o, slot)) in adj.iter().zip(&mut across).enumerate() {
                 if o == t {
                     return failed(format!("tetrahedron {t} is its own neighbour"));
                 }
@@ -97,59 +112,44 @@ impl Triangulation {
                 if face(vs, j) != face(ws, k) {
                     return failed(format!("tetrahedra {t} and {o} are neighbours without sharing a face"));
                 }
+                *slot = (ws, k);
             }
+            let apex = |j: usize| across.get(j).and_then(|&(ws, k)| ws.get(k).copied()).unwrap_or(NONE);
             match vs.iter().position(|&v| v == GHOST) {
                 None => {
-                    let p = self.points_with(vs, 4, self.point_of(vs[0])?)?;
+                    let p = self.points_of(vs)?;
                     if volume_sign(p) != Sign::Positive {
                         return failed(format!("tetrahedron {t} is flat or inverted"));
                     }
                     let vol = volume(p);
                     finite_volume += vol;
                     scale += vol.abs();
-                    let [a, b, c, d] = p;
+                    // The test is symmetric in the two tetrahedra: check each face once.
                     for (j, &o) in adj.iter().enumerate() {
-                        let (ws, k) = self.across(t, o)?;
-                        let apex = ws.get(k).copied().unwrap_or(NONE);
-                        if apex == GHOST {
-                            continue;
-                        }
-                        let e = self.point_of(apex)?;
-                        if insphere(b, a, c, d, e) == Sign::Positive {
-                            return failed(format!("vertex {apex} is inside the circumsphere of tetrahedron {t} (face {j})"));
-                        }
-                        if insphere_sos(b, a, c, d, e) != Sign::Negative {
-                            return failed(format!("vertex {apex} is inside the perturbed circumsphere of tetrahedron {t}"));
+                        let u = apex(j);
+                        if u != GHOST && t < o && !outside_sphere(p, self.point_of(u)?) {
+                            return failed(format!("vertex {u} is inside the circumsphere of tetrahedron {t}"));
                         }
                     }
                 }
                 Some(g) => {
-                    if vs.iter().filter(|&&v| v == GHOST).count() != 1 {
-                        return failed(format!("tetrahedron {t} has more than one ghost vertex"));
-                    }
-                    let finite = adj.get(g).copied().unwrap_or(NONE);
-                    let (fs, fk) = self.across(t, finite)?;
+                    let fs = across.get(g).map(|&(ws, _)| ws).unwrap_or([NONE; 4]);
                     if fs.contains(&GHOST) {
                         return failed(format!("hull face of {t} borders another ghost"));
                     }
-                    let inner = self.point_of(fs.get(fk).copied().unwrap_or(NONE))?;
+                    let inner = self.point_of(apex(g))?;
                     if volume_sign(self.points_with(vs, g, inner)?) != Sign::Negative {
                         return failed(format!("ghost tetrahedron {t} faces into the hull"));
                     }
-                    for (j, &o) in adj.iter().enumerate() {
-                        if j == g {
-                            continue;
-                        }
-                        let (ws, k) = self.across(t, o)?;
-                        let apex = self.point_of(ws.get(k).copied().unwrap_or(NONE))?;
+                    for j in (0..4).filter(|&j| j != g) {
+                        let apex = self.point_of(apex(j))?;
                         match volume_sign(self.points_with(vs, g, apex)?) {
                             Sign::Positive => return failed(format!("the hull is not convex at ghost tetrahedron {t}")),
                             Sign::Negative => {}
                             Sign::Zero => {
                                 // Coplanar hull faces: the perturbed decision of the finite
                                 // tetrahedron under this face.
-                                let [a, b, c, d] = self.points_with(fs, 4, inner)?;
-                                if insphere_sos(b, a, c, d, apex) != Sign::Negative {
+                                if !outside_sphere(self.points_of(fs)?, apex) {
                                     return failed(format!("coplanar hull faces at ghost tetrahedron {t} are not perturbed-Delaunay"));
                                 }
                             }
@@ -196,8 +196,7 @@ impl Triangulation {
                 let e = self.point_of(u)?;
                 match vs.iter().position(|&v| v == GHOST) {
                     None => {
-                        let [a, b, c, d] = self.points_with(vs, 4, e)?;
-                        if insphere(b, a, c, d, e) == Sign::Positive || insphere_sos(b, a, c, d, e) != Sign::Negative {
+                        if !outside_sphere(self.points_of(vs)?, e) {
                             return failed(format!("vertex {u} is inside the circumsphere of tetrahedron {t}"));
                         }
                     }

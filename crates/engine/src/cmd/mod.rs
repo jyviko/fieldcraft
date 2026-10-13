@@ -33,13 +33,22 @@ pub(crate) fn label(p: &Value, key: &str) -> Result<u32> {
 
 /// A required `[x, y, z]` parameter.
 pub(crate) fn xyz(p: &Value, key: &str) -> Result<[f64; 3]> {
-    let bad = || EngineError::Params(format!("`{key}` must be [x, y, z]"));
-    let a = p.get(key).and_then(Value::as_array).filter(|a| a.len() == 3).ok_or_else(bad)?;
-    let mut out = [0.0; 3];
-    for (o, v) in out.iter_mut().zip(a) {
-        *o = v.as_f64().ok_or_else(bad)?;
+    p.get(key).and_then(xyz_value).ok_or_else(|| EngineError::Params(format!("`{key}` must be [x, y, z]")))
+}
+
+/// A JSON `[x, y, z]`.
+fn xyz_value(v: &Value) -> Option<[f64; 3]> {
+    match v.as_array()?.as_slice() {
+        [x, y, z] => Some([x.as_f64()?, y.as_f64()?, z.as_f64()?]),
+        _ => None,
     }
-    Ok(out)
+}
+
+/// A required list of `[x, y, z]` points, at most `max_len` long.
+pub(crate) fn points(p: &Value, key: &str, max_len: usize) -> Result<Vec<[f64; 3]>> {
+    let bad = |what: String| EngineError::Params(format!("`{key}` must be a list of at most {max_len} [x, y, z]{what}"));
+    let raw = p.get(key).and_then(Value::as_array).filter(|a| a.len() <= max_len).ok_or_else(|| bad(String::new()))?;
+    raw.iter().enumerate().map(|(i, v)| xyz_value(v).ok_or_else(|| bad(format!(" (entry {i} is not)")))).collect()
 }
 
 /// A required list of labels (each in 1..=MAX_LABEL), at most `max_len` long.

@@ -42,9 +42,7 @@ fn run(name: &str, points: &[[f64; 3]]) {
 fn delaunay_throughput() {
     let mut r = Rng(1);
     let random: Vec<[f64; 3]> = (0..1_000_000).map(|_| [r.unit(), r.unit(), r.unit()]).collect();
-    if std::env::var("BENCH_GRID_ONLY").is_err() {
-        run("random 1M", &random);
-    }
+    run("random 1M", &random);
 
     let n = 100;
     let grid: Vec<[f64; 3]> = (0..n * n * n).map(|i| [(i % n) as f64, ((i / n) % n) as f64, (i / (n * n)) as f64]).collect();

@@ -133,14 +133,19 @@ module docs; ADR 0001 records why the linear algebra is our own.
 
 1. **System.** `Model::resolve()`; each solid section's elements take their material's
    elasticity matrix and the section's formulation (`modelcraft_fem::element::ELEMENT_TYPES`, one
-   row per element kind: tet4, tet10, wedge6, hex8, hex20). Every reference point a coupling
+   row per element kind: tet4, tet10, wedge6, hex8, hex20); 2D sections (plane stress, plane
+   strain, axisymmetric) take the 2D table (`modelcraft_fem::plane::PLANE_TYPES`: tri3, tri6,
+   quad4, quad8), chosen by the section kind, and the model then has two degrees of freedom per
+   node: the 2D elements declare `ElementDofs::new(DofSet::PLANE)` (Ux, Uy) to the `DofLayout`. A 2D model
+   lies in the XY plane (axisymmetric: x the radius, Y the axis; nodes on the axis are held
+   radially), is loaded on element edges, and cannot mix with solids or couplings yet. Every reference point a coupling
    ties to the mesh gets six degrees of freedom (translations, rotations) after the mesh's. Shells
    and beams return "not supported yet". The step's boundary conditions prescribe translations
    (rotations do not exist on solid nodes) and a coupled point's six directions; its loads become
    a load vector: forces and tractions from `Resolved::nodal_loads`, forces and moments on coupled
    reference points, pressure as consistent face loads, gravity and body forces through the
    element shape functions.
-2. **Assembly** on the node graph (3 × 3 blocks, elements in label order, so sums are
+2. **Assembly** on the node graph (3 × 3 blocks for solids, 2 × 2 in 2D models, elements in label order, so sums are
    reproducible bit for bit).
 3. **Ordering and elimination** (`constraints`). Nested dissection of the nodes by coordinate
    bisection. Couplings become linear constraint rows: kinematic = rigid link of each coupled
@@ -167,6 +172,11 @@ Verification (`crates/solver/tests/verification.rs`, analytic only): displacemen
 patch tests for every element and formulation (exact to round-off), cantilever tip deflection
 against Timoshenko with convergence rates of the linear elements, Lamé's cylinder, Kirsch's
 plate with a hole (Kt → 3), cantilever and free–free beam frequencies with six rigid-body modes.
+`crates/solver/tests/plane.rs`: the 2D elements' displacement patch tests in plane stress, plane
+strain and axisymmetry, uniform traction, a plane stress cantilever against Timoshenko with
+convergence rates, Kirsch's plate, Lamé's cylinder in plane strain and axisymmetric, a rotating
+disc (plane stress) and a rotating cylinder (axisymmetric) against Timoshenko & Goodier, masses
+and rigid-body modes.
 `crates/solver/tests/couplings.rs`: a block given a rigid motion through a coupled point
 (kinematic and distributing), clamping through a coupled point equals clamping (static and
 modes), tension through a distributing coupling against the equivalent pressure away from the

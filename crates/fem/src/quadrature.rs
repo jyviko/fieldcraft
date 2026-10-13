@@ -11,6 +11,7 @@
 //!   weights only.
 //! - On the reference triangle {ξ, η ≥ 0, ξ + η ≤ 1}: the same collapsed product in two
 //!   dimensions (Jacobian 1 − u), exact for degree 2n − 2.
+//!   Also the centroid rule (degree 1) and the symmetric three-point rule (degree 2).
 //! - On the reference square [−1, 1]²: tensor Gauss–Legendre.
 //! - On the reference wedge (triangle × [−1, 1]): the symmetric three-point triangle rule
 //!   (points at area coordinates (⅔, ⅙, ⅙) and permutations, degree 2; Zienkiewicz, Taylor &
@@ -57,6 +58,11 @@ pub enum Rule {
     Quad(u8),
     /// The collapsed product on the reference triangle, n points per direction (z = 0).
     TriConical(u8),
+    /// The triangle's centroid, weight 1/2 (degree 1).
+    TriCentroid,
+    /// Three symmetric points on the triangle at area coordinates (⅔, ⅙, ⅙) and permutations,
+    /// weight 1/6 each (degree 2); point k sits near corner k.
+    Tri3,
     /// Three triangle points times two Gauss points in ζ on the reference wedge: point k of each
     /// layer sits near corner k, the lower layer first.
     Wedge,
@@ -108,6 +114,11 @@ impl Rule {
                 g.iter()
                     .flat_map(|&(u, wu)| g.iter().map(move |&(v, wv)| Point { xi: [u, v * (1.0 - u), 0.0], weight: wu * wv * (1.0 - u) }))
                     .collect()
+            }
+            Rule::TriCentroid => vec![Point { xi: [1.0 / 3.0, 1.0 / 3.0, 0.0], weight: 0.5 }],
+            Rule::Tri3 => {
+                let (a, b) = (2.0 / 3.0, 1.0 / 6.0);
+                [[b, b, 0.0], [a, b, 0.0], [b, a, 0.0]].into_iter().map(|xi| Point { xi, weight: 1.0 / 6.0 }).collect()
             }
             Rule::Wedge => {
                 let (a, b) = (2.0 / 3.0, 1.0 / 6.0);
@@ -172,10 +183,12 @@ mod tests {
             }
         }
         // Triangle: ∫ ξ^a η^b = a! b! / (a + b + 2)!.
-        for a in 0..=4 {
-            for b in 0..=4 - a {
-                let got = integrate(Rule::TriConical(3), a, b, 0);
-                assert!((got - f(a) * f(b) / f(a + b + 2)).abs() < 1e-14, "tri ξ^{a} η^{b}");
+        for (rule, degree) in [(Rule::TriConical(3), 4), (Rule::TriConical(4), 6), (Rule::TriCentroid, 1), (Rule::Tri3, 2)] {
+            for a in 0..=degree {
+                for b in 0..=degree - a {
+                    let got = integrate(rule, a, b, 0);
+                    assert!((got - f(a) * f(b) / f(a + b + 2)).abs() < 1e-14, "{rule:?} ξ^{a} η^{b}");
+                }
             }
         }
     }

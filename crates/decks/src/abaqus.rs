@@ -64,6 +64,18 @@
 //! | quad8 | | S8R (reduced only) | | |
 //! | beam2, rod2 | | | B31 | T3D2 |
 //!
+//! | ModelCraft | Plane stress | Plane strain | Axisymmetric |
+//! |---|---|---|---|
+//! | tri3 | CPS3 | CPE3 | CAX3 |
+//! | tri6 | CPS6 | CPE6 | CAX6 |
+//! | quad4 | CPS4, CPS4R, CPS4I | CPE4, CPE4R, CPE4I | CAX4, CAX4R, CAX4I |
+//! | quad8 | CPS8, CPS8R | CPE8, CPE8R | CAX8, CAX8R |
+//!
+//! 2D models: Abaqus's axisymmetric elements, like the model, take r = x and the axis along Y,
+//! and their concentrated loads are totals over the circumference; a 2D section's thickness is
+//! the `*SOLID SECTION` data line. Surfaces of 2D elements are their edges, `S1`… in the edge
+//! order of the model; body forces of axisymmetric elements are `BR`, `BZ`.
+//!
 //! `H` marks the hybrid variant. A four-node tetrahedron integrates at one point either way, so
 //! reduced integration writes C3D4. Not expressible: reduced integration of ten-node tetrahedra and
 //! six-node wedges, full integration of eight-node shells, six-node triangular shells, orthotropic
@@ -125,8 +137,27 @@ pub fn element_type(kind: ElementKind, section: &Section) -> std::result::Result
     use SectionKind as S;
     let f = section.formulation;
     let reduced = f.integration == Integration::Reduced;
-    if (f.hybrid || f.incompatible_modes) && section.kind.dimension() != 3 {
+    if (f.hybrid && section.kind.dimension() != 3) || (f.incompatible_modes && !section.kind.is_continuum()) {
         return Err(format!("hybrid or incompatible-mode {} sections", section.kind.name()));
+    }
+    if let Some(prefix) = match section.kind {
+        S::PlaneStress { .. } => Some("CPS"),
+        S::PlaneStrain { .. } => Some("CPE"),
+        S::Axisymmetric {} => Some("CAX"),
+        _ => None,
+    } {
+        let suffix = match (kind, reduced, f.incompatible_modes) {
+            (K::Quad4, false, true) => "4I",
+            (_, true, true) => return Err("incompatible modes with reduced integration".into()),
+            (_, _, true) => return Err(format!("incompatible modes on {} elements (quad4 only)", kind.name())),
+            (K::Tri3, ..) => "3",
+            (K::Tri6, true, _) => return Err("reduced integration of tri6 elements (Abaqus has no reduced-integration variant)".into()),
+            (K::Tri6, ..) => "6",
+            (K::Quad4, r, _) => ["4", "4R"][usize::from(r)],
+            (K::Quad8, r, _) => ["8", "8R"][usize::from(r)],
+            _ => return Err(format!("{} elements in a {} section", kind.name(), section.kind.name())),
+        };
+        return Ok(format!("{prefix}{suffix}"));
     }
     let plain = match (&section.kind, kind, reduced, f.incompatible_modes) {
         (S::Solid {}, K::Hex8, false, true) => "C3D8I",
@@ -209,7 +240,7 @@ fn check_expressible(model: &Model) -> Result<()> {
     }
     for (name, section) in model.sections() {
         let ortho = matches!(model.material(&section.material).and_then(|m| m.elastic), Some(Elastic::EngineeringConstants { .. }));
-        if ortho && section.kind.dimension() != 3 {
+        if ortho && !section.kind.is_continuum() {
             bad.insert(format!(
                 "section `{name}`: orthotropic material `{}` in a {} section (its material axes need an orientation, not supported yet)",
                 section.material,
@@ -268,10 +299,22 @@ pub fn face_id(kind: ElementKind, face: u8) -> Option<&'static str> {
     }
 }
 
+/// The surface identifier of edge `edge` (1-based) of a 2D element: `S1`… in the model's edge
+/// order (which is Abaqus's face order for plane and axisymmetric elements).
+pub fn edge_id(kind: ElementKind, edge: u8) -> Option<&'static str> {
+    const EDGES: [&str; 4] = ["S1", "S2", "S3", "S4"];
+    let i = usize::from(edge).checked_sub(1)?;
+    if kind.dimension() != 2 || i >= kind.edges().len() {
+        return None;
+    }
+    EDGES.get(i).copied()
+}
+
 /// The node surface each coupling ties its reference point to: a fresh name per coupling that
 /// clashes with no set (sets with faces own surfaces of their name) and no other coupling surface.
 fn coupling_surfaces(model: &Model, r: &Resolved) -> BTreeMap<String, String> {
-    let mut taken: BTreeSet<String> = r.sets.iter().filter(|(_, s)| !s.faces.is_empty()).map(|(n, _)| n.to_ascii_uppercase()).collect();
+    let mut taken: BTreeSet<String> =
+        r.sets.iter().filter(|(n, s)| !s.faces.is_empty() || !r.planar_edges(n).is_empty()).map(|(n, _)| n.to_ascii_uppercase()).collect();
     let mut out = BTreeMap::new();
     for name in model.couplings().keys() {
         let base = format!("{name}-nodes");
@@ -365,6 +408,9 @@ fn element_loads<'a>(loads: &[ElementLoad<'a>], kind: BodyKind, out: &mut Vec<(E
     out.retain(|(_, _, v)| v.iter().any(|c| *c != 0.0));
 }
 
+/// A centrifugal load: the element set, ω², a point on the axis and its direction.
+type Centrifugal<'a> = (&'a str, f64, [f64; 3], [f64; 3]);
+
 /// The loads of one general step, as the deck writes them.
 #[derive(Default)]
 struct StepLoads<'a> {
@@ -373,6 +419,9 @@ struct StepLoads<'a> {
     /// Surface (set name) → summed pressure.
     pressure: BTreeMap<&'a str, f64>,
     element: Vec<(ElementTarget<'a>, BodyKind, [f64; 3])>,
+    centrifugal: Vec<Centrifugal<'a>>,
+    /// Body forces of axisymmetric elements are radial and axial (`BR`, `BZ`).
+    axisymmetric: bool,
 }
 
 /// Which load keywords a step wrote entries for, so the next step knows what to remove.
@@ -387,7 +436,8 @@ impl<'a> StepLoads<'a> {
     /// `everything` is every element and the section sets that hold them (gravity on the whole
     /// model).
     fn new(model: &'a Model, r: &'a Resolved, step: &'a Step, everything: &'a (Vec<&'a str>, Vec<u32>)) -> StepLoads<'a> {
-        let mut s = StepLoads { concentrated: crate::concentrated_loads(model, r, &step.loads), ..StepLoads::default() };
+        let axisymmetric = r.extent() == Some(modelcraft_model::Extent::Revolved);
+        let mut s = StepLoads { concentrated: crate::concentrated_loads(model, r, &step.loads), axisymmetric, ..StepLoads::default() };
         let (mut gravity, mut body) = (Vec::new(), Vec::new());
         for name in &step.loads {
             match model.load(name) {
@@ -397,6 +447,13 @@ impl<'a> StepLoads<'a> {
                     gravity.push(ElementLoad { elsets: everything.0.clone(), elements: &everything.1, vector: *acceleration })
                 }
                 Some(Load::BodyForce { set, vector }) => body.push(ElementLoad::on_set(r, set, *vector)),
+                Some(Load::Centrifugal { angular_velocity, point, axis, set }) => {
+                    let w2 = angular_velocity * angular_velocity;
+                    match set {
+                        Some(set) => s.centrifugal.push((set, w2, *point, *axis)),
+                        None => s.centrifugal.extend(everything.0.iter().map(|set| (*set, w2, *point, *axis))),
+                    }
+                }
                 _ => {}
             }
         }
@@ -407,7 +464,11 @@ impl<'a> StepLoads<'a> {
     }
 
     fn written(&self) -> Written {
-        Written { concentrated: !self.concentrated.is_empty(), pressure: !self.pressure.is_empty(), element: !self.element.is_empty() }
+        Written {
+            concentrated: !self.concentrated.is_empty(),
+            pressure: !self.pressure.is_empty(),
+            element: !self.element.is_empty() || !self.centrifugal.is_empty(),
+        }
     }
 }
 
@@ -513,7 +574,8 @@ impl Deck {
                 self.line(&format!("*ELSET, ELSET={name}"));
                 self.labels(&s.elements);
             }
-            if !s.faces.is_empty() {
+            let edges = r.planar_edges(name);
+            if !s.faces.is_empty() || !edges.is_empty() {
                 self.line(&format!("*SURFACE, TYPE=ELEMENT, NAME={name}"));
                 for f in &s.faces {
                     let id = model.element(f.element).and_then(|e| face_id(e.kind, f.face)).ok_or_else(|| Error::Unsupported {
@@ -521,6 +583,13 @@ impl Deck {
                         what: format!("set `{name}`: element {} has no face {}", f.element, f.face),
                     })?;
                     let _ = writeln!(self.out, "{}, {id}", f.element);
+                }
+                for g in &edges {
+                    let id = model.element(g.element).and_then(|e| edge_id(e.kind, g.edge)).ok_or_else(|| Error::Unsupported {
+                        format: FORMAT,
+                        what: format!("set `{name}`: element {} has no edge {}", g.element, g.edge),
+                    })?;
+                    let _ = writeln!(self.out, "{}, {id}", g.element);
                 }
             }
         }
@@ -565,9 +634,13 @@ impl Deck {
             self.comment(&format!("section {name}"));
             let (set, material) = (&s.set, &s.material);
             match s.kind {
-                SectionKind::Solid {} => {
+                SectionKind::Solid {} | SectionKind::Axisymmetric {} => {
                     self.line(&format!("*SOLID SECTION, ELSET={set}, MATERIAL={material}"));
                     self.line(",");
+                }
+                SectionKind::PlaneStress { thickness } | SectionKind::PlaneStrain { thickness } => {
+                    self.line(&format!("*SOLID SECTION, ELSET={set}, MATERIAL={material}"));
+                    self.numbers_line("", &[thickness])?;
                 }
                 SectionKind::Rod { area } => {
                     self.line(&format!("*SOLID SECTION, ELSET={set}, MATERIAL={material}"));
@@ -686,7 +759,7 @@ impl Deck {
                 self.numbers_line(&format!("{surface}, P"), &[*p])?;
             }
         }
-        if self.op_new("*DLOAD", !loads.element.is_empty(), before.element) {
+        if self.op_new("*DLOAD", !loads.element.is_empty() || !loads.centrifugal.is_empty(), before.element) {
             for (target, kind, v) in &loads.element {
                 let target = match target {
                     ElementTarget::Set(s) => s.to_string(),
@@ -698,13 +771,18 @@ impl Deck {
                         self.numbers_line(&format!("{target}, GRAV"), &[g, v[0] / g, v[1] / g, v[2] / g])?;
                     }
                     BodyKind::Force => {
-                        for (label, c) in ["BX", "BY", "BZ"].into_iter().zip(v) {
+                        let labels: &[&str] = if loads.axisymmetric { &["BR", "BZ"] } else { &["BX", "BY", "BZ"] };
+                        for (label, c) in labels.iter().zip(v) {
                             if *c != 0.0 {
                                 self.numbers_line(&format!("{target}, {label}"), &[*c])?;
                             }
                         }
                     }
                 }
+            }
+            for (set, w2, point, axis) in &loads.centrifugal {
+                // CENTRIF: ω², a point on the axis and the axis direction.
+                self.numbers_line(&format!("{set}, CENTRIF"), &[*w2, point[0], point[1], point[2], axis[0], axis[1], axis[2]])?;
             }
         }
         Ok(())
@@ -746,7 +824,7 @@ impl Deck {
             self.boundary_lines(model, r, &initial)?;
         }
         // Gravity on the whole model acts on every element, through the section sets.
-        let whole_model_gravity = model.loads().values().any(|l| matches!(l, Load::Gravity { set: None, .. }));
+        let whole_model_gravity = model.loads().values().any(|l| matches!(l, Load::Gravity { set: None, .. } | Load::Centrifugal { set: None, .. }));
         let everything: (Vec<&str>, Vec<u32>) = if whole_model_gravity {
             (model.sections().values().map(|s| s.set.as_str()).collect(), model.elements().keys().copied().collect())
         } else {

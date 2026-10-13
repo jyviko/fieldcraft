@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{ElementFace, Error, Model, Result};
+use crate::{ElementEdge, ElementFace, Error, Extent, Model, Result};
 
 /// Shape functions and their derivatives at one point of a reference face.
 struct Shape {
@@ -137,7 +137,82 @@ pub fn face_normal_weights(xyz: &[[f64; 3]]) -> Result<Vec<[f64; 3]>> {
     Ok(out)
 }
 
+/// Visit the 3-point Gauss–Legendre points of an element edge (its ends, then the mid-side node
+/// of a quadratic edge): the shape function values, the position and the weighted tangent
+/// (∂x/∂s) w, whose length is the point's share of the edge's length.
+fn integrate_edge(xyz: &[[f64; 3]], mut visit: impl FnMut(&[f64], [f64; 3], [f64; 3])) -> Result<()> {
+    if xyz.iter().flatten().any(|c| !c.is_finite()) {
+        return Err(Error::Invalid("edge coordinates must be finite".into()));
+    }
+    if !matches!(xyz.len(), 2 | 3) {
+        return Err(Error::Invalid(format!("an edge has 2 or 3 nodes, not {}", xyz.len())));
+    }
+    let g = (0.6f64).sqrt();
+    for (s, w) in [(-g, 5.0 / 9.0), (0.0, 8.0 / 9.0), (g, 5.0 / 9.0)] {
+        let (n, dn) = if xyz.len() == 2 {
+            ([(1.0 - s) / 2.0, (1.0 + s) / 2.0, 0.0], [-0.5, 0.5, 0.0])
+        } else {
+            ([s * (s - 1.0) / 2.0, s * (s + 1.0) / 2.0, 1.0 - s * s], [s - 0.5, s + 0.5, -2.0 * s])
+        };
+        let (mut x, mut t) = ([0.0; 3], [0.0; 3]);
+        for ((p, ni), di) in xyz.iter().zip(&n).zip(&dn) {
+            for k in 0..3 {
+                x[k] += ni * p[k];
+                t[k] += di * p[k];
+            }
+        }
+        visit(n.get(..xyz.len()).unwrap_or_default(), x, t.map(|v| v * w));
+    }
+    Ok(())
+}
+
+/// ∫ Nᵢ n e dL for every node of an element edge in the XY plane (node coordinates in the edge's
+/// order), with n the normal to the right of the edge's direction (outward for an edge of a
+/// counter-clockwise 2D element) and e the out-of-plane extent (thickness, or 2πr when
+/// revolved): the consistent nodal forces of a unit pressure pulling outward.
+pub fn edge_normal_weights(xyz: &[[f64; 3]], extent: Extent) -> Result<Vec<[f64; 3]>> {
+    let mut out = vec![[0.0; 3]; xyz.len()];
+    integrate_edge(xyz, |n, x, t| {
+        let e = extent.at(x);
+        for (o, ni) in out.iter_mut().zip(n) {
+            o[0] += ni * t[1] * e;
+            o[1] -= ni * t[0] * e;
+        }
+    })?;
+    Ok(out)
+}
+
+/// Consistent nodal forces of a uniform pressure on an element edge in the XY plane (positive
+/// pushes into a counter-clockwise element): `−p` times [`edge_normal_weights`].
+pub fn edge_pressure(xyz: &[[f64; 3]], extent: Extent, magnitude: f64) -> Result<Vec<[f64; 3]>> {
+    Ok(edge_normal_weights(xyz, extent)?.into_iter().map(|w| w.map(|c| -magnitude * c)).collect())
+}
+
 impl Model {
+    /// The nodal weights `∫ N_i e dL` of a set of 2D element edges (e the out-of-plane extent of
+    /// each element in `planar`), summed per node. Their sum is the area of the surface the
+    /// edges stand for: length times thickness, or the surface of revolution.
+    pub fn edge_weights(&self, edges: &[ElementEdge], planar: &BTreeMap<u32, Extent>) -> Result<BTreeMap<u32, f64>> {
+        let mut out: BTreeMap<u32, f64> = BTreeMap::new();
+        for &g in edges {
+            let extent = planar.get(&g.element).copied().ok_or_else(|| Error::Invalid(format!("element {} is not a 2D element", g.element)))?;
+            let labels = self.edge_nodes(g).ok_or_else(|| Error::NotFound(format!("element {} edge {}", g.element, g.edge)))?;
+            let xyz: Vec<[f64; 3]> =
+                labels.iter().map(|n| self.node(*n).map(|p| p.xyz).ok_or_else(|| Error::NotFound(format!("node {n}")))).collect::<Result<_>>()?;
+            integrate_edge(&xyz, |n, x, t| {
+                let dl = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt() * extent.at(x);
+                for (label, ni) in labels.iter().zip(n) {
+                    *out.entry(*label).or_default() += ni * dl;
+                }
+            })
+            .map_err(|e| match e {
+                Error::Invalid(m) => Error::Invalid(format!("element {} edge {}: {m}", g.element, g.edge)),
+                e => e,
+            })?;
+        }
+        Ok(out)
+    }
+
     /// The nodal weights `∫ N_i dA` of a set of element faces, summed per node. Their sum is the
     /// faces' area.
     pub fn surface_weights(&self, faces: &[ElementFace]) -> Result<BTreeMap<u32, f64>> {
@@ -165,6 +240,7 @@ impl Model {
 mod tests {
     use super::*;
     use crate::ElementKind;
+    use std::collections::BTreeMap;
 
     /// A flat 2 × 3 face of a hex8 or hex20 (face 1, z = 0), and its weights.
     fn face_weights(kind: ElementKind) -> Vec<f64> {
@@ -210,5 +286,31 @@ mod tests {
         let w = m.surface_weights(&[ElementFace { element: 2, face: 1 }]).unwrap();
         let tri6: Vec<f64> = m.face_nodes(ElementFace { element: 2, face: 1 }).unwrap().iter().map(|n| w[n]).collect();
         assert!(close(&tri6, &[0.0, 0.0, 0.0, 1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0]), "{tri6:?}");
+    }
+
+    #[test]
+    fn edge_weights_are_the_consistent_nodal_loads() {
+        let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);
+        // A quad8 2 × 1 in the XY plane: edge 1 (y = 0, x from 0 to 2) of thickness 3 shares
+        // its area 6 as 1/6, 1/6, 2/3; revolved about Y it shares the annulus π(2² − 0) = 4π
+        // as ∫ N 2π x dx.
+        let mut m = Model::default();
+        let p = [[0., 0., 0.], [2., 0., 0.], [2., 1., 0.], [0., 1., 0.], [1., 0., 0.], [2., 0.5, 0.], [1., 1., 0.], [0., 0.5, 0.]];
+        for (i, q) in p.iter().enumerate() {
+            m.set_node(i as u32 + 1, *q).unwrap();
+        }
+        m.set_element(1, ElementKind::Quad8, (1..=8).collect()).unwrap();
+        let edge = [ElementEdge { element: 1, edge: 1 }];
+        let w = m.edge_weights(&edge, &BTreeMap::from([(1, Extent::Thickness(3.0))])).unwrap();
+        assert!(close(&[w[&1], w[&2], w[&5]], &[1.0, 1.0, 4.0]), "{w:?}");
+        let w = m.edge_weights(&edge, &BTreeMap::from([(1, Extent::Revolved)])).unwrap();
+        // ∫₀² N 2π x dx with N on [0, 2]: corner at 0 → 0, corner at 2 → 2π·2/3·... summed: 4π.
+        let pi = std::f64::consts::PI;
+        assert!(close(&[w[&1], w[&2], w[&5]], &[0.0, 4.0 * pi / 3.0, 8.0 * pi / 3.0]), "{w:?}");
+        assert!(m.edge_weights(&edge, &BTreeMap::new()).is_err(), "not a 2D element");
+        // The outward normal of a counter-clockwise element's bottom edge is −Y.
+        let n = edge_normal_weights(&[p[0], p[1], p[4]], Extent::Thickness(1.0)).unwrap();
+        assert!(close(&n.iter().map(|v| v[1]).collect::<Vec<_>>(), &[-1.0 / 3.0, -1.0 / 3.0, -4.0 / 3.0]) && n.iter().all(|v| v[0] == 0.0), "{n:?}");
+        assert!(edge_normal_weights(&[p[0]], Extent::Revolved).is_err());
     }
 }

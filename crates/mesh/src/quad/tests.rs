@@ -537,3 +537,34 @@ fn unsmoothed_meshes_are_valid() {
     let m = free_quad_mesh(&loops, &UniformSize(0.2), &QuadOptions { smoothing_sweeps: 0, ..opts() }).unwrap();
     check(&m, &loops);
 }
+
+#[test]
+fn free_triangle_mesh_of_a_plate_with_a_hole() {
+    // Odd point counts are fine for triangles.
+    let outer = rect(0.0, 0.0, 10.0, 6.0, 9, 5);
+    let hole: Vec<[f64; 2]> = circle(4.0, 3.0, 1.5, 17).into_iter().rev().collect();
+    let loops = vec![outer.clone(), hole.clone()];
+    let m = free_tri_mesh(&loops, &UniformSize(0.7), &opts()).unwrap();
+    assert_eq!(m.boundary_nodes, outer.len() + hole.len());
+    let boundary: Vec<[f64; 2]> = outer.iter().chain(&hole).copied().collect();
+    assert_eq!(&m.nodes[..m.boundary_nodes], boundary.as_slice(), "boundary nodes are the input points");
+    let area: f64 = m
+        .triangles
+        .iter()
+        .map(|t| {
+            let [a, b, c] = t.map(|v| m.nodes[v as usize]);
+            let s = 0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+            assert!(s > 0.0, "counterclockwise");
+            s
+        })
+        .sum();
+    let want = signed_area(&outer).abs() - signed_area(&hole).abs();
+    assert!((area - want).abs() < 1e-9 * want, "{area} vs {want}");
+    assert!(m.triangles.len() > 100, "refined to the size: {}", m.triangles.len());
+    // Deterministic.
+    assert_eq!(free_tri_mesh(&loops, &UniformSize(0.7), &opts()).unwrap(), m);
+    // Hostile.
+    assert!(free_tri_mesh(&[vec![[0.0, 0.0], [1.0, 0.0]]], &UniformSize(0.5), &opts()).is_err());
+    assert!(free_tri_mesh(std::slice::from_ref(&outer), &UniformSize(0.001), &QuadOptions { max_elements: 100, ..opts() }).is_err());
+    assert!(free_tri_mesh(&[vec![[0.0, 0.0], [f64::NAN, 0.0], [0.0, 1.0]]], &UniformSize(0.5), &opts()).is_err());
+}

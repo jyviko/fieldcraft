@@ -1,4 +1,9 @@
 //! Loads. Which steps a load is active in is listed explicitly by each step ([`crate::steps`]).
+//!
+//! In a 2D model (plane stress, plane strain, axisymmetric sections) loads lie in the XY plane:
+//! surface loads act on the element edges of the set, forces are totals over the thickness (or
+//! over the full circumference for axisymmetric models), and a vector with a Z component is an
+//! error.
 
 use std::collections::BTreeMap;
 
@@ -55,6 +60,27 @@ pub enum Load {
     },
     /// A force per volume on the set's elements.
     BodyForce { set: String, vector: [f64; 3] },
+    /// The centrifugal load of a steady rotation at `angular_velocity` (radians per time unit)
+    /// about the axis through `point` along `axis`: a force per volume ρ ω² r on the mass of the
+    /// set's elements (or the whole model), r the distance from the axis, pointing away from it.
+    Centrifugal {
+        angular_velocity: f64,
+        point: [f64; 3],
+        axis: [f64; 3],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        set: Option<String>,
+    },
+}
+
+/// The centrifugal acceleration ω² r at `x` of a rotation at `angular_velocity` about the axis
+/// through `point` along `axis` (any length, not zero): r is the part of `x − point` normal to
+/// the axis, so the acceleration points away from the axis.
+pub fn centrifugal_acceleration(angular_velocity: f64, point: [f64; 3], axis: [f64; 3], x: [f64; 3]) -> [f64; 3] {
+    let len2 = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
+    let d = [x[0] - point[0], x[1] - point[1], x[2] - point[2]];
+    let along = if len2 > 0.0 { (d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2]) / len2 } else { 0.0 };
+    let w2 = angular_velocity * angular_velocity;
+    [0, 1, 2].map(|k| w2 * (d[k] - along * axis[k]))
 }
 
 impl Load {
@@ -67,6 +93,7 @@ impl Load {
             Load::Pressure { .. } => "pressure",
             Load::Gravity { .. } => "gravity",
             Load::BodyForce { .. } => "body_force",
+            Load::Centrifugal { .. } => "centrifugal",
         }
     }
 
@@ -75,7 +102,7 @@ impl Load {
         match self {
             Load::Force { target, .. } | Load::Moment { target, .. } => target.set(),
             Load::Pressure { set, .. } | Load::BodyForce { set, .. } | Load::Traction { set, .. } => Some(set),
-            Load::Gravity { set, .. } => set.as_deref(),
+            Load::Gravity { set, .. } | Load::Centrifugal { set, .. } => set.as_deref(),
         }
     }
 
@@ -93,6 +120,21 @@ impl Load {
             Load::Gravity { acceleration, .. } => acceleration,
             Load::Pressure { magnitude, .. } => {
                 finite("pressure", *magnitude)?;
+                return Ok(());
+            }
+            Load::Centrifugal { angular_velocity, point, axis, .. } => {
+                let w = finite("angular velocity", *angular_velocity)?;
+                if w == 0.0 || !(w * w).is_finite() {
+                    return Err(Error::Invalid(format!(
+                        "a centrifugal load's angular velocity must be a non-zero number whose square is finite, got {w}"
+                    )));
+                }
+                for c in point.iter().chain(axis) {
+                    finite("centrifugal axis", *c)?;
+                }
+                if axis.iter().all(|c| *c == 0.0) {
+                    return Err(Error::Invalid("a centrifugal load's axis direction must not be zero".into()));
+                }
                 return Ok(());
             }
         };

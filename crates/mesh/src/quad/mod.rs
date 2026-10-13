@@ -160,6 +160,51 @@ pub fn free_quad_mesh(loops: &[Vec<[f64; 2]>], size: &dyn SizeField, opts: &Quad
     free::mesh(loops, size, opts)
 }
 
+/// A planar triangle mesh.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TriMesh {
+    /// Node coordinates; `nodes[..boundary_nodes]` are the input boundary points in input order.
+    pub nodes: Vec<[f64; 2]>,
+    /// Counterclockwise corner node ids (the `Tri3` node order).
+    pub triangles: Vec<[u32; 3]>,
+    pub boundary_nodes: usize,
+}
+
+/// Free triangle mesh of a planar region on prescribed boundary nodes: the constrained Delaunay
+/// triangulation of the loops ([`cdt`]: Bowyer–Watson, Sloan 1993 recovery), refined to the size
+/// field by Ruppert-style circumcentre insertion that never splits a boundary edge (Steiner points
+/// keep a clearance of half the local boundary spacing from the boundary), so the boundary nodes
+/// are exactly the input points. Every triangle is checked counterclockwise with exact
+/// predicates. Loops as for [`free_quad_mesh`], with any number of points (at least 3 each).
+pub fn free_tri_mesh(loops: &[Vec<[f64; 2]>], size: &dyn SizeField, opts: &QuadOptions) -> Result<TriMesh> {
+    let region = domain::region(loops)?;
+    let mut chords = Vec::new();
+    for l in &region.loops {
+        for (i, &a) in l.iter().enumerate() {
+            let b = l.get((i + 1) % l.len()).copied().ok_or_else(|| Error::Failed("loop index".into()))?;
+            let (pa, pb) = (*region.point(a)?, *region.point(b)?);
+            let (ca, cb) = (pa.coords(), pb.coords());
+            let m = Point2::new(snap_to_domain(0.5 * (ca[0] + cb[0])), snap_to_domain(0.5 * (ca[1] + cb[1])))?;
+            chords.push((pa, pb, m));
+        }
+    }
+    let guard = guard::Guard::new(&chords)?;
+    let mut cdt = cdt::Cdt::build(&region, opts.max_elements.saturating_add(4 * region.pts.len() + 16))?;
+    cdt.refine(size, 1.0, &|p, h| guard.allows(p, cdt::CLEARANCE * h))?;
+    let tri = cdt.into_triangulation();
+    if tri.tris.len() > opts.max_elements {
+        return Err(Error::Limit(format!("the mesh would have {} triangles; the limit is {}", tri.tris.len(), opts.max_elements)));
+    }
+    for t in &tri.tris {
+        let [a, b, c] = t.map(|v| tri.p2.get(v as usize));
+        match (a, b, c) {
+            (Some(a), Some(b), Some(c)) if crate::predicates::orient2d(a, b, c) == Sign::Positive => {}
+            _ => return Err(Error::Failed("a triangle is inverted or degenerate".into())),
+        }
+    }
+    Ok(TriMesh { nodes: tri.pts, triangles: tri.tris, boundary_nodes: region.pts.len() })
+}
+
 /// Mapped mesh of a four-sided region: `boundary` lists the region's boundary nodes once (either
 /// orientation), and `corners` are the positions in it of the four corners in boundary order.
 /// Opposite sides need the same number of divisions. The grid is transfinite interpolation

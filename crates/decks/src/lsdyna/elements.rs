@@ -97,7 +97,9 @@ pub(crate) struct Elform {
 /// hexahedra), reduced 15 (two-point pentahedron); tet4 10 (one point, exact for a linear
 /// tetrahedron), hybrid 13 (nodal pressure); tet10 16; hex20 23. Shells: quad4 16 (fully
 /// integrated), reduced 2 (one-point) with hourglass control; tri3 4 (C0 triangle); quad8 23;
-/// tri6 24. Rods: 3 (truss).
+/// tri6 24. Rods: 3 (truss). 2D (in the XY plane): plane stress 12, plane strain 13, both one-point
+/// forms on quad4 (written for reduced integration, with hourglass control) and tri3 (exact at one
+/// point); quadratic 2D elements and axisymmetric sections have no form written here.
 /// What it cannot express is the reason, naming the section.
 pub(crate) fn elform(kind: ElementKind, section: &SectionKind, f: Formulation, section_name: &str) -> Result<Elform, String> {
     let plain = |elform| Ok(Elform { elform, hourglass: None });
@@ -142,6 +144,18 @@ pub(crate) fn elform(kind: ElementKind, section: &SectionKind, f: Formulation, s
             _ => no("a rod section cannot hold"),
         },
         SectionKind::Beam { .. } => no("beam sections are not written to LS-DYNA decks yet (planned with beam profiles):"),
+        SectionKind::Axisymmetric {} => {
+            no("axisymmetric sections are not written to LS-DYNA decks yet (its axisymmetric forms count loads per radian; not verified):")
+        }
+        SectionKind::PlaneStress { .. } | SectionKind::PlaneStrain { .. } => {
+            let form = if matches!(section, SectionKind::PlaneStress { .. }) { 12 } else { 13 };
+            match kind {
+                ElementKind::Tri3 => plain(form),
+                ElementKind::Quad4 if reduced => Ok(Elform { elform: form, hourglass: Some(Hourglass::Shell) }),
+                ElementKind::Quad4 => no("LS-DYNA's 2D forms integrate at one point (set the section's integration to reduced) for"),
+                _ => no("LS-DYNA's 2D forms are linear; there is no form for"),
+            }
+        }
     }
 }
 

@@ -120,10 +120,48 @@ pub enum SectionKind {
     Beam { profile: BeamProfile, orientation: [f64; 3] },
     /// Axial members (rods, trusses) with a cross-sectional area.
     Rod { area: f64 },
+    /// 2D continuum in plane stress (σzz = 0: thin plates loaded in their plane), of the given
+    /// thickness. The elements lie in the XY plane.
+    PlaneStress { thickness: f64 },
+    /// 2D continuum in plane strain (εzz = 0: a slice of a long body), of the given thickness
+    /// (1 by default, so results are per unit length). The elements lie in the XY plane.
+    PlaneStrain {
+        #[serde(default = "unit_thickness")]
+        thickness: f64,
+    },
+    /// Axisymmetric continuum: the elements lie in the XY half plane x ≥ 0, which is the r–z
+    /// plane of a body of revolution about the Y axis (x = radius, y = axial position; the hoop
+    /// direction is the third). Forces, reactions and masses are totals over the full
+    /// circumference (2π radians).
+    Axisymmetric {},
 }
 
 fn default_shell_points() -> u32 {
     5
+}
+
+fn unit_thickness() -> f64 {
+    1.0
+}
+
+/// How a 2D continuum section extends out of its plane: what turns a length along an element
+/// edge into an area, and an element's area into a volume.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Extent {
+    /// Plane stress and plane strain: a uniform thickness.
+    Thickness(f64),
+    /// Axisymmetric: the full circumference 2πr at radius r = x.
+    Revolved,
+}
+
+impl Extent {
+    /// The out-of-plane measure at a point: the thickness, or 2π x.
+    pub fn at(&self, xyz: [f64; 3]) -> f64 {
+        match *self {
+            Extent::Thickness(t) => t,
+            Extent::Revolved => 2.0 * std::f64::consts::PI * xyz[0],
+        }
+    }
 }
 
 impl SectionKind {
@@ -131,18 +169,41 @@ impl SectionKind {
     pub fn dimension(&self) -> u8 {
         match self {
             SectionKind::Solid {} => 3,
-            SectionKind::Shell { .. } => 2,
+            SectionKind::Shell { .. } | SectionKind::PlaneStress { .. } | SectionKind::PlaneStrain { .. } | SectionKind::Axisymmetric {} => 2,
             SectionKind::Beam { .. } | SectionKind::Rod { .. } => 1,
         }
     }
 
-    /// `solid`, `shell`, `beam` or `rod`.
+    /// Whether this is a continuum section (solid or 2D), the kinds with incompatible-mode
+    /// formulations.
+    pub fn is_continuum(&self) -> bool {
+        self.dimension() == 3 || self.is_planar()
+    }
+
+    /// Whether this is a 2D continuum section (plane stress, plane strain or axisymmetric).
+    pub fn is_planar(&self) -> bool {
+        self.extent().is_some()
+    }
+
+    /// How a 2D continuum section extends out of its plane (`None` for other kinds).
+    pub fn extent(&self) -> Option<Extent> {
+        match *self {
+            SectionKind::PlaneStress { thickness } | SectionKind::PlaneStrain { thickness } => Some(Extent::Thickness(thickness)),
+            SectionKind::Axisymmetric {} => Some(Extent::Revolved),
+            _ => None,
+        }
+    }
+
+    /// `solid`, `shell`, `beam`, `rod`, `plane_stress`, `plane_strain` or `axisymmetric`.
     pub fn name(&self) -> &'static str {
         match self {
             SectionKind::Solid {} => "solid",
             SectionKind::Shell { .. } => "shell",
             SectionKind::Beam { .. } => "beam",
             SectionKind::Rod { .. } => "rod",
+            SectionKind::PlaneStress { .. } => "plane_stress",
+            SectionKind::PlaneStrain { .. } => "plane_strain",
+            SectionKind::Axisymmetric {} => "axisymmetric",
         }
     }
 
@@ -172,6 +233,10 @@ impl SectionKind {
             SectionKind::Rod { area } => {
                 positive("area", *area)?;
             }
+            SectionKind::PlaneStress { thickness } | SectionKind::PlaneStrain { thickness } => {
+                positive("thickness", *thickness)?;
+            }
+            SectionKind::Axisymmetric {} => {}
         }
         Ok(())
     }
@@ -194,7 +259,8 @@ pub enum Integration {
 pub struct Formulation {
     #[serde(default)]
     pub integration: Integration,
-    /// Enhanced (incompatible) bending modes: linear hexahedra only.
+    /// Enhanced (incompatible) bending modes: linear hexahedra (solid sections) and linear
+    /// quadrilaterals (2D sections) only.
     #[serde(default)]
     pub incompatible_modes: bool,
     /// Mixed displacement–pressure formulation for nearly incompressible materials: solids only.
@@ -209,8 +275,11 @@ impl Formulation {
         if self.incompatible_modes && self.integration == Integration::Reduced {
             return Err(Error::Invalid("incompatible modes use full integration".into()));
         }
-        if kind.dimension() != 3 && (self.incompatible_modes || self.hybrid) {
-            return Err(Error::Invalid(format!("incompatible modes and hybrid formulations are for solid sections, not {}", kind.name())));
+        if !kind.is_continuum() && self.incompatible_modes {
+            return Err(Error::Invalid(format!("incompatible modes are for solid and 2D sections, not {}", kind.name())));
+        }
+        if kind.dimension() != 3 && self.hybrid {
+            return Err(Error::Invalid(format!("hybrid formulations are for solid sections, not {}", kind.name())));
         }
         Ok(())
     }
@@ -302,5 +371,27 @@ mod tests {
         );
         assert!(serde_json::from_value::<SectionKind>(serde_json::json!({"type": "solid", "x": 1})).is_err());
         assert!(serde_json::from_value::<SectionKind>(serde_json::json!({"type": "membrane"})).is_err());
+    }
+
+    #[test]
+    fn planar_sections() {
+        let strain: SectionKind = serde_json::from_value(serde_json::json!({"type": "plane_strain"})).unwrap();
+        assert_eq!(strain, SectionKind::PlaneStrain { thickness: 1.0 });
+        let stress: SectionKind = serde_json::from_value(serde_json::json!({"type": "plane_stress", "thickness": 2.5})).unwrap();
+        assert_eq!(stress.extent(), Some(Extent::Thickness(2.5)));
+        assert!(serde_json::from_value::<SectionKind>(serde_json::json!({"type": "plane_stress"})).is_err(), "plane stress needs a thickness");
+        let axi: SectionKind = serde_json::from_value(serde_json::json!({"type": "axisymmetric"})).unwrap();
+        assert_eq!(axi.extent(), Some(Extent::Revolved));
+        assert!((Extent::Revolved.at([2.0, 7.0, 0.0]) - 4.0 * std::f64::consts::PI).abs() < 1e-15);
+        assert!(axi.is_planar() && stress.is_planar() && !SectionKind::Solid {}.is_planar());
+        assert!(!SectionKind::Shell { thickness: 1.0, offset: 0.0, points: 5 }.is_planar());
+        for bad in [SectionKind::PlaneStress { thickness: 0.0 }, SectionKind::PlaneStrain { thickness: f64::NAN }] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+        let im = Formulation { incompatible_modes: true, ..Formulation::default() };
+        im.validate_for(&stress).unwrap();
+        im.validate_for(&axi).unwrap();
+        assert!(Formulation { hybrid: true, ..Formulation::default() }.validate_for(&strain).is_err());
+        assert!(im.validate_for(&SectionKind::Shell { thickness: 1.0, offset: 0.0, points: 5 }).is_err());
     }
 }

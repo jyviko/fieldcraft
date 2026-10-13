@@ -15,6 +15,7 @@ pub mod nastran;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use modelcraft_model::nodal::edge_pressure;
 use modelcraft_model::{Diagnostic, Load, Model, Resolved};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -133,4 +134,27 @@ pub fn concentrated_loads<'a>(model: &Model, r: &Resolved, active: impl IntoIter
     }
     out.retain(|_, v| *v != 0.0);
     out
+}
+
+/// The consistent nodal forces (degrees of freedom 1 and 2) of the active pressures on a 2D
+/// model's element edges, for formats that write them as concentrated loads: the model's edge
+/// integration ([`modelcraft_model::nodal::edge_pressure`]), a positive pressure pushing
+/// into the element, summed per node and direction; zero sums are left out.
+pub fn edge_pressure_loads<'a>(model: &Model, r: &Resolved, active: impl IntoIterator<Item = &'a str>) -> Result<BTreeMap<(u32, u8), f64>> {
+    let mut out: BTreeMap<(u32, u8), f64> = BTreeMap::new();
+    for name in active {
+        let Some(Load::Pressure { set, magnitude }) = model.load(name) else { continue };
+        for g in r.planar_edges(set) {
+            let Some(extent) = r.planar.get(&g.element).copied() else { continue };
+            let labels = model.edge_nodes(g).unwrap_or_default();
+            let xyz: Vec<[f64; 3]> = labels.iter().filter_map(|n| model.node(*n)).map(|n| n.xyz).collect();
+            for (node, f) in labels.iter().zip(edge_pressure(&xyz, extent, *magnitude)?) {
+                for (dof, c) in (1u8..).zip(&f[..2]) {
+                    *out.entry((*node, dof)).or_default() += c;
+                }
+            }
+        }
+    }
+    out.retain(|_, v| *v != 0.0);
+    Ok(out)
 }

@@ -1,5 +1,6 @@
 //! Linear static and frequency analysis of a model's step, and their results.
 
+use modelcraft_fem::ElementType;
 use modelcraft_fem::element::{Extrapolation, extrapolation};
 use modelcraft_fem::quadrature::Rule;
 use modelcraft_fem::{DofKind, DofLayout, PointStress, von_mises};
@@ -134,14 +135,15 @@ fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<As
     let mut k = graph.zero_matrix(layout);
     let mut m = mass.map(|_| graph.zero_matrix(layout));
     for e in &mesh.elements {
-        let solid = e.solid()?;
+        let kernel = e.kernel()?;
+        let kinds = kernel.dofs().node;
         let at = |err| Error::element(e.label, err);
-        add_block(&mut k, layout, &e.nodes, solid.dofs().node, &solid.stiffness(&e.d).map_err(at)?.data)?;
+        add_block(&mut k, layout, &e.nodes, kinds, &kernel.stiffness(&e.d).map_err(at)?.data)?;
         if let (Some(mm), Some(kind)) = (m.as_mut(), mass) {
             let rho = e.density.ok_or_else(|| Error::Invalid(format!("element {} has no density", e.label)))?;
             match kind {
-                MassKind::Consistent => add_scalar(mm, layout, &e.nodes, solid.dofs().node, &solid.mass(rho).map_err(at)?.data)?,
-                MassKind::Lumped => add_diagonal(mm, layout, &e.nodes, solid.dofs().node, &solid.lumped_mass(rho).map_err(at)?)?,
+                MassKind::Consistent => add_scalar(mm, layout, &e.nodes, kinds, &kernel.mass(rho).map_err(at)?.data)?,
+                MassKind::Lumped => add_diagonal(mm, layout, &e.nodes, kinds, &kernel.lumped_mass(rho).map_err(at)?)?,
             }
         }
     }
@@ -243,22 +245,22 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         .map(|(p, (d, r))| PointResult { name: p.name.clone(), label: p.label, displacement: *d, reaction: *r })
         .collect();
     // Stresses: one extrapolation per element type and rule.
-    let mut extrapolations: Vec<(ElementKind, Rule, Extrapolation)> = Vec::new();
+    let mut extrapolations: Vec<(&'static ElementType, Rule, Extrapolation)> = Vec::new();
     let mut elements = Vec::with_capacity(mesh.elements.len());
     let mut sum = vec![[0.0; 6]; mesh.labels.len()];
     let mut count = vec![0u32; mesh.labels.len()];
     for e in &mesh.elements {
-        let solid = e.solid()?;
+        let kernel = e.kernel()?;
         let at = |err| Error::element(e.label, err);
         let ue: Vec<[f64; 3]> = e.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
-        let points = solid.stresses(&e.d, &ue).map_err(at)?;
+        let points = kernel.stresses(&e.d, &ue).map_err(at)?;
         let values: Vec<[f64; 6]> = points.iter().map(|p| p.stress).collect();
-        let rule = solid.rule();
-        let cached = extrapolations.iter().position(|(k, r, _)| *k == e.kind && *r == rule);
+        let (ty, rule) = (kernel.ty(), kernel.rule());
+        let cached = extrapolations.iter().position(|(t, r, _)| std::ptr::eq(*t, ty) && *r == rule);
         let index = match cached {
             Some(i) => i,
             None => {
-                extrapolations.push((e.kind, rule, extrapolation(solid.ty, rule).map_err(at)?));
+                extrapolations.push((ty, rule, extrapolation(ty, rule).map_err(at)?));
                 extrapolations.len() - 1
             }
         };
@@ -341,7 +343,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let Assembled { k, m } = assemble(&mesh, &graph, Some(options.mass))?;
     let m = m.ok_or_else(|| Error::Internal("mass matrix".into()))?;
     // Every element's mass entries sum to its mass, once per direction.
-    let total_mass = m.val.iter().sum::<f64>() / 3.0;
+    let total_mass = m.val.iter().sum::<f64>() / if mesh.theory.is_some() { 2.0 } else { 3.0 };
     let neq = red.neq();
     if neq == 0 {
         return Err(Error::Invalid("every degree of freedom is held; there is nothing to vibrate".into()));

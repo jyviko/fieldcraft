@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use modelcraft_geometry::SurfaceMesh;
 use modelcraft_mesh::cdt::{CdtOptions, tetrahedralize};
@@ -87,6 +88,17 @@ pub const TET_GENERATE: CommandSpec = CommandSpec {
     run: tet_generate,
 };
 
+/// The first node and element labels of a mesh of `nodes` nodes and `elements` elements added
+/// after the model's largest labels, or an error when the labels would pass [`MAX_LABEL`].
+fn next_labels(s: &Session, nodes: usize, elements: usize) -> Result<(u32, u32)> {
+    let next = |last: Option<u32>| last.map_or(Some(1), |l| l.checked_add(1));
+    let fits = |first: Option<u32>, count: usize| first.filter(|&f| u64::from(f) + count as u64 - 1 <= u64::from(MAX_LABEL));
+    match (fits(next(s.model.nodes().keys().next_back().copied()), nodes), fits(next(s.model.elements().keys().next_back().copied()), elements)) {
+        (Some(n), Some(e)) => Ok((n, e)),
+        _ => Err(EngineError::Params(format!("the mesh needs labels beyond {MAX_LABEL}"))),
+    }
+}
+
 /// The most Steiner points and tetrahedra `mesh.tet.generate` may be asked for.
 const TET_MAX_STEINER: u64 = 10_000_000;
 const TET_MAX_TETS: u64 = 50_000_000;
@@ -127,13 +139,7 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
     let cdt = tetrahedralize(&surface, &cdt_options)?;
     let gate = cdt.gate(surface.volume())?.into_result()?;
 
-    let next = |last: Option<u32>| last.map_or(Some(1), |l| l.checked_add(1));
-    let first_node = next(s.model.nodes().keys().next_back().copied());
-    let first_element = next(s.model.elements().keys().next_back().copied());
-    let fits = |first: Option<u32>, count: usize| first.filter(|&f| u64::from(f) + count as u64 - 1 <= u64::from(MAX_LABEL));
-    let (Some(first_node), Some(first_element)) = (fits(first_node, cdt.points.len()), fits(first_element, cdt.tets.len())) else {
-        return Err(EngineError::Params(format!("the mesh needs labels beyond {MAX_LABEL}")));
-    };
+    let (first_node, first_element) = next_labels(s, cdt.points.len(), cdt.tets.len())?;
     for (i, xyz) in cdt.points.iter().enumerate() {
         s.model.set_node(first_node + i as u32, *xyz)?;
     }
@@ -172,6 +178,143 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
         "boundary_faces": cdt.boundary.len(),
         "volume": gate.volume,
         "boundary_volume": surface.volume(),
+    }))
+}
+
+pub const PLANAR: CommandSpec = CommandSpec {
+    id: "mesh.planar",
+    label: "2D Mesh",
+    params: r#"{"size": 1.0, "kind": "quad4|quad8|tri3|tri6" (default quad4), and either "polygon": [[x, y], ...] with optional "holes": [[[x, y], ...], ...] and "name": "Plane" (the body name its tags use), or "body": "Body1", "face": "F2:top", "tolerance": 0.05 (a planar face of an open design, parallel to XY); optional "max_elements": 1000000 (1..=4000000)} — meshes the planar region with 2D elements in the XY plane (a face at z = c is meshed at z = 0) for plane stress, plane strain or axisymmetric sections (x the radius, Y the axis): free quadrilaterals (or constrained Delaunay triangles) of about `size`, mid-side nodes on the boundary for quadratic kinds. Adds nodes and elements after the largest existing labels and tags them: the elements with the face (polygon: face `area` of body `name`), the boundary element edges with edges named after the neighbouring face of the body (polygon: `e1`, `e2`, … side by side, the outer loop then each hole, and vertices `v1`, … at the corners), so sets on those edges carry loads and boundary conditions"#,
+    kind: CommandKind::Model,
+    run: planar,
+};
+
+/// Most points of a `mesh.planar` polygon or hole, and most holes.
+const PLANAR_MAX_POINTS: usize = 100_000;
+const PLANAR_MAX_HOLES: usize = 10_000;
+const PLANAR_MAX_ELEMENTS: u64 = 4_000_000;
+
+/// A list of `[x, y]` points.
+fn polygon(v: &Value, what: &str) -> Result<Vec<[f64; 2]>> {
+    let bad = || EngineError::Params(format!("`{what}` must be a list of 3 to {PLANAR_MAX_POINTS} [x, y] points"));
+    let raw = v.as_array().filter(|a| (3..=PLANAR_MAX_POINTS).contains(&a.len())).ok_or_else(bad)?;
+    raw.iter()
+        .map(|p| match p.as_array().map(Vec::as_slice) {
+            Some([x, y]) => x.as_f64().zip(y.as_f64()).map(|(x, y)| [x, y]).filter(|c| c.iter().all(|v| v.is_finite())),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(bad)
+}
+
+fn planar(s: &mut Session, p: &Value) -> Result<Value> {
+    use modelcraft_mesh::planar::{Curve, face_boundary, mesh_region};
+    use modelcraft_model::Entity;
+
+    let size = p
+        .get("size")
+        .and_then(Value::as_f64)
+        .filter(|v| *v > 0.0 && v.is_finite())
+        .ok_or_else(|| EngineError::Params("`size` must be a positive number (the element size)".into()))?;
+    let kind = match p.get("kind") {
+        None => ElementKind::Quad4,
+        Some(k) => k
+            .as_str()
+            .and_then(ElementKind::from_name)
+            .filter(|k| k.dimension() == 2)
+            .ok_or_else(|| EngineError::Params("`kind` must be quad4, quad8, tri3 or tri6".into()))?,
+    };
+    let opts = modelcraft_mesh::quad::QuadOptions {
+        max_elements: optional_count(p, "max_elements", 1_000_000, 1..=PLANAR_MAX_ELEMENTS)?,
+        ..Default::default()
+    };
+    // The region's loops of curves, the body name, the face its elements fill, and each curve
+    // id's edge name.
+    let (loops, body, face, names): (Vec<Vec<Curve>>, String, String, BTreeMap<u32, String>) = match (p.get("polygon"), p.get("body")) {
+        (Some(outer), None) => {
+            let mut rings = vec![polygon(outer, "polygon")?];
+            if let Some(h) = p.get("holes") {
+                let list = h
+                    .as_array()
+                    .filter(|a| a.len() <= PLANAR_MAX_HOLES)
+                    .ok_or_else(|| EngineError::Params(format!("`holes` must be a list of at most {PLANAR_MAX_HOLES} polygons")))?;
+                for hole in list {
+                    rings.push(polygon(hole, "holes")?);
+                }
+            }
+            let name = match p.get("name") {
+                None => "Plane".to_string(),
+                Some(n) => n.as_str().map(str::to_string).ok_or_else(|| EngineError::Params("`name` must be a body name".into()))?,
+            };
+            GeometryRef::body(name.clone())?;
+            let mut id = 0u32;
+            let mut names = BTreeMap::new();
+            let loops = rings
+                .into_iter()
+                .map(|ring| {
+                    ring.into_iter()
+                        .map(|pt| {
+                            id += 1;
+                            names.insert(id, format!("e{id}"));
+                            Curve { id: Some(id), points: vec![pt] }
+                        })
+                        .collect()
+                })
+                .collect();
+            (loops, name, "area".to_string(), names)
+        }
+        (None, Some(_)) => {
+            let face_name = p.get("face").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`face` must be a face name".into()))?;
+            let (shape, mesh) = super::geometry::body_mesh(s, p)?;
+            let face = shape.face_index(face_name).ok_or_else(|| EngineError::Params(format!("body `{}` has no face `{face_name}`", shape.name)))?;
+            let b = face_boundary(&mesh.positions, &mesh.triangles, &mesh.tri_face, face, mesh.weld_distance)?;
+            let names = shape.faces().iter().enumerate().map(|(i, f)| (i as u32, f.name.clone())).collect();
+            (b.loops, shape.name.clone(), face_name.to_string(), names)
+        }
+        _ => return Err(EngineError::Params("give either `polygon` (and `holes`) or `body` with `face` and `tolerance`".into())),
+    };
+    let m = mesh_region(&loops, kind, size, &opts)?;
+
+    let (first_node, first_element) = next_labels(s, m.nodes.len(), m.elements.len())?;
+    for (i, xy) in m.nodes.iter().enumerate() {
+        s.model.set_node(first_node + i as u32, [xy[0], xy[1], 0.0])?;
+    }
+    let region = s.model.geometry_tag(&GeometryRef::face(body.clone(), face.clone())?)?;
+    for (i, nodes) in m.elements.iter().enumerate() {
+        let label = first_element + i as u32;
+        s.model.set_element(label, kind, nodes.iter().map(|v| first_node + v).collect())?;
+        s.model.tag_element(label, region)?;
+    }
+    let mut tags: BTreeMap<u32, u32> = BTreeMap::new();
+    for (e, edge, id) in &m.edges {
+        let Some(name) = names.get(id) else { continue };
+        let tag = match tags.get(id) {
+            Some(t) => *t,
+            None => {
+                let t = s.model.geometry_tag(&GeometryRef::new(body.clone(), Entity::Edge(name.clone()))?)?;
+                tags.insert(*id, t);
+                t
+            }
+        };
+        s.model.tag_element_edge(first_element + *e as u32, *edge, tag)?;
+    }
+    let polygon_input = p.get("polygon").is_some();
+    if polygon_input {
+        for (node, id) in &m.corners {
+            let t = s.model.geometry_tag(&GeometryRef::new(body.clone(), Entity::Vertex(format!("v{id}")))?)?;
+            s.model.tag_node(first_node + node, t)?;
+        }
+    }
+    let edges: Vec<&String> = tags.keys().filter_map(|id| names.get(id)).collect();
+    Ok(json!({
+        "body": body,
+        "face": face,
+        "kind": kind.name(),
+        "nodes": m.nodes.len(),
+        "elements": m.elements.len(),
+        "first_node": first_node,
+        "first_element": first_element,
+        "edges": edges,
     }))
 }
 
@@ -526,5 +669,81 @@ mod tests {
         assert_eq!(element.nodes.len(), 4);
         assert!(s.execute("mesh.tet.generate", &json!({"surface": 1})).is_err(), "an open surface bounds no volume");
         assert_eq!(s.model.elements().len(), 1);
+    }
+
+    #[test]
+    fn planar_meshes_a_polygon_that_solves_as_a_2d_model() {
+        let mut s = Session::default();
+        let hole: Vec<[f64; 2]> = (0..12).map(|k| std::f64::consts::TAU * k as f64 / 12.0).map(|t| [5.0 + t.cos(), 2.0 + t.sin()]).collect();
+        let r = s
+            .execute(
+                "mesh.planar",
+                &json!({"polygon": [[0, 0], [10, 0], [10, 4], [0, 4]], "holes": [hole], "size": 0.5, "kind": "quad8", "name": "Strip"}),
+            )
+            .unwrap();
+        assert_eq!(r["kind"], "quad8");
+        let elements = r["elements"].as_u64().unwrap() as usize;
+        assert!(elements > 20, "{r}");
+        assert!(s.model.elements().values().all(|e| e.kind == modelcraft_model::ElementKind::Quad8));
+        assert!(s.model.nodes().values().all(|n| n.xyz[2] == 0.0));
+        // Sets on the tagged edges carry the boundary condition and the load.
+        for (cmd, params) in [
+            ("model.set.create", json!({"name": "all", "geometry": [{"body": "Strip", "face": "area"}]})),
+            ("model.set.create", json!({"name": "left", "geometry": [{"body": "Strip", "edge": "e4"}]})),
+            ("model.set.create", json!({"name": "right", "geometry": [{"body": "Strip", "edge": "e2"}]})),
+            ("model.material.create", json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 210000.0, "poisson": 0.3}})),
+            ("model.section.create", json!({"name": "plate", "set": "all", "material": "Steel", "kind": {"type": "plane_stress", "thickness": 2.0}})),
+            ("model.boundary_condition.create", json!({"name": "hold", "type": "fixed", "target": {"set": "left"}})),
+            ("model.load.create", json!({"name": "pull", "type": "traction", "set": "right", "vector": [10.0, 0.0, 0.0]})),
+            ("model.step.create", json!({"name": "Pull", "procedure": {"type": "static"}, "boundary_conditions": ["hold"], "loads": ["pull"]})),
+        ] {
+            s.execute(cmd, &params).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let r = s.execute("solve.static", &json!({})).unwrap();
+        let total: f64 = r["reaction_total"][0].as_f64().unwrap();
+        // The traction over the right edge: 10 × 4 × 2.
+        assert!((total + 80.0).abs() < 1e-9, "{r}");
+        // A second mesh appends; failures change nothing.
+        let journal = s.journal.len();
+        let model = s.model.clone();
+        for bad in [
+            json!({"polygon": [[0, 0], [1, 0], [0, 1]], "size": 0}),
+            json!({"polygon": [[0, 0], [1, 0], [0, 1]], "size": 1e-9}),
+            json!({"polygon": [[0, 0], [1, 0], [0, 1]], "size": 0.1, "kind": "hex8"}),
+            json!({"polygon": [[0, 0], [1, 0]], "size": 0.1}),
+            json!({"polygon": [[0, 0], [1, 0], [1, 1], [0, 1]], "holes": [[[2, 2], [3, 2], [3, 3]]], "size": 0.1}),
+            json!({"polygon": [[0, 0], [1, 1], [1, 0], [0, 1]], "size": 0.1}),
+            json!({"polygon": [[0, 0], [1, 0], [0, 1]], "size": 0.1, "max_elements": 0}),
+            json!({"polygon": [[0, 0], [1, 0], [0, 1]], "size": 0.1, "name": ""}),
+            json!({"polygon": [[0, 0], [1, 0], [0, 1]], "size": 0.1, "body": "Body1", "face": "x"}),
+            json!({"body": "Body1", "face": "x", "tolerance": 0.1, "size": 1}),
+            json!({"size": 1}),
+        ] {
+            assert!(s.execute("mesh.planar", &bad).is_err(), "{bad}");
+        }
+        assert_eq!((s.journal.len(), &s.model), (journal, &model), "failures change nothing");
+    }
+
+    #[test]
+    fn planar_meshes_a_flat_face_of_a_design_with_edges_named_by_their_neighbours() {
+        use std::sync::Arc;
+
+        use modelcraft_geometry::open_design;
+        use modelcraft_geometry::sample::{Plate, plate_design};
+
+        let design = open_design(&plate_design(&Plate::default()).unwrap()).unwrap();
+        let names: Vec<String> = design.bodies[0].faces().iter().map(|f| f.name.clone()).collect();
+        let mut s = Session { design: Some(Arc::new(design)), ..Session::default() };
+        let mut meshed = 0;
+        for face in &names {
+            let Ok(r) = s.execute("mesh.planar", &json!({"body": "Body1", "face": face, "tolerance": 0.2, "size": 4.0, "kind": "tri6"})) else {
+                continue;
+            };
+            meshed += 1;
+            let edges: Vec<&str> = r["edges"].as_array().unwrap().iter().map(|e| e.as_str().unwrap()).collect();
+            // The plate's top and bottom faces border its four sides and the hole.
+            assert!(edges.len() >= 5 && edges.iter().all(|e| names.iter().any(|n| n == e)), "{face}: {edges:?}");
+        }
+        assert_eq!(meshed, 2, "the top and bottom faces are flat and parallel to XY; the sides and hole are not");
     }
 }

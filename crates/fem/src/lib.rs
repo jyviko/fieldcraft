@@ -15,6 +15,8 @@
 //! - [`material`]: isotropic and orthotropic elasticity matrices, von Mises stress;
 //! - [`element`]: the element table, stiffness (full, reduced, incompatible modes), consistent
 //!   and lumped mass, body forces, integration-point stresses and their extrapolation to nodes;
+//! - [`plane`]: 2D elements (plane stress, plane strain, axisymmetric) on tri3, tri6, quad4 and
+//!   quad8, with two displacement components per node;
 //! - [`face`]: consistent nodal forces of pressure on element faces;
 //! - [`uniform`]: uniform-strain (one-point) hexahedron and tetrahedron kinematics, hourglass
 //!   shape vectors and element frequency bounds for explicit dynamics;
@@ -35,6 +37,7 @@ pub mod element;
 pub mod face;
 pub mod jet;
 pub mod material;
+pub mod plane;
 pub mod quadrature;
 pub mod shape;
 pub mod uniform;

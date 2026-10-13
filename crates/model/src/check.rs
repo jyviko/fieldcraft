@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::loads::Distribution;
-use crate::{BoundaryCondition, Elastic, Error, Load, Model, Procedure, Result, SectionKind, Target};
+use crate::{BoundaryCondition, Elastic, ElementKind, Error, Extent, Load, Model, Procedure, Result, SectionKind, Target};
 
 /// How serious a [`Diagnostic`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -47,11 +47,14 @@ pub struct ResolvedSet {
     pub nodes: Vec<u32>,
     pub elements: Vec<u32>,
     pub faces: Vec<crate::ElementFace>,
+    /// Element edges (every element kind; 2D models load the edges of their 2D elements).
+    #[serde(default)]
+    pub edges: Vec<crate::ElementEdge>,
 }
 
 impl ResolvedSet {
     pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty() && self.elements.is_empty() && self.faces.is_empty()
+        self.nodes.is_empty() && self.elements.is_empty() && self.faces.is_empty() && self.edges.is_empty()
     }
 }
 
@@ -70,9 +73,30 @@ pub struct Resolved {
     pub nodal_loads: BTreeMap<String, Vec<(u32, [f64; 3])>>,
     /// The check's warnings (a resolved model has no errors).
     pub warnings: Vec<Diagnostic>,
+    /// How each element of a 2D section (plane stress, plane strain, axisymmetric) extends out
+    /// of its plane; empty for a model without 2D sections. A model is 2D or not as a whole.
+    pub planar: BTreeMap<u32, Extent>,
 }
 
 impl Resolved {
+    /// Whether the model is a 2D model (its sections are plane stress, plane strain or
+    /// axisymmetric).
+    pub fn is_planar(&self) -> bool {
+        !self.planar.is_empty()
+    }
+
+    /// How a 2D model extends out of its plane: revolved when any of its sections is
+    /// axisymmetric (the check refuses a mix), else the first element's thickness; `None` for a
+    /// model without 2D sections.
+    pub fn extent(&self) -> Option<Extent> {
+        if self.planar.values().any(|e| *e == Extent::Revolved) { Some(Extent::Revolved) } else { self.planar.values().next().copied() }
+    }
+
+    /// The edges of a set that belong to 2D elements: where a 2D model's surface loads act.
+    pub fn planar_edges(&self, set: &str) -> Vec<crate::ElementEdge> {
+        self.sets.get(set).map(|s| s.edges.iter().filter(|e| self.planar.contains_key(&e.element)).copied().collect()).unwrap_or_default()
+    }
+
     /// The nodes a boundary condition, force or moment acts on.
     pub fn target_nodes(&self, target: &Target) -> &[u32] {
         match target {
@@ -160,6 +184,14 @@ impl Model {
             }
             resolved.sets.insert(name.clone(), r);
         }
+        // The elements of 2D sections.
+        for sec in self.sections.values() {
+            if let (Some(extent), Some(r)) = (sec.kind.extent(), resolved.sets.get(&sec.set)) {
+                for &e in &r.elements {
+                    resolved.planar.insert(e, extent);
+                }
+            }
+        }
         let empty = crate::ResolvedSet::default();
         let set_of = |name: &str| resolved.sets.get(name).unwrap_or(&empty);
 
@@ -191,12 +223,16 @@ impl Model {
             if r.elements.is_empty() {
                 d.error(&subject, format!("set `{}` has no elements", sec.set));
             }
-            let fits = |k: crate::ElementKind| match sec.kind {
+            let fits = |k: ElementKind| match sec.kind {
                 SectionKind::Solid {} => k.dimension() == 3,
-                SectionKind::Shell { .. } => k.dimension() == 2,
-                SectionKind::Beam { .. } => k == crate::ElementKind::Beam2,
-                SectionKind::Rod { .. } => k == crate::ElementKind::Rod2,
+                SectionKind::Shell { .. } | SectionKind::PlaneStress { .. } | SectionKind::PlaneStrain { .. } | SectionKind::Axisymmetric {} => {
+                    k.dimension() == 2
+                }
+                SectionKind::Beam { .. } => k == ElementKind::Beam2,
+                SectionKind::Rod { .. } => k == ElementKind::Rod2,
             };
+            // The linear element with an incompatible-modes formulation for this kind of section.
+            let incompatible_kind = if sec.kind.is_planar() { ElementKind::Quad4 } else { ElementKind::Hex8 };
             let mut wrong = Vec::new();
             let mut not_hex8 = Vec::new();
             let mut along = Vec::new();
@@ -206,7 +242,7 @@ impl Model {
                 if !fits(el.kind) {
                     wrong.push(e);
                 }
-                if sec.formulation.incompatible_modes && el.kind != crate::ElementKind::Hex8 {
+                if sec.formulation.incompatible_modes && el.kind != incompatible_kind {
                     not_hex8.push(e);
                 }
                 if let SectionKind::Beam { orientation, .. } = sec.kind
@@ -225,8 +261,17 @@ impl Model {
                 d.error(&subject, format!("a {} section cannot hold elements {}", sec.kind.name(), first_labels(&wrong)));
             }
             if !not_hex8.is_empty() {
-                d.error(&subject, format!("incompatible modes apply to hex8 elements only, not elements {}", first_labels(&not_hex8)));
+                d.error(
+                    &subject,
+                    format!(
+                        "incompatible modes apply to {} elements only, not elements {} (in a {} section)",
+                        incompatible_kind.name(),
+                        first_labels(&not_hex8),
+                        sec.kind.name()
+                    ),
+                );
             }
+
             if !along.is_empty() {
                 d.error(&subject, format!("the orientation vector is parallel to elements {}", first_labels(&along)));
             }
@@ -241,6 +286,7 @@ impl Model {
         if !unsectioned.is_empty() {
             d.error("model", format!("elements {} have no section", first_labels(&unsectioned)));
         }
+        self.check_planar(&resolved, &mut d);
 
         // Mass: frequency steps and gravity need a density in every material in use.
         let needs_mass = self
@@ -254,7 +300,13 @@ impl Model {
                 };
                 Some(format!("step `{}` {why}", s.name))
             })
-            .or_else(|| self.loads.iter().find(|(_, l)| matches!(l, Load::Gravity { .. })).map(|(n, _)| format!("load `{n}` is gravity")));
+            .or_else(|| {
+                self.loads.iter().find_map(|(n, l)| match l {
+                    Load::Gravity { .. } => Some(format!("load `{n}` is gravity")),
+                    Load::Centrifugal { .. } => Some(format!("load `{n}` is centrifugal")),
+                    _ => None,
+                })
+            });
         if let Some(why) = needs_mass {
             let used: BTreeSet<&str> = self.sections.values().map(|s| s.material.as_str()).collect();
             for m in used {
@@ -285,9 +337,9 @@ impl Model {
             Target::Set(s) => {
                 let rotational: &BTreeSet<u32> = rotational.get_or_init(|| {
                     self.elements
-                        .values()
-                        .filter(|e| e.kind.dimension() == 2 || e.kind == crate::ElementKind::Beam2)
-                        .flat_map(|e| e.nodes.iter().copied())
+                        .iter()
+                        .filter(|(l, e)| (e.kind.dimension() == 2 && !resolved.planar.contains_key(l)) || e.kind == ElementKind::Beam2)
+                        .flat_map(|(_, e)| e.nodes.iter().copied())
                         .collect()
                 });
                 set_of(s).nodes.iter().any(|n| rotational.contains(n))
@@ -325,8 +377,8 @@ impl Model {
                 Load::Moment { target, .. } if !has_rotations(target) => {
                     d.error(&subject, format!("{target} has no nodes with rotations; apply the moment to a reference point coupled to it"))
                 }
-                Load::Pressure { set, .. } if set_of(set).faces.is_empty() => {
-                    d.error(&subject, format!("set `{set}` has no element faces to press on"))
+                Load::Pressure { set, .. } if set_of(set).faces.is_empty() && resolved.planar_edges(set).is_empty() => {
+                    d.error(&subject, format!("set `{set}` has no element faces (or 2D element edges) to press on"))
                 }
                 Load::BodyForce { set, .. } if set_of(set).elements.is_empty() => d.error(&subject, format!("set `{set}` has no elements")),
                 Load::Gravity { acceleration, set } => {
@@ -338,7 +390,11 @@ impl Model {
                         d.error(&subject, format!("set `{s}` has no elements"));
                     }
                 }
+                Load::Centrifugal { set: Some(s), .. } if set_of(s).elements.is_empty() => d.error(&subject, format!("set `{s}` has no elements")),
                 _ => {}
+            }
+            if resolved.is_planar() {
+                Self::check_planar_load(load, resolved.extent(), &subject, &mut d);
             }
         }
 
@@ -406,11 +462,12 @@ impl Model {
             Load::Force { target, vector, distribution } | Load::Moment { target, vector, distribution } => (target, *vector, *distribution),
             Load::Traction { set, vector } => {
                 let faces = r.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default();
-                if faces.is_empty() {
-                    return Err(format!("set `{set}` has no element faces to load"));
+                let edges = r.planar_edges(set);
+                if faces.is_empty() && edges.is_empty() {
+                    return Err(format!("set `{set}` has no element faces (or 2D element edges) to load"));
                 }
-                let w = self.surface_weights(faces).map_err(|e| e.to_string())?;
-                return Ok(Some(w.into_iter().map(|(n, a)| (n, scale(*vector, a))).collect()));
+                let w = if faces.is_empty() { self.edge_weights(&edges, &r.planar) } else { self.surface_weights(faces) };
+                return Ok(Some(w.map_err(|e| e.to_string())?.into_iter().map(|(n, a)| (n, scale(*vector, a))).collect()));
             }
             _ => return Ok(None),
         };
@@ -429,14 +486,16 @@ impl Model {
         if set.nodes.is_empty() {
             return Err(format!("set `{name}` has no nodes"));
         }
+        let edges = if set.faces.is_empty() { r.planar_edges(name) } else { Vec::new() };
         Ok(Some(match distribution {
             Distribution::PerNode => set.nodes.iter().map(|n| (*n, vector)).collect(),
-            Distribution::Total if set.faces.is_empty() => {
+            Distribution::Total if set.faces.is_empty() && edges.is_empty() => {
                 let share = 1.0 / set.nodes.len() as f64;
                 set.nodes.iter().map(|n| (*n, scale(vector, share))).collect()
             }
             Distribution::Total => {
-                let w = self.surface_weights(&set.faces).map_err(|e| e.to_string())?;
+                let w = if edges.is_empty() { self.surface_weights(&set.faces) } else { self.edge_weights(&edges, &r.planar) };
+                let w = w.map_err(|e| e.to_string())?;
                 let area: f64 = w.values().sum();
                 if !(area > 0.0 && area.is_finite()) {
                     return Err(format!("the faces of set `{name}` have no area to share the load by"));
@@ -444,6 +503,92 @@ impl Model {
                 w.into_iter().map(|(n, a)| (n, scale(vector, a / area))).collect()
             }
         }))
+    }
+
+    /// The rules of a 2D model: one kind of 2D model (plane or axisymmetric) and nothing else, in
+    /// the XY plane (x ≥ 0 when axisymmetric), elements numbered counter-clockwise.
+    fn check_planar(&self, r: &Resolved, d: &mut Diagnostics) {
+        if !r.is_planar() {
+            return;
+        }
+        let others: Vec<&str> = self.sections.iter().filter(|(_, s)| !s.kind.is_planar()).map(|(n, _)| n.as_str()).collect();
+        if !others.is_empty() {
+            d.error(
+                "model",
+                format!(
+                    "2D sections (plane stress, plane strain, axisymmetric) and other sections ({}) cannot be mixed in one model yet",
+                    others.join(", ")
+                ),
+            );
+        }
+        let axisymmetric = r.extent() == Some(Extent::Revolved);
+        if axisymmetric && r.planar.values().any(|e| *e != Extent::Revolved) {
+            d.error("model", "axisymmetric and plane (stress or strain) sections cannot be mixed in one model");
+        }
+        let (mut off_plane, mut negative_radius, mut clockwise) = (Vec::new(), Vec::new(), Vec::new());
+        for &label in r.planar.keys() {
+            let Some(e) = self.elements.get(&label) else { continue };
+            let xyz: Vec<[f64; 3]> = e.nodes.iter().filter_map(|n| self.nodes.get(n)).map(|n| n.xyz).collect();
+            if xyz.iter().any(|p| p[2] != 0.0) {
+                off_plane.push(label);
+            }
+            if axisymmetric && xyz.iter().any(|p| p[0] < 0.0) {
+                negative_radius.push(label);
+            }
+            // Twice the signed area of the corner polygon (shoelace).
+            let corners = xyz.get(..e.kind.corner_count()).unwrap_or_default();
+            let area2: f64 = corners.iter().zip(corners.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum();
+            if !(area2 > 0.0) {
+                clockwise.push(label);
+            }
+        }
+        if !off_plane.is_empty() {
+            d.error("model", format!("2D elements {} have nodes off the XY plane (z ≠ 0); 2D models lie in the XY plane", first_labels(&off_plane)));
+        }
+        if !negative_radius.is_empty() {
+            d.error(
+                "model",
+                format!(
+                    "axisymmetric elements {} have nodes at negative x; x is the radius, so the model lies in x ≥ 0",
+                    first_labels(&negative_radius)
+                ),
+            );
+        }
+        if !clockwise.is_empty() {
+            d.error(
+                "model",
+                format!(
+                    "2D elements {} are clockwise or have no area in the XY plane (2D elements number their nodes counter-clockwise)",
+                    first_labels(&clockwise)
+                ),
+            );
+        }
+    }
+
+    /// A load in a 2D model: in the XY plane, and a rotation about the axis the model can carry.
+    fn check_planar_load(load: &Load, extent: Option<Extent>, subject: &str, d: &mut Diagnostics) {
+        let in_plane = match load {
+            Load::Force { vector, .. } | Load::Traction { vector, .. } | Load::BodyForce { vector, .. } => vector[2] == 0.0,
+            Load::Gravity { acceleration, .. } => acceleration[2] == 0.0,
+            Load::Moment { .. } | Load::Pressure { .. } => true,
+            Load::Centrifugal { point, axis, .. } => {
+                let ok = if extent == Some(Extent::Revolved) {
+                    axis[0] == 0.0 && axis[2] == 0.0 && point[0] == 0.0 && point[2] == 0.0
+                } else {
+                    axis[0] == 0.0 && axis[1] == 0.0
+                };
+                if !ok {
+                    d.error(
+                        subject,
+                        "in a 2D model a rotation is about the Y axis (axisymmetric: through x = 0, z = 0) or about an axis along Z (plane models)",
+                    );
+                }
+                true
+            }
+        };
+        if !in_plane {
+            d.error(subject, "a 2D model is loaded in the XY plane; this load has a Z component");
+        }
     }
 
     /// Whether a vector is parallel to the axis of a two-node element (or the element has no

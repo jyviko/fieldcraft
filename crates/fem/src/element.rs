@@ -34,6 +34,7 @@
 
 use modelcraft_model::ElementKind;
 
+use crate::basis::Basis;
 use crate::dense::{Cholesky, Matrix, inverse3, positive_inverse};
 use crate::dof::{DofSet, ElementDofs, Internal};
 use crate::material::{Elasticity, stress};
@@ -47,6 +48,9 @@ pub enum Family {
     Tetrahedron,
     Wedge,
     Hexahedron,
+    /// The 2D elements of plane and axisymmetric models ([`crate::plane`]).
+    Triangle,
+    Quadrilateral,
 }
 
 /// One row of the element table: everything the kernels need to know about an element kind.
@@ -386,15 +390,7 @@ impl<'a> Solid<'a> {
 
     /// The lumped (diagonal) mass per node: the consistent diagonal scaled to the element's mass.
     pub fn lumped_mass(&self, density: f64) -> Result<Vec<f64>> {
-        let m = self.mass(density)?;
-        // The consistent entries sum to the element's mass (the shape functions sum to one).
-        let total: f64 = m.data.iter().sum();
-        let diag: Vec<f64> = (0..m.n).map(|i| m.get(i, i)).collect();
-        let sum: f64 = diag.iter().sum();
-        if !(sum > 0.0) {
-            return Err(self.degenerate());
-        }
-        Ok(diag.iter().map(|d| d * total / sum).collect())
+        lump(&self.mass(density)?).ok_or_else(|| self.degenerate())
     }
 
     /// Consistent nodal forces of a uniform force per volume: fᵢ = ∫ Nᵢ b dV.
@@ -402,6 +398,22 @@ impl<'a> Solid<'a> {
         let mut f = vec![[0.0; 3]; self.ty.nodes];
         for p in self.ty.mass.points() {
             let g = self.gradients(p.xi)?;
+            for (fi, n) in f.iter_mut().zip(g.shape.values()) {
+                for k in 0..3 {
+                    fi[k] += n * b[k] * g.det * p.weight;
+                }
+            }
+        }
+        Ok(f)
+    }
+
+    /// Consistent nodal forces of a force per volume that varies with position (such as a
+    /// centrifugal load): fᵢ = ∫ Nᵢ b(x) dV.
+    pub fn body_force_field(&self, b: impl Fn([f64; 3]) -> [f64; 3]) -> Result<Vec<[f64; 3]>> {
+        let mut f = vec![[0.0; 3]; self.ty.nodes];
+        for p in self.ty.mass.points() {
+            let g = self.gradients(p.xi)?;
+            let b = b(self.position(p.xi));
             for (fi, n) in f.iter_mut().zip(g.shape.values()) {
                 for k in 0..3 {
                     fi[k] += n * b[k] * g.det * p.weight;
@@ -475,7 +487,16 @@ impl<'a> Solid<'a> {
 }
 
 /// Make a matrix exactly symmetric (the mean of it and its transpose), so assembly can rely on it.
-fn symmetrize(k: &mut Matrix) {
+/// HRZ lumping of a consistent mass matrix: its diagonal scaled to the element's mass (the
+/// entries sum to it, the shape functions summing to one); `None` when the diagonal has no mass.
+pub(crate) fn lump(m: &Matrix) -> Option<Vec<f64>> {
+    let total: f64 = m.data.iter().sum();
+    let diag: Vec<f64> = (0..m.n).map(|i| m.get(i, i)).collect();
+    let sum: f64 = diag.iter().sum();
+    (sum > 0.0).then(|| diag.iter().map(|d| d * total / sum).collect())
+}
+
+pub(crate) fn symmetrize(k: &mut Matrix) {
     let n = k.n;
     for i in 0..n {
         for j in i + 1..n {
@@ -589,6 +610,8 @@ pub fn extrapolation(ty: &ElementType, rule: Rule) -> Result<Extrapolation> {
         Family::Tetrahedron => shape::tet4(xi),
         Family::Wedge => shape::wedge6(xi),
         Family::Hexahedron => shape::hex8(xi),
+        Family::Triangle => Basis::Tri3.eval(xi),
+        Family::Quadrilateral => Basis::Quad4.eval(xi),
     };
     let mut corner_rows = vec![0.0; c * g];
     if g < c {

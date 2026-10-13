@@ -9,6 +9,7 @@
 
 pub mod cdt;
 pub mod delaunay;
+pub mod planar;
 pub mod quad;
 pub mod quality;
 pub mod size;

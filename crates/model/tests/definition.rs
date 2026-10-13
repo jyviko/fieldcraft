@@ -396,3 +396,113 @@ fn reference_point_labels_are_stable() {
         "41 is a node of the remeshed bar"
     );
 }
+
+/// Two quad4 in the XY plane (x from `x0`, 2 × 1), tagged as face `area` of body `Plate` with the
+/// edges `left` (x = x0) and `right`, and a static step.
+fn plate(kind: SectionKind, x0: f64) -> Model {
+    let mut m = Model::default();
+    for (i, x) in [x0, x0 + 1.0, x0 + 2.0].iter().enumerate() {
+        m.set_node(i as u32 + 1, [*x, 0.0, 0.0]).unwrap();
+        m.set_node(i as u32 + 4, [*x, 1.0, 0.0]).unwrap();
+    }
+    m.set_element(1, ElementKind::Quad4, vec![1, 2, 5, 4]).unwrap();
+    m.set_element(2, ElementKind::Quad4, vec![2, 3, 6, 5]).unwrap();
+    let area = m.geometry_tag(&GeometryRef::face("Plate", "area").unwrap()).unwrap();
+    let left = m.geometry_tag(&GeometryRef::new("Plate", Entity::Edge("left".into())).unwrap()).unwrap();
+    let right = m.geometry_tag(&GeometryRef::new("Plate", Entity::Edge("right".into())).unwrap()).unwrap();
+    m.tag_element(1, area).unwrap();
+    m.tag_element(2, area).unwrap();
+    m.tag_element_edge(1, 4, left).unwrap();
+    m.tag_element_edge(2, 2, right).unwrap();
+    m.add_set("all", Set::of_geometry(vec![GeometryRef::face("Plate", "area").unwrap()])).unwrap();
+    m.add_set("left", Set::of_geometry(vec![GeometryRef::new("Plate", Entity::Edge("left".into())).unwrap()])).unwrap();
+    m.add_set("right", Set::of_geometry(vec![GeometryRef::new("Plate", Entity::Edge("right".into())).unwrap()])).unwrap();
+    m.add_material("Steel", Material { elastic: Some(Elastic::Isotropic { young: 2.1e5, poisson: 0.3 }), density: Some(7.85e-9), fluid: None })
+        .unwrap();
+    m.add_section("plate", Section { set: "all".into(), material: "Steel".into(), kind, formulation: Formulation::default() }).unwrap();
+    m.add_boundary_condition("clamp", BoundaryCondition::Fixed { target: Target::Set("left".into()) }).unwrap();
+    m.add_load("pull", Load::Traction { set: "right".into(), vector: [10.0, 0.0, 0.0] }).unwrap();
+    m.add_load("total", Load::Force { target: Target::Set("right".into()), vector: [0.0, 6.0, 0.0], distribution: Distribution::Total }).unwrap();
+    let mut s = Step::new("Pull", Procedure::Static {});
+    s.boundary_conditions.insert("clamp".into());
+    s.loads.extend(["pull".to_string(), "total".to_string()]);
+    m.add_step(s, None).unwrap();
+    m
+}
+
+#[test]
+fn two_dimensional_models_resolve_edges_and_check_their_rules() {
+    // Edge sets resolve to element edges; tractions spread over length × thickness.
+    let m = plate(SectionKind::PlaneStress { thickness: 2.0 }, 0.0);
+    let r = m.resolve().unwrap();
+    assert!(r.is_planar());
+    assert_eq!(r.planar_edges("right"), vec![ElementEdge { element: 2, edge: 2 }]);
+    assert_eq!(r.sets["left"].nodes, vec![1, 4]);
+    let pull: f64 = r.nodal_loads["pull"].iter().map(|(_, v)| v[0]).sum();
+    assert!((pull - 10.0 * 1.0 * 2.0).abs() < 1e-12, "{pull}");
+    assert_eq!(r.nodal_loads["total"], vec![(3, [0.0, 3.0, 0.0]), (6, [0.0, 3.0, 0.0])]);
+    // Axisymmetric: the right edge at r = 2 is a cylinder of area 2π·2·1.
+    let r = plate(SectionKind::Axisymmetric {}, 0.0).resolve().unwrap();
+    let pull: f64 = r.nodal_loads["pull"].iter().map(|(_, v)| v[0]).sum();
+    assert!((pull - 10.0 * 4.0 * std::f64::consts::PI).abs() < 1e-9, "{pull}");
+
+    let errors = |m: &Model| -> Vec<String> { m.check().into_iter().filter(|d| d.severity == Severity::Error).map(|d| d.to_string()).collect() };
+    assert!(errors(&plate(SectionKind::Axisymmetric {}, -1.0)).iter().any(|e| e.contains("negative x")));
+    let mut m = plate(SectionKind::PlaneStrain { thickness: 1.0 }, 0.0);
+    m.set_node(6, [2.0, 1.0, 0.5]).unwrap();
+    m.set_element(1, ElementKind::Quad4, vec![1, 4, 5, 2]).unwrap();
+    let area = m.geometry_tag(&GeometryRef::face("Plate", "area").unwrap()).unwrap();
+    m.tag_element(1, area).unwrap();
+    m.add_load("lift", Load::Force { target: Target::Set("right".into()), vector: [0.0, 0.0, 1.0], distribution: Distribution::Total }).unwrap();
+    m.add_load("spin", Load::Centrifugal { angular_velocity: 10.0, point: [0.0; 3], axis: [0.0, 1.0, 0.0], set: None }).unwrap();
+    let e = errors(&m);
+    assert!(e.iter().any(|e| e.contains("off the XY plane")), "{e:#?}");
+    assert!(e.iter().any(|e| e.contains("clockwise")), "{e:#?}");
+    assert!(e.iter().any(|e| e.contains("load `lift`") && e.contains("Z component")), "{e:#?}");
+    assert!(e.iter().any(|e| e.contains("load `spin`") && e.contains("about an axis along Z")), "{e:#?}");
+    // A 2D section with a solid one; quad4 takes incompatible modes in a 2D section.
+    let mut m = plate(SectionKind::PlaneStress { thickness: 1.0 }, 0.0);
+    m.replace_section(
+        "plate",
+        Section {
+            set: "all".into(),
+            material: "Steel".into(),
+            kind: SectionKind::PlaneStress { thickness: 1.0 },
+            formulation: Formulation { incompatible_modes: true, ..Formulation::default() },
+        },
+    )
+    .unwrap();
+    assert!(errors(&m).is_empty(), "{:#?}", errors(&m));
+    for v in 1..=4 {
+        m.set_node(10 + v, [f64::from(v & 1), f64::from(v >> 1 & 1), 5.0]).unwrap();
+    }
+    m.set_element(9, ElementKind::Tet4, vec![11, 12, 13, 14]).unwrap();
+    m.add_set("tet", Set { elements: vec![9], ..Set::default() }).unwrap();
+    m.add_section("tet", Section { set: "tet".into(), material: "Steel".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
+        .unwrap();
+    assert!(errors(&m).iter().any(|e| e.contains("cannot be mixed")), "{:#?}", errors(&m));
+    // Pressure on an edge set of a 2D model is fine; on nothing it is an error.
+    let mut m = plate(SectionKind::PlaneStress { thickness: 1.0 }, 0.0);
+    m.add_load("press", Load::Pressure { set: "right".into(), magnitude: 1.0 }).unwrap();
+    m.add_load("bad", Load::Pressure { set: "all".into(), magnitude: 1.0 }).unwrap();
+    let e = errors(&m);
+    assert!(!e.iter().any(|e| e.contains("load `press`")) && e.iter().any(|e| e.contains("load `bad`")), "{e:#?}");
+    // Explicit element edges round-trip through JSON; edge 0 is an error.
+    let set = Set { edges: vec![ElementEdge { element: 2, edge: 2 }], ..Set::default() };
+    let json = serde_json::to_value(&set).unwrap();
+    assert_eq!(json, serde_json::json!({"edges": [{"element": 2, "edge": 2}]}));
+    assert!(m.add_set("zero", Set { edges: vec![ElementEdge { element: 2, edge: 0 }], ..Set::default() }).is_err());
+    assert!(m.add_set("five", Set { edges: vec![ElementEdge { element: 2, edge: 5 }], ..Set::default() }).is_ok());
+    assert!(m.resolve_set("five").is_err());
+    let json = serde_json::to_string(&m).unwrap();
+    assert_eq!(serde_json::from_str::<Model>(&json).unwrap(), m);
+    // Hostile centrifugal loads.
+    for bad in [
+        Load::Centrifugal { angular_velocity: 0.0, point: [0.0; 3], axis: [0.0, 1.0, 0.0], set: None },
+        Load::Centrifugal { angular_velocity: 1e200, point: [0.0; 3], axis: [0.0, 1.0, 0.0], set: None },
+        Load::Centrifugal { angular_velocity: 1.0, point: [f64::NAN, 0.0, 0.0], axis: [0.0, 1.0, 0.0], set: None },
+        Load::Centrifugal { angular_velocity: 1.0, point: [0.0; 3], axis: [0.0; 3], set: None },
+    ] {
+        assert!(m.add_load("hostile", bad.clone()).is_err(), "{bad:?}");
+    }
+}

@@ -849,6 +849,13 @@ boundary nodes, so faces sharing an edge share its nodes. DOIs below were checke
   [10.1016/S0925-7721(01)00047-5](https://doi.org/10.1016/S0925-7721(01)00047-5). Used without segment splitting
   (boundary nodes are prescribed).
 
+**B7.3a Free triangle meshes on prescribed boundary nodes** (`free_tri_mesh`, used by
+`mesh.planar` for tri3/tri6 2D models): the same constrained Delaunay triangulation of the full
+resolution loops, refined to the size by circumcentre insertion that never splits a boundary
+segment (J. Ruppert, *A Delaunay refinement algorithm for quality 2-dimensional mesh generation*,
+J. Algorithms 18(3):548–585, 1995, without segment splitting, so the boundary nodes stay the
+input points), Steiner points kept half the local spacing from the boundary.
+
 **B7.4 Smoothing and untangling of the quads.** **Verdict: BUILD ON.**
 - L. A. Freitag. *On combining Laplacian and optimization-based mesh smoothing techniques.* AMD-Vol. 220, ASME 1997;
   S. A. Canann, J. R. Tristano, M. L. Staten, *An approach to combined Laplacian and optimization-based smoothing for

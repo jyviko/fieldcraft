@@ -46,7 +46,7 @@
 mod bvh;
 pub mod intersect;
 mod topology;
-mod weld;
+pub(crate) mod weld;
 
 #[cfg(test)]
 mod tests;

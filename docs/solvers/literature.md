@@ -979,6 +979,14 @@ the module docs):
   Lewis, H. D. Simon, SIAM J. Matrix Anal. Appl. 15(1):228–272, 1994; B. N. Parlett, *The
   Symmetric Eigenvalue Problem*, SIAM 1998; G. H. Golub, C. F. Van Loan, *Matrix Computations*,
   4th ed., 2013.
+- 2D elements (plane stress, plane strain, axisymmetric): Zienkiewicz, Taylor & Zhu 2013, ch. 6
+  and §6.6; Hughes 2000, §2.7 and §3.5. Quad4 incompatible modes (QM6): Wilson et al. 1973 and
+  Taylor, Beresford & Wilson 1976 as for hex8; in axisymmetric elements the modes' strain
+  operator is shifted by its volume mean, the patch-test correction of E. L. Wilson and A.
+  Ibrahimbegovic, *Use of incompatible displacement modes for the calculation of element
+  stiffnesses or stresses*, Finite Elements in Analysis and Design 7(3):229–241, 1990. Rotating
+  discs and cylinders for verification: S. Timoshenko, J. N. Goodier, *Theory of Elasticity*,
+  3rd ed., McGraw-Hill 1970, §32.
 - Wedge6: the linear triangle times the linear interval; the symmetric three-point triangle rule
   (Zienkiewicz, Taylor & Zhu 2013, table 6.3) times two-point Gauss–Legendre.
 - Couplings and constraint elimination: rigid links and master–slave elimination by

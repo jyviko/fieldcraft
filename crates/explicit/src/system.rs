@@ -368,6 +368,17 @@ impl System {
                         }
                     });
                 }
+                Load::Centrifugal { angular_velocity, point, axis, set } => {
+                    let chosen: Option<&[u32]> = set.as_ref().map(|s| resolved.sets.get(s).map(|r| r.elements.as_slice()).unwrap_or_default());
+                    let xyz = &self.xyz;
+                    self.each_element(chosen, |nodes, weights, rho| {
+                        for (node, w) in nodes.iter().zip(weights) {
+                            let x = xyz.get(*node).copied().unwrap_or_default();
+                            let a = modelcraft_model::centrifugal_acceleration(*angular_velocity, *point, *axis, x);
+                            add_at(&mut f, *node, &a.map(|c| rho * w * c));
+                        }
+                    });
+                }
             }
         }
         self.external = f;

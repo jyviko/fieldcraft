@@ -24,7 +24,15 @@
 //!   gravity: `GRAV`; a step with several loads combines them with `LOAD`;
 //! - kinematic coupling: `RBE2` (the reference point independent); distributing coupling: `RBE3`
 //!   (equal weights on the set's translations; the reference point dependent);
-//! - frequency steps: `EIGRL` (Lanczos) with the step's mode count and range.
+//! - frequency steps: `EIGRL` (Lanczos) with the step's mode count and range;
+//! - 2D models: plane stress as membranes, `CTRIA3`, `CQUAD4`, `CTRIA6`, `CQUAD8` with a
+//!   `PSHELL` that has only a membrane material, every grid holding its out-of-plane degrees of
+//!   freedom 3–6 (`GRID` field PS); edge pressures as the consistent `FORCE`s the model's edge
+//!   integration gives. Plane strain and axisymmetric elements are not written: their cards
+//!   (`PPLANE`/`PLPLANE` with `CPLSTN*`/`CQUADX`, `CTRIAX6`, `PAXI`) differ between Nastran
+//!   dialects, so a deck could not be read the same everywhere;
+//! - centrifugal loads: `RFORCE` about an axis through the origin of the basic system (speed in
+//!   revolutions per time unit).
 //!
 //! Field widths, continuations and number forms are in [`card`]. Model content Nastran cannot
 //! express is reported as [`Error::Unsupported`], every item at once, and nothing is written.
@@ -188,10 +196,31 @@ struct MaterialUse {
 
 /// One property entry, and what its elements' connection entries need besides their nodes.
 enum Property {
-    Solid { mid: u32, rule: (Option<&'static str>, Option<&'static str>) },
-    Shell { mid: u32, thickness: f64, offset: Option<f64>, mcid: Option<u32> },
-    Beam { mid: u32, profile: BeamProfile, orientation: [f64; 3] },
-    Rod { mid: u32, area: f64 },
+    Solid {
+        mid: u32,
+        rule: (Option<&'static str>, Option<&'static str>),
+    },
+    Shell {
+        mid: u32,
+        thickness: f64,
+        offset: Option<f64>,
+        mcid: Option<u32>,
+    },
+    Beam {
+        mid: u32,
+        profile: BeamProfile,
+        orientation: [f64; 3],
+    },
+    Rod {
+        mid: u32,
+        area: f64,
+    },
+    /// Plane stress: a shell with only a membrane material.
+    Membrane {
+        mid: u32,
+        thickness: f64,
+        mcid: Option<u32>,
+    },
 }
 
 /// A constraint set: per node, the prescribed value of each degree of freedom.
@@ -299,7 +328,9 @@ impl<'m> Deck<'m> {
             let u = uses.entry(s.material.as_str()).or_default();
             match s.kind {
                 SectionKind::Solid {} => u.solid = true,
-                SectionKind::Shell { .. } => u.shell = true,
+                SectionKind::Shell { .. } | SectionKind::PlaneStress { .. } | SectionKind::PlaneStrain { .. } | SectionKind::Axisymmetric {} => {
+                    u.shell = true
+                }
                 SectionKind::Beam { .. } | SectionKind::Rod { .. } => u.line = true,
             }
         }
@@ -397,6 +428,25 @@ impl<'m> Deck<'m> {
                 SectionKind::Rod { area } => {
                     let Some(mid) = ids.isotropic else { continue };
                     self.add_property(sname, Property::Rod { mid, area }, elements.iter().copied())?;
+                }
+                SectionKind::PlaneStress { thickness } => {
+                    if sec.formulation.integration == Integration::Reduced || sec.formulation.incompatible_modes {
+                        self.problems.insert(format!(
+                            "section `{sname}`: reduced integration or incompatible modes of plane stress elements (Nastran's membranes have one formulation)"
+                        ));
+                    }
+                    let (mid, mcid) = match ids {
+                        MaterialIds { isotropic: Some(m), .. } => (m, None),
+                        MaterialIds { shell: Some(m), .. } => (m, Some(*self.material_csys.get_or_insert(1))),
+                        _ => continue,
+                    };
+                    self.add_property(sname, Property::Membrane { mid, thickness, mcid }, elements.iter().copied())?;
+                }
+                SectionKind::PlaneStrain { .. } | SectionKind::Axisymmetric {} => {
+                    self.problems.insert(format!(
+                        "section `{sname}`: {} elements (Nastran's plane strain and axisymmetric cards differ between dialects; not written)",
+                        sec.kind.name()
+                    ));
                 }
             }
         }
@@ -529,6 +579,22 @@ impl<'m> Deck<'m> {
                         self.problems.insert(format!("load `{name}`: gravity on part of the model (set `{s}`); Nastran's gravity acts on all of it"));
                     }
                     Load::Gravity { .. } => gravity += 1,
+                    Load::Centrifugal { set: Some(s), .. } if r.sets.get(s).map(|s| s.elements.len()) != Some(model.elements().len()) => {
+                        self.problems
+                            .insert(format!("load `{name}`: a rotation of part of the model (set `{s}`); Nastran's RFORCE acts on all of it"));
+                    }
+                    Load::Centrifugal { point, axis, .. } => {
+                        let c = [
+                            point[1] * axis[2] - point[2] * axis[1],
+                            point[2] * axis[0] - point[0] * axis[2],
+                            point[0] * axis[1] - point[1] * axis[0],
+                        ];
+                        if c.iter().any(|v| *v != 0.0) {
+                            self.problems.insert(format!(
+                                "load `{name}`: a rotation about an axis that misses the origin (written as RFORCE about the origin)"
+                            ));
+                        }
+                    }
                     _ => {}
                 }
                 let sid = next_id(&mut self.next_sid)?;
@@ -597,7 +663,10 @@ impl<'m> Deck<'m> {
     fn emit_mesh(&self, out: &mut String) -> Result<()> {
         comment(out, "nodes");
         for (label, node) in self.model.nodes() {
-            Card::new("GRID").int(*label).blank().reals(node.xyz).write(out)?;
+            let grid = Card::new("GRID").int(*label).blank().reals(node.xyz);
+            // A 2D model's grids hold their out-of-plane translation and rotations.
+            let grid = if self.r.is_planar() { grid.blank().int(3456) } else { grid };
+            grid.write(out)?;
         }
         if !self.model.reference_points().is_empty() {
             comment(out, "reference points");
@@ -650,6 +719,7 @@ impl<'m> Deck<'m> {
                     Card::new("PBEAML").int(pid).int(*mid).blank().text(shape).end_line().reals(dims)
                 }
                 Property::Rod { mid, area } => Card::new("PROD").int(pid).int(*mid).real(*area),
+                Property::Membrane { mid, thickness, .. } => Card::new("PSHELL").int(pid).int(*mid).real(*thickness),
             };
             write_named(out, &format!("section {section}"), pid, card)?;
         }
@@ -664,6 +734,8 @@ impl<'m> Deck<'m> {
                 // CQUAD8 has four corner thicknesses before the material axes and the offset.
                 Property::Shell { offset, mcid, .. } if el.kind == ElementKind::Quad8 => card.blank().blank().blank().blank().opt(*mcid).opt(*offset),
                 Property::Shell { offset, mcid, .. } => card.opt(*mcid).opt(*offset),
+                Property::Membrane { mcid, .. } if el.kind == ElementKind::Quad8 => card.blank().blank().blank().blank().opt(*mcid),
+                Property::Membrane { mcid, .. } => card.opt(*mcid),
                 Property::Solid { .. } | Property::Rod { .. } => card,
             };
             card.write(out)?;
@@ -748,6 +820,18 @@ impl<'m> Deck<'m> {
                         entry(Card::new(card).int(*sid).int(*node).blank().real(1.0).reals(*v), out, &mut first)?;
                     }
                 }
+                Load::Pressure { .. } if self.r.is_planar() => {
+                    let forces = crate::edge_pressure_loads(self.model, self.r, [*name])?;
+                    let mut by_node: BTreeMap<u32, [f64; 3]> = BTreeMap::new();
+                    for ((node, dof), v) in forces {
+                        if let Some(c) = by_node.entry(node).or_default().get_mut(usize::from(dof) - 1) {
+                            *c = v;
+                        }
+                    }
+                    for (node, v) in by_node {
+                        entry(Card::new("FORCE").int(*sid).int(node).blank().real(1.0).reals(v), out, &mut first)?;
+                    }
+                }
                 Load::Pressure { set, magnitude } => {
                     for f in self.r.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default() {
                         if let Some(card) = self.pressure(*sid, *f, *magnitude) {
@@ -756,6 +840,12 @@ impl<'m> Deck<'m> {
                     }
                 }
                 Load::Gravity { acceleration, .. } => entry(Card::new("GRAV").int(*sid).blank().real(1.0).reals(*acceleration), out, &mut first)?,
+                Load::Centrifugal { angular_velocity, axis, .. } => {
+                    // RFORCE SID G CID A R1 R2 R3: about the basic origin (G blank), A in
+                    // revolutions per time unit along the direction R.
+                    let a = angular_velocity / (2.0 * std::f64::consts::PI);
+                    entry(Card::new("RFORCE").int(*sid).blank().blank().real(a).reals(*axis), out, &mut first)?
+                }
                 Load::BodyForce { .. } => {}
             }
         }

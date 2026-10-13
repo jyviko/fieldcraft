@@ -33,7 +33,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Mesh | Size field: global, per face and edge seeds, bias, curvature and proximity refinement | M2 | yes | planned |
 | Mesh | Free tet meshing (tet4, tet10 with mid-side nodes on the geometry) | M2 | | started |
 | Mesh | Quality metrics, certified validity, verify per set | M1–M2 | yes | done (metrics, gate) |
-| Mesh | 2D quad meshing of faces | M5 | yes | planned |
+| Mesh | 2D quad meshing of faces | M5 | yes | started (`modelcraft_mesh::quad`; `mesh.planar`: 2D models of a polygon or a planar face, quad4/quad8/tri3/tri6, edges tagged by their neighbouring face) |
 | Mesh | Mapped hex of six-sided regions | M5 | yes | planned |
 | Mesh | Sweep hex (extrusions, revolutions) | M5 | yes | planned |
 | Mesh | Automatic decomposition into sweepable and mappable regions | M5 | yes | planned |
@@ -46,6 +46,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Model | Materials: elastic (isotropic, orthotropic), density, unit-system check | M3 | | done |
 | Model | Materials: plasticity, hyperelasticity, damage, thermal | M8 | | planned |
 | Model | Sections: solid, shell, beam profiles; assignment by set | M3 | | done |
+| Model | 2D sections: plane stress, plane strain, axisymmetric (XY plane, Y the axis); element edges in sets; centrifugal load | M4 | | done |
 | Model | Composite layups, material orientations, continuum shells | M8 | yes | planned |
 | Model | Element formulation per region (integration, incompatible modes, hybrid) mapped per solver | M3 | yes | done (model; per-solver mapping with the deck writers) |
 | Model | Boundary conditions: fixed, displacement, symmetry | M3 | | done |
@@ -60,7 +61,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Decks | Nastran bulk data writer (`deck.write`, SOL 101 or 103 per deck; reports what Nastran cannot express) | M3 | | done |
 | Decks | LS-DYNA keyword writer (implicit; explicit in M8) | M3 | | done (implicit static and eigenvalue; beam sections planned) |
 | Decks | Readers keeping unknown keywords | M9 | | planned |
-| Solve | Own linear static and modal solver, verified against analytic solutions | M4 | yes | started (solid elements: tet4, tet10, wedge6, hex8, hex20; reference points, kinematic and distributing couplings, moments) |
+| Solve | Own linear static and modal solver, verified against analytic solutions | M4 | yes | started (solid elements: tet4, tet10, wedge6, hex8, hex20; 2D plane stress, plane strain and axisymmetric tri3, tri6, quad4 (full, incompatible modes), quad8 (full, reduced); reference points, kinematic and distributing couplings, moments; centrifugal loads) |
 | Solve | Own explicit dynamics solver (central differences, one-point hex8 with hourglass control, nodal-pressure tet4, bulk viscosity, energy balance), verified against analytic wave and impact solutions | M10 | yes | started (X1 core: small-strain elastic, rigid walls; large deformation, plasticity and contact planned) |
 | Results | Deformed shape, contours, mode shapes, probes, reaction sums | M4 | | started (results in the session, `solve.probe`, reaction sums; display planned) |
 | Results | XY and path plots, cuts, display groups, free-body forces, animation | M9 | | planned |
@@ -98,6 +99,15 @@ products are run, no documentation text is copied). Status: **done**, **started*
   body forces per volume, partial-DOF kinematic couplings, constraints on a coupled reference
   point, gravity on different sets or on parts of sections, hybrid other than tet4, reduced
   quadratic elements, materials without density, more than 10 shell integration points.
+- 2D models: Abaqus writes CPS*/CPE*/CAX* (3, 6, 4, 4R, 4I, 8, 8R) with the thickness on the
+  `*SOLID SECTION` line, edge surfaces `S1`… and `BR`/`BZ` body forces for axisymmetric elements;
+  Nastran writes plane stress as membranes (`PSHELL` with MID1 only, grids holding 3456 through
+  `GRID` PS) and edge pressures as consistent `FORCE`s, and refuses plane strain and
+  axisymmetric elements (their cards differ between Nastran dialects); LS-DYNA writes plane stress
+  and plane strain (unit thickness) as `*SECTION_SHELL` ELFORM 12/13, one-point quad4 (reduced
+  integration, with hourglass control) and tri3, and refuses quadratic 2D elements, full or
+  incompatible-mode quad4 and axisymmetric sections. Centrifugal loads: Abaqus `CENTRIF`
+  (ω², point, axis), Nastran `RFORCE` about an axis through the origin, LS-DYNA not yet.
 - Open item (LS-DYNA tet10 node order): the writer follows the manual's figure (mid-side nodes 8,
   9, 10 on edges 2-4, 3-4, 1-4), which disagrees with an earlier reading as the Abaqus order. It
   needs one confirmation run by a licensed user; agents never run commercial solvers.

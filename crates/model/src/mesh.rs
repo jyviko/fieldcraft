@@ -195,6 +195,16 @@ pub struct ElementFace {
     pub face: u8,
 }
 
+/// One edge of an element: the element's label and its edge number (1-based,
+/// [`ElementKind::edges`]). In a 2D model (plane stress, plane strain, axisymmetric) the edges on
+/// the boundary are what pressures and tractions act on, as faces are for solids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElementEdge {
+    pub element: u32,
+    pub edge: u8,
+}
+
 /// An element: a topology and its node labels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Element {

@@ -30,6 +30,11 @@
 //! order when LS-DYNA is started with `CASE` on its command line. A single step is written
 //! without cases.
 //!
+//! 2D models (plane stress and plane strain in the XY plane) are `*SECTION_SHELL` parts with
+//! ELFORM 12 and 13 ([`elements`]); plane strain is per unit thickness in LS-DYNA, so only a
+//! thickness of 1 is written; pressures on 2D element edges are the consistent nodal forces
+//! (`*LOAD_NODE_POINT`).
+//!
 //! What LS-DYNA cannot take is an [`Error::Unsupported`] naming the item: beam sections (not yet
 //! written), body forces per volume, kinematic couplings of some degrees of freedom only, boundary
 //! conditions on a coupled reference point, gravity on different sets, hybrid formulations other
@@ -188,6 +193,11 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
             let el = model.element(*e).ok_or_else(|| broken(format!("element {e} of section `{name}`")))?;
             by_kind.entry(el.kind).or_default().push((*e, el));
         }
+        if let SectionKind::PlaneStrain { thickness } = sec.kind
+            && thickness != 1.0
+        {
+            refused.insert(format!("section `{name}`: a plane strain thickness of {thickness} (LS-DYNA's plane strain is per unit thickness)"));
+        }
         if let SectionKind::Shell { points, .. } = sec.kind
             && points > MAX_SHELL_POINTS
         {
@@ -270,8 +280,12 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
                     }
                 }
                 Load::Traction { .. } => {}
+                Load::Pressure { .. } if r.is_planar() => {}
                 Load::Pressure { set, .. } => {
                     segment_sets.insert(set.as_str());
+                }
+                Load::Centrifugal { .. } => {
+                    refused.insert(format!("load `{l}`: a centrifugal load (not written to LS-DYNA decks yet)"));
                 }
                 Load::Gravity { set, .. } => {
                     gravity_sets.insert(set.as_deref());
@@ -414,6 +428,14 @@ fn parts(d: &mut Deck, plan: &Plan) -> Result<()> {
                 d.card([Field::from(area)]);
             }
             SectionKind::Beam { .. } => return Err(broken(format!("section `{}`: beams have no LS-DYNA formulation", p.name))),
+            SectionKind::PlaneStress { thickness } | SectionKind::PlaneStrain { thickness } => {
+                d.line("*SECTION_SHELL");
+                d.header(&["secid", "elform"]);
+                d.card([Field::from(p.id), Field::from(p.elform)]);
+                d.header(&["t1", "t2", "t3", "t4"]);
+                d.card([Field::from(thickness), Field::from(thickness), Field::from(thickness), Field::from(thickness)]);
+            }
+            SectionKind::Axisymmetric {} => return Err(broken(format!("section `{}`: axisymmetric sections have no LS-DYNA formulation", p.name))),
         }
     }
     for (h, hgid) in &plan.hourglasses {
@@ -621,12 +643,14 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
     if is_static {
         let mut gravity = [0.0f64; 3];
         let mut pointwise = Vec::new();
+        let mut edge_pressures = Vec::new();
         for (name, load) in &loads {
             match load {
                 Load::Force { .. } | Load::Moment { .. } if plan.uniform.contains_key(name.as_str()) => {
                     on_node_set(d, plan, name, matches!(load, Load::Moment { .. }), n);
                 }
                 Load::Force { .. } | Load::Moment { .. } | Load::Traction { .. } => pointwise.push(*name),
+                Load::Pressure { .. } if r.is_planar() => edge_pressures.push(name.as_str()),
                 Load::Pressure { set, magnitude } => {
                     let sid = plan.sets.get(set.as_str()).copied().unwrap_or_default();
                     d.comment(&format!("load `{name}`"));
@@ -640,10 +664,15 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
                     }
                 }
                 Load::BodyForce { .. } => return Err(broken(format!("load `{name}`: a body force"))),
+                Load::Centrifugal { .. } => return Err(broken(format!("load `{name}`: a centrifugal load"))),
             }
         }
         // The other concentrated loads node by node, summed where they share a node.
-        let point = crate::concentrated_loads(model, r, pointwise);
+        let mut point = crate::concentrated_loads(model, r, pointwise);
+        for (key, v) in crate::edge_pressure_loads(model, r, edge_pressures)? {
+            *point.entry(key).or_default() += v;
+        }
+        point.retain(|_, v| *v != 0.0);
         if !point.is_empty() {
             d.line("*LOAD_NODE_POINT");
             d.header(&["nid", "dof", "lcid", "sf"]);

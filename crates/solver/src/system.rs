@@ -3,18 +3,20 @@
 //! load vector of a step.
 //!
 //! Degrees of freedom ([`DofLayout`]): the kinds each mesh node's elements declare (three
-//! translations for solids), nodes by label, then six per coupled reference point (points by
+//! translations for solids, Ux and Uy for 2D elements), nodes by label, then six per coupled reference point (points by
 //! name): translations along X, Y, Z and rotations about them.
 
 use modelcraft_fem::element::{Formulation, Solid};
-use modelcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, elasticity, face};
+use modelcraft_fem::plane::{Plane, Theory};
+use modelcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, ElementDofs, PointStress, elasticity, face, plane};
+use modelcraft_model::nodal::edge_pressure;
 use std::collections::BTreeSet;
 
-use modelcraft_model::{ElementKind, Load, Model, Resolved, SectionKind, Step, Target};
+use modelcraft_model::{ElementKind, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
 
 use crate::{Error, Result};
 
-/// A solid element ready for the kernels.
+/// An element ready for the kernels: a solid, or a 2D element (`theory`).
 #[derive(Debug, Clone)]
 pub struct Elem {
     pub label: u32,
@@ -25,11 +27,93 @@ pub struct Elem {
     pub formulation: Formulation,
     pub d: Elasticity,
     pub density: Option<f64>,
+    /// The 2D theory of an element of a 2D section; `None` for solids.
+    pub theory: Option<Theory>,
+}
+
+/// An element's kernel: a solid or a 2D element.
+#[derive(Debug, Clone, Copy)]
+pub enum Kernel<'a> {
+    Solid(Solid<'a>),
+    Plane(Plane<'a>),
+}
+
+impl Kernel<'_> {
+    /// The element's unknowns, in the order of its matrices.
+    pub fn dofs(&self) -> ElementDofs {
+        match self {
+            Kernel::Solid(s) => s.dofs(),
+            Kernel::Plane(p) => p.dofs(),
+        }
+    }
+
+    pub fn stiffness(&self, d: &Elasticity) -> modelcraft_fem::Result<modelcraft_fem::dense::Matrix> {
+        match self {
+            Kernel::Solid(s) => s.stiffness(d),
+            Kernel::Plane(p) => p.stiffness(d),
+        }
+    }
+
+    pub fn mass(&self, density: f64) -> modelcraft_fem::Result<modelcraft_fem::dense::Matrix> {
+        match self {
+            Kernel::Solid(s) => s.mass(density),
+            Kernel::Plane(p) => p.mass(density),
+        }
+    }
+
+    pub fn lumped_mass(&self, density: f64) -> modelcraft_fem::Result<Vec<f64>> {
+        match self {
+            Kernel::Solid(s) => s.lumped_mass(density),
+            Kernel::Plane(p) => p.lumped_mass(density),
+        }
+    }
+
+    /// Consistent nodal forces of a uniform force per volume, as 3-vectors (Z zero for 2D).
+    pub fn body_force(&self, b: [f64; 3]) -> modelcraft_fem::Result<Vec<[f64; 3]>> {
+        match self {
+            Kernel::Solid(s) => s.body_force(b),
+            Kernel::Plane(p) => Ok(p.body_force_field(|_| b)?.into_iter().map(|v| [v[0], v[1], 0.0]).collect()),
+        }
+    }
+
+    /// Consistent nodal forces of a force per volume b(x), as 3-vectors (Z zero for 2D).
+    pub fn body_force_field(&self, b: impl Fn([f64; 3]) -> [f64; 3]) -> modelcraft_fem::Result<Vec<[f64; 3]>> {
+        match self {
+            Kernel::Solid(s) => s.body_force_field(b),
+            Kernel::Plane(p) => Ok(p.body_force_field(b)?.into_iter().map(|v| [v[0], v[1], 0.0]).collect()),
+        }
+    }
+
+    /// Integration-point stresses for nodal displacements given as 3-vectors.
+    pub fn stresses(&self, d: &Elasticity, u: &[[f64; 3]]) -> modelcraft_fem::Result<Vec<PointStress>> {
+        match self {
+            Kernel::Solid(s) => s.stresses(d, u),
+            Kernel::Plane(p) => p.stresses(d, &u.iter().map(|v| [v[0], v[1]]).collect::<Vec<_>>()),
+        }
+    }
+
+    pub fn rule(&self) -> modelcraft_fem::quadrature::Rule {
+        match self {
+            Kernel::Solid(s) => s.rule(),
+            Kernel::Plane(p) => p.rule(),
+        }
+    }
+
+    pub fn ty(&self) -> &'static modelcraft_fem::ElementType {
+        match self {
+            Kernel::Solid(s) => s.ty,
+            Kernel::Plane(p) => p.ty,
+        }
+    }
 }
 
 impl Elem {
-    pub fn solid(&self) -> Result<Solid<'_>> {
-        Solid::new(self.kind, &self.xyz, self.formulation).map_err(|e| Error::element(self.label, e))
+    pub fn kernel(&self) -> Result<Kernel<'_>> {
+        let k = match self.theory {
+            None => Solid::new(self.kind, &self.xyz, self.formulation).map(Kernel::Solid),
+            Some(t) => Plane::new(self.kind, &self.xyz, self.formulation, t).map(Kernel::Plane),
+        };
+        k.map_err(|e| Error::element(self.label, e))
     }
 }
 
@@ -52,6 +136,8 @@ pub struct Mesh {
     pub elements: Vec<Elem>,
     pub points: Vec<Point>,
     pub layout: DofLayout,
+    /// The 2D theory when this is a 2D model (a model is 2D as a whole).
+    pub theory: Option<Theory>,
 }
 
 impl Mesh {
@@ -102,12 +188,18 @@ impl Mesh {
     /// Build it from the model and its resolved view, refusing what the solver cannot represent.
     pub fn new(model: &Model, resolved: &Resolved, max_dofs: usize) -> Result<Mesh> {
         let mut elements = Vec::new();
+        // A model is 2D as a whole (the model check refuses a mix).
+        let planar = model.sections().values().find_map(|s| Theory::from_section(&s.kind));
         for (name, section) in model.sections() {
-            if !matches!(section.kind, SectionKind::Solid {}) {
+            let theory = Theory::from_section(&section.kind);
+            if !matches!(section.kind, SectionKind::Solid {}) && theory.is_none() {
                 return Err(Error::NotSupported(format!(
-                    "{} sections (section `{name}`); the solver has solid elements so far",
+                    "{} sections (section `{name}`); the solver has solid and 2D (plane stress, plane strain, axisymmetric) elements so far",
                     section.kind.name()
                 )));
+            }
+            if theory.is_some() != planar.is_some() {
+                return Err(Error::NotSupported("2D and solid sections in one model".into()));
             }
             let material = model
                 .material(&section.material)
@@ -118,9 +210,16 @@ impl Mesh {
             let set = resolved.sets.get(&section.set).ok_or_else(|| Error::Invalid(format!("set `{}` is not resolved", section.set)))?;
             for &label in &set.elements {
                 let el = model.element(label).ok_or_else(|| Error::Invalid(format!("element {label} is missing")))?;
-                let formulation = Formulation::from_section(el.kind, &section.formulation).map_err(|e| Error::element(label, e))?;
-                elements.push((label, el.kind, el.nodes.clone(), formulation, d, material.density));
+                let (formulation, dofs) = match theory {
+                    None => Formulation::from_section(el.kind, &section.formulation).map(|f| (f, f.dofs())),
+                    Some(_) => plane::formulation(el.kind, &section.formulation).map(|f| (f, ElementDofs::new(DofSet::PLANE))),
+                }
+                .map_err(|e| Error::element(label, e))?;
+                elements.push((label, el.kind, el.nodes.clone(), formulation, d, material.density, theory, dofs));
             }
+        }
+        if let (Some(_), Some(name)) = (planar, model.couplings().keys().next()) {
+            return Err(Error::NotSupported(format!("couplings in 2D models (coupling `{name}`)")));
         }
         elements.sort_by_key(|e| e.0);
         let mut labels: Vec<u32> = elements.iter().flat_map(|e| e.2.iter().copied()).collect();
@@ -136,7 +235,7 @@ impl Mesh {
             .collect::<Result<_>>()?;
         let mut layout = DofLayout::builder();
         for e in &elements {
-            layout.element(&e.2, e.3.dofs());
+            layout.element(&e.2, e.7);
         }
         for p in &points {
             layout.point(p.label, DofSet::STRUCTURAL);
@@ -150,11 +249,11 @@ impl Mesh {
             .iter()
             .map(|l| model.node(*l).map(|n| n.xyz).ok_or_else(|| Error::Invalid(format!("node {l} is missing"))))
             .collect::<Result<_>>()?;
-        let mut mesh = Mesh { labels, xyz, elements: Vec::with_capacity(elements.len()), points, layout };
-        for (label, kind, nodes, formulation, d, density) in elements {
+        let mut mesh = Mesh { labels, xyz, elements: Vec::with_capacity(elements.len()), points, layout, theory: planar };
+        for (label, kind, nodes, formulation, d, density, theory, _) in elements {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
-            mesh.elements.push(Elem { label, kind, nodes: idx, xyz: exyz, formulation, d, density });
+            mesh.elements.push(Elem { label, kind, nodes: idx, xyz: exyz, formulation, d, density, theory });
         }
         Ok(mesh)
     }
@@ -205,11 +304,31 @@ pub fn prescribed(
             }
         }
     }
+    // Axisymmetric: a node on the axis cannot move radially.
+    if mesh.theory == Some(Theory::Axisymmetric) {
+        for (n, p) in mesh.xyz.iter().enumerate() {
+            let index = mesh.dof(n, DofKind::Ux)?;
+            if p[0] != 0.0 || !active.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let slot = out.get_mut(index).ok_or_else(|| Error::Internal("dof index".into()))?;
+            match *slot {
+                Some(v) if v != 0.0 && values => {
+                    return Err(Error::Invalid(format!(
+                        "{} is on the axis, where the radial displacement is zero, not {v}",
+                        mesh.describe_dof(index)
+                    )));
+                }
+                _ => *slot = Some(0.0),
+            }
+        }
+    }
     Ok(out)
 }
 
-/// Add a vector to the three degrees of freedom `dofs`.
-fn add(f: &mut [f64], dofs: [usize; 3], v: [f64; 3]) {
+/// Add a vector's components to the degrees of freedom `dofs` (the first `dofs.len()`
+/// components).
+fn add(f: &mut [f64], dofs: &[usize], v: [f64; 3]) {
     for (d, c) in dofs.iter().zip(v) {
         if let Some(x) = f.get_mut(*d) {
             *x += c;
@@ -217,15 +336,20 @@ fn add(f: &mut [f64], dofs: [usize; 3], v: [f64; 3]) {
     }
 }
 
-/// The translations (or rotations) of layout slot `slot`, if it has them.
-fn vector_dofs(mesh: &Mesh, slot: usize, rotation: bool) -> Option<[usize; 3]> {
+/// The translations (or rotations) of layout slot `slot`, if it has them: X, Y, Z, or X and Y
+/// for a node of a 2D model.
+fn vector_dofs(mesh: &Mesh, slot: usize, rotation: bool) -> Option<Vec<usize>> {
     let kind = |c| if rotation { DofKind::rotation(c) } else { DofKind::translation(c) };
-    let [a, b, c] = [0, 1, 2].map(|c| kind(c).and_then(|k| mesh.layout.dof(slot, k)));
-    Some([a?, b?, c?])
+    let dofs: Vec<Option<usize>> = [0, 1, 2].map(|c| kind(c).and_then(|k| mesh.layout.dof(slot, k))).into();
+    match dofs.as_slice() {
+        [Some(a), Some(b), Some(c)] => Some(vec![*a, *b, *c]),
+        [Some(a), Some(b), None] if !rotation && mesh.theory.is_some() => Some(vec![*a, *b]),
+        _ => None,
+    }
 }
 
 /// The translations of mesh node `node`.
-fn translations(mesh: &Mesh, node: usize) -> Result<[usize; 3]> {
+fn translations(mesh: &Mesh, node: usize) -> Result<Vec<usize>> {
     vector_dofs(mesh, node, false).ok_or_else(|| Error::Internal(format!("mesh node {node} has no translations")))
 }
 
@@ -259,7 +383,28 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                             )));
                         }
                     }
-                    add(&mut f, dofs, *v);
+                    add(&mut f, &dofs, *v);
+                }
+            }
+            Load::Pressure { set, magnitude } if mesh.theory.is_some() => {
+                if resolved.sets.get(set).is_some_and(|s| !s.faces.is_empty()) {
+                    return Err(Error::Invalid(format!(
+                        "load `{name}`: a 2D model's pressures act on element edges, and set `{set}` has element faces"
+                    )));
+                }
+                for g in resolved.planar_edges(set) {
+                    let e = mesh.element(g.element).ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} is missing", g.element)))?;
+                    let labels = model
+                        .edge_nodes(g)
+                        .ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} edge {} is missing", g.element, g.edge)))?;
+                    let idx: Vec<usize> = labels.iter().filter_map(|l| mesh.node(*l)).collect();
+                    let xyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
+                    let theory = e.theory.ok_or_else(|| Error::Internal("2D element without a theory".into()))?;
+                    let forces = edge_pressure(&xyz, theory.extent(), *magnitude)
+                        .map_err(|err| Error::element(g.element, modelcraft_fem::Error::Invalid(err.to_string())))?;
+                    for (i, v) in idx.iter().zip(forces) {
+                        add(&mut f, &translations(mesh, *i)?, v);
+                    }
                 }
             }
             Load::Pressure { set, magnitude } => {
@@ -275,7 +420,7 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                     let xyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
                     let forces = face::pressure(&xyz, *magnitude).map_err(|e| Error::element(fc.element, e))?;
                     for (i, v) in idx.iter().zip(forces) {
-                        add(&mut f, translations(mesh, *i)?, v);
+                        add(&mut f, &translations(mesh, *i)?, v);
                     }
                 }
             }
@@ -295,15 +440,31 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                     body(&mut f, mesh, e, *vector)?;
                 }
             }
+            Load::Centrifugal { angular_velocity, point, axis, set } => {
+                let chosen: Option<&[u32]> = set.as_ref().map(|s| resolved.sets.get(s).map(|r| r.elements.as_slice()).unwrap_or_default());
+                for e in &mesh.elements {
+                    if chosen.is_some_and(|c| c.binary_search(&e.label).is_err()) {
+                        continue;
+                    }
+                    let rho = e.density.ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} has no density", e.label)))?;
+                    let forces = e
+                        .kernel()?
+                        .body_force_field(|x| centrifugal_acceleration(*angular_velocity, *point, *axis, x).map(|a| rho * a))
+                        .map_err(|err| Error::element(e.label, err))?;
+                    for (node, v) in e.nodes.iter().zip(forces) {
+                        add(&mut f, &translations(mesh, *node)?, v);
+                    }
+                }
+            }
         }
     }
     Ok(f)
 }
 
 fn body(f: &mut [f64], mesh: &Mesh, e: &Elem, b: [f64; 3]) -> Result<()> {
-    let forces = e.solid()?.body_force(b).map_err(|err| Error::element(e.label, err))?;
+    let forces = e.kernel()?.body_force(b).map_err(|err| Error::element(e.label, err))?;
     for (node, v) in e.nodes.iter().zip(forces) {
-        add(f, translations(mesh, *node)?, v);
+        add(f, &translations(mesh, *node)?, v);
     }
     Ok(())
 }

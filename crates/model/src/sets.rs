@@ -10,10 +10,11 @@
 //! What each member contributes:
 //! - a body: the elements filling it, their nodes, and the element faces on the body's faces;
 //! - a face: the element faces on it, the shell elements filling it, and their nodes;
-//! - an edge: the nodes of element edges on it, the line elements filling it, and their nodes;
+//! - an edge: the element edges on it (what 2D models load), their nodes, the line elements
+//!   filling it, and their nodes;
 //! - a vertex: the node on it;
 //! - node labels: those nodes; element labels: those elements and their nodes; element faces:
-//!   those faces and their nodes.
+//!   those faces and their nodes; element edges: those edges and their nodes.
 
 use std::collections::BTreeMap;
 
@@ -22,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use crate::check::ResolvedSet;
 use crate::mesh::check_label;
 use crate::{
-    ElementFace, Error, GeometryRef, MAX_ELEMENTS, MAX_NODES, Model, Result, context, insert_new, not_in_use, remove_existing, replace_existing,
+    ElementEdge, ElementFace, Error, GeometryRef, MAX_ELEMENTS, MAX_NODES, Model, Result, context, insert_new, not_in_use, remove_existing,
+    replace_existing,
 };
 
 /// Most geometry references in one set.
@@ -40,6 +42,8 @@ pub struct Set {
     pub elements: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub faces: Vec<ElementFace>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edges: Vec<ElementEdge>,
 }
 
 impl Set {
@@ -49,28 +53,31 @@ impl Set {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.geometry.is_empty() && self.nodes.is_empty() && self.elements.is_empty() && self.faces.is_empty()
+        self.geometry.is_empty() && self.nodes.is_empty() && self.elements.is_empty() && self.faces.is_empty() && self.edges.is_empty()
     }
 
     /// Check the definition's size and labels, and sort its members.
     pub fn normalized(mut self) -> Result<Set> {
         if self.is_empty() {
-            return Err(Error::Invalid("a set needs geometry, nodes, elements or element faces".into()));
+            return Err(Error::Invalid("a set needs geometry, nodes, elements, element faces or element edges".into()));
         }
         if self.geometry.len() > MAX_SET_REFERENCES {
             return Err(Error::Limit(format!("a set names at most {MAX_SET_REFERENCES} geometry entities")));
         }
-        if self.nodes.len() > MAX_NODES || self.elements.len() > MAX_ELEMENTS || self.faces.len() > MAX_ELEMENTS {
+        if self.nodes.len() > MAX_NODES || self.elements.len() > MAX_ELEMENTS || self.faces.len() > MAX_ELEMENTS || self.edges.len() > MAX_ELEMENTS {
             return Err(Error::Limit("a set lists at most as many members as a model holds".into()));
         }
         for &l in &self.nodes {
             check_label("node", l)?;
         }
-        for &l in self.elements.iter().chain(self.faces.iter().map(|f| &f.element)) {
+        for &l in self.elements.iter().chain(self.faces.iter().map(|f| &f.element)).chain(self.edges.iter().map(|e| &e.element)) {
             check_label("element", l)?;
         }
         if let Some(f) = self.faces.iter().find(|f| f.face == 0) {
             return Err(Error::Invalid(format!("element {} face 0: faces are numbered from 1", f.element)));
+        }
+        if let Some(e) = self.edges.iter().find(|e| e.edge == 0) {
+            return Err(Error::Invalid(format!("element {} edge 0: edges are numbered from 1", e.element)));
         }
         for v in [&mut self.nodes, &mut self.elements] {
             v.sort_unstable();
@@ -78,6 +85,8 @@ impl Set {
         }
         self.faces.sort_unstable();
         self.faces.dedup();
+        self.edges.sort_unstable();
+        self.edges.dedup();
         self.geometry.sort();
         self.geometry.dedup();
         Ok(self)
@@ -134,6 +143,7 @@ impl Model {
         let mut nodes = Vec::new();
         let mut elements = Vec::new();
         let mut faces = Vec::new();
+        let mut edges = Vec::new();
         let mut missing = Vec::new();
 
         // Geometry: mark the selected tags by role, then make one pass over the tagged elements.
@@ -192,8 +202,7 @@ impl Model {
                 }
                 for (&edge, &t) in &tags.edges {
                     if on(&edge_tags, t) {
-                        let local = usize::from(edge).checked_sub(1).and_then(|i| element.kind.edges().get(i)).copied().unwrap_or_default();
-                        nodes.extend(local.iter().filter_map(|&i| element.nodes.get(i)));
+                        edges.push(ElementEdge { element: label, edge });
                     }
                 }
             }
@@ -224,15 +233,27 @@ impl Model {
                 None => missing.push(format!("element {} is not in the mesh", f.element)),
             }
         }
+        for &g in &set.edges {
+            match self.elements.get(&g.element) {
+                Some(e) if usize::from(g.edge) <= e.kind.edges().len() => edges.push(g),
+                Some(e) => missing.push(format!("element {} ({}) has no edge {}", g.element, e.kind.name(), g.edge)),
+                None => missing.push(format!("element {} is not in the mesh", g.element)),
+            }
+        }
         elements.sort_unstable();
         elements.dedup();
         faces.sort_unstable();
         faces.dedup();
+        edges.sort_unstable();
+        edges.dedup();
         for f in &faces {
             if let Some(e) = self.elements.get(&f.element) {
                 let local = usize::from(f.face).checked_sub(1).and_then(|i| e.kind.faces().get(i)).copied().unwrap_or_default();
                 nodes.extend(local.iter().filter_map(|&i| e.nodes.get(i)));
             }
+        }
+        for g in &edges {
+            nodes.extend(self.edge_nodes(*g).unwrap_or_default());
         }
         nodes.sort_unstable();
         nodes.dedup();
@@ -242,7 +263,15 @@ impl Model {
             missing.truncate(20);
             missing.push(format!("and {more} more"));
         }
-        (ResolvedSet { nodes, elements, faces }, missing)
+        (ResolvedSet { nodes, elements, faces, edges }, missing)
+    }
+
+    /// The node labels of an element edge, in the edge's order ([`crate::ElementKind::edges`]:
+    /// its ends, then the mid-side node of a quadratic element).
+    pub fn edge_nodes(&self, edge: ElementEdge) -> Option<Vec<u32>> {
+        let e = self.elements.get(&edge.element)?;
+        let local = e.kind.edges().get(usize::from(edge.edge).checked_sub(1)?)?;
+        local.iter().map(|&i| e.nodes.get(i).copied()).collect()
     }
 
     /// The node labels of an element face, in the face's order ([`crate::ElementKind::faces`]).

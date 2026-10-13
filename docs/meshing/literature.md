@@ -238,6 +238,21 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 - **Complexity.** High: about 8–12k lines of Rust including the predicate generator. It is the single most valuable
   investment in the tet pipeline.
 - **Code.** `MarcoAttene/CDT` is **GPL, or LGPL by build option** (README): FORBIDDEN.
+- **Implemented** in `modelcraft-mesh::cdt` from the paper only, with these choices:
+  - Steiner points are LNC points (§4.3) on the original segment, `a + t (b − a)` with `t` a double; the in-sphere test
+    on them is exact (interval filter, then exact dyadic integers) and perturbed with the same lexicographic lift as
+    the Delaunay step, so Bowyer–Watson insertion of Steiner points stays consistent with it.
+  - Facet recovery uses the modified gift-wrapping (§4.4) for every cavity, not only after Si's cavity expansion
+    fails: it is the always-correct path, and Si's expansion is a speed-up. Condition (ii) is an exact
+    proper-intersection test of closed simplices (separating plane through three of the vertices, then recursion
+    into the contact plane), which handles the coplanar configurations of CAD tessellations; recovered facets inside
+    a cavity stay constraints.
+  - Reference points (§3.3) are searched among the tetrahedra whose boxes meet the missing subsegment's box (they
+    contain the tetrahedra the subsegment crosses); on the corpus this picks the same point as searching the whole
+    diametral ball.
+  - Rounding (§5.1): a Steiner point whose rounding leaves an incident tetrahedron non-positive tries the doubles
+    within two ulps per coordinate, nearest first; the flip-based improvement of §5.1 is not implemented. All 20
+    valid corpus parts pass the validity gate after rounding.
 
 **A2.4 Diazzi and Attene 2021, convex polyhedral meshing.** **Verdict: reference.**
 - **Citation.** L. Diazzi, M. Attene. *Convex polyhedral meshing for robust solid modeling.* ACM TOG 40(6):259, 2021.

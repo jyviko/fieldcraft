@@ -34,8 +34,9 @@
 //! then the Steiner points, each with its segment and parameter, rounded to doubles; and for each
 //! boundary tetrahedron face the input triangle it lies on (so the B-rep face tag carries over).
 //! Rounding a Steiner point to the nearest doubles moves it off its segment by under an ulp and
-//! can, on a nearly flat tetrahedron, flip it (§5.1): [`TetMesh::gate`] runs the validity gate on
-//! the rounded mesh and its failures are reported, never hidden.
+//! can, on a nearly flat tetrahedron, flip it (§5.1). [`round`] then tries the doubles a few ulps
+//! around such a point for one that keeps every incident tetrahedron positive; [`TetMesh::gate`]
+//! runs the validity gate on the rounded mesh and any failure left is reported, never hidden.
 //!
 //! # Determinism and bounds
 //! Same surface → same mesh: the Delaunay step is deterministic, segments and facets are
@@ -45,6 +46,7 @@
 mod complex;
 mod facets;
 mod meet;
+mod round;
 mod segments;
 
 #[cfg(test)]
@@ -57,7 +59,7 @@ use modelcraft_model::ElementKind;
 use crate::delaunay::Triangulation;
 use crate::predicates::{GenericPoint, Point3, Sign};
 use crate::quality::{GateOptions, GateReport, validity_gate_elements};
-use crate::surface::BoundarySurface;
+use crate::surface::{BoundarySurface, Box3};
 use crate::{Error, Result};
 
 use complex::{Complex, NONE, corrupt, face_toward, sorted3};
@@ -66,7 +68,10 @@ use segments::Segment;
 /// Caps on the work of [`tetrahedralize`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CdtOptions {
-    /// Most Steiner points added on segments.
+    /// Most Steiner points added on segments. A boundary whose triangles are long next to
+    /// features much closer than their length (needle triangles) needs Steiner points at that
+    /// spacing all along them; the default is well above what the corpus needs (30k at most) and
+    /// stops such input in seconds.
     pub max_steiner: usize,
     /// Most tetrahedra (inside and outside, while building).
     pub max_tets: usize,
@@ -74,7 +79,7 @@ pub struct CdtOptions {
 
 impl Default for CdtOptions {
     fn default() -> Self {
-        CdtOptions { max_steiner: 1_000_000, max_tets: 20_000_000 }
+        CdtOptions { max_steiner: 50_000, max_tets: 20_000_000 }
     }
 }
 
@@ -94,6 +99,16 @@ pub struct BoundaryFace {
     pub triangle: u32,
 }
 
+impl BoundaryFace {
+    /// The face's 1-based number in the model's tet4 face order ([`ElementKind::faces`]): the
+    /// face without the opposite vertex.
+    pub fn tet4_face(&self) -> Option<u8> {
+        let k = usize::from(self.opposite);
+        let n = ElementKind::Tet4.faces().iter().position(|f| !f.contains(&k))?;
+        u8::try_from(n + 1).ok()
+    }
+}
+
 /// What the recovery did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CdtStats {
@@ -107,6 +122,9 @@ pub struct CdtStats {
     pub gift_wrapped_tets: usize,
     /// Tetrahedra in the box at the end.
     pub box_tets: usize,
+    /// Steiner points moved by a few ulps from their nearest doubles to keep every incident
+    /// tetrahedron positive ([`round`]).
+    pub rounding_adjusted: usize,
 }
 
 /// The constrained Delaunay tetrahedralization of a closed surface (see the module docs).
@@ -147,6 +165,9 @@ pub(crate) struct Recovery {
     edge_segment: HashMap<(u32, u32), usize>,
     /// Recovered facet triangles (sorted vertex ids) → facet.
     constraint: HashMap<[u32; 3], u32>,
+    /// The surface's vertices are the complex's first `surface` vertices, then 8 box corners,
+    /// then the Steiner points.
+    surface: usize,
     /// Steiner points in creation order: (segment, t).
     steiner: Vec<(usize, f64)>,
     options: CdtOptions,
@@ -163,7 +184,7 @@ pub fn tetrahedralize(surface: &BoundarySurface, options: &CdtOptions) -> Result
     }
     rec.verify()?;
     let inside = rec.label()?;
-    rec.output(surface.points().len(), &inside)
+    rec.output(&inside)
 }
 
 impl Recovery {
@@ -174,17 +195,14 @@ impl Recovery {
             return Err(Error::Invalid("the surface has no triangles".into()));
         }
         let mut points: Vec<[f64; 3]> = surface.points().iter().map(|p| p.map(|x| x + 0.0)).collect();
-        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        let mut bbox = Box3::EMPTY;
         for p in &points {
-            for k in 0..3 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
-            }
+            bbox.add_point(*p);
         }
-        let size = (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max).max(1.0);
+        let size = (0..3).map(|k| bbox.hi[k] - bbox.lo[k]).fold(0.0, f64::max).max(1.0);
         for corner in 0..8 {
             points.push(std::array::from_fn(|k| {
-                let x = if corner >> k & 1 == 0 { lo[k] - size } else { hi[k] + size };
+                let x = if corner >> k & 1 == 0 { bbox.lo[k] - size } else { bbox.hi[k] + size };
                 crate::predicates::snap_to_domain(x) + 0.0
             }));
         }
@@ -204,7 +222,7 @@ impl Recovery {
         let segments: Vec<Segment> = edges.iter().map(|&(a, b)| Segment::new(a, b)).collect();
         let edge_segment = edges.iter().enumerate().map(|(i, &e)| (e, i)).collect();
         let stats = CdtStats { delaunay_tets: cx.live_count(), ..CdtStats::default() };
-        Ok(Recovery { cx, triangles, segments, edge_segment, constraint: HashMap::new(), steiner: Vec::new(), options: *options, stats })
+        Ok(Recovery { cx, triangles, segments, edge_segment, constraint: HashMap::new(), surface: n, steiner: Vec::new(), options: *options, stats })
     }
 
     /// Every segment is an edge, no edge crosses a facet, every facet has triangles, every
@@ -217,7 +235,7 @@ impl Recovery {
                 if let &[u, v] = w
                     && !self.cx.has_edge(u, v, &mut scratch)?
                 {
-                    let at = self.cx.pt(u)?.approx();
+                    let at = self.cx.approx(u)?;
                     return Err(Error::Failed(format!("a boundary edge near {at:?} was lost during facet recovery")));
                 }
             }
@@ -229,15 +247,14 @@ impl Recovery {
             }
         }
         for f in 0..self.triangles.len() {
-            let ring = self.facet_ring(f)?;
-            if self.crossing_cavity(f, &ring)?.is_some() || !has_faces.get(f).copied().unwrap_or(false) {
+            if !has_faces.get(f).copied().unwrap_or(false) || !self.facet_present(f)? {
                 return Err(Error::Failed(format!("input triangle {f} is not a union of tetrahedron faces")));
             }
         }
         let live: Vec<[u32; 4]> = self.cx.live_tets().map(|(_, vs)| vs).collect();
         for vs in live {
             if self.cx.volume(vs)? != Sign::Positive {
-                let at = self.cx.pt(vs[0])?.approx();
+                let at = self.cx.approx(vs[0])?;
                 return Err(corrupt(&format!("a tetrahedron near {at:?} is not positive")));
             }
         }
@@ -248,75 +265,58 @@ impl Recovery {
     /// flips across every facet triangle (Diazzi et al. §4.5), then the exact check that each
     /// facet triangle has its inside tetrahedron on the side its normal points away from.
     fn label(&mut self) -> Result<Vec<bool>> {
-        const UNSET: u8 = 0;
-        let mut label = vec![UNSET; self.cx.slots()];
-        let corners = self.surface_vertices()..self.surface_vertices() + 8;
+        let mut label: Vec<Option<bool>> = vec![None; self.cx.slots()];
+        let corners = self.surface..self.surface + 8;
         let corner = self.cx.live_tets().find(|(_, vs)| vs.iter().any(|&v| corners.contains(&(v as usize))));
         let (start, _) = corner.ok_or_else(|| corrupt("no tetrahedron touches the bounding box"))?;
-        let set = |label: &mut Vec<u8>, t: u32, l: u8| {
-            if let Some(s) = label.get_mut(t as usize) {
-                *s = l;
-            }
-        };
-        set(&mut label, start, 1);
+        if let Some(l) = label.get_mut(start as usize) {
+            *l = Some(false);
+        }
         let mut queue = vec![start];
         while let Some(t) = queue.pop() {
-            let l = label.get(t as usize).copied().unwrap_or(UNSET);
+            let inside = label.get(t as usize).copied().flatten().unwrap_or(false);
             let vs = self.cx.tet(t)?;
             for (k, nb) in self.cx.adj(t)?.into_iter().enumerate() {
-                if nb == NONE {
-                    continue;
-                }
-                let flip = self.constraint.contains_key(&sorted3(face_toward(vs, k)));
-                let want = if flip { 3 - l } else { l };
-                match label.get(nb as usize).copied().unwrap_or(UNSET) {
-                    UNSET => {
-                        set(&mut label, nb, want);
+                let want = inside != self.constraint.contains_key(&sorted3(face_toward(vs, k)));
+                match label.get_mut(nb as usize) {
+                    None => {} // the hull
+                    Some(l @ None) => {
+                        *l = Some(want);
                         queue.push(nb);
                     }
-                    got if got != want => {
-                        let at = self.cx.pt(vs[k])?.approx();
+                    Some(Some(got)) if *got != want => {
+                        let at = self.cx.approx(vs[k])?;
                         return Err(Error::Failed(format!(
                             "inside/outside labelling is inconsistent near {at:?}: the surface does not bound a volume"
                         )));
                     }
-                    _ => {}
+                    Some(_) => {}
                 }
             }
         }
-        let mut inside = vec![false; label.len()];
         let live: Vec<(u32, [u32; 4])> = self.cx.live_tets().collect();
         for (t, vs) in live {
-            match label.get(t as usize).copied().unwrap_or(UNSET) {
-                UNSET => return Err(corrupt("a tetrahedron the flood fill did not reach")),
-                2 => {
-                    if let Some(s) = inside.get_mut(t as usize) {
-                        *s = true;
-                    }
+            match label.get(t as usize).copied().flatten() {
+                None => return Err(corrupt("a tetrahedron the flood fill did not reach")),
+                Some(false) => {}
+                Some(true) => {
                     for k in 0..4 {
                         let Some(&f) = self.constraint.get(&sorted3(face_toward(vs, k))) else { continue };
                         let [a, b, c] = *self.triangles.get(f as usize).ok_or_else(|| corrupt("facet id"))?;
                         let x = vs.get(k).copied().unwrap_or(NONE);
                         if self.cx.volume([a, b, c, x])? != Sign::Negative {
-                            let at = self.cx.pt(a)?.approx();
+                            let at = self.cx.approx(a)?;
                             return Err(Error::Failed(format!("input triangle {f} near {at:?} faces into the solid: the surface is inverted")));
                         }
                     }
                 }
-                _ => {}
             }
         }
-        Ok(inside)
+        Ok(label.into_iter().map(|l| l == Some(true)).collect())
     }
 
-    fn surface_vertices(&self) -> usize {
-        self.cx.points().len() - self.steiner.len() - 8
-    }
-
-    fn output(&self, n: usize, inside: &[bool]) -> Result<TetMesh> {
-        if n != self.surface_vertices() {
-            return Err(corrupt("vertex count"));
-        }
+    fn output(&self, inside: &[bool]) -> Result<TetMesh> {
+        let n = self.surface;
         // Surface vertices keep their ids; box corners disappear; Steiner points follow.
         let total = self.cx.points().len();
         let mut id = vec![NONE; total];
@@ -325,7 +325,7 @@ impl Recovery {
             if let Some(s) = id.get_mut(v) {
                 *s = v as u32;
             }
-            points.push(self.cx.pt(v as u32)?.approx());
+            points.push(self.cx.approx(v as u32)?);
         }
         let mut steiner = Vec::with_capacity(self.steiner.len());
         for (k, &(s, t)) in self.steiner.iter().enumerate() {
@@ -333,7 +333,7 @@ impl Recovery {
             if let Some(slot) = id.get_mut(v) {
                 *slot = points.len() as u32;
             }
-            points.push(self.cx.pt(v as u32)?.approx());
+            points.push(self.cx.approx(v as u32)?);
             steiner.push(SteinerPoint { segment: self.segment(s)?.ends, t });
         }
         let mut tets = Vec::new();
@@ -355,6 +355,7 @@ impl Recovery {
         }
         let mut stats = self.stats;
         stats.box_tets = self.cx.live_count();
+        stats.rounding_adjusted = round::repair(&mut points, &tets, n)?;
         Ok(TetMesh { points, steiner, tets, boundary, stats })
     }
 }

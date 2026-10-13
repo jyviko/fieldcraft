@@ -70,7 +70,7 @@ impl Recovery {
         let mut dirs: Vec<Vec<[f64; 3]>> = vec![Vec::new(); n];
         for s in &self.segments {
             let [a, b] = s.ends;
-            let (pa, pb) = (self.cx.pt(a)?.approx(), self.cx.pt(b)?.approx());
+            let (pa, pb) = (self.cx.approx(a)?, self.cx.approx(b)?);
             if let Some(d) = dirs.get_mut(a as usize) {
                 d.push(sub(pb, pa));
             }
@@ -86,14 +86,38 @@ impl Recovery {
     }
 
     /// Split missing segments until every one is an edge of the (Delaunay) tetrahedralization.
+    /// Alg. 2 sweeps all segments until none is missing; an insertion only changes edges between
+    /// vertices of the tetrahedra it deletes, so after the first sweep only the segments through
+    /// those vertices are checked again.
     pub(super) fn recover_segments(&mut self) -> Result<()> {
         let mut scratch = Vec::new();
+        let mut through: Vec<Vec<u32>> = vec![Vec::new(); self.cx.points().len()];
+        for (s, seg) in self.segments.iter().enumerate() {
+            for v in seg.ends {
+                if let Some(l) = through.get_mut(v as usize) {
+                    l.push(s as u32);
+                }
+            }
+        }
+        let mut queued = vec![false; self.segments.len()];
+        let mut work: Vec<usize> = (0..self.segments.len()).collect();
         for _ in 0..MAX_PASSES {
-            let mut split_any = false;
-            for s in 0..self.segments.len() {
+            if work.is_empty() {
+                return Ok(());
+            }
+            queued.fill(false);
+            let mut next: Vec<usize> = Vec::new();
+            let mut requeue = |s: usize, next: &mut Vec<usize>| {
+                if let Some(q) = queued.get_mut(s)
+                    && !*q
+                {
+                    *q = true;
+                    next.push(s);
+                }
+            };
+            for &s in &work {
                 let mut i = 0;
-                loop {
-                    let (Some(&(tu, u)), Some(&(tv, v))) = (self.segment(s)?.splits.get(i), self.segment(s)?.splits.get(i + 1)) else { break };
+                while let (Some(&(tu, u)), Some(&(tv, v))) = (self.segment(s)?.splits.get(i), self.segment(s)?.splits.get(i + 1)) {
                     if self.cx.has_edge(u, v, &mut scratch)? {
                         i += 1;
                         continue;
@@ -103,23 +127,31 @@ impl Recovery {
                     let [a, b] = self.segment(s)?.ends;
                     let (pa, pb) = (explicit(self.cx.pt(a)?)?, explicit(self.cx.pt(b)?)?);
                     let w = self.cx.push_point(GenericPoint::Lnc(Lnc::new(&pa, &pb, t)?))?;
+                    through.push(vec![s as u32]);
                     self.steiner.push((s, t));
                     if self.steiner.len() > self.options.max_steiner {
-                        return Err(Error::Limit(format!("more than {} Steiner points on segments", self.options.max_steiner)));
+                        let at = self.cx.approx(u)?;
+                        return Err(Error::Limit(format!(
+                            "more than {} Steiner points on boundary edges (the last near {at:?}): the boundary has features much thinner than its triangles are long; raise the cap or tessellate coarser",
+                            self.options.max_steiner
+                        )));
                     }
-                    self.cx.insert(w, u)?;
+                    let touched = self.cx.insert(w, u)?;
                     if let Some(seg) = self.segments.get_mut(s) {
                         seg.splits.insert(i + 1, (t, w));
                     }
-                    split_any = true;
-                    // Both halves wait for the next pass (Alg. 2 splits each missing segment
+                    requeue(s, &mut next);
+                    for x in touched {
+                        for &r in through.get(x as usize).map(Vec::as_slice).unwrap_or_default() {
+                            requeue(r as usize, &mut next);
+                        }
+                    }
+                    // Both halves wait for the next sweep (Alg. 2 splits each missing segment
                     // once per sweep).
                     i += 2;
                 }
             }
-            if !split_any {
-                return Ok(());
-            }
+            work = next;
         }
         Err(Error::Limit(format!("segment recovery did not finish in {MAX_PASSES} passes")))
     }
@@ -130,19 +162,22 @@ impl Recovery {
 
     /// Si's split parameter for the missing subsegment `(tu, u)`–`(tv, v)` of segment `s`.
     fn split_parameter(&mut self, s: usize, (tu, u): (f64, u32), (tv, v): (f64, u32)) -> Result<f64> {
-        let seg = self.segment(s)?.clone();
-        let [a, b] = seg.ends;
-        let (pa, pb) = (self.cx.pt(a)?.approx(), self.cx.pt(b)?.approx());
+        let (ends, acute) = {
+            let seg = self.segment(s)?;
+            (seg.ends, seg.acute)
+        };
+        let [a, b] = ends;
+        let (pa, pb) = (self.cx.approx(a)?, self.cx.approx(b)?);
         let length = dist(pa, pb);
         let mid = 0.5 * (tu + tv);
         let r = self.reference_point(u, v)?;
-        let chosen = match (r, seg.acute) {
+        let chosen = match (r, acute) {
             (None, _) => mid,
             // Two acute ends: the first split is the midpoint.
             (_, [true, true]) if tu < 0.5 && tv > 0.5 => 0.5,
             (Some(r), acute) => {
-                let pr = self.cx.pt(r)?.approx();
-                let (pu, pv) = (self.cx.pt(u)?.approx(), self.cx.pt(v)?.approx());
+                let pr = self.cx.approx(r)?;
+                let (pu, pv) = (self.cx.approx(u)?, self.cx.approx(v)?);
                 match acute {
                     [false, false] => {
                         let (ru, rv) = (dist(pu, pr), dist(pv, pr));
@@ -163,13 +198,12 @@ impl Recovery {
                             [false, true] => false,
                             _ => tv <= 0.5,
                         };
-                        let (pw, tw) = if w_is_a { (pa, 0.0) } else { (pb, 1.0) };
+                        let pw = if w_is_a { pa } else { pb };
                         let radius = dist(pw, pr);
                         let tp = if w_is_a { radius / length } else { 1.0 - radius / length };
                         let (t_near, t_far) = if w_is_a { (tu, tv) } else { (tv, tu) };
                         let at = |t: f64| -> [f64; 3] { std::array::from_fn(|k| pa[k] + t * (pb[k] - pa[k])) };
                         let p = at(tp);
-                        let _ = tw;
                         if dist(p, pr) < dist(p, at(t_far)) {
                             tp
                         } else {
@@ -183,7 +217,7 @@ impl Recovery {
         };
         let t = if chosen.is_finite() && chosen > tu && chosen < tv { chosen } else { mid };
         if !(t > tu && t < tv) {
-            let at = self.cx.pt(u)?.approx();
+            let at = self.cx.approx(u)?;
             return Err(Error::Failed(format!("a missing segment near {at:?} is too short to split further in double precision")));
         }
         Ok(t)
@@ -191,24 +225,27 @@ impl Recovery {
 
     /// The reference point of the missing subsegment `u v`: the vertex strictly inside its
     /// diametral sphere with the largest circumcircle through `u, v` (floating point; `None` if
-    /// rounding hides every encroaching vertex). A vertex exactly on the open subsegment makes the
+    /// rounding hides every encroaching vertex). Candidates are the vertices of the tetrahedra
+    /// whose boxes meet the subsegment's box, connected to `u`'s star: they include every
+    /// tetrahedron the subsegment crosses, whose vertices are the ones keeping it from being an
+    /// edge. (On the corpus this picks the same point as searching the whole diametral ball, at a
+    /// fraction of the cost.) A vertex exactly on the open subsegment makes the
     /// input invalid (a segment through a vertex), which is reported.
     fn reference_point(&mut self, u: u32, v: u32) -> Result<Option<u32>> {
-        let (pu, pv) = (self.cx.pt(u)?.approx(), self.cx.pt(v)?.approx());
+        let (pu, pv) = (self.cx.approx(u)?, self.cx.approx(v)?);
         let c: [f64; 3] = std::array::from_fn(|k| 0.5 * (pu[k] + pv[k]));
         let r2 = 0.25 * dot(sub(pu, pv), sub(pu, pv));
-        let r = r2.sqrt();
-        let (lo, hi) = (c.map(|x| x - r), c.map(|x| x + r));
-        let (near, _) = self.cx.tets_near(u, lo, hi, NEAR_CAP)?;
-        let mut seen: Vec<u32> = Vec::new();
+        let lo: [f64; 3] = std::array::from_fn(|k| pu[k].min(pv[k]));
+        let hi: [f64; 3] = std::array::from_fn(|k| pu[k].max(pv[k]));
+        let near = self.cx.tets_near(u, lo, hi, NEAR_CAP)?;
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
         let mut best: Option<(f64, u32)> = None;
         for t in near {
             for x in self.cx.tet(t)? {
-                if x == u || x == v || seen.contains(&x) {
+                if x == u || x == v || !seen.insert(x) {
                     continue;
                 }
-                seen.push(x);
-                let px = self.cx.pt(x)?.approx();
+                let px = self.cx.approx(x)?;
                 let d = sub(px, c);
                 if dot(d, d) >= r2 {
                     continue;
@@ -217,7 +254,7 @@ impl Recovery {
                 let area2 = norm(cross(ea, eb));
                 let radius = if area2 > 0.0 { norm(ea) * norm(eb) * norm(sub(ea, eb)) / (2.0 * area2) } else { f64::INFINITY };
                 if !radius.is_finite() && self.on_segment(u, v, x)? {
-                    let at = self.cx.pt(x)?.approx();
+                    let at = self.cx.approx(x)?;
                     return Err(Error::Invalid(format!("vertex {x} at {at:?} lies on a boundary edge: the surface is not a valid complex")));
                 }
                 if best.is_none_or(|(b, _)| radius > b) {
@@ -232,14 +269,11 @@ impl Recovery {
     /// the open segment).
     fn on_segment(&self, u: u32, v: u32, x: u32) -> Result<bool> {
         let (a, b, c) = (self.cx.pt(u)?, self.cx.pt(v)?, self.cx.pt(x)?);
-        Ok([Axis::X, Axis::Y, Axis::Z].into_iter().all(|ax| generic_orient2d(a, b, c, ax).is_zero()))
+        Ok(Axis::ALL.into_iter().all(|ax| generic_orient2d(a, b, c, ax).is_zero()))
     }
 }
 
 /// The explicit point of an original segment endpoint.
-pub(super) fn explicit(p: &GenericPoint) -> Result<Point3> {
-    match p {
-        GenericPoint::Explicit(p) => Ok(*p),
-        _ => Err(super::complex::corrupt("a segment endpoint is not an input vertex")),
-    }
+fn explicit(p: &GenericPoint) -> Result<Point3> {
+    p.explicit().copied().ok_or_else(|| super::complex::corrupt("a segment endpoint is not an input vertex"))
 }

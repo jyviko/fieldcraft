@@ -38,6 +38,9 @@ pub enum Axis {
 }
 
 impl Axis {
+    /// The three axes, in order.
+    pub const ALL: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
+
     pub(crate) fn index(self) -> usize {
         match self {
             Axis::X => 0,
@@ -249,7 +252,8 @@ impl From<Point3> for GenericPoint {
 }
 
 impl GenericPoint {
-    fn explicit(&self) -> Option<&Point3> {
+    /// The point, when it is explicit.
+    pub fn explicit(&self) -> Option<&Point3> {
         match self {
             GenericPoint::Explicit(p) => Some(p),
             _ => None,

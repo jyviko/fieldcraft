@@ -60,8 +60,9 @@ Rules beyond the layer order:
    position.
 3. **Tetrahedral meshing.** Bowyer–Watson Delaunay on Shewchuk's adaptive predicates (symbolic
    perturbation for degeneracies), boundary recovery by the robust constrained Delaunay method of
-   Diazzi et al. 2023 (implicit Steiner points on indirect predicates, gift-wrapping fallback), so
-   every boundary triangle and its B-rep face tag survives. Then constrained Delaunay refinement to a
+   Diazzi et al. 2023 (implicit Steiner points on indirect predicates, gift-wrapping facet
+   recovery; `modelcraft-mesh::cdt`, command `mesh.tet.generate`), so every boundary triangle and
+   its B-rep face tag survives. Then constrained Delaunay refinement to a
    size field, ODT smoothing interleaved as in Tournois et al. 2009, and the Klingner–Shewchuk 2007
    improvement schedule against slivers.
 4. **Hexahedral meshing (the core).** Octree/grid dual all-hex first, the one family that meshes

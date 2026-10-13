@@ -229,3 +229,92 @@ fn a_pierced_facet_is_recovered_by_gift_wrapping() {
     assert!(m.stats.cavities > 0, "{:?}", m.stats);
     assert!(m.stats.gift_wrapped_tets > 0);
 }
+
+/// A Chazelle-style polyhedron (Chazelle 1984): a block whose top is cut by V-notches along `x`
+/// and whose bottom is cut by V-notches along `y`, the notch edges almost touching. Its
+/// tetrahedralizations need many Steiner points.
+fn chazelle(notches: usize, gap: f64) -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
+    let n = 2 * notches;
+    let at = |i: usize| i as f64 / n as f64;
+    // Top height by y index: ridges at even, valleys at odd. Bottom height by x index.
+    let top = |j: usize| if j.is_multiple_of(2) { 1.0 } else { 0.5 + gap / 2.0 };
+    let bottom = |i: usize| if i.is_multiple_of(2) { 0.0 } else { 0.5 - gap / 2.0 };
+    let mut p = Vec::new();
+    let mut id = std::collections::HashMap::new();
+    let mut vertex = |x: usize, y: usize, up: bool, p: &mut Vec<[f64; 3]>| -> u32 {
+        *id.entry((x, y, up)).or_insert_with(|| {
+            p.push([at(x), at(y), if up { top(y) } else { bottom(x) }]);
+            (p.len() - 1) as u32
+        })
+    };
+    let mut t = Vec::new();
+    let quad = |q: [u32; 4], out: [f64; 3], p: &Vec<[f64; 3]>, t: &mut Vec<[u32; 3]>| {
+        for tri in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] {
+            let (a, b, c) = (p[tri[0] as usize], p[tri[1] as usize], p[tri[2] as usize]);
+            let nrm = cross(sub(b, a), sub(c, a));
+            t.push(if dot(nrm, out) > 0.0 { tri } else { [tri[0], tri[2], tri[1]] });
+        }
+    };
+    for i in 0..n {
+        for j in 0..n {
+            let q = [vertex(i, j, true, &mut p), vertex(i + 1, j, true, &mut p), vertex(i + 1, j + 1, true, &mut p), vertex(i, j + 1, true, &mut p)];
+            quad(q, [0.0, 0.0, 1.0], &p, &mut t);
+            let q =
+                [vertex(i, j, false, &mut p), vertex(i + 1, j, false, &mut p), vertex(i + 1, j + 1, false, &mut p), vertex(i, j + 1, false, &mut p)];
+            quad(q, [0.0, 0.0, -1.0], &p, &mut t);
+        }
+    }
+    for k in 0..n {
+        for (fixed, out) in [(0, -1.0), (n, 1.0)] {
+            // Walls x = fixed (along y) and y = fixed (along x).
+            let q = [
+                vertex(fixed, k, false, &mut p),
+                vertex(fixed, k + 1, false, &mut p),
+                vertex(fixed, k + 1, true, &mut p),
+                vertex(fixed, k, true, &mut p),
+            ];
+            quad(q, [out, 0.0, 0.0], &p, &mut t);
+            let q = [
+                vertex(k, fixed, false, &mut p),
+                vertex(k + 1, fixed, false, &mut p),
+                vertex(k + 1, fixed, true, &mut p),
+                vertex(k, fixed, true, &mut p),
+            ];
+            quad(q, [0.0, out, 0.0], &p, &mut t);
+        }
+    }
+    (p, t)
+}
+
+#[test]
+fn chazelle_polyhedron_conforms() {
+    let (p, t) = chazelle(3, 0.02);
+    let faces: Vec<u32> = (0..t.len() as u32).collect();
+    let s = BoundarySurface::new(&p, &t, &faces, &SurfaceOptions::default()).unwrap();
+    assert_eq!(s.shells().len(), 1);
+    let m = tetrahedralize(&s, &CdtOptions::default()).unwrap();
+    check(&s, &m);
+    assert!(!m.steiner.is_empty());
+}
+
+#[test]
+fn hostile_and_degenerate_surfaces_are_errors() {
+    // A flat "solid" (all points coplanar) bounds no volume.
+    let p = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]];
+    let t = vec![[0, 1, 2], [1, 3, 2], [0, 2, 1], [1, 2, 3]];
+    let faces = vec![0; 4];
+    if let Ok(s) = BoundarySurface::new(&p, &t, &faces, &SurfaceOptions::default()) {
+        assert!(tetrahedralize(&s, &CdtOptions::default()).is_err());
+    }
+}
+
+#[test]
+fn the_gate_reports_an_inverted_tetrahedron() {
+    let (p, t) = cube();
+    let s = surface(&p, &t, [0.5; 3]);
+    let mut m = tetrahedralize(&s, &CdtOptions::default()).unwrap();
+    m.tets[0].swap(0, 1);
+    let report = m.gate(s.volume()).unwrap();
+    assert_eq!(report.invalid, vec![1]);
+    assert!(report.into_result().is_err());
+}

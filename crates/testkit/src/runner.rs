@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use crate::corpus::{self, CATEGORIES, Part};
 use modelcraft_geometry::{Design, Measure, SurfaceMesh};
+use modelcraft_mesh::cdt::{CdtOptions, tetrahedralize};
 use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 
 pub const FILE: &str = "docs/meshing/corpus.md";
@@ -41,7 +42,7 @@ pub trait Stage {
 
 /// The stages, in column order. Meshers add theirs here.
 fn stages() -> Vec<Box<dyn Stage>> {
-    vec![Box::new(SurfaceVolume), Box::new(BoundaryCheck)]
+    vec![Box::new(SurfaceVolume), Box::new(BoundaryCheck), Box::new(TetCdt)]
 }
 
 /// The boundary surface's enclosed volume against SolidCraft's measured volume and the closed
@@ -83,6 +84,33 @@ impl Stage for BoundaryCheck {
         }
         let ms = start.elapsed().as_secs_f64() * 1e3;
         Ok(vec![format!("ok, {vertices} vertices"), genus.join(", "), features.to_string(), format!("{ms:.1}")])
+    }
+}
+
+/// The constrained Delaunay tetrahedralization (`modelcraft_mesh::cdt`) of each body's boundary:
+/// tetrahedra, Steiner points on boundary edges, cavities refilled by gift-wrapping, and the
+/// validity gate on the rounded mesh (every tetrahedron positive, volume equal to the boundary's).
+struct TetCdt;
+
+impl Stage for TetCdt {
+    fn headers(&self) -> &'static [&'static str] {
+        &["CDT tets", "Steiner", "cavities", "tet gate", "CDT ms"]
+    }
+
+    fn run(&self, l: &Loaded) -> Result<Vec<String>, String> {
+        let start = Instant::now();
+        let (mut tets, mut steiner, mut cavities) = (0, 0, 0);
+        for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
+            let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
+            let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).map_err(|e| format!("{}: {e}", body.name))?;
+            let m = tetrahedralize(&s, &CdtOptions::default()).map_err(|e| format!("{}: {e}", body.name))?;
+            m.gate(s.volume()).and_then(|r| r.into_result()).map_err(|e| format!("{}: rounded mesh: {e}", body.name))?;
+            tets += m.tets.len();
+            steiner += m.steiner.len();
+            cavities += m.stats.cavities;
+        }
+        let ms = start.elapsed().as_secs_f64() * 1e3;
+        Ok(vec![tets.to_string(), steiner.to_string(), cavities.to_string(), "pass".into(), format!("{ms:.0}")])
     }
 }
 
@@ -222,6 +250,22 @@ mod tests {
             let (loaded, _) = load(part).unwrap();
             let cells = BoundaryCheck.run(&loaded).unwrap();
             assert_eq!(cells[1], genus, "{name}: {cells:?}");
+        }
+    }
+
+    /// The constrained Delaunay tetrahedralization passes the gate on parts that exercise each
+    /// of its stages: an assembly whose rounding needs a few-ulp repair, cavities refilled by
+    /// gift-wrapping, and a holed plate.
+    #[test]
+    fn cdt_meshes_corpus_parts() {
+        let mut parts = corpus::parts().unwrap();
+        parts.retain(|p| ["bolted-assembly", "thin-wall-enclosure", "analytic-plate-hole"].contains(&p.name.as_str()));
+        assert_eq!(parts.len(), 3);
+        for part in &parts {
+            let (loaded, _) = load(part).unwrap();
+            let cells = TetCdt.run(&loaded).unwrap_or_else(|e| panic!("{}: {e}", part.name));
+            assert_eq!(cells[3], "pass", "{}: {cells:?}", part.name);
+            assert!(cells[0].parse::<usize>().unwrap() > 0);
         }
     }
 }

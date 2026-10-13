@@ -9,10 +9,39 @@
 //! point is strictly inside it and no ghost tetrahedra are needed.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use crate::delaunay::Triangulation;
-use crate::predicates::{GenericPoint, Sign, generic_compare, generic_insphere_sos, generic_orient3d};
+use crate::predicates::{GenericPoint, Sign, generic_insphere_sos, generic_lex, generic_orient3d};
 use crate::{Error, Result};
+
+/// A multiplicative hasher for small integer keys (vertex triples). The maps it serves are only
+/// looked up, never iterated, so its order cannot leak into the output.
+#[derive(Default)]
+pub(super) struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+
+    fn write_u32(&mut self, x: u32) {
+        self.write_u64(u64::from(x));
+    }
+
+    fn write_u64(&mut self, x: u64) {
+        self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+/// A hash map keyed by vertex ids.
+pub(super) type IdMap<K, V> = HashMap<K, V, BuildHasherDefault<IdHasher>>;
 
 /// No tetrahedron / no vertex.
 pub(super) const NONE: u32 = u32::MAX;
@@ -49,6 +78,8 @@ pub(super) struct Complex {
     /// A box certainly containing each point (implicit points are not exactly representable).
     lo: Vec<[f64; 3]>,
     hi: Vec<[f64; 3]>,
+    /// Rounded coordinates (floating-point estimates only, never decisions).
+    approx: Vec<[f64; 3]>,
     tets: Vec<[u32; 4]>,
     adj: Vec<[u32; 4]>,
     free: Vec<u32>,
@@ -93,11 +124,13 @@ impl Complex {
             adj.push(ns.map(|n| id.get(n as usize).copied().unwrap_or(NONE)));
         }
         let (lo, hi) = points.iter().map(GenericPoint::bounds).unzip();
+        let approx = points.iter().map(GenericPoint::approx).collect();
         let mut cx = Complex {
             vertex_tet: vec![NONE; points.len()],
             points,
             lo,
             hi,
+            approx,
             mark: vec![0; tets.len()],
             live: tets.len(),
             tets,
@@ -125,6 +158,11 @@ impl Complex {
 
     pub(super) fn pt(&self, v: u32) -> Result<&GenericPoint> {
         self.points.get(v as usize).ok_or_else(|| corrupt("vertex id"))
+    }
+
+    /// Vertex `v`'s coordinates rounded to doubles: for estimates and messages only.
+    pub(super) fn approx(&self, v: u32) -> Result<[f64; 3]> {
+        self.approx.get(v as usize).copied().ok_or_else(|| corrupt("vertex id"))
     }
 
     /// The box certainly containing vertex `v`.
@@ -189,8 +227,7 @@ impl Complex {
 
     /// Whether two vertices are the same point (exact).
     fn same_point(&self, u: u32, v: u32) -> Result<bool> {
-        let (p, q) = (self.pt(u)?, self.pt(v)?);
-        Ok([crate::predicates::Axis::X, crate::predicates::Axis::Y, crate::predicates::Axis::Z].into_iter().all(|a| generic_compare(p, q, a).is_eq()))
+        Ok(generic_lex(self.pt(u)?, self.pt(v)?).is_eq())
     }
 
     // ---- traversal marks ----
@@ -274,9 +311,8 @@ impl Complex {
     }
 
     /// The tetrahedra whose (conservative) box meets the box `lo..hi`, connected to the star of
-    /// `v` through such tetrahedra; at most `cap` of them (the second value is false when the cap
-    /// cut the search short).
-    pub(super) fn tets_near(&mut self, v: u32, lo: [f64; 3], hi: [f64; 3], cap: usize) -> Result<(Vec<u32>, bool)> {
+    /// `v` through such tetrahedra; at most `cap` of them.
+    pub(super) fn tets_near(&mut self, v: u32, lo: [f64; 3], hi: [f64; 3], cap: usize) -> Result<Vec<u32>> {
         let mut out = Vec::new();
         self.star(v, &mut out)?;
         self.next_epoch();
@@ -287,7 +323,7 @@ impl Complex {
         while let Some(&t) = out.get(i) {
             i += 1;
             if out.len() >= cap {
-                return Ok((out, false));
+                break;
             }
             for n in self.adj(t)? {
                 if n == NONE || self.visited(n) {
@@ -300,7 +336,7 @@ impl Complex {
                 }
             }
         }
-        Ok((out, true))
+        Ok(out)
     }
 
     // ---- point location ----
@@ -321,14 +357,7 @@ impl Complex {
             for i in 0..4 {
                 let k = (first + i) % 4;
                 let n = ns.get(k).copied().unwrap_or(NONE);
-                if n == prev && n != NONE {
-                    continue;
-                }
-                let mut q = vs;
-                if let Some(s) = q.get_mut(k) {
-                    *s = p;
-                }
-                if self.volume(q)? == Sign::Negative {
+                if (n != prev || n == NONE) && self.beyond(vs, k, p)? {
                     next = Some(n);
                     break;
                 }
@@ -347,11 +376,7 @@ impl Complex {
         for (t, vs) in live {
             let mut inside = true;
             for k in 0..4 {
-                let mut q = vs;
-                if let Some(s) = q.get_mut(k) {
-                    *s = p;
-                }
-                if self.volume(q)? == Sign::Negative {
+                if self.beyond(vs, k, p)? {
                     inside = false;
                     break;
                 }
@@ -361,6 +386,14 @@ impl Complex {
             }
         }
         Err(Error::Failed("a Steiner point is in no tetrahedron".into()))
+    }
+
+    /// Whether `p` is strictly beyond the face of `vs` opposite slot `k`.
+    fn beyond(&self, mut vs: [u32; 4], k: usize, p: u32) -> Result<bool> {
+        if let Some(s) = vs.get_mut(k) {
+            *s = p;
+        }
+        Ok(self.volume(vs)? == Sign::Negative)
     }
 
     fn inside(&self, vs: [u32; 4], t: u32, p: u32) -> Result<Located> {
@@ -380,6 +413,7 @@ impl Complex {
             return Err(Error::Limit("too many vertices".into()));
         }
         let (l, h) = p.bounds();
+        self.approx.push(p.approx());
         self.points.push(p);
         self.lo.push(l);
         self.hi.push(h);
@@ -389,12 +423,13 @@ impl Complex {
 
     /// Insert vertex `v` (from [`Complex::push_point`]) by Bowyer–Watson with the perturbed
     /// in-sphere test: the mesh must be Delaunay for that predicate, which it is until the facet
-    /// recovery starts. The walk starts at a tetrahedron incident to `near`.
-    pub(super) fn insert(&mut self, v: u32, near: u32) -> Result<()> {
+    /// recovery starts. The walk starts at a tetrahedron incident to `near`. Returns the vertices
+    /// of the deleted tetrahedra (the only ones whose edges can have changed).
+    pub(super) fn insert(&mut self, v: u32, near: u32) -> Result<Vec<u32>> {
         let start = self.incident(near)?;
         let seed = match self.locate(v, start)? {
             Located::Vertex(u) => {
-                let at = self.pt(u)?.approx();
+                let at = self.approx(u)?;
                 return Err(Error::Failed(format!("a Steiner point coincides with vertex {u} at {at:?}")));
             }
             Located::Inside(t) => t,
@@ -440,8 +475,14 @@ impl Complex {
             }
             new.push(vs);
         }
+        let mut touched: Vec<u32> = Vec::with_capacity(4 * cavity.len());
+        for &t in &cavity {
+            touched.extend(self.tet(t)?);
+        }
         self.replace(&cavity, &new)?;
-        Ok(())
+        touched.sort_unstable();
+        touched.dedup();
+        Ok(touched)
     }
 
     fn alloc(&mut self, vs: [u32; 4]) -> Result<u32> {
@@ -489,7 +530,7 @@ impl Complex {
     pub(super) fn replace(&mut self, old: &[u32], new: &[[u32; 4]]) -> Result<Vec<u32>> {
         // Read the outside links before any slot is recycled.
         // Boundary face → (outside neighbour, its slot back, covered yet).
-        let mut external: HashMap<[u32; 3], (u32, usize, bool)> = HashMap::with_capacity(old.len() * 2);
+        let mut external: IdMap<[u32; 3], (u32, usize, bool)> = IdMap::with_capacity_and_hasher(old.len() * 2, Default::default());
         self.next_epoch();
         for &t in old {
             self.visit(t);
@@ -510,7 +551,7 @@ impl Complex {
             self.kill(t)?;
         }
         let mut ids = Vec::with_capacity(new.len());
-        let mut open: HashMap<[u32; 3], (u32, usize)> = HashMap::with_capacity(new.len() * 2);
+        let mut open: IdMap<[u32; 3], (u32, usize)> = IdMap::with_capacity_and_hasher(new.len() * 2, Default::default());
         let mut matched_external = 0usize;
         for &vs in new {
             let t = self.alloc(vs)?;

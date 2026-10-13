@@ -33,8 +33,15 @@ use super::Recovery;
 use super::complex::{NONE, corrupt, face_toward, sorted3};
 use super::meet::{in_closed_tet, meet_properly};
 
-/// Most cavities refilled for one facet.
-const MAX_CAVITIES_PER_FACET: usize = 100_000;
+/// Most rounds of finding and refilling the cavities of one facet (one suffices in exact
+/// arithmetic).
+const MAX_ROUNDS_PER_FACET: usize = 16;
+
+/// A box: `(lo, hi)`.
+type Bounds = ([f64; 3], [f64; 3]);
+
+/// The open front of a half-cavity: faces, their boxes, and whether each is still open.
+type Front<'a> = (&'a [[u32; 3]], &'a [Bounds], &'a [bool]);
 
 /// An oriented triangle rotated so its smallest id comes first: the key of an oriented face.
 fn canon([a, b, c]: [u32; 3]) -> [u32; 3] {
@@ -47,7 +54,7 @@ fn canon([a, b, c]: [u32; 3]) -> [u32; 3] {
     }
 }
 
-fn boxes_meet((l1, h1): ([f64; 3], [f64; 3]), (l2, h2): ([f64; 3], [f64; 3])) -> bool {
+fn boxes_meet((l1, h1): Bounds, (l2, h2): Bounds) -> bool {
     (0..3).all(|k| l1[k] <= h2[k] && l2[k] <= h1[k])
 }
 
@@ -114,45 +121,60 @@ impl Recovery {
         Ok(ring)
     }
 
-    /// One face-connected set of tetrahedra crossing facet `f`'s interior, if any. Each such set
-    /// contains a tetrahedron incident to a vertex of the facet's boundary.
-    pub(super) fn crossing_cavity(&mut self, f: usize, ring: &[u32]) -> Result<Option<Vec<u32>>> {
-        let mut plane = self.plane(f)?;
+    /// The face-connected sets of tetrahedra crossing facet `f`'s interior. Each contains a
+    /// tetrahedron incident to a vertex of the facet's boundary `ring`.
+    fn crossing_cavities(&mut self, plane: &mut Plane, ring: &[u32]) -> Result<Vec<Vec<u32>>> {
+        let mut cavities = Vec::new();
+        let mut seen: HashSet<u32> = HashSet::new();
         let mut star = Vec::new();
         for &v in ring {
             self.cx.star(v, &mut star)?;
             for &t in &star {
-                if !self.crosses(&mut plane, t)? {
+                if seen.contains(&t) || !self.crosses(plane, t)? {
                     continue;
                 }
+                seen.insert(t);
                 let mut cavity = vec![t];
-                let mut seen: HashSet<u32> = HashSet::from([t]);
                 let mut i = 0;
                 while let Some(&c) = cavity.get(i) {
                     i += 1;
                     for n in self.cx.adj(c)? {
-                        if n != NONE && seen.insert(n) && self.crosses(&mut plane, n)? {
+                        if n != NONE && !seen.contains(&n) && self.crosses(plane, n)? {
+                            seen.insert(n);
                             cavity.push(n);
                         }
                     }
                 }
-                return Ok(Some(cavity));
+                cavities.push(cavity);
             }
         }
-        Ok(None)
+        Ok(cavities)
     }
 
-    /// Recover facet `f`, then register its triangles as constraints.
+    /// Whether facet `f` is a union of mesh triangles: no tetrahedron crosses it.
+    pub(super) fn facet_present(&mut self, f: usize) -> Result<bool> {
+        let ring = self.facet_ring(f)?;
+        let mut plane = self.plane(f)?;
+        Ok(self.crossing_cavities(&mut plane, &ring)?.is_empty())
+    }
+
+    /// Recover facet `f`, then register its triangles as constraints. Filling one cavity leaves
+    /// the others untouched (they share no tetrahedron), so one scan finds them all; the scan is
+    /// repeated until it finds none.
     pub(super) fn recover_facet(&mut self, f: usize) -> Result<()> {
         let ring = self.facet_ring(f)?;
-        for _ in 0..MAX_CAVITIES_PER_FACET {
-            let Some(cavity) = self.crossing_cavity(f, &ring)? else {
+        let mut plane = self.plane(f)?;
+        for _ in 0..MAX_ROUNDS_PER_FACET {
+            let cavities = self.crossing_cavities(&mut plane, &ring)?;
+            if cavities.is_empty() {
                 return self.register_facet(f, &ring);
-            };
-            self.stats.cavities += 1;
-            self.fill_cavity(f, &cavity)?;
+            }
+            for cavity in cavities {
+                self.stats.cavities += 1;
+                self.fill_cavity(f, &mut plane, &cavity)?;
+            }
         }
-        Err(Error::Limit(format!("facet {f} needed more than {MAX_CAVITIES_PER_FACET} cavities")))
+        Err(Error::Limit(format!("facet {f} was still crossed after {MAX_ROUNDS_PER_FACET} rounds of cavity filling")))
     }
 
     /// Record the mesh triangles that make up facet `f` (all three vertices on its boundary).
@@ -181,12 +203,12 @@ impl Recovery {
     }
 
     /// Delete the cavity and refill its two halves by gift-wrapping.
-    fn fill_cavity(&mut self, f: usize, cavity: &[u32]) -> Result<()> {
-        let mut plane = self.plane(f)?;
+    fn fill_cavity(&mut self, f: usize, plane: &mut Plane, cavity: &[u32]) -> Result<()> {
         let inside: HashSet<u32> = cavity.iter().copied().collect();
-        // Boundary faces (cavity on their positive side) and constraint faces inside.
-        let mut halves: [Vec<[u32; 3]>; 2] = [Vec::new(), Vec::new()];
-        let mut fixed: [Vec<[u32; 3]>; 2] = [Vec::new(), Vec::new()];
+        // Per half: the boundary faces (cavity on their positive side) and the constraint faces
+        // inside it, and the other sides of those constraints.
+        let (mut fixed_up, mut fixed_down) = (Vec::new(), Vec::new());
+        let (mut back_up, mut back_down) = (Vec::new(), Vec::new());
         let mut vertices: Vec<u32> = Vec::new();
         for &t in cavity {
             let vs = self.cx.tet(t)?;
@@ -200,28 +222,25 @@ impl Recovery {
                 let mut pos = false;
                 let mut neg = false;
                 for v in face {
-                    match self.facet_side(&mut plane, v)? {
+                    match self.facet_side(plane, v)? {
                         Sign::Positive => pos = true,
                         Sign::Negative => neg = true,
                         Sign::Zero => {}
                     }
                 }
-                let h = match (pos, neg) {
-                    (true, false) => 0,
-                    (false, true) => 1,
+                let (fixed, back) = match (pos, neg) {
+                    (true, false) => (&mut fixed_up, &mut back_up),
+                    (false, true) => (&mut fixed_down, &mut back_down),
                     _ => {
-                        let at = self.cx.pt(face[0])?.approx();
+                        let at = self.cx.approx(face[0])?;
                         return Err(Error::Failed(format!("facet {f}: a cavity face near {at:?} is not on one side of the facet's plane")));
                     }
                 };
-                let (list, fx) = (halves.get_mut(h), fixed.get_mut(h));
-                let (Some(list), Some(fx)) = (list, fx) else { return Err(corrupt("half index")) };
-                list.push(face);
-                fx.push(face);
+                fixed.push(face);
                 if interior {
                     // A recovered constraint inside the cavity: both sides are open.
                     let [a, b, c] = face;
-                    list.push([a, c, b]);
+                    back.push([a, c, b]);
                 }
             }
         }
@@ -229,21 +248,20 @@ impl Recovery {
         vertices.dedup();
         let mut sides = Vec::with_capacity(vertices.len());
         for &v in &vertices {
-            sides.push(self.facet_side(&mut plane, v)?);
+            sides.push(self.facet_side(plane, v)?);
         }
         let above: Vec<u32> = vertices.iter().zip(&sides).filter(|(_, s)| **s != Sign::Negative).map(|(v, _)| *v).collect();
         let below: Vec<u32> = vertices.iter().zip(&sides).filter(|(_, s)| **s != Sign::Positive).map(|(v, _)| *v).collect();
         let on_plane = |v: u32| plane.side.get(&v) == Some(&Sign::Zero);
 
-        let [front_up, front_down] = halves;
-        let [fixed_up, mut fixed_down] = fixed;
+        let front_up = fixed_up.iter().chain(&back_up).copied().collect();
         let (mut new, open) = self.gift_wrap(f, front_up, &fixed_up, &above, Some(&on_plane))?;
         if open.iter().any(|face| !face.iter().all(|&v| on_plane(v))) {
             return Err(Error::Failed(format!("facet {f}: the upper half-cavity was left open off the facet")));
         }
-        let mut front_down = front_down;
-        front_down.extend(open.iter().copied());
+        // The facet's triangles made by the upper half bound the lower one.
         fixed_down.extend(open.iter().copied());
+        let front_down = fixed_down.iter().chain(&back_down).copied().collect();
         let (lower, rest) = self.gift_wrap(f, front_down, &fixed_down, &below, None)?;
         if !rest.is_empty() {
             return Err(Error::Failed(format!("facet {f}: the lower half-cavity did not close")));
@@ -251,7 +269,7 @@ impl Recovery {
         new.extend(lower);
         let used: HashSet<u32> = new.iter().flatten().copied().collect();
         if let Some(&lost) = vertices.iter().find(|v| !used.contains(v)) {
-            let at = self.cx.pt(lost)?.approx();
+            let at = self.cx.approx(lost)?;
             return Err(Error::Failed(format!("facet {f}: refilling a cavity lost vertex {lost} at {at:?}")));
         }
         self.stats.gift_wrapped_tets += new.len();
@@ -272,6 +290,7 @@ impl Recovery {
         skip: Option<&dyn Fn(u32) -> bool>,
     ) -> Result<(Vec<[u32; 4]>, Vec<[u32; 3]>)> {
         let mut faces: Vec<[u32; 3]> = Vec::with_capacity(front.len() * 2);
+        let mut boxes: Vec<([f64; 3], [f64; 3])> = Vec::with_capacity(front.len() * 2);
         let mut alive: Vec<bool> = Vec::new();
         let mut index: HashMap<[u32; 3], usize> = HashMap::new();
         let mut queue: Vec<usize> = Vec::new();
@@ -281,10 +300,11 @@ impl Recovery {
             }
             queue.push(faces.len());
             faces.push(face);
+            boxes.push(self.cx.bounds_of(&face));
             alive.push(true);
         }
         queue.reverse();
-        let fixed_boxes: Vec<([u32; 3], ([f64; 3], [f64; 3]))> = fixed.iter().map(|&t| (t, self.cx.bounds_of(&t))).collect();
+        let fixed_boxes: Vec<([u32; 3], Bounds)> = fixed.iter().map(|&t| (t, self.cx.bounds_of(&t))).collect();
         let cap = 64 * (faces.len() + vertices.len()) + 64;
         let mut tets: Vec<[u32; 4]> = Vec::new();
         while let Some(i) = queue.pop() {
@@ -297,7 +317,7 @@ impl Recovery {
             {
                 continue;
             }
-            let w = self.apex(f, sigma, &faces, &alive, &fixed_boxes, vertices)?;
+            let w = self.apex(f, sigma, (&faces, &boxes, &alive), &fixed_boxes, vertices)?;
             let tet = [sigma[0], sigma[1], sigma[2], w];
             tets.push(tet);
             if tets.len() > cap {
@@ -317,11 +337,12 @@ impl Recovery {
                 }
                 let r = [g[0], g[2], g[1]];
                 if index.insert(canon(r), faces.len()).is_some() {
-                    let at = self.cx.pt(r[0])?.approx();
+                    let at = self.cx.approx(r[0])?;
                     return Err(Error::Failed(format!("facet {f}: gift-wrapping overlapped itself near {at:?}")));
                 }
                 queue.push(faces.len());
                 faces.push(r);
+                boxes.push(self.cx.bounds_of(&r));
                 alive.push(true);
             }
         }
@@ -330,15 +351,7 @@ impl Recovery {
     }
 
     /// The apex for front face `sigma`: conditions (i)–(iii) of the module docs.
-    fn apex(
-        &mut self,
-        f: usize,
-        sigma: [u32; 3],
-        faces: &[[u32; 3]],
-        alive: &[bool],
-        fixed: &[([u32; 3], ([f64; 3], [f64; 3]))],
-        vertices: &[u32],
-    ) -> Result<u32> {
+    fn apex(&mut self, f: usize, sigma: [u32; 3], front: Front<'_>, fixed: &[([u32; 3], Bounds)], vertices: &[u32]) -> Result<u32> {
         let mut candidates = Vec::new();
         for &w in vertices {
             if !sigma.contains(&w) && self.cx.volume([sigma[0], sigma[1], sigma[2], w])? == Sign::Positive {
@@ -364,28 +377,20 @@ impl Recovery {
                 };
             }
             let Some((k, w)) = best else { break };
-            if self.valid(sigma, w, faces, alive, fixed, vertices)? {
+            if self.valid(sigma, w, front, fixed, vertices)? {
                 return Ok(w);
             }
             if let Some(e) = excluded.get_mut(k) {
                 *e = true;
             }
         }
-        let at = self.cx.pt(sigma[0])?.approx();
+        let at = self.cx.approx(sigma[0])?;
         Err(Error::Failed(format!("facet {f}: gift-wrapping found no valid apex for a cavity face near {at:?}")))
     }
 
     /// Condition (ii): the tetrahedron `sigma w` meets every front and fixed triangle properly
     /// and contains no other cavity vertex.
-    fn valid(
-        &self,
-        sigma: [u32; 3],
-        w: u32,
-        faces: &[[u32; 3]],
-        alive: &[bool],
-        fixed: &[([u32; 3], ([f64; 3], [f64; 3]))],
-        vertices: &[u32],
-    ) -> Result<bool> {
+    fn valid(&self, sigma: [u32; 3], w: u32, (faces, boxes, alive): Front<'_>, fixed: &[([u32; 3], Bounds)], vertices: &[u32]) -> Result<bool> {
         let tet = [sigma[0], sigma[1], sigma[2], w];
         let bx = self.cx.bounds_of(&tet);
         let points = self.cx.points();
@@ -394,8 +399,8 @@ impl Recovery {
                 return Ok(false);
             }
         }
-        for (face, _) in faces.iter().zip(alive).filter(|(_, a)| **a) {
-            if boxes_meet(bx, self.cx.bounds_of(face)) && !meet_properly(points, &tet, face)? {
+        for ((face, fb), _) in faces.iter().zip(boxes).zip(alive).filter(|(_, a)| **a) {
+            if boxes_meet(bx, *fb) && !meet_properly(points, &tet, face)? {
                 return Ok(false);
             }
         }

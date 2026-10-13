@@ -29,6 +29,7 @@ pub static ALL: &[CommandSpec] = &[
     mesh::QUALITY,
     mesh::DELAUNAY_POINTS,
     mesh::SURFACE_CHECK,
+    mesh::TET_GENERATE,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

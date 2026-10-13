@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use crate::corpus::{self, CATEGORIES, Part};
 use modelcraft_geometry::{Design, Measure, SurfaceMesh};
+use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 
 pub const FILE: &str = "docs/meshing/corpus.md";
 /// Chordal tolerance of the boundary surface, relative to the part's bounding-box diagonal.
@@ -40,7 +41,7 @@ pub trait Stage {
 
 /// The stages, in column order. Meshers add theirs here.
 fn stages() -> Vec<Box<dyn Stage>> {
-    vec![Box::new(SurfaceVolume)]
+    vec![Box::new(SurfaceVolume), Box::new(BoundaryCheck)]
 }
 
 /// The boundary surface's enclosed volume against SolidCraft's measured volume and the closed
@@ -57,6 +58,31 @@ impl Stage for SurfaceVolume {
         let measured: f64 = l.measures.iter().map(|m| m.volume).sum();
         let rel = if measured.abs() > 0.0 { (enclosed - measured) / measured } else { f64::NAN };
         Ok(vec![format!("{enclosed:.1}"), format!("{measured:.1}"), format!("{rel:.1e}"), l.part.volume.map_or("–".into(), |v| format!("{v:.1}"))])
+    }
+}
+
+/// Boundary surface preparation (`modelcraft_mesh::surface`): welded, closed, manifold, outward
+/// and free of self-intersections, or the first defects found, which keep the part from being
+/// volume meshed.
+struct BoundaryCheck;
+
+impl Stage for BoundaryCheck {
+    fn headers(&self) -> &'static [&'static str] {
+        &["boundary", "genus", "feature edges", "check ms"]
+    }
+
+    fn run(&self, l: &Loaded) -> Result<Vec<String>, String> {
+        let start = Instant::now();
+        let (mut vertices, mut genus, mut features) = (0, Vec::new(), 0);
+        for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
+            let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
+            let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).map_err(|e| format!("{}: {e}", body.name))?;
+            vertices += s.points().len();
+            genus.extend(s.shells().iter().map(|sh| if sh.void { format!("{} (void)", sh.genus) } else { sh.genus.to_string() }));
+            features += s.feature_edges().len();
+        }
+        let ms = start.elapsed().as_secs_f64() * 1e3;
+        Ok(vec![format!("ok, {vertices} vertices"), genus.join(", "), features.to_string(), format!("{ms:.1}")])
     }
 }
 
@@ -179,4 +205,23 @@ fn document(table: &str, parts: &[Part]) -> String {
         let _ = writeln!(s, "- `{}`: {}", p.name, p.description);
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The analytic shapes come out of boundary preparation valid, with their genus.
+    #[test]
+    fn analytic_parts_are_valid_boundaries() {
+        let expected =
+            [("analytic-sphere", "0"), ("analytic-torus", "1"), ("analytic-cylinder", "0"), ("analytic-pipe", "1"), ("analytic-plate-hole", "1")];
+        let parts = corpus::analytic_parts();
+        for (name, genus) in expected {
+            let part = parts.iter().find(|p| p.name == name).unwrap();
+            let (loaded, _) = load(part).unwrap();
+            let cells = BoundaryCheck.run(&loaded).unwrap();
+            assert_eq!(cells[1], genus, "{name}: {cells:?}");
+        }
+    }
 }

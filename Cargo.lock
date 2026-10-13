@@ -1907,6 +1907,7 @@ name = "modelcraft-testkit"
 version = "0.1.0"
 dependencies = [
  "modelcraft-geometry",
+ "modelcraft-mesh",
  "serde_json",
  "thiserror 2.0.21",
 ]

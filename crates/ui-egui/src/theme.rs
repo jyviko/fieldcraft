@@ -22,6 +22,8 @@ pub struct Tokens {
     pub hover: Color32,
     pub error: Color32,
     pub ok: Color32,
+    /// Loads and heat in icons.
+    pub warm: Color32,
     // ---- viewport ----
     /// Background gradient, top and bottom.
     pub viewport_top: Color32,
@@ -62,6 +64,7 @@ impl Tokens {
             hover: Color32::from_rgb(0x3c, 0x43, 0x4f),
             error: Color32::from_rgb(0xf0, 0x6c, 0x64),
             ok: Color32::from_rgb(0x8c, 0xc8, 0x8c),
+            warm: Color32::from_rgb(0xf0, 0xb4, 0x4a),
             viewport_top: Color32::from_rgb(0x3a, 0x41, 0x4d),
             viewport_bottom: Color32::from_rgb(0x1e, 0x22, 0x28),
             overlay: Color32::from_rgba_unmultiplied_const(0x1c, 0x20, 0x26, 0xd0),
@@ -93,6 +96,7 @@ impl Tokens {
             hover: Color32::from_rgb(0xd8, 0xde, 0xe6),
             error: Color32::from_rgb(0xc0, 0x30, 0x28),
             ok: Color32::from_rgb(0x2c, 0x7a, 0x3a),
+            warm: Color32::from_rgb(0xc0, 0x7a, 0x14),
             viewport_top: Color32::from_rgb(0xf0, 0xf3, 0xf7),
             viewport_bottom: Color32::from_rgb(0xc8, 0xd0, 0xdc),
             overlay: Color32::from_rgba_unmultiplied_const(0xea, 0xee, 0xf3, 0xe0),

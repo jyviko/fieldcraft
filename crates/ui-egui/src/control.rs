@@ -114,6 +114,15 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "model": {"nodes": app.session.model.nodes().len(), "elements": app.session.model.elements().len()},
             "version": crate::VERSION,
         })),
+        "ui.toolbar" => {
+            if let Some(tab) = p.get("tab") {
+                match serde_json::from_value(tab.clone()) {
+                    Ok(tab) => app.ui.tab = tab,
+                    Err(e) => return err(format!("`tab`: {e}")),
+                }
+            }
+            ok(crate::toolbar::describe(app))
+        }
         "ui.set" => {
             let mut cur = serde_json::to_value(&app.ui).unwrap_or(json!({}));
             if let (Some(o), Some(src)) = (cur.as_object_mut(), p.as_object()) {
@@ -367,6 +376,8 @@ mod tests {
             json!({"width": 1e12, "height": -5, "path": ""}),
             json!({"command": 5, "params": "x", "commands": {"a": 1}}),
             json!({"key": "NoSuchKey", "text": 7, "view": null, "points": [[1], "x", null]}),
+            json!({"tab": "nope", "command": "mesh.tet.generate"}),
+            json!({"tab": 3}),
         ];
         for method in [
             "engine.execute",
@@ -384,12 +395,27 @@ mod tests {
             "ui.worldToScreen",
             "ui.resize",
             "ui.render",
+            "ui.toolbar",
         ] {
             for p in &hostile {
                 let _ = call(&mut app, method, p.clone());
             }
         }
         assert!(app.synthetic.len() < 1000);
+    }
+
+    #[test]
+    fn the_toolbar_lists_every_entry_and_switches_tabs() {
+        let mut app = ModelApp::new(Session::default());
+        let r = call(&mut app, "ui.toolbar", json!({"tab": "mesh"}));
+        assert_eq!(r["result"]["tab"], "mesh", "{r}");
+        let entries = r["result"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), modelcraft_engine::catalogue::CATALOGUE.len());
+        let tet = entries.iter().find(|e| e["id"] == "mesh.tet.generate").unwrap();
+        assert_eq!((tet["coming_soon"].as_str(), tet["command"].is_null()), (Some("M2"), true));
+        assert_eq!(call(&mut app, "ui.toolbar", json!({"tab": "nope"}))["ok"], false);
+        let r = call(&mut app, "ui.start", json!({"command": "mesh.tet.generate"}));
+        assert_eq!((r["ok"].as_bool(), r["error"].as_str()), (Some(false), Some("Tet Mesh is coming soon (M2)")));
     }
 
     #[test]

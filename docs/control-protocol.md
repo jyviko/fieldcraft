@@ -35,9 +35,10 @@ Commands never open forms when run this way. `modelcraft-cli commands` prints th
 | Method | Params | Notes |
 |---|---|---|
 | `ui.inspect` | — | view settings (`ui`), camera, viewport rect (points), renderer (`gpu`/`cpu`) and adapter, open command form, status bar, node and element counts, version |
-| `ui.set` | any view setting: `style` (`shaded_edges`, `shaded`, `wireframe`), `show_nodes`, `perspective`, `dark`, `show_tree`, `show_commands` | an unknown setting or value is an error; returns the settings |
+| `ui.set` | any view setting: `style` (`shaded_edges`, `shaded`, `wireframe`), `show_nodes`, `perspective`, `dark`, `show_tree`, `show_commands`, `tab` (the toolbar tab: `geometry`, `mesh`, `properties`, `assembly`, `steps`, `loads`, `interactions`, `solve`, `results`, `tools`) | an unknown setting or value is an error; returns the settings |
 | `ui.view` | `view`: `front`, `back`, `left`, `right`, `top`, `bottom`, `iso`, `home` (iso and fit), `fit` | returns the camera |
-| `ui.start` | `command` | like clicking the command in the Commands panel: a command without parameters runs, one with parameters opens its form |
+| `ui.toolbar` | `tab?` (shows that tab first) | the toolbar: `tab`, `tabs`, and every catalogue entry (docs/features.md) with `id`, `label`, `tab`, `panel`, `command` (null while coming soon), `more` (its drop-down's commands), `coming_soon` (the milestone, or null) and `rect` (its button in screen points last frame, on the shown tab) |
+| `ui.start` | `command`: a command or toolbar entry id | like clicking it on the toolbar or in the Commands panel: a command without parameters runs, one with parameters opens its form; an entry that is coming soon is an error naming its milestone |
 | `ui.dialog` | `params?` (JSON object, fills the form), `run?`, `cancel?` | drives the open command form; `run` returns the command's result and closes the form on success |
 | `ui.click` | `x`, `y` (screen points), `button?`: `left`/`right`/`middle`, `shift?`, `ctrl?`, `alt?`, `double?` | real pointer input |
 | `ui.move` | `x`, `y` | |

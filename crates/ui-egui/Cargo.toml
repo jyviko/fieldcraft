@@ -1,0 +1,19 @@
+[package]
+name = "modelcraft-ui-egui"
+description = "ModelCraft desktop interface (egui + wgpu): viewport, model tree, commands, status bar and the control channel's request handling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+modelcraft-model = { workspace = true }
+modelcraft-engine = { workspace = true }
+modelcraft-render = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }

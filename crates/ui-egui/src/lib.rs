@@ -117,7 +117,7 @@ pub struct ModelApp {
     pub viewport: Viewport,
     pub icons: icons::IconCache,
     /// The toolbar's buttons drawn last frame, by catalogue id (for the control channel).
-    pub toolbar_rects: Vec<(&'static str, egui::Rect)>,
+    pub toolbar_rects: Vec<(&'static str, egui::Rect, toolbar::Fit)>,
     /// The GPU adapter, for the status bar and diagnostics.
     pub gpu_info: Option<String>,
     /// Bumped whenever the model may have changed.
@@ -223,17 +223,24 @@ impl ModelApp {
     /// entry; an entry that is coming soon does nothing and says when it comes. Programmatic calls
     /// use [`ModelApp::run`] instead.
     pub fn start(&mut self, id: &str) -> Result<(), String> {
-        if let Some((c, milestone)) = catalogue::find(id).and_then(|c| c.milestone().map(|m| (c, m))) {
-            let e = format!("{} is coming soon ({milestone})", c.label);
-            self.set_status(e.clone(), false);
-            return Err(e);
-        }
-        let spec = modelcraft_engine::find_command(id).ok_or_else(|| format!("unknown command `{id}`"))?;
+        let (command, preset) = match catalogue::find(id) {
+            Some(c) => match c.command() {
+                Some(command) => (command, c.preset()),
+                None => {
+                    let e = format!("{} is coming soon ({})", c.label, c.milestone().unwrap_or("later"));
+                    self.set_status(e.clone(), false);
+                    return Err(e);
+                }
+            },
+            None => (id, json!({})),
+        };
+        let spec = modelcraft_engine::find_command(command).ok_or_else(|| format!("unknown command `{command}`"))?;
         if spec.params.trim() == "{}" {
             self.dialog = None;
             self.run(spec.id, json!({})).map(|_| ())
         } else {
-            self.dialog = Some(ParamsDialog { command: spec.id, text: "{}".into(), error: None });
+            // The form starts with the entry's preset; the rest (a path…) is filled in there.
+            self.dialog = Some(ParamsDialog { command: spec.id, text: preset.to_string(), error: None });
             Ok(())
         }
     }
@@ -518,6 +525,10 @@ mod tests {
         assert!(app.dialog.is_none());
         assert_eq!(app.session.journal.len(), journal);
         assert_eq!(app.status.as_ref().map(|s| s.error), Some(false));
+        // A deck entry opens deck.write's form with its format filled in.
+        app.start("deck.write.abaqus").unwrap();
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!((d.command, d.text.as_str()), ("deck.write", r#"{"format":"abaqus"}"#));
     }
 
     #[test]

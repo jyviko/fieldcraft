@@ -5,7 +5,7 @@ Generated from the capability catalogue (`crates/engine/src/catalogue.rs`) by
 Every entry is a toolbar button. **Ready** entries run their command; **coming soon** entries are
 shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 
-23 ready, 75 coming soon.
+30 ready, 70 coming soon.
 
 ## Geometry
 
@@ -115,7 +115,7 @@ shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 | Panel | Capability | Status | Command |
 |---|---|---|---|
 | Check | Check Model — Name every missing or bad definition before writing or solving | ready | `model.check` |
-| Decks | Abaqus Input — Write an Abaqus input file (.inp) | coming soon (M3) |  |
+| Decks | Abaqus Input — Write an Abaqus input file (.inp) | ready | `deck.write {"format":"abaqus"}` |
 | Decks | Nastran Deck — Write Nastran bulk data (SOL 101, 103) | coming soon (M3) |  |
 | Decks | LS-DYNA Deck — Write an LS-DYNA keyword file | coming soon (M3) |  |
 | Decks | Read Deck — Read a deck, keeping keywords ModelCraft does not know | coming soon (M9) |  |
@@ -150,7 +150,9 @@ shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 | Panel | Capability | Status | Command |
 |---|---|---|---|
 | Model | Model Info — Node and element counts and the model summary | ready | `model.info` |
-| File | Open Model — Open a .modelcraft model | coming soon (M3) |  |
-| File | Save Model — Save the model as a .modelcraft file | coming soon (M3) |  |
-| History | Undo — Undo the last command | coming soon (M3) |  |
-| History | Redo — Redo the command undone last | coming soon (M3) |  |
+| File | Open Model — Open a .modelcraft model | ready | `file.open` |
+| File | Save — Save the model to its .modelcraft file | ready | `file.save` |
+| File | Save As — Save the model to a new .modelcraft file | ready | `file.save_as` |
+| File | Recover — Open a model autosaved by an app that crashed or closed with unsaved changes | ready | `file.recover`, `file.recovery.list`, `file.recovery.discard` |
+| History | Undo — Undo the last command that changed the model | ready | `edit.undo` |
+| History | Redo — Redo the command undone last | ready | `edit.redo` |

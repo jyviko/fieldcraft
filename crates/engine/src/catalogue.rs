@@ -58,6 +58,9 @@ pub enum Status {
     Ready,
     /// Coming in this roadmap milestone (`M2`…).
     Planned { milestone: &'static str },
+    /// Runs `deck.write` with this `format` once `modelcraft_decks::FORMATS` has a writer for it;
+    /// until then coming in `milestone`.
+    Deck { format: &'static str, milestone: &'static str },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,25 +78,37 @@ pub struct Capability {
 }
 
 impl Capability {
+    /// The command it runs; `None` while it is coming soon.
     pub fn command(&self) -> Option<&'static str> {
         match self.status {
             Status::Ready => Some(self.id),
             Status::Planned { .. } => None,
+            Status::Deck { format, .. } => modelcraft_decks::format(format).map(|_| crate::cmd::deck::WRITE.id),
         }
     }
 
+    /// The parameters its command starts with (an object; empty for most entries).
+    pub fn preset(&self) -> serde_json::Value {
+        match self.status {
+            Status::Deck { format, .. } => serde_json::json!({ "format": format }),
+            Status::Ready | Status::Planned { .. } => serde_json::json!({}),
+        }
+    }
+
+    /// The milestone that brings it, while it is coming soon.
     pub fn milestone(&self) -> Option<&'static str> {
         match self.status {
             Status::Planned { milestone } => Some(milestone),
-            Status::Ready => None,
+            Status::Deck { milestone, .. } if self.command().is_none() => Some(milestone),
+            Status::Ready | Status::Deck { .. } => None,
         }
     }
 
     /// The hover text: label, tip and command, or when it comes.
     pub fn tooltip(&self) -> String {
-        match self.status {
-            Status::Ready => format!("{}\n{}\n{}", self.label, self.tip, self.id),
-            Status::Planned { milestone } => format!("{} — coming soon ({milestone})\n{}", self.label, self.tip),
+        match (self.command(), self.milestone()) {
+            (Some(command), _) => format!("{}\n{}\n{command}", self.label, self.tip),
+            (None, m) => format!("{} — coming soon ({})\n{}", self.label, m.unwrap_or("later"), self.tip),
         }
     }
 }
@@ -115,6 +130,10 @@ const fn ready_more(
 
 const fn soon(id: &'static str, label: &'static str, tab: Tab, panel: &'static str, milestone: &'static str, tip: &'static str) -> Capability {
     Capability { id, label, tab, panel, tip, status: Status::Planned { milestone }, more: &[] }
+}
+
+const fn deck(id: &'static str, label: &'static str, format: &'static str, tip: &'static str) -> Capability {
+    Capability { id, label, tab: Tab::Solve, panel: "Decks", tip, status: Status::Deck { format, milestone: "M3" }, more: &[] }
 }
 
 use Tab::*;
@@ -267,9 +286,9 @@ pub static CATALOGUE: &[Capability] = &[
     soon("interaction.fsi", "FSI Interface", Interactions, "Coupled", "M13", "The fluid–structure interface"),
     // ---- Solve ----
     ready("model.check", "Check Model", Solve, "Check", "Name every missing or bad definition before writing or solving"),
-    soon("deck.write.abaqus", "Abaqus Input", Solve, "Decks", "M3", "Write an Abaqus input file (.inp)"),
-    soon("deck.write.nastran", "Nastran Deck", Solve, "Decks", "M3", "Write Nastran bulk data (SOL 101, 103)"),
-    soon("deck.write.lsdyna", "LS-DYNA Deck", Solve, "Decks", "M3", "Write an LS-DYNA keyword file"),
+    deck("deck.write.abaqus", "Abaqus Input", "abaqus", "Write an Abaqus input file (.inp)"),
+    deck("deck.write.nastran", "Nastran Deck", "nastran", "Write Nastran bulk data (SOL 101, 103)"),
+    deck("deck.write.lsdyna", "LS-DYNA Deck", "lsdyna", "Write an LS-DYNA keyword file"),
     soon("deck.read", "Read Deck", Solve, "Decks", "M9", "Read a deck, keeping keywords ModelCraft does not know"),
     soon("solve.static", "Static", Solve, "Implicit", "M4", "Linear static solve with ModelCraft's own solver"),
     soon("solve.frequency", "Frequency", Solve, "Implicit", "M4", "Natural frequencies and mode shapes"),
@@ -294,10 +313,19 @@ pub static CATALOGUE: &[Capability] = &[
     soon("results.convergence", "Convergence", Results, "Files", "M9", "Mesh convergence studies"),
     // ---- Tools ----
     ready("model.info", "Model Info", Tools, "Model", "Node and element counts and the model summary"),
-    soon("file.open", "Open Model", Tools, "File", "M3", "Open a .modelcraft model"),
-    soon("file.save", "Save Model", Tools, "File", "M3", "Save the model as a .modelcraft file"),
-    soon("edit.undo", "Undo", Tools, "History", "M3", "Undo the last command"),
-    soon("edit.redo", "Redo", Tools, "History", "M3", "Redo the command undone last"),
+    ready("file.open", "Open Model", Tools, "File", "Open a .modelcraft model"),
+    ready("file.save", "Save", Tools, "File", "Save the model to its .modelcraft file"),
+    ready("file.save_as", "Save As", Tools, "File", "Save the model to a new .modelcraft file"),
+    ready_more(
+        "file.recover",
+        "Recover",
+        Tools,
+        "File",
+        "Open a model autosaved by an app that crashed or closed with unsaved changes",
+        &["file.recovery.list", "file.recovery.discard"],
+    ),
+    ready("edit.undo", "Undo", Tools, "History", "Undo the last command that changed the model"),
+    ready("edit.redo", "Redo", Tools, "History", "Redo the command undone last"),
 ];
 
 /// The catalogue entry with this id.
@@ -332,7 +360,10 @@ pub fn features_page() -> String {
         let _ = write!(md, "\n## {}\n\n| Panel | Capability | Status | Command |\n|---|---|---|---|\n", tab.label());
         for c in tab_entries(tab) {
             let status = c.milestone().map_or_else(|| "ready".to_string(), |m| format!("coming soon ({m})"));
-            let commands: Vec<String> = c.command().into_iter().chain(c.more.iter().copied()).map(|id| format!("`{id}`")).collect();
+            let preset = c.preset();
+            let main =
+                c.command().map(|id| if preset.as_object().is_some_and(|o| !o.is_empty()) { format!("`{id} {preset}`") } else { format!("`{id}`") });
+            let commands: Vec<String> = main.into_iter().chain(c.more.iter().map(|id| format!("`{id}`"))).collect();
             let _ = writeln!(md, "| {} | {} — {} | {status} | {} |", c.panel, c.label, c.tip, commands.join(", "));
         }
     }
@@ -345,7 +376,7 @@ mod tests {
     use crate::{commands, find_command};
 
     #[test]
-    fn every_command_is_claimed_once_and_every_ready_entry_runs_a_command() {
+    fn every_command_is_claimed_and_every_ready_entry_runs_a_command() {
         let mut claimed: Vec<&str> = Vec::new();
         for c in CATALOGUE {
             if let Some(command) = c.command() {
@@ -361,8 +392,26 @@ mod tests {
         }
         for spec in commands() {
             let n = claimed.iter().filter(|c| **c == spec.id).count();
-            assert_eq!(n, 1, "command `{}` must appear exactly once in the catalogue (a ready entry or an entry's `more`)", spec.id);
+            assert!(n >= 1, "command `{}` has no catalogue entry (a ready entry or an entry's `more`)", spec.id);
         }
+    }
+
+    /// Deck entries follow the writers: one entry per format, ready exactly when its writer is in
+    /// `modelcraft_decks::FORMATS`, running `deck.write` with its format.
+    #[test]
+    fn deck_entries_follow_the_writers() {
+        let decks: Vec<(&Capability, &str)> =
+            CATALOGUE.iter().filter_map(|c| if let Status::Deck { format, .. } = c.status { Some((c, format)) } else { None }).collect();
+        for f in modelcraft_decks::FORMATS {
+            assert!(decks.iter().any(|(_, name)| *name == f.name), "deck format `{}` has no catalogue entry", f.name);
+        }
+        for (c, format) in decks {
+            let written = modelcraft_decks::format(format).is_some();
+            assert_eq!(c.command(), written.then_some("deck.write"), "{}", c.id);
+            assert_eq!(c.milestone().is_none(), written, "{}", c.id);
+            assert_eq!(c.preset(), serde_json::json!({"format": format}));
+        }
+        assert_eq!(find("deck.write.abaqus").and_then(Capability::command), Some("deck.write"));
     }
 
     #[test]

@@ -399,6 +399,7 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
         match used_scheme {
             region::Scheme::Mapped(_) => "mapped",
             region::Scheme::Annulus => "annulus",
+            region::Scheme::Disk => "disk",
             region::Scheme::Free => "free",
         }
     );

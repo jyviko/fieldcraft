@@ -7,7 +7,8 @@
 //! integer counts `x_i ≥ 1` close to goals `g_i` (the curve length over the target size), subject to
 //! - **equalities** `Σ_A x = Σ_B x`: opposite sides of a mapped face or of a sweep's linking
 //!   face;
-//! - **parity**: `Σ_L x` even on every loop of a face meshed by the free all-quad mesher;
+//! - **parity**: `Σ_L x` even on every loop of a face meshed by the free all-quad mesher (a
+//!   multiple of 4 around a disk meshed as an O-grid);
 //! - **minimum sums** `Σ_L x ≥ m`: a loop needs enough points to be meshed.
 //!
 //! Mitchell's *incremental interval assignment* (Mitchell, *Incremental interval assignment by
@@ -15,7 +16,7 @@
 //! rounded solution and repairs violated constraints by unit steps chosen by a priority on the
 //! change in relative error. This module uses that scheme with increments only: start from the
 //! rounded goals, then repeatedly take the first violated constraint and raise the variable whose
-//! increase costs least in relative error `max(x/g, g/x)`, preferring, for parity, variables that
+//! increase costs least in squared relative error `((x − g)/g)²`, preferring, for parity, variables that
 //! no equality couples to other faces. Increments only make the counts never coarser than asked
 //! and make termination provable for feasible systems up to the step cap; an infeasible system
 //! (one that only grows) hits the cap and is reported, never looped on.
@@ -31,8 +32,9 @@ pub(crate) struct Intervals {
     pub mins: Vec<usize>,
     /// `Σ lhs = Σ rhs` (variables may repeat).
     pub equal: Vec<(Vec<usize>, Vec<usize>)>,
-    /// `Σ vars` even.
-    pub even: Vec<Vec<usize>>,
+    /// `Σ vars` a multiple of the modulus (2: even loops for the free mesher; 4: a disk's
+    /// O-grid).
+    pub multiple: Vec<(Vec<usize>, usize)>,
     /// `Σ vars ≥ min`.
     pub at_least: Vec<(Vec<usize>, usize)>,
 }
@@ -65,7 +67,7 @@ impl Intervals {
         }
         let check = |v: &[usize]| v.iter().all(|&i| i < n);
         if !self.equal.iter().all(|(a, b)| check(a) && check(b))
-            || !self.even.iter().all(|l| check(l))
+            || !self.multiple.iter().all(|(l, m)| check(l) && *m >= 2)
             || !self.at_least.iter().all(|(l, _)| check(l))
         {
             return Err(Error::Failed("interval assignment: a constraint names an unknown curve".into()));
@@ -80,15 +82,16 @@ impl Intervals {
         }
         let error = |i: usize, c: usize| -> f64 {
             let g = self.goals.get(i).copied().unwrap_or(1.0).max(1e-3);
-            let c = c as f64;
-            if c > g { c / g } else { g / c }
+            // Squared relative deviation: strictly convex, so repeated increments spread over
+            // the candidates instead of piling onto one.
+            ((c as f64 - g) / g).powi(2)
         };
         let step_cost = |x: &[usize], i: usize| -> f64 {
             let c = x.get(i).copied().unwrap_or(0);
             error(i, c + 1) - error(i, c)
         };
         let total: usize = x.iter().sum();
-        let constraints = self.equal.len() + self.even.len() + self.at_least.len();
+        let constraints = self.equal.len() + self.multiple.len() + self.at_least.len();
         let max_steps = total.saturating_mul(8).saturating_add(64 * (n + constraints)).saturating_add(1000);
         for _ in 0..max_steps {
             let sum = |v: &[usize], x: &[usize]| v.iter().map(|&i| x.get(i).copied().unwrap_or(0)).sum::<usize>();
@@ -119,14 +122,15 @@ impl Intervals {
                 }
             }
             if raise.is_none() {
-                for l in &self.even {
-                    if sum(l, &x) % 2 == 1 {
-                        // Only a variable listed an odd number of times changes the parity.
-                        let odd: Vec<usize> = l.iter().copied().filter(|&i| l.iter().filter(|&&k| k == i).count() % 2 == 1).collect();
-                        if odd.is_empty() {
-                            return Err(Error::Failed("interval assignment: a loop's parity cannot change".into()));
+                for (l, m) in &self.multiple {
+                    if !sum(l, &x).is_multiple_of(*m) {
+                        // Only a variable listed a number of times that is not a multiple of the
+                        // modulus moves the remainder.
+                        let moving: Vec<usize> = l.iter().copied().filter(|&i| !l.iter().filter(|&&k| k == i).count().is_multiple_of(*m)).collect();
+                        if moving.is_empty() {
+                            return Err(Error::Failed("interval assignment: a loop's count cannot reach the multiple it needs".into()));
                         }
-                        raise = Some(odd);
+                        raise = Some(moving);
                         parity = true;
                         break;
                     }
@@ -177,7 +181,7 @@ mod tests {
         }
         p.equal.push((vec![0], vec![2]));
         p.equal.push((vec![1], vec![3]));
-        p.even.push(vec![0, 4, 5]);
+        p.multiple.push((vec![0, 4, 5], 2));
         let x = p.solve().unwrap();
         assert_eq!(x[0], x[2]);
         assert_eq!(x[1], x[3]);
@@ -194,7 +198,7 @@ mod tests {
         let c = p.var(5.0, 1);
         p.equal.push((vec![a, b], vec![c]));
         p.at_least.push((vec![a, b, c], 12));
-        p.even.push(vec![a, b, c]);
+        p.multiple.push((vec![a, b, c], 2));
         let x = p.solve().unwrap();
         assert_eq!(x[a] + x[b], x[c]);
         assert!(x[a] + x[b] + x[c] >= 12);
@@ -211,8 +215,9 @@ mod tests {
         assert!(p.solve().is_err());
         let mut q = Intervals::default();
         let a = q.var(3.0, 1);
-        q.even.push(vec![a, a]);
-        q.even.push(vec![a, a, a]);
+        q.multiple.push((vec![a, a], 2));
+        q.multiple.push((vec![a, a, a], 2));
+        q.multiple.push((vec![a, a, a], 4));
         assert!(q.solve().is_ok());
         let mut r = Intervals::default();
         r.var(f64::NAN, 1);

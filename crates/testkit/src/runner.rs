@@ -122,12 +122,13 @@ const HEX_RELATIVE_SIZE: f64 = 1.0 / 25.0;
 const REASON_CHARS: usize = 240;
 
 /// Structured all-hex meshing (`modelcraft_mesh::hex`): the method that meshed each body, the
-/// element count and the smallest scaled Jacobian, or why no structured method fits.
+/// element count and the smallest scaled Jacobian of the hex8 mesh and of the hex20 mesh (mid-edge
+/// nodes on the geometry), or why no structured method fits.
 struct StructuredHex;
 
 impl Stage for StructuredHex {
     fn headers(&self) -> &'static [&'static str] {
-        &["hex", "hex elements", "hex min SJ", "hex ms"]
+        &["hex", "hex elements", "hex8 min SJ", "hex20 min SJ", "hex ms"]
     }
 
     fn run(&self, l: &Loaded) -> Result<Vec<String>, String> {
@@ -141,31 +142,38 @@ impl Stage for StructuredHex {
         });
         let diagonal = (0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f64>().sqrt();
         let size = UniformSize(HEX_RELATIVE_SIZE * diagonal);
-        let options = HexOptions { chordal_tolerance: l.tolerance, ..HexOptions::default() };
-        let (mut methods, mut elements, mut min_sj) = (Vec::new(), 0usize, f64::INFINITY);
+        let linear = HexOptions { chordal_tolerance: l.tolerance, ..HexOptions::default() };
+        let quadratic = HexOptions { quadratic: true, ..linear.clone() };
+        let (mut methods, mut elements, mut sj8, mut sj20) = (Vec::new(), 0usize, f64::INFINITY, Ok(f64::INFINITY));
         for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
             let surface_options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
             let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &surface_options)
                 .map_err(|e| format!("{}: {e}", body.name))?;
             let faces: Vec<Option<Surface>> =
                 body.face_surfaces().map_err(|e| format!("{}: {e}", body.name))?.into_iter().map(|f| f.map(analytic)).collect();
-            match hex_mesh(&s, &faces, &size, &options) {
+            match hex_mesh(&s, &faces, &size, &linear) {
                 Ok(m) => {
                     methods.push(m.report.method.name());
                     elements += m.element_count();
-                    min_sj = min_sj.min(m.report.min_scaled_jacobian);
+                    sj8 = sj8.min(m.report.min_scaled_jacobian);
                 }
                 Err(e) => {
                     let reason: String = e.to_string().chars().take(REASON_CHARS).collect();
                     let ms = start.elapsed().as_secs_f64() * 1e3;
-                    return Ok(vec![format!("no: {}: {reason}", body.name), String::new(), String::new(), format!("{ms:.0}")]);
+                    return Ok(vec![format!("no: {}: {reason}", body.name), String::new(), String::new(), String::new(), format!("{ms:.0}")]);
                 }
             }
+            sj20 = match (sj20, hex_mesh(&s, &faces, &size, &quadratic)) {
+                (Ok(a), Ok(m)) => Ok(a.min(m.report.min_scaled_jacobian)),
+                (Err(e), _) => Err(e),
+                (_, Err(e)) => Err(format!("{}: {}", body.name, e.to_string().chars().take(REASON_CHARS).collect::<String>())),
+            };
         }
         methods.sort_unstable();
         methods.dedup();
         let ms = start.elapsed().as_secs_f64() * 1e3;
-        Ok(vec![methods.join(", "), elements.to_string(), format!("{min_sj:.3}"), format!("{ms:.0}")])
+        let sj20 = sj20.map_or_else(|e| format!("error: {e}"), |v| format!("{v:.3}"));
+        Ok(vec![methods.join(", "), elements.to_string(), format!("{sj8:.3}"), sj20, format!("{ms:.0}")])
     }
 }
 

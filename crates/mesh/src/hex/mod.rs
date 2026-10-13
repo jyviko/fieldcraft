@@ -193,6 +193,16 @@ pub fn hex_mesh(surface: &BoundarySurface, faces: &[Option<Surface>], field: &dy
             surface.shells().len()
         )));
     }
+    // A mesh far beyond the element limit is refused before any work: the solid's volume over
+    // the cube of the smallest size the field asks for at the boundary.
+    let mut h_min = f64::INFINITY;
+    for p in surface.points() {
+        h_min = h_min.min(crate::size::checked_size(field, *p)?);
+    }
+    let estimate = surface.volume().abs() / h_min.powi(3);
+    if !(estimate <= 8.0 * opts.max_elements as f64) {
+        return Err(Error::Limit(format!("about {estimate:.3e} hexahedra at this size; the limit is {}", opts.max_elements)));
+    }
     let brep = Brep::new(surface, faces)?;
     let tree = TriangleTree::new(surface)?;
     let ctx = Ctx { brep: &brep, tree: &tree, field, opts, tol: RELATIVE_TOLERANCE * brep.diagonal };
@@ -292,7 +302,7 @@ fn finish(ctx: &Ctx, raw: Raw, method: HexMethod) -> Result<HexMesh> {
             *uses.entry(key).or_insert(0) += 1;
         }
     }
-    if let Some(n) = uses.values().find(|&&n| n > 2) {
+    if let Some(n) = uses.values().copied().max().filter(|&n| n > 2) {
         return Err(Error::Failed(format!("a hexahedron face is shared by {n} elements (the mesh is not a manifold)")));
     }
     let mut boundary = Vec::new();

@@ -58,7 +58,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Interaction | Bolt pretension, springs, point masses, connectors | M7 | | planned |
 | Decks | Abaqus input writer (`deck.write`, flat deck; reports what Abaqus cannot express) | M3 | | done |
 | Decks | Nastran bulk data writer (`deck.write`, SOL 101 or 103 per deck; reports what Nastran cannot express) | M3 | | done |
-| Decks | LS-DYNA keyword writer (implicit; explicit in M8) | M3 | | planned |
+| Decks | LS-DYNA keyword writer (implicit; explicit in M8) | M3 | | done (implicit static and eigenvalue; beam sections planned) |
 | Decks | Readers keeping unknown keywords | M9 | | planned |
 | Solve | Own linear static and modal solver, verified against analytic solutions | M4 | yes | planned |
 | Results | Deformed shape, contours, mode shapes, probes, reaction sums | M4 | | planned |
@@ -88,3 +88,15 @@ products are run, no documentation text is copied). Status: **done**, **started*
   linear solids, hybrid solids, reduced-integration or one-point shells, body forces, gravity on part
   of the model, orthotropic beams and rods, and orthotropic shells off planes of constant Z are
   reported as unsupported. Static and frequency steps need separate decks (`deck.write` `steps`).
+- LS-DYNA (`modelcraft_decks::lsdyna`, `deck.write {"format": "lsdyna"}`): long format (20-column
+  fields; every value with up to 13 significant digits, and 17-digit values from 0.01 to 1e17, are
+  written exactly; the rest is rounded to at least 13 digits and counted). The 10-node tetrahedron
+  follows the manual's figure: mid-side nodes 8, 9, 10 on edges 2-4, 3-4, 1-4 (the model has them
+  on 1-4, 2-4, 3-4). Incompatible modes map to ELFORM −18 (eight-point enhanced strain). Several
+  steps are written as `*CASE` analyses. Refused with the item named: beam sections (not yet),
+  body forces per volume, partial-DOF kinematic couplings, constraints on a coupled reference
+  point, gravity on different sets or on parts of sections, hybrid other than tet4, reduced
+  quadratic elements, materials without density, more than 10 shell integration points.
+- Open item (LS-DYNA tet10 node order): the writer follows the manual's figure (mid-side nodes 8,
+  9, 10 on edges 2-4, 3-4, 1-4), which disagrees with an earlier reading as the Abaqus order. It
+  needs one confirmation run by a licensed user; agents never run commercial solvers.

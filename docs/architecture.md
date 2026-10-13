@@ -23,19 +23,21 @@ crates in strictly lower layers.
 | L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
 | L1 | `modelcraft-solver` | Element formulations, assembly, sparse linear static and modal solution. | planned |
 | L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. | planned |
-| L1 | `modelcraft-render` | Display data (meshes, contour maps) without a GPU dependency. | planned |
+| L1 | `modelcraft-render` | Display data without a GPU dependency: the visible faces, element edges and nodes of a model, the orbit camera, a CPU rasterizer for headless snapshots; contour maps later. | started |
 | L2 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
 | L3 | `modelcraft-io` | `.modelcraft` files, result files. | planned |
 | L4 | `modelcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts. | started |
-| L5 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI, control channel and MCP server. | planned |
+| L5 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI (egui + wgpu viewport, model tree, commands, status bar) and control channel requests (docs/control-protocol.md); MCP server. | ui started |
 | testkit | `modelcraft-testkit` | Test tooling, a dev-dependency only: the meshing test corpus (`tests/corpus/*/recipe.json`, analytic shapes) and its runner (`cargo xtask corpus`). | started |
-| apps | `modelcraft`, `modelcraft-cli`, `modelcraft-web` | Desktop, command line, browser. | cli started |
+| apps | `modelcraft`, `modelcraft-cli`, `modelcraft-web` | Desktop, command line, browser. | desktop, cli started |
 
 Rules beyond the layer order:
 - Nothing below L5 uses egui, eframe, winit, wgpu or rfd.
 - Only `modelcraft-geometry` uses `solidcraft-*`, pinned by rev in the workspace `Cargo.toml`.
   SolidCraft's `[patch.crates-io]` (its fixed truck crates) does not reach dependents, so the
-  workspace repeats it from the same rev; bump both together.
+  workspace repeats it from the same rev; bump both together. The same goes for SolidCraft's
+  patched `egui-wgpu` (MSAA clamped to what the device supports, 1x on OpenGL adapters, so the
+  desktop app's 4x never fails pipeline validation at start).
 - Everything below the apps builds for `wasm32-unknown-unknown`.
 - `modelcraft-geometry`'s non-default `scripts` feature builds designs from SolidCraft command
   scripts (`script_design`, through `solidcraft-engine`) for the test corpus; the library opens

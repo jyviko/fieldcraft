@@ -12,5 +12,5 @@ LS-PrePost, with hexahedral meshing as the centre of gravity, plus its own linea
 | M4 Model definition | Materials, sections, sets and surfaces, boundary conditions, loads, steps, output requests | planned |
 | M5 Solver decks | Abaqus input, Nastran bulk data, LS-DYNA keyword: writers first, then readers | planned |
 | M6 Linear solver | Element library, sparse assembly, linear static and modal analysis, verified against analytic solutions | planned |
-| M7 Desktop and agents | egui desktop app, control channel, MCP server, browser build | planned |
+| M7 Desktop and agents | egui desktop app, control channel, MCP server, browser build | started: desktop app (viewport, model tree, commands, status bar) and control channel |
 | M8 Post-processing | Results display: deformed shape, contours, probes | planned |

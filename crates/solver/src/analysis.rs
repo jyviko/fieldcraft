@@ -2,7 +2,7 @@
 
 use modelcraft_fem::element::{Extrapolation, extrapolation};
 use modelcraft_fem::quadrature::Rule;
-use modelcraft_fem::{PointStress, von_mises};
+use modelcraft_fem::{DofKind, DofLayout, PointStress, von_mises};
 use modelcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
 use serde::Serialize;
 
@@ -17,7 +17,8 @@ use crate::{Error, Limits, Result};
 /// Size and effort of a solution.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Stats {
-    /// Degrees of freedom: 3 per mesh node and 6 per coupled reference point.
+    /// Degrees of freedom: those of the mesh nodes (3 per solid node) and 6 per coupled
+    /// reference point.
     pub dofs: usize,
     /// Free degrees of freedom solved for.
     pub equations: usize,
@@ -129,17 +130,18 @@ struct Assembled {
 
 /// Assemble the stiffness (and the mass when `mass` is set) on the mesh's node graph.
 fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<Assembled> {
-    let mut k = graph.zero_matrix();
-    let mut m = mass.map(|_| graph.zero_matrix());
+    let layout = &mesh.layout;
+    let mut k = graph.zero_matrix(layout);
+    let mut m = mass.map(|_| graph.zero_matrix(layout));
     for e in &mesh.elements {
         let solid = e.solid()?;
         let at = |err| Error::element(e.label, err);
-        add_block(&mut k, &e.nodes, &solid.stiffness(&e.d).map_err(at)?.data)?;
+        add_block(&mut k, layout, &e.nodes, solid.dofs().node, &solid.stiffness(&e.d).map_err(at)?.data)?;
         if let (Some(mm), Some(kind)) = (m.as_mut(), mass) {
             let rho = e.density.ok_or_else(|| Error::Invalid(format!("element {} has no density", e.label)))?;
             match kind {
-                MassKind::Consistent => add_scalar(mm, &e.nodes, &solid.mass(rho).map_err(at)?.data)?,
-                MassKind::Lumped => add_diagonal(mm, &e.nodes, &solid.lumped_mass(rho).map_err(at)?)?,
+                MassKind::Consistent => add_scalar(mm, layout, &e.nodes, &solid.mass(rho).map_err(at)?.data)?,
+                MassKind::Lumped => add_diagonal(mm, layout, &e.nodes, &solid.lumped_mass(rho).map_err(at)?)?,
             }
         }
     }
@@ -167,10 +169,17 @@ fn factor_error(e: FactorError, mesh: &Mesh, reduction: &Reduction) -> Error {
     }
 }
 
-/// The mesh nodes' part of a full vector, per node, and the reference points' part, per point.
+/// The structural directions (0..N) of layout slot `slot` in a full vector, zero where the slot
+/// has none.
+fn directions<const N: usize>(full: &[f64], layout: &DofLayout, slot: usize) -> [f64; N] {
+    std::array::from_fn(|c| DofKind::from_direction(c).and_then(|k| layout.dof(slot, k)).and_then(|d| full.get(d)).copied().unwrap_or(0.0))
+}
+
+/// The mesh nodes' translations in a full vector, per node, and the reference points'
+/// translations and rotations, per point.
 fn split(full: &[f64], mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[f64; 6]>) {
-    let (nodes, points) = full.split_at(mesh.mesh_dofs().min(full.len()));
-    (nodes.as_chunks::<3>().0.to_vec(), points.as_chunks::<6>().0.to_vec())
+    let l = &mesh.layout;
+    ((0..l.nodes()).map(|n| directions(full, l, n)).collect(), (0..mesh.points.len()).map(|k| directions(full, l, l.point_slot(k))).collect())
 }
 
 /// Constraint rows, prescribed values and their elimination for a step.
@@ -188,8 +197,8 @@ fn reduction(s: &Setup, values: bool, order: &[usize], budget: Budget, warnings:
 }
 
 /// The reduced matrices' memory budget: the factorization's.
-fn budget(limits: &Limits, graph: &NodeGraph, matrices: usize) -> Budget {
-    Budget { max_bytes: limits.max_factor_entries.saturating_mul(8), pattern_entries: graph.entries(), matrices }
+fn budget(limits: &Limits, mesh: &Mesh, graph: &NodeGraph, matrices: usize) -> Budget {
+    Budget { max_bytes: limits.max_factor_entries.saturating_mul(8), pattern_entries: graph.entries(&mesh.layout), matrices }
 }
 
 /// Solve a linear static step: the step named `step`, or the model's only static step.
@@ -201,7 +210,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
     let order = nested_dissection(&mesh.xyz, &graph.adjacency);
     let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
-    let red = reduction(&setup, true, &order, budget(limits, &graph, 1), &mut warnings)?;
+    let red = reduction(&setup, true, &order, budget(limits, &mesh, &graph, 1), &mut warnings)?;
     let f = loads(model, &resolved, &mesh, step, &red.active)?;
     let k = assemble(&mesh, &graph, None)?.k;
     if red.neq() == 0 {
@@ -221,7 +230,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     let (reaction, point_reaction) = split(&reactions, &mesh);
     let (mut applied_total, mut reaction_total) = ([0.0; 3], [0.0; 3]);
     for (dof, (fv, rv)) in f.iter().zip(&reactions).enumerate() {
-        let d = mesh.direction(dof);
+        let Some(d) = mesh.kind(dof).and_then(DofKind::direction) else { continue };
         if let (Some(a), Some(r)) = (applied_total.get_mut(d), reaction_total.get_mut(d)) {
             *a += fv;
             *r += rv;
@@ -328,7 +337,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
     let order = nested_dissection(&mesh.xyz, &graph.adjacency);
     let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
-    let red = reduction(&setup, false, &order, budget(limits, &graph, 2), &mut warnings)?;
+    let red = reduction(&setup, false, &order, budget(limits, &mesh, &graph, 2), &mut warnings)?;
     let Assembled { k, m } = assemble(&mesh, &graph, Some(options.mass))?;
     let m = m.ok_or_else(|| Error::Internal("mass matrix".into()))?;
     // Every element's mass entries sum to its mass, once per direction.
@@ -374,7 +383,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     // (mesh and reference point translations).
     let mr: Vec<Vec<f64>> = (0..3)
         .map(|d| {
-            let r: Vec<f64> = red.eq_dof.iter().map(|dof| if mesh.direction(*dof) == d { 1.0 } else { 0.0 }).collect();
+            let r: Vec<f64> = red.eq_dof.iter().map(|dof| if mesh.kind(*dof).and_then(DofKind::direction) == Some(d) { 1.0 } else { 0.0 }).collect();
             let mut y = vec![0.0; neq];
             mff.mul(&r, &mut y);
             y

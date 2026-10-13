@@ -2,11 +2,12 @@
 //! formulations, the coupled reference points, the degrees of freedom, prescribed values and the
 //! load vector of a step.
 //!
-//! Degrees of freedom: three translations per mesh node (nodes by label), then six per coupled
-//! reference point (points by name): translations along X, Y, Z and rotations about them.
+//! Degrees of freedom ([`DofLayout`]): the kinds each mesh node's elements declare (three
+//! translations for solids), nodes by label, then six per coupled reference point (points by
+//! name): translations along X, Y, Z and rotations about them.
 
 use modelcraft_fem::element::{Formulation, Solid};
-use modelcraft_fem::{Elasticity, elasticity, face};
+use modelcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, elasticity, face};
 use std::collections::BTreeSet;
 
 use modelcraft_model::{ElementKind, Load, Model, Resolved, SectionKind, Step, Target};
@@ -41,17 +42,17 @@ pub struct Point {
 }
 
 /// The analysed mesh: the nodes that carry degrees of freedom (those of the solid elements),
-/// sorted by label, the elements sorted by label, and the coupled reference points by name.
+/// sorted by label, the elements sorted by label, the coupled reference points by name, and the
+/// numbering of their degrees of freedom (mesh node `n` is layout slot `n`, reference point `k`
+/// is [`DofLayout::point_slot`]`(k)`).
 #[derive(Debug, Clone)]
 pub struct Mesh {
     pub labels: Vec<u32>,
     pub xyz: Vec<[f64; 3]>,
     pub elements: Vec<Elem>,
     pub points: Vec<Point>,
+    pub layout: DofLayout,
 }
-
-/// The directions of a node's degrees of freedom, 0–5.
-const DIRECTIONS: [&str; 6] = ["X", "Y", "Z", "rotation about X", "rotation about Y", "rotation about Z"];
 
 impl Mesh {
     pub fn node(&self, label: u32) -> Option<usize> {
@@ -66,43 +67,35 @@ impl Mesh {
         self.points.binary_search_by(|p| p.name.as_str().cmp(name)).ok()
     }
 
-    /// The translational degrees of freedom of the mesh nodes.
+    /// The degrees of freedom of the mesh nodes; the reference points' follow them.
     pub fn mesh_dofs(&self) -> usize {
-        3 * self.labels.len()
+        self.layout.node_dofs()
     }
 
-    /// Every degree of freedom: the mesh's, then six per reference point.
+    /// Every degree of freedom.
     pub fn dofs(&self) -> usize {
-        self.mesh_dofs() + 6 * self.points.len()
+        self.layout.dofs()
     }
 
-    /// Degree of freedom `c` (0–5) of reference point `k`.
-    pub fn point_dof(&self, k: usize, c: usize) -> usize {
-        self.mesh_dofs() + 6 * k + c
+    /// The degree of freedom of `kind` at layout slot `slot` (a mesh node or reference point).
+    pub fn dof(&self, slot: usize, kind: DofKind) -> Result<usize> {
+        self.layout.dof(slot, kind).ok_or_else(|| Error::Internal(format!("slot {slot} has no {kind:?} degree of freedom")))
     }
 
-    /// The direction of a degree of freedom: 0–2 translations along X, Y, Z, 3–5 rotations.
-    pub fn direction(&self, dof: usize) -> usize {
-        if dof < self.mesh_dofs() { dof % 3 } else { (dof - self.mesh_dofs()) % 6 }
-    }
-
-    /// The first degree of freedom and their count (3 or 6) of a node or coupled reference
-    /// point label.
-    pub fn label_dofs(&self, label: u32) -> Option<(usize, usize)> {
-        match self.node(label) {
-            Some(n) => Some((3 * n, 3)),
-            None => self.points.iter().position(|p| p.label == label).map(|k| (self.point_dof(k, 0), 6)),
-        }
+    /// The kind of a degree of freedom.
+    pub fn kind(&self, dof: usize) -> Option<DofKind> {
+        self.layout.locate(dof).map(|(_, kind)| kind)
     }
 
     /// What a degree of freedom is, in the user's terms.
     pub fn describe_dof(&self, dof: usize) -> String {
-        let direction = DIRECTIONS.get(self.direction(dof)).copied().unwrap_or("?");
-        if dof < self.mesh_dofs() {
-            format!("node {} in {direction}", self.labels.get(dof / 3).copied().unwrap_or(0))
-        } else {
-            let name = self.points.get((dof - self.mesh_dofs()) / 6).map_or("?", |p| p.name.as_str());
-            format!("reference point `{name}` in {direction}")
+        let Some((slot, kind)) = self.layout.locate(dof) else { return format!("degree of freedom {dof}") };
+        match self.labels.get(slot) {
+            Some(label) => format!("node {label} in {}", kind.describe()),
+            None => {
+                let name = self.points.get(slot - self.labels.len()).map_or("?", |p| p.name.as_str());
+                format!("reference point `{name}` in {}", kind.describe())
+            }
         }
     }
 
@@ -141,7 +134,14 @@ impl Mesh {
                 Ok(Point { name: name.to_string(), label: p.label, xyz: p.xyz })
             })
             .collect::<Result<_>>()?;
-        let dofs = 3 * labels.len() + 6 * points.len();
+        let mut layout = DofLayout::builder();
+        for e in &elements {
+            layout.element(&e.2, e.3.dofs());
+        }
+        for p in &points {
+            layout.point(p.label, DofSet::STRUCTURAL);
+        }
+        let dofs = layout.dofs();
         if dofs > max_dofs {
             return Err(Error::Limit(format!("the model has {dofs} degrees of freedom; the limit is {max_dofs}")));
         }
@@ -149,7 +149,7 @@ impl Mesh {
             .iter()
             .map(|l| model.node(*l).map(|n| n.xyz).ok_or_else(|| Error::Invalid(format!("node {l} is missing"))))
             .collect::<Result<_>>()?;
-        let mut mesh = Mesh { labels, xyz, elements: Vec::with_capacity(elements.len()), points };
+        let mut mesh = Mesh { labels, xyz, elements: Vec::with_capacity(elements.len()), points, layout: layout.build() };
         for (label, kind, nodes, formulation, d, density) in elements {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
@@ -183,10 +183,10 @@ pub fn prescribed(
                 .push(format!("boundary condition `{name}` acts on reference point `{rp}`, which no coupling ties to the mesh; it holds nothing"));
             continue;
         }
-        for (first, count) in resolved.target_nodes(bc.target()).iter().filter_map(|l| mesh.label_dofs(*l)) {
-            for dof in 1..=count as u8 {
-                let Some(v) = bc.value(dof) else { continue };
-                let index = first + usize::from(dof - 1);
+        for slot in resolved.target_nodes(bc.target()).iter().filter_map(|l| mesh.layout.slot(*l)) {
+            for kind in mesh.layout.kinds(slot).iter() {
+                let Some(v) = bc.value(kind.number()) else { continue };
+                let index = mesh.dof(slot, kind)?;
                 if !active.get(index).copied().unwrap_or(false) {
                     continue;
                 }
@@ -207,12 +207,25 @@ pub fn prescribed(
     Ok(out)
 }
 
-fn add(f: &mut [f64], first: usize, v: [f64; 3]) {
-    for (k, c) in v.iter().enumerate() {
-        if let Some(x) = f.get_mut(first + k) {
+/// Add a vector to the three degrees of freedom `dofs`.
+fn add(f: &mut [f64], dofs: [usize; 3], v: [f64; 3]) {
+    for (d, c) in dofs.iter().zip(v) {
+        if let Some(x) = f.get_mut(*d) {
             *x += c;
         }
     }
+}
+
+/// The translations (or rotations) of layout slot `slot`, if it has them.
+fn vector_dofs(mesh: &Mesh, slot: usize, rotation: bool) -> Option<[usize; 3]> {
+    let kind = |c| if rotation { DofKind::rotation(c) } else { DofKind::translation(c) };
+    let [a, b, c] = [0, 1, 2].map(|c| kind(c).and_then(|k| mesh.layout.dof(slot, k)));
+    Some([a?, b?, c?])
+}
+
+/// The translations of mesh node `node`.
+fn translations(mesh: &Mesh, node: usize) -> Result<[usize; 3]> {
+    vector_dofs(mesh, node, false).ok_or_else(|| Error::Internal(format!("mesh node {node} has no translations")))
 }
 
 /// The load vector of a static step: nodal forces and tractions as the model distributes them,
@@ -230,15 +243,14 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                     return Err(Error::Invalid(format!("load `{name}` acts on reference point `{rp}`, which no coupling ties to the mesh")));
                 }
                 // Moments act on the rotations, which only reference points have.
-                let offset = if matches!(load, Load::Moment { .. }) { 3 } else { 0 };
+                let rotation = matches!(load, Load::Moment { .. });
                 for (label, v) in resolved.nodal_loads.get(name).map(Vec::as_slice).unwrap_or_default() {
-                    let (first, count) =
-                        mesh.label_dofs(*label).ok_or_else(|| Error::Invalid(format!("load `{name}`: node {label} belongs to no solid element")))?;
-                    if offset + 3 > count {
-                        return Err(Error::Invalid(format!("moment `{name}`: solid nodes have no rotations; apply it to a coupled reference point")));
-                    }
-                    for (c, x) in v.iter().enumerate() {
-                        let dof = first + offset + c;
+                    let slot =
+                        mesh.layout.slot(*label).ok_or_else(|| Error::Invalid(format!("load `{name}`: node {label} belongs to no solid element")))?;
+                    let dofs = vector_dofs(mesh, slot, rotation).ok_or_else(|| {
+                        Error::Invalid(format!("moment `{name}`: solid nodes have no rotations; apply it to a coupled reference point"))
+                    })?;
+                    for (&dof, x) in dofs.iter().zip(v) {
                         if *x != 0.0 && !active.get(dof).copied().unwrap_or(false) {
                             return Err(Error::Invalid(format!(
                                 "load `{name}`: {} is not coupled to the mesh (its coupling leaves that direction free)",
@@ -246,7 +258,7 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                             )));
                         }
                     }
-                    add(&mut f, first + offset, *v);
+                    add(&mut f, dofs, *v);
                 }
             }
             Load::Pressure { set, magnitude } => {
@@ -262,7 +274,7 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                     let xyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
                     let forces = face::pressure(&xyz, *magnitude).map_err(|e| Error::element(fc.element, e))?;
                     for (i, v) in idx.iter().zip(forces) {
-                        add(&mut f, 3 * i, v);
+                        add(&mut f, translations(mesh, *i)?, v);
                     }
                 }
             }
@@ -273,13 +285,13 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                         continue;
                     }
                     let rho = e.density.ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} has no density", e.label)))?;
-                    body(&mut f, e, acceleration.map(|a| rho * a))?;
+                    body(&mut f, mesh, e, acceleration.map(|a| rho * a))?;
                 }
             }
             Load::BodyForce { set, vector } => {
                 for label in resolved.sets.get(set).map(|r| r.elements.as_slice()).unwrap_or_default() {
                     let e = mesh.element(*label).ok_or_else(|| Error::Invalid(format!("load `{name}`: element {label} is not a solid element")))?;
-                    body(&mut f, e, *vector)?;
+                    body(&mut f, mesh, e, *vector)?;
                 }
             }
         }
@@ -287,10 +299,10 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
     Ok(f)
 }
 
-fn body(f: &mut [f64], e: &Elem, b: [f64; 3]) -> Result<()> {
+fn body(f: &mut [f64], mesh: &Mesh, e: &Elem, b: [f64; 3]) -> Result<()> {
     let forces = e.solid()?.body_force(b).map_err(|err| Error::element(e.label, err))?;
     for (node, v) in e.nodes.iter().zip(forces) {
-        add(f, 3 * node, v);
+        add(f, translations(mesh, *node)?, v);
     }
     Ok(())
 }

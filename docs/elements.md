@@ -9,6 +9,12 @@ then shells, special-purpose and multiphysics elements.
 Status: **done** (on main, verified against analytic solutions), **in progress** (an agent task is
 open), **planned**.
 
+Every element builds on the shared foundation of docs/fem.md: it declares its nodal degrees of
+freedom (`DofKind`: translations, rotations, temperature, pressure) and condensed internal ones
+(`ElementDofs`), the solvers number them with `DofLayout`, and its interpolation comes from the
+shape-function library (`Basis`: line2/3, tri3/6, quad4/8/9, tet4/10, wedge6/15, pyramid5,
+hex8/20/27 with first and second derivatives).
+
 ## Point and discrete elements
 
 | Element | Use | Status |
@@ -66,8 +72,8 @@ open), **planned**.
 | hex8 (full, incompatible modes), hex20 (full, reduced) | Structured and swept meshes | done |
 | wedge6 | Swept meshes from triangles, transitions | done |
 | hex8 one-point with hourglass control, nodal-pressure tet4 (explicit) | Explicit dynamics | done |
-| wedge15, pyramid5/13 | Quadratic transitions, tet–hex transition | planned (M5) |
-| Hybrid (mixed u–p) solids | Nearly incompressible materials (rubber) | planned (M8) |
+| wedge15, pyramid5/13 | Quadratic transitions, tet–hex transition | planned (M5); wedge15 and pyramid5 shape functions done |
+| Hybrid (mixed u–p) solids | Nearly incompressible materials (rubber) | in progress (FEM foundation, phase C); pressure DOF kind done |
 | Modified quadratic tet (tet10 for contact/plasticity) | Robust quadratic tets | planned |
 
 ## Special-purpose and multiphysics
@@ -77,6 +83,6 @@ open), **planned**.
 | Cohesive (2D, 3D) | Adhesive layers, delamination | planned |
 | Gasket | Through-thickness gasket behaviour | planned |
 | Infinite elements | Unbounded domains | planned |
-| Heat transfer (all shapes), coupled temperature–displacement | Thermal and thermal-stress analyses | planned (M8) |
+| Heat transfer (all shapes), coupled temperature–displacement | Thermal and thermal-stress analyses | in progress (FEM foundation, phase B); temperature DOF kind done |
 | Acoustic | Fluid acoustics, structural–acoustic coupling | planned |
 | Rigid elements | Rigid bodies from meshes | planned (M7) |

@@ -38,7 +38,7 @@ use modelcraft_fem::material::stress;
 use modelcraft_fem::uniform::UniformStrain;
 use modelcraft_model::{BulkViscosity, HourglassKind};
 
-use crate::system::{Material, System};
+use crate::system::{Material, NODE_DOFS, System};
 
 /// Scratch vectors and the element state of the latest evaluation.
 #[derive(Debug, Clone)]
@@ -82,13 +82,13 @@ impl Workspace {
 }
 
 pub(crate) fn gather<const N: usize>(x: &[f64], nodes: &[usize; N]) -> [[f64; 3]; N] {
-    nodes.map(|n| [0, 1, 2].map(|k| x.get(3 * n + k).copied().unwrap_or(0.0)))
+    nodes.map(|n| [0, 1, 2].map(|k| x.get(NODE_DOFS * n + k).copied().unwrap_or(0.0)))
 }
 
 /// Add a node's vector into a per-degree-of-freedom vector.
 pub(crate) fn add_at(f: &mut [f64], node: usize, v: &[f64; 3]) {
     for (k, c) in v.iter().enumerate() {
-        if let Some(x) = f.get_mut(3 * node + k) {
+        if let Some(x) = f.get_mut(NODE_DOFS * node + k) {
             *x += c;
         }
     }

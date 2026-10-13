@@ -1,0 +1,97 @@
+# FEM foundation: degrees of freedom and shape functions
+
+What every element in `crates/fem` and every solver builds on. Code: `crates/fem/src/dof.rs`,
+`crates/fem/src/basis.rs`, `crates/fem/src/jet.rs`.
+
+## Degrees of freedom
+
+Every unknown is a pair (node, `DofKind`):
+
+| `DofKind` | Meaning | Model / deck number |
+|---|---|---|
+| `Ux`, `Uy`, `Uz` | translations along X, Y, Z | 1, 2, 3 |
+| `Rx`, `Ry`, `Rz` | rotations about X, Y, Z | 4, 5, 6 |
+| `P` | pressure (mixed u–p elements) | 8 |
+| `T` | temperature | 11 |
+
+The enum order (Ux, Uy, Uz, Rx, Ry, Rz, T, P) is the numbering order within a node.
+`DofKind::from_number` / `number` convert to the 1-based numbers boundary conditions use;
+`from_direction` / `direction` to the structural directions 0–5.
+
+**Elements declare their unknowns** with `ElementDofs { node: DofSet, internal: Internal }`:
+the kinds every node of the element carries (`DofSet::TRANSLATIONS` for solids, `PLANE` for
+2D elements, `STRUCTURAL` for shells and beams, `TEMPERATURE` for heat transfer, translations
+plus `PRESSURE` for continuous-pressure mixed elements) and the internal unknowns the element
+condenses out itself (`incompatible_modes`, discontinuous `pressure`), which never reach the
+global system. An element's matrices are ordered node by node, its `node` kinds in `DofKind`
+order within a node (a shell's 24 × 24 stiffness: node 1 Ux Uy Uz Rx Ry Rz, node 2 …). Solid
+elements: `Formulation::dofs()` / `Solid::dofs()`.
+
+**Numbering** (`DofLayout`): collect what every node needs with `DofLayout::builder()`
+(`element(labels, dofs)`, `node(label, kinds)` for constraints and boundary conditions that
+need a kind no element gives, `point(label, kinds)` for reference points), then `build()`. A
+node carries the union of what was asked for. Unknowns are numbered mesh nodes in label order,
+each node's kinds in `DofKind` order, then the points in the order added; a slot's unknowns are
+contiguous, so a node pair is one dense block in the assembled matrix. The same model always
+gives the same numbering.
+
+Lookups: `node(label)` / `slot(label)` (a slot is a position: mesh nodes `0..nodes()`, points
+`point_slot(k)`), `dof(slot, kind)`, `range(slot)`, `kinds(slot)`, `locate(dof) -> (slot,
+kind)`, `element_dofs(slots, kinds)`, `describe(dof)`, `stride()` (uniform layouts).
+
+Solvers: `modelcraft_solver::system::Mesh::layout` numbers the implicit system (mesh nodes,
+then six per coupled reference point); assembly (`sparse::add_block(k, layout, slots, kinds,
+data)`, `add_scalar`, `add_diagonal`) works for any mix of kinds per node, so a solid sharing
+nodes with a shell adds its translation block into the shell nodes' six-unknown blocks.
+Boundary conditions and loads address (node, kind): a boundary condition holds the kinds a node
+carries, and a moment needs rotations. The explicit solver has solid nodes only and checks that
+its layout is the uniform node-major one (`NODE_DOFS = 3`).
+
+## Shape functions
+
+`Basis` is every family's interpolation:
+
+| Family | Reference element | Nodes |
+|---|---|---|
+| `Line2`, `Line3` | ξ ∈ [−1, 1] | ends −1, 1; line3 adds the middle |
+| `Tri3`, `Tri6` | ξ, η ≥ 0, ξ + η ≤ 1 | corners (0,0), (1,0), (0,1); mid-sides of 1-2, 2-3, 3-1 |
+| `Quad4`, `Quad8`, `Quad9` | [−1, 1]² | corners counter-clockwise from (−1,−1); mid-sides of 1-2, 2-3, 3-4, 4-1; centre |
+| `Tet4`, `Tet10` | unit tetrahedron | corners (0,0,0), (1,0,0), (0,1,0), (0,0,1); mid-sides of 1-2, 2-3, 3-1, 1-4, 2-4, 3-4 |
+| `Wedge6`, `Wedge15` | triangle × ζ ∈ [−1, 1] | bottom 1-3, top 4-6; mid-sides of the bottom edges, top edges, vertical edges |
+| `Pyramid5` | base [−1, 1]² at ζ = 0, apex (0, 0, 1) | base corners as quad4, then the apex |
+| `Hex8`, `Hex20`, `Hex27` | [−1, 1]³ | corners 1-4 at ζ = −1, 5-8 above; hex20 mid-sides (bottom, top, vertical edges); hex27 face centres in `ElementKind::Hex8.faces()` order, then the centre |
+
+Node orders are the model's (`ElementKind::edges()` / `faces()` are the single source):
+corners, mid-side nodes in edge order, face nodes, body nodes. `Basis::of(ElementKind)` maps a
+model element; `nodes()` gives natural node coordinates; `dim()`, `count()`, `corners()`,
+`degree()` (the complete polynomial degree reproduced: 1 for linear families including the
+rational pyramid, 2 for the quadratic ones).
+
+Evaluation at a natural point `xi: [f64; 3]` (unused coordinates are zero):
+
+- `eval(xi) -> Shape`: values `n` and first derivatives `dn[i] = ∂Nᵢ/∂(ξ, η, ζ)`. tet4, tet10,
+  wedge6, hex8, hex20 use the hand-written functions of `shape.rs` (the solid kernels' path).
+- `eval2(xi) -> Shape2`: adds `d2n[i][a][b] = ∂²Nᵢ/∂ξₐ∂ξ_b`, from second-order forward-mode
+  automatic differentiation of the same formulas (`jet::Jet`): exact to round-off.
+- `gradients(&shape, xyz) -> Gradients`: physical `dx[i] = ∇ₓNᵢ = J⁻¹ ∇_ξNᵢ` and `det J`, with
+  J_ab = ∂x_b/∂ξₐ; an inverted or collapsed element is `Error::Degenerate`.
+- `hessians(&shape2, xyz) -> Hessians`: physical `d2x[i]` =
+  J⁻¹ (H_ξ − Σ_b (∂N/∂x_b) X_b″) J⁻ᵀ with X_b″ = Σᵢ x_{i,b} H_ξ(Nᵢ), the map's second
+  derivative (T. J. R. Hughes, *The Finite Element Method*, 2000, §3.9, §4.2), and
+  `laplacian(i)`. Without the X″ term a field linear in x would have a nonzero Hessian on a
+  curved element.
+
+A family of dimension d maps onto the first d physical coordinates (plane elements in x–y,
+lines along x). Elements embedded in a higher dimension (shells, beams, trusses in 3D) pass
+node coordinates in their own local frame.
+
+## Verification (`basis::tests`, `dof::tests`, `jet::tests`)
+
+For every family: Kronecker delta at the nodes; partition of unity (Σ N = 1, Σ ∇N = 0,
+Σ H = 0); exact reproduction of every monomial up to `degree()` with its gradient and Hessian
+in natural coordinates; first and second derivatives against central differences;
+on an affine map, physical gradients, Hessians and Laplacians exact for a complete polynomial
+of the family's degree; on a curved map, linear fields exact with zero Hessian, and the
+physical Hessian of a quadratic interpolant consistent with finite differences of its physical
+gradient. The solver and explicit migration to `DofLayout` was checked bit for bit: every
+result of the solver, explicit, engine and io test suites hashes identically before and after.

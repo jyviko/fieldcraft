@@ -252,13 +252,10 @@ impl LayoutBuilder {
         self
     }
 
-    /// An extra point (a reference point) numbered after every mesh node, in the order added.
-    /// Adding the same label again widens its kinds.
+    /// An extra point (a reference point) numbered after every mesh node, in the order added;
+    /// each call adds one.
     pub fn point(&mut self, label: u32, kinds: DofSet) -> &mut Self {
-        match self.points.iter_mut().find(|p| p.0 == label) {
-            Some(p) => p.1 = p.1.union(kinds),
-            None => self.points.push((label, kinds)),
-        }
+        self.points.push((label, kinds));
         self
     }
 
@@ -370,6 +367,13 @@ impl DofLayout {
         Some(out)
     }
 
+    /// `Some(s)` when every slot carries the same `s` kinds, so unknown `s · slot + offset` is
+    /// the `offset`-th kind of `slot` (node-major vectors of `s`-vectors).
+    pub fn stride(&self) -> Option<usize> {
+        let first = self.slots.first()?.kinds;
+        self.slots.iter().all(|s| s.kinds == first).then_some(first.len())
+    }
+
     /// What a global unknown is, in the user's terms.
     pub fn describe(&self, dof: usize) -> String {
         match self.locate(dof) {
@@ -444,8 +448,8 @@ mod tests {
         assert_eq!(l.describe(19), "point 100 in rotation about X");
         // The same needs in another order give the same layout.
         let mut c = DofLayout::builder();
-        c.point(100, DofSet::TRANSLATIONS).node(5, DofSet::TEMPERATURE).element(&[5, 7, 3], ElementDofs::SOLID);
-        c.point(100, DofSet::ROTATIONS).element(&[3, 7], ElementDofs::new(DofSet::STRUCTURAL));
+        c.point(100, DofSet::STRUCTURAL).node(5, DofSet::TEMPERATURE).element(&[5, 7, 3], ElementDofs::SOLID);
+        c.element(&[3, 7], ElementDofs::new(DofSet::STRUCTURAL));
         assert_eq!(c.build(), l);
         // A uniform translational layout is the classic 3 × node numbering.
         let u = DofLayout::uniform([4, 2, 9], DofSet::TRANSLATIONS);
@@ -453,5 +457,8 @@ mod tests {
         assert_eq!(u.dofs(), 9);
         assert_eq!(u.range(7), 0..0);
         assert_eq!(u.locate(usize::MAX), None);
+        assert_eq!(u.stride(), Some(3));
+        assert_eq!(l.stride(), None);
+        assert_eq!(DofLayout::default().stride(), None);
     }
 }

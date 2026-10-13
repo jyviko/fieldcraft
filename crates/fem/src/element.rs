@@ -35,6 +35,7 @@
 use modelcraft_model::ElementKind;
 
 use crate::dense::{Cholesky, Matrix, inverse3};
+use crate::dof::{DofSet, ElementDofs, Internal};
 use crate::material::{Elasticity, stress};
 use crate::quadrature::{Point, Rule};
 use crate::shape::{self, MAX_NODES, Shape};
@@ -144,6 +145,13 @@ pub enum Formulation {
 }
 
 impl Formulation {
+    /// The unknowns of a solid element so formulated: three translations per node, and the
+    /// incompatible modes it condenses out.
+    pub fn dofs(self) -> ElementDofs {
+        let incompatible_modes = if self == Formulation::IncompatibleModes { INCOMPATIBLE_DOFS } else { 0 };
+        ElementDofs { node: DofSet::TRANSLATIONS, internal: Internal { incompatible_modes, pressure: 0 } }
+    }
+
     /// The formulation a model section asks for, if this element type has it.
     pub fn from_section(kind: ElementKind, f: &modelcraft_model::Formulation) -> Result<Formulation> {
         let ty = element_type(kind)?;
@@ -218,6 +226,11 @@ impl<'a> Solid<'a> {
             return Err(Error::NotSupported(format!("{formulation:?} formulation of {} elements", kind.name())));
         }
         Ok(Solid { ty, xyz, formulation })
+    }
+
+    /// The element's unknowns, in the order of its matrices.
+    pub fn dofs(&self) -> ElementDofs {
+        self.formulation.dofs()
     }
 
     /// The stiffness integration rule.

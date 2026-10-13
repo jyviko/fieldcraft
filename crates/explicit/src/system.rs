@@ -2,13 +2,16 @@
 //! lengths, lumped masses, prescribed velocities, rigid walls, initial velocities and the load
 //! vector of an explicit dynamic step.
 
-use modelcraft_fem::face;
 use modelcraft_fem::material::Elasticity;
 use modelcraft_fem::uniform::{Hex8, Tet4, modulus_bound};
+use modelcraft_fem::{DofKind, DofLayout, DofSet, face};
 use modelcraft_model::{Elastic, ElementKind, ExplicitDynamic, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step, Target};
 
 use crate::elements::add_at;
 use crate::{Error, Result};
+
+/// Degrees of freedom per node: the three translations, node-major (see [`System`]).
+pub const NODE_DOFS: usize = 3;
 
 /// Most nodes whose histories a step records.
 pub const MAX_HISTORY_NODES: usize = 1000;
@@ -67,10 +70,15 @@ pub struct Wall {
 }
 
 /// The discrete system of an explicit dynamic step.
+///
+/// Its elements are solids, so every node carries the three translations and the layout is
+/// node-major: degree of freedom 3 n + axis, which the integrator's per-node loops rely on
+/// (checked when the system is built).
 #[derive(Debug, Clone)]
 pub struct System {
     /// Node labels with degrees of freedom (those of the elements), sorted.
     pub labels: Vec<u32>,
+    pub layout: DofLayout,
     pub xyz: Vec<[f64; 3]>,
     /// Element labels, sorted.
     pub elements: Vec<u32>,
@@ -188,25 +196,30 @@ impl System {
         let mut labels: Vec<u32> = chosen.iter().flat_map(|e| e.2.iter().copied()).collect();
         labels.sort_unstable();
         labels.dedup();
-        if 3 * labels.len() > max_dofs {
-            return Err(Error::Limit(format!("the model has {} degrees of freedom; the limit is {max_dofs}", 3 * labels.len())));
+        let layout = DofLayout::uniform(labels.iter().copied(), DofSet::TRANSLATIONS);
+        if layout.dofs() > max_dofs {
+            return Err(Error::Limit(format!("the model has {} degrees of freedom; the limit is {max_dofs}", layout.dofs())));
+        }
+        if layout.stride() != Some(NODE_DOFS) {
+            return Err(Error::Internal("explicit dynamics needs three translations per node".into()));
         }
         if labels.is_empty() {
             return Err(invalid("the model has no elements to analyse"));
         }
         let xyz: Vec<[f64; 3]> =
             labels.iter().map(|l| model.node(*l).map(|n| n.xyz).ok_or_else(|| invalid(format!("node {l} is missing")))).collect::<Result<_>>()?;
-        let n = labels.len();
+        let (n, dofs) = (labels.len(), layout.dofs());
         let mut sys = System {
+            layout,
             elements: chosen.iter().map(|e| e.0).collect(),
             materials,
             hexes: Vec::new(),
             tets: Vec::new(),
             mass: vec![0.0; n],
-            prescribed: vec![None; 3 * n],
+            prescribed: vec![None; dofs],
             walls: Vec::new(),
-            initial_velocity: vec![0.0; 3 * n],
-            external: vec![0.0; 3 * n],
+            initial_velocity: vec![0.0; dofs],
+            external: vec![0.0; dofs],
             history_nodes: Vec::new(),
             hourglass: settings.hourglass.kind,
             warnings: resolved.warnings.iter().map(ToString::to_string).collect(),
@@ -270,7 +283,7 @@ impl System {
     }
 
     pub fn dofs(&self) -> usize {
-        3 * self.labels.len()
+        self.layout.dofs()
     }
 
     /// Prescribed velocities from the step's boundary conditions: zero for held degrees of
@@ -283,13 +296,15 @@ impl System {
             }
             for &label in resolved.target_nodes(bc.target()) {
                 let Some(node) = self.node(label) else { continue };
-                for dof in 1..=3u8 {
+                for kind in self.layout.kinds(node).iter() {
+                    let dof = kind.number();
                     let Some(value) = bc.value(dof) else { continue };
                     let velocity = value / end_time;
                     if !velocity.is_finite() {
                         return Err(invalid(format!("boundary condition `{name}`: the velocity {value} / {end_time} is not finite")));
                     }
-                    let slot = self.prescribed.get_mut(3 * node + usize::from(dof - 1)).ok_or_else(|| Error::Internal("dof index".into()))?;
+                    let index = self.layout.dof(node, kind).ok_or_else(|| Error::Internal("dof index".into()))?;
+                    let slot = self.prescribed.get_mut(index).ok_or_else(|| Error::Internal("dof index".into()))?;
                     match *slot {
                         Some(old) if old != velocity => {
                             return Err(invalid(format!(
@@ -381,7 +396,9 @@ impl System {
         for iv in &settings.initial_velocities {
             for node in self.nodes_of(resolved, &iv.set) {
                 for (k, c) in iv.velocity.iter().enumerate() {
-                    if let Some(v) = self.initial_velocity.get_mut(3 * node + k) {
+                    if let Some(v) =
+                        DofKind::translation(k).and_then(|kind| self.layout.dof(node, kind)).and_then(|d| self.initial_velocity.get_mut(d))
+                    {
                         *v = *c;
                     }
                 }

@@ -24,7 +24,7 @@ use modelcraft_model::{ExplicitDynamic, Model, OutputVariable, Procedure, Step};
 
 use crate::elements::{Workspace, internal_forces};
 use crate::result::{ControllingElement, Energies, ExplicitResult, Frame, History};
-use crate::system::System;
+use crate::system::{NODE_DOFS, System};
 use crate::{Error, Limits, Result};
 
 /// How many elements the result names as controlling the time increment.
@@ -76,7 +76,7 @@ fn constrain(sys: &System, u: &[f64], v: &mut [f64], dt: f64) {
         for w in &sys.walls {
             for &node in &w.nodes {
                 let x = sys.xyz.get(node).copied().unwrap_or_default();
-                let at = |k: usize| 3 * node + k;
+                let at = |k: usize| NODE_DOFS * node + k;
                 let gap: f64 = (0..3).map(|k| (x[k] + u.get(at(k)).copied().unwrap_or(0.0) - w.point[k]) * w.normal[k]).sum();
                 let normal: f64 = (0..3).map(|k| v.get(at(k)).copied().unwrap_or(0.0) * w.normal[k]).sum();
                 if gap + dt * normal < 0.0 {
@@ -113,7 +113,7 @@ fn impulses(mass: &[f64], free: &[f64], constrained: &[f64], dt: f64, r: &mut [f
 }
 
 fn per_node(x: &[f64]) -> Vec<[f64; 3]> {
-    x.as_chunks::<3>().0.to_vec()
+    x.as_chunks::<NODE_DOFS>().0.to_vec()
 }
 
 /// Solve an explicit dynamic step: the step named `step`, or the model's only one.
@@ -171,7 +171,7 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     }
 
     let n = sys.dofs();
-    let mass: Vec<f64> = (0..n).map(|d| sys.mass.get(d / 3).copied().unwrap_or(0.0)).collect();
+    let mass: Vec<f64> = (0..n).map(|d| sys.mass.get(d / NODE_DOFS).copied().unwrap_or(0.0)).collect();
     if mass.iter().any(|m| !(*m > 0.0 && m.is_finite())) {
         return Err(Error::Internal("a node has no positive mass".into()));
     }
@@ -209,7 +209,7 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         history.energies.push(e);
         let sum = |x: &[f64], weight: &dyn Fn(usize) -> f64| {
             let mut s = [0.0; 3];
-            for (node, c) in x.as_chunks::<3>().0.iter().enumerate() {
+            for (node, c) in x.as_chunks::<NODE_DOFS>().0.iter().enumerate() {
                 for k in 0..3 {
                     s[k] += weight(node) * c[k];
                 }
@@ -218,7 +218,7 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         };
         history.momentum.push(sum(v, &|node| sys.mass.get(node).copied().unwrap_or(0.0)));
         history.constraint_force.push(sum(r, &|_| 1.0));
-        let pick = |x: &[f64]| sys.history_nodes.iter().map(|i| [0, 1, 2].map(|k| x.get(3 * i + k).copied().unwrap_or(0.0))).collect();
+        let pick = |x: &[f64]| sys.history_nodes.iter().map(|i| [0, 1, 2].map(|k| x.get(NODE_DOFS * i + k).copied().unwrap_or(0.0))).collect();
         history.displacement.push(pick(u));
         history.velocity.push(pick(v));
     };

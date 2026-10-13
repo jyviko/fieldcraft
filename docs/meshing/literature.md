@@ -128,7 +128,14 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
   - Visibility or straight walking for point location: O. Devillers, S. Pion, M. Teillaud, *Walking in a
     triangulation*, IJFCS 13(2):181–199, 2002, DOI [10.1142/S0129054102001047](https://doi.org/10.1142/S0129054102001047).
   - A compact tet-adjacency array.
+  - Termination of the visibility walk in a Delaunay triangulation: H. Edelsbrunner, *An acyclicity theorem for cell
+    complexes in d dimensions*, Combinatorica 10(3):251–260, 1990, DOI
+    [10.1007/BF02122779](https://doi.org/10.1007/BF02122779).
+  - Hilbert index: J. Skilling, *Programming the Hilbert curve*, AIP Conf. Proc. 707:381–387, 2004, DOI
+    [10.1063/1.1751381](https://doi.org/10.1063/1.1751381).
 - **Code.** For a permissive reference, see geogram `delaunay_3d.cpp` (BSD).
+- **Implemented** in `modelcraft-mesh::delaunay` (ghost vertex for the hull, Devillers–Teillaud perturbation for
+  cospherical points, exact verifier).
 
 **A1.2 Marot, Pellerin, Remacle 2019, "One machine, one minute, three billion tetrahedra".** **Verdict: reference (later).**
 - **Citation.** IJNME 117(9):967–990, 2019. DOI [10.1002/nme.5987](https://doi.org/10.1002/nme.5987).

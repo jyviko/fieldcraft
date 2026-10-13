@@ -1,3 +1,4 @@
+use modelcraft_mesh::delaunay::Triangulation;
 use modelcraft_mesh::quality::{self, QualityReport};
 use modelcraft_model::{ElementKind, MAX_ELEMENTS};
 use serde_json::{Value, json};
@@ -31,6 +32,32 @@ pub const QUALITY: CommandSpec = CommandSpec {
     params: r#"{"elements": [labels] (optional, default all), "bins": 10 (1..=1000)} — certified validity (det J > 0 everywhere), volume, and min/max/mean/worst/histogram per metric (angles in degrees; histograms over each metric's fixed range, out-of-range values in the end bins)"#,
     run: quality_report,
 };
+
+pub const DELAUNAY_POINTS: CommandSpec = CommandSpec {
+    id: "mesh.delaunay.points",
+    label: "Delaunay of Points",
+    params: r#"{"points": [[x, y, z], ...] (at most 20000)} — the exact Delaunay tetrahedralization (a debugging report; the model is not changed): {"dimension", "vertices", "duplicates": [[point, kept point], ...], "tets": [[i, j, k, l], ...]} with 0-based point indices in tet4 order; collinear or coplanar points give no tets"#,
+    run: delaunay_points,
+};
+
+/// The most points `mesh.delaunay.points` takes (its report lists every tetrahedron).
+const DELAUNAY_MAX_POINTS: usize = 20_000;
+
+fn delaunay_points(_: &mut Session, p: &Value) -> Result<Value> {
+    let bad = || EngineError::Params(format!("`points` must be a list of at most {DELAUNAY_MAX_POINTS} [x, y, z]"));
+    let raw = p.get("points").and_then(Value::as_array).filter(|a| a.len() <= DELAUNAY_MAX_POINTS).ok_or_else(bad)?;
+    let points = raw.iter().map(|v| xyz(&json!({ "p": v }), "p")).collect::<Result<Vec<[f64; 3]>>>().map_err(|_| bad())?;
+    let tri = Triangulation::new(&points)?;
+    tri.verify()?;
+    let duplicates: Vec<[u32; 2]> = (0..points.len() as u32).filter_map(|v| tri.duplicate_of(v).map(|d| [v, d])).collect();
+    let tets: Vec<[u32; 4]> = tri.finite_tets().map(|(_, vs)| vs).collect();
+    Ok(json!({
+        "dimension": tri.dimension(),
+        "vertices": points.len() - duplicates.len(),
+        "duplicates": duplicates,
+        "tets": tets,
+    }))
+}
 
 fn node_add(s: &mut Session, p: &Value) -> Result<Value> {
     let l = label(p, "label")?;
@@ -125,6 +152,32 @@ mod tests {
         }
         let nodes: Vec<u32> = (first_node..first_node + 8).collect();
         s.execute("mesh.element.add", &json!({"label": label, "kind": "hex8", "nodes": nodes})).unwrap();
+    }
+
+    #[test]
+    fn delaunay_of_points_reports_tets_and_duplicates() {
+        let mut s = Session::default();
+        let cube = json!({"points": [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1], [1, 1, 1]]});
+        let r = s.execute("mesh.delaunay.points", &cube).unwrap();
+        assert_eq!(r["dimension"], 3);
+        assert_eq!(r["vertices"], 8);
+        assert_eq!(r["duplicates"], json!([[8, 7]]));
+        let tets = r["tets"].as_array().unwrap();
+        assert!((5..=6).contains(&tets.len()), "{tets:?}");
+        assert!(s.journal.is_empty(), "a report does not change the model");
+
+        let flat = s.execute("mesh.delaunay.points", &json!({"points": [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]})).unwrap();
+        assert_eq!((flat["dimension"].clone(), flat["tets"].clone()), (json!(2), json!([])));
+        for bad in [
+            json!({}),
+            json!({"points": [[0, 0]]}),
+            json!({"points": [[0, 0, "x"]]}),
+            json!({"points": [[f64::MAX, 0, 0]]}),
+            json!({"points": [[1e-300, 0, 0]]}),
+            json!({"points": vec![[0, 0, 0]; 20_001]}),
+        ] {
+            assert!(s.execute("mesh.delaunay.points", &bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

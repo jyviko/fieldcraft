@@ -179,6 +179,11 @@ mod tests {
             json!({"elements": [u32::MAX, -1, 1.5]}),
             json!({"elements": {}, "bins": -5}),
             json!({"elements": [1], "bins": 1e300}),
+            json!({"points": null}),
+            json!({"points": [[1, 2]]}),
+            json!({"points": [[1e308, -1e308, 0], [0, 0, 0]]}),
+            json!({"points": [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]}),
+            json!({"points": vec![[1, 1, 1]; 30_000]}),
         ];
         for spec in commands() {
             for p in &hostile {

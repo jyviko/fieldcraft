@@ -70,6 +70,8 @@ pub const GHOST: u32 = u32::MAX;
 const DEAD: u32 = u32::MAX - 1;
 /// No tetrahedron / no vertex.
 const NONE: u32 = u32::MAX;
+/// An empty slot of the edge table (no edge has two equal endpoints).
+const EMPTY_EDGE: u64 = u64::MAX;
 /// The most points a triangulation takes (vertex ids stay far below [`GHOST`] and the ~6.7
 /// tetrahedra per point fit `u32` slot ids).
 pub const MAX_POINTS: usize = 1 << 24;
@@ -134,8 +136,8 @@ struct Scratch {
     boundary: Vec<(u32, usize, u32)>,
     /// `(new tet vertices, slot of the outside neighbour, neighbour, the neighbour's slot back)`.
     new_tets: Vec<([u32; 4], usize, u32, usize)>,
-    /// `(edge key, tet, slot)` for linking the new tetrahedra to each other.
-    faces: Vec<(u64, u32, usize)>,
+    /// Open-addressing table `(edge key, tet, slot)` linking the new tetrahedra to each other.
+    edges: Vec<(u64, u32, usize)>,
 }
 
 /// A Delaunay triangulation is corrupt: this never happens with exact predicates, and is
@@ -639,30 +641,54 @@ impl Triangulation {
         for &t in &s.cavity {
             self.kill(t)?;
         }
-        s.faces.clear();
+        // Each edge of the cavity boundary is shared by exactly two boundary faces; their new
+        // tetrahedra meet across the face spanned by that edge and `v`. Pair them through a
+        // small open-addressing table keyed by the edge (lookups only, so no order leaks out).
+        let size = (s.new_tets.len() * 4).next_power_of_two().max(16);
+        s.edges.clear();
+        s.edges.resize(size, (EMPTY_EDGE, NONE, 0));
+        let mask = size - 1;
+        let mut open = 0usize;
         for &(vs, j, o, back) in &s.new_tets {
             let t = self.alloc(vs)?;
             self.set_adj(t, j, o)?;
             self.set_adj(o, back, t)?;
-            // The other three faces contain `v` and one edge of the boundary face: key them by
-            // that edge.
             for k in (0..4).filter(|&k| k != j) {
                 let mut e = vs.iter().enumerate().filter(|&(i, _)| i != j && i != k).map(|(_, &u)| u);
                 let (a, b) = (e.next().unwrap_or(NONE), e.next().unwrap_or(NONE));
                 let key = (u64::from(a.min(b)) << 32) | u64::from(a.max(b));
-                s.faces.push((key, t, k));
+                let mut h = (key.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize & mask;
+                let mut placed = false;
+                for _ in 0..size {
+                    let entry = s.edges.get_mut(h).ok_or_else(|| corrupt("edge table"))?;
+                    if entry.0 == EMPTY_EDGE {
+                        *entry = (key, t, k);
+                        open += 1;
+                        placed = true;
+                        break;
+                    }
+                    if entry.0 == key {
+                        let (_, u, l) = *entry;
+                        if u == NONE {
+                            return Err(corrupt("an edge of the cavity boundary has more than two faces"));
+                        }
+                        entry.1 = NONE;
+                        open -= 1;
+                        self.set_adj(t, k, u)?;
+                        self.set_adj(u, l, t)?;
+                        placed = true;
+                        break;
+                    }
+                    h = (h + 1) & mask;
+                }
+                if !placed {
+                    return Err(corrupt("edge table full"));
+                }
             }
             self.hint = t;
         }
-        s.faces.sort_unstable();
-        for pair in s.faces.chunks(2) {
-            match pair {
-                [(e, t, i), (f, u, j)] if e == f => {
-                    self.set_adj(*t, *i, *u)?;
-                    self.set_adj(*u, *j, *t)?;
-                }
-                _ => return Err(corrupt("the cavity boundary is not a closed surface")),
-            }
+        if open != 0 {
+            return Err(corrupt("the cavity boundary is not a closed surface"));
         }
         Ok(())
     }

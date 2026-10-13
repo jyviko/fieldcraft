@@ -366,14 +366,14 @@ fn perturbed_sign(points: &[Vec<f64>]) -> Sign {
         .enumerate()
         .map(|(i, p)| {
             let rank = order.iter().position(|&k| k == i).unwrap() + 1;
-            let mut row: Vec<BigRational> = p.iter().map(|x| q(*x)).collect();
-            let mut lift = row.iter().fold(BigRational::zero(), |acc, v| acc + v.clone() * v.clone());
+            let mut row = lifted(p.iter().map(|x| q(*x)).collect());
             let mut e = BigRational::from_integer(BigInt::from(1));
             for _ in 0..rank {
                 e *= eps.clone();
             }
-            lift += e;
-            row.push(lift);
+            if let Some(lift) = row.last_mut() {
+                *lift += e;
+            }
             row.push(BigRational::from_integer(BigInt::from(1)));
             row
         })

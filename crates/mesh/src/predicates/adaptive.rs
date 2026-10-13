@@ -15,7 +15,7 @@
 
 use super::eft::two_diff_tail;
 use super::expansion::{Exp, Expansion, cross_diff};
-use super::ring::{det3, det4, sq2, sq3};
+use super::ring::{det2, det3, sq2, sq3};
 use super::{Point2, Point3, Sign};
 
 /// `ε = 2^-53`, half a unit in the last place of 1 (the machine epsilon of §2.1).
@@ -406,20 +406,31 @@ fn insphere_adapt(a: &Point3, b: &Point3, c: &Point3, d: &Point3, e: &Point3, pe
     insphere_exact(a, b, c, d, e)
 }
 
+/// The same expansion as stage B (shared 2×2 minors, then the 3×3 minors, then the lifts), on
+/// the exact differences.
 fn insphere_exact(a: &Point3, b: &Point3, c: &Point3, d: &Point3, e: &Point3) -> Sign {
-    let row = |p: &Point3| {
-        let [x, y, z] = diffs3(p, e);
-        let lift = sq3(&x, &y, &z);
-        [x, y, z, lift]
-    };
-    det4(&[row(a), row(b), row(c), row(d)]).sign()
+    let [ax, ay, az] = diffs3(a, e);
+    let [bx, by, bz] = diffs3(b, e);
+    let [cx, cy, cz] = diffs3(c, e);
+    let [dx, dy, dz] = diffs3(d, e);
+    let ab = det2(&ax, &ay, &bx, &by);
+    let bc = det2(&bx, &by, &cx, &cy);
+    let cd = det2(&cx, &cy, &dx, &dy);
+    let da = det2(&dx, &dy, &ax, &ay);
+    let ac = det2(&ax, &ay, &cx, &cy);
+    let bd = det2(&bx, &by, &dx, &dy);
+    let abc = az.clone() * bc.clone() - bz.clone() * ac.clone() + cz.clone() * ab.clone();
+    let bcd = bz.clone() * cd.clone() - cz.clone() * bd.clone() + dz.clone() * bc;
+    let cda = cz.clone() * da.clone() + dz.clone() * ac + az.clone() * cd;
+    let dab = dz.clone() * ab + az.clone() * bd + bz.clone() * da;
+    let lift = sq3(&dx, &dy, &dz) * abc - sq3(&cx, &cy, &cz) * dab + sq3(&bx, &by, &bz) * cda - sq3(&ax, &ay, &az) * bcd;
+    lift.sign()
 }
 
 /// The exact stages alone, for tests that exercise them directly.
 #[cfg(test)]
 pub(crate) mod exact {
     use super::*;
-    use crate::predicates::ring::det2;
 
     pub(crate) fn orient2d(a: &Point2, b: &Point2, c: &Point2) -> Sign {
         let [ax, ay] = diffs2(a, c);

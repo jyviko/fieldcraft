@@ -38,12 +38,6 @@ fn ranked<const N: usize, const M: usize>(points: &[[f64; N]; M]) -> [usize; M] 
     order
 }
 
-/// `points` without the one at `skip`, in order.
-fn others<T: Copy, const M: usize, const K: usize>(points: &[T; M], skip: usize, fill: T) -> [T; K] {
-    let mut kept = points.iter().enumerate().filter(|(i, _)| *i != skip).map(|(_, p)| *p);
-    std::array::from_fn(|_| kept.next().unwrap_or(fill))
-}
-
 /// [`insphere`] with symbolic perturbation: never [`Sign::Zero`] when `a, b, c, d` is not
 /// coplanar. Points must be pairwise distinct for the perturbation to be consistent (a
 /// Delaunay triangulation never passes duplicates); with all five points coplanar it returns
@@ -56,10 +50,15 @@ pub fn insphere_sos(a: &Point3, b: &Point3, c: &Point3, d: &Point3, e: &Point3) 
 
 #[cold]
 fn insphere_perturbed(a: &Point3, b: &Point3, c: &Point3, d: &Point3, e: &Point3) -> Sign {
-    let points = [*a, *b, *c, *d, *e];
-    for i in ranked(&points.map(|p| p.0)) {
-        let [p, q, r, s]: [Point3; 4] = others(&points, i, *a);
-        let minor = orient3d(&p, &q, &r, &s);
+    for i in ranked(&[a.0, b.0, c.0, d.0, e.0]) {
+        let [p, q, r, s] = match i {
+            0 => [b, c, d, e],
+            1 => [a, c, d, e],
+            2 => [a, b, d, e],
+            3 => [a, b, c, e],
+            _ => [a, b, c, d],
+        };
+        let minor = orient3d(p, q, r, s);
         if !minor.is_zero() {
             // Row i + 1 (1-based), lift column 4: cofactor sign (-1)^(i + 5).
             return if i % 2 == 1 { minor } else { -minor };
@@ -78,10 +77,14 @@ pub fn incircle_sos(a: &Point2, b: &Point2, c: &Point2, d: &Point2) -> Sign {
 
 #[cold]
 fn incircle_perturbed(a: &Point2, b: &Point2, c: &Point2, d: &Point2) -> Sign {
-    let points = [*a, *b, *c, *d];
-    for i in ranked(&points.map(|p| p.0)) {
-        let [p, q, r]: [Point2; 3] = others(&points, i, *a);
-        let minor = orient2d(&p, &q, &r);
+    for i in ranked(&[a.0, b.0, c.0, d.0]) {
+        let [p, q, r] = match i {
+            0 => [b, c, d],
+            1 => [a, c, d],
+            2 => [a, b, d],
+            _ => [a, b, c],
+        };
+        let minor = orient2d(p, q, r);
         if !minor.is_zero() {
             // Row i + 1 (1-based), lift column 3: cofactor sign (-1)^(i + 4).
             return if i % 2 == 0 { minor } else { -minor };

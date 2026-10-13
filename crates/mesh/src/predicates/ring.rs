@@ -34,18 +34,6 @@ pub(crate) fn det3<T: Ring>(rows: &[[T; 3]; 3]) -> T {
     a2.clone() * det2(b0, b1, c0, c1) - b2.clone() * det2(a0, a1, c0, c1) + c2.clone() * det2(a0, a1, b0, b1)
 }
 
-/// The determinant of four rows `[x, y, z, w]`, expanded along the last column.
-pub(crate) fn det4<T: Ring>(rows: &[[T; 4]; 4]) -> T {
-    let minor = |skip: usize| -> [[T; 3]; 3] {
-        let mut kept = rows.iter().enumerate().filter(|(i, _)| *i != skip).map(|(_, [x, y, z, _])| [x.clone(), y.clone(), z.clone()]);
-        let zero = || [T::from_f64(0.0), T::from_f64(0.0), T::from_f64(0.0)];
-        [kept.next().unwrap_or_else(zero), kept.next().unwrap_or_else(zero), kept.next().unwrap_or_else(zero)]
-    };
-    let [[.., w0], [.., w1], [.., w2], [.., w3]] = rows;
-    // Cofactor signs (-1)^(i + 4) for rows i = 1..4.
-    w1.clone() * det3(&minor(1)) - w0.clone() * det3(&minor(0)) + w3.clone() * det3(&minor(3)) - w2.clone() * det3(&minor(2))
-}
-
 /// `x² + y²` and `x² + y² + z²`.
 #[inline]
 pub(crate) fn sq2<T: Ring>(x: &T, y: &T) -> T {

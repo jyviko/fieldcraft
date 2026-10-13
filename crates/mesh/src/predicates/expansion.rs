@@ -185,8 +185,8 @@ impl<const N: usize> Exp<N> {
     /// `-e`, exactly.
     #[inline]
     pub(crate) fn negated(mut self) -> Self {
-        for x in self.c.iter_mut() {
-            *x = -*x;
+        if let Some(live) = self.c.get_mut(..self.n) {
+            live.iter_mut().for_each(|x| *x = -*x);
         }
         self
     }
@@ -218,15 +218,7 @@ pub(crate) struct Expansion(Vec<f64>);
 impl Expansion {
     /// The exact difference `a - b`.
     pub(crate) fn diff(a: f64, b: f64) -> Self {
-        let (hi, lo) = two_diff(a, b);
-        let mut v = Vec::with_capacity(2);
-        if lo != 0.0 {
-            v.push(lo);
-        }
-        if hi != 0.0 || v.is_empty() {
-            v.push(hi);
-        }
-        Self(v)
+        Self(Exp::<2>::from_pair(two_diff(a, b)).as_slice().to_vec())
     }
 
     fn scaled(&self, b: f64) -> Self {
@@ -274,13 +266,12 @@ impl Mul for Expansion {
 
     /// The sum of `self` scaled by each component of `rhs` (distributivity; every partial
     /// product is exact).
+    #[allow(clippy::suspicious_arithmetic_impl)] // the product is a sum of scaled expansions
     fn mul(self, rhs: Self) -> Self {
         let (long, short) = if self.0.len() >= rhs.0.len() { (self, rhs) } else { (rhs, self) };
-        let mut acc = Self(vec![0.0]);
-        for &b in &short.0 {
-            acc = acc + long.scaled(b);
-        }
-        acc
+        let mut terms = short.0.iter().map(|&b| long.scaled(b));
+        let first = terms.next().unwrap_or_else(|| Self(vec![0.0]));
+        terms.fold(first, |acc, term| acc + term)
     }
 }
 

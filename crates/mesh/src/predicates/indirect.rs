@@ -120,18 +120,11 @@ fn tpi_hom<T: Ring>(planes: &[[[f64; 3]; 3]; 3]) -> Hom<T> {
         (n, c)
     };
     let [p1, p2, p3] = planes;
-    let rows = [plane(p1), plane(p2), plane(p3)];
-    let normals: [[T; 3]; 3] = std::array::from_fn(|i| rows.get(i).map_or_else(|| lift(&[0.0; 3]), |(n, _)| n.clone()));
-    let replaced = |k: usize| -> [[T; 3]; 3] {
-        std::array::from_fn(|i| {
-            let (n, c) = match rows.get(i) {
-                Some((n, c)) => (n.clone(), c.clone()),
-                None => (lift(&[0.0; 3]), T::from_f64(0.0)),
-            };
-            std::array::from_fn(|j| if j == k { c.clone() } else { coord(&n, j) })
-        })
-    };
-    Hom { x: std::array::from_fn(|k| det3(&replaced(k))), w: Some(det3(&normals)) }
+    let [(n1, c1), (n2, c2), (n3, c3)] = [plane(p1), plane(p2), plane(p3)];
+    // Row `n` with column `k` replaced by `c`.
+    let with = |n: &[T; 3], c: &T, k: usize| -> [T; 3] { std::array::from_fn(|j| if j == k { c.clone() } else { coord(n, j) }) };
+    let x = std::array::from_fn(|k| det3(&[with(&n1, &c1, k), with(&n2, &c2, k), with(&n3, &c3, k)]));
+    Hom { x, w: Some(det3(&[n1, n2, n3])) }
 }
 
 /// Decides the sign of `W` exactly: filter first, integers if needed.

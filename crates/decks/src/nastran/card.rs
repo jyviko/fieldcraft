@@ -34,6 +34,24 @@ pub(crate) enum Field {
     Text(&'static str),
 }
 
+impl From<u32> for Field {
+    fn from(v: u32) -> Field {
+        Field::Int(v.into())
+    }
+}
+
+impl From<f64> for Field {
+    fn from(v: f64) -> Field {
+        Field::Real(v)
+    }
+}
+
+impl From<&'static str> for Field {
+    fn from(v: &'static str) -> Field {
+        Field::Text(v)
+    }
+}
+
 /// A bulk data entry: a name and its data fields in order (fields 2–9 of the first line, then
 /// fields 2–9 of each continuation).
 #[derive(Debug, Clone, PartialEq)]
@@ -77,28 +95,14 @@ impl Card {
         self
     }
 
-    /// An optional integer: blank when absent.
-    pub(crate) fn opt_int(self, v: Option<impl Into<i64>>) -> Card {
-        match v {
-            Some(v) => self.int(v),
-            None => self.blank(),
-        }
+    /// An optional field: blank when absent.
+    pub(crate) fn opt(mut self, v: Option<impl Into<Field>>) -> Card {
+        self.fields.push(v.map_or(Field::Blank, Into::into));
+        self
     }
 
-    /// An optional real: blank when absent.
-    pub(crate) fn opt_real(self, v: Option<f64>) -> Card {
-        match v {
-            Some(v) => self.real(v),
-            None => self.blank(),
-        }
-    }
-
-    /// An optional keyword: blank when absent.
-    pub(crate) fn opt_text(self, v: Option<&'static str>) -> Card {
-        match v {
-            Some(v) => self.text(v),
-            None => self.blank(),
-        }
+    pub(crate) fn name(&self) -> &'static str {
+        self.name
     }
 
     /// Blank fields up to the end of the current line, so the next field starts a continuation.
@@ -110,47 +114,56 @@ impl Card {
     }
 
     /// Append the entry to `out`. Trailing blank fields are dropped, and so are trailing blanks on
-    /// each line. Counts reals that had to be rounded in `rounded`.
-    pub(crate) fn write(&self, out: &mut String, rounded: &mut usize) -> Result<()> {
+    /// each line.
+    pub(crate) fn write(&self, out: &mut String) -> Result<()> {
         let large = self.fields.iter().any(|f| matches!(f, Field::Real(_)));
         let (width, per_line) = if large { (LARGE, 4) } else { (SMALL, 8) };
         let used = self.fields.iter().rposition(|f| *f != Field::Blank).map_or(0, |i| i + 1);
-        let mut line = if large { format!("{}*", self.name) } else { self.name.to_string() };
-        let mut fields = self.fields.iter().take(used).peekable();
+        let too_wide = |text: &dyn std::fmt::Display| Error::Limit(format!("{}: `{text}` does not fit a {width}-column field", self.name));
+        let mut lines = self.fields.get(..used).unwrap_or_default().chunks(per_line).peekable();
+        let mut first = true;
         loop {
-            pad(&mut line, SMALL);
-            for f in fields.by_ref().take(per_line) {
-                let text = match *f {
-                    Field::Blank => String::new(),
-                    Field::Int(v) => v.to_string(),
-                    Field::Text(t) => t.to_string(),
-                    Field::Real(v) => {
-                        let (s, exact) = real(v, width).ok_or_else(|| Error::Limit(format!("{}: {v} is not a finite number", self.name)))?;
-                        if !exact {
-                            *rounded += 1;
-                        }
-                        s
-                    }
-                };
-                if text.len() > width {
-                    return Err(Error::Limit(format!("{}: `{text}` does not fit a {width}-column field", self.name)));
-                }
-                let _ = write!(line, "{text:>width$}");
+            let start = out.len();
+            if first {
+                out.push_str(self.name);
             }
-            out.push_str(line.trim_end());
+            if large {
+                out.push('*');
+            }
+            while out.len() < start + SMALL {
+                out.push(' ');
+            }
+            for f in lines.next().unwrap_or_default() {
+                match *f {
+                    Field::Blank => out.extend(std::iter::repeat_n(' ', width)),
+                    Field::Int(v) if digits(v) <= width => {
+                        let _ = write!(out, "{v:>width$}");
+                    }
+                    Field::Int(v) => return Err(too_wide(&v)),
+                    Field::Text(t) if t.len() <= width => {
+                        let _ = write!(out, "{t:>width$}");
+                    }
+                    Field::Text(t) => return Err(too_wide(&t)),
+                    Field::Real(v) => {
+                        let (text, _) = real(v, width).ok_or_else(|| Error::Limit(format!("{}: {v} is not a finite number", self.name)))?;
+                        let _ = write!(out, "{text:>width$}");
+                    }
+                }
+            }
+            out.truncate(start + out.get(start..).map_or(0, |l| l.trim_end().len()));
             out.push('\n');
-            if fields.peek().is_none() {
+            first = false;
+            if lines.peek().is_none() {
                 return Ok(());
             }
-            line = if large { "*".to_string() } else { String::new() };
         }
     }
 }
 
-fn pad(line: &mut String, to: usize) {
-    while line.len() < to {
-        line.push(' ');
-    }
+/// Characters of an integer written in decimal.
+fn digits(v: i64) -> usize {
+    let sign = usize::from(v < 0);
+    sign + v.unsigned_abs().checked_ilog10().map_or(1, |l| l as usize + 1)
 }
 
 /// A finite real in at most `width` columns, and whether it is exact (reads back as the same
@@ -189,33 +202,44 @@ fn shortest(v: f64) -> (String, i32) {
     (mantissa.replace('.', ""), exp.parse().unwrap_or(0))
 }
 
-/// The first form of `±d.ddd × 10^exp` that fits `width`.
+/// The first form of `±d.ddd × 10^exp` that fits `width` (lengths are worked out before
+/// anything is formatted).
 fn fit(negative: bool, digits: &str, exp: i32, width: usize) -> Option<String> {
     let sign = if negative { "-" } else { "" };
-    let (first, rest) = digits.split_at(1.min(digits.len()));
-    let plain = |leading_zero: bool| -> String {
-        let n = digits.len() as i32;
+    let n = digits.len();
+    let e = exp.unsigned_abs() as usize;
+    let exp_len = e.checked_ilog10().map_or(1, |l| l as usize + 1);
+    // Plain decimal: the integer digits (padded with zeros), or zeros after the point.
+    let plain_len = |leading_zero: bool| sign.len() + if exp >= 0 { n.max(e + 1) + 1 } else { usize::from(leading_zero) + 1 + (e - 1) + n };
+    let plain = |leading_zero: bool| {
         if exp >= 0 {
-            let int_len = exp + 1;
-            if n <= int_len {
-                format!("{sign}{digits}{}.", "0".repeat((int_len - n) as usize))
-            } else {
-                let (a, b) = digits.split_at(int_len as usize);
-                format!("{sign}{a}.{b}")
+            match digits.split_at_checked(e + 1) {
+                Some((a, b)) => format!("{sign}{a}.{b}"),
+                None => format!("{sign}{digits}{}.", "0".repeat(e + 1 - n)),
             }
         } else {
             let zero = if leading_zero { "0" } else { "" };
-            format!("{sign}{zero}.{}{digits}", "0".repeat((-exp - 1) as usize))
+            format!("{sign}{zero}.{}{digits}", "0".repeat(e - 1))
         }
     };
-    let exp_sign = if exp < 0 { '-' } else { '+' };
-    let candidates = [
-        (-5..16).contains(&exp).then(|| plain(true)),
-        Some(format!("{sign}{first}.{rest}E{exp_sign}{}", exp.abs())),
-        Some(format!("{sign}{first}.{rest}{exp_sign}{}", exp.abs())),
-        (exp < 0).then(|| plain(false)),
-    ];
-    candidates.into_iter().flatten().find(|c| c.len() <= width)
+    let scientific = |with_e: bool| {
+        let (first, rest) = digits.split_at(1.min(n));
+        let marker = if with_e { "E" } else { "" };
+        let exp_sign = if exp < 0 { '-' } else { '+' };
+        format!("{sign}{first}.{rest}{marker}{exp_sign}{e}")
+    };
+    let sci_len = sign.len() + n + 1 + 1 + exp_len;
+    if (-5..16).contains(&exp) && plain_len(true) <= width {
+        Some(plain(true))
+    } else if sci_len < width {
+        Some(scientific(true))
+    } else if sci_len <= width {
+        Some(scientific(false))
+    } else if exp < 0 && plain_len(false) <= width {
+        Some(plain(false))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -296,10 +320,9 @@ mod tests {
     #[test]
     fn cards_wrap_and_trim() {
         let mut out = String::new();
-        let mut rounded = 0;
-        Card::new("CHEXA").ints(1..=22u32).write(&mut out, &mut rounded).unwrap();
-        Card::new("GRID").int(7).blank().reals([1.0, -2.5, 1.0 / 3.0]).write(&mut out, &mut rounded).unwrap();
-        Card::new("PSHELL").int(1).int(2).real(0.5).blank().blank().write(&mut out, &mut rounded).unwrap();
+        Card::new("CHEXA").ints(1..=22u32).write(&mut out).unwrap();
+        Card::new("GRID").int(7).blank().reals([1.0, -2.5, 1.0 / 3.0]).write(&mut out).unwrap();
+        Card::new("PSHELL").int(1).int(2).real(0.5).blank().blank().write(&mut out).unwrap();
         let want = "\
 CHEXA          1       2       3       4       5       6       7       8
                9      10      11      12      13      14      15      16
@@ -309,8 +332,7 @@ GRID*                  7                              1.            -2.5
 PSHELL*                1               2             0.5
 ";
         assert_eq!(out, want);
-        assert_eq!(rounded, 1);
-        assert!(Card::new("X").int(123_456_789).write(&mut out, &mut rounded).is_err(), "nine digits do not fit");
-        assert!(Card::new("X").real(f64::NAN).write(&mut out, &mut rounded).is_err());
+        assert!(Card::new("X").int(123_456_789).write(&mut out).is_err(), "nine digits do not fit");
+        assert!(Card::new("X").real(f64::NAN).write(&mut out).is_err());
     }
 }

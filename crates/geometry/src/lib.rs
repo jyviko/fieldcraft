@@ -38,6 +38,13 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Write a file through SolidCraft's virtual file system, which every file of the workspace goes
+/// through: on the desktop it is the disk, in the browser build an in-memory store the host
+/// collects writes from.
+pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+    solidcraft_io::vfs::write(path, bytes).map_err(|e| Error::Invalid(format!("cannot write `{path}`: {e}")))
+}
+
 impl From<KernelError> for Error {
     fn from(e: KernelError) -> Self {
         match e {

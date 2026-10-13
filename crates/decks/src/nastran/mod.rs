@@ -33,14 +33,15 @@
 mod card;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use modelcraft_model::{
-    BeamProfile, Coupling, CouplingKind, Elastic, ElementKind, Formulation, Integration, Load, MAX_LABEL, Model, Procedure, Resolved, SectionKind,
-    Step,
+    BeamProfile, Coupling, CouplingKind, Dofs, Elastic, ElementKind, Formulation, Integration, Load, MAX_LABEL, Model, OutputVariable, Procedure,
+    Resolved, SectionKind, Step,
 };
 
 use crate::{Error, Result};
-pub(crate) use card::Card;
+use card::Card;
 
 /// The format's name in errors.
 pub const FORMAT: &str = "Nastran";
@@ -77,8 +78,8 @@ pub fn write_with(model: &Model, options: &Options) -> Result<String> {
 }
 
 /// The Nastran grid order of an element's nodes (model order in, Nastran order out).
-pub fn grids(kind: ElementKind, nodes: &[u32]) -> Vec<u32> {
-    order(kind).iter().filter_map(|&i| nodes.get(i).copied()).collect()
+pub fn grids(kind: ElementKind, nodes: &[u32]) -> impl Iterator<Item = u32> + '_ {
+    order(kind).iter().filter_map(|&i| nodes.get(i).copied())
 }
 
 /// For each Nastran grid position, the position in the model's node list.
@@ -121,7 +122,7 @@ pub fn solid_rule(kind: ElementKind, f: Formulation) -> std::result::Result<(Opt
     if f.hybrid {
         return Err("the hybrid (displacement–pressure) formulation".into());
     }
-    let quadratic = matches!(kind, ElementKind::Tet10 | ElementKind::Hex20);
+    let quadratic = kind.is_quadratic();
     match (kind, f.incompatible_modes, f.integration) {
         (ElementKind::Hex8, true, _) => Ok((Some("BUBBLE"), None)),
         (_, true, _) => Err(format!("incompatible modes on {} elements", kind.name())),
@@ -157,25 +158,39 @@ fn select_steps<'m>(model: &'m Model, options: &Options) -> Result<Vec<&'m Step>
     if names.is_empty() {
         return Err(Error::Model(modelcraft_model::Error::Invalid("choose at least one step to write".into())));
     }
-    for n in names {
-        if model.step(n).is_none() {
-            let shown: String = n.chars().take(modelcraft_model::MAX_NAME_LEN).collect();
-            return Err(Error::Model(modelcraft_model::Error::NotFound(format!("step `{shown}`"))));
-        }
+    if let Some(n) = names.iter().find(|n| model.step(n).is_none()) {
+        let shown: String = n.chars().take(modelcraft_model::MAX_NAME_LEN).collect();
+        return Err(Error::Model(modelcraft_model::Error::NotFound(format!("step `{shown}`"))));
     }
     Ok(model.steps().iter().filter(|s| names.contains(&s.name)).collect())
 }
 
-/// The component code of a set of degrees of freedom, such as 123 or 156 (0 for none).
-fn component(mask: u8) -> i64 {
-    (1..=6u8).filter(|d| mask & (1 << (d - 1)) != 0).fold(0, |c, d| c * 10 + i64::from(d))
+/// Nastran's component code of a set of degrees of freedom, such as 123 or 156.
+fn component(dofs: Dofs) -> i64 {
+    dofs.list().into_iter().fold(0, |c, d| c * 10 + i64::from(d))
 }
 
-fn mask_of(dofs: &[u8]) -> u8 {
-    dofs.iter().filter(|d| (1..=6).contains(*d)).fold(0, |m, d| m | (1 << (d - 1)))
+/// The next identification number of a counter.
+fn next_id(counter: &mut u32) -> Result<u32> {
+    let id = *counter;
+    if id > MAX_LABEL {
+        return Err(Error::Limit(format!("more than {MAX_LABEL} identification numbers of one kind")));
+    }
+    *counter += 1;
+    Ok(id)
 }
 
-/// A material's entry and identification numbers.
+/// The id of `value` in `list`, adding it under a new id from `counter` when it is not there.
+fn intern<T: PartialEq>(list: &mut Vec<(u32, T)>, counter: &mut u32, value: T) -> Result<u32> {
+    if let Some((id, _)) = list.iter().find(|(_, v)| *v == value) {
+        return Ok(*id);
+    }
+    let id = next_id(counter)?;
+    list.push((id, value));
+    Ok(id)
+}
+
+/// A material's entry identification numbers.
 #[derive(Debug, Clone, Copy, Default)]
 struct MaterialIds {
     /// `MAT1`, for isotropic materials (every element kind).
@@ -186,117 +201,110 @@ struct MaterialIds {
     shell: Option<u32>,
 }
 
-/// One property entry.
-enum Property {
-    Solid { mid: u32, rule: (Option<&'static str>, Option<&'static str>) },
-    Shell { mid: u32, thickness: f64 },
-    Beam { mid: u32, profile: BeamProfile },
-    Rod { mid: u32, area: f64 },
+/// Which element families use a material.
+#[derive(Debug, Clone, Copy, Default)]
+struct MaterialUse {
+    solid: bool,
+    shell: bool,
+    line: bool,
 }
 
-/// What an element's connection entry needs besides its nodes.
-#[derive(Clone, Copy)]
-enum Extra {
-    None,
-    Shell { offset: Option<f64>, mcid: Option<u32> },
-    Beam { orientation: [f64; 3] },
+/// One property entry, and what its elements' connection entries need besides their nodes.
+enum Property {
+    Solid { mid: u32, rule: (Option<&'static str>, Option<&'static str>) },
+    Shell { mid: u32, thickness: f64, offset: Option<f64>, mcid: Option<u32> },
+    Beam { mid: u32, profile: BeamProfile, orientation: [f64; 3] },
+    Rod { mid: u32, area: f64 },
 }
 
 /// A constraint set: per node, the prescribed value of each degree of freedom.
 type Constraints = BTreeMap<u32, [Option<f64>; 6]>;
 
+/// One step's subcase: the sets it selects.
+struct Subcase<'m> {
+    step: &'m Step,
+    spc: Option<u32>,
+    load: Option<u32>,
+    method: Option<u32>,
+}
+
 struct Deck<'m> {
     model: &'m Model,
     r: &'m Resolved,
-    steps: Vec<&'m Step>,
+    sol: u32,
+    subcases: Vec<Subcase<'m>>,
     problems: Vec<String>,
     next_sid: u32,
     /// Material name → ids.
     materials: BTreeMap<&'m str, MaterialIds>,
     /// The coordinate system tying shell material axes to the basic axes, when one is needed.
     material_csys: Option<u32>,
-    /// Property id → (section name, entry).
-    properties: BTreeMap<u32, (&'m str, Property)>,
-    /// Element → (property id, extra fields).
-    element_props: BTreeMap<u32, (u32, Extra)>,
+    /// Properties in id order (id = position + 1), with their section's name.
+    properties: Vec<(&'m str, Property)>,
+    /// Element → property id.
+    element_pid: BTreeMap<u32, u32>,
     /// Rigid elements: (id, coupling name, coupling).
     rigid: Vec<(u32, &'m str, &'m Coupling)>,
     /// Node → (dependent degrees of freedom, coupling that makes them dependent).
-    dependent: BTreeMap<u32, (u8, &'m str)>,
-    /// Constraint sets by id, and each step's set.
+    dependent: BTreeMap<u32, (Dofs, &'m str)>,
+    /// Constraint sets by id.
     spc_sets: Vec<(u32, Constraints)>,
-    step_spc: Vec<Option<u32>>,
     /// Load name → load set id.
     load_sids: BTreeMap<&'m str, u32>,
     /// Combinations: (id, load set ids).
     combinations: Vec<(u32, Vec<u32>)>,
-    step_load: Vec<Option<u32>>,
-    /// Eigenvalue methods: (id, step index).
-    methods: Vec<(u32, usize)>,
+}
+
+/// The solution sequence of a list of steps, or why there is none.
+fn solution(steps: &[&Step]) -> std::result::Result<u32, String> {
+    let statics = steps.iter().find(|s| matches!(s.procedure, Procedure::Static {}));
+    let modes = steps.iter().find(|s| matches!(s.procedure, Procedure::Frequency { .. }));
+    match (statics, modes) {
+        (Some(_), None) => Ok(101),
+        (None, Some(_)) => Ok(103),
+        (Some(s), Some(m)) => Err(format!(
+            "one run solves either static steps (SOL 101) or frequency steps (SOL 103), and step `{}` is static while step `{}` extracts frequencies; write them as separate decks (choose the steps)",
+            s.name, m.name
+        )),
+        (None, None) => Err("there is no step to write".into()),
+    }
 }
 
 impl<'m> Deck<'m> {
     fn new(model: &'m Model, r: &'m Resolved, steps: Vec<&'m Step>) -> Deck<'m> {
+        let mut problems = Vec::new();
+        let sol = solution(&steps).unwrap_or_else(|p| {
+            problems.push(p);
+            0
+        });
         Deck {
             model,
             r,
-            steps,
-            problems: Vec::new(),
+            sol,
+            subcases: steps.into_iter().map(|step| Subcase { step, spc: None, load: None, method: None }).collect(),
+            problems,
             next_sid: 1,
             materials: BTreeMap::new(),
             material_csys: None,
-            properties: BTreeMap::new(),
-            element_props: BTreeMap::new(),
+            properties: Vec::new(),
+            element_pid: BTreeMap::new(),
             rigid: Vec::new(),
             dependent: BTreeMap::new(),
             spc_sets: Vec::new(),
-            step_spc: Vec::new(),
             load_sids: BTreeMap::new(),
             combinations: Vec::new(),
-            step_load: Vec::new(),
-            methods: Vec::new(),
-        }
-    }
-
-    fn problem(&mut self, p: String) {
-        self.problems.push(p);
-    }
-
-    fn sid(&mut self) -> Result<u32> {
-        let s = self.next_sid;
-        if s > MAX_LABEL {
-            return Err(Error::Limit(format!("more than {MAX_LABEL} set identification numbers")));
-        }
-        self.next_sid += 1;
-        Ok(s)
-    }
-
-    /// The solution sequence, or why there is none.
-    fn solution(&self) -> std::result::Result<u32, String> {
-        let statics: Vec<&str> = self.steps.iter().filter(|s| matches!(s.procedure, Procedure::Static {})).map(|s| s.name.as_str()).collect();
-        let modes: Vec<&str> = self.steps.iter().filter(|s| matches!(s.procedure, Procedure::Frequency { .. })).map(|s| s.name.as_str()).collect();
-        match (statics.first(), modes.first()) {
-            (Some(_), None) => Ok(101),
-            (None, Some(_)) => Ok(103),
-            (Some(s), Some(m)) => Err(format!(
-                "one run solves either static steps (SOL 101) or frequency steps (SOL 103), and step `{s}` is static while step `{m}` extracts frequencies; write them as separate decks (choose the steps)"
-            )),
-            (None, None) => Err("there is no step to write".into()),
         }
     }
 
     fn plan(&mut self) -> Result<()> {
-        if let Err(p) = self.solution() {
-            self.problem(p);
-        }
+        self.plan_materials();
         self.plan_sections()?;
         self.plan_couplings()?;
         self.plan_constraints()?;
         self.plan_loads()?;
-        for i in 0..self.steps.len() {
-            if matches!(self.steps.get(i).map(|s| s.procedure), Some(Procedure::Frequency { .. })) {
-                let sid = self.sid()?;
-                self.methods.push((sid, i));
+        for sub in &mut self.subcases {
+            if matches!(sub.step.procedure, Procedure::Frequency { .. }) {
+                sub.method = Some(next_id(&mut self.next_sid)?);
             }
         }
         if self.problems.is_empty() {
@@ -310,149 +318,127 @@ impl<'m> Deck<'m> {
         Err(Error::Unsupported { format: FORMAT, what })
     }
 
-    /// Materials, properties and each element's property.
-    fn plan_sections(&mut self) -> Result<()> {
+    /// Material ids, for the forms the sections need.
+    fn plan_materials(&mut self) {
         let model = self.model;
-        // Which forms each material is needed in: (solid, shell, line).
-        let mut uses: BTreeMap<&str, (bool, bool, bool)> = BTreeMap::new();
+        let mut uses: BTreeMap<&str, MaterialUse> = BTreeMap::new();
         for s in model.sections().values() {
             let u = uses.entry(s.material.as_str()).or_default();
             match s.kind {
-                SectionKind::Solid {} => u.0 = true,
-                SectionKind::Shell { .. } => u.1 = true,
-                SectionKind::Beam { .. } | SectionKind::Rod { .. } => u.2 = true,
+                SectionKind::Solid {} => u.solid = true,
+                SectionKind::Shell { .. } => u.shell = true,
+                SectionKind::Beam { .. } | SectionKind::Rod { .. } => u.line = true,
             }
         }
         let mut next_mid = 1u32;
-        for (name, (solid, shell, line)) in uses {
-            let Some(material) = model.material(name) else { continue };
-            let mut ids = MaterialIds::default();
-            match material.elastic {
-                Some(Elastic::Isotropic { .. }) => {
-                    ids.isotropic = Some(next_mid);
-                    next_mid += 1;
-                }
+        let mut take = |wanted: bool| {
+            wanted.then(|| {
+                next_mid += 1;
+                next_mid - 1
+            })
+        };
+        for (name, u) in uses {
+            let ids = match model.material(name).and_then(|m| m.elastic) {
+                Some(Elastic::Isotropic { .. }) => MaterialIds { isotropic: take(true), ..MaterialIds::default() },
                 Some(Elastic::EngineeringConstants { .. }) => {
-                    if solid {
-                        ids.solid = Some(next_mid);
-                        next_mid += 1;
+                    if u.line {
+                        self.problems
+                            .push(format!("material `{name}`: orthotropic constants on beams or rods (their properties take isotropic materials)"));
                     }
-                    if shell {
-                        ids.shell = Some(next_mid);
-                        next_mid += 1;
-                    }
-                    if line {
-                        self.problem(format!(
-                            "material `{name}`: orthotropic constants on beams or rods (their properties take isotropic materials)"
-                        ));
-                    }
+                    MaterialIds { solid: take(u.solid), shell: take(u.shell), ..MaterialIds::default() }
                 }
-                None => {}
-            }
+                None => MaterialIds::default(),
+            };
             self.materials.insert(name, ids);
         }
+    }
 
-        let r = self.r;
-        let mut next_pid = 1u32;
+    /// A new property for `elements`.
+    fn add_property(&mut self, section: &'m str, property: Property, elements: impl IntoIterator<Item = u32>) -> Result<()> {
+        self.properties.push((section, property));
+        let pid = u32::try_from(self.properties.len()).ok().filter(|p| *p <= MAX_LABEL).ok_or_else(|| Error::Limit("too many properties".into()))?;
+        for e in elements {
+            self.element_pid.insert(e, pid);
+        }
+        Ok(())
+    }
+
+    /// Properties and each element's property.
+    fn plan_sections(&mut self) -> Result<()> {
+        let (model, r) = (self.model, self.r);
         for (sname, sec) in model.sections() {
-            let ids = self.materials.get(sec.material.as_str()).copied();
+            let ids = self.materials.get(sec.material.as_str()).copied().unwrap_or_default();
             let elements = r.sets.get(&sec.set).map(|s| s.elements.as_slice()).unwrap_or_default();
+            let kind_of = |e: u32| model.element(e).map(|el| el.kind);
             match sec.kind {
                 SectionKind::Solid {} => {
-                    let Some(mid) = ids.and_then(|i| i.isotropic.or(i.solid)) else { continue };
+                    let Some(mid) = ids.isotropic.or(ids.solid) else { continue };
                     // One property per integration rule the section's element kinds need.
-                    let mut rules: BTreeMap<(Option<&'static str>, Option<&'static str>), Vec<u32>> = BTreeMap::new();
-                    let mut bad: BTreeSet<String> = BTreeSet::new();
-                    for &e in elements {
-                        let Some(el) = model.element(e) else { continue };
-                        match solid_rule(el.kind, sec.formulation) {
-                            Ok(rule) => rules.entry(rule).or_default().push(e),
-                            Err(why) => {
-                                bad.insert(why);
+                    let kinds: BTreeSet<ElementKind> = elements.iter().filter_map(|e| kind_of(*e)).collect();
+                    let mut rules = BTreeMap::new();
+                    for kind in kinds {
+                        match solid_rule(kind, sec.formulation) {
+                            Ok(rule) => {
+                                rules.entry(rule).or_insert_with(Vec::new).push(kind);
                             }
+                            Err(why) => self.problems.push(format!("section `{sname}`: {why} (Nastran's linear solids have no such formulation)")),
                         }
                     }
-                    for why in bad {
-                        self.problem(format!("section `{sname}`: {why} (Nastran's linear solids have no such formulation)"));
-                    }
-                    for (rule, elems) in rules {
-                        let pid = next_pid;
-                        next_pid += 1;
-                        self.properties.insert(pid, (sname.as_str(), Property::Solid { mid, rule }));
-                        for e in elems {
-                            self.element_props.insert(e, (pid, Extra::None));
-                        }
+                    for (rule, kinds) in rules {
+                        let members = elements.iter().copied().filter(|e| kind_of(*e).is_some_and(|k| kinds.contains(&k)));
+                        self.add_property(sname, Property::Solid { mid, rule }, members)?;
                     }
                 }
                 SectionKind::Shell { thickness, offset, points } => {
                     if sec.formulation.integration == Integration::Reduced {
-                        self.problem(format!("section `{sname}`: reduced integration of shells (Nastran's shells have one formulation)"));
+                        self.problems.push(format!("section `{sname}`: reduced integration of shells (Nastran's shells have one formulation)"));
                     }
                     if points < 2 {
-                        self.problem(format!(
+                        self.problems.push(format!(
                             "section `{sname}`: one integration point through the thickness (no bending stiffness; Nastran integrates a linear section exactly)"
                         ));
                     }
                     let (mid, mcid) = match ids {
-                        Some(MaterialIds { isotropic: Some(m), .. }) => (m, None),
-                        Some(MaterialIds { shell: Some(m), .. }) => {
-                            let flat = elements.iter().all(|e| model.element(*e).is_some_and(|el| self.in_constant_z(&el.nodes, el.kind)));
-                            if !flat {
-                                self.problem(format!(
+                        MaterialIds { isotropic: Some(m), .. } => (m, None),
+                        MaterialIds { shell: Some(m), .. } => {
+                            if !elements.iter().all(|e| model.element(*e).is_some_and(|el| self.in_constant_z(&el.nodes, el.kind))) {
+                                self.problems.push(format!(
                                     "section `{sname}`: orthotropic shells that do not lie in planes of constant Z (the material axes are the global ones)"
                                 ));
                             }
-                            let csys = *self.material_csys.get_or_insert(1);
-                            (m, Some(csys))
+                            (m, Some(*self.material_csys.get_or_insert(1)))
                         }
                         _ => continue,
                     };
-                    let pid = next_pid;
-                    next_pid += 1;
-                    self.properties.insert(pid, (sname.as_str(), Property::Shell { mid, thickness }));
                     // The nodes lie on the reference surface; Nastran's offset runs from them to
                     // the mid-surface along the element normal.
-                    let zoffs = (offset != 0.0).then_some(-offset * thickness);
-                    for &e in elements {
-                        self.element_props.insert(e, (pid, Extra::Shell { offset: zoffs, mcid }));
-                    }
+                    let offset = (offset != 0.0).then_some(-offset * thickness);
+                    self.add_property(sname, Property::Shell { mid, thickness, offset, mcid }, elements.iter().copied())?;
                 }
                 SectionKind::Beam { profile, orientation } => {
-                    let Some(mid) = ids.and_then(|i| i.isotropic) else { continue };
-                    let pid = next_pid;
-                    next_pid += 1;
-                    self.properties.insert(pid, (sname.as_str(), Property::Beam { mid, profile }));
-                    for &e in elements {
-                        self.element_props.insert(e, (pid, Extra::Beam { orientation }));
-                    }
+                    let Some(mid) = ids.isotropic else { continue };
+                    self.add_property(sname, Property::Beam { mid, profile, orientation }, elements.iter().copied())?;
                 }
                 SectionKind::Rod { area } => {
-                    let Some(mid) = ids.and_then(|i| i.isotropic) else { continue };
-                    let pid = next_pid;
-                    next_pid += 1;
-                    self.properties.insert(pid, (sname.as_str(), Property::Rod { mid, area }));
-                    for &e in elements {
-                        self.element_props.insert(e, (pid, Extra::None));
-                    }
+                    let Some(mid) = ids.isotropic else { continue };
+                    self.add_property(sname, Property::Rod { mid, area }, elements.iter().copied())?;
                 }
             }
-        }
-        if next_mid > MAX_LABEL || next_pid > MAX_LABEL {
-            return Err(Error::Limit("too many materials or properties".into()));
         }
         Ok(())
     }
 
     /// Whether a shell element's corners lie in a plane of constant Z.
     fn in_constant_z(&self, nodes: &[u32], kind: ElementKind) -> bool {
-        let corners = if matches!(kind, ElementKind::Tri3 | ElementKind::Tri6) { 3 } else { 4 };
-        let z: Vec<f64> = nodes.iter().take(corners).filter_map(|n| self.model.node(*n)).map(|n| n.xyz[2]).collect();
-        z.len() == corners && z.iter().all(|v| *v == z[0])
+        let corners = nodes.get(..kind.corner_count()).unwrap_or_default();
+        let mut z = corners.iter().map(|n| self.model.node(*n).map(|n| n.xyz[2]));
+        let first = z.next().flatten();
+        first.is_some() && z.all(|v| v == first)
     }
 
     /// Rigid element ids and the degrees of freedom couplings make dependent.
     fn plan_couplings(&mut self) -> Result<()> {
-        let model = self.model;
+        let (model, r) = (self.model, self.r);
         let mut next = model.elements().keys().next_back().copied().unwrap_or(0);
         for (name, c) in model.couplings() {
             next = next
@@ -460,25 +446,21 @@ impl<'m> Deck<'m> {
                 .filter(|n| *n <= MAX_LABEL)
                 .ok_or_else(|| Error::Limit(format!("coupling `{name}`: no element identification number left below {}", MAX_LABEL as u64 + 1)))?;
             self.rigid.push((next, name.as_str(), c));
-            let mask = mask_of(&c.dofs.list());
-            let dependents: Vec<(u32, u8)> = match c.kind {
-                CouplingKind::Kinematic => self.r.sets.get(&c.set).map(|s| s.nodes.iter().map(|n| (*n, mask)).collect()).unwrap_or_default(),
-                CouplingKind::Distributing => self.r.reference_point_nodes.get(&c.reference_point).map(|n| vec![(*n, mask)]).unwrap_or_default(),
+            let dependents: &[u32] = match c.kind {
+                CouplingKind::Kinematic => r.sets.get(&c.set).map(|s| s.nodes.as_slice()).unwrap_or_default(),
+                CouplingKind::Distributing => r.reference_point_nodes.get(&c.reference_point).map(std::slice::from_ref).unwrap_or_default(),
             };
-            for (node, m) in dependents {
+            for &node in dependents {
                 match self.dependent.get(&node).copied() {
-                    Some((had, other)) if had & m != 0 => {
-                        let p = format!(
-                            "couplings `{other}` and `{name}` both make degrees of freedom {} of node {node} follow another node",
-                            component(had & m)
-                        );
-                        self.problem(p);
-                    }
+                    Some((had, other)) if had.bits() & c.dofs.bits() != 0 => self.problems.push(format!(
+                        "couplings `{other}` and `{name}` both make degrees of freedom {} of node {node} follow another node",
+                        component(Dofs::from_bits(had.bits() & c.dofs.bits()))
+                    )),
                     Some((had, other)) => {
-                        self.dependent.insert(node, (had | m, other));
+                        self.dependent.insert(node, (Dofs::from_bits(had.bits() | c.dofs.bits()), other));
                     }
                     None => {
-                        self.dependent.insert(node, (m, name));
+                        self.dependent.insert(node, (c.dofs, name));
                     }
                 }
             }
@@ -488,24 +470,29 @@ impl<'m> Deck<'m> {
 
     /// One constraint set per distinct step constraint, checked against coupled nodes.
     fn plan_constraints(&mut self) -> Result<()> {
-        let model = self.model;
-        let r = self.r;
+        let (model, r) = (self.model, self.r);
         // Conflicts, one problem per pair of definitions: the nodes they meet on.
         let mut clashes: BTreeMap<(&str, &str, &str), BTreeSet<u32>> = BTreeMap::new();
         let mut on_dependent: BTreeMap<(&str, &str), BTreeSet<u32>> = BTreeMap::new();
-        for i in 0..self.steps.len() {
-            let Some(step) = self.steps.get(i).copied() else { continue };
+        for sub in &mut self.subcases {
+            let step = sub.step;
             let modes = matches!(step.procedure, Procedure::Frequency { .. });
             let mut set: Constraints = BTreeMap::new();
             let mut by: BTreeMap<(u32, u8), &str> = BTreeMap::new();
             for name in &step.boundary_conditions {
                 let Some(bc) = model.boundary_condition(name) else { continue };
+                let dofs = bc.dofs();
+                // In a modes step every constrained degree of freedom is held.
+                let values: Vec<(u8, f64)> = dofs.list().into_iter().filter_map(|d| Some((d, if modes { 0.0 } else { bc.value(d)? }))).collect();
                 for &node in r.target_nodes(bc.target()) {
-                    for dof in bc.dofs().list() {
-                        let value = if modes { Some(0.0) } else { bc.value(dof) };
-                        let Some(value) = value else { continue };
-                        let slot = set.entry(node).or_default();
-                        let Some(slot) = usize::from(dof).checked_sub(1).and_then(|i| slot.get_mut(i)) else { continue };
+                    if let Some((dep, coupling)) = self.dependent.get(&node)
+                        && dep.bits() & dofs.bits() != 0
+                    {
+                        on_dependent.entry((name.as_str(), coupling)).or_default().insert(node);
+                    }
+                    let slots = set.entry(node).or_default();
+                    for &(dof, value) in &values {
+                        let Some(slot) = usize::from(dof).checked_sub(1).and_then(|i| slots.get_mut(i)) else { continue };
                         match *slot {
                             Some(v) if v != value => {
                                 let other = by.get(&(node, dof)).copied().unwrap_or_default();
@@ -516,36 +503,21 @@ impl<'m> Deck<'m> {
                                 by.insert((node, dof), name);
                             }
                         }
-                        if let Some((mask, coupling)) = self.dependent.get(&node).copied()
-                            && mask & (1 << (dof - 1)) != 0
-                        {
-                            on_dependent.entry((name.as_str(), coupling)).or_default().insert(node);
-                        }
                     }
                 }
             }
-            if set.is_empty() {
-                self.step_spc.push(None);
-                continue;
+            if !set.is_empty() {
+                sub.spc = Some(intern(&mut self.spc_sets, &mut self.next_sid, set)?);
             }
-            let sid = match self.spc_sets.iter().find(|(_, s)| *s == set) {
-                Some((sid, _)) => *sid,
-                None => {
-                    let sid = self.sid()?;
-                    self.spc_sets.push((sid, set));
-                    sid
-                }
-            };
-            self.step_spc.push(Some(sid));
         }
         for ((step, a, b), nodes) in clashes {
-            self.problem(format!(
+            self.problems.push(format!(
                 "step `{step}`: boundary conditions `{a}` and `{b}` prescribe different values at nodes {} (Nastran takes one value per degree of freedom)",
                 labels(&nodes)
             ));
         }
         for ((bc, coupling), nodes) in on_dependent {
-            self.problem(format!(
+            self.problems.push(format!(
                 "boundary condition `{bc}` constrains nodes {} whose motion coupling `{coupling}` prescribes (Nastran cannot constrain a dependent degree of freedom)",
                 labels(&nodes)
             ));
@@ -555,17 +527,14 @@ impl<'m> Deck<'m> {
 
     /// Load set ids for the static steps' loads, and their combinations.
     fn plan_loads(&mut self) -> Result<()> {
-        let model = self.model;
-        let r = self.r;
+        let (model, r) = (self.model, self.r);
         let mut gravity = 0usize;
-        for i in 0..self.steps.len() {
-            let Some(step) = self.steps.get(i).copied() else { continue };
-            if !matches!(step.procedure, Procedure::Static {}) || step.loads.is_empty() {
-                self.step_load.push(None);
+        for sub in &mut self.subcases {
+            if !matches!(sub.step.procedure, Procedure::Static {}) {
                 continue;
             }
             let mut sids = Vec::new();
-            for name in &step.loads {
+            for name in &sub.step.loads {
                 if let Some(sid) = self.load_sids.get(name.as_str()) {
                     sids.push(*sid);
                     continue;
@@ -573,247 +542,239 @@ impl<'m> Deck<'m> {
                 let Some(load) = model.load(name) else { continue };
                 match load {
                     Load::BodyForce { .. } => {
-                        self.problem(format!("load `{name}`: a body force (Nastran has no force-per-volume load for these elements)"));
+                        self.problems.push(format!("load `{name}`: a body force (Nastran has no force-per-volume load for these elements)"));
                     }
                     Load::Gravity { set: Some(s), .. } if r.sets.get(s).map(|s| s.elements.len()) != Some(model.elements().len()) => {
-                        self.problem(format!("load `{name}`: gravity on part of the model (set `{s}`); Nastran's gravity acts on all of it"));
+                        self.problems.push(format!("load `{name}`: gravity on part of the model (set `{s}`); Nastran's gravity acts on all of it"));
                     }
                     Load::Gravity { .. } => gravity += 1,
                     _ => {}
                 }
-                let sid = self.sid()?;
+                let sid = next_id(&mut self.next_sid)?;
                 self.load_sids.insert(name.as_str(), sid);
                 sids.push(sid);
             }
-            let case = match sids.as_slice() {
+            sub.load = match sids.as_slice() {
                 [] => None,
                 [one] => Some(*one),
-                _ => match self.combinations.iter().find(|(_, c)| *c == sids) {
-                    Some((sid, _)) => Some(*sid),
-                    None => {
-                        let sid = self.sid()?;
-                        self.combinations.push((sid, sids));
-                        Some(sid)
-                    }
-                },
+                _ => Some(intern(&mut self.combinations, &mut self.next_sid, sids)?),
             };
-            self.step_load.push(case);
         }
         if gravity > MAX_GRAV {
-            self.problem(format!("{gravity} gravity loads (a run selects at most {MAX_GRAV})"));
+            self.problems.push(format!("{gravity} gravity loads (a run selects at most {MAX_GRAV})"));
         }
         Ok(())
     }
 
     fn emit(&self) -> Result<String> {
-        let sol = self.solution().map_err(|what| Error::Unsupported { format: FORMAT, what })?;
         let mut out = String::new();
-        let mut rounded = 0usize;
         out.push_str("$ Nastran bulk data written by ModelCraft\n");
-        out.push_str(&format!("$ units: {}\n", self.model.units().label()));
-        out.push_str(&format!("SOL {sol}\nCEND\nTITLE = ModelCraft model\nECHO = NONE\n"));
-        for (i, step) in self.steps.iter().enumerate() {
-            out.push_str(&format!("SUBCASE {}\n", i + 1));
-            let title: String = format!("  SUBTITLE = {}", step.name).chars().take(72).collect();
-            out.push_str(&title);
-            out.push('\n');
-            if let Some(Some(sid)) = self.step_spc.get(i) {
-                out.push_str(&format!("  SPC = {sid}\n"));
+        let _ = writeln!(out, "$ units: {}", self.model.units().label());
+        let _ = writeln!(out, "SOL {}\nCEND\nTITLE = ModelCraft model\nECHO = NONE", self.sol);
+        for (i, sub) in self.subcases.iter().enumerate() {
+            let _ = writeln!(out, "SUBCASE {}", i + 1);
+            let title: String = format!("  SUBTITLE = {}", sub.step.name).chars().take(72).collect();
+            let _ = writeln!(out, "{title}");
+            for (key, sid) in [("SPC", sub.spc), ("LOAD", sub.load), ("METHOD", sub.method)] {
+                if let Some(sid) = sid {
+                    let _ = writeln!(out, "  {key} = {sid}");
+                }
             }
-            if let Some(Some(sid)) = self.step_load.get(i) {
-                out.push_str(&format!("  LOAD = {sid}\n"));
-            }
-            if let Some((sid, _)) = self.methods.iter().find(|(_, s)| *s == i) {
-                out.push_str(&format!("  METHOD = {sid}\n"));
-            }
-            for v in &step.output {
+            for v in &sub.step.output {
                 let request = match v {
-                    modelcraft_model::OutputVariable::Displacement => "DISPLACEMENT",
-                    modelcraft_model::OutputVariable::ReactionForce => "SPCFORCES",
-                    modelcraft_model::OutputVariable::Stress => "STRESS",
-                    modelcraft_model::OutputVariable::Strain => "STRAIN",
+                    OutputVariable::Displacement => "DISPLACEMENT",
+                    OutputVariable::ReactionForce => "SPCFORCES",
+                    OutputVariable::Stress => "STRESS",
+                    OutputVariable::Strain => "STRAIN",
                 };
-                out.push_str(&format!("  {request} = ALL\n"));
+                let _ = writeln!(out, "  {request} = ALL");
             }
         }
         out.push_str("BEGIN BULK\n");
-        let mut put = |card: Card, out: &mut String| card.write(out, &mut rounded);
-        put(Card::new("PARAM").text("POST").int(-1), &mut out)?;
-        put(Card::new("PARAM").text("AUTOSPC").text("YES"), &mut out)?;
-        if sol == 103 {
+        Card::new("PARAM").text("POST").int(-1).write(&mut out)?;
+        Card::new("PARAM").text("AUTOSPC").text("YES").write(&mut out)?;
+        if self.sol == 103 {
             // Consistent (coupled) mass, as the other formats use by default.
-            put(Card::new("PARAM").text("COUPMASS").int(1), &mut out)?;
+            Card::new("PARAM").text("COUPMASS").int(1).write(&mut out)?;
         }
-
-        comment(&mut out, "nodes");
-        for (label, node) in self.model.nodes() {
-            put(Card::new("GRID").int(*label).blank().reals(node.xyz), &mut out)?;
+        self.emit_mesh(&mut out)?;
+        self.emit_constraints(&mut out)?;
+        self.emit_loads(&mut out)?;
+        if self.subcases.iter().any(|s| s.method.is_some()) {
+            comment(&mut out, "eigenvalue extraction");
         }
-        if !self.model.reference_points().is_empty() {
-            comment(&mut out, "reference points");
-            for (name, rp) in self.model.reference_points() {
-                comment(&mut out, &format!("reference point {name}: GRID {}", rp.label));
-                put(Card::new("GRID").int(rp.label).blank().reals(rp.xyz), &mut out)?;
+        for sub in &self.subcases {
+            if let (Some(sid), Procedure::Frequency { modes, min_hz, max_hz }) = (sub.method, sub.step.procedure) {
+                Card::new("EIGRL").int(sid).opt(min_hz).opt(max_hz).int(modes).write(&mut out)?;
             }
         }
+        out.push_str("ENDDATA\n");
+        Ok(out)
+    }
+
+    /// Grids, materials, properties, elements and couplings.
+    fn emit_mesh(&self, out: &mut String) -> Result<()> {
+        comment(out, "nodes");
+        for (label, node) in self.model.nodes() {
+            Card::new("GRID").int(*label).blank().reals(node.xyz).write(out)?;
+        }
+        if !self.model.reference_points().is_empty() {
+            comment(out, "reference points");
+        }
+        for (name, rp) in self.model.reference_points() {
+            comment(out, &format!("reference point {name}: GRID {}", rp.label));
+            Card::new("GRID").int(rp.label).blank().reals(rp.xyz).write(out)?;
+        }
         if let Some(cid) = self.material_csys {
-            comment(&mut out, "material axes of orthotropic shells: the basic axes");
-            put(Card::new("CORD2R").int(cid).blank().reals([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]), &mut out)?;
+            comment(out, "material axes of orthotropic shells: the basic axes");
+            Card::new("CORD2R").int(cid).blank().reals([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]).write(out)?;
         }
 
-        comment(&mut out, "materials");
+        comment(out, "materials");
         for (name, ids) in &self.materials {
             let Some(m) = self.model.material(name) else { continue };
             let rho = m.density;
-            match m.elastic {
-                Some(Elastic::Isotropic { young, poisson }) => {
-                    if let Some(mid) = ids.isotropic {
-                        comment(&mut out, &format!("material {name}: MAT1 {mid}"));
-                        put(Card::new("MAT1").int(mid).real(young).blank().real(poisson).opt_real(rho), &mut out)?;
-                    }
+            let card = match (m.elastic, ids) {
+                (Some(Elastic::Isotropic { young, poisson }), MaterialIds { isotropic: Some(mid), .. }) => {
+                    Some(Card::new("MAT1").int(*mid).real(young).blank().real(poisson).opt(rho))
                 }
-                Some(Elastic::EngineeringConstants { young, poisson, shear }) => {
-                    if let Some(mid) = ids.solid {
-                        let c = orthotropic_stiffness(young, poisson, shear)
-                            .ok_or_else(|| Error::Limit(format!("material `{name}`: its stiffness is not a finite number")))?;
-                        let [[c11, c12, c13], [c22, c23, c33], [g12, g23, g13]] = c;
-                        comment(&mut out, &format!("material {name}: MAT9 {mid}"));
-                        let card = Card::new("MAT9")
-                            .int(mid)
-                            .reals([c11, c12, c13, 0.0, 0.0, 0.0, c22, c23, 0.0, 0.0, 0.0, c33, 0.0, 0.0, 0.0, g12, 0.0, 0.0, g23, 0.0, g13])
-                            .opt_real(rho);
-                        put(card, &mut out)?;
-                    }
-                    if let Some(mid) = ids.shell {
-                        comment(&mut out, &format!("material {name}: MAT8 {mid}"));
-                        let [e1, e2, _] = young;
-                        let [g12, g13, g23] = shear;
-                        put(Card::new("MAT8").int(mid).reals([e1, e2, poisson[0], g12, g13, g23]).opt_real(rho), &mut out)?;
-                    }
-                }
-                None => {}
-            }
-        }
-
-        comment(&mut out, "properties");
-        for (pid, (section, p)) in &self.properties {
-            let card = match p {
-                Property::Solid { mid, rule: (network, scheme) } => {
-                    Card::new("PSOLID").int(*pid).int(*mid).blank().opt_text(*network).blank().opt_text(*scheme)
-                }
-                Property::Shell { mid, thickness } => Card::new("PSHELL").int(*pid).int(*mid).real(*thickness).int(*mid).blank().int(*mid),
-                Property::Beam { mid, profile } => {
-                    let (shape, dims) = beam_dimensions(*profile);
-                    Card::new("PBEAML").int(*pid).int(*mid).blank().text(shape).end_line().reals(dims)
-                }
-                Property::Rod { mid, area } => Card::new("PROD").int(*pid).int(*mid).real(*area),
+                _ => None,
             };
-            comment(&mut out, &format!("section {section}: {} {pid}", card_name(p)));
-            put(card, &mut out)?;
+            if let (Some(Elastic::EngineeringConstants { young, poisson, shear }), Some(mid)) = (m.elastic, ids.solid) {
+                let [[c11, c12, c13], [c22, c23, c33], [g12, g23, g13]] = orthotropic_stiffness(young, poisson, shear)
+                    .ok_or_else(|| Error::Limit(format!("material `{name}`: its stiffness is not a finite number")))?;
+                let card = Card::new("MAT9")
+                    .int(mid)
+                    .reals([c11, c12, c13, 0.0, 0.0, 0.0, c22, c23, 0.0, 0.0, 0.0, c33, 0.0, 0.0, 0.0, g12, 0.0, 0.0, g23, 0.0, g13])
+                    .opt(rho);
+                write_named(out, &format!("material {name}"), mid, card)?;
+            }
+            if let (Some(Elastic::EngineeringConstants { young: [e1, e2, _], poisson: [nu12, ..], shear: [g12, g13, g23] }), Some(mid)) =
+                (m.elastic, ids.shell)
+            {
+                write_named(out, &format!("material {name}"), mid, Card::new("MAT8").int(mid).reals([e1, e2, nu12, g12, g13, g23]).opt(rho))?;
+            }
+            if let (Some(card), Some(mid)) = (card, ids.isotropic) {
+                write_named(out, &format!("material {name}"), mid, card)?;
+            }
         }
 
-        comment(&mut out, "elements");
+        comment(out, "properties");
+        for (pid, (section, p)) in (1u32..).zip(&self.properties) {
+            let card = match p {
+                Property::Solid { mid, rule: (network, scheme) } => Card::new("PSOLID").int(pid).int(*mid).blank().opt(*network).blank().opt(*scheme),
+                Property::Shell { mid, thickness, .. } => Card::new("PSHELL").int(pid).int(*mid).real(*thickness).int(*mid).blank().int(*mid),
+                Property::Beam { mid, profile, .. } => {
+                    let (shape, dims) = beam_dimensions(*profile);
+                    Card::new("PBEAML").int(pid).int(*mid).blank().text(shape).end_line().reals(dims)
+                }
+                Property::Rod { mid, area } => Card::new("PROD").int(pid).int(*mid).real(*area),
+            };
+            write_named(out, &format!("section {section}"), pid, card)?;
+        }
+
+        comment(out, "elements");
         for (label, el) in self.model.elements() {
-            let Some(&(pid, extra)) = self.element_props.get(label) else { continue };
-            let g = grids(el.kind, &el.nodes);
-            let mut card = Card::new(element_card(el.kind)).int(*label).int(pid);
-            match (el.kind, extra) {
-                (ElementKind::Beam2, Extra::Beam { orientation }) => {
-                    let v = self.beam_vector(&el.nodes, orientation);
-                    card = card.ints(g).reals(v);
-                }
-                (ElementKind::Quad8, Extra::Shell { offset, mcid }) => {
-                    card = card.ints(g).blank().blank().blank().blank().opt_int(mcid).opt_real(offset);
-                }
-                (_, Extra::Shell { offset, mcid }) => card = card.ints(g).opt_int(mcid).opt_real(offset),
-                _ => card = card.ints(g),
-            }
-            put(card, &mut out)?;
+            let Some(pid) = self.element_pid.get(label).copied() else { continue };
+            let Some((_, property)) = usize::try_from(pid).ok().and_then(|p| self.properties.get(p - 1)) else { continue };
+            let card = Card::new(element_card(el.kind)).int(*label).int(pid).ints(grids(el.kind, &el.nodes));
+            let card = match property {
+                Property::Beam { orientation, .. } => card.reals(self.beam_vector(&el.nodes, *orientation)),
+                // CQUAD8 has four corner thicknesses before the material axes and the offset.
+                Property::Shell { offset, mcid, .. } if el.kind == ElementKind::Quad8 => card.blank().blank().blank().blank().opt(*mcid).opt(*offset),
+                Property::Shell { offset, mcid, .. } => card.opt(*mcid).opt(*offset),
+                Property::Solid { .. } | Property::Rod { .. } => card,
+            };
+            card.write(out)?;
         }
 
         if !self.rigid.is_empty() {
-            comment(&mut out, "couplings");
+            comment(out, "couplings");
         }
         for (eid, name, c) in &self.rigid {
             let rp = self.r.reference_point_nodes.get(&c.reference_point).copied().unwrap_or_default();
             let nodes = self.r.sets.get(&c.set).map(|s| s.nodes.as_slice()).unwrap_or_default();
-            let dofs = component(mask_of(&c.dofs.list()));
             let card = match c.kind {
-                CouplingKind::Kinematic => {
-                    comment(&mut out, &format!("coupling {name}: RBE2 {eid}"));
-                    Card::new("RBE2").int(*eid).int(rp).int(dofs).ints(nodes.iter().copied())
-                }
+                CouplingKind::Kinematic => Card::new("RBE2").int(*eid).int(rp).int(component(c.dofs)).ints(nodes.iter().copied()),
+                // Equal weights on the set's translations.
                 CouplingKind::Distributing => {
-                    comment(&mut out, &format!("coupling {name}: RBE3 {eid}"));
-                    Card::new("RBE3").int(*eid).blank().int(rp).int(dofs).real(1.0).int(123).ints(nodes.iter().copied())
+                    Card::new("RBE3").int(*eid).blank().int(rp).int(component(c.dofs)).real(1.0).int(123).ints(nodes.iter().copied())
                 }
             };
-            put(card, &mut out)?;
+            write_named(out, &format!("coupling {name}"), *eid, card)?;
         }
+        Ok(())
+    }
 
+    /// Constraint sets: held degrees of freedom by `SPC1`, prescribed values by `SPC`.
+    fn emit_constraints(&self, out: &mut String) -> Result<()> {
         if !self.spc_sets.is_empty() {
-            comment(&mut out, "boundary conditions");
+            comment(out, "boundary conditions");
         }
         for (sid, set) in &self.spc_sets {
-            for name in self.steps.iter().zip(&self.step_spc).filter(|(_, s)| **s == Some(*sid)).map(|(st, _)| &st.name) {
-                comment(&mut out, &format!("step {name}: SPC {sid}"));
+            for sub in self.subcases.iter().filter(|s| s.spc == Some(*sid)) {
+                comment(out, &format!("step {}: SPC {sid}", sub.step.name));
             }
             let mut held: BTreeMap<u8, Vec<u32>> = BTreeMap::new();
-            let mut prescribed: Vec<(u32, u8, f64)> = Vec::new();
+            let mut prescribed = Vec::new();
             for (node, values) in set {
-                let zero = values.iter().enumerate().filter(|(_, v)| **v == Some(0.0)).fold(0u8, |m, (i, _)| m | (1 << i));
-                if zero != 0 {
-                    held.entry(zero).or_default().push(*node);
-                }
+                let mut zero = 0u8;
                 // Nonzero values: one entry per value, with every degree of freedom it applies to.
                 let mut by_value: Vec<(f64, u8)> = Vec::new();
-                for (i, v) in values.iter().enumerate() {
-                    let Some(v) = *v else { continue };
-                    if v == 0.0 {
-                        continue;
-                    }
+                for (bit, v) in values.iter().enumerate().filter_map(|(i, v)| Some((1u8 << i, (*v)?))) {
                     match by_value.iter_mut().find(|(w, _)| *w == v) {
-                        Some((_, m)) => *m |= 1 << i,
-                        None => by_value.push((v, 1 << i)),
+                        _ if v == 0.0 => zero |= bit,
+                        Some((_, m)) => *m |= bit,
+                        None => by_value.push((v, bit)),
                     }
+                }
+                if zero != 0 {
+                    held.entry(zero).or_default().push(*node);
                 }
                 prescribed.extend(by_value.into_iter().map(|(v, m)| (*node, m, v)));
             }
             for (mask, nodes) in &held {
                 for chunk in nodes.chunks(SPC1_GRIDS) {
-                    put(Card::new("SPC1").int(*sid).int(component(*mask)).ints(chunk.iter().copied()), &mut out)?;
+                    Card::new("SPC1").int(*sid).int(component(Dofs::from_bits(*mask))).ints(chunk.iter().copied()).write(out)?;
                 }
             }
             for (node, mask, value) in prescribed {
-                put(Card::new("SPC").int(*sid).int(node).int(component(mask)).real(value), &mut out)?;
+                Card::new("SPC").int(*sid).int(node).int(component(Dofs::from_bits(mask))).real(value).write(out)?;
             }
         }
+        Ok(())
+    }
 
+    /// Load sets and their combinations.
+    fn emit_loads(&self, out: &mut String) -> Result<()> {
         if !self.load_sids.is_empty() {
-            comment(&mut out, "loads");
+            comment(out, "loads");
         }
         for (name, sid) in &self.load_sids {
             let Some(load) = self.model.load(name) else { continue };
-            comment(&mut out, &format!("load {name}: {} {sid}", load_card(load)));
+            let entry = |card: Card, out: &mut String, first: &mut bool| -> Result<()> {
+                if std::mem::take(first) {
+                    comment(out, &format!("load {name}: {} {sid}", card.name()));
+                }
+                card.write(out)
+            };
+            let mut first = true;
             match load {
                 Load::Force { .. } | Load::Traction { .. } | Load::Moment { .. } => {
-                    let entry = if matches!(load, Load::Moment { .. }) { "MOMENT" } else { "FORCE" };
+                    let card = if matches!(load, Load::Moment { .. }) { "MOMENT" } else { "FORCE" };
                     let values = self.r.nodal_loads.get(*name).map(Vec::as_slice).unwrap_or_default();
                     for (node, v) in values.iter().filter(|(_, v)| v.iter().any(|c| *c != 0.0)) {
-                        put(Card::new(entry).int(*sid).int(*node).blank().real(1.0).reals(*v), &mut out)?;
+                        entry(Card::new(card).int(*sid).int(*node).blank().real(1.0).reals(*v), out, &mut first)?;
                     }
                 }
                 Load::Pressure { set, magnitude } => {
-                    let faces = self.r.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default();
-                    for f in faces {
+                    for f in self.r.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default() {
                         if let Some(card) = self.pressure(*sid, *f, *magnitude) {
-                            put(card, &mut out)?;
+                            entry(card, out, &mut first)?;
                         }
                     }
                 }
-                Load::Gravity { acceleration, .. } => {
-                    put(Card::new("GRAV").int(*sid).blank().real(1.0).reals(*acceleration), &mut out)?;
-                }
+                Load::Gravity { acceleration, .. } => entry(Card::new("GRAV").int(*sid).blank().real(1.0).reals(*acceleration), out, &mut first)?,
                 Load::BodyForce { .. } => {}
             }
         }
@@ -822,19 +783,9 @@ impl<'m> Deck<'m> {
             for l in loads {
                 card = card.real(1.0).int(*l);
             }
-            put(card, &mut out)?;
+            card.write(out)?;
         }
-
-        if !self.methods.is_empty() {
-            comment(&mut out, "eigenvalue extraction");
-        }
-        for (sid, i) in &self.methods {
-            if let Some(Procedure::Frequency { modes, min_hz, max_hz }) = self.steps.get(*i).map(|s| s.procedure) {
-                put(Card::new("EIGRL").int(*sid).opt_real(min_hz).opt_real(max_hz).int(modes), &mut out)?;
-            }
-        }
-        out.push_str("ENDDATA\n");
-        Ok(out)
+        Ok(())
     }
 
     /// A `PLOAD4` for one element face, positive pushing into the element.
@@ -846,18 +797,16 @@ impl<'m> Deck<'m> {
             let p = if f.face == 1 { -magnitude } else { magnitude };
             return Some(card.real(p));
         }
+        let corners = el.kind.corner_count();
         let local = el.kind.faces().get(usize::from(f.face).checked_sub(1)?)?;
-        let corners: Vec<usize> = local.iter().copied().filter(|&i| i < corner_count(el.kind)).collect();
-        let g1 = el.nodes.get(*corners.first()?).copied()?;
-        let card = card.real(magnitude).blank().blank().blank().int(g1);
-        Some(match (el.kind, corners.len()) {
+        let face_corners = local.get(..local.iter().take_while(|&&i| i < corners).count())?;
+        let node = |i: usize| el.nodes.get(i).copied();
+        let card = card.real(magnitude).blank().blank().blank().int(node(*face_corners.first()?)?);
+        Some(match (el.kind, face_corners.len()) {
             // Tetrahedra: the corner off the face.
-            (ElementKind::Tet4 | ElementKind::Tet10, _) => {
-                let off = (0..4).find(|i| !corners.contains(i))?;
-                card.int(el.nodes.get(off).copied()?)
-            }
+            (ElementKind::Tet4 | ElementKind::Tet10, _) => card.int(node((0..corners).find(|i| !face_corners.contains(i))?)?),
             // Quadrilateral faces: the corner diagonally opposite G1.
-            (_, 4) => card.int(el.nodes.get(*corners.get(2)?).copied()?),
+            (_, 4) => card.int(node(*face_corners.get(2)?)?),
             // Triangular faces of wedges: G3 stays blank.
             _ => card,
         })
@@ -870,17 +819,6 @@ impl<'m> Deck<'m> {
         let (a, b) = (p(0), p(1));
         let t = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         [t[1] * o[2] - t[2] * o[1], t[2] * o[0] - t[0] * o[2], t[0] * o[1] - t[1] * o[0]]
-    }
-}
-
-fn corner_count(kind: ElementKind) -> usize {
-    match kind {
-        ElementKind::Tet4 | ElementKind::Tet10 => 4,
-        ElementKind::Wedge6 => 6,
-        ElementKind::Hex8 | ElementKind::Hex20 => 8,
-        ElementKind::Tri3 | ElementKind::Tri6 => 3,
-        ElementKind::Quad4 | ElementKind::Quad8 => 4,
-        ElementKind::Rod2 | ElementKind::Beam2 => 2,
     }
 }
 
@@ -898,23 +836,10 @@ fn beam_dimensions(p: BeamProfile) -> (&'static str, Vec<f64>) {
     }
 }
 
-fn card_name(p: &Property) -> &'static str {
-    match p {
-        Property::Solid { .. } => "PSOLID",
-        Property::Shell { .. } => "PSHELL",
-        Property::Beam { .. } => "PBEAML",
-        Property::Rod { .. } => "PROD",
-    }
-}
-
-fn load_card(l: &Load) -> &'static str {
-    match l {
-        Load::Force { .. } | Load::Traction { .. } => "FORCE",
-        Load::Moment { .. } => "MOMENT",
-        Load::Pressure { .. } => "PLOAD4",
-        Load::Gravity { .. } => "GRAV",
-        Load::BodyForce { .. } => "-",
-    }
+/// An entry preceded by a comment naming what it holds (`material Steel: MAT1 1`).
+fn write_named(out: &mut String, what: &str, id: u32, card: Card) -> Result<()> {
+    comment(out, &format!("{what}: {} {id}", card.name()));
+    card.write(out)
 }
 
 /// The first few labels of a list, and how many more there are.
@@ -929,8 +854,7 @@ fn labels(nodes: &BTreeSet<u32>) -> String {
 
 /// A comment line, at most 80 columns.
 fn comment(out: &mut String, text: &str) {
-    let line: String = format!("$ {text}").chars().take(80).collect();
-    out.push_str(&line);
+    out.extend(format!("$ {text}").chars().take(80));
     out.push('\n');
 }
 
@@ -953,7 +877,7 @@ mod tests {
     #[test]
     fn hex20_mid_side_nodes_swap_blocks() {
         let nodes: Vec<u32> = (1..=20).collect();
-        let g = grids(ElementKind::Hex20, &nodes);
+        let g: Vec<u32> = grids(ElementKind::Hex20, &nodes).collect();
         assert_eq!(&g[..12], &nodes[..12]);
         assert_eq!(&g[12..16], &[17, 18, 19, 20]);
         assert_eq!(&g[16..], &[13, 14, 15, 16]);

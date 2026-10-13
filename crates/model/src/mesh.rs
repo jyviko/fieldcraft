@@ -76,6 +76,22 @@ impl ElementKind {
         }
     }
 
+    /// Corner nodes: the first ones in the node list (the rest are mid-side nodes).
+    pub fn corner_count(self) -> usize {
+        match self {
+            ElementKind::Rod2 | ElementKind::Beam2 => 2,
+            ElementKind::Tri3 | ElementKind::Tri6 => 3,
+            ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Tet4 | ElementKind::Tet10 => 4,
+            ElementKind::Wedge6 => 6,
+            ElementKind::Hex8 | ElementKind::Hex20 => 8,
+        }
+    }
+
+    /// Whether the element has mid-side nodes.
+    pub fn is_quadratic(self) -> bool {
+        self.node_count() > self.corner_count()
+    }
+
     /// Topological dimension: 1 for line elements, 2 for shells, 3 for solids.
     pub fn dimension(self) -> u8 {
         match self {
@@ -387,6 +403,10 @@ mod tests {
         assert_eq!(ElementKind::Tet4.faces().len(), 4);
         assert_eq!(ElementKind::Wedge6.faces().len(), 5);
         assert_eq!(ElementKind::Hex20.edges().len(), 12);
+        for kind in ElementKind::ALL {
+            let mid_sides = kind.edges().iter().filter(|e| e.len() == 3).count();
+            assert_eq!(kind.corner_count() + mid_sides, kind.node_count(), "{kind:?}");
+        }
     }
 
     #[test]

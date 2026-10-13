@@ -32,6 +32,16 @@ impl Dofs {
         self.0 == 0
     }
 
+    /// The degrees of freedom as bits: bit `d - 1` for degree of freedom `d`.
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// The degrees of freedom of bits (bits above the sixth are ignored).
+    pub fn from_bits(bits: u8) -> Dofs {
+        Dofs(bits & 0b111_111)
+    }
+
     /// The degrees of freedom in order.
     pub fn list(self) -> Vec<u8> {
         (1..=6).filter(|d| self.contains(*d)).collect()

@@ -18,6 +18,7 @@ pub static ALL: &[CommandSpec] = &[
     mesh::NODE_REMOVE,
     mesh::ELEMENT_ADD,
     mesh::ELEMENT_REMOVE,
+    mesh::QUALITY,
 ];
 
 /// A required label parameter (1..=u32::MAX; the model checks its own range).

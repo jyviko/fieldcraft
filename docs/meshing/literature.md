@@ -746,6 +746,19 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 - **HexaLab** (MIT, https://github.com/mlivesu/HexaLab, https://www.hexalab.net) is READ OK. It is a hex quality
   viewer whose metrics match the literature's.
 
+**B6.6 Element validity and quality metrics (implemented in `modelcraft-mesh::quality`).** **Verdict: BUILD ON.**
+- **Johnen, Remacle, Geuzaine 2013.** *Geometrical validity of curvilinear finite elements.* J. Comput. Phys.
+  233:359–372, 2013. The Jacobian
+  determinant in Bernstein form is bounded by its coefficients, equals them at the vertices and converges under
+  subdivision: a proof of `det J > 0` on the whole element. We use it for every solid kind, including the trilinear
+  hex whose corner Jacobians do not certify it (B6.3). (The paper's authors also wrote Gmsh code, which stays
+  forbidden; the paper is enough.)
+- **Shewchuk 2002.** *What is a good linear finite element? Interpolation, conditioning, anisotropy, and quality
+  measures.* Unpublished preprint, https://people.eecs.berkeley.edu/~jrs/papers/elemj.pdf. Tet dihedral angles,
+  radius ratio and aspect ratio; with Klingner–Shewchuk's volume–length measure (A3.6).
+- **Knupp 2001.** *Algebraic mesh quality metrics.* SIAM J. Sci. Comput. 23(1):193–218. Corner-Jacobian scaled Jacobian and
+  shape metrics for hexes, wedges and quads.
+
 ---
 
 ## Part C: Datasets and benchmarks

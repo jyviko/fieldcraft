@@ -47,8 +47,16 @@ pub struct Node {
     pub xyz: [f64; 3],
 }
 
-/// Element topology. Node order follows each family's usual corner-first convention (corners,
-/// then mid-side nodes), which all three target formats share for these shapes.
+/// Element topology. Node order is corners first, then mid-side nodes, with positive volume for
+/// a right-handed ordering:
+/// - tet10: mid-side nodes 5–10 on edges 1-2, 2-3, 3-1, 1-4, 2-4, 3-4;
+/// - wedge6: triangle 1-2-3, then 4-5-6 on the side its right-hand normal points to;
+/// - hex8/hex20: face 1-2-3-4, then 5-6-7-8 above it; hex20's mid-side nodes 9–12 lie on the
+///   edges of 1-2-3-4, 13–16 on those of 5-6-7-8, and 17–20 on edges 1-5, 2-6, 3-7, 4-8.
+///
+/// This is the Abaqus (and VTK) order. Formats that order nodes differently, such as Nastran's
+/// CHEXA with 20 nodes (vertical edges before the top face's edges), are reordered by their deck
+/// readers and writers; the model never stores another order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ElementKind {

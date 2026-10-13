@@ -26,6 +26,8 @@ pub enum EngineError {
     Model(#[from] modelcraft_model::Error),
     #[error(transparent)]
     Geometry(#[from] modelcraft_geometry::Error),
+    #[error(transparent)]
+    Mesh(#[from] modelcraft_mesh::Error),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
@@ -173,6 +175,9 @@ mod tests {
             json!({"path": 7}),
             json!({"body": "Body1", "tolerance": 0.05}),
             json!({"body": null, "tolerance": "fine"}),
+            json!({"elements": [u32::MAX, -1, 1.5]}),
+            json!({"elements": {}, "bins": -5}),
+            json!({"elements": [1], "bins": 1e300}),
         ];
         for spec in commands() {
             for p in &hostile {

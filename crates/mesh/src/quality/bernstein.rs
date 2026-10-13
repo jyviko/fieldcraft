@@ -161,6 +161,18 @@ impl Bernstein {
         self.factors.len() == o.factors.len() && self.factors.iter().zip(&o.factors).all(|(a, b)| a.dim == b.dim)
     }
 
+    /// The multinomial weight of every slot (zero for unused slots).
+    fn weights(&self) -> Vec<f64> {
+        let mut w = vec![0.0; self.coef.len()];
+        for m in self.multis() {
+            let s = self.slot(&m);
+            if let Some(x) = w.get_mut(s) {
+                *x = self.weight(&m);
+            }
+        }
+        w
+    }
+
     /// The product of two polynomials on the same domain.
     pub fn mul(&self, o: &Self) -> Result<Self> {
         if !self.same_domain(o) {
@@ -168,19 +180,20 @@ impl Bernstein {
         }
         let factors: Vec<Factor> = self.factors.iter().zip(&o.factors).map(|(a, b)| Factor { dim: a.dim, deg: a.deg + b.deg }).collect();
         let mut out = Self::zero(&factors)?;
-        let right: Vec<(Multi, f64, f64)> = o.multis().into_iter().map(|m| (m, o.get(&m), o.weight(&m))).filter(|(_, c, _)| *c != 0.0).collect();
-        for a in self.multis() {
-            let ca = self.get(&a);
-            if ca == 0.0 {
-                continue;
-            }
-            let wa = self.weight(&a);
-            for (b, cb, wb) in &right {
+        let out_w = out.weights();
+        let terms =
+            |p: &Self| -> Vec<(Multi, f64)> { p.multis().into_iter().map(|m| (m, p.get(&m) * p.weight(&m))).filter(|(_, c)| *c != 0.0).collect() };
+        let right = terms(o);
+        for (a, ca) in terms(self) {
+            for (b, cb) in &right {
                 let mut k = a;
                 for (x, y) in k.iter_mut().zip(b) {
                     *x += y;
                 }
-                out.add_at(&k, ca * cb * wa * wb / out.weight(&k));
+                let s = out.slot(&k);
+                if let (Some(c), Some(w)) = (out.coef.get_mut(s), out_w.get(s)) {
+                    *c += ca * cb / w;
+                }
             }
         }
         Ok(out)

@@ -1,8 +1,8 @@
 use modelcraft_mesh::quality::{self, QualityReport};
-use modelcraft_model::{ElementKind, MAX_ELEMENTS, MAX_LABEL};
+use modelcraft_model::{ElementKind, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
-use super::{label, xyz};
+use super::{label, labels, xyz};
 use crate::{CommandSpec, EngineError, Result, Session};
 
 pub const NODE_ADD: CommandSpec = CommandSpec {
@@ -47,15 +47,10 @@ fn element_add(s: &mut Session, p: &Value) -> Result<Value> {
     let l = label(p, "label")?;
     let name = p.get("kind").and_then(Value::as_str).unwrap_or_default();
     let kind = ElementKind::from_name(name).ok_or_else(|| EngineError::Params(format!("unknown element kind `{name}`")))?;
-    let raw = p.get("nodes").and_then(Value::as_array).ok_or_else(|| EngineError::Params("`nodes` must be a list of node labels".into()))?;
-    if raw.len() != kind.node_count() {
-        return Err(EngineError::Params(format!("{name} needs {} nodes, got {}", kind.node_count(), raw.len())));
+    let nodes = labels(p, "nodes", ElementKind::Hex20.node_count())?;
+    if nodes.len() != kind.node_count() {
+        return Err(EngineError::Params(format!("{name} needs {} nodes, got {}", kind.node_count(), nodes.len())));
     }
-    let nodes = raw
-        .iter()
-        .map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()).filter(|n| (1..=MAX_LABEL).contains(n)))
-        .collect::<Option<Vec<u32>>>()
-        .ok_or_else(|| EngineError::Params(format!("`nodes` must be node labels in 1..={MAX_LABEL}")))?;
     s.model.set_element(l, kind, nodes)?;
     Ok(json!({"label": l}))
 }
@@ -73,7 +68,7 @@ fn number(v: f64) -> Value {
     if v.is_finite() { json!(v) } else { json!(if v > 0.0 { "inf" } else { "-inf" }) }
 }
 
-fn labels(v: &[u32]) -> Value {
+fn listed(v: &[u32]) -> Value {
     json!({"count": v.len(), "labels": v.iter().take(LISTED).collect::<Vec<_>>()})
 }
 
@@ -84,18 +79,7 @@ fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let selection = match p.get("elements") {
         None => None,
-        Some(v) => {
-            let raw = v
-                .as_array()
-                .filter(|a| a.len() <= MAX_ELEMENTS)
-                .ok_or_else(|| EngineError::Params("`elements` must be a list of element labels".into()))?;
-            let labels = raw
-                .iter()
-                .map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()).filter(|n| (1..=MAX_LABEL).contains(n)))
-                .collect::<Option<Vec<u32>>>()
-                .ok_or_else(|| EngineError::Params(format!("`elements` must be element labels in 1..={MAX_LABEL}")))?;
-            Some(labels)
-        }
+        Some(_) => Some(labels(p, "elements", MAX_ELEMENTS)?),
     };
     let r: QualityReport = quality::quality_report(&s.model, selection.as_deref(), bins)?;
     let skipped: serde_json::Map<String, Value> = r.skipped.iter().map(|(k, n)| (k.name().to_string(), json!(n))).collect();
@@ -119,8 +103,8 @@ fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
         "measured": r.measured,
         "skipped": skipped,
         "valid": r.valid,
-        "invalid": labels(&r.invalid),
-        "undetermined": labels(&r.undetermined),
+        "invalid": listed(&r.invalid),
+        "undetermined": listed(&r.undetermined),
         "volume": r.volume,
         "area": r.area,
         "metrics": metrics,

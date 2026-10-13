@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use modelcraft_model::{Element, ElementKind, MAX_COORD, Model};
+use modelcraft_model::{Element, ElementKind, Model, check_coordinates};
 
 use super::{ElementQuality, Metric, Validity, element_quality, element_validity, is_measured};
 use crate::{Error, Result};
@@ -40,7 +40,7 @@ pub struct QualityReport {
     /// Total signed volume of the solids and total area of the shells.
     pub volume: f64,
     pub area: f64,
-    /// One entry per metric present, in [`Metric::ALL`] order.
+    /// One entry per metric present, in [`Metric`] declaration order.
     pub metrics: Vec<MetricStats>,
 }
 
@@ -83,12 +83,11 @@ pub fn quality_report(model: &Model, labels: Option<&[u32]>, bins: usize) -> Res
         area: 0.0,
         metrics: Vec::new(),
     };
-    let mut skipped: BTreeMap<usize, (ElementKind, usize)> = BTreeMap::new();
+    let mut skipped: BTreeMap<ElementKind, usize> = BTreeMap::new();
     let mut stats: BTreeMap<Metric, (MetricStats, f64, usize)> = BTreeMap::new();
     for (label, element) in selection(model, labels)? {
         if !is_measured(element.kind) {
-            let order = ElementKind::ALL.iter().position(|k| *k == element.kind).unwrap_or(0);
-            skipped.entry(order).or_insert((element.kind, 0)).1 += 1;
+            *skipped.entry(element.kind).or_insert(0) += 1;
             continue;
         }
         let q: ElementQuality = element_quality(element.kind, &coordinates(model, label, element)?)?;
@@ -134,7 +133,7 @@ pub fn quality_report(model: &Model, labels: Option<&[u32]>, bins: usize) -> Res
             }
         }
     }
-    report.skipped = skipped.into_values().collect();
+    report.skipped = skipped.into_iter().collect();
     report.metrics = stats
         .into_values()
         .map(|(mut s, sum, finite)| {
@@ -204,37 +203,64 @@ impl GateReport {
     }
 }
 
-/// The validity gate every mesher runs on its output before it reaches the model: each solid
-/// element's Jacobian determinant is proven positive everywhere, and the elements' total volume
-/// equals the volume the boundary encloses. Call [`GateReport::into_result`] to turn a failure
-/// into an error.
-pub fn validity_gate(model: &Model, options: &GateOptions) -> Result<GateReport> {
-    if !(options.volume_tolerance >= 0.0 && options.volume_tolerance.is_finite()) || options.expected_volume.is_some_and(|v| !v.is_finite()) {
-        return Err(Error::Invalid("gate options must be finite, with a non-negative tolerance".into()));
-    }
-    let mut report = GateReport { checked: 0, invalid: Vec::new(), undetermined: Vec::new(), volume: 0.0, options: *options };
-    for (label, element) in model.elements() {
-        if element.kind.dimension() != 3 {
-            continue;
+/// Accumulates the gate's report one element at a time.
+struct Gate(GateReport);
+
+impl Gate {
+    fn new(options: &GateOptions) -> Result<Self> {
+        if !(options.volume_tolerance >= 0.0 && options.volume_tolerance.is_finite()) || options.expected_volume.is_some_and(|v| !v.is_finite()) {
+            return Err(Error::Invalid("gate options must be finite, with a non-negative tolerance".into()));
         }
-        let check = element_validity(element.kind, &coordinates(model, *label, element)?)?;
-        report.checked += 1;
-        report.volume += check.volume;
+        Ok(Gate(GateReport { checked: 0, invalid: Vec::new(), undetermined: Vec::new(), volume: 0.0, options: *options }))
+    }
+
+    fn add(&mut self, label: u32, kind: ElementKind, xyz: &[[f64; 3]]) -> Result<()> {
+        if kind.dimension() != 3 {
+            return Ok(());
+        }
+        let check = element_validity(kind, xyz)?;
+        let r = &mut self.0;
+        r.checked += 1;
+        r.volume += check.volume;
         match check.validity {
             Validity::Valid => {}
-            Validity::Invalid => report.invalid.push(*label),
-            Validity::Undetermined => report.undetermined.push(*label),
+            Validity::Invalid => r.invalid.push(label),
+            Validity::Undetermined => r.undetermined.push(label),
         }
+        Ok(())
     }
-    Ok(report)
+}
+
+/// The validity gate every mesher runs on its output before it reaches the model: each solid
+/// element's Jacobian determinant is proven positive everywhere, and the elements' total volume
+/// equals the volume the boundary encloses. Elements come as `(label, kind, node coordinates in
+/// node order)`, straight from the mesher's arrays; other than solids are ignored. Call
+/// [`GateReport::into_result`] to turn a failure into an error.
+pub fn validity_gate_elements<I, E>(elements: I, options: &GateOptions) -> Result<GateReport>
+where
+    I: IntoIterator<Item = (u32, ElementKind, E)>,
+    E: AsRef<[[f64; 3]]>,
+{
+    let mut gate = Gate::new(options)?;
+    for (label, kind, xyz) in elements {
+        gate.add(label, kind, xyz.as_ref())?;
+    }
+    Ok(gate.0)
+}
+
+/// [`validity_gate_elements`] over a model's elements.
+pub fn validity_gate(model: &Model, options: &GateOptions) -> Result<GateReport> {
+    let mut gate = Gate::new(options)?;
+    for (label, element) in model.elements() {
+        gate.add(*label, element.kind, &coordinates(model, *label, element)?)?;
+    }
+    Ok(gate.0)
 }
 
 /// The signed volume enclosed by a closed triangle surface (positive when the triangles' right-
 /// hand normals point outwards), by the divergence theorem.
 pub fn enclosed_volume(points: &[[f64; 3]], triangles: &[[usize; 3]]) -> Result<f64> {
-    if let Some(c) = points.iter().flatten().find(|c| !(c.abs() <= MAX_COORD)) {
-        return Err(Error::Invalid(format!("coordinate {c} is not a finite number within ±{MAX_COORD}")));
-    }
+    check_coordinates(points.as_flattened())?;
     let o = points.first().copied().unwrap_or([0.0; 3]);
     let mut six_v = 0.0;
     for t in triangles {

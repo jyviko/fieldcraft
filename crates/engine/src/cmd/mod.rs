@@ -4,6 +4,7 @@ mod geometry;
 mod mesh;
 mod model;
 
+use modelcraft_model::MAX_LABEL;
 use serde_json::Value;
 
 use crate::{CommandSpec, EngineError, Result};
@@ -38,4 +39,17 @@ pub(crate) fn xyz(p: &Value, key: &str) -> Result<[f64; 3]> {
         *o = v.as_f64().ok_or_else(bad)?;
     }
     Ok(out)
+}
+
+/// A required list of labels (each in 1..=MAX_LABEL), at most `max_len` long.
+pub(crate) fn labels(p: &Value, key: &str, max_len: usize) -> Result<Vec<u32>> {
+    let raw = p
+        .get(key)
+        .and_then(Value::as_array)
+        .filter(|a| a.len() <= max_len)
+        .ok_or_else(|| EngineError::Params(format!("`{key}` must be a list of at most {max_len} labels")))?;
+    raw.iter()
+        .map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()).filter(|n| (1..=MAX_LABEL).contains(n)))
+        .collect::<Option<Vec<u32>>>()
+        .ok_or_else(|| EngineError::Params(format!("`{key}` must be labels in 1..={MAX_LABEL}")))
 }

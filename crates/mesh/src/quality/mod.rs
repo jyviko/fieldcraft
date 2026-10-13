@@ -13,17 +13,22 @@
 //!
 //! Inputs are hostile: coordinates must be finite and within [`modelcraft_model::MAX_COORD`],
 //! and every metric has a defined value on degenerate and inverted elements.
+//!
+//! Linear tetrahedra take their validity from the exact `orient3d` ([`crate::predicates`]); the
+//! other kinds from the floating-point Bernstein certificate, which counts a Jacobian within
+//! [`jacobian::RELATIVE_TOLERANCE`] of zero as degenerate.
 
 mod bernstein;
 pub mod jacobian;
 mod report;
 mod shape;
 
-use modelcraft_model::{ElementKind, MAX_COORD};
+use modelcraft_model::{ElementKind, check_coordinates};
 
 pub use jacobian::{JacobianCheck, Validity};
-pub use report::{GateOptions, GateReport, MetricStats, QualityReport, enclosed_volume, quality_report, validity_gate};
+pub use report::{GateOptions, GateReport, MetricStats, QualityReport, enclosed_volume, quality_report, validity_gate, validity_gate_elements};
 
+use crate::predicates::{Point3, Sign, orient3d};
 use crate::{Error, Result};
 
 /// A quality metric. Angles are in degrees.
@@ -58,20 +63,6 @@ pub enum Metric {
 }
 
 impl Metric {
-    pub const ALL: [Metric; 11] = [
-        Metric::ScaledJacobian,
-        Metric::JacobianRatio,
-        Metric::Shape,
-        Metric::MinDihedral,
-        Metric::MaxDihedral,
-        Metric::RadiusRatio,
-        Metric::AspectRatio,
-        Metric::VolumeLength,
-        Metric::EdgeRatio,
-        Metric::MinAngle,
-        Metric::MaxAngle,
-    ];
-
     pub fn name(self) -> &'static str {
         match self {
             Metric::ScaledJacobian => "scaled_jacobian",
@@ -136,9 +127,7 @@ fn local(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<Vec<[f64; 3]>> {
     if xyz.len() != kind.node_count() {
         return Err(Error::Invalid(format!("{} needs {} nodes, got {}", kind.name(), kind.node_count(), xyz.len())));
     }
-    if let Some(c) = xyz.iter().flatten().find(|c| !(c.abs() <= MAX_COORD)) {
-        return Err(Error::Invalid(format!("coordinate {c} is not a finite number within ±{MAX_COORD}")));
-    }
+    check_coordinates(xyz.as_flattened())?;
     let o = xyz.first().copied().unwrap_or([0.0; 3]);
     Ok(xyz.iter().map(|p| shape::sub(*p, o)).collect())
 }
@@ -148,63 +137,91 @@ fn corners<const N: usize>(p: &[[f64; 3]]) -> Result<[[f64; 3]; N]> {
     p.get(..N).and_then(|s| <[[f64; 3]; N]>::try_from(s).ok()).ok_or_else(|| Error::Invalid(format!("need {N} corner nodes")))
 }
 
+/// The Jacobian matrix's columns as polynomials (each three coordinates).
+type Columns = [[bernstein::Bernstein; 3]; 3];
+
+/// The certified check of a solid, and its Jacobian columns when they were built. A linear
+/// tetrahedron's Jacobian is constant: its sign is the exact `orient3d` of the input
+/// coordinates, its volume the determinant.
+fn checked(kind: ElementKind, xyz: &[[f64; 3]], p: &[[f64; 3]]) -> Result<(Option<Columns>, JacobianCheck)> {
+    if kind == ElementKind::Tet4
+        && let Some(sign) = exact_tet_sign(xyz)
+    {
+        let [a, b, c, d]: [[f64; 3]; 4] = corners(p)?;
+        let volume = shape::det(shape::sub(b, a), shape::sub(c, a), shape::sub(d, a)) / 6.0;
+        let (validity, ratio) = match sign {
+            Sign::Positive => (Validity::Valid, 1.0),
+            Sign::Negative => (Validity::Invalid, -1.0),
+            Sign::Zero => (Validity::Invalid, 0.0),
+        };
+        return Ok((None, JacobianCheck { validity, ratio, volume }));
+    }
+    let jacobian::Jacobian { columns, det } = jacobian::jacobian(kind, p)?;
+    Ok((Some(columns), jacobian::certify(det)?))
+}
+
+/// The exact orientation of a tetrahedron (positive for node 4 on the side of face 1-2-3's
+/// right-hand normal), or `None` when a coordinate is outside the predicates' domain.
+fn exact_tet_sign(xyz: &[[f64; 3]]) -> Option<Sign> {
+    let p = |i: usize| xyz.get(i).and_then(|c| Point3::try_from(*c).ok());
+    // orient3d(a, b, c, d) is positive when d lies below the plane of a, b, c seen
+    // counterclockwise, i.e. opposite to our convention.
+    Some(match orient3d(&p(0)?, &p(1)?, &p(2)?, &p(3)?) {
+        Sign::Positive => Sign::Negative,
+        Sign::Negative => Sign::Positive,
+        Sign::Zero => Sign::Zero,
+    })
+}
+
 /// The certified Jacobian check and exact volume of a solid element (tet4, tet10, wedge6, hex8,
 /// hex20) from its node coordinates in node order.
 pub fn element_validity(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<JacobianCheck> {
     let p = local(kind, xyz)?;
-    jacobian::certify(&jacobian::jacobian(kind, &p)?.det)
+    checked(kind, xyz, &p).map(|(_, check)| check)
+}
+
+/// Knupp's scaled Jacobian and shape of a hexahedron: the Jacobian matrix at the eight corners
+/// and the centre (hex20 uses its curved map).
+fn hex_metrics(columns: &Columns) -> (f64, f64) {
+    let at = |value: &dyn Fn(&bernstein::Bernstein) -> f64| {
+        let [a, b, c] = columns.each_ref().map(|col| col.each_ref().map(value));
+        shape::jacobian_metrics(a, b, c)
+    };
+    let half: &[f64] = &[0.5, 0.5];
+    let centre = at(&|q| q.eval(&[half, half, half]));
+    jacobian::HEX_CORNERS.iter().map(|corner| at(&|q| q.at_vertex(corner))).fold(centre, |(s, k), (s2, k2)| (s.min(s2), k.min(k2)))
 }
 
 /// Every metric of one element from its node coordinates in node order. Quadratic elements are
-/// certified on their curved geometry; their shape metrics are those of their corners (hex20
-/// uses the curved map's corner Jacobians). Rods and beams are an error ([`is_measured`]).
+/// certified on their curved geometry; tet10 and wedge shape metrics are those of their corners.
+/// Rods and beams are an error ([`is_measured`]).
 pub fn element_quality(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<ElementQuality> {
     let p = local(kind, xyz)?;
-    let solid = |metrics: Vec<(Metric, f64)>| -> Result<ElementQuality> {
-        let check = jacobian::certify(&jacobian::jacobian(kind, &p)?.det)?;
-        let mut metrics = metrics;
-        metrics.push((Metric::JacobianRatio, check.ratio));
-        Ok(ElementQuality { kind, size: check.volume, jacobian: Some(check), metrics })
-    };
-    match kind {
-        ElementKind::Tet4 | ElementKind::Tet10 => solid(shape::tet(corners(&p)?)),
-        ElementKind::Wedge6 => {
-            let c: [[f64; 3]; 6] = corners(&p)?;
-            let edges = [(0, 1), (1, 2), (2, 0), (3, 4), (4, 5), (5, 3), (0, 3), (1, 4), (2, 5)];
-            solid(vec![(Metric::ScaledJacobian, shape::wedge_scaled_jacobian(c)), (Metric::EdgeRatio, shape::edge_ratio(&c, &edges))])
-        }
-        ElementKind::Hex8 | ElementKind::Hex20 => {
-            let j = jacobian::jacobian(kind, &p)?;
-            // Knupp's metrics of the Jacobian matrix at the eight corners and the centre.
-            let at = |value: &dyn Fn(&bernstein::Bernstein) -> f64| {
-                let [a, b, c] = j.columns.each_ref().map(|col| col.each_ref().map(value));
-                shape::jacobian_metrics(a, b, c)
-            };
-            let half: &[f64] = &[0.5, 0.5];
-            let mut samples: Vec<(f64, f64)> = jacobian::HEX_CORNERS.iter().map(|corner| at(&|q| q.at_vertex(corner))).collect();
-            samples.push(at(&|q| q.eval(&[half, half, half])));
-            let scaled = samples.iter().fold(f64::INFINITY, |m, s| m.min(s.0));
-            let knupp = samples.iter().fold(f64::INFINITY, |m, s| m.min(s.1));
-            let c: [[f64; 3]; 8] = corners(&p)?;
-            let check = jacobian::certify(&j.det)?;
-            let metrics = vec![
-                (Metric::ScaledJacobian, scaled),
-                (Metric::JacobianRatio, check.ratio),
-                (Metric::Shape, knupp),
-                (Metric::EdgeRatio, shape::edge_ratio(&c, &jacobian::HEX_EDGES)),
-            ];
-            Ok(ElementQuality { kind, size: check.volume, jacobian: Some(check), metrics })
-        }
+    let mut metrics = match kind {
         ElementKind::Tri3 | ElementKind::Tri6 => {
             let (area, metrics) = shape::tri(corners(&p)?);
-            Ok(ElementQuality { kind, size: area, jacobian: None, metrics })
+            return Ok(ElementQuality { kind, size: area, jacobian: None, metrics });
         }
         ElementKind::Quad4 | ElementKind::Quad8 => {
             let (area, metrics) = shape::quad(corners(&p)?);
-            Ok(ElementQuality { kind, size: area, jacobian: None, metrics })
+            return Ok(ElementQuality { kind, size: area, jacobian: None, metrics });
         }
-        ElementKind::Rod2 | ElementKind::Beam2 => Err(Error::Invalid(format!("quality metrics are not defined for {}", kind.name()))),
+        ElementKind::Rod2 | ElementKind::Beam2 => return Err(Error::Invalid(format!("quality metrics are not defined for {}", kind.name()))),
+        ElementKind::Tet4 | ElementKind::Tet10 => shape::tet(corners(&p)?),
+        ElementKind::Wedge6 => {
+            let c: [[f64; 3]; 6] = corners(&p)?;
+            let edges = [(0, 1), (1, 2), (2, 0), (3, 4), (4, 5), (5, 3), (0, 3), (1, 4), (2, 5)];
+            vec![(Metric::ScaledJacobian, shape::wedge_scaled_jacobian(c)), (Metric::EdgeRatio, shape::edge_ratio(&c, &edges))]
+        }
+        ElementKind::Hex8 | ElementKind::Hex20 => vec![(Metric::EdgeRatio, shape::edge_ratio(&corners::<8>(&p)?, &jacobian::HEX_EDGES))],
+    };
+    let (columns, check) = checked(kind, xyz, &p)?;
+    if let Some(columns) = columns.as_ref().filter(|_| matches!(kind, ElementKind::Hex8 | ElementKind::Hex20)) {
+        let (scaled, knupp) = hex_metrics(columns);
+        metrics.extend([(Metric::ScaledJacobian, scaled), (Metric::Shape, knupp)]);
     }
+    metrics.push((Metric::JacobianRatio, check.ratio));
+    Ok(ElementQuality { kind, size: check.volume, jacobian: Some(check), metrics })
 }
 
 #[cfg(test)]

@@ -76,11 +76,9 @@ pub(crate) fn tet(p: [P; 4]) -> Vec<(Metric, f64)> {
     // Dihedral angle at edge (i, j): the angle between the other two vertices as seen
     // perpendicular to the edge.
     let mut dihedral = (180.0_f64, 0.0_f64);
-    for (i, j) in super::jacobian::TET_EDGES {
-        let (k, l) = match (0..4).filter(|v| *v != i && *v != j).collect::<Vec<_>>()[..] {
-            [k, l] => (k, l),
-            _ => continue,
-        };
+    // The two vertices off each edge of TET_EDGES, in the same order.
+    let opposite = [(2, 3), (0, 3), (1, 3), (1, 2), (0, 2), (0, 1)];
+    for ((i, j), (k, l)) in super::jacobian::TET_EDGES.into_iter().zip(opposite) {
         let e = sub(p[j], p[i]);
         let ee = dot(e, e);
         let perp = |v: P| {
@@ -113,7 +111,7 @@ pub(crate) fn tet(p: [P; 4]) -> Vec<(Metric, f64)> {
 
     vec![
         (Metric::ScaledJacobian, scaled),
-        (Metric::MinDihedral, dihedral.0.min(dihedral.1)),
+        (Metric::MinDihedral, dihedral.0),
         (Metric::MaxDihedral, dihedral.1),
         (Metric::RadiusRatio, radius_ratio),
         (Metric::AspectRatio, aspect.max(1.0)),

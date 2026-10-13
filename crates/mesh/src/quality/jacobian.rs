@@ -230,11 +230,18 @@ pub(crate) fn jacobian(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<Jacobian> 
 /// in reference coordinates, per factor.
 struct Piece {
     det: Bernstein,
+    /// The determinant's smallest coefficient on this piece.
+    min: f64,
     verts: Vec<Vec<[f64; 3]>>,
     depth: u32,
 }
 
 impl Piece {
+    fn new(det: Bernstein, verts: Vec<Vec<[f64; 3]>>, depth: u32) -> Self {
+        let min = det.bounds().0;
+        Piece { det, min, verts, depth }
+    }
+
     /// The longest edge over all factors (first on ties, so the choice is deterministic).
     fn longest_edge(&self) -> (usize, usize, usize) {
         let mut best = (0, 0, 1);
@@ -267,14 +274,14 @@ impl Piece {
             if let Some(v) = verts.get_mut(f).and_then(|vs| vs.get_mut(replace)) {
                 *v = m;
             }
-            Piece { det, verts, depth: self.depth + 1 }
+            Piece::new(det, verts, self.depth + 1)
         };
         Ok((child(a, j), child(b, i)))
     }
 }
 
 /// Decide the sign of a Jacobian determinant on the whole reference domain.
-pub(crate) fn certify(det: &Bernstein) -> Result<JacobianCheck> {
+pub(crate) fn certify(det: Bernstein) -> Result<JacobianCheck> {
     let (lo, hi) = det.bounds();
     let volume = det.integral();
     let scale = lo.abs().max(hi.abs());
@@ -283,25 +290,8 @@ pub(crate) fn certify(det: &Bernstein) -> Result<JacobianCheck> {
     }
     let tol = RELATIVE_TOLERANCE * scale;
     let ratio_of = |v: f64| if scale > 0.0 { v / scale } else { 0.0 };
-    let invalid = JacobianCheck { validity: Validity::Invalid, ratio: ratio_of(lo), volume };
-    let verts = det
-        .factors()
-        .iter()
-        .map(|f| {
-            (0..=f.dim)
-                .map(|k| {
-                    let mut p = [0.0; 3];
-                    if k > 0
-                        && let Some(x) = p.get_mut(k - 1)
-                    {
-                        *x = 1.0;
-                    }
-                    p
-                })
-                .collect()
-        })
-        .collect();
-    let mut stack = vec![Piece { det: det.clone(), verts, depth: 0 }];
+    let verts = det.factors().iter().map(|f| (0..=f.dim).map(|k| simplex_vertex(k, 1).map(|x| x as f64)).collect()).collect();
+    let mut stack = vec![Piece::new(det, verts, 0)];
     let mut lower = f64::INFINITY;
     let mut undetermined = false;
     let mut pieces = 0;
@@ -312,11 +302,10 @@ pub(crate) fn certify(det: &Bernstein) -> Result<JacobianCheck> {
             break;
         }
         if piece.det.vertex_values().iter().any(|v| !(*v > tol)) {
-            return Ok(invalid);
+            return Ok(JacobianCheck { validity: Validity::Invalid, ratio: ratio_of(lo), volume });
         }
-        let (min, _) = piece.det.bounds();
-        if min > tol {
-            lower = lower.min(min);
+        if piece.min > tol {
+            lower = lower.min(piece.min);
             continue;
         }
         if piece.depth >= MAX_DEPTH {
@@ -325,13 +314,9 @@ pub(crate) fn certify(det: &Bernstein) -> Result<JacobianCheck> {
         }
         let (a, b) = piece.split()?;
         // Look at the more doubtful piece first: a negative value is found sooner.
-        if a.det.bounds().0 <= b.det.bounds().0 {
-            stack.push(b);
-            stack.push(a);
-        } else {
-            stack.push(a);
-            stack.push(b);
-        }
+        let (first, second) = if a.min <= b.min { (a, b) } else { (b, a) };
+        stack.push(second);
+        stack.push(first);
     }
     if undetermined {
         return Ok(JacobianCheck { validity: Validity::Undetermined, ratio: ratio_of(lo), volume });

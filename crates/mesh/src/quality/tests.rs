@@ -78,6 +78,12 @@ fn inverted_and_flat_tetrahedra() {
     assert_eq!(metric(&q, Metric::AspectRatio), f64::INFINITY);
     assert!(q.metrics.iter().all(|(_, v)| !v.is_nan()));
 
+    // A sliver with an exactly positive orientation is valid, however thin (exact orient3d).
+    let sliver = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0.3, 0.3, 1e-30]];
+    assert_eq!(element_validity(ElementKind::Tet4, &sliver).unwrap().validity, Validity::Valid);
+    let below = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0.3, 0.3, -1e-30]];
+    assert_eq!(element_validity(ElementKind::Tet4, &below).unwrap().validity, Validity::Invalid);
+
     // All four nodes at one point.
     let q = element_quality(ElementKind::Tet4, &[[1., 2., 3.]; 4]).unwrap();
     assert_eq!(q.validity(), Some(Validity::Invalid));
@@ -275,6 +281,10 @@ fn report_and_gate() {
     let gate = validity_gate(&model, &GateOptions::default()).unwrap();
     assert_eq!((gate.checked, gate.invalid.clone()), (4, vec![2, 4]));
     assert!(gate.into_result().is_err());
+    // The same gate straight from a mesher's arrays.
+    let raw = validity_gate_elements([(7, ElementKind::Hex8, inside_out_hex()), (8, ElementKind::Hex8, UNIT_CUBE.to_vec())], &GateOptions::default())
+        .unwrap();
+    assert_eq!((raw.checked, raw.invalid), (2, vec![7]));
 
     // A unit cube split into six tetrahedra around the 1-7 diagonal passes against its boundary.
     let c = UNIT_CUBE;

@@ -57,7 +57,7 @@ pub struct Node {
 /// This is the Abaqus (and VTK) order. Formats that order nodes differently, such as Nastran's
 /// CHEXA with 20 nodes (vertical edges before the top face's edges), are reordered by their deck
 /// readers and writers; the model never stores another order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ElementKind {
     /// Two-node axial member.
@@ -156,6 +156,15 @@ pub struct Model {
     elements: BTreeMap<u32, Element>,
 }
 
+/// Check that every coordinate is a finite number within ±[`MAX_COORD`] (the rule for nodes,
+/// shared by everything that takes coordinates from outside).
+pub fn check_coordinates(xyz: &[f64]) -> Result<()> {
+    match xyz.iter().find(|c| !(c.abs() <= MAX_COORD)) {
+        Some(c) => Err(Error::Invalid(format!("coordinate {c} is not a finite number within ±{MAX_COORD}"))),
+        None => Ok(()),
+    }
+}
+
 fn check_label(what: &str, label: u32) -> Result<()> {
     if label == 0 || label > MAX_LABEL {
         return Err(Error::Invalid(format!("{what} label {label} is outside 1..={MAX_LABEL}")));
@@ -183,9 +192,10 @@ impl Model {
     /// Add a node, or move an existing one (decks redefine nodes the same way).
     pub fn set_node(&mut self, label: u32, xyz: [f64; 3]) -> Result<()> {
         check_label("node", label)?;
-        if let Some(c) = xyz.iter().find(|c| !(c.abs() <= MAX_COORD)) {
-            return Err(Error::Invalid(format!("node {label}: coordinate {c} is not a finite number within ±{MAX_COORD}")));
-        }
+        check_coordinates(&xyz).map_err(|e| match e {
+            Error::Invalid(m) => Error::Invalid(format!("node {label}: {m}")),
+            e => e,
+        })?;
         if !self.nodes.contains_key(&label) && self.nodes.len() >= MAX_NODES {
             return Err(Error::Limit(format!("a model holds at most {MAX_NODES} nodes")));
         }

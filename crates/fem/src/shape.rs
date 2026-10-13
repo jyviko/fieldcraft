@@ -1,0 +1,281 @@
+//! Shape functions and their derivatives in natural coordinates.
+//!
+//! Node order is the model's (Abaqus/VTK, [`modelcraft_model::ElementKind`]):
+//! - tetrahedra on the reference element with corners (0,0,0), (1,0,0), (0,1,0), (0,0,1) and the
+//!   volume coordinates L₁ = 1 − ξ − η − ζ, L₂ = ξ, L₃ = η, L₄ = ζ; tet10 mid-side nodes on edges
+//!   1-2, 2-3, 3-1, 1-4, 2-4, 3-4 with N = 4 Lₐ L_b, corners N = L(2L − 1);
+//! - hexahedra on [−1, 1]³, corners 1–4 at ζ = −1 counter-clockwise from (−1,−1), 5–8 above
+//!   them; hex20 is the serendipity element (corners
+//!   N = ⅛(1 + ξξᵢ)(1 + ηηᵢ)(1 + ζζᵢ)(ξξᵢ + ηηᵢ + ζζᵢ − 2), a mid-side node with ξᵢ = 0
+//!   N = ¼(1 − ξ²)(1 + ηηᵢ)(1 + ζζᵢ), and likewise), mid-side nodes 9–12 on the bottom edges,
+//!   13–16 on the top edges, 17–20 on the vertical edges;
+//! - faces: three- and six-node triangles on {ξ, η ≥ 0, ξ + η ≤ 1}, four- and eight-node
+//!   quadrilaterals on [−1, 1]², in the order of [`modelcraft_model::ElementKind::faces`].
+//!
+//! The functions are the textbook ones (O. C. Zienkiewicz, R. L. Taylor, J. Z. Zhu, *The Finite
+//! Element Method: Its Basis and Fundamentals*, 7th ed., Butterworth-Heinemann 2013, ch. 6;
+//! T. J. R. Hughes, *The Finite Element Method*, Dover 2000, ch. 3).
+
+/// Most nodes an element in this crate has (hex20).
+pub const MAX_NODES: usize = 20;
+
+/// Shape function values and natural derivatives at one point.
+#[derive(Debug, Clone, Copy)]
+pub struct Shape {
+    pub count: usize,
+    pub n: [f64; MAX_NODES],
+    /// ∂Nᵢ/∂ξ, ∂Nᵢ/∂η, ∂Nᵢ/∂ζ.
+    pub dn: [[f64; 3]; MAX_NODES],
+}
+
+impl Shape {
+    fn new(count: usize) -> Shape {
+        Shape { count, n: [0.0; MAX_NODES], dn: [[0.0; 3]; MAX_NODES] }
+    }
+
+    pub fn values(&self) -> &[f64] {
+        self.n.get(..self.count).unwrap_or_default()
+    }
+
+    pub fn derivatives(&self) -> &[[f64; 3]] {
+        self.dn.get(..self.count).unwrap_or_default()
+    }
+}
+
+/// Natural coordinates of the hexahedron's corners.
+pub const HEX_CORNERS: [[f64; 3]; 8] =
+    [[-1., -1., -1.], [1., -1., -1.], [1., 1., -1.], [-1., 1., -1.], [-1., -1., 1.], [1., -1., 1.], [1., 1., 1.], [-1., 1., 1.]];
+
+/// Natural coordinates of hex20's mid-side nodes 9–20.
+pub const HEX20_MIDSIDES: [[f64; 3]; 12] = [
+    [0., -1., -1.],
+    [1., 0., -1.],
+    [0., 1., -1.],
+    [-1., 0., -1.],
+    [0., -1., 1.],
+    [1., 0., 1.],
+    [0., 1., 1.],
+    [-1., 0., 1.],
+    [-1., -1., 0.],
+    [1., -1., 0.],
+    [1., 1., 0.],
+    [-1., 1., 0.],
+];
+
+/// Natural coordinates of the tetrahedron's corners.
+pub const TET_CORNERS: [[f64; 3]; 4] = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
+
+/// tet10's mid-side nodes 5–10 as pairs of corners.
+pub const TET10_EDGES: [(usize, usize); 6] = [(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)];
+
+/// Four-node tetrahedron.
+pub fn tet4(xi: [f64; 3]) -> Shape {
+    let mut s = Shape::new(4);
+    s.n[0] = 1.0 - xi[0] - xi[1] - xi[2];
+    s.n[1] = xi[0];
+    s.n[2] = xi[1];
+    s.n[3] = xi[2];
+    s.dn[0] = [-1.0, -1.0, -1.0];
+    s.dn[1] = [1.0, 0.0, 0.0];
+    s.dn[2] = [0.0, 1.0, 0.0];
+    s.dn[3] = [0.0, 0.0, 1.0];
+    s
+}
+
+/// Ten-node tetrahedron.
+pub fn tet10(xi: [f64; 3]) -> Shape {
+    let lin = tet4(xi);
+    let l = [lin.n[0], lin.n[1], lin.n[2], lin.n[3]];
+    let dl = [lin.dn[0], lin.dn[1], lin.dn[2], lin.dn[3]];
+    let mut s = Shape::new(10);
+    for i in 0..4 {
+        s.n[i] = l[i] * (2.0 * l[i] - 1.0);
+        s.dn[i] = dl[i].map(|d| (4.0 * l[i] - 1.0) * d);
+    }
+    for (k, &(a, b)) in TET10_EDGES.iter().enumerate() {
+        s.n[4 + k] = 4.0 * l[a] * l[b];
+        s.dn[4 + k] = [0, 1, 2].map(|c| 4.0 * (dl[a][c] * l[b] + l[a] * dl[b][c]));
+    }
+    s
+}
+
+/// Eight-node hexahedron (trilinear).
+pub fn hex8(xi: [f64; 3]) -> Shape {
+    let mut s = Shape::new(8);
+    for (i, c) in HEX_CORNERS.iter().enumerate() {
+        let f = [0, 1, 2].map(|k| 1.0 + xi[k] * c[k]);
+        s.n[i] = f[0] * f[1] * f[2] / 8.0;
+        s.dn[i] = [c[0] * f[1] * f[2] / 8.0, c[1] * f[0] * f[2] / 8.0, c[2] * f[0] * f[1] / 8.0];
+    }
+    s
+}
+
+/// Twenty-node serendipity hexahedron.
+pub fn hex20(xi: [f64; 3]) -> Shape {
+    let mut s = Shape::new(20);
+    let [x, y, z] = xi;
+    for (i, c) in HEX_CORNERS.iter().enumerate() {
+        let f = [0, 1, 2].map(|k| 1.0 + xi[k] * c[k]);
+        let g = x * c[0] + y * c[1] + z * c[2] - 2.0;
+        s.n[i] = f[0] * f[1] * f[2] * g / 8.0;
+        // ∂/∂ξ_k: c_k f_l f_m g / 8 + f_0 f_1 f_2 c_k / 8.
+        s.dn[i] = [c[0] * f[1] * f[2] * (g + f[0]) / 8.0, c[1] * f[0] * f[2] * (g + f[1]) / 8.0, c[2] * f[0] * f[1] * (g + f[2]) / 8.0];
+    }
+    for (k, c) in HEX20_MIDSIDES.iter().enumerate() {
+        let i = 8 + k;
+        // The direction along the edge has cᵢ = 0: N = ¼(1 − t²)(1 + a aᵢ)(1 + b bᵢ).
+        let along = if c[0] == 0.0 {
+            0
+        } else if c[1] == 0.0 {
+            1
+        } else {
+            2
+        };
+        let (p, q) = ((along + 1) % 3, (along + 2) % 3);
+        let t = xi[along];
+        let fp = 1.0 + xi[p] * c[p];
+        let fq = 1.0 + xi[q] * c[q];
+        s.n[i] = (1.0 - t * t) * fp * fq / 4.0;
+        let mut d = [0.0; 3];
+        d[along] = -2.0 * t * fp * fq / 4.0;
+        d[p] = (1.0 - t * t) * c[p] * fq / 4.0;
+        d[q] = (1.0 - t * t) * fp * c[q] / 4.0;
+        s.dn[i] = d;
+    }
+    s
+}
+
+/// Face shape functions: values and the two in-plane derivatives (the third is zero). `nodes` is
+/// 3 or 6 (triangles) or 4 or 8 (quadrilaterals); `None` for any other count.
+pub fn face(nodes: usize, xi: f64, eta: f64) -> Option<Shape> {
+    let mut s = Shape::new(nodes);
+    match nodes {
+        3 | 6 => {
+            let l = [1.0 - xi - eta, xi, eta];
+            let dl = [[-1.0, -1.0], [1.0, 0.0], [0.0, 1.0]];
+            if nodes == 3 {
+                for i in 0..3 {
+                    s.n[i] = l[i];
+                    s.dn[i] = [dl[i][0], dl[i][1], 0.0];
+                }
+            } else {
+                for i in 0..3 {
+                    s.n[i] = l[i] * (2.0 * l[i] - 1.0);
+                    s.dn[i] = [(4.0 * l[i] - 1.0) * dl[i][0], (4.0 * l[i] - 1.0) * dl[i][1], 0.0];
+                }
+                for (k, (a, b)) in [(0, 1), (1, 2), (2, 0)].into_iter().enumerate() {
+                    s.n[3 + k] = 4.0 * l[a] * l[b];
+                    s.dn[3 + k] = [4.0 * (dl[a][0] * l[b] + l[a] * dl[b][0]), 4.0 * (dl[a][1] * l[b] + l[a] * dl[b][1]), 0.0];
+                }
+            }
+        }
+        4 | 8 => {
+            const CORNERS: [[f64; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+            for (i, c) in CORNERS.iter().enumerate() {
+                let (a, b) = (1.0 + xi * c[0], 1.0 + eta * c[1]);
+                if nodes == 4 {
+                    s.n[i] = a * b / 4.0;
+                    s.dn[i] = [c[0] * b / 4.0, c[1] * a / 4.0, 0.0];
+                } else {
+                    let g = xi * c[0] + eta * c[1] - 1.0;
+                    s.n[i] = a * b * g / 4.0;
+                    s.dn[i] = [c[0] * b * (g + a) / 4.0, c[1] * a * (g + b) / 4.0, 0.0];
+                }
+            }
+            if nodes == 8 {
+                // Mid-sides of edges 1-2 (η = −1), 2-3 (ξ = 1), 3-4 (η = 1), 4-1 (ξ = −1).
+                for (k, c) in [[0.0, -1.0], [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]].iter().enumerate() {
+                    let i = 4 + k;
+                    if c[0] == 0.0 {
+                        s.n[i] = (1.0 - xi * xi) * (1.0 + eta * c[1]) / 2.0;
+                        s.dn[i] = [-xi * (1.0 + eta * c[1]), c[1] * (1.0 - xi * xi) / 2.0, 0.0];
+                    } else {
+                        s.n[i] = (1.0 + xi * c[0]) * (1.0 - eta * eta) / 2.0;
+                        s.dn[i] = [c[0] * (1.0 - eta * eta) / 2.0, -eta * (1.0 + xi * c[0]), 0.0];
+                    }
+                }
+            }
+        }
+        _ => return None,
+    }
+    Some(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nodes_of(kind: &str) -> Vec<[f64; 3]> {
+        match kind {
+            "tet4" => TET_CORNERS.to_vec(),
+            "tet10" => {
+                let mut v = TET_CORNERS.to_vec();
+                for (a, b) in TET10_EDGES {
+                    v.push([0, 1, 2].map(|k| (TET_CORNERS[a][k] + TET_CORNERS[b][k]) / 2.0));
+                }
+                v
+            }
+            "hex8" => HEX_CORNERS.to_vec(),
+            _ => HEX_CORNERS.iter().chain(&HEX20_MIDSIDES).copied().collect(),
+        }
+    }
+
+    #[test]
+    fn kronecker_delta_partition_of_unity_and_derivatives() {
+        let kinds: [(&str, fn([f64; 3]) -> Shape); 4] = [("tet4", tet4), ("tet10", tet10), ("hex8", hex8), ("hex20", hex20)];
+        for (name, f) in kinds {
+            let nodes = nodes_of(name);
+            for (i, p) in nodes.iter().enumerate() {
+                let s = f(*p);
+                for (j, v) in s.values().iter().enumerate() {
+                    assert!((v - if i == j { 1.0 } else { 0.0 }).abs() < 1e-14, "{name} N{j} at node {i}: {v}");
+                }
+            }
+            // At an arbitrary point: ΣN = 1, ΣdN = 0, Σ N x = x (linear completeness), and the
+            // derivatives match central differences.
+            let p = [0.21, 0.17, 0.33];
+            let s = f(p);
+            assert!((s.values().iter().sum::<f64>() - 1.0).abs() < 1e-14);
+            for k in 0..3 {
+                assert!(s.derivatives().iter().map(|d| d[k]).sum::<f64>().abs() < 1e-13);
+                let x: f64 = s.values().iter().zip(&nodes).map(|(n, x)| n * x[k]).sum();
+                assert!((x - p[k]).abs() < 1e-14, "{name}");
+                let h = 1e-6;
+                let (mut a, mut b) = (p, p);
+                a[k] += h;
+                b[k] -= h;
+                let (sa, sb) = (f(a), f(b));
+                for j in 0..s.count {
+                    let fd = (sa.n[j] - sb.n[j]) / (2.0 * h);
+                    assert!((fd - s.dn[j][k]).abs() < 1e-8, "{name} dN{j}/dξ{k}: {fd} vs {}", s.dn[j][k]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn face_functions() {
+        for (n, nodes) in [
+            (3, vec![[0., 0.], [1., 0.], [0., 1.]]),
+            (6, vec![[0., 0.], [1., 0.], [0., 1.], [0.5, 0.], [0.5, 0.5], [0., 0.5]]),
+            (4, vec![[-1., -1.], [1., -1.], [1., 1.], [-1., 1.]]),
+            (8, vec![[-1., -1.], [1., -1.], [1., 1.], [-1., 1.], [0., -1.], [1., 0.], [0., 1.], [-1., 0.]]),
+        ] {
+            for (i, p) in nodes.iter().enumerate() {
+                let s = face(n, p[0], p[1]).unwrap();
+                for (j, v) in s.values().iter().enumerate() {
+                    assert!((v - if i == j { 1.0 } else { 0.0 }).abs() < 1e-14, "face {n} N{j} at {i}");
+                }
+            }
+            let (x, y, h) = (0.2, 0.3, 1e-6);
+            let s = face(n, x, y).unwrap();
+            let (a, b) = (face(n, x + h, y).unwrap(), face(n, x - h, y).unwrap());
+            let (c, d) = (face(n, x, y + h).unwrap(), face(n, x, y - h).unwrap());
+            for j in 0..n {
+                assert!(((a.n[j] - b.n[j]) / (2.0 * h) - s.dn[j][0]).abs() < 1e-8);
+                assert!(((c.n[j] - d.n[j]) / (2.0 * h) - s.dn[j][1]).abs() < 1e-8);
+            }
+        }
+        assert!(face(5, 0.0, 0.0).is_none());
+    }
+}

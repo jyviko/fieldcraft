@@ -36,7 +36,18 @@ pub fn menu_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
                 ui.checkbox(&mut app.ui.show_tree, "Model tree");
                 ui.checkbox(&mut app.ui.show_commands, "Commands");
             });
+            if ui.button("Solve").on_hover_text("Solve every step and show the results (solve.run)").clicked() {
+                app.solve_all();
+            }
             ui.menu_button("Help", |ui| {
+                ui.menu_button("Samples", |ui| {
+                    let mut open = None;
+                    crate::files::sample_rows(ui, &t, &mut open);
+                    if let Some(n) = open {
+                        ui.close();
+                        app.open_sample(n);
+                    }
+                });
                 ui.label(format!("ModelCraft {VERSION}"));
                 ui.label(RichText::new("Left drag orbits, right or middle drag pans,\nthe wheel zooms, F or a double click fits.").color(t.text_dim));
             });

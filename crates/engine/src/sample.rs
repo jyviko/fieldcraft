@@ -12,6 +12,37 @@
 
 use serde_json::{Value, json};
 
+/// A sample the app offers (Help ▸ Samples, the empty viewport, `file.sample`, `--sample NAME`).
+pub struct Sample {
+    pub name: &'static str,
+    pub label: &'static str,
+    /// One line: what it shows.
+    pub about: &'static str,
+    pub script: fn() -> Value,
+}
+
+/// Every sample, the default first.
+pub const SAMPLES: &[Sample] = &[
+    Sample { name: "parts", label: "Hex and Tet Parts", about: "A hex8 block beside a tet4 cube: meshes to look at, nothing to solve", script },
+    Sample {
+        name: "cantilever",
+        label: "Cantilever",
+        about: "A clamped steel beam with an end load: a static and a frequency step, ready to solve",
+        script: cantilever,
+    },
+    Sample {
+        name: "impact",
+        label: "Bar Impact",
+        about: "The steel beam flying onto a rigid wall: an explicit dynamic step, ready to solve",
+        script: impact,
+    },
+];
+
+/// The sample called `name`.
+pub fn find(name: &str) -> Option<&'static Sample> {
+    SAMPLES.iter().find(|s| s.name == name)
+}
+
 /// Hex block: cells along x, y, z and the cell size (mm).
 const HEX_CELLS: [u32; 3] = [8, 4, 2];
 /// Tet cube: cells per side and its offset from the origin (mm).

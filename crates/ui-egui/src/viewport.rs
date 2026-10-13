@@ -32,18 +32,34 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     } else {
         paint_cpu(app, ui, &painter, rect);
     }
-    if app.display().bounds.is_empty() {
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "The model is empty.\nOpen a design or add nodes and elements, or start with --sample.",
-            egui::FontId::proportional(15.0),
-            t.text_dim,
-        );
+    if app.display().bounds.is_empty() && app.busy().is_none() {
+        start_screen(app, ui, rect, &t);
     }
     axis_indicator(app, &painter, rect, &t);
     view_buttons(app, ui, rect, &t);
     crate::results_panel::show(app, ui, rect, &t);
+}
+
+/// The empty viewport: open a file or a sample (the samples are ready to solve).
+fn start_screen(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
+    let mut open = None;
+    let mut pick = false;
+    let area = Rect::from_center_size(rect.center(), vec2(440.0_f32.min(rect.width() - 24.0), 300.0_f32.min(rect.height() - 24.0)));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
+    egui::Frame::NONE.fill(t.overlay).corner_radius(6.0).inner_margin(egui::Margin::same(14)).show(&mut child, |ui| {
+        ui.label(egui::RichText::new("Start").size(16.0).color(t.overlay_text));
+        ui.label(egui::RichText::new("Open a model, a SolidCraft design or a tagged mesh — or drop one here.").color(t.text_dim));
+        ui.add_space(4.0);
+        pick = ui.button("Open…").clicked();
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Samples").color(t.overlay_text));
+        crate::files::sample_rows(ui, t, &mut open);
+    });
+    if pick {
+        app.open_dialog(None);
+    } else if let Some(n) = open {
+        app.open_sample(n);
+    }
 }
 
 /// A click on a results plot probes the node nearest to the face under the pointer.

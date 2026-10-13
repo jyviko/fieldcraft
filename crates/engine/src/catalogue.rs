@@ -332,6 +332,7 @@ pub static CATALOGUE: &[Capability] = &[
     soon("interaction.connector", "Connector", Interactions, "Connectors", "M7", "Connector elements between points"),
     soon("interaction.fsi", "FSI Interface", Interactions, "Coupled", "M13", "The fluid–structure interface"),
     // ---- Solve ----
+    ready("solve.run", "Solve", Solve, "Run", "Solve every step in order and show the results"),
     ready("model.check", "Check Model", Solve, "Check", "Name every missing or bad definition before writing or solving"),
     deck("deck.write.abaqus", "Abaqus Input", "abaqus", "Write an Abaqus input file (.inp)"),
     deck("deck.write.nastran", "Nastran Deck", "nastran", "Write Nastran bulk data (SOL 101, 103)"),
@@ -381,6 +382,7 @@ pub static CATALOGUE: &[Capability] = &[
     // ---- Tools ----
     ready("model.info", "Model Info", Tools, "Model", "Node and element counts and the model summary"),
     ready("file.open", "Open Model", Tools, "File", "Open a .modelcraft model"),
+    ready("file.sample", "Samples", Tools, "File", "Open a sample model, ready to solve"),
     ready("file.save", "Save", Tools, "File", "Save the model to its .modelcraft file"),
     ready("file.save_as", "Save As", Tools, "File", "Save the model to a new .modelcraft file"),
     ready_more(

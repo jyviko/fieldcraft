@@ -1,6 +1,7 @@
 //! ModelCraft desktop app.
 //!
-//! Usage: `modelcraft [--sample] [--control PORT] [FILE…]` (files open as if dropped on the window)
+//! Usage: `modelcraft [--sample [NAME]] [--control PORT] [FILE…]` (files open as if dropped on the
+//! window; NAME is a sample of `modelcraft_engine::sample`, `parts` by default)
 //!
 //! `--sample` opens a sample model (`modelcraft_engine::sample`). `--control PORT` (or
 //! `MODELCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
@@ -16,7 +17,7 @@ use modelcraft_engine::Session;
 use modelcraft_engine::autosave::{self, Autosaver};
 use modelcraft_ui_egui::{Filter, ModelApp, Services};
 
-const USAGE: &str = "usage: modelcraft [--sample] [--control PORT] [FILE…]  (FILE: .modelcraft, .solidcraft or .3mf)";
+const USAGE: &str = "usage: modelcraft [--sample [parts|cantilever|impact]] [--control PORT] [FILE…]  (FILE: .modelcraft, .solidcraft or .3mf)";
 const DEPTH_BITS: u8 = 24;
 const MSAA: u16 = 4;
 
@@ -94,7 +95,8 @@ fn services() -> Services {
 /// Command-line options.
 #[derive(Debug, Default, PartialEq)]
 struct Args {
-    sample: bool,
+    /// The sample to open (`--sample [NAME]`).
+    sample: Option<String>,
     control: Option<u16>,
     /// Files to open (models, designs, tagged meshes).
     files: Vec<String>,
@@ -102,10 +104,17 @@ struct Args {
 
 fn parse_args(args: impl IntoIterator<Item = String>, env_port: Option<String>) -> Result<Option<Args>, String> {
     let mut out = Args { control: env_port.and_then(|p| p.trim().parse().ok()), ..Default::default() };
-    let mut args = args.into_iter();
+    let mut args = args.into_iter().peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--sample" => out.sample = true,
+            "--sample" => {
+                // An optional sample name follows.
+                let name = args.peek().filter(|a| modelcraft_engine::sample::find(a).is_some()).cloned();
+                if name.is_some() {
+                    args.next();
+                }
+                out.sample = Some(name.unwrap_or_else(|| "parts".into()));
+            }
             "--control" => {
                 let port = args.next().ok_or("--control needs a port")?;
                 out.control = Some(port.parse().map_err(|_| format!("--control: `{port}` is not a port number"))?);
@@ -158,9 +167,8 @@ fn main() -> eframe::Result {
             if let Some(port) = args.control {
                 app = app.with_control(control_server::start(port, cc.egui_ctx.clone()));
             }
-            if args.sample {
-                // The status bar reports a failure; the app still opens.
-                let _ = app.run_script(&modelcraft_engine::sample::script());
+            if let Some(name) = &args.sample {
+                app.open_sample(name);
             }
             for f in &args.files {
                 app.open_path(f);
@@ -196,12 +204,18 @@ mod tests {
     #[test]
     fn arguments() {
         assert_eq!(parse(&[], None), Ok(Some(Args::default())));
-        assert_eq!(parse(&["--sample", "--control", "7070"], None), Ok(Some(Args { sample: true, control: Some(7070), files: vec![] })));
+        assert_eq!(
+            parse(&["--sample", "--control", "7070"], None),
+            Ok(Some(Args { sample: Some("parts".into()), control: Some(7070), files: vec![] }))
+        );
         assert_eq!(parse(&[], Some("9000")), Ok(Some(Args { control: Some(9000), ..Default::default() })));
         assert_eq!(parse(&[], Some("nope")), Ok(Some(Args::default())));
         assert!(parse(&["--control"], None).is_err());
         assert!(parse(&["--control", "99999"], None).is_err());
         assert!(parse(&["--frobnicate"], None).is_err());
+        assert_eq!(parse(&["--sample", "impact"], None).map(|a| a.and_then(|a| a.sample)), Ok(Some("impact".into())));
+        let a = parse(&["--sample", "x.modelcraft"], None).unwrap().unwrap();
+        assert_eq!((a.sample.as_deref(), a.files), (Some("parts"), vec!["x.modelcraft".to_string()]));
         assert_eq!(parse(&["a.modelcraft", "--sample"], None).map(|a| a.map(|a| a.files)), Ok(Some(vec!["a.modelcraft".to_string()])));
         assert_eq!(parse(&["--help"], None), Ok(None));
     }

@@ -164,21 +164,45 @@ impl Recent {
     }
 }
 
-/// A file opening in the background.
+/// A command running in the background on a copy of the session: a file opening, a solve.
 pub struct Loading {
-    pub path: String,
-    pub kind: Kind,
+    /// What the window shows while it runs ("Opening beam.modelcraft").
+    pub title: String,
+    /// The status when it succeeded ("Opened beam.modelcraft").
+    done: String,
+    /// The file it opens, for the recent list.
+    recent: Option<String>,
     /// The finished session copy and the command's reply.
     rx: Receiver<(Box<Session>, Result<Value, String>)>,
+}
+
+/// What waits for an answer about unsaved changes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Replace {
+    /// A `.modelcraft` file.
+    File(String),
+    /// A sample (`file.sample`).
+    Sample(&'static str),
+}
+
+impl Replace {
+    fn name(&self) -> String {
+        match self {
+            Replace::File(p) => file_name(p),
+            Replace::Sample(n) => modelcraft_engine::sample::find(n).map_or_else(|| (*n).to_string(), |s| format!("the {} sample", s.label)),
+        }
+    }
 }
 
 /// A question the window asks before going on.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prompt {
-    /// Opening a model discards the current one's unsaved changes.
-    Unsaved { path: String },
+    /// Opening a model or a sample discards the current one's unsaved changes.
+    Unsaved(Replace),
     /// Autosaved models to recover (`file.recovery.list`).
     Recover,
+    /// The samples to open (`file.sample`).
+    Samples,
 }
 
 /// The answer to [`Prompt::Unsaved`].
@@ -209,9 +233,9 @@ fn spawn(session: Session, command: &'static str, params: Value) -> Receiver<(Bo
         let _ = tx.send((Box::new(s), r));
     };
     #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = std::thread::Builder::new().name("modelcraft-open".into()).spawn(work) {
+    if let Err(e) = std::thread::Builder::new().name(format!("modelcraft {command}")).spawn(work) {
         // The sender went with the closure: the job reports that it could not start.
-        log::warn!("open: no worker thread: {e}");
+        log::warn!("{command}: no worker thread: {e}");
     }
     #[cfg(target_arch = "wasm32")]
     work();
@@ -224,9 +248,23 @@ impl ModelApp {
         model_name(&self.session)
     }
 
-    /// The file being opened, if one is.
-    pub fn loading_path(&self) -> Option<&str> {
-        self.loading.as_ref().map(|l| l.path.as_str())
+    /// What is running in the background ("Opening beam.modelcraft", "Solving"), if anything.
+    pub fn busy(&self) -> Option<&str> {
+        self.loading.as_ref().map(|l| l.title.as_str())
+    }
+
+    /// Run `command` in the background on a copy of the session; the copy replaces the session
+    /// when it succeeds. One at a time.
+    fn begin_job(&mut self, command: &'static str, params: Value, title: String, done: String, recent: Option<String>) -> bool {
+        if let Some(busy) = self.busy() {
+            let e = format!("{busy}: wait for it or cancel it");
+            self.set_status(e, true);
+            return false;
+        }
+        let rx = spawn(self.session.clone(), command, params);
+        self.set_status(format!("{title}…"), false);
+        self.loading = Some(Loading { title, done, recent, rx });
+        true
     }
 
     /// File > Open: pick a model, design or tagged mesh and open it. `None` asks for any of them.
@@ -241,6 +279,11 @@ impl ModelApp {
         }
     }
 
+    /// Whether replacing the model would lose work: unsaved changes made by commands.
+    fn has_unsaved_work(&self) -> bool {
+        self.session.is_dirty() && !self.session.journal.is_empty()
+    }
+
     /// Open a file the user chose (picked, dropped or from the recent list) by its type. A model
     /// replacing unsaved changes asks first.
     pub fn open_path(&mut self, path: &str) {
@@ -248,8 +291,8 @@ impl ModelApp {
             self.set_status(format!("{path}: ModelCraft opens .modelcraft models, .solidcraft designs and .3mf tagged meshes"), true);
             return;
         };
-        if kind == Kind::Model && self.session.is_dirty() && !self.session.journal.is_empty() {
-            self.prompt = Some(Prompt::Unsaved { path: path.to_string() });
+        if kind == Kind::Model && self.has_unsaved_work() {
+            self.prompt = Some(Prompt::Unsaved(Replace::File(path.to_string())));
             return;
         }
         self.load(kind, path.to_string());
@@ -261,32 +304,64 @@ impl ModelApp {
             self.queued.push_back(path);
             return;
         }
-        let rx = spawn(self.session.clone(), kind.command(), json!({"path": path}));
-        self.set_status(format!("{} {}…", kind.verb(), file_name(&path)), false);
-        self.loading = Some(Loading { path, kind, rx });
+        let name = file_name(&path);
+        let done = match kind {
+            Kind::Mesh => format!("Imported {name}"),
+            Kind::Model | Kind::Design => format!("Opened {name}"),
+        };
+        self.begin_job(kind.command(), json!({"path": path}), format!("{} {name}", kind.verb()), done, Some(path));
+    }
+
+    /// Help ▸ Samples (and the empty viewport): open a sample model, asking first when that
+    /// would discard unsaved changes.
+    pub fn open_sample(&mut self, name: &str) {
+        let Some(sample) = modelcraft_engine::sample::find(name) else {
+            self.set_status(format!("no sample `{name}`"), true);
+            return;
+        };
+        if self.has_unsaved_work() {
+            self.prompt = Some(Prompt::Unsaved(Replace::Sample(sample.name)));
+            return;
+        }
+        self.load_sample(sample.name);
+    }
+
+    fn load_sample(&mut self, name: &str) {
+        let Some(sample) = modelcraft_engine::sample::find(name) else { return };
+        if self.run("file.sample", json!({"name": sample.name})).is_ok() {
+            self.model_changed();
+            self.fit_view();
+            let next = if self.session.model.steps().is_empty() { "" } else { " — Solve shows its results" };
+            self.set_status(format!("Opened the {} sample{next}", sample.label), false);
+        }
+    }
+
+    /// Solve every step (`solve.run`) in the background; the results come up when it is done.
+    pub fn solve_all(&mut self) {
+        if self.session.model.steps().is_empty() {
+            self.set_status("Nothing to solve: the model has no steps (Steps ▸ Step, or open a sample from Help ▸ Samples)", true);
+            return;
+        }
+        let n = self.session.model.steps().len();
+        let done = format!("Solved {n} step{}", if n == 1 { "" } else { "s" });
+        self.begin_job("solve.run", json!({}), "Solving".into(), done, None);
     }
 
     /// Recover an autosaved model (`file.recover`) in the background.
     pub fn recover(&mut self, id: &str) {
-        if self.loading.is_some() {
-            self.set_status("Wait for the file being opened (or cancel it)", true);
-            return;
-        }
         self.prompt = None;
-        let rx = spawn(self.session.clone(), "file.recover", json!({"id": id}));
-        self.set_status("Recovering the autosaved model…", false);
-        self.loading = Some(Loading { path: format!("autosave {id}"), kind: Kind::Model, rx });
+        self.begin_job("file.recover", json!({"id": id}), "Recovering the autosaved model".into(), "Recovered the autosaved model".into(), None);
     }
 
-    /// Stop waiting for the file being opened; the model stays as it was.
+    /// Stop waiting for the background job; the model stays as it was.
     pub fn cancel_loading(&mut self) {
         if let Some(l) = self.loading.take() {
             self.queued.clear();
-            self.set_status(format!("Cancelled opening {}", file_name(&l.path)), false);
+            self.set_status(format!("Cancelled: {}", l.title), false);
         }
     }
 
-    /// Take in a finished background open (called every frame); `true` while one is running.
+    /// Take in a finished background job (called every frame); `true` while one is running.
     pub fn poll_loading(&mut self) -> bool {
         let Some(l) = &self.loading else { return false };
         let outcome = match l.rx.try_recv() {
@@ -295,28 +370,29 @@ impl ModelApp {
             Err(TryRecvError::Disconnected) => None,
         };
         let Some(l) = self.loading.take() else { return false };
-        let name = file_name(&l.path);
         match outcome {
             Some((session, Ok(reply))) => {
+                let replaced = l.recent.is_some() || l.title.starts_with("Recovering");
                 self.session = *session;
                 self.model_changed();
-                self.fit_view();
-                if !l.path.starts_with("autosave ") {
-                    self.recent.add(&l.path);
+                if replaced {
+                    self.fit_view();
+                }
+                if let Some(p) = &l.recent {
+                    self.recent.add(p);
                 }
                 let warnings: Vec<&str> = reply.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
-                let done = match l.kind {
-                    Kind::Mesh => format!("Imported {name}"),
-                    Kind::Model | Kind::Design => format!("Opened {name}"),
-                };
                 if warnings.is_empty() {
-                    self.set_status(done, false);
+                    self.set_status(l.done, false);
                 } else {
-                    self.set_status(format!("{done} — {}", warnings.join("; ")), true);
+                    self.set_status(format!("{} — {}", l.done, warnings.join("; ")), true);
                 }
             }
-            Some((_, Err(e))) => self.set_status(format!("{name}: {e}"), true),
-            None => self.set_status(format!("{name}: opening stopped unexpectedly"), true),
+            Some((_, Err(e))) => {
+                let what = l.recent.as_deref().map_or_else(|| l.title.clone(), file_name);
+                self.set_status(format!("{what}: {e}"), true);
+            }
+            None => self.set_status(format!("{}: stopped unexpectedly", l.title), true),
         }
         if let Some(next) = self.queued.pop_front() {
             self.open_path(&next);
@@ -395,15 +471,23 @@ impl ModelApp {
 
     /// Answer the unsaved-changes prompt.
     pub fn answer_unsaved(&mut self, answer: Answer) {
-        let Some(Prompt::Unsaved { path }) = self.prompt.clone() else { return };
+        let Some(Prompt::Unsaved(next)) = self.prompt.clone() else { return };
         self.prompt = None;
         let go = match answer {
             Answer::Save => self.save(),
             Answer::Discard => true,
             Answer::Cancel => false,
         };
-        if go && let Some(kind) = Kind::of(&path) {
-            self.load(kind, path);
+        if !go {
+            return;
+        }
+        match next {
+            Replace::File(path) => {
+                if let Some(kind) = Kind::of(&path) {
+                    self.load(kind, path);
+                }
+            }
+            Replace::Sample(name) => self.load_sample(name),
         }
     }
 
@@ -418,6 +502,8 @@ impl ModelApp {
                 self.save_as();
             }
             "file.recover" | "file.recovery.list" => self.prompt = Some(Prompt::Recover),
+            "file.sample" => self.prompt = Some(Prompt::Samples),
+            "solve.run" => self.solve_all(),
             "deck.write" if self.services.pick_save.is_some() => match preset.get("format").and_then(Value::as_str) {
                 Some(f) => self.write_deck(f),
                 None => return false,
@@ -453,7 +539,7 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
     let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
     if hovering || app.loading.is_some() {
         let text = match app.loading.as_ref() {
-            Some(l) => format!("{} {}…", l.kind.verb(), file_name(&l.path)),
+            Some(l) => format!("{}…", l.title),
             None => "Drop to open: .modelcraft models, .solidcraft designs, .3mf tagged meshes".into(),
         };
         let mut cancel = false;
@@ -481,10 +567,10 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
         }
     }
     match app.prompt.clone() {
-        Some(Prompt::Unsaved { path }) => {
+        Some(Prompt::Unsaved(next)) => {
             let mut answer = None;
             crate::frame::window(ctx, "Unsaved changes", crate::frame::Width::Normal).id(egui::Id::new("mc_unsaved")).show(ctx, |ui| {
-                ui.label(format!("Save the changes to {} before opening {}?", app.model_name(), file_name(&path)));
+                ui.label(format!("Save the changes to {} before opening {}?", app.model_name(), next.name()));
                 ui.label(egui::RichText::new("Without saving, they are lost.").color(t.text_dim));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -544,7 +630,39 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                 ctx.data_mut(|d| d.remove::<Vec<Value>>(egui::Id::new("mc_recover_entries")));
             }
         }
+        Some(Prompt::Samples) => {
+            let (mut open, mut close) = (None, false);
+            crate::frame::window(ctx, "Samples", crate::frame::Width::Normal).id(egui::Id::new("mc_samples")).show(ctx, |ui| {
+                sample_rows(ui, &t, &mut open);
+                ui.add_space(6.0);
+                close = ui.button("Close").clicked();
+            });
+            if let Some(name) = open {
+                app.prompt = None;
+                app.open_sample(name);
+            } else if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                app.prompt = None;
+            }
+        }
         None => {}
+    }
+}
+
+/// One row per sample: its name, what it shows and an Open button; `open` gets the one clicked.
+pub fn sample_rows(ui: &mut egui::Ui, t: &crate::theme::Tokens, open: &mut Option<&'static str>) {
+    for sample in modelcraft_engine::sample::SAMPLES {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(sample.label).strong());
+                ui.label(egui::RichText::new(sample.about).small().color(t.text_dim));
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Open").clicked() {
+                    *open = Some(sample.name);
+                }
+            });
+        });
+        ui.add_space(4.0);
     }
 }
 
@@ -685,7 +803,7 @@ mod tests {
         app.start("file.open").unwrap();
         assert!(app.dialog.is_none(), "a picker, not the form");
         assert_eq!(offered.borrow()[0][0], MODEL, "Open Model offers models first");
-        assert_eq!(app.loading_path(), Some(saved.as_str()));
+        assert_eq!(app.busy(), Some("Opening beam.modelcraft"));
         app.wait_loaded();
         assert_eq!(app.session.model.elements().len(), first.session.model.elements().len());
         assert_eq!(app.session.path.as_deref(), Some(saved.as_str()));
@@ -732,7 +850,7 @@ mod tests {
         let mut app = ModelApp::new(Session::default());
         app.run("mesh.node.add", serde_json::json!({"label": 1, "xyz": [0, 0, 0]})).unwrap();
         app.open_path(&path);
-        assert_eq!(app.prompt, Some(Prompt::Unsaved { path: path.clone() }));
+        assert_eq!(app.prompt, Some(Prompt::Unsaved(Replace::File(path.clone()))));
         assert!(app.loading.is_none());
         app.answer_unsaved(Answer::Cancel);
         assert!(app.prompt.is_none() && app.loading.is_none() && app.session.model.node(1).is_some());
@@ -780,6 +898,36 @@ mod tests {
         std::fs::write(&file, br#"["/x/a.modelcraft", "/x/b.exe", ""]"#).unwrap();
         assert_eq!(Recent::load(Some(file)).paths, vec!["/x/a.modelcraft".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A sample opens with nothing to save; Solve runs its steps in the background and the
+    /// Results tab comes up with the first step's result.
+    #[test]
+    fn a_sample_solves_into_the_results_view() {
+        let mut app = ModelApp::new(Session::default());
+        app.start("file.sample").unwrap();
+        assert_eq!(app.prompt, Some(Prompt::Samples));
+        app.prompt = None;
+        app.open_sample("cantilever");
+        assert!(!app.session.is_dirty() && !app.session.model.steps().is_empty());
+        app.start("solve.run").unwrap();
+        assert_eq!(app.busy(), Some("Solving"));
+        assert!(app.run("model.info", serde_json::json!({})).is_err(), "commands wait for the solve");
+        app.wait_loaded();
+        assert_eq!(app.status.as_ref().map(|s| s.text.as_str()), Some("Solved 2 steps"));
+        app.logic(&egui::Context::default());
+        assert_eq!(app.ui.tab, modelcraft_engine::catalogue::Tab::Results);
+        assert!(app.plot().is_some());
+        // Over unsaved changes, opening a sample asks first.
+        app.run("mesh.node.add", serde_json::json!({"label": 900000, "xyz": [0, 0, 0]})).unwrap();
+        app.open_sample("impact");
+        assert_eq!(app.prompt, Some(Prompt::Unsaved(Replace::Sample("impact"))));
+        app.answer_unsaved(Answer::Discard);
+        assert!(app.session.model.step("Impact").is_some());
+        // A model without steps says so instead of solving nothing.
+        let mut empty = ModelApp::new(Session::default());
+        empty.solve_all();
+        assert!(empty.busy().is_none() && empty.status.as_ref().is_some_and(|s| s.error));
     }
 
     /// The control channel's `ui.start` never opens a picker: it opens the form.

@@ -65,6 +65,28 @@ pub const RECOVERY_DISCARD: CommandSpec = CommandSpec {
     run: recovery_discard,
 };
 
+pub const SAMPLE: CommandSpec = CommandSpec {
+    id: "file.sample",
+    label: "Open Sample",
+    params: r#"{"name": "parts|cantilever|impact"} — opens a sample model (modelcraft_engine::sample) in place of the current one, unsaved changes discarded; `cantilever` and `impact` are ready to solve (solve.run)"#,
+    kind: CommandKind::Session,
+    run: open_sample,
+};
+
+fn open_sample(s: &mut Session, p: &Value) -> Result<Value> {
+    let name: &str = req(p, "name")?;
+    let names = || crate::sample::SAMPLES.iter().map(|x| x.name).collect::<Vec<_>>().join(", ");
+    let sample = crate::sample::find(name).ok_or_else(|| EngineError::Params(format!("no sample `{name}` (samples: {})", names())))?;
+    let mut opened = Session::default();
+    opened.run_script(&(sample.script)())?;
+    // A sample just opened has nothing to save: it opens again the same way.
+    opened.saved_revision = Some(opened.revision);
+    s.replace_with(opened);
+    let mut reply = summary(s, &[]);
+    reply["sample"] = json!(sample.name);
+    Ok(reply)
+}
+
 /// `path` made absolute against the working folder (as given where there is none).
 pub(crate) fn absolute(path: &str) -> String {
     std::path::absolute(path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string())

@@ -258,8 +258,8 @@ impl ModelApp {
     /// Run a command with JSON parameters: what every panel, the control channel and scripts
     /// do. The result or the error goes to the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        if let Some(path) = self.loading_path() {
-            let e = format!("{} is still opening: wait for it or cancel it", files::file_name(path));
+        if let Some(busy) = self.busy() {
+            let e = format!("{busy}: wait for it or cancel it");
             self.set_status(e.clone(), true);
             return Err(e);
         }

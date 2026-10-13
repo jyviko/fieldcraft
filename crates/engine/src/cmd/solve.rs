@@ -11,6 +11,14 @@ use serde_json::{Value, json};
 use super::{labels, opt, points, req};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session, StepResult};
 
+pub const RUN: CommandSpec = CommandSpec {
+    id: "solve.run",
+    label: "Solve All Steps",
+    params: r#"{} — solves every step in order with its procedure's solver (solve.static, solve.frequency, solve.explicit with their default caps) and keeps the results; stops at the first step that fails, naming it"#,
+    kind: CommandKind::Model,
+    run: run_all,
+};
+
 pub const STATIC: CommandSpec = CommandSpec {
     id: "solve.static",
     label: "Solve Static Step",
@@ -94,6 +102,38 @@ fn largest(values: impl Iterator<Item = (u32, f64)>) -> Value {
         Some((node, value)) => json!({"node": node, "value": value}),
         None => Value::Null,
     }
+}
+
+fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
+    use modelcraft_model::Procedure;
+    let steps: Vec<(String, &'static str)> = s
+        .model
+        .steps()
+        .iter()
+        .map(|st| {
+            let kind = match st.procedure {
+                Procedure::Static {} => "static",
+                Procedure::Frequency { .. } => "frequency",
+                Procedure::ExplicitDynamic(_) => "explicit",
+            };
+            (st.name.clone(), kind)
+        })
+        .collect();
+    if steps.is_empty() {
+        return Err(EngineError::Params("the model has no steps to solve: add one (model.step.create)".into()));
+    }
+    let mut done = Vec::new();
+    for (name, kind) in steps {
+        let p = json!({"step": name});
+        let r = match kind {
+            "static" => run_static(s, &p),
+            "frequency" => run_frequency(s, &p),
+            _ => run_explicit(s, &p),
+        };
+        let summary = r.map_err(|e| EngineError::Params(format!("step `{name}`: {e}")))?;
+        done.push(json!({"step": name, "procedure": kind, "summary": summary}));
+    }
+    Ok(json!({"steps": done}))
 }
 
 fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
@@ -523,6 +563,31 @@ fn probe_frame(r: &ExplicitResult, step: &str, nodes: &[u32], elements: &[u32], 
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// `file.sample` opens the cantilever with nothing to save; `solve.run` solves both its steps
+    /// in order and the results view comes up on the first.
+    #[test]
+    fn samples_open_and_solve_run_solves_every_step() {
+        use serde_json::json;
+        let mut s = Session::default();
+        s.execute("mesh.node.add", &json!({"label": 1, "xyz": [0, 0, 0]})).unwrap();
+        let r = s.execute("file.sample", &json!({"name": "cantilever"})).unwrap();
+        assert_eq!(r["sample"], "cantilever");
+        assert!(!s.is_dirty() && s.path.is_none());
+        assert!(s.model.node(1).is_some_and(|n| n.xyz != [0.0, 0.0, 0.0]) || s.model.nodes().len() > 1);
+        assert!(s.execute("file.sample", &json!({"name": "nope"})).unwrap_err().to_string().contains("cantilever"));
+        let r = s.execute("solve.run", &json!({})).unwrap();
+        let steps: Vec<&str> = r["steps"].as_array().unwrap().iter().map(|x| x["step"].as_str().unwrap()).collect();
+        assert_eq!(steps, ["Load", "Modes"]);
+        assert!(s.result("Load").is_some() && s.result("Modes").is_some());
+        assert_eq!(s.results_view.as_ref().map(|v| v.step.as_str()), Some("Load"));
+        s.execute("file.sample", &json!({"name": "impact"})).unwrap();
+        assert!(s.results_view.is_none(), "a new model shows no old results");
+        s.execute("solve.run", &json!({})).unwrap();
+        assert!(s.result("Impact").is_some());
+        let mut empty = Session::default();
+        assert!(empty.execute("solve.run", &json!({})).unwrap_err().to_string().contains("no steps"));
+    }
+
     use super::*;
 
     /// A cantilever 10 × 1 × 1 of ten hex8 elements with incompatible modes, clamped at x = 0,

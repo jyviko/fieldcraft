@@ -115,10 +115,14 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "model": {"nodes": app.session.model.nodes().len(), "elements": app.session.model.elements().len()},
             "results": app.session.results_report(),
             "probe": app.probe,
-            "loading": app.loading_path(),
+            "busy": app.busy(),
             "prompt": app.prompt.as_ref().map(|p| match p {
-                crate::files::Prompt::Unsaved { path } => json!({"unsaved": path}),
+                crate::files::Prompt::Unsaved(next) => json!({"unsaved": match next {
+                    crate::files::Replace::File(p) => p.clone(),
+                    crate::files::Replace::Sample(n) => format!("sample {n}"),
+                }}),
                 crate::files::Prompt::Recover => json!("recover"),
+                crate::files::Prompt::Samples => json!("samples"),
             }),
             "recent": app.recent.paths,
             "version": crate::VERSION,
@@ -182,29 +186,37 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
         "ui.prompt" => {
             let Some(prompt) = app.prompt.clone() else { return err("no prompt is open") };
             match (prompt, s("answer")) {
-                (crate::files::Prompt::Unsaved { .. }, Some(a @ ("save" | "discard" | "cancel"))) => {
+                (crate::files::Prompt::Unsaved(_), Some(a @ ("save" | "discard" | "cancel"))) => {
                     let answer = match a {
                         "save" => crate::files::Answer::Save,
                         "discard" => crate::files::Answer::Discard,
                         _ => crate::files::Answer::Cancel,
                     };
                     app.answer_unsaved(answer);
-                    ok(json!({"loading": app.loading_path()}))
+                    ok(json!({"busy": app.busy()}))
                 }
-                (crate::files::Prompt::Recover, Some("close" | "cancel")) => {
+                (crate::files::Prompt::Samples, Some("open")) => match s("name") {
+                    Some(name) => {
+                        app.prompt = None;
+                        app.open_sample(name);
+                        ok(json!({"prompt": app.prompt.is_some()}))
+                    }
+                    None => err("missing `name` (a sample)"),
+                },
+                (crate::files::Prompt::Recover | crate::files::Prompt::Samples, Some("close" | "cancel")) => {
                     app.prompt = None;
                     ok(Value::Null)
                 }
                 (crate::files::Prompt::Recover, Some("recover")) => match s("id") {
                     Some(id) => {
                         app.recover(id);
-                        ok(json!({"loading": app.loading_path()}))
+                        ok(json!({"busy": app.busy()}))
                     }
                     None => err("missing `id` (from file.recovery.list)"),
                 },
-                (_, a) => {
-                    err(format!("`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; recover: recover with id, close)"))
-                }
+                (_, a) => err(format!(
+                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; recover: recover with id, close; samples: open with name, close)"
+                )),
             }
         }
         "ui.move" | "ui.click" => {

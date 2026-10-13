@@ -98,9 +98,12 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   --all`, `cargo check` the touched crates, and run the tests you added or changed. Commit after
   each working step (a layer that compiles with its tests passing), not one big commit per PR.
 - **Publishing**: `origin` is github.com/jyviko/modelcraft. Changes land through pull requests:
-  branch, push, open a PR, let CI run, then `gh pr merge --squash` when green. Rebase onto `main`
-  (never merge `main` into a branch); never force-push `main`. Never commit `plan/`,
-  `.agent-files/`, `worktrees/` or `target*/`; check `git ls-files` before pushing.
+  branch, **rebase onto the latest `origin/main` right before opening the PR and before every push
+  that updates it** (never merge `main` into a branch), push, open a PR, let CI run. A PR merges
+  (`gh pr merge --squash`) only after review and only when its green CI ran on top of current
+  `main` (`mergeStateStatus` CLEAN; rebase again if `main` moved); after a merge, `main`'s own CI
+  must pass. Never force-push `main`. Never commit `plan/`, `.agent-files/`, `worktrees/` or
+  `target*/`; check `git ls-files` before pushing.
 
 ## Running
 - `cargo run -p modelcraft-cli -- commands` lists every command with its parameters.

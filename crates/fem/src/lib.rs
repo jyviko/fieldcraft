@@ -9,6 +9,8 @@
 //! - [`element`]: the element table, stiffness (full, reduced, incompatible modes), consistent
 //!   and lumped mass, body forces, integration-point stresses and their extrapolation to nodes;
 //! - [`face`]: consistent nodal forces of pressure on element faces;
+//! - [`uniform`]: uniform-strain (one-point) hexahedron and tetrahedron kinematics, hourglass
+//!   shape vectors and element frequency bounds for explicit dynamics;
 //! - [`dense`]: the small dense linear algebra inside an element.
 //!
 //! Conventions: three translational degrees of freedom per node, ordered node by node; stress
@@ -24,6 +26,7 @@ pub mod face;
 pub mod material;
 pub mod quadrature;
 pub mod shape;
+pub mod uniform;
 
 pub use element::{ELEMENT_TYPES, ElementType, Family, Formulation, PointStress, Solid, element_type};
 pub use material::{Elasticity, elasticity, von_mises};

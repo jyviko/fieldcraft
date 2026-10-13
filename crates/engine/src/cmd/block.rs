@@ -4,11 +4,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use modelcraft_mesh::block::{Block, BlockMesh, Curve, block};
-use modelcraft_model::{ElementKind, Entity, GeometryRef, MAX_LABEL, Model};
+use modelcraft_mesh::block::{Block, Curve, block};
+use modelcraft_mesh::join::{check_conforming, weld};
+use modelcraft_model::{ElementKind, Entity, GeometryRef, Model};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::fresh_labels;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const BLOCK: CommandSpec = CommandSpec {
@@ -97,16 +99,15 @@ fn block_mesh(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::Params(format!("edge {:?} gives neither a curve nor a name", e.corners)));
         }
     }
-    let faces: Vec<(usize, String)> = p.faces.iter().map(|(k, n)| Ok((numbered(k, 6, "face")?, n.clone()))).collect::<Result<_>>()?;
-    let vertices: Vec<(usize, String)> = p.vertices.iter().map(|(k, n)| Ok((numbered(k, 8, "vertex")?, n.clone()))).collect::<Result<_>>()?;
     // Check every name before meshing.
     let body = GeometryRef::body(p.body.clone())?;
-    let face_refs: Vec<(usize, GeometryRef)> =
-        faces.iter().map(|(k, n)| Ok((*k, GeometryRef::face(p.body.clone(), n.clone())?))).collect::<Result<_>>()?;
+    let named = |entries: &BTreeMap<String, String>, n: usize, what: &str, entity: fn(String) -> Entity| -> Result<Vec<(usize, GeometryRef)>> {
+        entries.iter().map(|(k, name)| Ok((numbered(k, n, what)?, GeometryRef::new(p.body.clone(), entity(name.clone()))?))).collect()
+    };
+    let face_refs = named(&p.faces, 6, "face", Entity::Face)?;
+    let vertex_refs = named(&p.vertices, 8, "vertex", Entity::Vertex)?;
     let edge_refs: Vec<(usize, GeometryRef)> =
-        edge_names.iter().map(|(k, n)| Ok((*k, GeometryRef::new(p.body.clone(), Entity::Edge(n.clone()))?))).collect::<Result<_>>()?;
-    let vertex_refs: Vec<(usize, GeometryRef)> =
-        vertices.iter().map(|(k, n)| Ok((*k, GeometryRef::new(p.body.clone(), Entity::Vertex(n.clone()))?))).collect::<Result<_>>()?;
+        edge_names.into_iter().map(|(k, n)| Ok((k, GeometryRef::new(p.body.clone(), Entity::Edge(n))?))).collect::<Result<_>>()?;
 
     let mesh = block(&Block { kind, corners: p.corners, divisions: p.divisions, bias: p.bias, curves })?;
     let diagonal = {
@@ -118,62 +119,49 @@ fn block_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     if !(merge.is_finite() && merge >= 0.0 && merge <= 1e-2 * diagonal) {
         return Err(EngineError::Params(format!("`merge` must be from 0 to 1/100 of the block's diagonal ({diagonal})")));
     }
-
-    let next = |last: Option<u32>| last.map_or(Some(1), |l| l.checked_add(1));
-    let first_node = next(s.model.nodes().keys().next_back().copied());
-    let first_element = next(s.model.elements().keys().next_back().copied());
-    let fits = |first: Option<u32>, count: usize| first.filter(|&f| u64::from(f) + count as u64 <= u64::from(MAX_LABEL) + 1);
-    let (Some(first_node), Some(first_element)) = (fits(first_node, mesh.points.len()), fits(first_element, mesh.elements.len())) else {
-        return Err(EngineError::Params(format!("the block needs labels beyond {MAX_LABEL}")));
-    };
+    let (first_node, first_element) = fresh_labels(&s.model, mesh.points.len(), mesh.elements.len())?;
 
     // Each block point: an existing node within `merge`, or a new label.
-    let existing = joined(&s.model, &mesh.points, merge)?;
+    let welded = weld(&s.model, &mesh.points, merge)?;
     let mut labels = Vec::with_capacity(mesh.points.len());
     let mut added = 0u32;
-    for (i, xyz) in mesh.points.iter().enumerate() {
-        match existing.get(i).copied().flatten() {
-            Some(label) => labels.push(label),
+    for (xyz, existing) in mesh.points.iter().zip(&welded) {
+        let label = match existing {
+            Some(label) => *label,
             None => {
-                let label = first_node + added;
-                s.model.set_node(label, *xyz)?;
-                labels.push(label);
                 added += 1;
+                s.model.set_node(first_node + added - 1, *xyz)?;
+                first_node + added - 1
             }
-        }
+        };
+        labels.push(label);
     }
-    let merged: BTreeSet<u32> = existing.iter().flatten().copied().collect();
-    let elements: Vec<Vec<u32>> = mesh.elements.iter().map(|e| e.iter().map(|&i| labels.get(i as usize).copied().unwrap_or(0)).collect()).collect();
-    if !merged.is_empty() {
-        check_conforming(&s.model, kind, &mesh, &elements, &merged, merge)?;
-    }
+    let joined: BTreeSet<u32> = welded.iter().flatten().copied().collect();
+    let label_of = |i: u32| labels.get(i as usize).copied().ok_or_else(|| EngineError::Params(format!("block point {i} has no node")));
+    let elements: Vec<(ElementKind, Vec<u32>)> =
+        mesh.elements.iter().map(|e| Ok((kind, e.iter().map(|&i| label_of(i)).collect::<Result<_>>()?))).collect::<Result<_>>()?;
+    check_conforming(&s.model, &elements, &joined, merge)?;
 
     let body_tag = s.model.geometry_tag(&body)?;
-    for (i, nodes) in elements.into_iter().enumerate() {
-        let label = first_element + i as u32;
+    for (label, (_, nodes)) in (first_element..).zip(elements) {
         s.model.set_element(label, kind, nodes)?;
         s.model.tag_element(label, body_tag)?;
     }
-    for (k, r) in &face_refs {
-        let t = s.model.geometry_tag(r)?;
-        for &(e, f, bf) in &mesh.faces {
-            if usize::from(bf) == *k {
-                s.model.tag_element_face(first_element + e, f, t)?;
-            }
-        }
-    }
-    for (k, r) in &edge_refs {
-        let t = s.model.geometry_tag(r)?;
-        for &(e, edge, be) in &mesh.edges {
-            if usize::from(be) == *k {
-                s.model.tag_element_edge(first_element + e, edge, t)?;
+    for (refs, pieces, tag) in [
+        (&face_refs, &mesh.faces, Model::tag_element_face as fn(&mut Model, u32, u8, u32) -> modelcraft_model::Result<()>),
+        (&edge_refs, &mesh.edges, Model::tag_element_edge),
+    ] {
+        for (k, r) in refs {
+            let t = s.model.geometry_tag(r)?;
+            for &(e, local, _) in pieces.iter().filter(|piece| usize::from(piece.2) == *k) {
+                tag(&mut s.model, first_element + e, local, t)?;
             }
         }
     }
     for (k, r) in &vertex_refs {
         let t = s.model.geometry_tag(r)?;
-        let node = mesh.corners.get(*k).and_then(|&i| labels.get(i as usize)).copied().unwrap_or(0);
-        s.model.tag_node(node, t)?;
+        let corner = mesh.corners.get(*k).copied().unwrap_or(u32::MAX);
+        s.model.tag_node(label_of(corner)?, t)?;
     }
     Ok(json!({
         "body": p.body,
@@ -182,156 +170,8 @@ fn block_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         "first_element": first_element,
         "nodes": added,
         "first_node": first_node,
-        "joined": merged.len(),
+        "joined": joined.len(),
     }))
-}
-
-/// For each block point, the existing node within `merge` of it (the nearest; the lowest label
-/// on a tie). Two points may not join the same node.
-fn joined(model: &Model, points: &[[f64; 3]], merge: f64) -> Result<Vec<Option<u32>>> {
-    if merge == 0.0 || model.nodes().is_empty() {
-        return Ok(vec![None; points.len()]);
-    }
-    let cell = |x: f64| (x / merge).floor() as i64;
-    let mut grid: BTreeMap<[i64; 3], Vec<(u32, [f64; 3])>> = BTreeMap::new();
-    for (&label, node) in model.nodes() {
-        grid.entry(node.xyz.map(cell)).or_default().push((label, node.xyz));
-    }
-    let mut out = Vec::with_capacity(points.len());
-    let mut taken: BTreeMap<u32, usize> = BTreeMap::new();
-    for (i, p) in points.iter().enumerate() {
-        let c = p.map(cell);
-        let mut best: Option<(f64, u32)> = None;
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    for &(label, xyz) in grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz]).into_iter().flatten() {
-                        let d = ((xyz[0] - p[0]).powi(2) + (xyz[1] - p[1]).powi(2) + (xyz[2] - p[2]).powi(2)).sqrt();
-                        if d <= merge && best.is_none_or(|(bd, bl)| d < bd || (d == bd && label < bl)) {
-                            best = Some((d, label));
-                        }
-                    }
-                }
-            }
-        }
-        if let Some((_, label)) = best
-            && let Some(other) = taken.insert(label, i)
-        {
-            return Err(EngineError::Params(format!(
-                "block points {other} and {i} both lie within `merge` of node {label}: lower `merge` or refine the block"
-            )));
-        }
-        out.push(best.map(|(_, l)| l));
-    }
-    Ok(out)
-}
-
-/// Faces as sorted node lists.
-fn key(nodes: impl Iterator<Item = u32>) -> Vec<u32> {
-    let mut k: Vec<u32> = nodes.collect();
-    k.sort_unstable();
-    k
-}
-
-/// Where the block joins existing nodes it must meet the mesh face to face: an element face
-/// (of the block, or of the mesh) whose corners all landed on shared nodes must be a face of
-/// the other side too, with the same nodes (no mixed linear and quadratic sides); and no node on
-/// the block's boundary may lie on an edge of the mesh between two of its nodes, nor the other
-/// way round (no hanging nodes where the divisions differ). Edges are tested as straight
-/// segments, so a mismatch along a curved shared edge is caught only through its faces.
-fn check_conforming(model: &Model, kind: ElementKind, mesh: &BlockMesh, elements: &[Vec<u32>], merged: &BTreeSet<u32>, merge: f64) -> Result<()> {
-    let refuse = |what: String| {
-        Err(EngineError::Params(format!("{what}: the block must meet the mesh face to face, with the same divisions and element kind")))
-    };
-    let corners_of = |k: ElementKind, nodes: &[u32], local: &[usize]| -> Vec<u32> {
-        key(local.iter().filter(|&&i| i < k.corner_count()).filter_map(|&i| nodes.get(i).copied()))
-    };
-    // The block's boundary faces, by sorted corners, with their full node lists.
-    let mut new_faces: BTreeMap<Vec<u32>, Vec<u32>> = BTreeMap::new();
-    for &(e, f, _) in &mesh.faces {
-        let (Some(nodes), Some(local)) = (elements.get(e as usize), usize::from(f).checked_sub(1).and_then(|i| kind.faces().get(i))) else {
-            continue;
-        };
-        new_faces.insert(corners_of(kind, nodes, local), key(local.iter().filter_map(|&i| nodes.get(i).copied())));
-    }
-    let mut old_faces: BTreeMap<Vec<u32>, Vec<u32>> = BTreeMap::new();
-    let mut old_edges: BTreeSet<[u32; 2]> = BTreeSet::new();
-    for e in model.elements().values().filter(|e| e.nodes.iter().any(|n| merged.contains(n))) {
-        for local in e.kind.faces() {
-            old_faces.insert(corners_of(e.kind, &e.nodes, local), key(local.iter().filter_map(|&i| e.nodes.get(i).copied())));
-        }
-    }
-    for (corners, nodes) in &new_faces {
-        if corners.iter().all(|n| merged.contains(n)) && old_faces.get(corners) != Some(nodes) {
-            return refuse(format!("the block face on nodes {corners:?} lies on existing nodes but is no element face there"));
-        }
-    }
-    for (corners, nodes) in &old_faces {
-        if corners.iter().all(|n| merged.contains(n)) && new_faces.get(corners) != Some(nodes) {
-            return refuse(format!("the element face on nodes {corners:?} lies on the block but no block element shares it"));
-        }
-    }
-    // Hanging nodes: boundary nodes of either side on the other side's element edges.
-    let xyz = |label: u32| model.node(label).map(|n| n.xyz);
-    let block_points: BTreeMap<u32, [f64; 3]> = mesh
-        .elements
-        .iter()
-        .zip(elements)
-        .flat_map(|(pts, labels)| pts.iter().zip(labels).filter_map(|(&p, &l)| Some((l, *mesh.points.get(p as usize)?))))
-        .collect();
-    let mut new_edges: BTreeSet<[u32; 2]> = BTreeSet::new();
-    for &(e, f, _) in &mesh.faces {
-        let (Some(nodes), Some(local)) = (elements.get(e as usize), usize::from(f).checked_sub(1).and_then(|i| kind.faces().get(i))) else {
-            continue;
-        };
-        let cs: Vec<u32> = local.iter().filter(|&&i| i < kind.corner_count()).filter_map(|&i| nodes.get(i).copied()).collect();
-        for (i, &a) in cs.iter().enumerate() {
-            let b = cs.get((i + 1) % cs.len()).copied().unwrap_or(a);
-            new_edges.insert(if a < b { [a, b] } else { [b, a] });
-        }
-    }
-    for e in model.elements().values().filter(|e| e.nodes.iter().any(|n| merged.contains(n))) {
-        for local in e.kind.edges() {
-            if let (Some(&a), Some(&b)) = (local.first().and_then(|&i| e.nodes.get(i)), local.get(1).and_then(|&i| e.nodes.get(i))) {
-                old_edges.insert(if a < b { [a, b] } else { [b, a] });
-            }
-        }
-    }
-    let new_boundary: BTreeSet<u32> = new_faces.values().flatten().copied().filter(|n| !merged.contains(n)).collect();
-    let on_segment = |p: [f64; 3], a: [f64; 3], b: [f64; 3]| {
-        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-        let ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
-        let len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
-        if !(len2 > 0.0) {
-            return false;
-        }
-        let t = (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / len2;
-        let d = [ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]];
-        let tol = merge / len2.sqrt();
-        t > tol && t < 1.0 - tol && (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= merge
-    };
-    for &n in &new_boundary {
-        let Some(&p) = block_points.get(&n) else { continue };
-        for [a, b] in &old_edges {
-            if let (Some(xa), Some(xb)) = (xyz(*a), xyz(*b))
-                && on_segment(p, xa, xb)
-            {
-                return refuse(format!("a block node at {p:?} lies on the edge between nodes {a} and {b}"));
-            }
-        }
-    }
-    let old_nodes: BTreeSet<u32> = old_faces.values().flatten().copied().filter(|n| !merged.contains(n)).collect();
-    for n in old_nodes {
-        let Some(p) = xyz(n) else { continue };
-        for [a, b] in &new_edges {
-            if let (Some(&xa), Some(&xb)) = (block_points.get(a), block_points.get(b))
-                && on_segment(p, xa, xb)
-            {
-                return refuse(format!("node {n} at {p:?} lies on a block edge"));
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

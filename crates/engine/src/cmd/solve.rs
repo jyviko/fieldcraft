@@ -353,7 +353,7 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
         (None, Some(_)) => {
             let at = points(p, "at", MAX_PROBE)?;
             let found = nearest_nodes(&s.model, result.nodes(), &at)?;
-            (found.iter().map(|(l, _)| *l).collect(), Some(found))
+            (found.iter().map(|(l, _, _)| *l).collect(), Some(found))
         }
         (None, None) if matches!(result.as_ref(), StepResult::Explicit(_)) => (Vec::new(), None),
         _ => return Err(EngineError::Params("give either `nodes` or `at`".into())),
@@ -367,9 +367,9 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
         StepResult::Fluid(r) => probe_fluid(r, p)?,
     };
     if let (Some(found), Some(entries)) = (located, out.get_mut("nodes").and_then(Value::as_array_mut)) {
-        for (entry, (label, distance)) in entries.iter_mut().zip(found) {
+        for (entry, (_, xyz, distance)) in entries.iter_mut().zip(found) {
             if let Some(obj) = entry.as_object_mut() {
-                obj.insert("xyz".into(), json!(s.model.node(label).map(|n| n.xyz)));
+                obj.insert("xyz".into(), json!(xyz));
                 obj.insert("distance".into(), json!(distance));
             }
         }
@@ -377,16 +377,15 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// The node with a result nearest to each point (lowest label on a tie), and its distance.
-fn nearest_nodes(model: &modelcraft_model::Model, with_result: &[u32], at: &[[f64; 3]]) -> Result<Vec<(u32, f64)>> {
+/// The node with a result nearest to each point (lowest label on a tie), where it is and how far.
+fn nearest_nodes(model: &modelcraft_model::Model, with_result: &[u32], at: &[[f64; 3]]) -> Result<Vec<(u32, [f64; 3], f64)>> {
+    let candidates: Vec<(u32, [f64; 3])> = with_result.iter().filter_map(|&l| Some((l, model.node(l)?.xyz))).collect();
     at.iter()
         .map(|p| {
-            with_result
+            candidates
                 .iter()
-                .filter_map(|&l| {
-                    model.node(l).map(|n| (l, ((n.xyz[0] - p[0]).powi(2) + (n.xyz[1] - p[1]).powi(2) + (n.xyz[2] - p[2]).powi(2)).sqrt()))
-                })
-                .fold(None, |best: Option<(u32, f64)>, (l, d)| if best.is_none_or(|(_, bd)| d < bd) { Some((l, d)) } else { best })
+                .map(|&(l, x)| (l, x, ((x[0] - p[0]).powi(2) + (x[1] - p[1]).powi(2) + (x[2] - p[2]).powi(2)).sqrt()))
+                .min_by(|a, b| a.2.total_cmp(&b.2))
                 .ok_or_else(|| EngineError::Params("the result has no nodes to probe".into()))
         })
         .collect()

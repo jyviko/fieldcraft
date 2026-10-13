@@ -19,9 +19,8 @@
 use modelcraft_model::{ElementKind, MAX_COORD};
 
 use crate::quality::{Validity, element_validity};
+use crate::vec3::{P, cross, dot, norm, sub};
 use crate::{Error, Result};
-
-type P = [f64; 3];
 
 /// Most elements one block makes.
 pub const MAX_BLOCK_ELEMENTS: usize = 4_000_000;
@@ -88,20 +87,8 @@ impl Block {
     }
 }
 
-fn sub(a: P, b: P) -> P {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
 fn add_scaled(a: P, s: f64, b: P) -> P {
     [a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2]]
-}
-fn dot(a: P, b: P) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: P, b: P) -> P {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-fn norm(a: P) -> f64 {
-    dot(a, a).sqrt()
 }
 
 /// An edge curve resolved against its end points: `point(s)` for `s` in `[0, 1]`.
@@ -196,28 +183,38 @@ fn parameters(n: usize, bias: f64, order: usize) -> Vec<f64> {
     out
 }
 
-/// The map from the unit cube onto the block.
-struct Map {
+/// The map from the unit cube onto the block, on the lattice of `params`: each edge curve is
+/// evaluated once per lattice parameter along its direction.
+struct Map<'a> {
     corners: [P; 8],
-    edges: [Path; 12],
+    params: &'a [Vec<f64>; 3],
+    /// `edges[k][i]`: edge `k` at the `i`-th parameter of its direction (`k / 4`).
+    edges: [Vec<P>; 12],
 }
 
-impl Map {
-    fn point(&self, u: f64, v: f64, w: f64) -> P {
-        let e = |k: usize, s: f64| self.edges[k].point(s);
+impl<'a> Map<'a> {
+    fn new(corners: [P; 8], paths: &[Path; 12], params: &'a [Vec<f64>; 3]) -> Map<'a> {
+        let edges = std::array::from_fn(|k| params[k / 4].iter().map(|&s| paths[k].point(s)).collect());
+        Map { corners, params, edges }
+    }
+
+    /// The point at lattice coordinates `[i, j, k]`.
+    fn point(&self, at: [usize; 3]) -> P {
+        let [u, v, w] = [0, 1, 2].map(|d| self.params[d].get(at[d]).copied().unwrap_or(0.0));
+        let e = |k: usize| self.edges[k].get(at[k / 4]).copied().unwrap_or([f64::NAN; 3]);
         let terms: [(f64, P); 12] = [
-            ((1.0 - v) * (1.0 - w), e(0, u)),
-            (v * (1.0 - w), e(1, u)),
-            ((1.0 - v) * w, e(2, u)),
-            (v * w, e(3, u)),
-            ((1.0 - u) * (1.0 - w), e(4, v)),
-            (u * (1.0 - w), e(5, v)),
-            ((1.0 - u) * w, e(6, v)),
-            (u * w, e(7, v)),
-            ((1.0 - u) * (1.0 - v), e(8, w)),
-            (u * (1.0 - v), e(9, w)),
-            (u * v, e(10, w)),
-            ((1.0 - u) * v, e(11, w)),
+            ((1.0 - v) * (1.0 - w), e(0)),
+            (v * (1.0 - w), e(1)),
+            ((1.0 - v) * w, e(2)),
+            (v * w, e(3)),
+            ((1.0 - u) * (1.0 - w), e(4)),
+            (u * (1.0 - w), e(5)),
+            ((1.0 - u) * w, e(6)),
+            (u * w, e(7)),
+            ((1.0 - u) * (1.0 - v), e(8)),
+            (u * (1.0 - v), e(9)),
+            (u * v, e(10)),
+            ((1.0 - u) * v, e(11)),
         ];
         let mut x = [0.0; 3];
         for (f, p) in terms {
@@ -234,22 +231,23 @@ impl Map {
 /// Lattice offsets of each element of one cell, in units of the lattice (two per cell for
 /// quadratic kinds), in the model's node order.
 fn cell_elements(kind: ElementKind) -> Vec<Vec<[usize; 3]>> {
-    let scale = |c: [usize; 3], m: usize| [c[0] * m, c[1] * m, c[2] * m];
-    match kind {
-        ElementKind::Hex8 => vec![CORNERS.to_vec()],
-        ElementKind::Hex20 => {
-            let mut nodes: Vec<[usize; 3]> = CORNERS.iter().map(|c| scale(*c, 2)).collect();
-            for edge in kind.edges() {
-                if let (Some(&a), Some(&b)) = (edge.first(), edge.get(1))
-                    && let (Some(pa), Some(pb)) = (CORNERS.get(a), CORNERS.get(b))
-                {
-                    nodes.push([pa[0] + pb[0], pa[1] + pb[1], pa[2] + pb[2]]);
-                }
-            }
-            vec![nodes]
+    // Corners in units of the lattice, then (quadratic kinds) a mid-side node on each edge in
+    // the kind's edge order.
+    let nodes = |corners: &[[usize; 3]]| -> Vec<[usize; 3]> {
+        if !kind.is_quadratic() {
+            return corners.to_vec();
         }
+        let mut out: Vec<[usize; 3]> = corners.iter().map(|c| c.map(|x| 2 * x)).collect();
+        for edge in kind.edges() {
+            if let (Some(a), Some(b)) = (edge.first().and_then(|&i| corners.get(i)), edge.get(1).and_then(|&i| corners.get(i))) {
+                out.push([a[0] + b[0], a[1] + b[1], a[2] + b[2]]);
+            }
+        }
+        out
+    };
+    match kind {
+        ElementKind::Hex8 | ElementKind::Hex20 => vec![nodes(&CORNERS)],
         ElementKind::Tet4 | ElementKind::Tet10 => {
-            let m = if kind == ElementKind::Tet10 { 2 } else { 1 };
             [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
                 .iter()
                 .map(|perm| {
@@ -263,13 +261,7 @@ fn cell_elements(kind: ElementKind) -> Vec<Vec<[usize; 3]>> {
                     if odd {
                         v.swap(1, 2);
                     }
-                    let mut nodes: Vec<[usize; 3]> = v.iter().map(|c| scale(*c, m)).collect();
-                    if m == 2 {
-                        for [a, b] in [[0, 1], [1, 2], [2, 0], [0, 3], [1, 3], [2, 3]] {
-                            nodes.push([v[a][0] + v[b][0], v[a][1] + v[b][1], v[a][2] + v[b][2]]);
-                        }
-                    }
-                    nodes
+                    nodes(&v)
                 })
                 .collect()
         }
@@ -302,26 +294,22 @@ pub fn block(b: &Block) -> Result<BlockMesh> {
         Error::Limit(format!("a block makes at most {MAX_BLOCK_ELEMENTS} elements; {:?} divisions of {} are more", b.divisions, kind.name()))
     })?;
 
-    let mut curves = [Curve::Line; 12];
-    let mut seen = [false; 12];
+    let mut curves: [Option<Curve>; 12] = [None; 12];
     for (pair, curve) in &b.curves {
         let k = Block::edge_index(*pair)
             .ok_or_else(|| Error::Invalid(format!("corners {} and {} are not joined by a block edge", pair[0] + 1, pair[1] + 1)))?;
-        if std::mem::replace(&mut seen[k], true) {
+        if curves[k].replace(*curve).is_some() {
             return Err(Error::Invalid(format!("the edge from corner {} to {} is given twice", pair[0] + 1, pair[1] + 1)));
-        }
-        if let Some(slot) = curves.get_mut(k) {
-            *slot = *curve;
         }
     }
     let mut paths = [Path::Line { from: [0.0; 3], to: [0.0; 3] }; 12];
     for (k, [from, to]) in EDGES.iter().enumerate() {
-        paths[k] = Path::new(curves[k], b.corners[*from], b.corners[*to])?;
+        paths[k] = Path::new(curves[k].unwrap_or(Curve::Line), b.corners[*from], b.corners[*to])?;
     }
-    let map = Map { corners: b.corners, edges: paths };
 
     let order = if kind.is_quadratic() { 2 } else { 1 };
     let params: [Vec<f64>; 3] = [0, 1, 2].map(|d| parameters(b.divisions[d], b.bias[d], order));
+    let map = Map::new(b.corners, &paths, &params);
     let size = [0, 1, 2].map(|d| params[d].len());
     let index = |c: [usize; 3]| c[0] + size[0] * (c[1] + size[1] * c[2]);
 
@@ -338,29 +326,28 @@ pub fn block(b: &Block) -> Result<BlockMesh> {
             }
         }
     }
-    let total = size.iter().product::<usize>();
-    let mut number: Vec<u32> = vec![u32::MAX; total];
-    for e in &lattice {
-        for c in e {
-            if let Some(slot) = number.get_mut(index(*c)) {
-                *slot = 0;
-            }
+    let mut used = vec![false; size.iter().product::<usize>()];
+    for c in lattice.iter().flatten() {
+        if let Some(slot) = used.get_mut(index(*c)) {
+            *slot = true;
         }
     }
+    let mut number: Vec<Option<u32>> = vec![None; used.len()];
     let mut points = Vec::new();
     for k in 0..size[2] {
         for j in 0..size[1] {
             for i in 0..size[0] {
-                if let Some(slot) = number.get_mut(index([i, j, k]))
-                    && *slot == 0
+                let at = index([i, j, k]);
+                if used.get(at) == Some(&true)
+                    && let Some(slot) = number.get_mut(at)
                 {
-                    *slot = u32::try_from(points.len()).map_err(|_| Error::Limit("too many points in one block".into()))?;
-                    points.push(map.point(params[0][i], params[1][j], params[2][k]));
+                    *slot = Some(u32::try_from(points.len()).map_err(|_| Error::Limit("too many points in one block".into()))?);
+                    points.push(map.point([i, j, k]));
                 }
             }
         }
     }
-    let point_of = |c: [usize; 3]| number.get(index(c)).copied().filter(|&n| n != u32::MAX);
+    let point_of = |c: [usize; 3]| number.get(index(c)).copied().flatten();
     let last = [0, 1, 2].map(|d| size[d] - 1);
     let mut corners = [0u32; 8];
     for (slot, c) in corners.iter_mut().zip(CORNERS) {
@@ -370,6 +357,11 @@ pub fn block(b: &Block) -> Result<BlockMesh> {
     // Block faces in hex8 face order: (direction, at the end?).
     const FACES: [(usize, bool); 6] = [(2, false), (2, true), (1, false), (0, true), (1, true), (0, false)];
     let on_face = |c: &[usize; 3], f: (usize, bool)| c[f.0] == if f.1 { last[f.0] } else { 0 };
+    // Each block edge: the direction it runs along and the lattice coordinates fixed on it.
+    let block_edges: [(usize, [usize; 3]); 12] = std::array::from_fn(|be| {
+        let [from, _] = EDGES[be];
+        (be / 4, [0, 1, 2].map(|d| CORNERS[from][d] * last[d]))
+    });
     let corner_count = kind.corner_count();
     let mut elements = Vec::with_capacity(lattice.len());
     let mut faces = Vec::new();
@@ -397,11 +389,9 @@ pub fn block(b: &Block) -> Result<BlockMesh> {
         }
         for (k, local) in kind.edges().iter().enumerate() {
             let (Some(a), Some(c)) = (local.first().and_then(|&i| nodes.get(i)), local.get(1).and_then(|&i| nodes.get(i))) else { continue };
-            for (be, [from, to]) in EDGES.iter().enumerate() {
-                // The block edge is where two of the three lattice coordinates are fixed.
-                let along = (0..3).find(|&d| CORNERS[*from][d] != CORNERS[*to][d]).unwrap_or(0);
-                let fixed = |p: &[usize; 3]| (0..3).filter(|&d| d != along).all(|d| p[d] == CORNERS[*from][d] * last[d]);
-                if fixed(a) && fixed(c) {
+            for (be, (along, fixed)) in block_edges.iter().enumerate() {
+                let on = |p: &[usize; 3]| (0..3).filter(|d| d != along).all(|d| p[d] == fixed[d]);
+                if on(a) && on(c) {
                     edges.push((label, k as u8 + 1, be as u8));
                 }
             }

@@ -206,14 +206,17 @@ impl Session {
     }
 
     /// Run a script: a JSON array of `{"command": id, "params": {...}}`.
-    pub fn run_script(&mut self, script: &Value) -> Result<()> {
+    /// Returns each step's output, in order. Other fields of a step (such as an `id` naming it)
+    /// are left to the caller.
+    pub fn run_script(&mut self, script: &Value) -> Result<Vec<Value>> {
         let steps = script.as_array().ok_or_else(|| EngineError::Params("a script is a JSON array of steps".into()))?;
+        let mut outputs = Vec::with_capacity(steps.len());
         for (i, step) in steps.iter().enumerate() {
             let id = step.get("command").and_then(Value::as_str).ok_or_else(|| EngineError::Params(format!("step {}: no `command`", i + 1)))?;
             let params = step.get("params").cloned().unwrap_or(Value::Object(Default::default()));
-            self.execute(id, &params).map_err(|e| EngineError::Params(format!("step {} ({id}): {e}", i + 1)))?;
+            outputs.push(self.execute(id, &params).map_err(|e| EngineError::Params(format!("step {} ({id}): {e}", i + 1)))?);
         }
-        Ok(())
+        Ok(outputs)
     }
 
     /// Identifies the current state (see [`Session::is_dirty`]).

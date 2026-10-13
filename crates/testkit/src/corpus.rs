@@ -167,7 +167,7 @@ pub fn corpus_dir() -> PathBuf {
     workspace_root().join("tests").join("corpus")
 }
 
-fn read(path: &Path) -> Result<String> {
+pub(crate) fn read(path: &Path) -> Result<String> {
     let io = |e: std::io::Error| Error::Io(format!("{}: {e}", path.display()));
     let len = std::fs::metadata(path).map_err(io)?.len();
     if len > MAX_FILE_BYTES {

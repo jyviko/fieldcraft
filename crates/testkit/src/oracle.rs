@@ -24,9 +24,6 @@ use std::time::Instant;
 use modelcraft_engine::Session;
 use serde_json::{Value, json};
 
-/// Largest case file read.
-const MAX_FILE_BYTES: u64 = 16 << 20;
-
 /// Fixture band: a result may move by this fraction of its size (and a thousandth of the
 /// reference's absolute tolerance) before CI calls it a change. Results are deterministic on one
 /// platform; the band only absorbs last-digit differences of the system maths library.
@@ -187,11 +184,7 @@ pub fn fixture_band(value: f64, reference: f64, tolerance: Tolerance) -> f64 {
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
-    let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
-    if size > MAX_FILE_BYTES {
-        return Err(format!("{}: larger than {MAX_FILE_BYTES} bytes", path.display()));
-    }
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text = crate::corpus::read(path).map_err(|e| e.to_string())?;
     serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -215,19 +208,13 @@ fn read_fixture(path: &Path) -> Result<Option<BTreeMap<String, Frozen>>, String>
         .map(Some)
 }
 
-/// The result of measuring one quantity.
-#[derive(Debug, Clone)]
-pub struct Measured {
-    pub id: String,
-    pub value: Result<f64, String>,
-}
-
-/// Run a case's recipe and measure its quantities. A failing command fails every quantity.
-pub fn run_case(dir: &Path, expected: &Expected) -> Result<Vec<Measured>, String> {
+/// Run a case's recipe and measure its quantities, in order. A failing command fails every
+/// quantity.
+pub fn run_case(dir: &Path, expected: &Expected) -> Result<Vec<Result<f64, String>>, String> {
     let mut session = Session::default();
     let design = dir.join("design.json");
     if design.is_file() {
-        let script = std::fs::read_to_string(&design).map_err(|e| format!("{}: {e}", design.display()))?;
+        let script = crate::corpus::read(&design).map_err(|e| e.to_string())?;
         let bytes = modelcraft_geometry::script_design(&script).map_err(|e| format!("design.json: {e}"))?;
         let opened = modelcraft_geometry::open_design(&bytes).map_err(|e| format!("design.json: {e}"))?;
         if let Some(e) = opened.errors.first() {
@@ -236,17 +223,10 @@ pub fn run_case(dir: &Path, expected: &Expected) -> Result<Vec<Measured>, String
         session.design = Some(Arc::new(opened));
     }
     let recipe = read_json(&dir.join("recipe.json"))?;
-    let steps = recipe.as_array().ok_or("recipe.json must be a JSON array of steps")?;
-    let mut outputs: BTreeMap<String, Value> = BTreeMap::new();
-    for (i, step) in steps.iter().enumerate() {
-        let command = step.get("command").and_then(Value::as_str).ok_or_else(|| format!("recipe step {}: no `command`", i + 1))?;
-        let params = step.get("params").cloned().unwrap_or_else(|| json!({}));
-        let out = session.execute(command, &params).map_err(|e| format!("recipe step {} ({command}): {e}", i + 1))?;
-        if let Some(id) = step.get("id").and_then(Value::as_str) {
-            outputs.insert(id.to_string(), out);
-        }
-    }
-    Ok(expected.quantities.iter().map(|q| Measured { id: q.id.clone(), value: measure(&mut session, &outputs, &q.measure) }).collect())
+    let results = session.run_script(&recipe).map_err(|e| format!("recipe.json: {e}"))?;
+    let outputs: BTreeMap<String, Value> =
+        recipe.as_array().into_iter().flatten().zip(results).filter_map(|(step, out)| Some((step.get("id")?.as_str()?.to_string(), out))).collect();
+    Ok(expected.quantities.iter().map(|q| measure(&mut session, &outputs, &q.measure)).collect())
 }
 
 /// Read one number: from a recipe step's output (`"from": id`) or a command run now
@@ -368,27 +348,27 @@ pub fn run(root: &Path, options: &Options) -> Result<(), String> {
             skipped.push(case);
             continue;
         }
-        let measured: Vec<Measured> = if expected.pending.is_some() {
-            expected.quantities.iter().map(|q| Measured { id: q.id.clone(), value: Err("pending".into()) }).collect()
-        } else {
-            let start = Instant::now();
-            let m = run_case(dir, &expected)
-                .unwrap_or_else(|e| expected.quantities.iter().map(|q| Measured { id: q.id.clone(), value: Err(e.clone()) }).collect());
-            eprintln!("oracle: {case} ({:.2} s)", start.elapsed().as_secs_f64());
-            m
-        };
         let fixture_path = dir.join("fixture.json");
         let fixture = read_fixture(&fixture_path)?;
+        let mut case_rows: Vec<Row> = if expected.pending.is_some() {
+            let row =
+                |q: &Quantity| Row { case: case.clone(), quantity: q.clone(), ours: None, verdict: Verdict::Pending, fixture: FixtureCheck::NotKept };
+            expected.quantities.iter().map(row).collect()
+        } else {
+            let start = Instant::now();
+            let measured = run_case(dir, &expected).unwrap_or_else(|e| vec![Err(e); expected.quantities.len()]);
+            eprintln!("oracle: {case} ({:.2} s)", start.elapsed().as_secs_f64());
+            expected
+                .quantities
+                .iter()
+                .zip(&measured)
+                .map(|(q, m)| {
+                    let (verdict, fixture) = judge(q, m, fixture.as_ref().and_then(|f| f.get(&q.id)));
+                    Row { case: case.clone(), quantity: q.clone(), ours: m.as_ref().ok().copied(), verdict, fixture }
+                })
+                .collect()
+        };
         let bless = options.bless.iter().any(|b| *b == case || b == "all");
-        let mut case_rows = Vec::new();
-        for (q, m) in expected.quantities.iter().zip(&measured) {
-            let (verdict, check) = if expected.pending.is_some() {
-                (Verdict::Pending, FixtureCheck::NotKept)
-            } else {
-                judge(q, &m.value, fixture.as_ref().and_then(|f| f.get(&q.id)))
-            };
-            case_rows.push(Row { case: case.clone(), quantity: q.clone(), ours: m.value.as_ref().ok().copied(), verdict, fixture: check });
-        }
         if bless && expected.pending.is_none() {
             let passing = case_rows.iter().all(|r| matches!(r.verdict, Verdict::Pass | Verdict::Known));
             if !passing {
@@ -508,14 +488,14 @@ fn error_of(r: &Row) -> String {
     }
 }
 
-fn verdict_text(v: &Verdict) -> String {
+fn verdict_text(v: &Verdict) -> &'static str {
     match v {
-        Verdict::Pass => "pass".into(),
-        Verdict::Fail => "**FAIL**".into(),
-        Verdict::Known => "known failure".into(),
-        Verdict::Fixed => "**passes: remove known_failure**".into(),
-        Verdict::Error(_) => "**ERROR**".into(),
-        Verdict::Pending => "pending".into(),
+        Verdict::Pass => "pass",
+        Verdict::Fail => "**FAIL**",
+        Verdict::Known => "known failure",
+        Verdict::Fixed => "**passes: remove known_failure**",
+        Verdict::Error(_) => "**ERROR**",
+        Verdict::Pending => "pending",
     }
 }
 
@@ -530,7 +510,7 @@ fn fixture_text(f: &FixtureCheck) -> &'static str {
 }
 
 fn cell(s: &str) -> String {
-    s.replace('|', "/").replace('\n', " ")
+    s.replace('|', "\\|").replace('\n', " ")
 }
 
 /// docs/oracle.md.
@@ -573,7 +553,7 @@ benchmark, {} experiment; {} pending cases wait for capabilities still being bui
         );
         for (case, _) in &in_kind {
             for r in rows.iter().filter(|r| &r.case == case) {
-                let mut result = verdict_text(&r.verdict);
+                let mut result = verdict_text(&r.verdict).to_string();
                 if let Some(k) = &r.quantity.known_failure {
                     result = format!("{result}: {k}");
                 }

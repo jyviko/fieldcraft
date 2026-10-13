@@ -103,6 +103,19 @@ pub(crate) fn label(p: &Value, key: &str) -> Result<u32> {
         .ok_or_else(|| EngineError::Params(format!("`{key}` must be a positive whole number")))
 }
 
+/// The first node and element labels after the model's largest, for `nodes` new nodes and
+/// `elements` new elements, all within [`MAX_LABEL`].
+pub(crate) fn fresh_labels(model: &modelcraft_model::Model, nodes: usize, elements: usize) -> Result<(u32, u32)> {
+    let first = |last: Option<&u32>, count: usize| {
+        let first = last.map_or(Some(1), |l| l.checked_add(1))?;
+        (u64::from(first) + count as u64 <= u64::from(MAX_LABEL) + 1).then_some(first)
+    };
+    match (first(model.nodes().keys().next_back(), nodes), first(model.elements().keys().next_back(), elements)) {
+        (Some(n), Some(e)) => Ok((n, e)),
+        _ => Err(EngineError::Params(format!("the mesh needs labels beyond {MAX_LABEL}"))),
+    }
+}
+
 /// A required `[x, y, z]` parameter.
 pub(crate) fn xyz(p: &Value, key: &str) -> Result<[f64; 3]> {
     p.get(key).and_then(xyz_value).ok_or_else(|| EngineError::Params(format!("`{key}` must be [x, y, z]")))

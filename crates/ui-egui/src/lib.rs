@@ -253,7 +253,7 @@ impl ModelApp {
 
     /// Run a script (a JSON array of `{command, params}`), stopping at the first error.
     pub fn run_script(&mut self, script: &Value) -> Result<(), String> {
-        let r = self.session.run_script(script).map_err(|e| e.to_string());
+        let r = self.session.run_script(script).map(|_| ()).map_err(|e| e.to_string());
         self.model_changed();
         match &r {
             Ok(()) => self.set_status("Script done", false),

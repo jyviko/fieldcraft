@@ -6,7 +6,7 @@ use modelcraft_mesh::cdt::{CdtOptions, tetrahedralize};
 use modelcraft_mesh::delaunay::Triangulation;
 use modelcraft_mesh::quality::{self, QualityReport};
 use modelcraft_mesh::surface::{BoundarySurface, Defect, FeatureKind, SurfaceOptions};
-use modelcraft_model::{ElementKind, GeometryRef, MAX_ELEMENTS, MAX_LABEL};
+use modelcraft_model::{ElementKind, GeometryRef, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
 use super::{label, labels, listed, optional_number, points, xyz};
@@ -88,17 +88,6 @@ pub const TET_GENERATE: CommandSpec = CommandSpec {
     run: tet_generate,
 };
 
-/// The first node and element labels of a mesh of `nodes` nodes and `elements` elements added
-/// after the model's largest labels, or an error when the labels would pass [`MAX_LABEL`].
-fn next_labels(s: &Session, nodes: usize, elements: usize) -> Result<(u32, u32)> {
-    let next = |last: Option<u32>| last.map_or(Some(1), |l| l.checked_add(1));
-    let fits = |first: Option<u32>, count: usize| first.filter(|&f| u64::from(f) + count as u64 - 1 <= u64::from(MAX_LABEL));
-    match (fits(next(s.model.nodes().keys().next_back().copied()), nodes), fits(next(s.model.elements().keys().next_back().copied()), elements)) {
-        (Some(n), Some(e)) => Ok((n, e)),
-        _ => Err(EngineError::Params(format!("the mesh needs labels beyond {MAX_LABEL}"))),
-    }
-}
-
 /// The most Steiner points and tetrahedra `mesh.tet.generate` may be asked for.
 const TET_MAX_STEINER: u64 = 10_000_000;
 const TET_MAX_TETS: u64 = 50_000_000;
@@ -138,7 +127,7 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
     let cdt = tetrahedralize(&surface, &cdt_options)?;
     let gate = cdt.gate(surface.volume())?.into_result()?;
 
-    let (first_node, first_element) = next_labels(s, cdt.points.len(), cdt.tets.len())?;
+    let (first_node, first_element) = super::fresh_labels(&s.model, cdt.points.len(), cdt.tets.len())?;
     for (i, xyz) in cdt.points.iter().enumerate() {
         s.model.set_node(first_node + i as u32, *xyz)?;
     }
@@ -274,7 +263,7 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let m = mesh_region(&loops, kind, size, &opts)?;
 
-    let (first_node, first_element) = next_labels(s, m.nodes.len(), m.elements.len())?;
+    let (first_node, first_element) = super::fresh_labels(&s.model, m.nodes.len(), m.elements.len())?;
     for (i, xy) in m.nodes.iter().enumerate() {
         s.model.set_node(first_node + i as u32, [xy[0], xy[1], 0.0])?;
     }

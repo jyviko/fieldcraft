@@ -48,12 +48,16 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   HyperMesh, ANSA, Femap, Patran, ANSYS, …): no test data, measurements, decks, results or ids
   produced with them. Deck formats come from the vendors' publicly available reference manuals;
   we write our own descriptions and our own examples, never copy manual text or example decks.
-- **Expected values are analytic.** Reference tests compare with closed-form solutions (patch
-  tests, beams, plates, Lamé cylinders, Kirsch plates, natural frequencies, wave and shock
-  solutions) and with mesh invariants (positive Jacobians, conserved volume, watertight
-  boundaries). A separate **benchmark** suite may compare with reference values published in
-  papers (lid-driven cavity, Schäfer–Turek, Turek–Hron, Taylor bar), each tagged with its source;
-  the analytic suite is the gate. Never values produced with a commercial product.
+- **Verification and validation (docs/verification.md).** Every solver capability is checked
+  three ways, each case in `tests/oracle/` tagged with its source: **theory** (closed-form
+  solutions, patch tests, mesh invariants), **experiment** (measurements published in papers and
+  reports) and **published benchmarks** (reference results published by benchmark bodies and by
+  solver vendors' benchmark and verification manuals, e.g. NAFEMS, Abaqus). Owner decision
+  2026-10-13: published vendor results may be used as reference values, cited per case. We never
+  run a commercial product, never copy its input files, text or figures: each case is our own
+  model built from the published description, and only the published numbers are used. Once our
+  result matches its reference within the stated tolerance, it is frozen as a **fixture**
+  (`fixture.json`), so any later change that moves it fails CI (fidelity never drifts silently).
 - **Algorithms come from papers.** Meshing and solver methods are implemented from published
   papers and theses, cited in the module docs and in `docs/meshing/literature.md`.
 - **Never read, copy or link GPL/LGPL/AGPL code**: TetGen, CGAL, Gmsh, Netgen, CalculiX,

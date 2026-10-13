@@ -89,8 +89,11 @@ dependency of `modelcraft-geometry` only behind its non-default `scripts` featur
 tooling (`modelcraft-testkit`) enables; the shipped library opens designs without it.
 
 **Commercial products** (Abaqus, Nastran, LS-DYNA, LS-PrePost, HyperMesh, ANSA, Femap, Patran,
-ANSYS) are never run, scripted or used as a source of data. Deck formats come from the vendors'
-public reference manuals, described in our own words with our own examples.
+ANSYS) are never run or scripted, and their input files, text and figures are never copied. Deck
+formats come from the vendors' public reference manuals, described in our own words with our own
+examples. Published numerical results (benchmark and verification manuals) may serve as cited
+reference values for our own models of the same problems (owner decision 2026-10-13;
+docs/verification.md).
 
 ## Consequences
 

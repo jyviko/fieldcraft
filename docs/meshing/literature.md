@@ -110,6 +110,23 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 
 ---
 
+**A0.5 Boundary surface preparation (implemented in `modelcraft-mesh::surface`).** **Verdict: BUILD ON.**
+- **Guigue and Devillers 2003.** P. Guigue, O. Devillers. *Fast and Robust Triangle–Triangle Overlap Test Using
+  Orientation Predicates.* Journal of Graphics Tools 8(1):25–32, 2003. Triangle overlap decided from `orient3d` /
+  `orient2d` signs alone, so it is exact on the A0.1 predicates. We use the equivalent edge–triangle reduction (two
+  closed triangles meet exactly when an edge of one meets the other) and add the cases of triangles that share a
+  vertex or an edge, which may meet only there.
+- **Ericson 2005.** C. Ericson. *Real-Time Collision Detection.* Morgan Kaufmann, 2005, ch. 6. Bounding volume
+  hierarchies: top-down median-split construction and the self-collision traversal that pairs the triangles to test.
+- **Jacobson, Kavan, Sorkine-Hornung 2013.** *Robust Inside-Outside Segmentation using Generalized Winding Numbers.*
+  ACM TOG 32(4):33, 2013. DOI [10.1145/2461912.2461916](https://doi.org/10.1145/2461912.2461916). The winding number
+  of a vertex of one shell with respect to another tells nesting, so voids must face inwards.
+- **van Oosterom and Strackee 1983.** *The Solid Angle of a Plane Triangle.* IEEE Trans. Biomed. Eng. 30(2):125–126,
+  1983. DOI [10.1109/TBME.1983.325207](https://doi.org/10.1109/TBME.1983.325207). The triangle solid angle the
+  winding number sums.
+
+---
+
 ### A1. Delaunay construction
 
 **A1.1 Bowyer 1981 / Watson 1981, incremental cavity insertion.** **Verdict: build on.**

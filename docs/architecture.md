@@ -51,8 +51,11 @@ Rules beyond the layer order:
    them), so a load on a named face follows it when the design is edited and opened again.
    Bodies of components are placed in the world through their occurrences (one body per
    placement), as SolidCraft displays and exports them.
-2. **Surface preparation.** Weld coincident vertices, check the surface is closed, manifold and
-   consistently oriented, find feature edges (face boundaries, sharp dihedral angles).
+2. **Surface preparation** (`modelcraft-mesh::surface`, `mesh.surface.check`). Weld the tessellation's per-face
+   vertex copies (at twice SolidCraft's linear tolerance), check the surface is closed, manifold, consistently and
+   outwardly oriented (voids inwards) and free of self-intersections (exact triangle–triangle tests), and find
+   feature edges (face boundaries, sharp dihedral angles). Defects come back located by triangle, vertex and
+   position.
 3. **Tetrahedral meshing.** Bowyer–Watson Delaunay on Shewchuk's adaptive predicates (symbolic
    perturbation for degeneracies), boundary recovery by the robust constrained Delaunay method of
    Diazzi et al. 2023 (implicit Steiner points on indirect predicates, gift-wrapping fallback), so

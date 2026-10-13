@@ -44,7 +44,11 @@ CC0 and public domain.
 | Code_Aster | GPL-3.0 | implicit solver |
 | OpenRadioss | AGPL-3.0 | explicit solver |
 | Elmer | GPL-2.0 / LGPL-2.1 | multiphysics solver |
-| deal.II, FreeFEM, Salome | LGPL | FE libraries, pre-processing |
+| FreeFEM, Salome | LGPL | FE libraries, pre-processing |
+| Palabos, OpenLB, waLBerla, lbmpy, VirtualFluids, TCLB | AGPL / GPL | lattice Boltzmann (implement from the papers) |
+| OpenFOAM, SU2, 4C, DualSPHysics, preCICE | GPL / LGPL | CFD, FSI coupling, SPH |
+| FluidX3D | non-commercial only | GPU lattice Boltzmann |
+| LULESH | no licence | explicit hydrodynamics proxy |
 | OpenCASCADE | LGPL-2.1 | B-rep kernel |
 | Attene's CDT, Indirect_Predicates, VolumeMesher | GPL / LGPL | robust CDT, indirect predicates (implement from the papers) |
 | TetWild (original), Evocube, robustPolycube, ultimaille, invertible-maps | GPL-3.0 / AGPL-3.0 | tet meshing, polycube, injective maps |
@@ -53,6 +57,8 @@ CC0 and public domain.
 | geogram `third_party/tetgen`, `third_party/triangle` and their wrappers | AGPL / non-commercial | (the rest of geogram is BSD-3 and readable) |
 | libigl `copyleft/` modules | GPL | (libigl core is MPL-2.0 and readable) |
 | OpenVolumeMesh, CGoGN | believed LGPL, unverified | treat as forbidden until checked |
+
+deal.II is now dual-licensed Apache-2.0 (with LLVM exception) or LGPL, so it is readable under its Apache-2.0 option. Readable solver references (re-implement from the papers): STLBM (MIT), XLB, lettuce, pylbm, Laghos, MFEM, IBAMR, the Kratos core, MUI, FEBio, SPHinXsys, SPlisHSPlasH, fenris; full table in `docs/solvers/literature.md`.
 
 **Repositories without a licence are all rights reserved: never read them** (for example Gao
 2019's octree hex code, LoopyCuts). Readable references for the meshing work (re-implement from

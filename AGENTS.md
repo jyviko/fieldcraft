@@ -49,8 +49,11 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   produced with them. Deck formats come from the vendors' publicly available reference manuals;
   we write our own descriptions and our own examples, never copy manual text or example decks.
 - **Expected values are analytic.** Reference tests compare with closed-form solutions (patch
-  tests, beams, plates, Lamé cylinders, Kirsch plates, natural frequencies) and with mesh
-  invariants (positive Jacobians, conserved volume, watertight boundaries).
+  tests, beams, plates, Lamé cylinders, Kirsch plates, natural frequencies, wave and shock
+  solutions) and with mesh invariants (positive Jacobians, conserved volume, watertight
+  boundaries). A separate **benchmark** suite may compare with reference values published in
+  papers (lid-driven cavity, Schäfer–Turek, Turek–Hron, Taylor bar), each tagged with its source;
+  the analytic suite is the gate. Never values produced with a commercial product.
 - **Algorithms come from papers.** Meshing and solver methods are implemented from published
   papers and theses, cited in the module docs and in `docs/meshing/literature.md`.
 - **Never read, copy or link GPL/LGPL/AGPL code**: TetGen, CGAL, Gmsh, Netgen, CalculiX,
@@ -72,11 +75,14 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   JSON `run`) + tests. The UI, scripts, CLI and control channel all reach the same commands.
 - **Programmatic calls never open dialogs.**
 - **Layering** is enforced by `cargo xtask layers` (`docs/architecture.md`): L0 `model` → L1
-  `geometry`, `mesh`, `solver`, `decks`, `render` → L2 `doc` → L3 `io` → L4 `engine` → L5
-  `ui-egui`, `mcp` → apps. Nothing below L5 depends on egui/eframe/winit/wgpu/rfd. **Only
+  `geometry`, `mesh`, `fem`, `decks`, `render` → L2 solvers (`solver`, `explicit`, `lbm`) → L3
+  `fsi` → then `doc`, `io`, `engine`, UI and apps above (the layer table is renumbered when the
+  first solver crate lands). Nothing below L5 depends on egui/eframe/winit/wgpu/rfd. **Only
   `crates/geometry` may use `solidcraft-*`.**
-- **Determinism.** The same input gives the same mesh and the same deck, bit for bit, on every
-  platform: no hash-order iteration into output, no thread-count-dependent results.
+- **Determinism.** The same input gives the same mesh, deck and CPU solver result, bit for bit, on
+  every platform: no hash-order iteration into output, no thread-count-dependent results. GPU
+  solver backends (wgpu, f32) are the one exception: deterministic per device, and checked against
+  the CPU reference within a stated tolerance.
 - **Robust geometry.** Meshing decisions (orientation, in-sphere, intersection) use exact or
   adaptive-precision predicates, never a bare floating-point sign.
 - **Units.** The model is unit-consistent and never converts (the user picks e.g. mm, t, s, N,

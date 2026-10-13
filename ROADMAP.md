@@ -5,7 +5,9 @@ with hexahedral meshing as the centre of gravity, plus its own linear solver. Ab
 reference for scope (its documentation is excellent and its solver strong); its application is
 where we aim to be clearly better: parametric geometry from SolidCraft, sets that survive
 remeshing, automatic hex partitioning, undo, a text-diffable model and agent control.
-The capability checklist is [docs/parity.md](docs/parity.md).
+The capability checklist is [docs/parity.md](docs/parity.md). Beyond the pre-processor and the
+linear solver come our own explicit, CFD (lattice Boltzmann) and fluid–structure solvers (M10–M14;
+methods and papers in [docs/solvers/literature.md](docs/solvers/literature.md)).
 
 Order (revised 2026-10-13): one end-to-end slice first — *SolidCraft part → named faces → sets →
 mesh → material and section → BCs and loads → static and frequency steps → Abaqus, Nastran and
@@ -26,4 +28,9 @@ hex meshes today and it gives the best elements where stresses are read.
 | M7 Assemblies and contact | Part instances from SolidCraft occurrences; tie between non-matching meshes; general and pairwise contact with automatic pair detection, friction; bolt pretension, springs, point masses; amplitudes, multiple steps; nonlinear static steps in decks | planned |
 | M8 Materials, explicit, shells, composites | Plasticity, hyperelasticity, damage data per solver; explicit dynamics decks (Abaqus/Explicit, LS-DYNA); midsurface shells; composite layups and material orientations, continuum shells on swept hex; heat transfer | planned |
 | M9 Post-processing and deck readers | Results readers for public formats (Nastran OP2, LS-DYNA d3plot, Abaqus `.fil`); XY and path plots, cuts, display groups, free-body forces; deck readers that keep unknown keywords; mesh convergence studies | planned |
+| M10 Explicit dynamics | Shared element and material kernels with the implicit solver (`fem`); central-difference solver with lumped mass, stable time step, one-point hex8 with hourglass control and nodal-pressure tet4, bulk viscosity, energy accounting; large-deformation materials (objective rates, J2, Johnson–Cook, damage, erosion); contact (global search, penalty with friction, rigid walls); runs on hex and tet meshes | planned |
+| M11 Equations of state and shells | Polynomial, ideal-gas, Mie–Grüneisen, JWL with programmed burn, tabulated; energy coupling; shock verification (Rankine–Hugoniot, Sod, Noh, Sedov); Belytschko–Lin–Tsay shells with self-contact on quad meshes | planned |
+| M12 CFD: lattice Boltzmann | D3Q19/D3Q27 on grids voxelised from the face-tagged surface; TRT, regularised and cumulant collision; interpolated walls, inlets and outlets; LES; octree refinement shared with the hex mesher; wgpu backend (deterministic per device, checked against the CPU) | planned |
+| M13 Fluid–structure interaction | Immersed-boundary coupling of the lattice Boltzmann fluid with the explicit or implicit structure; interface force transfer; sub-cycling; Aitken then interface quasi-Newton coupling; free-surface flow | planned |
+| M14 Blast and impact fluids | EOS-driven fluids in the explicit solver: ALE multi-material or SPH, with fluid–structure contact | planned |
 | Continuous: desktop and agents | Desktop app (viewport, model tree, commands, control channel: done), MCP server, browser build, command schema as the public API | started |

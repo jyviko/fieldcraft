@@ -38,6 +38,8 @@ pub static ALL: &[CommandSpec] = &[
     mesh::TET_GENERATE,
     block::BLOCK,
     hex::HEX_GENERATE,
+    hex::HEX_SWEEP,
+    hex::HEX_MAPPED,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

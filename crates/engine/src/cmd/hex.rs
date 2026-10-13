@@ -12,7 +12,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const HEX_GENERATE: CommandSpec = CommandSpec {
     id: "mesh.hex.generate",
     label: "Generate Hex Mesh",
-    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the mesh with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; `face<index>` when a face has no name), so sets by geometry resolve. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
+    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "swept" (any sweep) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the mesh with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; `face<index>` when a face has no name), so sets by geometry resolve. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
     kind: CommandKind::Model,
     run: hex_generate,
 };
@@ -109,7 +109,37 @@ fn inputs(s: &Session, p: &Value) -> Result<Vec<Input>> {
     }
 }
 
+pub const HEX_SWEEP: CommandSpec = CommandSpec {
+    id: "mesh.hex.sweep",
+    label: "Sweep Hex Mesh",
+    params: r#"the parameters of mesh.hex.generate, with "method": "swept" (default: extrude, sweep or revolve, whichever fits first) | "extrude" | "sweep" | "revolve" — mesh.hex.generate limited to the sweeping methods"#,
+    kind: CommandKind::Model,
+    run: hex_sweep,
+};
+
+pub const HEX_MAPPED: CommandSpec = CommandSpec {
+    id: "mesh.hex.mapped",
+    label: "Mapped Hex Mesh",
+    params: r#"the parameters of mesh.hex.generate without "method" — mesh.hex.generate with the mapped method: a six-sided block (six faces of four edges, three edges at each of eight corners)"#,
+    kind: CommandKind::Model,
+    run: hex_mapped,
+};
+
 fn hex_generate(s: &mut Session, p: &Value) -> Result<Value> {
+    let all = [HexMethod::Auto, HexMethod::Swept, HexMethod::Extrude, HexMethod::Sweep, HexMethod::Revolve, HexMethod::Mapped];
+    generate(s, p, HexMethod::Auto, &all)
+}
+
+fn hex_sweep(s: &mut Session, p: &Value) -> Result<Value> {
+    generate(s, p, HexMethod::Swept, &[HexMethod::Swept, HexMethod::Extrude, HexMethod::Sweep, HexMethod::Revolve])
+}
+
+fn hex_mapped(s: &mut Session, p: &Value) -> Result<Value> {
+    generate(s, p, HexMethod::Mapped, &[HexMethod::Mapped])
+}
+
+/// Mesh with `default` or the `method` parameter, which must be one of `allowed`.
+fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod]) -> Result<Value> {
     let size = number(p, "size")?;
     let quadratic = match p.get("order") {
         None => false,
@@ -120,11 +150,11 @@ fn hex_generate(s: &mut Session, p: &Value) -> Result<Value> {
         },
     };
     let method = match p.get("method") {
-        None => HexMethod::Auto,
-        Some(v) => v
-            .as_str()
-            .and_then(HexMethod::from_name)
-            .ok_or_else(|| EngineError::Params("`method` must be auto, extrude, sweep, revolve or mapped".into()))?,
+        None => default,
+        Some(v) => v.as_str().and_then(HexMethod::from_name).filter(|m| allowed.contains(m)).ok_or_else(|| {
+            let names: Vec<&str> = allowed.iter().map(|m| m.name()).collect();
+            EngineError::Params(format!("`method` must be one of {}", names.join(", ")))
+        })?,
     };
     let bodies = inputs(s, p)?;
     let mut meshes: Vec<(Input, HexMesh)> = Vec::with_capacity(bodies.len());
@@ -293,5 +323,12 @@ mod tests {
             assert_eq!(s.model, before, "{p}");
         }
         assert!(Session::default().execute("mesh.hex.generate", &json!({})).is_err());
+        assert!(s.execute("mesh.hex.sweep", &json!({"body": "Body1", "method": "mapped"})).is_err());
+        assert!(s.execute("mesh.hex.mapped", &json!({"body": "Body1", "method": "sweep"})).is_err());
+        // The plate is not a six-sided block; it is a sweep.
+        assert!(s.execute("mesh.hex.mapped", &json!({"body": "Body1"})).unwrap_err().to_string().contains("logical cube"));
+        assert_eq!(s.model, before);
+        let r = s.execute("mesh.hex.sweep", &json!({"body": "Body1", "size": 4})).unwrap();
+        assert_eq!(r["bodies"][0]["method"], "extrude");
     }
 }

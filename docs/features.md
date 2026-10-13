@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-52 ready, 51 coming soon.
+39 ready, 61 coming soon.
 
 ## Geometry
 
@@ -31,10 +31,9 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Tet | Tet Mesh — Constrained Delaunay tet mesh of a body: every boundary triangle kept, faces tagged (refinement comes next) | ready | `mesh.tet.generate` |
 | Tet | Quadratic — Second-order elements with mid-side nodes on the geometry | coming soon (M2) |  |
 | Tet | Delaunay Points — Delaunay tetrahedralization of a point list (debugging aid) | ready | `mesh.delaunay.points` |
-| 2D | 2D Mesh — Quad or triangle mesh of a planar face or polygon in the XY plane for plane stress, plane strain and axisymmetric models; edges tagged | ready | `mesh.planar` |
 | Structured Hex | Quad Faces — All-quad meshes of faces on shared edge nodes | coming soon (M5) |  |
-| Structured Hex | Mapped Hex — Mapped hex mesh of six-sided regions | coming soon (M5) |  |
-| Structured Hex | Sweep Hex — Hex mesh swept along extrusions and revolutions | coming soon (M5) |  |
+| Structured Hex | Mapped Hex — Mapped hex mesh of a six-sided block (curved faces allowed) | ready | `mesh.hex.mapped` |
+| Structured Hex | Sweep Hex — Hex mesh swept along extrusions (several levels), around revolutions, or from a source face to a target | ready | `mesh.hex.sweep`, `mesh.hex.generate` |
 | Structured Hex | Decompose — Find sweepable and mappable regions and propose the splits | coming soon (M5) |  |
 | Structured Hex | Transition — Conforming tet–hex interfaces with pyramids | coming soon (M5) |  |
 | Automatic Hex | All-Hex — Octree dual all-hex mesh of any part | coming soon (M6) |  |
@@ -57,12 +56,12 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Panel | Capability | Status | Command |
 |---|---|---|---|
 | Materials | Material — Elastic (isotropic, orthotropic) material with density | ready | `model.material.create`, `model.material.edit`, `model.material.delete` |
-| Materials | Plasticity — Von Mises plasticity: bilinear, hardening table or Johnson–Cook | ready | `model.material.plasticity` |
+| Materials | Plasticity — Plastic hardening data | coming soon (M8) |  |
 | Materials | Hyperelastic — Hyperelastic material models | coming soon (M8) |  |
-| Materials | Damage — Johnson–Cook damage and element erosion | ready | `model.material.damage` |
+| Materials | Damage — Damage initiation and evolution | coming soon (M8) |  |
 | Materials | Thermal — Conductivity, specific heat and expansion | coming soon (M8) |  |
 | Materials | Equation of State — Polynomial, ideal gas, Mie–Grüneisen, JWL and tabulated equations of state | coming soon (M11) |  |
-| Sections | Section — Solid, shell, beam, rod or 2D (plane stress, plane strain, axisymmetric) section assigned to a set, with its element formulation | ready | `model.section.create`, `model.section.edit`, `model.section.delete` |
+| Sections | Section — Solid, shell, beam or rod section assigned to a set, with its element formulation | ready | `model.section.create`, `model.section.edit`, `model.section.delete` |
 | Sections | Composite — Composite layups and continuum shells | coming soon (M8) |  |
 | Sections | Orientation — Material orientations | coming soon (M8) |  |
 | Sets | Set — A set of nodes, elements and faces, or of named geometry that survives remeshing | ready | `model.set.create`, `model.set.edit`, `model.set.delete`, `model.set.resolve` |
@@ -92,8 +91,8 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 |---|---|---|---|
 | Boundary Conditions | Boundary Condition — Fixed, displacement or symmetry condition on a set or reference point | ready | `model.boundary_condition.create`, `model.boundary_condition.edit`, `model.boundary_condition.delete` |
 | Loads | Load — Force, moment, pressure, traction, gravity or body force | ready | `model.load.create`, `model.load.edit`, `model.load.delete` |
-| Flow | Fluid Domain — The box of fluid cells, its fluid, and the obstacle bodies voxelised from their face-tagged surfaces | ready | `model.fluid_domain.create`, `model.fluid_domain.edit`, `model.fluid_domain.delete` |
-| Flow | Inlet & Outlet — Velocity inlets, pressure outlets, walls, moving and slip walls, periodic faces | ready | `model.fluid_domain.boundary` |
+| Flow | Fluid Domain — The fluid grid voxelised from the face-tagged surface | coming soon (M12) |  |
+| Flow | Inlet & Outlet — Velocity inlets, pressure outlets and walls | coming soon (M12) |  |
 
 ## Interactions
 
@@ -107,8 +106,8 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Contact | Find Contacts — Detect contact pairs automatically | coming soon (M7) |  |
 | Contact | Rigid Wall — Rigid walls for explicit dynamics | coming soon (M10) |  |
 | Connectors | Bolt Load — Bolt pretension | coming soon (M7) |  |
-| Connectors | Spring — Spring or dashpot to the ground or between two points, along a direction or their line | ready | `model.spring.create`, `model.spring.edit`, `model.spring.delete` |
-| Connectors | Point Mass — Point mass and rotary inertia at nodes or a reference point | ready | `model.mass.create`, `model.mass.edit`, `model.mass.delete` |
+| Connectors | Spring — Springs and dashpots | coming soon (M7) |  |
+| Connectors | Point Mass — Point masses and inertia | coming soon (M7) |  |
 | Connectors | Connector — Connector elements between points | coming soon (M7) |  |
 | Coupled | FSI Interface — The fluid–structure interface | coming soon (M13) |  |
 
@@ -116,7 +115,6 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
 | Panel | Capability | Status | Command |
 |---|---|---|---|
-| Run | Solve — Solve every step in order and show the results | ready | `solve.run` |
 | Check | Check Model — Name every missing or bad definition before writing or solving | ready | `model.check` |
 | Decks | Abaqus Input — Write an Abaqus input file (.inp) | ready | `deck.write {"format":"abaqus"}` |
 | Decks | Nastran Deck — Write Nastran bulk data (SOL 101, 103) | ready | `deck.write {"format":"nastran"}` |
@@ -126,19 +124,19 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Implicit | Frequency — Natural frequencies and mode shapes of a frequency step | ready | `solve.frequency` |
 | Explicit | Explicit — Transient dynamics of an explicit step by central differences (contact and erosion coming in M10) | ready | `solve.explicit` |
 | Explicit | Blast & Impact — EOS-driven fluids with fluid–structure contact (ALE or SPH) | coming soon (M14) |  |
-| Fluids | Lattice Boltzmann — Lattice Boltzmann flow of a fluid step on the CPU, with wall forces | ready | `solve.fluid` |
+| Fluids | Lattice Boltzmann — Lattice Boltzmann flow on the CPU or the GPU | coming soon (M12) |  |
 | Fluids | Fluid–Structure — Coupled fluid and structure solve | coming soon (M13) |  |
 
 ## Results
 
 | Panel | Capability | Status | Command |
 |---|---|---|---|
-| Display | Deformed — The deformed shape of a solved step, to scale | ready | `results.deformed`, `results.clear` |
-| Display | Contours — Contours of displacement and stress, with a legend | ready | `results.contour` |
-| Display | Mode Shapes — Mode shapes and frequencies of a frequency step | ready | `results.modes` |
-| Display | Animate — Animate the deformed shape, a mode or an explicit step's frames | ready | `results.animate`, `results.frame` |
-| Query | Probe — Displacement, rotation, reaction and stress at nodes, element section forces, a mode shape, or an explicit field frame (or click the model) | ready | `solve.probe`, `solve.history` |
-| Query | Reactions — Reaction force and moment sums per set | ready | `results.reactions` |
+| Display | Deformed — The deformed shape | coming soon (M4) |  |
+| Display | Contours — Contour plots of stress, strain and displacement | coming soon (M4) |  |
+| Display | Mode Shapes — Mode shapes of a frequency step | coming soon (M4) |  |
+| Display | Animate — Animate modes and time histories | coming soon (M9) |  |
+| Query | Probe — Displacement, reaction and stress at nodes, a mode shape, or an explicit field frame | ready | `solve.probe`, `solve.history` |
+| Query | Reactions — Reaction force and moment sums | coming soon (M4) |  |
 | Query | Free Body — Free-body forces across a cut | coming soon (M9) |  |
 | Plots | XY Plot — Plot a quantity against time or another | coming soon (M9) |  |
 | Plots | Path Plot — Plot a quantity along a path | coming soon (M9) |  |
@@ -154,7 +152,6 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 |---|---|---|---|
 | Model | Model Info — Node and element counts and the model summary | ready | `model.info` |
 | File | Open Model — Open a .modelcraft model | ready | `file.open` |
-| File | Samples — Open a sample model, ready to solve | ready | `file.sample` |
 | File | Save — Save the model to its .modelcraft file | ready | `file.save` |
 | File | Save As — Save the model to a new .modelcraft file | ready | `file.save_as` |
 | File | Recover — Open a model autosaved by an app that crashed or closed with unsaved changes | ready | `file.recover`, `file.recovery.list`, `file.recovery.discard` |

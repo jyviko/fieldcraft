@@ -61,6 +61,8 @@ use modelcraft_model::ElementKind;
 pub enum HexMethod {
     /// The first method that fits, in the order extrude, sweep, revolve, mapped.
     Auto,
+    /// The first sweeping method that fits: extrude, sweep, revolve.
+    Swept,
     Extrude,
     Sweep,
     Revolve,
@@ -71,6 +73,7 @@ impl HexMethod {
     pub fn name(self) -> &'static str {
         match self {
             HexMethod::Auto => "auto",
+            HexMethod::Swept => "swept",
             HexMethod::Extrude => "extrude",
             HexMethod::Sweep => "sweep",
             HexMethod::Revolve => "revolve",
@@ -79,7 +82,9 @@ impl HexMethod {
     }
 
     pub fn from_name(name: &str) -> Option<HexMethod> {
-        [HexMethod::Auto, HexMethod::Extrude, HexMethod::Sweep, HexMethod::Revolve, HexMethod::Mapped].into_iter().find(|m| m.name() == name)
+        [HexMethod::Auto, HexMethod::Swept, HexMethod::Extrude, HexMethod::Sweep, HexMethod::Revolve, HexMethod::Mapped]
+            .into_iter()
+            .find(|m| m.name() == name)
     }
 }
 
@@ -208,6 +213,7 @@ pub fn hex_mesh(surface: &BoundarySurface, faces: &[Option<Surface>], field: &dy
     let ctx = Ctx { brep: &brep, tree: &tree, field, opts, tol: RELATIVE_TOLERANCE * brep.diagonal };
     let methods: &[HexMethod] = match opts.method {
         HexMethod::Auto => &[HexMethod::Extrude, HexMethod::Sweep, HexMethod::Revolve, HexMethod::Mapped],
+        HexMethod::Swept => &[HexMethod::Extrude, HexMethod::Sweep, HexMethod::Revolve],
         HexMethod::Extrude => &[HexMethod::Extrude],
         HexMethod::Sweep => &[HexMethod::Sweep],
         HexMethod::Revolve => &[HexMethod::Revolve],

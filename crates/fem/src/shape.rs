@@ -21,8 +21,8 @@
 
 use modelcraft_model::ElementKind;
 
-/// Most nodes an element in this crate has (hex20).
-pub const MAX_NODES: usize = 20;
+/// Most nodes an element family has (hex27, [`crate::basis::Basis::Hex27`]).
+pub const MAX_NODES: usize = 27;
 
 /// Shape function values and natural derivatives at one point.
 #[derive(Debug, Clone, Copy)]

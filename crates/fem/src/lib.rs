@@ -3,8 +3,15 @@
 //! Pure functions over element geometry and material constants, with no solver loop and no
 //! global state, so the implicit solver (`modelcraft-solver`) and the explicit solver that follows
 //! it use the same element technology:
+//! - [`dof`]: degree-of-freedom kinds, what elements declare, and the global numbering
+//!   ([`DofLayout`]) every solver assembles on;
 //! - [`quadrature`]: Gauss–Legendre and tetrahedron rules;
-//! - [`shape`]: shape functions of tet4, tet10, wedge6, hex8, hex20;
+//! - [`basis`]: the shape-function library of every family (lines, triangles, quadrilaterals,
+//!   tetrahedra, wedges, pyramids, hexahedra) with first and second derivatives and their
+//!   physical gradients, Hessians and Laplacians; [`jet`] is the automatic differentiation behind
+//!   the second derivatives;
+//! - [`shape`]: the hand-written first-order functions of tet4, tet10, wedge6, hex8, hex20 that
+//!   the solid kernels evaluate;
 //! - [`material`]: isotropic and orthotropic elasticity matrices, von Mises stress;
 //! - [`element`]: the element table, stiffness (full, reduced, incompatible modes), consistent
 //!   and lumped mass, body forces, integration-point stresses and their extrapolation to nodes;
@@ -13,21 +20,27 @@
 //!   shape vectors and element frequency bounds for explicit dynamics;
 //! - [`dense`]: the small dense linear algebra inside an element.
 //!
-//! Conventions: three translational degrees of freedom per node, ordered node by node; stress
+//! Conventions: element matrices are ordered node by node, each node's degrees of freedom in
+//! [`DofKind`] order (three translations for solids; docs/fem.md); stress
 //! and strain 6-vectors in the order xx, yy, zz, xy, xz, yz with engineering shear strains.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 // Matrix kernels over fixed small dimensions read as the textbook formulas with index loops.
 #![allow(clippy::needless_range_loop)]
 
+pub mod basis;
 pub mod dense;
+pub mod dof;
 pub mod element;
 pub mod face;
+pub mod jet;
 pub mod material;
 pub mod quadrature;
 pub mod shape;
 pub mod uniform;
 
+pub use basis::Basis;
+pub use dof::{DofKind, DofLayout, DofSet, ElementDofs};
 pub use element::{ELEMENT_TYPES, ElementType, Family, Formulation, PointStress, Solid, element_type};
 pub use material::{Elasticity, elasticity, principal, von_mises};
 

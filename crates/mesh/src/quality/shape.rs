@@ -14,23 +14,7 @@ use std::f64::consts::SQRT_2;
 
 use super::Metric;
 
-pub(crate) type P = [f64; 3];
-
-pub(crate) fn sub(a: P, b: P) -> P {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-pub(crate) fn dot(a: P, b: P) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-pub(crate) fn cross(a: P, b: P) -> P {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-pub(crate) fn norm(a: P) -> f64 {
-    dot(a, a).sqrt()
-}
-pub(crate) fn det(a: P, b: P, c: P) -> f64 {
-    dot(a, cross(b, c))
-}
+pub(crate) use crate::vec3::{P, cross, det, dot, norm, sub};
 
 /// The angle between two vectors in degrees, 0 when either is zero.
 fn angle(a: P, b: P) -> f64 {

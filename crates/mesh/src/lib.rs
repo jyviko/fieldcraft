@@ -9,6 +9,8 @@
 
 pub mod delaunay;
 pub mod quality;
+pub mod surface;
+mod vec3;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
@@ -18,6 +20,9 @@ pub enum Error {
     Limit(String),
     #[error("meshing failed: {0}")]
     Failed(String),
+    /// The boundary surface has defects ([`surface::BoundarySurface::new`]).
+    #[error("invalid boundary surface: {0}")]
+    Surface(surface::Defects),
     #[error(transparent)]
     Model(#[from] modelcraft_model::Error),
 }

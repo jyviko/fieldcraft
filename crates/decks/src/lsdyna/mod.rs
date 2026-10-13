@@ -416,7 +416,10 @@ fn element_cards(d: &mut Deck, model: &Model, plan: &Plan) -> Result<()> {
         d.keyword(keyword.name());
         match keyword {
             Keyword::Shell | Keyword::Beam => d.header(&["eid", "pid", "n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8"]),
-            Keyword::Solid | Keyword::SolidH20 => d.header(&["eid", "pid", "/ n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9", "n10"]),
+            Keyword::Solid | Keyword::SolidH20 => {
+                d.header(&["eid", "pid"]);
+                d.header(&["n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9", "n10"]);
+            }
         }
         for (label, pid) in elements {
             let el = model.element(label).ok_or_else(|| unsupported(format!("element {label} is missing")))?;

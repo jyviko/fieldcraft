@@ -4,9 +4,10 @@
 //! wide, on the same number of lines as the standard format. Standard format gives most reals
 //! 10 columns (16 for node coordinates), which holds only about 5 to 9 significant digits; 20
 //! columns hold the shortest decimal that reads back to the same `f64` for every value with up to
-//! 17 significant digits in the usual magnitude range (0.1 to 1e17) and for every value with up
-//! to 13 significant digits at any exponent. A value that does not fit (17 digits and a large
-//! negative exponent, say) is rounded to the most significant digits that fit, never fewer than
+//! 17 significant digits and a magnitude from 0.01 to 1e17 (a leading `0` before the point is
+//! dropped when that makes it fit: `-.01234…`), and for every value with up to 13 significant
+//! digits at any exponent. A value that does not fit (17 digits and a large negative exponent,
+//! say) is rounded to the most significant digits that fit, never fewer than
 //! 13, and counted, so the writer reports how many values did not round-trip exactly.
 //!
 //! Fields are right-aligned in their columns; trailing blank fields are left out, so a card ends
@@ -54,10 +55,22 @@ pub(crate) fn real(v: f64) -> (String, bool) {
         Some((m, e)) => format!("{}e{e}", with_point(m.to_string())),
         None => positional.clone(),
     };
-    // Positional reads best for everyday magnitudes; otherwise the shorter form.
-    let everyday = (1e-4..1e15).contains(&v.abs()) && positional.len() <= WIDTH;
-    let shortest = if !everyday && scientific.len() < positional.len() { scientific } else { positional };
-    if shortest.len() <= WIDTH {
+    // Without the leading zero (`-.0123`), which every Fortran reader takes, when that is needed.
+    let bare = positional.replacen("0.", ".", 1);
+    let bare = if v.abs() < 1.0 { bare } else { positional.clone() };
+    // Positional reads best for everyday magnitudes; otherwise the shortest form.
+    let everyday = (1e-4..1e15).contains(&v.abs());
+    // Candidates in order of preference among equals: everyday magnitudes positional first,
+    // others the shortest, scientific before positional; the bare form only when it is needed.
+    let candidates = if everyday { [positional, bare, scientific] } else { [scientific, positional, bare] };
+    let shortest = candidates
+        .into_iter()
+        .enumerate()
+        .filter(|(_, s)| s.len() <= WIDTH)
+        .min_by_key(|(i, s)| if everyday { (0, *i) } else { (s.len(), *i) })
+        .map(|(_, s)| s)
+        .unwrap_or_default();
+    if !shortest.is_empty() {
         return (shortest, true);
     }
     // Round to the most significant digits that fit (13 always do: sign, 13 digits, the point

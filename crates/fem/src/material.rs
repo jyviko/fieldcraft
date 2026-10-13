@@ -12,13 +12,11 @@
 
 use modelcraft_model::Elastic;
 
+use crate::dense::inverse3;
 use crate::{Error, Result};
 
 /// A 6 × 6 elasticity matrix, row-major.
 pub type Elasticity = [[f64; 6]; 6];
-
-/// Index of each strain component in the 6-vector.
-pub const VOIGT: [(usize, usize); 6] = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
 
 /// The isotropic elasticity matrix.
 pub fn isotropic(young: f64, poisson: f64) -> Result<Elasticity> {
@@ -43,20 +41,14 @@ pub fn orthotropic(young: [f64; 3], poisson: [f64; 3], shear: [f64; 3]) -> Resul
     let [e1, e2, e3] = young;
     let [n12, n13, n23] = poisson;
     let s = [[1.0 / e1, -n12 / e1, -n13 / e1], [-n12 / e1, 1.0 / e2, -n23 / e2], [-n13 / e1, -n23 / e2, 1.0 / e3]];
-    let det = s[0][0] * (s[1][1] * s[2][2] - s[1][2] * s[2][1]) - s[0][1] * (s[1][0] * s[2][2] - s[1][2] * s[2][0])
-        + s[0][2] * (s[1][0] * s[2][1] - s[1][1] * s[2][0]);
     let scale = (1.0 / e1) * (1.0 / e2) * (1.0 / e3);
-    if !(det > 1e-12 * scale) || shear.iter().any(|g| !(*g > 0.0 && g.is_finite())) {
+    let inverse = inverse3(&s).filter(|(_, det)| *det > 1e-12 * scale);
+    let Some((normal, _)) = inverse.filter(|_| shear.iter().all(|g| *g > 0.0 && g.is_finite())) else {
         return Err(Error::Invalid("the orthotropic constants do not describe a stable material".into()));
-    }
+    };
     let mut d = [[0.0; 6]; 6];
     for i in 0..3 {
-        for j in 0..3 {
-            // Cofactor inverse of the symmetric 3 × 3 compliance.
-            let (i1, i2) = ((i + 1) % 3, (i + 2) % 3);
-            let (j1, j2) = ((j + 1) % 3, (j + 2) % 3);
-            d[j][i] = (s[i1][j1] * s[i2][j2] - s[i1][j2] * s[i2][j1]) / det;
-        }
+        d[i][..3].copy_from_slice(&normal[i]);
     }
     for (k, g) in shear.iter().enumerate() {
         d[3 + k][3 + k] = *g;

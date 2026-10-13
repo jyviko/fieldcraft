@@ -56,8 +56,6 @@ pub struct ElementType {
     /// The corner nodes come first in the node list.
     pub corners: usize,
     pub shape: fn([f64; 3]) -> Shape,
-    /// Natural coordinates of every node.
-    pub natural: &'static [[f64; 3]],
     /// Full integration of the stiffness.
     pub full: Rule,
     /// Reduced integration, where the element is stable with it.
@@ -68,42 +66,6 @@ pub struct ElementType {
     pub incompatible_modes: bool,
 }
 
-const TET10_NATURAL: [[f64; 3]; 10] = [
-    [0., 0., 0.],
-    [1., 0., 0.],
-    [0., 1., 0.],
-    [0., 0., 1.],
-    [0.5, 0., 0.],
-    [0.5, 0.5, 0.],
-    [0., 0.5, 0.],
-    [0., 0., 0.5],
-    [0.5, 0., 0.5],
-    [0., 0.5, 0.5],
-];
-
-const HEX20_NATURAL: [[f64; 3]; 20] = [
-    [-1., -1., -1.],
-    [1., -1., -1.],
-    [1., 1., -1.],
-    [-1., 1., -1.],
-    [-1., -1., 1.],
-    [1., -1., 1.],
-    [1., 1., 1.],
-    [-1., 1., 1.],
-    [0., -1., -1.],
-    [1., 0., -1.],
-    [0., 1., -1.],
-    [-1., 0., -1.],
-    [0., -1., 1.],
-    [1., 0., 1.],
-    [0., 1., 1.],
-    [-1., 0., 1.],
-    [-1., -1., 0.],
-    [1., -1., 0.],
-    [1., 1., 0.],
-    [-1., 1., 0.],
-];
-
 /// The element table.
 pub static ELEMENT_TYPES: [ElementType; 4] = [
     ElementType {
@@ -112,7 +74,6 @@ pub static ELEMENT_TYPES: [ElementType; 4] = [
         nodes: 4,
         corners: 4,
         shape: shape::tet4,
-        natural: &shape::TET_CORNERS,
         full: Rule::TetCentroid,
         reduced: None,
         mass: Rule::Tet4,
@@ -124,7 +85,6 @@ pub static ELEMENT_TYPES: [ElementType; 4] = [
         nodes: 10,
         corners: 4,
         shape: shape::tet10,
-        natural: &TET10_NATURAL,
         full: Rule::Tet4,
         reduced: None,
         mass: Rule::TetConical(4),
@@ -136,7 +96,6 @@ pub static ELEMENT_TYPES: [ElementType; 4] = [
         nodes: 8,
         corners: 8,
         shape: shape::hex8,
-        natural: &shape::HEX_CORNERS,
         full: Rule::Hex(2),
         reduced: None,
         mass: Rule::Hex(2),
@@ -148,7 +107,6 @@ pub static ELEMENT_TYPES: [ElementType; 4] = [
         nodes: 20,
         corners: 8,
         shape: shape::hex20,
-        natural: &HEX20_NATURAL,
         full: Rule::Hex(3),
         reduced: Some(Rule::Hex(2)),
         mass: Rule::Hex(3),
@@ -220,6 +178,14 @@ pub struct Solid<'a> {
     formulation: Formulation,
 }
 
+/// The stiffness blocks of the incompatible-modes element.
+struct IncompatibleParts {
+    kuu: Matrix,
+    kua: Vec<f64>,
+    kaa: Matrix,
+    j0: ([[f64; 3]; 3], f64),
+}
+
 /// The incompatible modes' count of internal degrees of freedom.
 const INCOMPATIBLE_DOFS: usize = 9;
 
@@ -229,9 +195,7 @@ impl<'a> Solid<'a> {
         if xyz.len() != ty.nodes {
             return Err(Error::Invalid(format!("a {} element has {} nodes, got {}", kind.name(), ty.nodes, xyz.len())));
         }
-        if xyz.iter().flatten().any(|c| !c.is_finite()) {
-            return Err(Error::Invalid("node coordinates must be finite".into()));
-        }
+        modelcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
         let ok = match formulation {
             Formulation::Full => true,
             Formulation::Reduced => ty.reduced.is_some(),
@@ -241,10 +205,6 @@ impl<'a> Solid<'a> {
             return Err(Error::NotSupported(format!("{formulation:?} formulation of {} elements", kind.name())));
         }
         Ok(Solid { ty, xyz, formulation })
-    }
-
-    pub fn formulation(&self) -> Formulation {
-        self.formulation
     }
 
     /// The stiffness integration rule.
@@ -334,11 +294,12 @@ impl<'a> Solid<'a> {
         inverse3(&self.jacobian(&s)).filter(|(_, d)| *d > 0.0).ok_or_else(|| self.degenerate())
     }
 
-    /// The parts of the stiffness with the incompatible modes: K_uu, K_ua (3n × 9), K_aa.
-    fn incompatible_parts(&self, d: &Elasticity) -> Result<(Matrix, Vec<f64>, Matrix)> {
+    /// The parts of the stiffness with the incompatible modes: K_uu (when `with_uu`), K_ua
+    /// (3n × 9), K_aa, and the centre Jacobian they were built with.
+    fn incompatible_parts(&self, d: &Elasticity, with_uu: bool) -> Result<IncompatibleParts> {
         let n = 3 * self.ty.nodes;
         let j0 = self.centre_jacobian()?;
-        let mut kuu = Matrix::zeros(n);
+        let mut kuu = Matrix::zeros(if with_uu { n } else { 0 });
         let mut kua = vec![0.0; n * INCOMPATIBLE_DOFS];
         let mut kaa = Matrix::zeros(INCOMPATIBLE_DOFS);
         for p in self.rule().points() {
@@ -346,18 +307,20 @@ impl<'a> Solid<'a> {
             let w = g.det * p.weight;
             let ga = self.incompatible_gradients(p.xi, g.det, &j0);
             let gu = g.dx.get(..self.ty.nodes).unwrap_or_default();
-            accumulate(&mut kuu.data, n, gu, gu, d, w);
+            if with_uu {
+                accumulate_symmetric(&mut kuu.data, gu, d, w);
+            }
             accumulate(&mut kua, INCOMPATIBLE_DOFS, gu, &ga, d, w);
-            accumulate(&mut kaa.data, INCOMPATIBLE_DOFS, &ga, &ga, d, w);
+            accumulate_symmetric(&mut kaa.data, &ga, d, w);
         }
-        Ok((kuu, kua, kaa))
+        Ok(IncompatibleParts { kuu, kua, kaa, j0 })
     }
 
     /// The stiffness matrix, 3n × 3n, degrees of freedom ordered node by node (x, y, z).
     pub fn stiffness(&self, d: &Elasticity) -> Result<Matrix> {
         let n = 3 * self.ty.nodes;
         if self.formulation == Formulation::IncompatibleModes {
-            let (mut k, kua, kaa) = self.incompatible_parts(d)?;
+            let IncompatibleParts { kuu: mut k, kua, kaa, .. } = self.incompatible_parts(d, true)?;
             let chol = Cholesky::new(&kaa)?;
             // K = K_uu − K_ua K_aa⁻¹ K_au, column by column of K_au.
             for i in 0..n {
@@ -376,9 +339,8 @@ impl<'a> Solid<'a> {
         for p in self.rule().points() {
             let g = self.gradients(p.xi)?;
             let gu = g.dx.get(..self.ty.nodes).unwrap_or_default();
-            accumulate(&mut k.data, n, gu, gu, d, g.det * p.weight);
+            accumulate_symmetric(&mut k.data, gu, d, g.det * p.weight);
         }
-        symmetrize(&mut k);
         Ok(k)
     }
 
@@ -403,7 +365,8 @@ impl<'a> Solid<'a> {
     /// The lumped (diagonal) mass per node: the consistent diagonal scaled to the element's mass.
     pub fn lumped_mass(&self, density: f64) -> Result<Vec<f64>> {
         let m = self.mass(density)?;
-        let total = density * self.volume()?;
+        // The consistent entries sum to the element's mass (the shape functions sum to one).
+        let total: f64 = m.data.iter().sum();
         let diag: Vec<f64> = (0..m.n).map(|i| m.get(i, i)).collect();
         let sum: f64 = diag.iter().sum();
         if !(sum > 0.0) {
@@ -433,7 +396,7 @@ impl<'a> Solid<'a> {
         }
         // Incompatible modes: recover the internal amplitudes α = −K_aa⁻¹ K_au u.
         let alpha = if self.formulation == Formulation::IncompatibleModes {
-            let (_, kua, kaa) = self.incompatible_parts(d)?;
+            let IncompatibleParts { kua, kaa, j0, .. } = self.incompatible_parts(d, false)?;
             let flat: Vec<f64> = u.iter().flatten().copied().collect();
             let mut rhs = [0.0; INCOMPATIBLE_DOFS];
             for (i, ui) in flat.iter().enumerate() {
@@ -442,7 +405,7 @@ impl<'a> Solid<'a> {
                 }
             }
             Cholesky::new(&kaa)?.solve(&mut rhs);
-            Some((rhs, self.centre_jacobian()?))
+            Some((rhs, j0))
         } else {
             None
         };
@@ -468,7 +431,13 @@ impl<'a> Solid<'a> {
                 }
             }
             let strain = [grad[0][0], grad[1][1], grad[2][2], grad[0][1] + grad[1][0], grad[0][2] + grad[2][0], grad[1][2] + grad[2][1]];
-            out.push(PointStress { xyz: self.position(p.xi), strain, stress: stress(d, &strain) });
+            let mut xyz = [0.0; 3];
+            for (n, x) in g.shape.values().iter().zip(self.xyz) {
+                for k in 0..3 {
+                    xyz[k] += n * x[k];
+                }
+            }
+            out.push(PointStress { xyz, strain, stress: stress(d, &strain) });
         }
         Ok(out)
     }
@@ -523,6 +492,39 @@ fn accumulate(out: &mut [f64], cols: usize, ga: &[[f64; 3]], gb: &[[f64; 3]], d:
                     let v: f64 = (0..6).map(|s| bi[s][r] * db[s][c]).sum();
                     if let Some(x) = out.get_mut((3 * i + r) * cols + 3 * j + c) {
                         *x += w * v;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The symmetric case of [`accumulate`] (rows and columns from the same gradients, `out` square):
+/// computes the blocks with j ≥ i and mirrors them, so the result is exactly symmetric.
+fn accumulate_symmetric(out: &mut [f64], g: &[[f64; 3]], d: &Elasticity, w: f64) {
+    let cols = 3 * g.len();
+    for (j, gj) in g.iter().enumerate() {
+        let bj = b_block(gj);
+        let mut db = [[0.0; 3]; 6];
+        for s in 0..6 {
+            for c in 0..3 {
+                db[s][c] = (0..6).map(|t| d[s][t] * bj[t][c]).sum();
+            }
+        }
+        for (i, gi) in g.iter().enumerate().take(j + 1) {
+            let bi = b_block(gi);
+            for r in 0..3 {
+                // On a diagonal block only the upper triangle is computed, then mirrored.
+                for c in if i == j { r } else { 0 }..3 {
+                    let v = w * (0..6).map(|s| bi[s][r] * db[s][c]).sum::<f64>();
+                    let (row, col) = (3 * i + r, 3 * j + c);
+                    if let Some(x) = out.get_mut(row * cols + col) {
+                        *x += v;
+                    }
+                    if row != col
+                        && let Some(x) = out.get_mut(col * cols + row)
+                    {
+                        *x += v;
                     }
                 }
             }

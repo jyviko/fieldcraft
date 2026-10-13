@@ -4,42 +4,16 @@
 //! (∂x/∂ξ × ∂x/∂η) dξ dη on the face's own, possibly curved, geometry; faces are numbered so this
 //! normal points out of the element ([`modelcraft_model::ElementKind::faces`]), and a positive
 //! pressure pushes in. This is the consistent load vector of the virtual work of the surface load
-//! (Zienkiewicz, Taylor & Zhu 2013, §6.6), exact for a uniform pressure on a flat or quadratic
-//! face with the rules used here.
+//! (Zienkiewicz, Taylor & Zhu 2013, §6.6), integrated with the model's face rules (exact for a
+//! uniform pressure on a flat face).
 
-use crate::quadrature::Rule;
-use crate::shape;
 use crate::{Error, Result};
 
-fn rule(nodes: usize) -> Rule {
-    if nodes == 3 || nodes == 6 { Rule::TriConical(3) } else { Rule::Quad(3) }
-}
-
-/// ∫ Nᵢ n dA for every node of a face (node coordinates in the face's node order).
+/// ∫ Nᵢ n dA for every node of a face (node coordinates in the face's node order): the model's
+/// face integration ([`modelcraft_model::nodal::face_normal_weights`]), so pressures and the
+/// tractions the model distributes use the same rule.
 pub fn normal_weights(xyz: &[[f64; 3]]) -> Result<Vec<[f64; 3]>> {
-    if xyz.iter().flatten().any(|c| !c.is_finite()) {
-        return Err(Error::Invalid("face coordinates must be finite".into()));
-    }
-    let mut out = vec![[0.0; 3]; xyz.len()];
-    for p in rule(xyz.len()).points() {
-        let s =
-            shape::face(xyz.len(), p.xi[0], p.xi[1]).ok_or_else(|| Error::Invalid(format!("a face has 3, 4, 6 or 8 nodes, not {}", xyz.len())))?;
-        let mut tx = [0.0; 3];
-        let mut te = [0.0; 3];
-        for (d, x) in s.derivatives().iter().zip(xyz) {
-            for k in 0..3 {
-                tx[k] += d[0] * x[k];
-                te[k] += d[1] * x[k];
-            }
-        }
-        let n = [tx[1] * te[2] - tx[2] * te[1], tx[2] * te[0] - tx[0] * te[2], tx[0] * te[1] - tx[1] * te[0]];
-        for (o, ni) in out.iter_mut().zip(s.values()) {
-            for k in 0..3 {
-                o[k] += ni * n[k] * p.weight;
-            }
-        }
-    }
-    Ok(out)
+    modelcraft_model::nodal::face_normal_weights(xyz).map_err(|e| Error::Invalid(e.to_string()))
 }
 
 /// Consistent nodal forces of a uniform pressure (positive pushes into the element).

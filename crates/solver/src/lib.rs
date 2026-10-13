@@ -41,6 +41,9 @@ pub enum Error {
     Invalid(String),
     #[error("not supported yet: {0}")]
     NotSupported(String),
+    /// An element kernel failed (inverted geometry, a formulation it lacks, …).
+    #[error("element {label}: {source}")]
+    Element { label: u32, source: modelcraft_fem::Error },
     /// The stiffness (or shifted matrix) is singular.
     #[error("{0}")]
     Singular(String),
@@ -54,6 +57,13 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    /// A kernel error, naming the element.
+    pub fn element(label: u32, source: modelcraft_fem::Error) -> Error {
+        Error::Element { label, source }
+    }
+}
 
 /// Caps on the size of a solution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -129,35 +129,64 @@ impl NodeGraph {
     }
 }
 
-/// Add an element matrix (3n × 3n, row-major, its nodes' global indices in `nodes`) into a matrix
-/// built by [`NodeGraph::zero_matrix`]. `scalar` adds an n × n matrix to each component's block
-/// instead (mass).
-pub fn add_element(k: &mut Csr, nodes: &[usize], data: &[f64], scalar: bool) -> Result<()> {
-    let n = nodes.len();
-    let width = if scalar { n } else { 3 * n };
+/// Where node b's 3 × 3 block starts in each of node a's three rows (the rows of a node share
+/// one pattern, built by [`NodeGraph::zero_matrix`]): one search per node pair.
+fn block_offsets(k: &Csr, a: usize, b: usize) -> Result<[usize; 3]> {
+    let (start, end) = (k.ptr.get(3 * a).copied().unwrap_or(0), k.ptr.get(3 * a + 1).copied().unwrap_or(0));
+    let cols = k.idx.get(start..end).ok_or_else(|| Error::Internal("pattern".into()))?;
+    let at = cols.binary_search(&(3 * b)).map_err(|_| Error::Internal("entry outside the pattern".into()))?;
+    Ok([0, 1, 2].map(|r| k.ptr.get(3 * a + r).copied().unwrap_or(0) + at))
+}
+
+/// Add an element matrix (3n × 3n, row-major, degrees of freedom node by node) into a matrix
+/// built by [`NodeGraph::zero_matrix`]; `nodes` are the element's global node indices.
+pub fn add_block(k: &mut Csr, nodes: &[usize], data: &[f64]) -> Result<()> {
+    let width = 3 * nodes.len();
     if data.len() != width * width {
         return Err(Error::Internal("element matrix size".into()));
     }
     for (i, &a) in nodes.iter().enumerate() {
-        for r in 0..3 {
-            let row = 3 * a + r;
-            let (start, end) = (k.ptr.get(row).copied().unwrap_or(0), k.ptr.get(row + 1).copied().unwrap_or(0));
-            let cols = k.idx.get(start..end).ok_or_else(|| Error::Internal("pattern".into()))?;
-            for (j, &b) in nodes.iter().enumerate() {
+        for (j, &b) in nodes.iter().enumerate() {
+            let rows = block_offsets(k, a, b)?;
+            for (r, start) in rows.iter().enumerate() {
                 for c in 0..3 {
-                    let v = if scalar {
-                        if r != c {
-                            continue;
-                        }
-                        data.get(i * n + j).copied().unwrap_or(0.0)
-                    } else {
-                        data.get((3 * i + r) * width + 3 * j + c).copied().unwrap_or(0.0)
-                    };
-                    let pos = cols.binary_search(&(3 * b + c)).map_err(|_| Error::Internal("entry outside the pattern".into()))?;
-                    if let Some(x) = k.val.get_mut(start + pos) {
+                    if let (Some(x), Some(v)) = (k.val.get_mut(start + c), data.get((3 * i + r) * width + 3 * j + c)) {
                         *x += v;
                     }
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Add an n × n element matrix to each displacement component's block (consistent mass).
+pub fn add_scalar(k: &mut Csr, nodes: &[usize], data: &[f64]) -> Result<()> {
+    let n = nodes.len();
+    if data.len() != n * n {
+        return Err(Error::Internal("element matrix size".into()));
+    }
+    for (i, &a) in nodes.iter().enumerate() {
+        for (j, &b) in nodes.iter().enumerate() {
+            let rows = block_offsets(k, a, b)?;
+            let v = data.get(i * n + j).copied().unwrap_or(0.0);
+            for (c, start) in rows.iter().enumerate() {
+                if let Some(x) = k.val.get_mut(start + c) {
+                    *x += v;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Add a per-node diagonal to each displacement component (lumped mass).
+pub fn add_diagonal(k: &mut Csr, nodes: &[usize], diagonal: &[f64]) -> Result<()> {
+    for (&a, v) in nodes.iter().zip(diagonal) {
+        let rows = block_offsets(k, a, a)?;
+        for (c, start) in rows.iter().enumerate() {
+            if let Some(x) = k.val.get_mut(start + c) {
+                *x += v;
             }
         }
     }
@@ -179,8 +208,8 @@ mod tests {
             e[i * 6 + i] = 2.0;
             e[i * 6 + (i + 3) % 6] = -1.0;
         }
-        add_element(&mut k, &[0, 1], &e, false).unwrap();
-        add_element(&mut k, &[1, 2], &e, false).unwrap();
+        add_block(&mut k, &[0, 1], &e).unwrap();
+        add_block(&mut k, &[1, 2], &e).unwrap();
         assert_eq!(k.diagonal(), vec![2.0, 2.0, 2.0, 4.0, 4.0, 4.0, 2.0, 2.0, 2.0]);
         let x = vec![1.0; 9];
         let mut y = vec![0.0; 9];
@@ -191,7 +220,13 @@ mod tests {
         let r = k.restrict(&map, 3);
         assert_eq!(r.diagonal(), vec![2.0, 4.0, 2.0]);
         assert_eq!(r.row(1).0, &[0, 1, 2]);
-        assert!(add_element(&mut k, &[0, 2], &e, false).is_err(), "nodes 0 and 2 share no element");
+        assert!(add_block(&mut k, &[0, 2], &e).is_err(), "nodes 0 and 2 share no element");
+        // Scalar (per component) and diagonal additions land on each component.
+        let mut m = g.zero_matrix();
+        add_scalar(&mut m, &[0, 1], &[2.0, 1.0, 1.0, 2.0]).unwrap();
+        add_diagonal(&mut m, &[2], &[5.0]).unwrap();
+        assert_eq!(m.diagonal(), vec![2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 5.0, 5.0, 5.0]);
+        assert_eq!(m.row(0).1, &[2.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
         let s = k.add_scaled(-1.0, &k).unwrap();
         assert!(s.val.iter().all(|v| *v == 0.0));
     }

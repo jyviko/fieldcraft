@@ -85,14 +85,13 @@ fn etree(a: &UpperColumns) -> Vec<usize> {
 /// The pattern of row k of L (excluding the diagonal): the reach of column k's entries in the
 /// elimination tree. Fills `stack[top..]` in topological order and returns `top`; `mark` holds
 /// `k` for visited columns.
-fn ereach(a: &UpperColumns, k: usize, parent: &[usize], stack: &mut [usize], mark: &mut [usize]) -> usize {
+fn ereach(a: &UpperColumns, k: usize, parent: &[usize], stack: &mut [usize], mark: &mut [usize], path: &mut Vec<usize>) -> usize {
     let n = a.n;
     let mut top = n;
     if let Some(m) = mark.get_mut(k) {
         *m = k;
     }
     let (rows, _) = a.column(k);
-    let mut path = Vec::new();
     for &i0 in rows {
         let mut i = i0;
         if i > k {
@@ -135,14 +134,15 @@ pub enum FactorError {
 }
 
 impl Factor {
-    /// The number of entries L would have, without computing it.
-    pub fn symbolic_entries(a: &UpperColumns) -> (Vec<usize>, Vec<usize>) {
+    /// The elimination tree and the entry count of each column of L, without computing values.
+    fn symbolic(a: &UpperColumns) -> (Vec<usize>, Vec<usize>) {
         let parent = etree(a);
         let mut counts = vec![1usize; a.n];
         let mut stack = vec![0; a.n];
         let mut mark = vec![NONE; a.n];
+        let mut path = Vec::new();
         for k in 0..a.n {
-            let top = ereach(a, k, &parent, &mut stack, &mut mark);
+            let top = ereach(a, k, &parent, &mut stack, &mut mark, &mut path);
             for &j in stack.get(top..).unwrap_or_default() {
                 if let Some(c) = counts.get_mut(j) {
                     *c += 1;
@@ -154,7 +154,7 @@ impl Factor {
 
     pub fn new(a: &UpperColumns, max_entries: usize) -> std::result::Result<Factor, FactorError> {
         let n = a.n;
-        let (parent, counts) = Factor::symbolic_entries(a);
+        let (parent, counts) = Factor::symbolic(a);
         let total: usize = counts.iter().sum();
         if total > max_entries {
             return Err(FactorError::TooLarge { entries: total, limit: max_entries });
@@ -171,8 +171,9 @@ impl Factor {
         let mut x = vec![0.0f64; n];
         let mut stack = vec![0usize; n];
         let mut mark = vec![NONE; n];
+        let mut path = Vec::new();
         for k in 0..n {
-            let top = ereach(a, k, &parent, &mut stack, &mut mark);
+            let top = ereach(a, k, &parent, &mut stack, &mut mark, &mut path);
             let (rows, vals) = a.column(k);
             let mut diag = 0.0;
             for (i, v) in rows.iter().zip(vals) {

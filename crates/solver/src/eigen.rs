@@ -305,8 +305,8 @@ pub fn lanczos(op: &impl Operator, shift: f64, wanted: Wanted, block: usize, max
                 a[j][i] = s;
             }
         }
-        q.extend(cur.iter().cloned());
-        mq.extend(mcur.iter().cloned());
+        q.append(&mut cur);
+        mq.append(&mut mcur);
         let m = q.len();
         for row in &mut t {
             row.resize(m, 0.0);

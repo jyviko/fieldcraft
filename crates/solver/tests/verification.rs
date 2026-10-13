@@ -10,7 +10,7 @@ use modelcraft_model::{BoundaryCondition, ElementKind, Load, Procedure, Symmetry
 use modelcraft_solver::{FrequencyOptions, Limits, MassKind, StaticResult, solve_frequency, solve_static};
 
 fn static_solve(g: &Grid) -> StaticResult {
-    solve_static(&g.model, "Step", &Limits::default()).unwrap()
+    solve_static(&g.model, Some("Step"), &Limits::default()).unwrap()
 }
 
 fn at(r: &StaticResult, label: u32) -> usize {
@@ -308,7 +308,7 @@ fn cantilever_natural_frequencies() {
         (ElementKind::Tet10, [20, 2, 2], MassKind::Consistent, "tet10"),
     ] {
         let g = beam(kind, n, true, 4);
-        let r = solve_frequency(&g.model, "Step", &FrequencyOptions { mass, shift: None }, &Limits::default()).unwrap();
+        let r = solve_frequency(&g.model, Some("Step"), &FrequencyOptions { mass, shift: None }, &Limits::default()).unwrap();
         let f: Vec<f64> = r.modes.iter().map(|m| m.frequency).collect();
         eprintln!("cantilever modes {name}: {f:.6?} vs EB {f1:.6}, {f2:.6} ({} Lanczos vectors)", r.stats.lanczos_vectors);
         assert_eq!(f.len(), 4);
@@ -323,7 +323,7 @@ fn cantilever_natural_frequencies() {
 #[test]
 fn free_free_beam_has_six_rigid_body_modes() {
     let g = beam(ElementKind::Hex20, [20, 1, 1], false, 8);
-    let r = solve_frequency(&g.model, "Step", &FrequencyOptions::default(), &Limits::default()).unwrap();
+    let r = solve_frequency(&g.model, Some("Step"), &FrequencyOptions::default(), &Limits::default()).unwrap();
     let f: Vec<f64> = r.modes.iter().map(|m| m.frequency).collect();
     let f1 = beam_frequency(4.730_040_74, 20.0, 1000.0, 1.0, 1.0);
     eprintln!("free-free modes: {f:.6?} vs EB {f1:.6}");
@@ -341,8 +341,8 @@ fn free_free_beam_has_six_rigid_body_modes() {
 #[test]
 fn results_are_deterministic() {
     let g = beam(ElementKind::Tet10, [6, 1, 1], true, 3);
-    let a = solve_frequency(&g.model, "Step", &FrequencyOptions::default(), &Limits::default()).unwrap();
-    let b = solve_frequency(&g.model, "Step", &FrequencyOptions::default(), &Limits::default()).unwrap();
+    let a = solve_frequency(&g.model, Some("Step"), &FrequencyOptions::default(), &Limits::default()).unwrap();
+    let b = solve_frequency(&g.model, Some("Step"), &FrequencyOptions::default(), &Limits::default()).unwrap();
     assert_eq!(a, b);
 }
 
@@ -353,15 +353,15 @@ fn errors_name_the_problem() {
     g.define(iso(1000.0, 0.3), None, full(), Procedure::Static {});
     g.face_set("end", |q| near(q[0], 1.0));
     g.load("p", Load::Pressure { set: "end".into(), magnitude: 1.0 });
-    let e = solve_static(&g.model, "Step", &Limits::default()).unwrap_err().to_string();
+    let e = solve_static(&g.model, Some("Step"), &Limits::default()).unwrap_err().to_string();
     assert!(e.contains("singular at node"), "{e}");
     // Caps.
     g.fixed("root", |q| near(q[0], 0.0));
     let tight = Limits { max_dofs: 10, ..Limits::default() };
-    assert!(solve_static(&g.model, "Step", &tight).unwrap_err().to_string().contains("limit"));
+    assert!(solve_static(&g.model, Some("Step"), &tight).unwrap_err().to_string().contains("limit"));
     let tight = Limits { max_factor_entries: 5, ..Limits::default() };
-    assert!(solve_static(&g.model, "Step", &tight).unwrap_err().to_string().contains("limit"));
-    assert!(solve_static(&g.model, "Nope", &Limits::default()).is_err());
-    assert!(solve_frequency(&g.model, "Step", &FrequencyOptions::default(), &Limits::default()).is_err(), "a static step");
-    assert!(solve_static(&g.model, "Step", &Limits::default()).is_ok());
+    assert!(solve_static(&g.model, Some("Step"), &tight).unwrap_err().to_string().contains("limit"));
+    assert!(solve_static(&g.model, Some("Nope"), &Limits::default()).is_err());
+    assert!(solve_frequency(&g.model, Some("Step"), &FrequencyOptions::default(), &Limits::default()).is_err(), "a static step");
+    assert!(solve_static(&g.model, Some("Step"), &Limits::default()).is_ok());
 }

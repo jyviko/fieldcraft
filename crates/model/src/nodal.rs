@@ -95,6 +95,48 @@ fn rule(corners: usize) -> Vec<(f64, f64, f64)> {
     }
 }
 
+/// Visit the quadrature points of a face (node coordinates in the face's node order): the shape
+/// function values and the weighted normal (∂x/∂ξ × ∂x/∂η) w, whose length is the point's share of
+/// the area and whose direction is the face's right-hand normal.
+fn integrate_face(xyz: &[[f64; 3]], mut visit: impl FnMut(&[f64], [f64; 3])) -> Result<()> {
+    if xyz.iter().flatten().any(|c| !c.is_finite()) {
+        return Err(Error::Invalid("face coordinates must be finite".into()));
+    }
+    let (corners, shape): (usize, fn(usize, f64, f64) -> Shape) = match xyz.len() {
+        3 | 6 => (3, triangle),
+        4 | 8 => (4, quadrilateral),
+        n => return Err(Error::Invalid(format!("a face has 3, 4, 6 or 8 nodes, not {n}"))),
+    };
+    for (xi, eta, w) in rule(corners) {
+        let s = shape(xyz.len(), xi, eta);
+        let mut tx = [0.0; 3];
+        let mut te = [0.0; 3];
+        for ((p, dx), de) in xyz.iter().zip(&s.dxi).zip(&s.deta) {
+            for k in 0..3 {
+                tx[k] += dx * p[k];
+                te[k] += de * p[k];
+            }
+        }
+        let c = [tx[1] * te[2] - tx[2] * te[1], tx[2] * te[0] - tx[0] * te[2], tx[0] * te[1] - tx[1] * te[0]];
+        visit(&s.n, c.map(|v| v * w));
+    }
+    Ok(())
+}
+
+/// ∫ Nᵢ n dA for every node of a face: the consistent nodal forces of a unit pressure pulling
+/// along the face's right-hand (outward, for solids) normal.
+pub fn face_normal_weights(xyz: &[[f64; 3]]) -> Result<Vec<[f64; 3]>> {
+    let mut out = vec![[0.0; 3]; xyz.len()];
+    integrate_face(xyz, |n, nda| {
+        for (o, ni) in out.iter_mut().zip(n) {
+            for k in 0..3 {
+                o[k] += ni * nda[k];
+            }
+        }
+    })?;
+    Ok(out)
+}
+
 impl Model {
     /// The nodal weights `∫ N_i dA` of a set of element faces, summed per node. Their sum is the
     /// faces' area.
@@ -104,27 +146,16 @@ impl Model {
             let labels = self.face_nodes(f).ok_or_else(|| Error::NotFound(format!("element {} face {}", f.element, f.face)))?;
             let xyz: Vec<[f64; 3]> =
                 labels.iter().map(|n| self.node(*n).map(|p| p.xyz).ok_or_else(|| Error::NotFound(format!("node {n}")))).collect::<Result<_>>()?;
-            let (corners, shape): (usize, fn(usize, f64, f64) -> Shape) = match labels.len() {
-                3 | 6 => (3, triangle),
-                4 | 8 => (4, quadrilateral),
-                n => return Err(Error::Invalid(format!("element {} face {} has {n} nodes, not a surface face", f.element, f.face))),
-            };
-            for (xi, eta, w) in rule(corners) {
-                let s = shape(labels.len(), xi, eta);
-                let mut tx = [0.0; 3];
-                let mut te = [0.0; 3];
-                for ((p, dx), de) in xyz.iter().zip(&s.dxi).zip(&s.deta) {
-                    for k in 0..3 {
-                        tx[k] += dx * p[k];
-                        te[k] += de * p[k];
-                    }
+            integrate_face(&xyz, |n, nda| {
+                let da = (nda[0] * nda[0] + nda[1] * nda[1] + nda[2] * nda[2]).sqrt();
+                for (label, ni) in labels.iter().zip(n) {
+                    *out.entry(*label).or_default() += ni * da;
                 }
-                let c = [tx[1] * te[2] - tx[2] * te[1], tx[2] * te[0] - tx[0] * te[2], tx[0] * te[1] - tx[1] * te[0]];
-                let da = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt() * w;
-                for (label, n) in labels.iter().zip(&s.n) {
-                    *out.entry(*label).or_default() += n * da;
-                }
-            }
+            })
+            .map_err(|e| match e {
+                Error::Invalid(m) => Error::Invalid(format!("element {} face {}: {m}", f.element, f.face)),
+                e => e,
+            })?;
         }
         Ok(out)
     }

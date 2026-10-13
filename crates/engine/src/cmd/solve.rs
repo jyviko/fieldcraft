@@ -54,19 +54,6 @@ fn limits(p: &Value) -> Result<Limits> {
     })
 }
 
-/// The step named by `step`, or the only step of the procedure.
-fn step_name(s: &Session, p: &Value, procedure: &str) -> Result<String> {
-    if let Some(name) = opt::<String>(p, "step")? {
-        return Ok(name);
-    }
-    let matching: Vec<&str> = s.model.steps().iter().filter(|st| st.procedure.name() == procedure).map(|st| st.name.as_str()).collect();
-    match matching.as_slice() {
-        [one] => Ok((*one).to_string()),
-        [] => Err(EngineError::Params(format!("the model has no {procedure} step"))),
-        many => Err(EngineError::Params(format!("name the `step`: the model has {procedure} steps {}", many.join(", ")))),
-    }
-}
-
 fn largest(values: impl Iterator<Item = (u32, f64)>) -> Value {
     match values.fold(None, |best: Option<(u32, f64)>, (l, v)| if best.is_none_or(|(_, b)| v > b) { Some((l, v)) } else { best }) {
         Some((node, value)) => json!({"node": node, "value": value}),
@@ -76,8 +63,8 @@ fn largest(values: impl Iterator<Item = (u32, f64)>) -> Value {
 
 fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
     let limits = limits(p)?;
-    let step = step_name(s, p, "static")?;
-    let r = solve_static(&s.model, &step, &limits)?;
+    let step = opt::<String>(p, "step")?;
+    let r = solve_static(&s.model, step.as_deref(), &limits)?;
     let magnitude = |u: &[f64; 3]| (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]).sqrt();
     let summary = json!({
         "step": r.step,
@@ -96,15 +83,10 @@ fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_frequency(s: &mut Session, p: &Value) -> Result<Value> {
     let limits = limits(p)?;
-    let step = step_name(s, p, "frequency")?;
+    let step = opt::<String>(p, "step")?;
     let mass = opt::<MassKind>(p, "mass")?.unwrap_or_default();
     let shift = opt::<f64>(p, "shift")?;
-    if let Some(sh) = shift
-        && !sh.is_finite()
-    {
-        return Err(EngineError::Params("`shift` must be a finite number".into()));
-    }
-    let r = solve_frequency(&s.model, &step, &FrequencyOptions { mass, shift }, &limits)?;
+    let r = solve_frequency(&s.model, step.as_deref(), &FrequencyOptions { mass, shift }, &limits)?;
     let summary = json!({
         "step": r.step,
         "dofs": r.stats.dofs,

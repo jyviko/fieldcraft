@@ -22,15 +22,7 @@ pub struct Elem {
 
 impl Elem {
     pub fn solid(&self) -> Result<Solid<'_>> {
-        Solid::new(self.kind, &self.xyz, self.formulation).map_err(|e| element_error(self.label, e))
-    }
-}
-
-/// Name the element in a kernel error.
-pub fn element_error(label: u32, e: modelcraft_fem::Error) -> Error {
-    match e {
-        modelcraft_fem::Error::NotSupported(m) => Error::NotSupported(format!("element {label}: {m}")),
-        other => Error::Invalid(format!("element {label}: {other}")),
+        Solid::new(self.kind, &self.xyz, self.formulation).map_err(|e| Error::element(self.label, e))
     }
 }
 
@@ -80,7 +72,7 @@ impl Mesh {
             let set = resolved.sets.get(&section.set).ok_or_else(|| Error::Invalid(format!("set `{}` is not resolved", section.set)))?;
             for &label in &set.elements {
                 let el = model.element(label).ok_or_else(|| Error::Invalid(format!("element {label} is missing")))?;
-                let formulation = Formulation::from_section(el.kind, &section.formulation).map_err(|e| element_error(label, e))?;
+                let formulation = Formulation::from_section(el.kind, &section.formulation).map_err(|e| Error::element(label, e))?;
                 elements.push((label, el.kind, el.nodes.clone(), formulation, d, material.density));
             }
         }
@@ -149,10 +141,10 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step) -> Re
     for name in &step.loads {
         let load = model.load(name).ok_or_else(|| Error::Invalid(format!("load `{name}` is missing")))?;
         match load {
+            Load::Force { target: Target::ReferencePoint(rp), .. } => {
+                return Err(Error::NotSupported(format!("loads on reference points (`{name}` on `{rp}`)")));
+            }
             Load::Force { .. } | Load::Traction { .. } => {
-                if let Load::Force { target: Target::ReferencePoint(rp), .. } = load {
-                    return Err(Error::NotSupported(format!("loads on reference points (`{name}` on `{rp}`)")));
-                }
                 for (label, v) in resolved.nodal_loads.get(name).map(Vec::as_slice).unwrap_or_default() {
                     let node = mesh.node(*label).ok_or_else(|| Error::Invalid(format!("load `{name}`: node {label} belongs to no solid element")))?;
                     add(&mut f, node, *v);
@@ -172,17 +164,14 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step) -> Re
                         .map(|l| mesh.node(*l).ok_or_else(|| Error::Invalid(format!("load `{name}`: node {l} belongs to no solid element"))))
                         .collect::<Result<_>>()?;
                     let xyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
-                    let forces = face::pressure(&xyz, *magnitude).map_err(|e| element_error(fc.element, e))?;
+                    let forces = face::pressure(&xyz, *magnitude).map_err(|e| Error::element(fc.element, e))?;
                     for (i, v) in idx.iter().zip(forces) {
                         add(&mut f, *i, v);
                     }
                 }
             }
             Load::Gravity { acceleration, set } => {
-                let chosen: Option<&[u32]> = match set {
-                    Some(s) => Some(resolved.sets.get(s).map(|r| r.elements.as_slice()).unwrap_or_default()),
-                    None => None,
-                };
+                let chosen: Option<&[u32]> = set.as_ref().map(|s| resolved.sets.get(s).map(|r| r.elements.as_slice()).unwrap_or_default());
                 for e in &mesh.elements {
                     if chosen.is_some_and(|c| c.binary_search(&e.label).is_err()) {
                         continue;
@@ -203,7 +192,7 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step) -> Re
 }
 
 fn body(f: &mut [f64], e: &Elem, b: [f64; 3]) -> Result<()> {
-    let forces = e.solid()?.body_force(b).map_err(|err| element_error(e.label, err))?;
+    let forces = e.solid()?.body_force(b).map_err(|err| Error::element(e.label, err))?;
     for (node, v) in e.nodes.iter().zip(forces) {
         add(f, *node, v);
     }

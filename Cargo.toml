@@ -15,6 +15,7 @@ repository = "https://github.com/jyviko/modelcraft"
 modelcraft-model = { path = "crates/model" }
 modelcraft-geometry = { path = "crates/geometry" }
 modelcraft-mesh = { path = "crates/mesh" }
+modelcraft-decks = { path = "crates/decks" }
 modelcraft-engine = { path = "crates/engine" }
 modelcraft-testkit = { path = "crates/testkit" }
 modelcraft-render = { path = "crates/render" }

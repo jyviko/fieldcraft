@@ -1,0 +1,13 @@
+[package]
+name = "modelcraft-decks"
+description = "ModelCraft's solver decks: Abaqus input, Nastran bulk data and LS-DYNA keyword writers (and later readers)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+modelcraft-model = { workspace = true }
+thiserror = { workspace = true }

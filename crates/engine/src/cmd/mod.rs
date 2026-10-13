@@ -7,7 +7,7 @@ mod edit;
 pub(crate) mod file;
 mod geometry;
 mod hex;
-mod mesh;
+pub(crate) mod mesh;
 mod model;
 mod results;
 pub(crate) mod solve;

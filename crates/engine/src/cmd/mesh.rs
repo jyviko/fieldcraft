@@ -104,8 +104,8 @@ fn optional_count(p: &Value, key: &str, default: u64, range: std::ops::RangeIncl
     usize::try_from(v).map_err(|_| EngineError::Params(format!("`{key}` is too large")))
 }
 
-/// The boundary options of `mesh.surface.check` and `mesh.tet.generate`.
-fn surface_options(p: &Value, mesh: &SurfaceMesh) -> Result<SurfaceOptions> {
+/// The boundary options of `mesh.surface.check`, `mesh.tet.generate` and the hex meshers.
+pub(super) fn surface_options(p: &Value, mesh: &SurfaceMesh) -> Result<SurfaceOptions> {
     let defaults = SurfaceOptions::default();
     Ok(SurfaceOptions {
         weld_tolerance: optional_number(p, "weld", defaults.weld_tolerance)?,

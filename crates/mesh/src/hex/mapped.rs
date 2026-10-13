@@ -128,7 +128,7 @@ pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
                     _ => (s * ni, t * nj, q),
                 };
                 if let Some(slot) = x.get_mut(idx(i, j, k)) {
-                    *slot = Some(*slot.as_ref().unwrap_or(&pt));
+                    slot.get_or_insert(pt);
                 }
             }
         }

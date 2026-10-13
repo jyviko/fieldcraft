@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
-  <title>mesh.hex.generate</title>
+  <title>mesh.hex.octree</title>
   <g id="Layer_1" data-name="Layer 1">
     <path d="M3 3 L21 3 L21 21 L3 21 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M12 3 L12 21 M3 12 L21 12" fill="none" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>

@@ -221,57 +221,84 @@ pub fn hex_mesh(surface: &BoundarySurface, faces: &[Option<Surface>], field: &dy
     };
     let mut reasons: Vec<String> = Vec::new();
     for &method in methods {
-        // The ways this method can try the body: frames for the layered sweeps, one otherwise.
-        let frames: Vec<Option<layered::Frame>> = match method {
-            HexMethod::Extrude | HexMethod::Revolve => {
-                let frames = if method == HexMethod::Extrude { layered::translations(&brep) } else { layered::rotations(&brep) };
-                // Frames the body sweeps in, fewest levels first.
-                let mut fitting: Vec<(usize, usize, layered::Frame)> = Vec::new();
-                let mut first_reason = None;
-                for (k, f) in frames.into_iter().enumerate() {
-                    match layered::levels(&ctx, &f) {
-                        Ok(n) => fitting.push((n, k, f)),
-                        Err(e) => {
-                            first_reason.get_or_insert(e);
-                        }
-                    }
-                }
-                fitting.sort_by_key(|x| (x.0, x.1));
-                if fitting.is_empty() {
-                    let none = if method == HexMethod::Extrude { "no direction to try" } else { "no axis to try" };
-                    reasons.push(format!("{}: {}", method.name(), first_reason.unwrap_or_else(|| none.to_string())));
-                    continue;
-                }
-                fitting.into_iter().take(layered::MAX_CANDIDATES).map(|(_, _, f)| Some(f)).collect()
-            }
-            _ => vec![None],
-        };
         let mut last = None;
-        for frame in frames {
-            // A face mesher that fails on a coarse boundary gets finer cross-section curves.
-            for refine in 0..=MAX_REFINE {
-                let raw = match (method, frame) {
-                    (HexMethod::Extrude | HexMethod::Revolve, Some(f)) => layered::mesh(&ctx, &f, refine),
-                    (HexMethod::Sweep, _) => sweep::mesh(&ctx, refine),
-                    (HexMethod::Mapped, _) => mapped::mesh(&ctx),
-                    _ => Err(Error::Failed("no frame".into())),
+        match method {
+            HexMethod::Extrude | HexMethod::Revolve => {
+                let setups = match candidate_setups(&ctx, method) {
+                    Ok(s) => s,
+                    Err(why) => {
+                        reasons.push(format!("{}: {why}", method.name()));
+                        continue;
+                    }
                 };
-                match raw.and_then(|raw| finish(&ctx, raw, method)) {
-                    Ok(mesh) => return Ok(mesh),
-                    Err(e @ Error::Limit(_)) => return Err(e),
-                    Err(e @ Error::Failed(_)) if refine < MAX_REFINE && method != HexMethod::Mapped => last = Some(e),
-                    Err(e) => {
-                        last = Some(e);
-                        break;
+                for setup in setups {
+                    // The cross-section is laid out once per frame; refinement retries reuse it.
+                    let prepared = match layered::prepare(&ctx, setup) {
+                        Ok(p) => p,
+                        Err(e @ Error::Limit(_)) => return Err(e),
+                        Err(e) => {
+                            last = Some(e);
+                            continue;
+                        }
+                    };
+                    match with_refinement(&ctx, method, |refine| layered::mesh(&ctx, &prepared, refine)) {
+                        Ok(mesh) => return Ok(mesh),
+                        Err(e @ Error::Limit(_)) => return Err(e),
+                        Err(e) => last = Some(e),
                     }
                 }
             }
+            HexMethod::Sweep => match with_refinement(&ctx, method, |refine| sweep::mesh(&ctx, refine)) {
+                Ok(mesh) => return Ok(mesh),
+                Err(e @ Error::Limit(_)) => return Err(e),
+                Err(e) => last = Some(e),
+            },
+            _ => match mapped::mesh(&ctx).and_then(|raw| finish(&ctx, raw, method)) {
+                Ok(mesh) => return Ok(mesh),
+                Err(e @ Error::Limit(_)) => return Err(e),
+                Err(e) => last = Some(e),
+            },
         }
         if let Some(e) = last {
             reasons.push(format!("{}: {}", method.name(), plain(&e)));
         }
     }
     Err(Error::Unsupported(format!("no structured hex method fits this body ({})", reasons.join("; "))))
+}
+
+/// The frames a layered method can try, fewest levels first, or the first reason none fits.
+fn candidate_setups(ctx: &Ctx, method: HexMethod) -> std::result::Result<Vec<layered::Setup>, String> {
+    let frames = if method == HexMethod::Extrude { layered::translations(ctx.brep) } else { layered::rotations(ctx.brep) };
+    let mut fitting: Vec<(usize, usize, layered::Setup)> = Vec::new();
+    let mut first_reason = None;
+    for (k, f) in frames.into_iter().enumerate() {
+        match layered::setup(ctx, &f) {
+            Ok(s) => fitting.push((s.level_count(), k, s)),
+            Err(e) => {
+                first_reason.get_or_insert_with(|| plain(&e));
+            }
+        }
+    }
+    if fitting.is_empty() {
+        return Err(first_reason.unwrap_or_else(|| if method == HexMethod::Extrude { "no direction to try".into() } else { "no axis to try".into() }));
+    }
+    fitting.sort_by_key(|x| (x.0, x.1));
+    Ok(fitting.into_iter().take(layered::MAX_CANDIDATES).map(|x| x.2).collect())
+}
+
+/// Run a method's mesher and [`finish`], and when that fails (a face mesher on a boundary too
+/// coarse for it, or curved elements the gate rejects) again with the cross-section's curves
+/// halved, up to [`MAX_REFINE`] times. Limits and unsupported shapes end it at once.
+fn with_refinement(ctx: &Ctx, method: HexMethod, run: impl Fn(u32) -> Result<Raw>) -> Result<HexMesh> {
+    let mut last = Error::Failed("no attempt".into());
+    for refine in 0..=MAX_REFINE {
+        match run(refine).and_then(|raw| finish(ctx, raw, method)) {
+            Ok(mesh) => return Ok(mesh),
+            Err(e @ Error::Failed(_)) => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
 }
 
 /// An error's message without the "not supported yet" prefix (for the combined reasons).
@@ -284,8 +311,7 @@ fn plain(e: &Error) -> String {
 
 /// Hex face `k` (0-based) corner positions in the element.
 fn hex_face(k: usize) -> [usize; 4] {
-    let f = ElementKind::Hex8.faces().get(k).copied().unwrap_or(&[0, 1, 2, 3]);
-    [f.first().copied().unwrap_or(0), f.get(1).copied().unwrap_or(0), f.get(2).copied().unwrap_or(0), f.get(3).copied().unwrap_or(0)]
+    ElementKind::Hex8.faces().get(k).and_then(|f| <[usize; 4]>::try_from(*f).ok()).unwrap_or([0, 1, 2, 3])
 }
 
 /// Tag, check, upgrade to hex20 when asked, gate and measure.
@@ -399,13 +425,12 @@ fn face_flux(face: &[P]) -> f64 {
     let mut sum = 0.0;
     for (r, wr) in G {
         for (s, ws) in G {
-            let (n, dr, ds) = quad_shape(face.len(), r, s);
+            let [n, dr, ds] = quad_shape(face.len() == 8, r, s);
             let (mut x, mut xr, mut xs) = ([0.0; 3], [0.0; 3], [0.0; 3]);
-            for (k, p) in face.iter().enumerate() {
-                let (a, b, c) = (n.get(k).copied().unwrap_or(0.0), dr.get(k).copied().unwrap_or(0.0), ds.get(k).copied().unwrap_or(0.0));
-                x = add(x, scale(*p, a));
-                xr = add(xr, scale(*p, b));
-                xs = add(xs, scale(*p, c));
+            for (k, p) in face.iter().enumerate().take(8) {
+                x = add(x, scale(*p, n[k]));
+                xr = add(xr, scale(*p, dr[k]));
+                xs = add(xs, scale(*p, ds[k]));
             }
             sum += wr * ws * x[0] * cross(xr, xs)[0];
         }
@@ -413,29 +438,34 @@ fn face_flux(face: &[P]) -> f64 {
     sum
 }
 
-/// Shape functions and derivatives of quad4 (4 nodes) or quad8 (8 nodes) at `(r, s)`.
-fn quad_shape(n: usize, r: f64, s: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+/// Shape functions and their `r`, `s` derivatives of quad4 (the first four entries) or quad8 at
+/// `(r, s)`.
+fn quad_shape(quadratic: bool, r: f64, s: f64) -> [[f64; 8]; 3] {
     const C: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
-    if n == 8 {
-        let mut v: Vec<f64> = C.iter().map(|(ri, si)| 0.25 * (1.0 + ri * r) * (1.0 + si * s) * (ri * r + si * s - 1.0)).collect();
-        let mut dr: Vec<f64> = C.iter().map(|(ri, si)| 0.25 * ri * (1.0 + si * s) * (2.0 * ri * r + si * s)).collect();
-        let mut ds: Vec<f64> = C.iter().map(|(ri, si)| 0.25 * si * (1.0 + ri * r) * (ri * r + 2.0 * si * s)).collect();
+    let mut out = [[0.0; 8]; 3];
+    for (k, (ri, si)) in C.iter().enumerate() {
+        if quadratic {
+            out[0][k] = 0.25 * (1.0 + ri * r) * (1.0 + si * s) * (ri * r + si * s - 1.0);
+            out[1][k] = 0.25 * ri * (1.0 + si * s) * (2.0 * ri * r + si * s);
+            out[2][k] = 0.25 * si * (1.0 + ri * r) * (ri * r + 2.0 * si * s);
+        } else {
+            out[0][k] = 0.25 * (1.0 + ri * r) * (1.0 + si * s);
+            out[1][k] = 0.25 * ri * (1.0 + si * s);
+            out[2][k] = 0.25 * si * (1.0 + ri * r);
+        }
+    }
+    if quadratic {
         // Mid-side nodes on sides 0-1 (s = −1), 1-2 (r = 1), 2-3 (s = 1), 3-0 (r = −1).
-        v.extend([
+        out[0][4..].copy_from_slice(&[
             0.5 * (1.0 - r * r) * (1.0 - s),
             0.5 * (1.0 + r) * (1.0 - s * s),
             0.5 * (1.0 - r * r) * (1.0 + s),
             0.5 * (1.0 - r) * (1.0 - s * s),
         ]);
-        dr.extend([-r * (1.0 - s), 0.5 * (1.0 - s * s), -r * (1.0 + s), -0.5 * (1.0 - s * s)]);
-        ds.extend([-0.5 * (1.0 - r * r), -s * (1.0 + r), 0.5 * (1.0 - r * r), -s * (1.0 - r)]);
-        (v, dr, ds)
-    } else {
-        let v = C.iter().map(|(ri, si)| 0.25 * (1.0 + ri * r) * (1.0 + si * s)).collect();
-        let dr = C.iter().map(|(ri, si)| 0.25 * ri * (1.0 + si * s)).collect();
-        let ds = C.iter().map(|(ri, si)| 0.25 * si * (1.0 + ri * r)).collect();
-        (v, dr, ds)
+        out[1][4..].copy_from_slice(&[-r * (1.0 - s), 0.5 * (1.0 - s * s), -r * (1.0 + s), -0.5 * (1.0 - s * s)]);
+        out[2][4..].copy_from_slice(&[-0.5 * (1.0 - r * r), -s * (1.0 + r), 0.5 * (1.0 - r * r), -s * (1.0 - r)]);
     }
+    out
 }
 
 /// Projection rounds for a point on several faces (alternating projections onto each).

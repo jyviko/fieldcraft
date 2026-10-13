@@ -32,7 +32,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Tet | Quadratic — Second-order elements with mid-side nodes on the geometry | coming soon (M2) |  |
 | Tet | Delaunay Points — Delaunay tetrahedralization of a point list (debugging aid) | ready | `mesh.delaunay.points` |
 | Structured Hex | Quad Faces — All-quad meshes of faces on shared edge nodes | coming soon (M5) |  |
-| Structured Hex | Mapped Hex — Mapped hex mesh of a six-sided block (curved faces allowed) | ready | `mesh.hex.mapped` |
+| Structured Hex | Mapped Hex — Mapped hex mesh of a six-sided block (curved faces allowed) | ready | `mesh.hex.mapped`, `mesh.hex.generate` |
 | Structured Hex | Sweep Hex — Hex mesh swept along extrusions (several levels), around revolutions, or from a source face to a target | ready | `mesh.hex.sweep`, `mesh.hex.generate` |
 | Structured Hex | Decompose — Find sweepable and mappable regions and propose the splits | coming soon (M5) |  |
 | Structured Hex | Transition — Conforming tet–hex interfaces with pyramids | coming soon (M5) |  |

@@ -323,7 +323,7 @@ impl<'a> TriangleTree<'a> {
 }
 
 /// The most triangle evaluations the inside tests of one mesh may spend.
-pub(crate) const MAX_WINDING_WORK: u64 = 2_000_000_000;
+pub(crate) const MAX_INSIDE_WORK: u64 = 2_000_000_000;
 
 /// Inside tests by the generalized winding number, with a shared work budget.
 pub(crate) struct Inside<'a> {
@@ -340,8 +340,8 @@ impl<'a> Inside<'a> {
     pub(crate) fn winding(&mut self, x: P) -> Result<f64> {
         let n = self.surface.triangles().len() as u64;
         self.work = self.work.saturating_add(n);
-        if self.work > MAX_WINDING_WORK {
-            return Err(Error::Limit(format!("inside tests exceed {MAX_WINDING_WORK} triangle evaluations")));
+        if self.work > MAX_INSIDE_WORK {
+            return Err(Error::Limit(format!("inside tests exceed {MAX_INSIDE_WORK} triangle evaluations")));
         }
         let pts = self.surface.points();
         let mut sum = 0.0;

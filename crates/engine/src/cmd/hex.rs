@@ -1,9 +1,11 @@
 //! Structured hexahedral meshing of the open design's bodies or of imported surfaces.
 
+use std::borrow::Cow;
+
 use modelcraft_geometry::{FaceSurface, Shape, SurfaceMesh};
 use modelcraft_mesh::hex::{HexMesh, HexMethod, HexOptions, Surface, hex_mesh};
 use modelcraft_mesh::size::UniformSize;
-use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
+use modelcraft_mesh::surface::BoundarySurface;
 use modelcraft_model::{GeometryRef, Model};
 use serde_json::{Value, json};
 
@@ -12,7 +14,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const HEX_GENERATE: CommandSpec = CommandSpec {
     id: "mesh.hex.generate",
     label: "Generate Hex Mesh",
-    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "swept" (any sweep) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the mesh with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; `face<index>` when a face has no name), so sets by geometry resolve. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
+    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "swept" (any sweep) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the mesh with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name; `weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate), so sets by geometry resolve. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
     kind: CommandKind::Model,
     run: hex_generate,
 };
@@ -27,9 +29,9 @@ const DEFAULT_RELATIVE_SIZE: f64 = 1.0 / 25.0;
 const DEFAULT_RELATIVE_TOLERANCE: f64 = 1e-3;
 
 /// One body to mesh.
-struct Input {
+struct Input<'a> {
     name: String,
-    mesh: SurfaceMesh,
+    mesh: Cow<'a, SurfaceMesh>,
     surfaces: Vec<Option<Surface>>,
     face_names: Vec<String>,
     diagonal: f64,
@@ -60,7 +62,7 @@ fn diagonal(lo: [f64; 3], hi: [f64; 3]) -> f64 {
     (0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f64>().sqrt()
 }
 
-fn shape_input(shape: &Shape, tolerance: Option<f64>) -> Result<Input> {
+fn shape_input(shape: &Shape, tolerance: Option<f64>) -> Result<Input<'static>> {
     let diag = shape.size()?;
     let tol = tolerance.unwrap_or(DEFAULT_RELATIVE_TOLERANCE * diag);
     if tol < MIN_RELATIVE_TOLERANCE * diag {
@@ -68,10 +70,10 @@ fn shape_input(shape: &Shape, tolerance: Option<f64>) -> Result<Input> {
     }
     let surfaces = shape.face_surfaces()?.into_iter().map(|f| f.map(analytic)).collect();
     let face_names = shape.faces().iter().map(|f| f.name.clone()).collect();
-    Ok(Input { name: shape.name.clone(), mesh: shape.tessellate(tol)?, surfaces, face_names, diagonal: diag })
+    Ok(Input { name: shape.name.clone(), mesh: Cow::Owned(shape.tessellate(tol)?), surfaces, face_names, diagonal: diag })
 }
 
-fn inputs(s: &Session, p: &Value) -> Result<Vec<Input>> {
+fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
     let tolerance = number(p, "tolerance")?;
     match (p.get("body"), p.get("surface")) {
         (Some(b), None) => {
@@ -96,7 +98,9 @@ fn inputs(s: &Session, p: &Value) -> Result<Vec<Input>> {
                 }
             }
             let name = if t.name.trim().is_empty() { format!("Surface{index}") } else { t.name.clone() };
-            Ok(vec![Input { name, mesh: t.mesh.clone(), surfaces: Vec::new(), face_names: Vec::new(), diagonal: diagonal(lo, hi) }])
+            // Faces named by index, as mesh.tet.generate names them.
+            let face_names = (0..t.faces).map(|f| f.to_string()).collect();
+            Ok(vec![Input { name, mesh: Cow::Borrowed(&t.mesh), surfaces: Vec::new(), face_names, diagonal: diagonal(lo, hi) }])
         }
         (None, None) => {
             let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first, or give `surface`".into()))?;
@@ -166,7 +170,7 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
         if h < MIN_RELATIVE_SIZE * b.diagonal {
             return Err(EngineError::Params(format!("`size` must be at least {} mm for body `{}`", MIN_RELATIVE_SIZE * b.diagonal, b.name)));
         }
-        let surface_options = SurfaceOptions { weld_distance: b.mesh.weld_distance, ..SurfaceOptions::default() };
+        let surface_options = super::mesh::surface_options(p, &b.mesh)?;
         let surface = BoundarySurface::new(&b.mesh.positions, &b.mesh.triangles, &b.mesh.tri_face, &surface_options)
             .map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?;
         let chord = if b.surfaces.is_empty() { 0.0 } else { number(p, "tolerance")?.unwrap_or(DEFAULT_RELATIVE_TOLERANCE * b.diagonal) };
@@ -212,7 +216,7 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
 }
 
 /// Tag every boundary element face with its B-rep face.
-fn tag_faces(model: &mut Model, b: &Input, m: &HexMesh, first_element: u32) -> Result<()> {
+fn tag_faces(model: &mut Model, b: &Input<'_>, m: &HexMesh, first_element: u32) -> Result<()> {
     let mut tags: Vec<Option<u32>> = Vec::new();
     for f in &m.boundary {
         let i = f.brep_face as usize;
@@ -222,7 +226,7 @@ fn tag_faces(model: &mut Model, b: &Input, m: &HexMesh, first_element: u32) -> R
         let tag = match tags.get(i).copied().flatten() {
             Some(t) => t,
             None => {
-                let name = b.face_names.get(i).cloned().unwrap_or_else(|| format!("face{i}"));
+                let name = b.face_names.get(i).cloned().unwrap_or_else(|| i.to_string());
                 let t = model.geometry_tag(&GeometryRef::face(b.name.as_str(), name)?)?;
                 if let Some(slot) = tags.get_mut(i) {
                     *slot = Some(t);

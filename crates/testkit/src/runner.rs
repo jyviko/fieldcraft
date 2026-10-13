@@ -151,18 +151,21 @@ impl Stage for StructuredHex {
                 .map_err(|e| format!("{}: {e}", body.name))?;
             let faces: Vec<Option<Surface>> =
                 body.face_surfaces().map_err(|e| format!("{}: {e}", body.name))?.into_iter().map(|f| f.map(analytic)).collect();
-            match hex_mesh(&s, &faces, &size, &linear) {
+            let m_method = match hex_mesh(&s, &faces, &size, &linear) {
                 Ok(m) => {
                     methods.push(m.report.method.name());
                     elements += m.element_count();
                     sj8 = sj8.min(m.report.min_scaled_jacobian);
+                    m.report.method
                 }
                 Err(e) => {
                     let reason: String = e.to_string().chars().take(REASON_CHARS).collect();
                     let ms = start.elapsed().as_secs_f64() * 1e3;
                     return Ok(vec![format!("no: {}: {reason}", body.name), String::new(), String::new(), String::new(), format!("{ms:.0}")]);
                 }
-            }
+            };
+            // The hex20 run goes straight to the method that meshed the body.
+            let quadratic = HexOptions { method: m_method, ..quadratic.clone() };
             sj20 = match (sj20, hex_mesh(&s, &faces, &size, &quadratic)) {
                 (Ok(a), Ok(m)) => Ok(a.min(m.report.min_scaled_jacobian)),
                 (Err(e), _) => Err(e),

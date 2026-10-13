@@ -28,11 +28,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::brep::Brep;
 use super::geom::{add, scale};
 use super::interval::Intervals;
-use super::layered::Frame;
+use super::layered::{Frame, PlaneField};
 use super::region;
 use super::{Ctx, Raw, project_to_face, project_to_faces};
 use crate::quad::transfinite_grid;
-use crate::size::{SizeField, divide_polyline, ideal_divisions};
+use crate::size::{divide_polyline, ideal_divisions};
 use crate::vec3::{P, sub};
 use crate::{Error, Result};
 
@@ -316,7 +316,7 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
     // Source mesh on the layer-0 rings, which run as the source's loops do.
     let ring0: Vec<Vec<u32>> = rings_by_layer.iter().map(|l| l.first().cloned().unwrap_or_default()).collect();
     let loops2: Vec<Vec<[f64; 2]>> = ring0.iter().map(|r| r.iter().map(|&i| q(nodes.get(i))).collect()).collect();
-    let plane_field = PlaneField { field: ctx.field, frame };
+    let plane_field = PlaneField { field: ctx.field, frame, h: 0.0 };
     // Where each loop's edge uses start in its ring: at the edges' first vertices.
     let starts: Vec<Vec<usize>> = source
         .loops
@@ -356,7 +356,8 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
         return Err(Error::Limit(format!("placing the sweep's interior nodes would take {work} steps; the limit is {MAX_CORRECTION_WORK}")));
     }
     let s_ring: Vec<[f64; 2]> = boundary_ids.iter().map(|&i| q(nodes.get(i))).collect();
-    // Interior nodes, layer by layer.
+    // Interior nodes, layer by layer. The residual weights depend only on the source plane.
+    let weights: Vec<Vec<(usize, f64)>> = interior2.iter().map(|p| shepard_weights(*p, &s_ring)).collect();
     let mut layer_nodes: Vec<Vec<u32>> = Vec::with_capacity(n_layers + 1);
     for j in 0..=n_layers {
         let ring: Vec<u32> = rings_by_layer.iter().flat_map(|l| l.get(j).cloned().unwrap_or_default()).collect();
@@ -370,8 +371,9 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
             let x: Vec<P> = ring.iter().map(|&i| nodes.get(i)).collect();
             let map = Affine::fit(&s_ring, &x)?;
             let residual: Vec<P> = s_ring.iter().zip(&x).map(|(s, xi)| sub(*xi, map.at(*s))).collect();
-            for p in &interior2 {
-                let mut y = add(map.at(*p), shepard(*p, &s_ring, &residual));
+            for (p, w) in interior2.iter().zip(&weights) {
+                let correction = w.iter().fold([0.0; 3], |acc, &(k, wk)| add(acc, scale(residual.get(k).copied().unwrap_or([0.0; 3]), wk)));
+                let mut y = add(map.at(*p), correction);
                 if j == n_layers {
                     y = project_to_face(ctx, topo.target, y).unwrap_or(y);
                 }
@@ -404,18 +406,6 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
         }
     );
     Ok(Raw { nodes: nodes.xyz, hexes, description })
-}
-
-/// A size field on the source plane.
-struct PlaneField<'a> {
-    field: &'a dyn SizeField,
-    frame: Frame,
-}
-
-impl SizeField for PlaneField<'_> {
-    fn size(&self, p: [f64; 3]) -> f64 {
-        self.field.size(self.frame.point([p[0], p[1]], 0.0))
-    }
 }
 
 /// The transfinite grid of a linking face projected onto it: `grid[j][i]`, `i` along the bottom
@@ -495,17 +485,22 @@ impl Affine {
     }
 }
 
-/// Inverse-distance (Shepard, power 4) interpolation of the ring residuals at `p`.
-fn shepard(p: [f64; 2], ring: &[[f64; 2]], residual: &[P]) -> P {
-    let (mut acc, mut wsum) = ([0.0; 3], 0.0);
-    for (s, r) in ring.iter().zip(residual) {
+/// Inverse-distance (Shepard, power 4) weights of the ring nodes at `p`, normalized: the
+/// residual correction at `p` is their weighted sum of the ring's residuals.
+fn shepard_weights(p: [f64; 2], ring: &[[f64; 2]]) -> Vec<(usize, f64)> {
+    let mut w: Vec<(usize, f64)> = Vec::with_capacity(ring.len());
+    for (k, s) in ring.iter().enumerate() {
         let d2 = (p[0] - s[0]).powi(2) + (p[1] - s[1]).powi(2);
         if d2 == 0.0 {
-            return *r;
+            return vec![(k, 1.0)];
         }
-        let w = 1.0 / (d2 * d2);
-        acc = add(acc, scale(*r, w));
-        wsum += w;
+        w.push((k, 1.0 / (d2 * d2)));
     }
-    if wsum > 0.0 { scale(acc, 1.0 / wsum) } else { [0.0; 3] }
+    let sum: f64 = w.iter().map(|x| x.1).sum();
+    if sum > 0.0 {
+        for x in &mut w {
+            x.1 /= sum;
+        }
+    }
+    w
 }

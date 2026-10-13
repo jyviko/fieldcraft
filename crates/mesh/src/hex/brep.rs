@@ -63,11 +63,10 @@ pub(crate) struct Brep<'a> {
     pub edges: Vec<Edge>,
     /// Whether each surface vertex is a B-rep vertex.
     pub is_vertex: Vec<bool>,
+    /// The two triangles of each face-boundary segment, by its vertices (low, high).
+    edge_triangles: BTreeMap<(u32, u32), [u32; 2]>,
     /// Length of the bounding-box diagonal.
     pub diagonal: f64,
-    /// Geometric tolerance: points closer than this are the same, planes flatter than this are
-    /// planar.
-    pub eps: f64,
 }
 
 /// Relative geometric tolerance (of the bounding-box diagonal).
@@ -124,6 +123,7 @@ impl<'a> Brep<'a> {
             right: usize,
         }
         let mut segs = Vec::new();
+        let mut edge_triangles = BTreeMap::new();
         for fe in surface.feature_edges().iter().filter(|e| e.kind == FeatureKind::FaceBoundary) {
             let (Some(left), Some(right)) = (face_of(fe.triangles[0]), face_of(fe.triangles[1])) else {
                 return Err(Error::Failed("feature edge without faces".into()));
@@ -131,6 +131,7 @@ impl<'a> Brep<'a> {
             // Orient each segment as the lower-indexed face traverses it, so that the segments of
             // one edge chain head to tail.
             let [lo, hi] = fe.vertices;
+            edge_triangles.insert((lo, hi), fe.triangles);
             segs.push(if left < right { Seg { from: lo, to: hi, left, right } } else { Seg { from: hi, to: lo, left: right, right: left } });
         }
         let mut incident: Vec<Vec<usize>> = vec![Vec::new(); pts.len()];
@@ -235,7 +236,7 @@ impl<'a> Brep<'a> {
                 face.loops = loops;
             }
         }
-        Ok(Brep { surface, faces, edges, is_vertex, diagonal, eps })
+        Ok(Brep { surface, faces, edges, is_vertex, edge_triangles, diagonal })
     }
 
     pub(crate) fn point(&self, v: u32) -> P {
@@ -258,6 +259,14 @@ impl<'a> Brep<'a> {
             v.reverse();
         }
         v
+    }
+
+    /// The vertex of face `f`'s triangle on edge `e`'s first segment that is not on the edge.
+    pub(crate) fn third_vertex(&self, e: usize, f: usize) -> Option<u32> {
+        let edge = self.edges.get(e)?;
+        let (a, b) = (*edge.points.first()?, *edge.points.get(1)?);
+        let tri = self.edge_triangles.get(&(a.min(b), a.max(b)))?.iter().copied().find(|&t| self.face_of_triangle(t) == Some(f))?;
+        self.surface.triangles().get(tri as usize)?.iter().copied().find(|&v| v != a && v != b)
     }
 
     /// The face's name for messages: its tag.

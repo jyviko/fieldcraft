@@ -33,12 +33,15 @@ use super::geom::{Inside, Surface, add, dist, scale, unit};
 use super::interval::Intervals;
 use super::region::{self, Scheme};
 use super::{Ctx, Raw};
-use crate::size::{SizeField, divide_polyline, ideal_divisions};
+use crate::predicates::Sign;
+use crate::size::{SizeField, divide_polyline, edge_divisions, ideal_divisions};
 use crate::vec3::{P, cross, dot, norm, sub};
 use crate::{Error, Result};
 
 /// Angular tolerance (radians) of "parallel" and "perpendicular" for the recognition.
 const ANGLE_TOL: f64 = 1e-6;
+/// Distance (relative to the diagonal) within which two axes of revolution are one.
+const RELATIVE_AXIS: f64 = 1e-6;
 /// The most candidate frames tried per method.
 pub(crate) const MAX_CANDIDATES: usize = 6;
 
@@ -246,15 +249,16 @@ pub(crate) fn rotations(brep: &Brep) -> Vec<Frame> {
             | Some(Surface::Torus { center: origin, axis, .. }) => (origin, axis),
             _ => continue,
         };
-        if !axes.iter().any(|(p, b)| parallel(*b, a) && line_distance(o, *p, *b) <= brep.eps * 10.0) {
+        if !axes.iter().any(|(p, b)| parallel(*b, a) && line_distance(o, *p, *b) <= RELATIVE_AXIS * brep.diagonal) {
             axes.push((o, a));
         }
     }
     axes.into_iter().filter_map(|(o, a)| Frame::rotate(o, a)).collect()
 }
 
-/// A level of the sweep and the curves projected from it.
-struct Setup {
+/// The frame's classification of the body: face roles and levels.
+pub(crate) struct Setup {
+    frame: Frame,
     roles: Vec<Role>,
     /// Sorted levels (heights or angles in `[0, 2π)`).
     levels: Vec<f64>,
@@ -262,7 +266,7 @@ struct Setup {
 
 /// Classify faces and edges and find the levels; an `Unsupported` error says why the body does
 /// not sweep in this frame.
-fn setup(ctx: &Ctx, frame: &Frame) -> Result<Setup> {
+pub(crate) fn setup(ctx: &Ctx, frame: &Frame) -> Result<Setup> {
     let brep = ctx.brep;
     let tol = ctx.tol;
     let mut roles = Vec::with_capacity(brep.faces.len());
@@ -318,14 +322,21 @@ fn setup(ctx: &Ctx, frame: &Frame) -> Result<Setup> {
     if levels.len() < need {
         return Err(Error::Unsupported("no source and target faces across the sweep".into()));
     }
-    Ok(Setup { roles, levels })
+    Ok(Setup { frame: *frame, roles, levels })
+}
+
+impl Setup {
+    /// The number of levels the frame sweeps through (for ordering candidates).
+    pub(crate) fn level_count(&self) -> usize {
+        self.levels.len()
+    }
 }
 
 /// A size field on the cross-section plane at sweep coordinate `h`.
-struct PlaneField<'a> {
-    field: &'a dyn SizeField,
-    frame: Frame,
-    h: f64,
+pub(crate) struct PlaneField<'a> {
+    pub field: &'a dyn SizeField,
+    pub frame: Frame,
+    pub h: f64,
 }
 
 impl SizeField for PlaneField<'_> {
@@ -334,42 +345,37 @@ impl SizeField for PlaneField<'_> {
     }
 }
 
-/// The number of levels the frame sweeps through, if the body sweeps in it (for ordering
-/// candidates).
-pub(crate) fn levels(ctx: &Ctx, frame: &Frame) -> std::result::Result<usize, String> {
-    match setup(ctx, frame) {
-        Ok(s) => Ok(s.levels.len()),
-        Err(e) => Err(e.to_string()),
-    }
+/// The cross-section of a frame the body sweeps in: the arrangement (cut at reflex corners),
+/// the level intervals and which of them each region fills. It does not depend on the element
+/// size, so refinement retries reuse it.
+pub(crate) struct Prepared {
+    setup: Setup,
+    arr: Arrangement,
+    intervals: Vec<(f64, f64)>,
+    filled: Vec<Vec<bool>>,
+    used: Vec<bool>,
 }
 
-/// Mesh the body by sweeping in `frame`, with the cross-section's curves `2^refine` times finer
-/// than the size asks.
-pub(crate) fn mesh(ctx: &Ctx, frame: &Frame, refine: u32) -> Result<Raw> {
+/// Lay out the cross-section of `setup`'s frame.
+pub(crate) fn prepare(ctx: &Ctx, setup: Setup) -> Result<Prepared> {
     let brep = ctx.brep;
     let tol = ctx.tol;
-    let Setup { roles, levels } = setup(ctx, frame)?;
-    let h_ref = levels.first().copied().unwrap_or(0.0);
+    let frame = &setup.frame;
+    let (roles, levels) = (&setup.roles, &setup.levels);
     // Lower outlines of the walls, and every vertex.
     let mut polylines: Vec<(Vec<Q>, usize)> = Vec::new();
-    for edge in &brep.edges {
+    for (e, edge) in brep.edges.iter().enumerate() {
         let pts: Vec<(Q, f64)> = edge.points.iter().map(|&v| frame.coords(brep.point(v))).collect();
         let Some(&(_, h0)) = pts.first() else { continue };
         if !pts.iter().all(|&(q, h)| frame.span(q, frame.dh(h, h0)) <= tol) {
             continue;
         }
-        let (Some(&a), Some(&b)) = (edge.points.first(), edge.points.get(1)) else { continue };
         for &f in &edge.faces {
             if roles.get(f) != Some(&Role::Wall) {
                 continue;
             }
             // The wall's triangle on the edge's first segment: is its third vertex above?
-            let Some(face) = brep.faces.get(f) else { continue };
-            let third = face.triangles.iter().find_map(|&t| {
-                let tri = brep.surface.triangles().get(t as usize)?;
-                (tri.contains(&a) && tri.contains(&b)).then(|| tri.iter().copied().find(|&v| v != a && v != b)).flatten()
-            });
-            let Some(c) = third else { continue };
+            let Some(c) = brep.third_vertex(e, f) else { continue };
             let (qc, hc) = frame.coords(brep.point(c));
             if frame.dh(hc, h0) > 0.0 && frame.span(qc, frame.dh(hc, h0)) > tol {
                 polylines.push((pts.iter().map(|x| x.0).collect(), f));
@@ -380,22 +386,16 @@ pub(crate) fn mesh(ctx: &Ctx, frame: &Frame, refine: u32) -> Result<Raw> {
         .edges
         .iter()
         .flat_map(|e| [e.first(), e.last()])
-        .chain((0..brep.is_vertex.len() as u32).filter(|&v| brep.is_vertex.get(v as usize).copied().unwrap_or(false)))
+        .chain(brep.is_vertex.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u32))
         .map(|v| frame.coords(brep.point(v)).0)
         .collect();
     let coincide = 2.0 * ctx.opts.chordal_tolerance.max(0.0) + 4.0 * tol;
-    // Level intervals.
-    let intervals: Vec<(f64, f64)> = if frame.periodic() {
-        (0..levels.len())
-            .map(|k| {
-                let lo = levels.get(k).copied().unwrap_or(0.0);
-                let hi = levels.get(k + 1).copied().unwrap_or(levels.first().copied().unwrap_or(0.0) + TAU);
-                (lo, hi)
-            })
-            .collect()
-    } else {
-        levels.windows(2).map(|w| (w[0], w[1])).collect()
+    // Level intervals; a revolution's last one wraps round to the first level.
+    let (Some(&first_level), Some(rest)) = (levels.first(), levels.get(1..)) else {
+        return Err(Error::Unsupported("no levels".into()));
     };
+    let ends: Vec<f64> = if frame.periodic() { rest.iter().copied().chain(std::iter::once(first_level + TAU)).collect() } else { rest.to_vec() };
+    let intervals: Vec<(f64, f64)> = levels.iter().copied().zip(ends).collect();
     let mut inside = Inside::new(brep.surface);
     let first = arrangement::build(&vertices, &polylines, tol, coincide)?;
     let (_, used_first) = occupancy(&first, frame, &intervals, &mut inside)?;
@@ -408,6 +408,15 @@ pub(crate) fn mesh(ctx: &Ctx, frame: &Frame, refine: u32) -> Result<Raw> {
         arrangement::build(&vertices, &polylines, tol, coincide)?
     };
     let (filled, used) = occupancy(&arr, frame, &intervals, &mut inside)?;
+    Ok(Prepared { setup, arr, intervals, filled, used })
+}
+
+/// Mesh the prepared cross-section, with its curves `2^refine` times finer than the size asks.
+pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
+    let brep = ctx.brep;
+    let Prepared { setup, arr, intervals, filled, used } = prepared;
+    let (frame, levels) = (&setup.frame, &setup.levels);
+    let h_ref = levels.first().copied().unwrap_or(0.0);
     // Interval assignment over the curves of filled regions, and the layer counts.
     let mut ia = Intervals::default();
     let plane_field = PlaneField { field: ctx.field, frame: *frame, h: h_ref };
@@ -446,12 +455,12 @@ pub(crate) fn mesh(ctx: &Ctx, frame: &Frame, refine: u32) -> Result<Raw> {
     let counts = ia.solve()?;
     let r_max = arr.points.iter().map(|q| q[1].abs()).fold(0.0, f64::max);
     let mut layers = Vec::with_capacity(intervals.len());
-    for &(lo, hi) in &intervals {
+    for &(lo, hi) in intervals.iter() {
         let path: Vec<P> = match frame {
             Frame::Translate { .. } => vec![frame.point([0.0, 0.0], lo), frame.point([0.0, 0.0], hi)],
             Frame::Rotate { .. } => (0..=16).map(|k| frame.point([0.0, r_max], lo + (hi - lo) * k as f64 / 16.0)).collect(),
         };
-        let mut n = ideal_divisions(ctx.field, &path)?.round().max(1.0) as usize;
+        let mut n = edge_divisions(ctx.field, &path)?;
         if frame.periodic() {
             n = n.max(((hi - lo) / FRAC_PI_4).ceil() as usize);
         }
@@ -589,7 +598,7 @@ pub(crate) fn mesh(ctx: &Ctx, frame: &Frame, refine: u32) -> Result<Raw> {
         }
     }
     let filled_regions = used.iter().filter(|&&u| u).count();
-    let structured = schemes.iter().zip(&used).filter(|(s, u)| **u && **s != Scheme::Free).count();
+    let structured = schemes.iter().zip(used.iter()).filter(|(s, u)| **u && **s != Scheme::Free).count();
     let description = format!(
         "{}: {} level{}, {} region{} ({} structured, {} free), {} layer{}",
         frame.describe(),
@@ -737,16 +746,18 @@ fn interior_point(arr: &Arrangement, region: &arrangement::Region) -> Result<Q> 
         out
     };
     let loops: Vec<Vec<Q>> = region.loops.iter().map(|l| polygon(l)).collect();
+    // Crossing-number winding with exact side tests (a probe point off the plane's domain
+    // counts as outside).
     let winding = |p: Q, poly: &[Q]| -> i64 {
         let mut wn = 0;
         for k in 0..poly.len() {
             let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
-            let side = (b[0] - a[0]) * (p[1] - a[1]) - (p[0] - a[0]) * (b[1] - a[1]);
+            let side = arrangement::sign(a, b, p).unwrap_or(Sign::Zero);
             if a[1] <= p[1] {
-                if b[1] > p[1] && side > 0.0 {
+                if b[1] > p[1] && side == Sign::Positive {
                     wn += 1;
                 }
-            } else if b[1] <= p[1] && side < 0.0 {
+            } else if b[1] <= p[1] && side == Sign::Negative {
                 wn -= 1;
             }
         }
@@ -756,16 +767,11 @@ fn interior_point(arr: &Arrangement, region: &arrangement::Region) -> Result<Q> 
         loops
             .iter()
             .flat_map(|poly| (0..poly.len()).map(move |k| (poly[k], poly[(k + 1) % poly.len()])))
-            .map(|(a, b)| {
-                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                let l2 = dx * dx + dy * dy;
-                let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-                ((p[0] - a[0] - t * dx).powi(2) + (p[1] - a[1] - t * dy).powi(2)).sqrt()
-            })
+            .map(|(a, b)| arrangement::seg_dist2(p, a, b).0.sqrt())
             .fold(f64::INFINITY, f64::min)
     };
     let outer = loops.first().ok_or_else(|| Error::Failed("region without a loop".into()))?;
-    let mut edges: Vec<(f64, usize)> = (0..outer.len()).map(|k| (dist2(outer[k], outer[(k + 1) % outer.len()]), k)).collect();
+    let mut edges: Vec<(f64, usize)> = (0..outer.len()).map(|k| (arrangement::d2(outer[k], outer[(k + 1) % outer.len()]), k)).collect();
     edges.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
     let mut best: Option<(f64, Q)> = None;
     for &(len2, k) in edges.iter().take(64) {
@@ -784,8 +790,4 @@ fn interior_point(arr: &Arrangement, region: &arrangement::Region) -> Result<Q> 
         }
     }
     best.filter(|(c, _)| *c > 0.0).map(|(_, p)| p).ok_or_else(|| Error::Failed("no point found inside a cross-section region".into()))
-}
-
-fn dist2(a: Q, b: Q) -> f64 {
-    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)
 }

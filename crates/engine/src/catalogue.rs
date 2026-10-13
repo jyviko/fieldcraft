@@ -256,7 +256,14 @@ pub static CATALOGUE: &[Capability] = &[
         "Quad or triangle mesh of a planar face or polygon in the XY plane for plane stress, plane strain and axisymmetric models; edges tagged",
     ),
     soon("mesh.quad.faces", "Quad Faces", Mesh, "Structured Hex", "M5", "All-quad meshes of faces on shared edge nodes"),
-    ready("mesh.hex.mapped", "Mapped Hex", Mesh, "Structured Hex", "Mapped hex mesh of a six-sided block (curved faces allowed)"),
+    ready_more(
+        "mesh.hex.mapped",
+        "Mapped Hex",
+        Mesh,
+        "Structured Hex",
+        "Mapped hex mesh of a six-sided block (curved faces allowed)",
+        &["mesh.hex.generate"],
+    ),
     ready_more(
         "mesh.hex.sweep",
         "Sweep Hex",

@@ -46,12 +46,12 @@ pub(crate) struct Arrangement {
     pub regions: Vec<Region>,
 }
 
-fn d2(a: Q, b: Q) -> f64 {
+pub(super) fn d2(a: Q, b: Q) -> f64 {
     (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)
 }
 
 /// Squared distance from `p` to segment `ab`, and the parameter of the closest point.
-fn seg_dist2(p: Q, a: Q, b: Q) -> (f64, f64) {
+pub(super) fn seg_dist2(p: Q, a: Q, b: Q) -> (f64, f64) {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let len2 = dx * dx + dy * dy;
     if !(len2 > 0.0) {
@@ -61,7 +61,7 @@ fn seg_dist2(p: Q, a: Q, b: Q) -> (f64, f64) {
     (d2(p, [a[0] + t * dx, a[1] + t * dy]), t)
 }
 
-fn sign(a: Q, b: Q, c: Q) -> Result<Sign> {
+pub(super) fn sign(a: Q, b: Q, c: Q) -> Result<Sign> {
     Ok(orient2d(&Point2::new(a[0], a[1])?, &Point2::new(b[0], b[1])?, &Point2::new(c[0], c[1])?))
 }
 

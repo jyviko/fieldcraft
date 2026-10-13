@@ -130,19 +130,29 @@ module docs; ADR 0001 records why the linear algebra is our own.
 
 1. **System.** `Model::resolve()`; each solid section's elements take their material's
    elasticity matrix and the section's formulation (`modelcraft_fem::element::ELEMENT_TYPES`, one
-   row per element kind). Couplings, reference points, moments, shells and beams return "not
-   supported yet". The step's boundary conditions prescribe translations (rotations do not exist
-   on solid nodes); its loads become a load vector: forces and tractions from
-   `Resolved::nodal_loads`, pressure as consistent face loads, gravity and body forces through the
+   row per element kind: tet4, tet10, wedge6, hex8, hex20). Every reference point a coupling
+   ties to the mesh gets six degrees of freedom (translations, rotations) after the mesh's. Shells
+   and beams return "not supported yet". The step's boundary conditions prescribe translations
+   (rotations do not exist on solid nodes) and a coupled point's six directions; its loads become
+   a load vector: forces and tractions from `Resolved::nodal_loads`, forces and moments on coupled
+   reference points, pressure as consistent face loads, gravity and body forces through the
    element shape functions.
 2. **Assembly** on the node graph (3 × 3 blocks, elements in label order, so sums are
    reproducible bit for bit).
-3. **Ordering and elimination.** Nested dissection of the nodes by coordinate bisection; free
-   degrees of freedom numbered in that order; prescribed values moved to the right-hand side (no
-   penalty).
+3. **Ordering and elimination** (`constraints`). Nested dissection of the nodes by coordinate
+   bisection. Couplings become linear constraint rows: kinematic = rigid link of each coupled
+   translation to the point's translation and rotation; distributing = the point follows the
+   least-squares rigid fit of the set's translations (equal weights, the deck writers' choice).
+   Prescribed values and rows are eliminated master–slave in a fixed order, one dependent degree
+   of freedom per row (the coupled node or the distributing point while it is free, else the
+   largest coefficient), giving u = T_f q + T_p u_p; the reduced matrix T_fᵀ K T_f stays
+   symmetric positive definite (no penalty, no multipliers). Free mesh equations follow the
+   node order, reference point equations come last. Without couplings T is a selection and the
+   numbers are those of plain elimination, bit for bit.
 4. **Static solution.** Up-looking sparse Cholesky (the factor size is computed and capped before
-   any value), reactions K u − f, integration-point stresses extrapolated to the nodes and
-   averaged, von Mises. A zero pivot names the node and direction that can move freely.
+   any value), reactions T_pᵀ (K u − f) (at nodes and at prescribed reference points, forces and
+   moments), integration-point stresses extrapolated to the nodes and averaged, von Mises. A zero
+   pivot names the node or reference point and direction that can move freely.
 5. **Frequency.** Shift-invert block Lanczos (block 6, full reorthogonalization) on
    K − σM, σ = 0 for a supported structure and slightly negative for a free one, so rigid-body
    modes come out at zero; mass-normalized shapes, participation factors and effective masses.
@@ -154,6 +164,11 @@ Verification (`crates/solver/tests/verification.rs`, analytic only): displacemen
 patch tests for every element and formulation (exact to round-off), cantilever tip deflection
 against Timoshenko with convergence rates of the linear elements, Lamé's cylinder, Kirsch's
 plate with a hole (Kt → 3), cantilever and free–free beam frequencies with six rigid-body modes.
+`crates/solver/tests/couplings.rs`: a block given a rigid motion through a coupled point
+(kinematic and distributing), clamping through a coupled point equals clamping (static and
+modes), tension through a distributing coupling against the equivalent pressure away from the
+end, pure bending by a moment through a distributing coupling, torsion of a tube by a moment on
+a kinematically coupled point (twist and shear stress).
 
 ## Commands
 

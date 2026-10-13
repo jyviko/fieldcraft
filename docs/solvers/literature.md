@@ -977,6 +977,17 @@ the module docs):
   Lewis, H. D. Simon, SIAM J. Matrix Anal. Appl. 15(1):228–272, 1994; B. N. Parlett, *The
   Symmetric Eigenvalue Problem*, SIAM 1998; G. H. Golub, C. F. Van Loan, *Matrix Computations*,
   4th ed., 2013.
+- Wedge6: the linear triangle times the linear interval; the symmetric three-point triangle rule
+  (Zienkiewicz, Taylor & Zhu 2013, table 6.3) times two-point Gauss–Legendre.
+- Couplings and constraint elimination: rigid links and master–slave elimination by
+  transformation, R. D. Cook, D. S. Malkus, M. E. Plesha, R. J. Witt, *Concepts and Applications
+  of Finite Element Analysis*, 4th ed., Wiley 2002, §9.2, and C. A. Felippa, *Introduction to
+  Finite Element Methods*, ch. 8 (University of Colorado lecture notes); automatic choice of the
+  dependent degree of freedom, J. F. Abel, M. S. Shephard, IJNME 14(3):464–467, 1979; the
+  distributing (interpolation) constraint as a least-squares rigid fit with loads spread by
+  virtual work, G. H. K. Heirman, W. Desmet, Multibody Syst. Dyn. 24(2):219–234, 2010; the
+  reduced matrix product T_fᵀ K T_f row by row, F. G. Gustavson, ACM TOMS 4(3):250–269, 1978.
 - Verification: R. H. MacNeal, R. L. Harder, *A proposed standard set of problems to test finite
   element accuracy*, Finite Elem. Anal. Des. 1(1):3–20, 1985 (patch tests); Lamé, Kirsch,
-  Timoshenko and Euler–Bernoulli closed forms.
+  Timoshenko and Euler–Bernoulli closed forms; Saint-Venant's principle (tension through a
+  coupling), pure bending σ = M z / I, torsion of a circular tube φ = T L / (G J), τ = T r / J.

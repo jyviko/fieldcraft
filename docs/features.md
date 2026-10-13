@@ -5,7 +5,7 @@ Generated from the capability catalogue (`crates/engine/src/catalogue.rs`) by
 Every entry is a toolbar button. **Ready** entries run their command; **coming soon** entries are
 shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 
-36 ready, 64 coming soon.
+37 ready, 63 coming soon.
 
 ## Geometry
 

@@ -54,7 +54,7 @@ pub const FLUID: CommandSpec = CommandSpec {
 pub const PROBE: CommandSpec = CommandSpec {
     id: "solve.probe",
     label: "Probe Results",
-    params: r#"{"step": "Load", "nodes": [1, 2], "mode": 1, "frame": 0} — the stored result at nodes: displacement, reaction, stress and von Mises (static), the shape of mode `mode` (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
+    params: r#"{"step": "Load", "nodes": [1, 2], "mode": 1, "frame": 0} — the stored result at nodes: displacement, reaction, stress and von Mises (static), the shape of mode `mode` (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` (or at the nodes nearest to points: "at": [[x, y, z], ...], lowest label on a tie, each entry then giving its `xyz` and `distance`) and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
     kind: CommandKind::Model,
     run: probe,
 };
@@ -345,15 +345,55 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
             format!("step `{step}` has no result; solve it first")
         })
     })?;
-    let result = match result.as_ref() {
-        StepResult::Explicit(r) => {
-            let list = |key| if p.get(key).is_some() { labels(p, key, MAX_PROBE) } else { Ok(Vec::new()) };
-            return probe_frame(r, &step, &list("nodes")?, &list("elements")?, p);
+    if let StepResult::Fluid(r) = result.as_ref() {
+        return probe_fluid(r, p);
+    }
+    let (nodes, located) = match (p.get("nodes"), p.get("at")) {
+        (Some(_), None) => (labels(p, "nodes", MAX_PROBE)?, None),
+        (None, Some(_)) => {
+            let at = points(p, "at", MAX_PROBE)?;
+            let found = nearest_nodes(&s.model, result.nodes(), &at)?;
+            (found.iter().map(|(l, _)| *l).collect(), Some(found))
         }
-        StepResult::Fluid(r) => return probe_fluid(r, p),
-        StepResult::Implicit(r) => r,
+        (None, None) if matches!(result.as_ref(), StepResult::Explicit(_)) => (Vec::new(), None),
+        _ => return Err(EngineError::Params("give either `nodes` or `at`".into())),
     };
-    let nodes = labels(p, "nodes", MAX_PROBE)?;
+    let mut out = match result.as_ref() {
+        StepResult::Explicit(r) => {
+            let elements = if p.get("elements").is_some() { labels(p, "elements", MAX_PROBE)? } else { Vec::new() };
+            probe_frame(r, &step, &nodes, &elements, p)?
+        }
+        StepResult::Implicit(r) => probe_implicit(r, &step, &nodes, p)?,
+        StepResult::Fluid(r) => probe_fluid(r, p)?,
+    };
+    if let (Some(found), Some(entries)) = (located, out.get_mut("nodes").and_then(Value::as_array_mut)) {
+        for (entry, (label, distance)) in entries.iter_mut().zip(found) {
+            if let Some(obj) = entry.as_object_mut() {
+                obj.insert("xyz".into(), json!(s.model.node(label).map(|n| n.xyz)));
+                obj.insert("distance".into(), json!(distance));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The node with a result nearest to each point (lowest label on a tie), and its distance.
+fn nearest_nodes(model: &modelcraft_model::Model, with_result: &[u32], at: &[[f64; 3]]) -> Result<Vec<(u32, f64)>> {
+    at.iter()
+        .map(|p| {
+            with_result
+                .iter()
+                .filter_map(|&l| {
+                    model.node(l).map(|n| (l, ((n.xyz[0] - p[0]).powi(2) + (n.xyz[1] - p[1]).powi(2) + (n.xyz[2] - p[2]).powi(2)).sqrt()))
+                })
+                .fold(None, |best: Option<(u32, f64)>, (l, d)| if best.is_none_or(|(_, bd)| d < bd) { Some((l, d)) } else { best })
+                .ok_or_else(|| EngineError::Params("the result has no nodes to probe".into()))
+        })
+        .collect()
+}
+
+/// The result of an implicit step at nodes.
+fn probe_implicit(result: &ImplicitResult, step: &str, nodes: &[u32], p: &Value) -> Result<Value> {
     let locate = |label: u32| {
         result
             .locate(label)
@@ -507,6 +547,15 @@ pub(crate) mod tests {
         let probe = s.execute("solve.probe", &json!({"step": "Bend", "nodes": [11, 1]})).unwrap();
         assert!(probe["nodes"][0]["displacement"][2].as_f64().unwrap() < -3.8, "{probe}");
         assert!(probe["nodes"][1]["reaction"][2].as_f64().unwrap() != 0.0, "{probe}");
+        // By location: the nearest node, with where it is.
+        let at = s.execute("solve.probe", &json!({"step": "Bend", "at": [[10.1, -0.2, 0.1], [0, 0, 0]]})).unwrap();
+        assert_eq!((at["nodes"][0]["node"].clone(), at["nodes"][1]["node"].clone()), (json!(11), json!(1)), "{at}");
+        assert_eq!(at["nodes"][0]["displacement"], probe["nodes"][0]["displacement"]);
+        assert_eq!(at["nodes"][0]["xyz"], json!([10.0, 0.0, 0.0]));
+        assert!((at["nodes"][0]["distance"].as_f64().unwrap() - 0.06f64.sqrt()).abs() < 1e-12);
+        for bad in [json!({"step": "Bend"}), json!({"step": "Bend", "nodes": [1], "at": [[0, 0, 0]]}), json!({"step": "Bend", "at": [[0, 0]]})] {
+            assert!(s.execute("solve.probe", &bad).is_err(), "{bad}");
+        }
 
         let f = s.execute("solve.frequency", &json!({"mass": "lumped"})).unwrap();
         assert_eq!(f["modes"].as_array().unwrap().len(), 4, "{f}");

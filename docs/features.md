@@ -43,7 +43,7 @@ shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 | Improve | Untangle — Repair inverted elements | coming soon (M6) |  |
 | Improve | Layers — Boundary padding and layers through thin walls | coming soon (M6) |  |
 | Edit | Node — Add a node | ready | `mesh.node.add`, `mesh.node.remove` |
-| Edit | Element — Add an element on existing nodes | ready | `mesh.element.add`, `mesh.element.remove` |
+| Edit | Element — Add an element on existing nodes, or a mapped block of them | ready | `mesh.element.add`, `mesh.element.remove`, `mesh.block` |
 | Edit | Merge Nodes — Merge coincident nodes | coming soon (M6) |  |
 | Edit | Remesh Region — Remesh a region in place; split and collapse elements | coming soon (M6) |  |
 | Edit | Orphan Mesh — Import a mesh without geometry | coming soon (M6) |  |

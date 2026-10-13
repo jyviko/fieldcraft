@@ -1,5 +1,6 @@
 //! The command registry. Each area has its own module; [`ALL`] lists every command.
 
+mod block;
 pub(crate) mod deck;
 pub(crate) mod define;
 mod edit;
@@ -32,6 +33,7 @@ pub static ALL: &[CommandSpec] = &[
     mesh::SURFACE_CHECK,
     mesh::PLANAR,
     mesh::TET_GENERATE,
+    block::BLOCK,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

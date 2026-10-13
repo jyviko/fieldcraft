@@ -53,10 +53,40 @@ impl Format {
         let text = (self.writer)(model, &resolved)?;
         Ok(Deck { text, warnings: resolved.warnings })
     }
+
+    /// Write only the named steps (in the model's order), or every step when `steps` is `None`;
+    /// for runs that hold some steps only, such as a Nastran run (static or frequency steps).
+    pub fn write_steps(&self, model: &Model, steps: Option<&[String]>) -> Result<Deck> {
+        match steps {
+            None => self.write(model),
+            Some(names) => self.write(&with_steps(model, names)?),
+        }
+    }
+}
+
+/// The model with only the named steps, in its own order. Definitions the dropped steps used
+/// stay (the check warns about the ones no step uses).
+pub fn with_steps(model: &Model, names: &[String]) -> Result<Model> {
+    if names.is_empty() {
+        return Err(Error::Model(modelcraft_model::Error::Invalid("choose at least one step to write".into())));
+    }
+    if let Some(n) = names.iter().find(|n| model.step(n).is_none()) {
+        let shown: String = n.chars().take(modelcraft_model::MAX_NAME_LEN).collect();
+        return Err(Error::Model(modelcraft_model::Error::NotFound(format!("step `{shown}`"))));
+    }
+    let mut out = model.clone();
+    let dropped: Vec<String> = model.steps().iter().map(|s| s.name.clone()).filter(|s| !names.contains(s)).collect();
+    for name in dropped {
+        out.remove_step(&name)?;
+    }
+    Ok(out)
 }
 
 /// Every deck format, one row per writer.
-pub const FORMATS: &[Format] = &[Format { name: "abaqus", extension: "inp", writer: abaqus::write_resolved }];
+pub const FORMATS: &[Format] = &[
+    Format { name: "abaqus", extension: "inp", writer: abaqus::write_resolved },
+    Format { name: "nastran", extension: "bdf", writer: nastran::write_resolved },
+];
 
 /// The format called `name`.
 pub fn format(name: &str) -> Option<&'static Format> {

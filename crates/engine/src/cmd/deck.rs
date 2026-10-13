@@ -10,7 +10,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const WRITE: CommandSpec = CommandSpec {
     id: "deck.write",
     label: "Write Solver Deck",
-    params: r#"{"format": "abaqus", "path": "part.inp"} — writes the model as a solver deck (formats: modelcraft_decks::FORMATS); fails naming every error of the model check and everything the format cannot express"#,
+    params: r#"{"format": "abaqus|nastran", "path": "part.inp", "steps": ["Load"]} — writes the model as a solver deck (formats: modelcraft_decks::FORMATS); `steps` (optional) writes only those steps, as a Nastran run needs (static or frequency steps, not both); fails naming every error of the model check and everything the format cannot express"#,
     kind: CommandKind::Session,
     run: write,
 };
@@ -23,7 +23,8 @@ fn write(s: &mut Session, p: &Value) -> Result<Value> {
         EngineError::Params(format!("unknown deck format `{shown}`; known: {}", known.join(", ")))
     })?;
     let path = super::path_param(p, "path")?;
-    let deck = format.write(&s.model)?;
+    let steps: Option<Vec<String>> = super::opt(p, "steps")?;
+    let deck = format.write_steps(&s.model, steps.as_deref())?;
     modelcraft_io::fs::write_atomic(Path::new(path), deck.text.as_bytes(), false)?;
     Ok(json!({"format": format.name, "path": path, "bytes": deck.text.len(), "warnings": deck.warnings}))
 }
@@ -60,6 +61,20 @@ mod tests {
         assert!(matches!(empty.execute("deck.write", &json!({"format": "abaqus", "path": other})), Err(EngineError::Deck(_))));
         assert!(!dir.join("other.inp").exists());
         assert!(matches!(s.execute("deck.write", &json!({"format": "abaqus", "path": dir.to_string_lossy()})), Err(EngineError::File(_))));
+
+        // Nastran: one run is static or frequency steps, so the bar's two steps need two decks.
+        let bdf = dir.join("bar.bdf").to_string_lossy().into_owned();
+        let e = s.execute("deck.write", &json!({"format": "nastran", "path": bdf})).unwrap_err().to_string();
+        assert!(e.contains("not supported by Nastran") && e.contains("separate decks"), "{e}");
+        for (step, sol) in [("Bend", "SOL 101"), ("Modes", "SOL 103")] {
+            s.execute("deck.write", &json!({"format": "nastran", "path": bdf, "steps": [step]})).unwrap();
+            let deck = std::fs::read_to_string(&bdf).unwrap();
+            assert!(deck.contains(sol) && deck.contains("RBE2") && deck.ends_with("ENDDATA\n"), "{deck}");
+        }
+        assert_eq!(s.journal.len(), journal);
+        for steps in [json!([]), json!(["Nope"]), json!("Bend"), json!([1, 2]), json!([["Bend"]])] {
+            assert!(s.execute("deck.write", &json!({"format": "nastran", "path": bdf, "steps": steps})).is_err(), "{steps}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

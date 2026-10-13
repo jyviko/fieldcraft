@@ -46,33 +46,21 @@ use card::Card;
 /// The format's name in errors.
 pub const FORMAT: &str = "Nastran";
 
-/// Most problems listed in one [`Error::Unsupported`].
-const LISTED: usize = 20;
-
 /// Most `GRAV` entries one run may select.
 const MAX_GRAV: usize = 9;
 
 /// Grids per `SPC1` entry; longer lists are split over entries of the same set.
 const SPC1_GRIDS: usize = 1000;
 
-/// What to write.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Options {
-    /// The steps to write, by name (written in model order). `None` writes every step. A run has
-    /// one solution sequence, so static and frequency steps go in separate decks.
-    pub steps: Option<Vec<String>>,
-}
-
-/// The model as a Nastran deck, with every step.
+/// The model as a Nastran deck, with every step (a deck of some steps:
+/// [`crate::Format::write_steps`]).
 pub fn write(model: &Model) -> Result<String> {
-    write_with(model, &Options::default())
+    write_resolved(model, &model.resolve()?)
 }
 
-/// The model as a Nastran deck, with the steps `options` selects.
-pub fn write_with(model: &Model, options: &Options) -> Result<String> {
-    let resolved = model.resolve()?;
-    let steps = select_steps(model, options)?;
-    let mut deck = Deck::new(model, &resolved, steps);
+/// [`write`] for a model already resolved.
+pub fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
+    let mut deck = Deck::new(model, r, model.steps().iter().collect());
     deck.plan()?;
     deck.emit()
 }
@@ -153,18 +141,6 @@ pub fn orthotropic_stiffness(young: [f64; 3], poisson: [f64; 3], shear: [f64; 3]
     out.iter().flatten().all(|v| v.is_finite()).then_some(out)
 }
 
-fn select_steps<'m>(model: &'m Model, options: &Options) -> Result<Vec<&'m Step>> {
-    let Some(names) = &options.steps else { return Ok(model.steps().iter().collect()) };
-    if names.is_empty() {
-        return Err(Error::Model(modelcraft_model::Error::Invalid("choose at least one step to write".into())));
-    }
-    if let Some(n) = names.iter().find(|n| model.step(n).is_none()) {
-        let shown: String = n.chars().take(modelcraft_model::MAX_NAME_LEN).collect();
-        return Err(Error::Model(modelcraft_model::Error::NotFound(format!("step `{shown}`"))));
-    }
-    Ok(model.steps().iter().filter(|s| names.contains(&s.name)).collect())
-}
-
 /// Nastran's component code of a set of degrees of freedom, such as 123 or 156.
 fn component(dofs: Dofs) -> i64 {
     dofs.list().into_iter().fold(0, |c, d| c * 10 + i64::from(d))
@@ -233,7 +209,8 @@ struct Deck<'m> {
     r: &'m Resolved,
     sol: u32,
     subcases: Vec<Subcase<'m>>,
-    problems: Vec<String>,
+    /// Everything the format cannot express.
+    problems: BTreeSet<String>,
     next_sid: u32,
     /// Material name → ids.
     materials: BTreeMap<&'m str, MaterialIds>,
@@ -263,7 +240,7 @@ fn solution(steps: &[&Step]) -> std::result::Result<u32, String> {
         (Some(_), None) => Ok(101),
         (None, Some(_)) => Ok(103),
         (Some(s), Some(m)) => Err(format!(
-            "one run solves either static steps (SOL 101) or frequency steps (SOL 103), and step `{}` is static while step `{}` extracts frequencies; write them as separate decks (choose the steps)",
+            "one run solves either static steps (SOL 101) or frequency steps (SOL 103), and step `{}` is static while step `{}` extracts frequencies; write them as separate decks (choose the steps to write)",
             s.name, m.name
         )),
         (None, None) => Err("there is no step to write".into()),
@@ -272,9 +249,9 @@ fn solution(steps: &[&Step]) -> std::result::Result<u32, String> {
 
 impl<'m> Deck<'m> {
     fn new(model: &'m Model, r: &'m Resolved, steps: Vec<&'m Step>) -> Deck<'m> {
-        let mut problems = Vec::new();
+        let mut problems = BTreeSet::new();
         let sol = solution(&steps).unwrap_or_else(|p| {
-            problems.push(p);
+            problems.insert(p);
             0
         });
         Deck {
@@ -307,15 +284,7 @@ impl<'m> Deck<'m> {
                 sub.method = Some(next_id(&mut self.next_sid)?);
             }
         }
-        if self.problems.is_empty() {
-            return Ok(());
-        }
-        let more = self.problems.len().saturating_sub(LISTED);
-        let mut what = self.problems.iter().take(LISTED).cloned().collect::<Vec<_>>().join("; ");
-        if more > 0 {
-            what.push_str(&format!("; and {more} more"));
-        }
-        Err(Error::Unsupported { format: FORMAT, what })
+        crate::unsupported(FORMAT, std::mem::take(&mut self.problems))
     }
 
     /// Material ids, for the forms the sections need.
@@ -343,7 +312,7 @@ impl<'m> Deck<'m> {
                 Some(Elastic::EngineeringConstants { .. }) => {
                     if u.line {
                         self.problems
-                            .push(format!("material `{name}`: orthotropic constants on beams or rods (their properties take isotropic materials)"));
+                            .insert(format!("material `{name}`: orthotropic constants on beams or rods (their properties take isotropic materials)"));
                     }
                     MaterialIds { solid: take(u.solid), shell: take(u.shell), ..MaterialIds::default() }
                 }
@@ -381,7 +350,9 @@ impl<'m> Deck<'m> {
                             Ok(rule) => {
                                 rules.entry(rule).or_insert_with(Vec::new).push(kind);
                             }
-                            Err(why) => self.problems.push(format!("section `{sname}`: {why} (Nastran's linear solids have no such formulation)")),
+                            Err(why) => {
+                                self.problems.insert(format!("section `{sname}`: {why} (Nastran's linear solids have no such formulation)"));
+                            }
                         }
                     }
                     for (rule, kinds) in rules {
@@ -391,10 +362,10 @@ impl<'m> Deck<'m> {
                 }
                 SectionKind::Shell { thickness, offset, points } => {
                     if sec.formulation.integration == Integration::Reduced {
-                        self.problems.push(format!("section `{sname}`: reduced integration of shells (Nastran's shells have one formulation)"));
+                        self.problems.insert(format!("section `{sname}`: reduced integration of shells (Nastran's shells have one formulation)"));
                     }
                     if points < 2 {
-                        self.problems.push(format!(
+                        self.problems.insert(format!(
                             "section `{sname}`: one integration point through the thickness (no bending stiffness; Nastran integrates a linear section exactly)"
                         ));
                     }
@@ -402,7 +373,7 @@ impl<'m> Deck<'m> {
                         MaterialIds { isotropic: Some(m), .. } => (m, None),
                         MaterialIds { shell: Some(m), .. } => {
                             if !elements.iter().all(|e| model.element(*e).is_some_and(|el| self.in_constant_z(&el.nodes, el.kind))) {
-                                self.problems.push(format!(
+                                self.problems.insert(format!(
                                     "section `{sname}`: orthotropic shells that do not lie in planes of constant Z (the material axes are the global ones)"
                                 ));
                             }
@@ -440,6 +411,7 @@ impl<'m> Deck<'m> {
     fn plan_couplings(&mut self) -> Result<()> {
         let (model, r) = (self.model, self.r);
         let mut next = model.elements().keys().next_back().copied().unwrap_or(0);
+        let mut overlaps: BTreeMap<(&str, &str), BTreeSet<u32>> = BTreeMap::new();
         for (name, c) in model.couplings() {
             next = next
                 .checked_add(1)
@@ -452,10 +424,9 @@ impl<'m> Deck<'m> {
             };
             for &node in dependents {
                 match self.dependent.get(&node).copied() {
-                    Some((had, other)) if had.bits() & c.dofs.bits() != 0 => self.problems.push(format!(
-                        "couplings `{other}` and `{name}` both make degrees of freedom {} of node {node} follow another node",
-                        component(Dofs::from_bits(had.bits() & c.dofs.bits()))
-                    )),
+                    Some((had, other)) if had.bits() & c.dofs.bits() != 0 => {
+                        overlaps.entry((other, name.as_str())).or_default().insert(node);
+                    }
                     Some((had, other)) => {
                         self.dependent.insert(node, (Dofs::from_bits(had.bits() | c.dofs.bits()), other));
                     }
@@ -464,6 +435,12 @@ impl<'m> Deck<'m> {
                     }
                 }
             }
+        }
+        for ((a, b), nodes) in overlaps {
+            self.problems.insert(format!(
+                "couplings `{a}` and `{b}` both make nodes {} follow another node (Nastran makes a degree of freedom dependent once)",
+                labels(&nodes)
+            ));
         }
         Ok(())
     }
@@ -511,13 +488,13 @@ impl<'m> Deck<'m> {
             }
         }
         for ((step, a, b), nodes) in clashes {
-            self.problems.push(format!(
+            self.problems.insert(format!(
                 "step `{step}`: boundary conditions `{a}` and `{b}` prescribe different values at nodes {} (Nastran takes one value per degree of freedom)",
                 labels(&nodes)
             ));
         }
         for ((bc, coupling), nodes) in on_dependent {
-            self.problems.push(format!(
+            self.problems.insert(format!(
                 "boundary condition `{bc}` constrains nodes {} whose motion coupling `{coupling}` prescribes (Nastran cannot constrain a dependent degree of freedom)",
                 labels(&nodes)
             ));
@@ -542,10 +519,10 @@ impl<'m> Deck<'m> {
                 let Some(load) = model.load(name) else { continue };
                 match load {
                     Load::BodyForce { .. } => {
-                        self.problems.push(format!("load `{name}`: a body force (Nastran has no force-per-volume load for these elements)"));
+                        self.problems.insert(format!("load `{name}`: a body force (Nastran has no force-per-volume load for these elements)"));
                     }
                     Load::Gravity { set: Some(s), .. } if r.sets.get(s).map(|s| s.elements.len()) != Some(model.elements().len()) => {
-                        self.problems.push(format!("load `{name}`: gravity on part of the model (set `{s}`); Nastran's gravity acts on all of it"));
+                        self.problems.insert(format!("load `{name}`: gravity on part of the model (set `{s}`); Nastran's gravity acts on all of it"));
                     }
                     Load::Gravity { .. } => gravity += 1,
                     _ => {}
@@ -561,7 +538,7 @@ impl<'m> Deck<'m> {
             };
         }
         if gravity > MAX_GRAV {
-            self.problems.push(format!("{gravity} gravity loads (a run selects at most {MAX_GRAV})"));
+            self.problems.insert(format!("{gravity} gravity loads (a run selects at most {MAX_GRAV})"));
         }
         Ok(())
     }

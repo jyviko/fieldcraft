@@ -6,8 +6,8 @@
 
 use std::collections::BTreeMap;
 
-use modelcraft_decks::Error;
-use modelcraft_decks::nastran::{self, Options};
+use modelcraft_decks::nastran;
+use modelcraft_decks::{Error, with_steps};
 use modelcraft_model::{
     BeamProfile, BoundaryCondition, Coupling, CouplingKind, Distribution, Dofs, Elastic, ElementFace, ElementKind, Formulation, Integration, Load,
     Material, Model, Procedure, ReferencePoint, Section, SectionKind, Set, Step, Target, UnitSystem,
@@ -627,17 +627,19 @@ fn steps_are_chosen_and_mixed_solutions_are_refused() {
     m.add_step(s, None).unwrap();
     assert!(unsupported(&m).contains("separate decks"));
 
-    let only = |names: &[&str]| Options { steps: Some(names.iter().map(|s| s.to_string()).collect()) };
-    let r = read(&nastran::write_with(&m, &only(&["Modes"])).unwrap());
+    let only = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let r = read(&nastran::write(&with_steps(&m, &only(&["Modes"])).unwrap()).unwrap());
     assert_eq!((r.sol, r.subcases.len()), (103, 1));
     let eigrl = r.cards("EIGRL").next().unwrap();
     assert_eq!((real(&eigrl[1]), eigrl[2].as_str(), int(&eigrl[3])), (1.0, "", 4));
     // A modes step holds the clamp but carries no loads.
     assert!(r.cards("FORCE").next().is_none());
-    assert_eq!(read(&nastran::write_with(&m, &only(&["Bend"])).unwrap()).sol, 101);
+    assert_eq!(read(&nastran::write(&with_steps(&m, &only(&["Bend"])).unwrap()).unwrap()).sol, 101);
+    let nastran = modelcraft_decks::format("nastran").unwrap();
+    assert_eq!(nastran.write_steps(&m, Some(&only(&["Bend"]))).unwrap().text, nastran::write(&with_steps(&m, &only(&["Bend"])).unwrap()).unwrap());
 
     for bad in [only(&[]), only(&["Nope"]), only(&[&"x".repeat(100_000)]), only(&["", "\u{0}"])] {
-        assert!(matches!(nastran::write_with(&m, &bad), Err(Error::Model(_))), "{bad:?}");
+        assert!(matches!(with_steps(&m, &bad), Err(Error::Model(_))), "{bad:?}");
     }
 }
 

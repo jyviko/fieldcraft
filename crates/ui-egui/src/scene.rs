@@ -1,5 +1,9 @@
 //! What the viewport draws: the model's display data in the chosen style and the theme's
 //! colours. The GPU viewport and the headless render (`ui.render`) draw the same [`Scene`].
+//!
+//! Geometry (the open design, imported surfaces) draws as faces with their boundaries while
+//! the model has no element faces; once it is meshed, as boundaries only, so the mesh is not
+//! hidden behind coincident faces.
 
 use modelcraft_render::{Camera, DisplayMesh, Scene, SceneLine, ScenePoint, SceneTri};
 use serde::{Deserialize, Serialize};
@@ -30,8 +34,9 @@ impl Style {
     }
 }
 
-/// Mesh edge width, line element width and node size, in points.
+/// Mesh edge width, geometry edge width, line element width and node size, in points.
 const EDGE_WIDTH: f64 = 1.0;
+const GEOMETRY_EDGE_WIDTH: f64 = 1.5;
 const LINE_ELEMENT_WIDTH: f64 = 3.0;
 const NODE_SIZE: f64 = 5.0;
 
@@ -40,16 +45,23 @@ pub fn build(display: &DisplayMesh, style: Style, show_nodes: bool, t: &Tokens) 
     let mut s = Scene { background: Some((rgb(t.viewport_top), rgb(t.viewport_bottom))), ..Default::default() };
     if style != Style::Wireframe {
         s.tris = display.tris.iter().map(|d| SceneTri { p: d.p, normal: d.normal, color: rgb(t.element(d.kind)) }).collect();
+        if display.tris.is_empty() {
+            s.tris.extend(display.surface_tris.iter().map(|d| SceneTri { p: d.p, normal: d.normal, color: rgb(t.geometry) }));
+        }
     }
     if style != Style::Shaded {
         // Without faces behind them the edges take the element colour, so they read on the
         // background.
         let color = rgb(if style == Style::Wireframe { t.hex } else { t.mesh_edge });
-        s.lines = display.edges.iter().map(|[a, b]| SceneLine { a: *a, b: *b, color, width: EDGE_WIDTH }).collect();
+        s.lines = display.edges.iter().map(|e| SceneLine { a: e.p[0], b: e.p[1], color, width: EDGE_WIDTH }).collect();
     }
+    // Face boundaries in every style: they are the geometry's outline.
+    let faces_drawn = style != Style::Wireframe && display.tris.is_empty();
+    let edge = rgb(if faces_drawn { t.mesh_edge } else { t.geometry_edge });
+    s.lines.extend(display.surface_edges.iter().map(|[a, b]| SceneLine { a: *a, b: *b, color: edge, width: GEOMETRY_EDGE_WIDTH }));
     s.lines.extend(display.lines.iter().map(|l| SceneLine { a: l.a, b: l.b, color: rgb(t.element(l.kind)), width: LINE_ELEMENT_WIDTH }));
     if show_nodes {
-        s.points = display.nodes.iter().map(|p| ScenePoint { p: *p, color: rgb(t.node), size: NODE_SIZE }).collect();
+        s.points = display.nodes.iter().map(|n| ScenePoint { p: n.p, color: rgb(t.node), size: NODE_SIZE }).collect();
     }
     s
 }

@@ -43,6 +43,11 @@ pub struct Tokens {
     /// Element edges (the mesh wireframe).
     pub mesh_edge: Color32,
     pub node: Color32,
+    // ---- geometry ----
+    /// Faces of the open design and imported surfaces.
+    pub geometry: Color32,
+    /// Their face boundaries.
+    pub geometry_edge: Color32,
 }
 
 impl Tokens {
@@ -79,6 +84,8 @@ impl Tokens {
             line_element: Color32::from_rgb(0xf0, 0xc0, 0x50),
             mesh_edge: Color32::from_rgb(0x14, 0x18, 0x1e),
             node: Color32::from_rgb(0xf2, 0xe6, 0x6e),
+            geometry: Color32::from_rgb(0xa8, 0xae, 0xb8),
+            geometry_edge: Color32::from_rgb(0xe8, 0xec, 0xf2),
         }
     }
 
@@ -111,6 +118,8 @@ impl Tokens {
             line_element: Color32::from_rgb(0xc8, 0x8c, 0x1e),
             mesh_edge: Color32::from_rgb(0x1e, 0x23, 0x2a),
             node: Color32::from_rgb(0xb4, 0x3c, 0x8c),
+            geometry: Color32::from_rgb(0xb4, 0xba, 0xc4),
+            geometry_edge: Color32::from_rgb(0x2a, 0x30, 0x3a),
         }
     }
 

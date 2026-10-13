@@ -188,7 +188,7 @@ impl ModelApp {
     /// Run a command with JSON parameters: what every panel, the control channel and scripts
     /// do. The result or the error goes to the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        let was_empty = self.session.model.nodes().is_empty();
+        let was_empty = self.display().bounds.is_empty();
         let revision = self.session.revision();
         let label = command_label(id);
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
@@ -201,7 +201,7 @@ impl ModelApp {
             Ok(v) => self.set_status(format!("{label}: {v}"), false),
             Err(e) => self.set_status(format!("{label}: {e}"), true),
         }
-        if was_empty && !self.session.model.nodes().is_empty() {
+        if was_empty && !self.display().bounds.is_empty() {
             self.fit_view();
         }
         r
@@ -209,14 +209,14 @@ impl ModelApp {
 
     /// Run a script (a JSON array of `{command, params}`), stopping at the first error.
     pub fn run_script(&mut self, script: &Value) -> Result<(), String> {
-        let was_empty = self.session.model.nodes().is_empty();
+        let was_empty = self.display().bounds.is_empty();
         let r = self.session.run_script(script).map_err(|e| e.to_string());
         self.model_changed();
         match &r {
             Ok(()) => self.set_status("Script done", false),
             Err(e) => self.set_status(format!("Script: {e}"), true),
         }
-        if was_empty && !self.session.model.nodes().is_empty() {
+        if was_empty && !self.display().bounds.is_empty() {
             self.fit_view();
         }
         r
@@ -285,10 +285,27 @@ impl ModelApp {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// The model's display data, rebuilt when the model changed.
+    /// The model's display data with its geometry (the open design's bodies, tessellated, and
+    /// the imported surfaces), rebuilt when the model changed.
     pub fn display(&mut self) -> &DisplayMesh {
         if self.display.0 != Some(self.revision) {
-            self.display = (Some(self.revision), DisplayMesh::from_model(&self.session.model));
+            let mut d = DisplayMesh::from_model(&self.session.model);
+            let mut failed = Vec::new();
+            if let Some(design) = &self.session.design {
+                for body in &design.bodies {
+                    match body.measure().and_then(|m| body.tessellate(display_tolerance(m.bbox_min, m.bbox_max))) {
+                        Ok(mesh) => d.add_surface(&mesh.positions, &mesh.triangles, &mesh.tri_face),
+                        Err(e) => failed.push(format!("{}: {e}", body.name)),
+                    }
+                }
+            }
+            for surface in &self.session.surfaces {
+                d.add_surface(&surface.mesh.positions, &surface.mesh.triangles, &surface.mesh.tri_face);
+            }
+            if !failed.is_empty() {
+                self.set_status(format!("Some bodies cannot be drawn: {}", failed.join("; ")), true);
+            }
+            self.display = (Some(self.revision), d);
         }
         &self.display.1
     }
@@ -476,6 +493,12 @@ impl ModelApp {
     }
 }
 
+/// The chordal tolerance bodies are drawn with: a thousandth of their size, within 1 µm–1 mm.
+fn display_tolerance(min: [f64; 3], max: [f64; 3]) -> f64 {
+    let d = ((max[0] - min[0]).powi(2) + (max[1] - min[1]).powi(2) + (max[2] - min[2]).powi(2)).sqrt();
+    if d.is_finite() { (d * 1e-3).clamp(1e-3, 1.0) } else { 0.1 }
+}
+
 /// Seconds a screenshot waits for a presented frame.
 const SHOT_TIMEOUT: f64 = 8.0;
 /// Vertical field of view of the perspective camera (radians).
@@ -548,6 +571,35 @@ mod tests {
         assert!(app.cam.target.dist(d.bounds.center()) < 1e-9);
         let png = app.render_png(64, 48).unwrap();
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
+    }
+
+    #[test]
+    fn the_open_design_and_imported_surfaces_are_drawn() {
+        let dir = std::env::temp_dir().join(format!("modelcraft-ui-design-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let design = dir.join("plate.solidcraft");
+        let bytes = modelcraft_geometry::sample::plate_design(&modelcraft_geometry::sample::Plate::default()).unwrap();
+        std::fs::write(&design, bytes).unwrap();
+        let mut app = ModelApp::new(Session::default());
+        app.run("geometry.open", json!({"path": design.to_string_lossy()})).unwrap();
+        let d = app.display().clone();
+        assert!(!d.surface_tris.is_empty() && !d.surface_edges.is_empty(), "the design's bodies are drawn");
+        assert!(d.tris.is_empty());
+        // Without elements, geometry draws as faces with their boundaries; the camera frames it.
+        let t = theme::Tokens::dark();
+        let s = scene::build(&d, Style::ShadedEdges, false, &t);
+        assert_eq!(s.tris.len(), d.surface_tris.len());
+        assert!(s.tris.iter().all(|tri| tri.color == theme::rgb(t.geometry)));
+        assert!(!d.bounds.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn display_tolerance_follows_the_size() {
+        assert_eq!(display_tolerance([0.0; 3], [100.0, 0.0, 0.0]), 0.1);
+        assert_eq!(display_tolerance([0.0; 3], [0.0; 3]), 1e-3);
+        assert_eq!(display_tolerance([0.0; 3], [1e9, 0.0, 0.0]), 1.0);
+        assert_eq!(display_tolerance([f64::NAN; 3], [0.0; 3]), 0.1);
     }
 
     #[test]

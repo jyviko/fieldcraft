@@ -11,7 +11,7 @@ mod raster;
 mod vec;
 
 pub use camera::{Camera, Mat4, StandardView};
-pub use display::{DisplayLine, DisplayMesh, DisplayTri};
+pub use display::{DisplayEdge, DisplayLine, DisplayMesh, DisplayNode, DisplayTri, SurfaceTri};
 pub use raster::{
     Canvas, MAX_DIM, MAX_PIXELS, MAX_PRIMITIVES, RenderError, Rgb, Scene, SceneLine, ScenePoint, SceneTri, fit_size, png, render, render_png, shade,
 };

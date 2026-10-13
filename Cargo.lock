@@ -1998,6 +1998,7 @@ dependencies = [
  "egui-wgpu",
  "log",
  "modelcraft-engine",
+ "modelcraft-geometry",
  "modelcraft-model",
  "modelcraft-render",
  "resvg",

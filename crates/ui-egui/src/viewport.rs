@@ -27,11 +27,11 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     } else {
         paint_cpu(app, ui, &painter, rect);
     }
-    if app.session.model.nodes().is_empty() {
+    if app.display().bounds.is_empty() {
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            "The model is empty.\nAdd nodes and elements from the Commands panel, or start with --sample.",
+            "The model is empty.\nOpen a design or add nodes and elements, or start with --sample.",
             egui::FontId::proportional(15.0),
             t.text_dim,
         );

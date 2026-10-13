@@ -96,6 +96,12 @@ pub fn model_tree(app: &mut ModelApp, ui: &mut egui::Ui) {
                         }
                     },
                 );
+                if let Some(d) = &app.session.design {
+                    ui.label(format!("Design {} ({} bodies)", d.name, d.bodies.len()));
+                }
+                if !app.session.surfaces.is_empty() {
+                    ui.label(format!("Surfaces ({})", app.session.surfaces.len()));
+                }
                 ui.label(format!("History ({} commands)", app.session.journal.len()));
             });
         },

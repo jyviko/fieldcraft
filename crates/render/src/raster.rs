@@ -156,10 +156,11 @@ pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Canvas {
         let (Some(a), Some(b)) = (project(l.a), project(l.b)) else { continue };
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
         let steps = if len.is_finite() { (len.ceil() as usize).clamp(1, MAX_LINE_STEPS) } else { continue };
+        let col = l.color.f();
         for k in 0..=steps {
             let t = k as f64 / steps as f64;
             let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-            dot(&mut c, p, l.width * SS as f64, l.color.f(), true);
+            dot(&mut c, p, l.width * SS as f64, col, true);
         }
     }
     for p in &scene.points {

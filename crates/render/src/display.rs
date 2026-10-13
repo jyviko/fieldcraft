@@ -3,10 +3,8 @@
 //!
 //! Faces shared by two solid elements are inside the mesh and are left out, so a model of a
 //! million elements draws its surface, not its interior. Higher-order elements (tet10, hex20,
-//! tri6, quad8) draw through their corner nodes. The output is deterministic: faces and edges
-//! come out in element label order.
-
-use std::collections::{BTreeMap, BTreeSet};
+//! tri6, quad8) draw through their corner nodes. The output is deterministic: faces come out in
+//! element label order, edges sorted.
 
 use modelcraft_model::{ElementKind, Model};
 
@@ -18,8 +16,6 @@ pub struct DisplayTri {
     pub p: [Vec3; 3],
     /// The face's unit normal, pointing out of its element (a shell's own orientation).
     pub normal: Vec3,
-    /// The element the face belongs to, and its kind (for colour by kind, picking later).
-    pub element: u32,
     pub kind: ElementKind,
 }
 
@@ -28,7 +24,6 @@ pub struct DisplayTri {
 pub struct DisplayLine {
     pub a: Vec3,
     pub b: Vec3,
-    pub element: u32,
     pub kind: ElementKind,
 }
 
@@ -59,11 +54,18 @@ fn faces(kind: ElementKind) -> &'static [&'static [usize]] {
     }
 }
 
-/// A face's identity regardless of winding and starting corner: its sorted node labels.
-fn face_key(labels: &[u32]) -> Vec<u32> {
-    let mut k = labels.to_vec();
+/// Most corners of any element (hex).
+const MAX_CORNERS: usize = 8;
+
+/// A face's identity regardless of winding and starting corner: its sorted node labels, a
+/// triangle padded with `u32::MAX`.
+fn face_key(e: &[u32], face: &[usize]) -> Option<[u32; 4]> {
+    let mut k = [u32::MAX; 4];
+    for (slot, &i) in k.iter_mut().zip(face) {
+        *slot = *e.get(i)?;
+    }
     k.sort_unstable();
-    k
+    Some(k)
 }
 
 /// Newell's normal of a polygon (robust for non-planar quads); `None` when degenerate.
@@ -76,6 +78,10 @@ fn polygon_normal(p: &[Vec3]) -> Option<Vec3> {
     n.normalized()
 }
 
+fn centre(p: &[Vec3]) -> Vec3 {
+    p.iter().fold(Vec3::ZERO, |s, q| s + *q) * (1.0 / p.len().max(1) as f64)
+}
+
 impl DisplayMesh {
     pub fn from_model(model: &Model) -> DisplayMesh {
         let mut out = DisplayMesh::default();
@@ -85,62 +91,68 @@ impl DisplayMesh {
             out.nodes.push(p);
             out.bounds.add(p);
         }
-        // How many solid elements use each face: a face used twice is inside the mesh.
-        let mut uses: BTreeMap<Vec<u32>, u32> = BTreeMap::new();
-        for e in model.elements().values().filter(|e| e.kind.dimension() == 3) {
-            for f in faces(e.kind) {
-                let labels: Option<Vec<u32>> = f.iter().map(|&i| e.nodes.get(i).copied()).collect();
-                if let Some(l) = labels {
-                    *uses.entry(face_key(&l)).or_default() += 1;
+        // Faces two solid elements share are inside the mesh: sort every solid face's key and
+        // keep the ones that occur more than once.
+        let mut keys: Vec<[u32; 4]> = model
+            .elements()
+            .values()
+            .filter(|e| e.kind.dimension() == 3)
+            .flat_map(|e| faces(e.kind).iter().filter_map(|f| face_key(&e.nodes, f)))
+            .collect();
+        keys.sort_unstable();
+        let mut inner: Vec<[u32; 4]> = keys.windows(2).filter(|w| w.first() == w.get(1)).filter_map(|w| w.first().copied()).collect();
+        inner.dedup();
+        drop(keys);
+        let mut edges: Vec<(u32, u32)> = Vec::new();
+        for e in model.elements().values() {
+            // Corners: one past the highest face index (line elements: their two ends).
+            let corners = faces(e.kind).iter().flat_map(|f| f.iter()).max().map_or(2, |m| m + 1).min(MAX_CORNERS);
+            let mut at = [Vec3::ZERO; MAX_CORNERS];
+            let mut found = 0;
+            for (slot, &n) in at.iter_mut().zip(e.nodes.iter().take(corners)) {
+                if let Some(p) = pos(n) {
+                    *slot = p;
+                    found += 1;
                 }
             }
-        }
-        let mut edges: BTreeSet<(u32, u32)> = BTreeSet::new();
-        for (&label, e) in model.elements() {
+            if found < corners {
+                continue;
+            }
+            let at = at.get(..corners).unwrap_or(&[]);
             if e.kind.dimension() == 1 {
-                if let (Some(a), Some(b)) = (e.nodes.first().and_then(|&n| pos(n)), e.nodes.get(1).and_then(|&n| pos(n))) {
-                    out.lines.push(DisplayLine { a, b, element: label, kind: e.kind });
+                if let (Some(&a), Some(&b)) = (at.first(), at.get(1)) {
+                    out.lines.push(DisplayLine { a, b, kind: e.kind });
                 }
                 continue;
             }
             let solid = e.kind.dimension() == 3;
-            // The element's centre, to point each face's normal out of it.
-            let corners: Vec<Vec3> = e.nodes.iter().take(corner_count(e.kind)).filter_map(|&n| pos(n)).collect();
-            let centre = corners.iter().fold(Vec3::ZERO, |s, p| s + *p) * (1.0 / corners.len().max(1) as f64);
+            let element_centre = centre(at);
             for f in faces(e.kind) {
-                let Some(labels) = f.iter().map(|&i| e.nodes.get(i).copied()).collect::<Option<Vec<u32>>>() else { continue };
-                if solid && uses.get(&face_key(&labels)).is_some_and(|&n| n > 1) {
+                if solid && face_key(&e.nodes, f).is_some_and(|k| inner.binary_search(&k).is_ok()) {
                     continue;
                 }
-                let Some(p) = labels.iter().map(|&l| pos(l)).collect::<Option<Vec<Vec3>>>() else { continue };
+                let p: Vec<Vec3> = f.iter().filter_map(|&i| at.get(i).copied()).collect();
                 let Some(mut normal) = polygon_normal(&p) else { continue };
-                let face_centre = p.iter().fold(Vec3::ZERO, |s, q| s + *q) * (1.0 / p.len() as f64);
-                if solid && normal.dot(face_centre - centre) < 0.0 {
+                if solid && normal.dot(centre(&p) - element_centre) < 0.0 {
                     normal = -normal;
                 }
                 for k in 1..p.len().saturating_sub(1) {
                     if let (Some(&a), Some(&b), Some(&c)) = (p.first(), p.get(k), p.get(k + 1)) {
-                        out.tris.push(DisplayTri { p: [a, b, c], normal, element: label, kind: e.kind });
+                        out.tris.push(DisplayTri { p: [a, b, c], normal, kind: e.kind });
                     }
                 }
-                for (i, &a) in labels.iter().enumerate() {
-                    let b = labels.get((i + 1) % labels.len()).copied().unwrap_or(a);
-                    edges.insert((a.min(b), a.max(b)));
+                for (j, &i) in f.iter().enumerate() {
+                    let i2 = f.get((j + 1) % f.len()).copied().unwrap_or(i);
+                    if let (Some(&a), Some(&b)) = (e.nodes.get(i), e.nodes.get(i2)) {
+                        edges.push((a.min(b), a.max(b)));
+                    }
                 }
             }
         }
+        edges.sort_unstable();
+        edges.dedup();
         out.edges = edges.into_iter().filter_map(|(a, b)| Some([pos(a)?, pos(b)?])).collect();
         out
-    }
-}
-
-fn corner_count(kind: ElementKind) -> usize {
-    match kind {
-        ElementKind::Rod2 | ElementKind::Beam2 => 2,
-        ElementKind::Tri3 | ElementKind::Tri6 => 3,
-        ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Tet4 | ElementKind::Tet10 => 4,
-        ElementKind::Wedge6 => 6,
-        ElementKind::Hex8 | ElementKind::Hex20 => 8,
     }
 }
 
@@ -194,9 +206,8 @@ mod tests {
             let fc = (t.p[0] + t.p[1] + t.p[2]) * (1.0 / 3.0);
             assert!(t.normal.dot(fc - c) > 0.0, "{t:?}");
         }
-        // Edges of the skin grid: each surface edge once. Counted per face: x-lines on the
-        // two z-faces and two y-faces, and so on. Euler: V - E + F = 2 on the skin.
-        let skin_nodes = 4 * 3 * 3 - 2; // the two interior nodes (i=1,2; j=1; k=1)
+        // Euler on the skin: V - E + F = 2 (two nodes are inside).
+        let skin_nodes = 4 * 3 * 3 - 2;
         assert_eq!(skin_nodes as i64 - d.edges.len() as i64 + 32, 2);
     }
 

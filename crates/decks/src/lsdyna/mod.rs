@@ -322,6 +322,11 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
             None
         }
     };
+    if r.is_planar() {
+        for name in model.sections().iter().filter(|(_, s)| matches!(s.kind, SectionKind::Rod { .. })).map(|(n, _)| n) {
+            refused.insert(format!("section `{name}`: trusses in a 2D model (LS-DYNA's 2D elements take no truss)"));
+        }
+    }
     for m in &r.masses {
         if m.mass[0] != m.mass[1] || m.mass[0] != m.mass[2] {
             refused.insert(format!("point mass `{}`: a mass that differs by direction (LS-DYNA's mass elements take one mass)", m.name));

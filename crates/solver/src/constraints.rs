@@ -191,10 +191,15 @@ pub fn coupling_rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh) -> 
 }
 
 /// The degrees of freedom that exist: every mesh node's, and the reference point directions
-/// some coupling row involves.
+/// some coupling row or discrete element involves.
 fn active_dofs(mesh: &Mesh, rows: &[Row]) -> Vec<bool> {
     let mut active = vec![false; mesh.dofs()];
     active.iter_mut().take(mesh.mesh_dofs()).for_each(|a| *a = true);
+    for dof in mesh.discrete.dofs() {
+        if let Some(a) = active.get_mut(dof) {
+            *a = true;
+        }
+    }
     for row in rows {
         for (dof, c) in &row.terms {
             if *c != 0.0

@@ -950,4 +950,32 @@ pub(crate) mod tests {
         // Defining steps edited the model, so the impact result is stale.
         assert_eq!(s.solved_steps().count(), 0);
     }
+
+    /// A mass on a spring and a dashpot, defined, solved and written through commands; editing
+    /// and deleting them goes through the same checks as every definition.
+    #[test]
+    fn spring_mass_through_commands() {
+        let mut s = Session::default();
+        let script = json!([
+            {"command": "mesh.node.add", "params": {"label": 1, "xyz": [0, 0, 0]}},
+            {"command": "model.set.create", "params": {"name": "n", "nodes": [1]}},
+            {"command": "model.mass.create", "params": {"name": "m", "target": {"set": "n"}, "mass": 4}},
+            {"command": "model.spring.create", "params": {"name": "k", "type": "spring", "first": {"set": "n"}, "direction": {"dof": 1}, "stiffness": 400}},
+            {"command": "model.spring.create", "params": {"name": "c", "type": "dashpot", "first": {"set": "n"}, "direction": {"vector": [1, 0, 0]}, "coefficient": 1}},
+            {"command": "model.boundary_condition.create", "params": {"name": "yz", "type": "displacement", "target": {"set": "n"}, "values": [null, 0, 0, null, null, null]}},
+            {"command": "model.step.create", "params": {"name": "Modes", "procedure": {"type": "frequency", "modes": 1}, "boundary_conditions": ["yz"]}},
+        ]);
+        s.run_script(&script).unwrap();
+        let r = s.execute("solve.frequency", &json!({})).unwrap();
+        let f = r["modes"][0]["frequency"].as_f64().unwrap();
+        assert!((f - 10.0 / (2.0 * std::f64::consts::PI)).abs() < 1e-12, "{r}");
+        assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("dashpots `c`")), "{r}");
+        assert!(s.execute("model.mass.edit", &json!({"name": "m", "target": {"set": "n"}, "mass": -1})).is_err());
+        assert!(s.execute("model.set.delete", &json!({"name": "n"})).is_err(), "the set is in use");
+        s.execute("model.mass.edit", &json!({"name": "m", "target": {"set": "n"}, "mass": 1})).unwrap();
+        let r = s.execute("solve.frequency", &json!({})).unwrap();
+        assert!((r["modes"][0]["frequency"].as_f64().unwrap() - 20.0 / (2.0 * std::f64::consts::PI)).abs() < 1e-12);
+        s.execute("model.spring.delete", &json!({"name": "c"})).unwrap();
+        assert!(s.model.springs().len() == 1 && s.model.mass("m").is_some());
+    }
 }

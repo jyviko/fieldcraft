@@ -103,10 +103,10 @@ impl NodeGraph {
         self.adjacency.iter().enumerate().map(|(a, row)| layout.range(a).len() * row.iter().map(|b| layout.range(*b).len()).sum::<usize>()).sum()
     }
 
-    /// A zero matrix over the mesh nodes' degrees of freedom (layout slots `0..nodes`) on this
-    /// pattern.
+    /// A zero matrix over the degrees of freedom of the graph's layout slots (the mesh nodes
+    /// `0..nodes`, and reference points when the graph has rows for them) on this pattern.
     pub fn zero_matrix(&self, layout: &DofLayout) -> Csr {
-        let n = layout.node_dofs();
+        let n = self.adjacency.len().checked_sub(1).map_or(0, |last| layout.range(last).end);
         let mut ptr = Vec::with_capacity(n + 1);
         ptr.push(0);
         let mut idx = Vec::with_capacity(self.entries(layout));
@@ -207,6 +207,14 @@ pub fn add_diagonal(k: &mut Csr, layout: &DofLayout, nodes: &[usize], kinds: Dof
             add_at(k, block.rows[c] + block.cols[c], *v);
         }
     }
+    Ok(())
+}
+
+/// Add `v` to entry (`i`, `j`), which must be in the pattern.
+pub fn add_entry(k: &mut Csr, i: usize, j: usize, v: f64) -> Result<()> {
+    let (start, end) = (k.ptr.get(i).copied().unwrap_or(0), k.ptr.get(i + 1).copied().unwrap_or(0));
+    let at = k.idx.get(start..end).and_then(|cols| cols.binary_search(&j).ok()).ok_or_else(|| Error::Internal("entry outside the pattern".into()))?;
+    add_at(k, start + at, v);
     Ok(())
 }
 

@@ -65,6 +65,8 @@
 //! | beam2, rod2 | | | B31 | T3D2 |
 //! | rod3 | | | | T3D3 |
 //!
+//! Trusses in a 2D model are T2D2 and T2D3.
+//!
 //! Point masses, springs and dashpots are elements numbered after the mesh's, one per resolved
 //! copy, in an element set per definition (`<name>-mass`, `<name>-inertia`, `<name>-spring`, made
 //! unique against the model's sets): `MASS` with `*MASS` (one mass for every direction),
@@ -230,7 +232,9 @@ fn elements_by_type<'m>(model: &'m Model, r: &Resolved) -> Result<BTreeMap<Strin
             }
         }
         for (kind, elements) in by_kind {
-            match element_type(kind, section) {
+            // Trusses of a 2D model are the planar ones.
+            let planar = |t: String| if r.is_planar() { t.replacen("T3D", "T2D", 1) } else { t };
+            match element_type(kind, section).map(planar) {
                 Ok(t) => {
                     count += elements.len();
                     by_type.entry(t).or_default().extend(elements);

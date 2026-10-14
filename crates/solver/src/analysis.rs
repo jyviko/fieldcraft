@@ -12,7 +12,7 @@ use crate::constraints::{Budget, Reduction, coupling_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
 use crate::ordering::nested_dissection;
 use crate::sparse::{Csr, NodeGraph, add_block, add_diagonal, add_scalar};
-use crate::system::{Mesh, inelastic_warnings, loads, prescribed};
+use crate::system::{Mesh, inelastic_warnings, loads, prescribed, translation_block};
 use crate::{Error, Limits, Result};
 
 /// Size and effort of a solution.
@@ -147,6 +147,24 @@ fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<As
             }
         }
     }
+    let kinds = mesh.translation_kinds();
+    for t in &mesh.trusses {
+        let truss = t.truss()?;
+        let at = |err| Error::element(t.label, err);
+        let stiffness = translation_block(&truss.stiffness(t.young, t.area).map_err(at)?.data, t.nodes.len(), kinds);
+        add_block(&mut k, layout, &t.nodes, kinds, &stiffness)?;
+        if let (Some(mm), Some(kind)) = (m.as_mut(), mass) {
+            let rho = t.density.ok_or_else(|| Error::Invalid(format!("element {} has no density", t.label)))?;
+            match kind {
+                MassKind::Consistent => add_scalar(mm, layout, &t.nodes, kinds, &truss.mass(rho, t.area).map_err(at)?.data)?,
+                MassKind::Lumped => add_diagonal(mm, layout, &t.nodes, kinds, &truss.lumped_mass(rho, t.area).map_err(at)?)?,
+            }
+        }
+    }
+    mesh.discrete.add_stiffness(&mut k)?;
+    if let Some(mm) = m.as_mut() {
+        mesh.discrete.add_mass(mm)?;
+    }
     Ok(Assembled { k, m })
 }
 
@@ -184,6 +202,32 @@ fn split(full: &[f64], mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[f64; 6]>) {
     ((0..l.nodes()).map(|n| directions(full, l, n)).collect(), (0..mesh.points.len()).map(|k| directions(full, l, l.point_slot(k))).collect())
 }
 
+/// The matrix pattern of the mesh (node blocks of its elements, trusses and discrete elements)
+/// and the order of its nodes for the factorization.
+fn pattern(mesh: &Mesh) -> (NodeGraph, Vec<usize>) {
+    let graph = NodeGraph::new(mesh.block_count(), mesh.blocks());
+    // The order covers the mesh nodes; reference point equations follow them.
+    let n = mesh.labels.len();
+    let order = if graph.adjacency.len() == n {
+        nested_dissection(&mesh.xyz, &graph.adjacency)
+    } else {
+        let mesh_part: Vec<Vec<usize>> = graph.adjacency.iter().take(n).map(|row| row.iter().copied().filter(|b| *b < n).collect()).collect();
+        nested_dissection(&mesh.xyz, &mesh_part)
+    };
+    (graph, order)
+}
+
+/// Warnings for what a step without velocities ignores.
+fn ignored_dashpots(mesh: &Mesh, warnings: &mut Vec<String>) {
+    let names = mesh.discrete.dashpots();
+    if !names.is_empty() {
+        warnings.push(format!(
+            "dashpots {} act in dynamic steps only; this step ignores them",
+            names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
+        ));
+    }
+}
+
 /// Constraint rows, prescribed values and their elimination for a step.
 /// The model, its resolved view, the mesh and the step being solved.
 struct Setup<'a> {
@@ -210,8 +254,8 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     warnings.extend(inelastic_warnings(model));
-    let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
-    let order = nested_dissection(&mesh.xyz, &graph.adjacency);
+    let (graph, order) = pattern(&mesh);
+    ignored_dashpots(&mesh, &mut warnings);
     let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
     let red = reduction(&setup, true, &order, budget(limits, &mesh, &graph, 1), &mut warnings)?;
     let f = loads(model, &resolved, &mesh, step, &red.active)?;
@@ -276,10 +320,28 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         }
         elements.push(ElementStress { label: e.label, kind: e.kind, points, nodal });
     }
+    for t in &mesh.trusses {
+        let truss = t.truss()?;
+        let at = |err| Error::element(t.label, err);
+        let ue: Vec<[f64; 3]> = t.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
+        let points = truss.stresses(t.young, &ue).map_err(at)?;
+        let nodal = truss.extrapolate(&points.iter().map(|p| p.stress).collect::<Vec<_>>()).map_err(at)?;
+        for (n, s) in t.nodes.iter().zip(&nodal) {
+            if let (Some(acc), Some(c)) = (sum.get_mut(*n), count.get_mut(*n)) {
+                for k in 0..6 {
+                    acc[k] += s[k];
+                }
+                *c += 1;
+            }
+        }
+        elements.push(ElementStress { label: t.label, kind: t.kind, points, nodal });
+    }
+    elements.sort_by_key(|e| e.label);
     let stress: Vec<[f64; 6]> = sum.iter().zip(&count).map(|(s, c)| s.map(|v| if *c > 0 { v / f64::from(*c) } else { 0.0 })).collect();
     let von_mises = stress.iter().map(von_mises).collect();
     let scale = applied_total.iter().chain(&reaction_total).fold(0.0f64, |m, v| m.max(v.abs()));
-    let imbalance = (0..3).map(|c| (applied_total[c] + reaction_total[c]).abs()).fold(0.0, f64::max);
+    let ground = mesh.discrete.ground_force(&u, &mesh);
+    let imbalance = (0..3).map(|c| (applied_total[c] + reaction_total[c] + ground[c]).abs()).fold(0.0, f64::max);
     if scale > 0.0 && imbalance > 1e-6 * scale {
         warnings.push(format!("loads and reactions differ by {imbalance:.3e} (relative {:.1e})", imbalance / scale));
     }
@@ -338,14 +400,23 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
     warnings.extend(inelastic_warnings(model));
-    let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
-    let order = nested_dissection(&mesh.xyz, &graph.adjacency);
+    let (graph, order) = pattern(&mesh);
+    ignored_dashpots(&mesh, &mut warnings);
     let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
     let red = reduction(&setup, false, &order, budget(limits, &mesh, &graph, 2), &mut warnings)?;
     let Assembled { k, m } = assemble(&mesh, &graph, Some(options.mass))?;
     let m = m.ok_or_else(|| Error::Internal("mass matrix".into()))?;
     // Every element's mass entries sum to its mass, once per direction.
-    let total_mass = m.val.iter().sum::<f64>() / if mesh.theory.is_some() { 2.0 } else { 3.0 };
+    // (the mean over the directions for a point mass given per direction; rotary inertia is left
+    // out), added in storage order.
+    let translation = |d: usize| mesh.kind(d).and_then(DofKind::direction).is_some_and(|c| c < 3);
+    let mut translational = 0.0;
+    for d in (0..m.n).filter(|d| translation(*d)) {
+        for v in m.row(d).1 {
+            translational += v;
+        }
+    }
+    let total_mass = translational / mesh.translation_kinds().len() as f64;
     let neq = red.neq();
     if neq == 0 {
         return Err(Error::Invalid("every degree of freedom is held; there is nothing to vibrate".into()));

@@ -25,6 +25,7 @@
 pub mod analysis;
 pub mod cholesky;
 pub mod constraints;
+pub mod discrete;
 pub mod eigen;
 pub mod ordering;
 pub mod sparse;

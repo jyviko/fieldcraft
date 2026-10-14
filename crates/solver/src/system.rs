@@ -1,5 +1,6 @@
-//! From the resolved model to the discrete system: the solid elements with their materials and
-//! formulations, the coupled reference points, the degrees of freedom, prescribed values and the
+//! From the resolved model to the discrete system: the solid, 2D and truss elements with their
+//! materials and formulations, point masses, springs and dashpots ([`crate::discrete`]), the
+//! reference points couplings or discrete elements use, the degrees of freedom, prescribed values and the
 //! load vector of a step.
 //!
 //! Degrees of freedom ([`DofLayout`]): the kinds each mesh node's elements declare (three
@@ -8,6 +9,7 @@
 
 use modelcraft_fem::element::{Formulation, Solid};
 use modelcraft_fem::plane::{Plane, Theory};
+use modelcraft_fem::truss::{Truss, young_modulus};
 use modelcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, ElementDofs, PointStress, elasticity, face, plane};
 use modelcraft_model::nodal::edge_pressure;
 use std::collections::BTreeSet;
@@ -117,6 +119,42 @@ impl Elem {
     }
 }
 
+/// A truss element (rod2, rod3) ready for the kernel.
+#[derive(Debug, Clone)]
+pub struct Bar {
+    pub label: u32,
+    pub kind: ElementKind,
+    /// Indices into [`Mesh::labels`] (layout slots).
+    pub nodes: Vec<usize>,
+    pub xyz: Vec<[f64; 3]>,
+    pub young: f64,
+    pub area: f64,
+    pub density: Option<f64>,
+}
+
+impl Bar {
+    pub fn truss(&self) -> Result<Truss<'_>> {
+        Truss::new(self.kind, &self.xyz).map_err(|e| Error::element(self.label, e))
+    }
+}
+
+/// The translations of a model's nodes: X and Y in a 2D model, else X, Y and Z. Trusses and
+/// translational discrete elements declare these.
+pub fn translation_kinds(planar: bool) -> DofSet {
+    if planar { DofSet::PLANE } else { DofSet::TRANSLATIONS }
+}
+
+/// Keep the rows and columns of a matrix over three translations per node (node by node) that
+/// `kinds` has: the in-plane block of a truss in a 2D model, or the matrix itself.
+pub fn translation_block(data: &[f64], nodes: usize, kinds: DofSet) -> Vec<f64> {
+    if kinds == DofSet::TRANSLATIONS {
+        return data.to_vec();
+    }
+    let keep: Vec<usize> = (0..3 * nodes).filter(|i| DofKind::translation(i % 3).is_some_and(|k| kinds.contains(k))).collect();
+    let width = 3 * nodes;
+    keep.iter().flat_map(|i| keep.iter().map(move |j| data.get(i * width + j).copied().unwrap_or(0.0))).collect()
+}
+
 /// A reference point some coupling ties to the mesh.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Point {
@@ -138,11 +176,23 @@ pub struct Mesh {
     pub layout: DofLayout,
     /// The 2D theory when this is a 2D model (a model is 2D as a whole).
     pub theory: Option<Theory>,
+    pub trusses: Vec<Bar>,
+    /// Point masses, springs and dashpots ([`crate::discrete`]).
+    pub discrete: crate::discrete::Discrete,
 }
 
 impl Mesh {
     pub fn node(&self, label: u32) -> Option<usize> {
         self.labels.binary_search(&label).ok()
+    }
+
+    pub fn truss(&self, label: u32) -> Option<&Bar> {
+        self.trusses.binary_search_by_key(&label, |e| e.label).ok().and_then(|i| self.trusses.get(i))
+    }
+
+    /// The kinds trusses and translational discrete elements carry at their nodes.
+    pub fn translation_kinds(&self) -> DofSet {
+        translation_kinds(self.theory.is_some())
     }
 
     pub fn element(&self, label: u32) -> Option<&Elem> {
@@ -188,17 +238,32 @@ impl Mesh {
     /// Build it from the model and its resolved view, refusing what the solver cannot represent.
     pub fn new(model: &Model, resolved: &Resolved, max_dofs: usize) -> Result<Mesh> {
         let mut elements = Vec::new();
+        let mut trusses = Vec::new();
         // A model is 2D as a whole (the model check refuses a mix).
         let planar = model.sections().values().find_map(|s| Theory::from_section(&s.kind));
+        if matches!(planar, Some(Theory::Axisymmetric))
+            && let Some(what) = model
+                .sections()
+                .values()
+                .any(|s| matches!(s.kind, SectionKind::Rod { .. }))
+                .then_some("trusses")
+                .or_else(|| (!model.masses().is_empty() || !model.springs().is_empty()).then_some("point masses, springs and dashpots"))
+        {
+            return Err(Error::NotSupported(format!("{what} in axisymmetric models")));
+        }
         for (name, section) in model.sections() {
             let theory = Theory::from_section(&section.kind);
-            if !matches!(section.kind, SectionKind::Solid {}) && theory.is_none() {
+            let rod = match section.kind {
+                SectionKind::Rod { area } => Some(area),
+                _ => None,
+            };
+            if !matches!(section.kind, SectionKind::Solid {}) && theory.is_none() && rod.is_none() {
                 return Err(Error::NotSupported(format!(
-                    "{} sections (section `{name}`); the solver has solid and 2D (plane stress, plane strain, axisymmetric) elements so far",
+                    "{} sections (section `{name}`); the solver has solid, 2D (plane stress, plane strain, axisymmetric) and truss elements so far",
                     section.kind.name()
                 )));
             }
-            if theory.is_some() != planar.is_some() {
+            if theory.is_some() != planar.is_some() && rod.is_none() {
                 return Err(Error::NotSupported("2D and solid sections in one model".into()));
             }
             let material = model
@@ -206,8 +271,17 @@ impl Mesh {
                 .ok_or_else(|| Error::Invalid(format!("section `{name}`: material `{}` is missing", section.material)))?;
             let elastic =
                 material.elastic.as_ref().ok_or_else(|| Error::Invalid(format!("material `{}` has no elastic constants", section.material)))?;
-            let d = elasticity(elastic).map_err(|e| Error::Invalid(format!("material `{}`: {e}", section.material)))?;
             let set = resolved.sets.get(&section.set).ok_or_else(|| Error::Invalid(format!("set `{}` is not resolved", section.set)))?;
+            if let Some(area) = rod {
+                let young =
+                    young_modulus(elastic).map_err(|e| Error::Invalid(format!("material `{}` of section `{name}`: {e}", section.material)))?;
+                for &label in &set.elements {
+                    let el = model.element(label).ok_or_else(|| Error::Invalid(format!("element {label} is missing")))?;
+                    trusses.push((label, el.kind, el.nodes.clone(), young, area, material.density));
+                }
+                continue;
+            }
+            let d = elasticity(elastic).map_err(|e| Error::Invalid(format!("material `{}`: {e}", section.material)))?;
             for &label in &set.elements {
                 let el = model.element(label).ok_or_else(|| Error::Invalid(format!("element {label} is missing")))?;
                 let (formulation, dofs) = match theory {
@@ -222,10 +296,19 @@ impl Mesh {
             return Err(Error::NotSupported(format!("couplings in 2D models (coupling `{name}`)")));
         }
         elements.sort_by_key(|e| e.0);
+        trusses.sort_by_key(|e| e.0);
+        let translations = translation_kinds(planar.is_some());
+        // What discrete elements need: at mesh nodes (some only they use), and at reference
+        // points, which then get their six degrees of freedom like coupled ones.
+        let needs: Vec<(u32, DofSet)> = crate::discrete::needs(resolved, translations).collect();
         let mut labels: Vec<u32> = elements.iter().flat_map(|e| e.2.iter().copied()).collect();
+        labels.extend(trusses.iter().flat_map(|e| e.2.iter().copied()));
+        labels.extend(needs.iter().map(|n| n.0).filter(|l| model.node(*l).is_some()));
         labels.sort_unstable();
         labels.dedup();
-        let coupled: BTreeSet<&str> = model.couplings().values().map(|c| c.reference_point.as_str()).collect();
+        let mut coupled: BTreeSet<&str> = model.couplings().values().map(|c| c.reference_point.as_str()).collect();
+        let discrete_labels: BTreeSet<u32> = needs.iter().map(|n| n.0).collect();
+        coupled.extend(model.reference_points().iter().filter(|(_, p)| discrete_labels.contains(&p.label)).map(|(n, _)| n.as_str()));
         let points: Vec<Point> = coupled
             .into_iter()
             .map(|name| {
@@ -236,6 +319,12 @@ impl Mesh {
         let mut layout = DofLayout::builder();
         for e in &elements {
             layout.element(&e.2, e.7);
+        }
+        for e in &trusses {
+            layout.element(&e.2, modelcraft_fem::ElementDofs::new(translations));
+        }
+        for (label, kinds) in needs.iter().filter(|n| model.node(n.0).is_some()) {
+            layout.node(*label, *kinds);
         }
         for p in &points {
             layout.point(p.label, DofSet::STRUCTURAL);
@@ -249,13 +338,45 @@ impl Mesh {
             .iter()
             .map(|l| model.node(*l).map(|n| n.xyz).ok_or_else(|| Error::Invalid(format!("node {l} is missing"))))
             .collect::<Result<_>>()?;
-        let mut mesh = Mesh { labels, xyz, elements: Vec::with_capacity(elements.len()), points, layout, theory: planar };
+        let mut mesh = Mesh {
+            labels,
+            xyz,
+            elements: Vec::with_capacity(elements.len()),
+            points,
+            layout,
+            theory: planar,
+            trusses: Vec::with_capacity(trusses.len()),
+            discrete: crate::discrete::Discrete::default(),
+        };
         for (label, kind, nodes, formulation, d, density, theory, _) in elements {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
             mesh.elements.push(Elem { label, kind, nodes: idx, xyz: exyz, formulation, d, density, theory });
         }
+        for (label, kind, nodes, young, area, density) in trusses {
+            let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
+            let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
+            mesh.trusses.push(Bar { label, kind, nodes: idx, xyz: exyz, young, area, density });
+        }
+        mesh.discrete = crate::discrete::Discrete::new(&mesh, resolved)?;
         Ok(mesh)
+    }
+
+    /// The layout slots (mesh nodes, reference points) every element and discrete element
+    /// couples, for the matrix pattern.
+    pub fn blocks(&self) -> impl Iterator<Item = std::borrow::Cow<'_, [usize]>> {
+        let elements = self.elements.iter().map(|e| e.nodes.as_slice()).chain(self.trusses.iter().map(|t| t.nodes.as_slice()));
+        elements.map(std::borrow::Cow::Borrowed).chain(self.discrete.couplings().map(|dofs| {
+            let mut slots: Vec<usize> = dofs.iter().filter_map(|d| self.layout.locate(*d).map(|(slot, _)| slot)).collect();
+            slots.dedup();
+            std::borrow::Cow::Owned(slots)
+        }))
+    }
+
+    /// The slots of the matrix pattern: the mesh nodes, and the reference points too when a
+    /// discrete element acts on them (couplings tie points through constraints, not the matrix).
+    pub fn block_count(&self) -> usize {
+        if self.discrete.couplings().flatten().any(|d| d >= self.mesh_dofs()) { self.layout.slots() } else { self.labels.len() }
     }
 }
 
@@ -279,8 +400,9 @@ pub fn prescribed(
         if let Target::ReferencePoint(rp) = bc.target()
             && mesh.point(rp).is_none()
         {
-            warnings
-                .push(format!("boundary condition `{name}` acts on reference point `{rp}`, which no coupling ties to the mesh; it holds nothing"));
+            warnings.push(format!(
+                "boundary condition `{name}` acts on reference point `{rp}`, which no coupling ties to the mesh and no spring or point mass uses; it holds nothing"
+            ));
             continue;
         }
         for slot in resolved.target_nodes(bc.target()).iter().filter_map(|l| mesh.layout.slot(*l)) {
@@ -365,7 +487,9 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                 if let Some(rp) = load.reference_point()
                     && mesh.point(rp).is_none()
                 {
-                    return Err(Error::Invalid(format!("load `{name}` acts on reference point `{rp}`, which no coupling ties to the mesh")));
+                    return Err(Error::Invalid(format!(
+                        "load `{name}` acts on reference point `{rp}`, which no coupling ties to the mesh and no spring or point mass uses"
+                    )));
                 }
                 // Moments act on the rotations, which only reference points have.
                 let rotation = matches!(load, Load::Moment { .. });
@@ -433,15 +557,36 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                     let rho = e.density.ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} has no density", e.label)))?;
                     body(&mut f, mesh, e, acceleration.map(|a| rho * a))?;
                 }
+                for t in &mesh.trusses {
+                    if chosen.is_some_and(|c| c.binary_search(&t.label).is_err()) {
+                        continue;
+                    }
+                    let rho = t.density.ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} has no density", t.label)))?;
+                    bar_body(&mut f, mesh, t, acceleration.map(|a| rho * a))?;
+                }
+                // Point masses take gravity on the whole model.
+                if set.is_none() {
+                    mesh.discrete.add_gravity(&mut f, *acceleration, mesh);
+                }
             }
             Load::BodyForce { set, vector } => {
                 for label in resolved.sets.get(set).map(|r| r.elements.as_slice()).unwrap_or_default() {
+                    if let Some(t) = mesh.truss(*label) {
+                        bar_body(&mut f, mesh, t, *vector)?;
+                        continue;
+                    }
                     let e = mesh.element(*label).ok_or_else(|| Error::Invalid(format!("load `{name}`: element {label} is not a solid element")))?;
                     body(&mut f, mesh, e, *vector)?;
                 }
             }
             Load::Centrifugal { angular_velocity, point, axis, set } => {
                 let chosen: Option<&[u32]> = set.as_ref().map(|s| resolved.sets.get(s).map(|r| r.elements.as_slice()).unwrap_or_default());
+                if let Some(t) = mesh.trusses.iter().find(|t| chosen.is_none_or(|c| c.binary_search(&t.label).is_ok())) {
+                    return Err(Error::NotSupported(format!("centrifugal loads on trusses (load `{name}`, element {})", t.label)));
+                }
+                if set.is_none() && !mesh.discrete.masses.is_empty() {
+                    return Err(Error::NotSupported(format!("centrifugal loads on point masses (load `{name}`)")));
+                }
                 for e in &mesh.elements {
                     if chosen.is_some_and(|c| c.binary_search(&e.label).is_err()) {
                         continue;
@@ -459,6 +604,15 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
         }
     }
     Ok(f)
+}
+
+/// A force `b` per volume on a truss.
+fn bar_body(f: &mut [f64], mesh: &Mesh, t: &Bar, b: [f64; 3]) -> Result<()> {
+    let forces = t.truss()?.body_force(b, t.area).map_err(|err| Error::element(t.label, err))?;
+    for (node, v) in t.nodes.iter().zip(forces) {
+        add(f, &translations(mesh, *node)?, v);
+    }
+    Ok(())
 }
 
 fn body(f: &mut [f64], mesh: &Mesh, e: &Elem, b: [f64; 3]) -> Result<()> {

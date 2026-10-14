@@ -631,13 +631,17 @@ impl Model {
         }))
     }
 
-    /// The rules of a 2D model: one kind of 2D model (plane or axisymmetric) and nothing else, in
-    /// the XY plane (x ≥ 0 when axisymmetric), elements numbered counter-clockwise.
+    /// The rules of a 2D model: one kind of 2D model (plane or axisymmetric) and nothing else but
+    /// trusses (plane models only), in the XY plane (x ≥ 0 when axisymmetric), elements numbered
+    /// counter-clockwise.
     fn check_planar(&self, r: &Resolved, d: &mut Diagnostics) {
         if !r.is_planar() {
             return;
         }
-        let others: Vec<&str> = self.sections.iter().filter(|(_, s)| !s.kind.is_planar()).map(|(n, _)| n.as_str()).collect();
+        let axisymmetric = r.extent() == Some(Extent::Revolved);
+        // Trusses join a plane model with its two in-plane unknowns per node.
+        let truss = |s: &crate::Section| matches!(s.kind, SectionKind::Rod { .. }) && !axisymmetric;
+        let others: Vec<&str> = self.sections.iter().filter(|(_, s)| !s.kind.is_planar() && !truss(s)).map(|(n, _)| n.as_str()).collect();
         if !others.is_empty() {
             d.error(
                 "model",
@@ -647,7 +651,6 @@ impl Model {
                 ),
             );
         }
-        let axisymmetric = r.extent() == Some(Extent::Revolved);
         if axisymmetric && r.planar.values().any(|e| *e != Extent::Revolved) {
             d.error("model", "axisymmetric and plane (stress or strain) sections cannot be mixed in one model");
         }
@@ -666,6 +669,14 @@ impl Model {
             let area2: f64 = corners.iter().zip(corners.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum();
             if !(area2 > 0.0) {
                 clockwise.push(label);
+            }
+        }
+        for sec in self.sections.values().filter(|s| truss(s)) {
+            for label in r.sets.get(&sec.set).map(|s| s.elements.as_slice()).unwrap_or_default() {
+                let Some(e) = self.elements.get(label) else { continue };
+                if e.nodes.iter().filter_map(|n| self.nodes.get(n)).any(|n| n.xyz[2] != 0.0) {
+                    off_plane.push(*label);
+                }
             }
         }
         if !off_plane.is_empty() {

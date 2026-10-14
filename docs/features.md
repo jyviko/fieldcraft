@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-50 ready, 51 coming soon.
+52 ready, 49 coming soon.
 
 ## Geometry
 
@@ -107,8 +107,8 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Contact | Find Contacts — Detect contact pairs automatically | coming soon (M7) |  |
 | Contact | Rigid Wall — Rigid walls for explicit dynamics | coming soon (M10) |  |
 | Connectors | Bolt Load — Bolt pretension | coming soon (M7) |  |
-| Connectors | Spring — Springs and dashpots | coming soon (M7) |  |
-| Connectors | Point Mass — Point masses and inertia | coming soon (M7) |  |
+| Connectors | Spring — Spring or dashpot to the ground or between two points, along a direction or their line | ready | `model.spring.create`, `model.spring.edit`, `model.spring.delete` |
+| Connectors | Point Mass — Point mass and rotary inertia at nodes or a reference point | ready | `model.mass.create`, `model.mass.edit`, `model.mass.delete` |
 | Connectors | Connector — Connector elements between points | coming soon (M7) |  |
 | Coupled | FSI Interface — The fluid–structure interface | coming soon (M13) |  |
 

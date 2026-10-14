@@ -74,6 +74,37 @@ impl Elastic {
     }
 }
 
+/// Hyperelastic behaviour of an isotropic material at large strain, in nonlinear steps.
+///
+/// The constants are the material's isotropic elastic ones: the shear modulus μ = E / (2(1 + ν))
+/// and the bulk modulus κ = E / (3(1 − 2ν)), so at small strain the material is that linear
+/// elastic one (linear steps use it so). Without this option an elastic material in a nonlinear
+/// step is St Venant–Kirchhoff (the second Piola–Kirchhoff stress linear in the Green–Lagrange
+/// strain), which is right for large rotations with small strains.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Hyperelastic {
+    /// Compressible neo-Hookean with the isochoric–volumetric split: the strain energy per
+    /// reference volume W = μ/2 (Ī₁ − 3) + κ/2 (J − 1)², with Ī₁ = J^(−2/3) tr C (C₁₀ = μ/2,
+    /// D₁ = 2/κ in the usual polynomial notation).
+    NeoHookean {},
+}
+
+impl Hyperelastic {
+    /// The shear and bulk moduli μ = E / (2(1 + ν)) and κ = E / (3(1 − 2ν)) the model takes from
+    /// the isotropic constants.
+    pub fn moduli(young: f64, poisson: f64) -> (f64, f64) {
+        (young / (2.0 * (1.0 + poisson)), young / (3.0 * (1.0 - 2.0 * poisson)))
+    }
+
+    /// The name of the model, for messages.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Hyperelastic::NeoHookean {} => "neo-Hookean",
+        }
+    }
+}
+
 /// Fluid behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -332,6 +363,9 @@ pub struct Erosion {
 pub struct Material {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elastic: Option<Elastic>,
+    /// Large-strain behaviour in nonlinear steps, built on the isotropic elastic constants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperelastic: Option<Hyperelastic>,
     /// Mass per volume, needed by frequency steps, gravity and transient heat transfer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub density: Option<f64>,
@@ -365,6 +399,14 @@ impl Material {
         }
         if let Some(e) = &self.elastic {
             e.validate()?;
+        }
+        if let Some(h) = &self.hyperelastic {
+            if !matches!(self.elastic, Some(Elastic::Isotropic { .. })) {
+                return Err(Error::Invalid(format!("{} hyperelasticity needs isotropic elastic constants", h.name())));
+            }
+            if self.plastic.is_some() {
+                return Err(Error::Invalid(format!("plasticity of a {} hyperelastic material is not supported yet", h.name())));
+            }
         }
         if let Some(d) = self.density {
             positive("density", d)?;
@@ -410,6 +452,11 @@ impl Model {
 
     pub fn material(&self, name: &str) -> Option<&Material> {
         self.materials.get(name)
+    }
+
+    /// The hyperelastic materials some section uses, by name.
+    pub fn hyperelastic_in_use(&self) -> std::collections::BTreeSet<&str> {
+        self.sections.values().map(|s| s.material.as_str()).filter(|m| self.material(m).is_some_and(|m| m.hyperelastic.is_some())).collect()
     }
 
     pub fn add_material(&mut self, name: &str, material: Material) -> Result<()> {
@@ -542,6 +589,25 @@ mod tests {
         assert!(serde_json::from_str::<Material>(r#"{"density":1,"plastic":{"type":"bilinear","yield_stress":1,"oops":2}}"#).is_err());
         let text = serde_json::to_string(&Material { plastic: Some(jc()), damage: Some(damage), ..steel() }).unwrap();
         assert_eq!(serde_json::from_str::<Material>(&text).unwrap(), Material { plastic: Some(jc()), damage: Some(damage), ..steel() });
+    }
+
+    #[test]
+    fn hyperelasticity_builds_on_isotropic_constants() {
+        let m: Material = serde_json::from_value(serde_json::json!({
+            "elastic": {"type": "isotropic", "young": 3.0, "poisson": 0.49}, "hyperelastic": {"type": "neo_hookean"}
+        }))
+        .unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.hyperelastic, Some(Hyperelastic::NeoHookean {}));
+        let back: Material = serde_json::from_value(serde_json::to_value(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+        assert!(serde_json::from_value::<Material>(serde_json::json!({"hyperelastic": {"type": "neo_hookean", "c10": 1}})).is_err());
+        let alone = Material { hyperelastic: Some(Hyperelastic::NeoHookean {}), density: Some(1.0), ..Material::default() };
+        assert!(alone.validate().is_err(), "needs isotropic constants");
+        let ortho = Elastic::EngineeringConstants { young: [1.0; 3], poisson: [0.0; 3], shear: [1.0; 3] };
+        assert!(Material { elastic: Some(ortho), ..alone }.validate().is_err());
+        let plastic = Plastic::Bilinear { yield_stress: 1.0, hardening_modulus: 0.0, hardening: Hardening::Isotropic };
+        assert!(Material { plastic: Some(plastic), ..m }.validate().is_err());
     }
 
     #[test]

@@ -782,3 +782,13 @@ fn plasticity_is_written_as_mats1() {
     let Err(Error::Unsupported { what, .. }) = nastran::write(&m) else { panic!() };
     assert!(what.contains("Johnson–Cook plasticity") && what.contains("damage and erosion"), "{what}");
 }
+
+#[test]
+fn nonlinear_static_steps_are_refused_by_name() {
+    let mut m = cantilever();
+    let name = m.steps()[0].name.clone();
+    let mut s = m.steps()[0].clone();
+    s.set_procedure(Procedure::NonlinearStatic(fieldcraft_model::NonlinearStatic::default()));
+    m.replace_step(s).unwrap();
+    assert!(unsupported(&m).contains(&format!("step `{name}`: nonlinear static steps (Nastran's SOL 400")), "{}", unsupported(&m));
+}

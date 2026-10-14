@@ -30,7 +30,14 @@
 //! - a frequency step is a perturbation of the last general step: its boundary conditions are
 //!   written against that base state and do not carry on to later steps; loads have no effect on
 //!   natural frequencies and are not written in it;
-//! - every step restates its output request (`*OUTPUT, FIELD, OP=NEW`).
+//! - every step restates its output request (`*OUTPUT, FIELD, OP=NEW`);
+//! - a nonlinear static step is `*STEP, NLGEOM=YES` (or `NO` without nonlinear geometry) with
+//!   `INC=` its increment cap, `*STATIC` with its initial, minimum and maximum increments over a
+//!   step period of 1, and `*CONTROLS, PARAMETERS=LINE SEARCH` when it searches; its iteration cap
+//!   and tolerances are left to Abaqus's controls, whose residual norms are defined differently.
+//!   Abaqus starts each general step from the end of the previous one, while every model step
+//!   starts from the undeformed state; for elastic materials the end state depends on the final
+//!   loads alone, so the two agree.
 //!
 //! # Loads
 //!
@@ -96,7 +103,10 @@
 //!
 //! # Materials
 //!
-//! Isotropic elasticity is `*ELASTIC, TYPE=ISOTROPIC`, engineering constants
+//! Isotropic elasticity is `*ELASTIC, TYPE=ISOTROPIC` (or, for a neo-Hookean material in a deck
+//! with nonlinear steps, `*HYPERELASTIC, NEO HOOKE` with C₁₀ = μ/2 and D₁ = 2/κ, the same strain
+//! energy; a linear static step is then refused, since Abaqus's general static step would apply
+//! the hyperelastic law), engineering constants
 //! `TYPE=ENGINEERING CONSTANTS`, density `*DENSITY`. Von Mises plasticity is `*PLASTIC`: a
 //! hardening table as its (yield stress, plastic strain) lines; bilinear isotropic hardening as
 //! two lines, the second at a plastic strain of [`BILINEAR_REACH`] (Abaqus holds the last yield
@@ -219,6 +229,12 @@ pub fn element_type(kind: ElementKind, section: &Section) -> std::result::Result
     Ok(if f.hybrid { format!("{plain}H") } else { plain.to_string() })
 }
 
+/// Whether the model has a nonlinear static step: hyperelastic materials are then written as
+/// `*HYPERELASTIC` (in a deck of linear steps their elastic constants are the whole of it).
+fn has_nonlinear_step(model: &Model) -> bool {
+    model.steps().iter().any(|s| matches!(s.procedure, Procedure::NonlinearStatic(_)))
+}
+
 /// Every element, grouped by element type (from its section) and sorted by label.
 fn elements_by_type<'m>(model: &'m Model, r: &Resolved) -> Result<BTreeMap<String, Vec<(u32, &'m Element)>>> {
     let mut by_type: BTreeMap<String, Vec<(u32, &Element)>> = BTreeMap::new();
@@ -286,6 +302,16 @@ fn check_expressible(model: &Model) -> Result<()> {
     }
     for step in model.steps().iter().filter(|s| matches!(s.procedure, Procedure::ExplicitDynamic(_))) {
         bad.insert(format!("step `{}`: explicit dynamic steps (not written to Abaqus input yet)", step.name));
+    }
+    if has_nonlinear_step(model)
+        && let Some(material) = model.hyperelastic_in_use().into_iter().next()
+    {
+        for step in model.steps().iter().filter(|s| matches!(s.procedure, Procedure::Static {})) {
+            bad.insert(format!(
+                "step `{}`: a linear static step beside nonlinear steps of hyperelastic material `{material}` (Abaqus's general static step applies the hyperelastic law; write the linear step to its own deck)",
+                step.name
+            ));
+        }
     }
     for (name, m) in model.materials() {
         if m.damage.is_some() || m.erosion.is_some() {
@@ -759,6 +785,12 @@ impl Deck {
         for (name, m) in model.materials() {
             self.line(&format!("*MATERIAL, NAME={name}"));
             match m.elastic {
+                Some(Elastic::Isotropic { young, poisson }) if m.hyperelastic.is_some() && has_nonlinear_step(model) => {
+                    // W = C10 (Ī1 − 3) + (J − 1)²/D1 with C10 = μ/2 and D1 = 2/κ.
+                    let (shear, bulk) = fieldcraft_model::Hyperelastic::moduli(young, poisson);
+                    self.line("*HYPERELASTIC, NEO HOOKE");
+                    self.numbers_line("", &[shear / 2.0, 2.0 / bulk])?;
+                }
                 Some(Elastic::Isotropic { young, poisson }) => {
                     self.line("*ELASTIC, TYPE=ISOTROPIC");
                     self.numbers_line("", &[young, poisson])?;
@@ -1038,10 +1070,22 @@ impl Deck {
             self.comment(&format!("Step {}", step.name));
             match step.procedure {
                 Procedure::Fluid { .. } => return Err(crate::fluid_step(FORMAT, &step.name)),
-                Procedure::Static {} => {
-                    self.line(&format!("*STEP, NAME={}, NLGEOM=NO", step.name));
-                    self.line("*STATIC");
-                    self.line("1.0, 1.0");
+                Procedure::Static {} | Procedure::NonlinearStatic(_) => {
+                    if let Procedure::NonlinearStatic(n) = &step.procedure {
+                        let nlgeom = if n.nonlinear_geometry { "YES" } else { "NO" };
+                        self.line(&format!("*STEP, NAME={}, NLGEOM={nlgeom}, INC={}", step.name, n.max_increments));
+                        self.line("*STATIC");
+                        self.numbers_line("", &[n.initial_increment, 1.0, n.min_increment, n.max_increment])?;
+                        if n.line_search {
+                            self.line("*CONTROLS, PARAMETERS=LINE SEARCH");
+                            self.line("5,");
+                        }
+                        self.comment("iterations and convergence: Abaqus's own controls (its residual norms differ from FieldCraft's)");
+                    } else {
+                        self.line(&format!("*STEP, NAME={}, NLGEOM=NO", step.name));
+                        self.line("*STATIC");
+                        self.line("1.0, 1.0");
+                    }
                     self.step_boundaries(model, r, &base_bcs, &step.boundary_conditions)?;
                     if step.loads == base_loads {
                         self.comment("loads: as in the previous general step");

@@ -737,3 +737,37 @@ fn plasticity_is_written_as_plastic_materials() {
     let Err(Error::Unsupported { what, .. }) = lsdyna::write(&with(jc, None)) else { panic!() };
     assert!(what.contains("Johnson–Cook"), "{what}");
 }
+
+/// A nonlinear static step: the ramped implicit run with full Newton and automatic increments;
+/// what LS-DYNA cannot take is named.
+#[test]
+fn nonlinear_static_steps() {
+    let mut m = cantilever();
+    let controls =
+        NonlinearStatic { initial_increment: 0.05, min_increment: 1e-4, max_increment: 0.5, max_iterations: 12, ..NonlinearStatic::default() };
+    m.replace_step(step("Bend", Procedure::NonlinearStatic(controls.clone()), &["clamp"], &["tip_load"])).unwrap();
+    let deck = lsdyna::write(&m).unwrap().text;
+    let after = |keyword: &str| -> Vec<String> {
+        let mut lines = deck.lines().skip_while(|l| *l != keyword).skip(1).filter(|l| !l.starts_with('$'));
+        lines.next().unwrap().split_whitespace().map(str::to_string).collect()
+    };
+    let num = |s: &String| s.parse::<f64>().unwrap();
+    let general = after("*CONTROL_IMPLICIT_GENERAL");
+    assert_eq!((num(&general[0]), num(&general[1])), (1.0, 0.05), "{general:?}");
+    let solution = after("*CONTROL_IMPLICIT_SOLUTION");
+    assert_eq!(solution.iter().map(num).collect::<Vec<_>>(), [2.0, 1.0, 12.0], "{solution:?}");
+    let auto = after("*CONTROL_IMPLICIT_AUTO");
+    assert_eq!(auto.iter().map(num).collect::<Vec<_>>(), [1.0, 1e-4, 0.5], "blank fields are skipped: {auto:?}");
+    assert!(deck.contains("*DEFINE_CURVE_TITLE\nBend ramp\n"), "the loads follow the ramp");
+    assert!(deck.contains("*LOAD_NODE"), "{deck}");
+
+    m.replace_step(step("Bend", Procedure::NonlinearStatic(NonlinearStatic { nonlinear_geometry: false, ..controls }), &["clamp"], &["tip_load"]))
+        .unwrap();
+    unsupported(&m, "a nonlinear step without nonlinear geometry");
+    m.replace_step(step("Bend", Procedure::NonlinearStatic(NonlinearStatic::default()), &["clamp"], &["tip_load"])).unwrap();
+    m.replace_material("Steel", Material { hyperelastic: Some(Hyperelastic::NeoHookean {}), ..steel() }).unwrap();
+    unsupported(&m, "hyperelastic material `Steel` in a nonlinear step");
+    // In a linear step the elastic constants are the whole of a hyperelastic material.
+    m.replace_step(step("Bend", Procedure::Static {}, &["clamp"], &["tip_load"])).unwrap();
+    assert!(lsdyna::write(&m).unwrap().text.contains("*MAT_ELASTIC_TITLE"));
+}

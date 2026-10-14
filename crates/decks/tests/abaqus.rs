@@ -753,3 +753,45 @@ fn plasticity_is_written_and_failure_reported() {
     let Err(Error::Unsupported { what, .. }) = abaqus::write(&failing) else { panic!("damage is not written") };
     assert!(what.contains("material `Steel`: damage and erosion"), "{what}");
 }
+
+/// A nonlinear static step is a general step with NLGEOM, its increments and its line search; a
+/// neo-Hookean material is then `*HYPERELASTIC` and a linear static step beside it is refused.
+#[test]
+fn nonlinear_steps_and_hyperelastic_materials_are_written() {
+    use fieldcraft_model::{Hyperelastic, NonlinearStatic};
+    let mut m = cantilever();
+    let controls = NonlinearStatic {
+        initial_increment: 0.05,
+        min_increment: 1e-4,
+        max_increment: 0.5,
+        max_increments: 40,
+        line_search: true,
+        ..NonlinearStatic::default()
+    };
+    m.replace_step(step("Bend", Procedure::NonlinearStatic(controls.clone()), &["clamp"], &["end"])).unwrap();
+    let deck = abaqus::write(&m).unwrap();
+    let bend = block(&deck, "Bend");
+    assert_eq!(bend.first(), Some(&"*STEP, NAME=Bend, NLGEOM=YES, INC=40"), "{bend:?}");
+    let at = bend.iter().position(|l| *l == "*STATIC").unwrap();
+    assert_eq!(bend.get(at + 1..at + 4), Some(&["0.05, 1.0, 0.0001, 0.5", "*CONTROLS, PARAMETERS=LINE SEARCH", "5,"][..]), "{bend:?}");
+    assert!(deck.contains("*ELASTIC, TYPE=ISOTROPIC\n210000.0, 0.3\n"), "St Venant–Kirchhoff is the elastic material");
+
+    let small = NonlinearStatic { nonlinear_geometry: false, line_search: false, ..controls };
+    m.replace_step(step("Bend", Procedure::NonlinearStatic(small), &["clamp"], &["end"])).unwrap();
+    m.replace_material("Steel", Material { hyperelastic: Some(Hyperelastic::NeoHookean {}), ..steel() }).unwrap();
+    let deck = abaqus::write(&m).unwrap();
+    let bend = block(&deck, "Bend");
+    assert_eq!(bend.first(), Some(&"*STEP, NAME=Bend, NLGEOM=NO, INC=40"), "{bend:?}");
+    assert!(!bend.iter().any(|l| l.starts_with("*CONTROLS")), "{bend:?}");
+    // μ = E/(2(1 + ν)) = 80769.23…, κ = E/(3(1 − 2ν)) = 175000: C10 = μ/2, D1 = 2/κ.
+    let (c10, d1) = (210_000.0 / 2.6 / 2.0, 2.0 / 175_000.0);
+    let line = deck.split("*HYPERELASTIC, NEO HOOKE\n").nth(1).and_then(|s| s.lines().next()).unwrap();
+    let values: Vec<f64> = line.split(", ").map(|v| v.parse().unwrap()).collect();
+    assert!((values[0] - c10).abs() < 1e-9 * c10 && (values[1] - d1).abs() < 1e-9 * d1, "{line}");
+    assert!(!deck.contains("*ELASTIC"), "{deck}");
+
+    m.add_step(step("Linear", Procedure::Static {}, &["clamp"], &["end"]), None).unwrap();
+    assert!(unsupported(&m).contains("step `Linear`: a linear static step beside nonlinear steps of hyperelastic material `Steel`"));
+    m.remove_step("Bend").unwrap();
+    assert!(abaqus::write(&m).unwrap().contains("*ELASTIC, TYPE=ISOTROPIC\n"), "with linear steps only, the elastic constants are the whole of it");
+}

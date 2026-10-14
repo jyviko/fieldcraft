@@ -24,7 +24,13 @@
 //!   the set's translations, equal weights);
 //! - per step: `*CONTROL_IMPLICIT_GENERAL`, `*CONTROL_IMPLICIT_SOLUTION` (linear) or
 //!   `*CONTROL_IMPLICIT_EIGENVALUE`, `*CONTROL_TERMINATION` (a static step is one implicit step
-//!   from time 0 to 1 with every load ramped by one curve, `*DEFINE_CURVE`); boundary conditions
+//!   from time 0 to 1 with every load ramped by one curve, `*DEFINE_CURVE`); a nonlinear static
+//!   step runs over the same time with the same ramp, its first increment as `dt0`, the nonlinear
+//!   solver with a stiffness reformation every iteration (`ilimit` 1, full Newton) and its
+//!   iteration cap as `maxref`, and `*CONTROL_IMPLICIT_AUTO` with its minimum and maximum
+//!   increments (its increment cap and tolerances have no LS-DYNA counterpart and are left to
+//!   LS-DYNA's defaults; a step without nonlinear geometry and hyperelastic materials in nonlinear
+//!   steps are refused); boundary conditions
 //!   as `*BOUNDARY_SPC_*_ID` (named) and `*BOUNDARY_PRESCRIBED_MOTION_*_ID` for non-zero
 //!   displacements; forces, moments and tractions as `*LOAD_NODE_SET`/`_POINT` from the
 //!   resolved nodal values; pressure as `*LOAD_SEGMENT_SET`; gravity as `*LOAD_BODY_X/Y/Z`
@@ -267,7 +273,21 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
         if matches!(step.procedure, Procedure::ExplicitDynamic(_)) {
             refused.insert(format!("step `{}`: explicit dynamic steps (this writer writes implicit analyses so far)", step.name));
         }
-        let is_static = matches!(step.procedure, Procedure::Static {});
+        if let Procedure::NonlinearStatic(n) = &step.procedure {
+            if !n.nonlinear_geometry {
+                refused.insert(format!(
+                    "step `{}`: a nonlinear step without nonlinear geometry (LS-DYNA's nonlinear implicit analysis always follows the deformed shape)",
+                    step.name
+                ));
+            }
+            for material in model.hyperelastic_in_use() {
+                refused.insert(format!(
+                    "step `{}`: hyperelastic material `{material}` in a nonlinear step (LS-DYNA's rubber materials define their volumetric energy differently; not written yet)",
+                    step.name
+                ));
+            }
+        }
+        let is_static = matches!(step.procedure, Procedure::Static {} | Procedure::NonlinearStatic(_));
         for b in &step.boundary_conditions {
             let Some(bc) = model.boundary_conditions().get(b) else { continue };
             match bc.target() {
@@ -793,18 +813,29 @@ fn dof_code(dof: u8) -> i32 {
 fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Step, n: u32, constraint_id: &mut u32) -> Result<()> {
     d.line("*TITLE");
     d.line(&step.name);
-    let is_static = matches!(step.procedure, Procedure::Static {});
+    let is_static = matches!(step.procedure, Procedure::Static {} | Procedure::NonlinearStatic(_));
+    let first_increment = if let Procedure::NonlinearStatic(n) = &step.procedure { n.initial_increment } else { 1.0 };
     d.line("*CONTROL_IMPLICIT_GENERAL");
     d.header(&["imflag", "dt0"]);
-    d.card([Field::from(1), Field::from(1.0)]);
-    match step.procedure {
+    d.card([Field::from(1), Field::from(first_increment)]);
+    match &step.procedure {
         Procedure::Fluid { .. } => return Err(crate::fluid_step(FORMAT, &step.name)),
         Procedure::Static {} => {
             d.line("*CONTROL_IMPLICIT_SOLUTION");
             d.header(&["nsolvr"]);
             d.card([Field::from(1)]);
         }
-        Procedure::Frequency { modes, min_hz, max_hz } => {
+        Procedure::NonlinearStatic(n) => {
+            // Nonlinear with a stiffness reformation every iteration (full Newton), at most
+            // `max_iterations` per increment; LS-DYNA's own convergence norms and line search.
+            d.line("*CONTROL_IMPLICIT_SOLUTION");
+            d.header(&["nsolvr", "ilimit", "maxref"]);
+            d.card([Field::from(2), Field::from(1), Field::from(n.max_iterations)]);
+            d.line("*CONTROL_IMPLICIT_AUTO");
+            d.header(&["iauto", "iteopt", "itewin", "dtmin", "dtmax"]);
+            d.card([Field::from(1), Field::Blank, Field::Blank, Field::from(n.min_increment), Field::from(n.max_increment)]);
+        }
+        &Procedure::Frequency { modes, min_hz, max_hz } => {
             d.line("*CONTROL_IMPLICIT_EIGENVALUE");
             d.header(&["neig", "center", "lflag", "lftend", "rflag", "rhtend"]);
             let bound = |b: Option<f64>| match b {

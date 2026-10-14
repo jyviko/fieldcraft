@@ -57,12 +57,13 @@ pub use discrete::{Direction, Mass, PointMass, ResolvedDirection, ResolvedMass, 
 pub use fluids::{BoxFace, BoxFaces, FaceCondition, FluidBoundary, FluidDomain, Profile, SurfaceBoundary, SurfaceCondition};
 pub use geometry::{Classification, Entity, GeometryRef};
 pub use loads::{Distribution, Load, centrifugal_acceleration};
-pub use materials::{Damage, Directional, Elastic, Erosion, Fluid, Hardening, HardeningPoint, Material, Plastic, Thermal};
+pub use materials::{Damage, Directional, Elastic, Erosion, Fluid, Hardening, HardeningPoint, Hyperelastic, Material, Plastic, Thermal};
 pub use mesh::{Element, ElementEdge, ElementFace, ElementKind, Node, check_coordinates};
 pub use sections::{BeamProfile, Extent, Formulation, Integration, Section, SectionKind};
 pub use sets::Set;
 pub use steps::{
-    BulkViscosity, ExplicitDynamic, Hourglass, HourglassKind, InitialVelocity, OutputVariable, Procedure, RigidWall, Step, StressRate, Transient,
+    BulkViscosity, ExplicitDynamic, Hourglass, HourglassKind, InitialVelocity, MAX_NONLINEAR_INCREMENTS, MAX_NONLINEAR_ITERATIONS, NonlinearStatic,
+    OutputVariable, Procedure, RigidWall, Step, StressRate, Tolerances, Transient,
 };
 pub use units::UnitSystem;
 

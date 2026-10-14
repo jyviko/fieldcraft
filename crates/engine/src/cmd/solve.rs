@@ -142,6 +142,7 @@ fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
                 Procedure::Frequency { .. } => run_frequency,
                 Procedure::ExplicitDynamic(_) => run_explicit,
                 Procedure::Fluid { .. } => run_fluid,
+                Procedure::NonlinearStatic(_) => run_nonlinear,
             };
             (st.name.clone(), st.procedure.name(), solve)
         })
@@ -191,6 +192,10 @@ fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
     });
     s.store_result(StepResult::Implicit(ImplicitResult::Static(r)));
     Ok(summary)
+}
+
+fn run_nonlinear(_: &mut Session, _: &Value) -> Result<Value> {
+    Err(EngineError::Params("not supported yet: nonlinear static steps (the nonlinear solver arrives with solve.nonlinear)".into()))
 }
 
 fn run_heat(s: &mut Session, p: &Value) -> Result<Value> {

@@ -139,6 +139,9 @@ fn invalid(m: impl Into<String>) -> Error {
 fn material(model: &Model, name: &str) -> Result<Material> {
     let m = model.material(name).ok_or_else(|| invalid(format!("material `{name}` is missing")))?;
     let elastic = m.elastic.as_ref().ok_or_else(|| invalid(format!("material `{name}` has no elastic constants")))?;
+    if let Some(h) = m.hyperelastic {
+        return Err(Error::NotSupported(format!("{} hyperelastic material `{name}` in explicit dynamics", h.name())));
+    }
     let density = m
         .density
         .filter(|d| *d > 0.0 && d.is_finite())

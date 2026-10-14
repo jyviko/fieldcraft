@@ -322,6 +322,7 @@ impl Model {
                     Procedure::ExplicitDynamic(_) => "is dynamic",
                     Procedure::HeatTransfer { transient: Some(_) } => "is transient heat transfer",
                     Procedure::Static {}
+                    | Procedure::NonlinearStatic(_)
                     | Procedure::Fluid { .. }
                     | Procedure::HeatTransfer { transient: None }
                     | Procedure::CoupledTemperatureDisplacement {} => {
@@ -469,7 +470,7 @@ impl Model {
                 }
             }
             match &s.procedure {
-                Procedure::Static {} => {
+                Procedure::Static {} | Procedure::NonlinearStatic(_) => {
                     if s.loads.is_empty() && !prescribes_motion {
                         d.warning(&subject, "nothing loads the model in this step");
                     }

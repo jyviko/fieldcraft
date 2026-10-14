@@ -86,6 +86,114 @@ pub enum Procedure {
     /// Steady heat conduction and the static equilibrium of the thermal strains it causes,
     /// together: every boundary condition and load of the step acts.
     CoupledTemperatureDisplacement {},
+    /// Static equilibrium followed in load increments with Newton–Raphson iterations: large
+    /// displacements, rotations and strains (`nonlinear_geometry`), hyperelastic materials and
+    /// follower pressure. Loads and prescribed displacements grow in proportion to the step's
+    /// load factor, from 0 to 1.
+    NonlinearStatic(NonlinearStatic),
+}
+
+/// Most load increments a nonlinear static step may take.
+pub const MAX_NONLINEAR_INCREMENTS: u32 = 100_000;
+
+/// Most Newton iterations a nonlinear static step may take in one increment.
+pub const MAX_NONLINEAR_ITERATIONS: u32 = 1000;
+
+/// The settings of a nonlinear static step.
+///
+/// The step's load factor λ runs from 0 to 1: every load is λ times its value and every
+/// prescribed displacement λ times its value (a linear ramp). Increments are fractions of the
+/// step: the first is `initial_increment`; an increment that converges quickly lets the next
+/// grow (up to `max_increment`), one that diverges, fails to converge in `max_iterations` or
+/// inverts an element is retried with a quarter of its size, and the step fails, naming the
+/// load factor and the reason, when an increment would fall below `min_increment` or the step
+/// has taken `max_increments` increments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NonlinearStatic {
+    /// Large displacements, rotations and strains (total Lagrangian elements, follower
+    /// pressure); `false` keeps the kinematics of small displacements (only the materials are
+    /// nonlinear).
+    pub nonlinear_geometry: bool,
+    /// The first increment, as a fraction of the step.
+    pub initial_increment: f64,
+    /// The smallest increment a cutback may reach.
+    pub min_increment: f64,
+    /// The largest increment.
+    pub max_increment: f64,
+    /// Cap on the increments (cutbacks included).
+    pub max_increments: u32,
+    /// Cap on the Newton iterations of one increment.
+    pub max_iterations: u32,
+    /// Convergence tolerances.
+    pub tolerances: Tolerances,
+    /// A line search along each Newton correction (off by default: full Newton steps converge
+    /// best for elastic large-rotation problems; a search helps where the material softens).
+    pub line_search: bool,
+}
+
+/// When an increment's Newton iterations have converged: all three hold.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tolerances {
+    /// The largest residual force component over the largest force (applied, internal or
+    /// reaction) the step has seen.
+    pub force: f64,
+    /// The largest displacement correction over the largest displacement of the increment.
+    pub displacement: f64,
+    /// The work of the last correction against the residual over that of the first.
+    pub energy: f64,
+}
+
+impl Default for Tolerances {
+    fn default() -> Tolerances {
+        Tolerances { force: 1e-6, displacement: 1e-5, energy: 1e-10 }
+    }
+}
+
+impl Default for NonlinearStatic {
+    fn default() -> NonlinearStatic {
+        NonlinearStatic {
+            nonlinear_geometry: true,
+            initial_increment: 0.1,
+            min_increment: 1e-5,
+            max_increment: 1.0,
+            max_increments: 100,
+            max_iterations: 16,
+            tolerances: Tolerances::default(),
+            line_search: false,
+        }
+    }
+}
+
+impl NonlinearStatic {
+    pub fn validate(&self) -> Result<()> {
+        let fraction = |what: &str, v: f64| {
+            if v > 0.0 && v <= 1.0 { Ok(v) } else { Err(Error::Invalid(format!("the {what} is a fraction of the step in (0, 1], got {v}"))) }
+        };
+        let initial = fraction("initial increment", self.initial_increment)?;
+        let min = fraction("minimum increment", self.min_increment)?;
+        let max = fraction("maximum increment", self.max_increment)?;
+        if !(min <= initial && initial <= max) {
+            return Err(Error::Invalid(format!("the increments must satisfy minimum ≤ initial ≤ maximum, got {min}, {initial} and {max}")));
+        }
+        if !(1..=MAX_NONLINEAR_INCREMENTS).contains(&self.max_increments) {
+            return Err(Error::Invalid(format!("a nonlinear step takes 1 to {MAX_NONLINEAR_INCREMENTS} increments, got {}", self.max_increments)));
+        }
+        if !(1..=MAX_NONLINEAR_ITERATIONS).contains(&self.max_iterations) {
+            return Err(Error::Invalid(format!(
+                "a nonlinear step takes 1 to {MAX_NONLINEAR_ITERATIONS} iterations per increment, got {}",
+                self.max_iterations
+            )));
+        }
+        let t = self.tolerances;
+        for (what, v) in [("force", t.force), ("displacement", t.displacement), ("energy", t.energy)] {
+            if !(v > 0.0 && v < 1.0) {
+                return Err(Error::Invalid(format!("the {what} tolerance is in (0, 1), got {v}")));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Most time increments of a transient heat transfer step.
@@ -386,7 +494,7 @@ impl BulkViscosity {
 }
 
 impl Procedure {
-    /// `static` or `frequency`.
+    /// The procedure's type, as the model file names it.
     pub fn name(&self) -> &'static str {
         match self {
             Procedure::Static {} => "static",
@@ -395,6 +503,7 @@ impl Procedure {
             Procedure::HeatTransfer { .. } => "heat_transfer",
             Procedure::CoupledTemperatureDisplacement {} => "coupled_temperature_displacement",
             Procedure::Fluid { .. } => "fluid",
+            Procedure::NonlinearStatic(_) => "nonlinear_static",
         }
     }
 
@@ -434,6 +543,9 @@ impl Procedure {
     pub fn validate(&self) -> Result<()> {
         if let Procedure::ExplicitDynamic(e) = self {
             return e.validate();
+        }
+        if let Procedure::NonlinearStatic(n) = self {
+            return n.validate();
         }
         if let Procedure::Fluid { end_time, steps, time_step, frames, magic, .. } = *self {
             match (end_time, steps) {
@@ -480,7 +592,7 @@ impl Procedure {
     /// The output a step of this procedure requests unless told otherwise.
     pub fn default_output(&self) -> BTreeSet<OutputVariable> {
         match self {
-            Procedure::Static {} => OutputVariable::ALL.into_iter().collect(),
+            Procedure::Static {} | Procedure::NonlinearStatic(_) => OutputVariable::ALL.into_iter().collect(),
             Procedure::Frequency { .. } => [OutputVariable::Displacement].into_iter().collect(),
             Procedure::ExplicitDynamic(_) => [OutputVariable::Displacement, OutputVariable::Stress].into_iter().collect(),
             // Velocity, pressure and wall forces, always.
@@ -751,6 +863,43 @@ mod tests {
             assert!(Procedure::ExplicitDynamic(b.clone()).validate().is_err(), "{b:?}");
         }
         assert!(serde_json::from_value::<Procedure>(serde_json::json!({"type": "explicit_dynamic", "end_time": 1, "dt": 2})).is_err());
+    }
+
+    #[test]
+    fn nonlinear_static_steps_validate_their_controls() {
+        let p: Procedure = serde_json::from_value(serde_json::json!({"type": "nonlinear_static"})).unwrap();
+        assert_eq!(p, Procedure::NonlinearStatic(NonlinearStatic::default()));
+        assert_eq!(p.name(), "nonlinear_static");
+        assert!(p.validate().is_ok() && p.is_structural() && !p.is_dynamic());
+        assert_eq!(p.default_output(), Procedure::Static {}.default_output());
+        let p: Procedure = serde_json::from_value(serde_json::json!({
+            "type": "nonlinear_static", "nonlinear_geometry": false, "initial_increment": 0.5, "min_increment": 0.01,
+            "max_increments": 20, "max_iterations": 8, "tolerances": {"force": 1e-4}, "line_search": true
+        }))
+        .unwrap();
+        let Procedure::NonlinearStatic(n) = &p else { panic!("{p:?}") };
+        assert_eq!((n.nonlinear_geometry, n.max_increment, n.tolerances.force, n.tolerances.energy), (false, 1.0, 1e-4, 1e-10));
+        let back: Procedure = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+        assert_eq!(back, p);
+        let base = NonlinearStatic::default();
+        let bad = [
+            NonlinearStatic { initial_increment: 0.0, ..base.clone() },
+            NonlinearStatic { initial_increment: f64::NAN, ..base.clone() },
+            NonlinearStatic { initial_increment: 2.0, max_increment: 2.0, ..base.clone() },
+            NonlinearStatic { min_increment: 0.5, initial_increment: 0.1, ..base.clone() },
+            NonlinearStatic { max_increment: 0.05, ..base.clone() },
+            NonlinearStatic { max_increments: 0, ..base.clone() },
+            NonlinearStatic { max_increments: MAX_NONLINEAR_INCREMENTS + 1, ..base.clone() },
+            NonlinearStatic { max_iterations: 0, ..base.clone() },
+            NonlinearStatic { max_iterations: u32::MAX, ..base.clone() },
+            NonlinearStatic { tolerances: Tolerances { force: 0.0, ..Tolerances::default() }, ..base.clone() },
+            NonlinearStatic { tolerances: Tolerances { energy: f64::INFINITY, ..Tolerances::default() }, ..base.clone() },
+            NonlinearStatic { tolerances: Tolerances { displacement: 1.0, ..Tolerances::default() }, ..base.clone() },
+        ];
+        for b in bad {
+            assert!(Procedure::NonlinearStatic(b.clone()).validate().is_err(), "{b:?}");
+        }
+        assert!(serde_json::from_value::<Procedure>(serde_json::json!({"type": "nonlinear_static", "nlgeom": true})).is_err());
     }
 
     #[test]

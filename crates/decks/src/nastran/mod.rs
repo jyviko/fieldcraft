@@ -280,6 +280,9 @@ fn solution(steps: &[&Step]) -> std::result::Result<u32, String> {
     if let Some(s) = steps.iter().find(|s| matches!(s.procedure, Procedure::ExplicitDynamic(_))) {
         return Err(format!("step `{}`: explicit dynamic steps (Nastran's linear solutions have none)", s.name));
     }
+    if let Some(s) = steps.iter().find(|s| matches!(s.procedure, Procedure::NonlinearStatic(_))) {
+        return Err(format!("step `{}`: nonlinear static steps (Nastran's SOL 400; this writer writes SOL 101 and 103 so far)", s.name));
+    }
     let statics = steps.iter().find(|s| matches!(s.procedure, Procedure::Static {}));
     let modes = steps.iter().find(|s| matches!(s.procedure, Procedure::Frequency { .. }));
     match (statics, modes) {

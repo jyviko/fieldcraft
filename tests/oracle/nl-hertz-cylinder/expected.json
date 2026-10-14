@@ -1,0 +1,109 @@
+{
+ "title": "Hertz line contact: a cylinder pressed on a flat (implicit mortar contact, plane strain)",
+ "kind": "theory",
+ "source": "H. Hertz, Über die Berührung fester elastischer Körper, J. reine angew. Math. 92:156–171, 1882; K. L. Johnson, Contact Mechanics, Cambridge University Press 1985, §4.3 (two-dimensional contact of cylindrical bodies, eqs. 4.45–4.49): b = √(4PR/(πE*)), p₀ = 2P/(πb), with 1/E* = 2(1 − ν²)/E for two bodies of one material and R the cylinder's radius on a flat",
+ "quantities": [
+  {
+   "id": "peak_pressure",
+   "quantity": "the largest contact pressure p₀ (at x = 0)",
+   "measure": {
+    "from": "solve",
+    "pointer": "/contacts/0/max_pressure/value"
+   },
+   "value": 2884.6153846153843,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "p₀ = 2P/(πb) for the load per length P = 2265.57 N/mm, b = 0.5 mm; the contact width spans seven elements of the graded mesh"
+  },
+  {
+   "id": "normal_force",
+   "quantity": "the force across the contact (half model, 1 mm thick)",
+   "measure": {
+    "from": "solve",
+    "pointer": "/contacts/0/normal_force"
+   },
+   "value": 1132.7858125924733,
+   "tolerance": {
+    "relative": 0.002
+   },
+   "reason": "the pressure carries the whole load; the soft springs that hold the indenter before contact take a millionth"
+  },
+  {
+   "id": "pressure_x0296",
+   "quantity": "the contact pressure at the secondary node at x = 0.29594 (node 7)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Press",
+     "nodes": [
+      7
+     ]
+    },
+    "pointer": "/nodes/0/contact/0/pressure"
+   },
+   "value": 2325.066800691437,
+   "tolerance": {
+    "relative": 0.05
+   },
+   "reason": "p₀ √(1 − x²/b²) at the node; the nodal pressure (the node's normal force over the area it carries) averages the distribution over the node's elements"
+  },
+  {
+   "id": "pressure_x0367",
+   "quantity": "the contact pressure at the secondary node at x = 0.36701 (node 8)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Press",
+     "nodes": [
+      8
+     ]
+    },
+    "pointer": "/nodes/0/contact/0/pressure"
+   },
+   "value": 1959.0164149439815,
+   "tolerance": {
+    "relative": 0.1
+   },
+   "reason": "as at node 7, nearer the edge, where the elements round off the square-root fall of the pressure to zero at b"
+  },
+  {
+   "id": "pressure_x0633",
+   "quantity": "the contact pressure at the secondary node at x = 0.63325 (node 11, beyond the half-width b = 0.5)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Press",
+     "nodes": [
+      11
+     ]
+    },
+    "pointer": "/nodes/0/contact/0/pressure"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 1.0
+   },
+   "reason": "outside the contact the surfaces are apart: no pressure (an element beyond b, since the edge element carries part of the last closed node's pressure)"
+  },
+  {
+   "id": "syy_depth",
+   "quantity": "the vertical stress σ_yy under the centre of contact at depth 0.47127 (node 713)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Press",
+     "nodes": [
+      713
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": -2099.1580228637245,
+   "tolerance": {
+    "relative": 0.04
+   },
+   "reason": "σ_z = −p₀ / √(1 + z²/b²) on the axis of a half-plane (Johnson 1985, eq. 4.49); the foundation is ten half-widths wide and deep, not a half-plane, and the stress is the nodal average of the elements around the node"
+  }
+ ]
+}

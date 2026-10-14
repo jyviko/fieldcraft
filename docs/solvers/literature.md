@@ -1299,3 +1299,34 @@ from (cited again in the module docs); docs/fem.md describes the formulation.
   impact of spheres, H. Hertz, J. reine angew. Math. 92:156–171, 1882, and K. L. Johnson,
   *Contact Mechanics*, Cambridge 1985, §11.4; the sliding block, any dynamics text (J. L. Meriam,
   L. G. Kraige, *Engineering Mechanics: Dynamics*, §3/5).
+
+## Part R: Contact in nonlinear static steps (M7), as implemented
+
+The papers `fieldcraft_fem::mortar`, `fieldcraft_fem::dual` and `fieldcraft_solver::contact` are
+written from (cited again in the module docs); docs/fem.md describes the formulation.
+
+- Mortar contact, segment to segment, with nodal weighted gaps and the pressure interpolated by
+  the non-mortar side's shape functions: M. A. Puso, T. A. Laursen, *A mortar segment-to-segment
+  contact method for large deformation solid mechanics*, CMAME 193:601–629, 2004; T. W. McDevitt,
+  T. A. Laursen, *A mortar-finite element formulation for frictional contact problems*, IJNME
+  48:1525–1547, 2000; the segmentation (projection on the non-mortar plane, clipping, integration
+  cells) and the linearisation it needs, A. Popp, M. W. Gee, W. A. Wall, *A finite deformation
+  mortar contact formulation using a primal–dual active set strategy*, IJNME 79:1354–1391, 2009.
+  Chosen over two-pass node-to-surface because mortar passes the contact patch test on
+  non-matching meshes (R. L. Taylor, P. Papadopoulos 1991; M. A. Crisfield 2000, as in Part Q).
+- The consistent tangent by automatic differentiation of the mortar integrals rather than by
+  hand: J. Lengiewicz, J. Korelc, S. Stupkiewicz, *Automation of finite element formulations for
+  large deformation contact problems*, IJNME 85:1252–1279, 2011; forward-mode (truncated Taylor)
+  arithmetic, A. Griewank, A. Walther, *Evaluating Derivatives*, 2nd ed., SIAM 2008.
+- Augmented Lagrangian with Uzawa updates after each converged increment: J. C. Simo, T. A.
+  Laursen, *An augmented Lagrangian treatment of contact problems involving friction*, Comput.
+  Struct. 42(1):97–116, 1992; P. Wriggers, *Computational Contact Mechanics*, 2nd ed., Springer
+  2006, ch. 6 and 10; T. A. Laursen, *Computational Contact and Impact Mechanics*, Springer 2003.
+- The active set inside Newton (the max() of the regularised pressure, a semismooth Newton
+  method): P. Alart, A. Curnier, *A mixed formulation for frictional contact problems prone to
+  Newton like solution methods*, CMAME 92:353–375, 1991; Popp et al. 2009.
+- Integration of the overlap cells: J. Radon's seven-point degree-5 rule on triangles (A. H.
+  Stroud, *Approximate Calculation of Multiple Integrals*, Prentice-Hall 1971, T2:5-1).
+- Verification: Hertz's contact of cylinders and spheres, H. Hertz, J. reine angew. Math.
+  92:156–171, 1882; K. L. Johnson, *Contact Mechanics*, Cambridge 1985, §4.2–4.3 (eqs. 4.45–4.49
+  for the line contact's pressure and subsurface stresses).

@@ -1,0 +1,23 @@
+[
+ {"command": "mesh.block", "params": {"body": "Indenter", "kind": "hex8", "corners": [[0, 0, 0], [2.5, 0.3175416344814579, 0], [2.5, 3.0, 0], [0, 3.0, 0], [0, 0, 1.0], [2.5, 0.3175416344814579, 1.0], [2.5, 3.0, 1.0], [0, 3.0, 1.0]], "divisions": [20, 10, 1], "bias": [8, 8, 1], "edges": [{"corners": [1, 2], "arc": {"center": [0, 10.0, 0]}}, {"corners": [5, 6], "arc": {"center": [0, 10.0, 1.0]}}], "faces": {"3": "round", "5": "top", "6": "sym"}}},
+ {"command": "mesh.block", "params": {"body": "Foundation", "kind": "hex8", "corners": [[0, -5, 0], [5, -5, 0], [5, 0, 0], [0, 0, 0], [0, -5, 1.0], [5, -5, 1.0], [5, 0, 1.0], [0, 0, 1.0]], "divisions": [24, 14, 1], "bias": [10, 0.1, 1], "faces": {"3": "base", "5": "flat", "6": "sym"}, "merge": 0}},
+ {"command": "model.set.create", "params": {"name": "indenter", "geometry": [{"body": "Indenter"}]}},
+ {"command": "model.set.create", "params": {"name": "foundation", "geometry": [{"body": "Foundation"}]}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Indenter"}, {"body": "Foundation"}]}},
+ {"command": "model.set.create", "params": {"name": "round", "geometry": [{"body": "Indenter", "face": "round"}]}},
+ {"command": "model.set.create", "params": {"name": "flat", "geometry": [{"body": "Foundation", "face": "flat"}]}},
+ {"command": "model.set.create", "params": {"name": "top", "geometry": [{"body": "Indenter", "face": "top"}]}},
+ {"command": "model.set.create", "params": {"name": "base", "geometry": [{"body": "Foundation", "face": "base"}]}},
+ {"command": "model.set.create", "params": {"name": "sym", "geometry": [{"body": "Indenter", "face": "sym"}, {"body": "Foundation", "face": "sym"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000.0, "poisson": 0.3}}},
+ {"command": "model.section.create", "params": {"name": "indenter", "set": "indenter", "material": "Steel", "kind": {"type": "solid"}}},
+ {"command": "model.section.create", "params": {"name": "foundation", "set": "foundation", "material": "Steel", "kind": {"type": "solid"}}},
+ {"command": "interaction.contact.pair", "params": {"name": "hertz", "main": "flat", "secondary": "round"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sym", "type": "displacement", "target": {"set": "sym"}, "values": [0, null, null, null, null, null]}},
+ {"command": "model.boundary_condition.create", "params": {"name": "plane", "type": "displacement", "target": {"set": "all"}, "values": [null, null, 0, null, null, null]}},
+ {"command": "model.boundary_condition.create", "params": {"name": "base", "type": "displacement", "target": {"set": "base"}, "values": [null, 0, null, null, null, null]}},
+ {"command": "model.spring.create", "params": {"name": "hold", "type": "spring", "first": {"set": "top"}, "direction": {"dof": 2}, "stiffness": 0.01}},
+ {"command": "model.load.create", "params": {"name": "press", "type": "pressure", "set": "top", "magnitude": 453.1143250369893}},
+ {"command": "model.step.create", "params": {"name": "Press", "procedure": {"type": "nonlinear_static", "nonlinear_geometry": false, "max_iterations": 60}, "boundary_conditions": ["sym", "plane", "base"], "loads": ["press"]}},
+ {"command": "solve.nonlinear", "params": {"step": "Press"}, "id": "solve"}
+]

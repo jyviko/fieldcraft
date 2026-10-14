@@ -408,7 +408,8 @@ analysis stops naming the node, the face and the depth). Planar rigid walls take
 Commands `interaction.contact.pair|general|edit|delete|find`; Abaqus writes `*SURFACE
 INTERACTION` with `*FRICTION` (exponential decay), `*CONTACT PAIR` and general `*CONTACT`, LS-DYNA
 `*CONTACT_AUTOMATIC_SURFACE_TO_SURFACE` and `_SINGLE_SURFACE` (`fs`, `fd`, `dc`, `sfsa`,
-`sfsb`); Nastran and the implicit solver refuse contact by name (implicit contact is M7).
+`sfsb`); Nastran and the linear implicit analyses refuse contact by name; nonlinear static steps
+take contact pairs (next section).
 
 **Geometry** (`fieldcraft_fem::contact`, shared with the implicit solver to come): the closest
 point of a triangle (exact region tests) or of a bilinear quadrilateral (projected Newton with the
@@ -450,6 +451,76 @@ contact patch test on non-matching meshes (σ_zz uniform to 0.1%), two spheres c
 Hertz (peak force +2.3%, duration −0.4% on a graded quarter-sphere mesh), a free body untouched
 by general contact on all its faces, initial penetrations adjusted or refused, the face cap, and
 bit-for-bit results on one and four threads.
+
+## Contact in nonlinear static steps (mortar, augmented Lagrangian)
+
+**Discretisation** (`fieldcraft_solver::contact`): mortar contact, one pass, the pair's
+`secondary` surface the non-mortar side. Each secondary node A carries a pressure p_A and the
+weighted gap g̃_A = Σ ∫ Φ_A (x_m − x_s)·n dA over the overlaps of its faces with the main faces
+facing them, Φ_A the secondary face's own shape functions; ĝ_A = g̃_A / A_A with A_A = ∫ Φ_A over
+the node's faces. The pressure field is interpolated like the displacements, so a uniform
+pressure crosses a non-matching interface as the consistent nodal forces of both meshes: the
+contact patch test. Linear faces (tri3, quad4: tet4, wedge6, hex8); general contact, quadratic
+faces, 2D models and arc-length steps are refused by name.
+
+**Segmentation** (`fieldcraft_fem::mortar`): both faces are projected along the secondary
+face's unit normal onto its plane, the main polygon is clipped by the secondary one
+(Sutherland–Hodgman; a projected quadrilateral that is not convex goes as its two triangles), and
+the overlap's fan of triangles is integrated with Radon's seven-point degree-5 rule. At each point
+both faces' coordinates come from inverting their projected maps (linear, or bilinear by the root
+of its quadratic), so the main point is on the main surface along the normal, warped or not. A
+vertex within 10⁻⁸ of a clip edge's length of its line is on it and never cut: the intersection
+of two nearly coincident edges is ill-conditioned and its derivative swamped by round-off. The
+kernel is written over a generic scalar: `f64` for values, forward-mode `Dual` for gradients and
+`Hyper` (gradient and packed Hessian in the 24 corner coordinates) for the consistent tangent,
+the exact linearisation of the segmentation, normal and projection (`fieldcraft_fem::dual`).
+
+**Enforcement**: augmented Lagrangian. With the multipliers λ_A fixed, p_A = ⟨λ_A − ε_A ĝ_A⟩,
+the derivative of Π = Σ A_A/(2ε_A) ⟨λ_A − ε_A ĝ_A⟩²: internal forces −p_A ∂g̃_A/∂x and the tangent
+Σ_closed (ε_A/A_A) ∂g̃_A ⊗ ∂g̃_A − p_A ∂²g̃_A (the second term the contact's geometric stiffness).
+Once Newton converges an increment, λ_A ← p_A (Uzawa) and the increment is solved again from its
+solution, until every closed node's gap is within 10⁻⁵ of the thickness of the element under it
+and no open node keeps a multiplier (at most 25 augmentations, then a warning). The penalty per
+length is ε_A = s · 10 · 3Ḡ/h (Ḡ the mean shear modulus, h = V/A of the element under the face,
+s the contact's `penalty_scale`): about ten times the local element stiffness, and 3Ḡ rather than
+the constrained modulus keeps it so for nearly incompressible rubber.
+
+**Active set and Newton**: the max() decides at every evaluation which nodes are closed
+(semismooth Newton); an increment whose active set alternates between two states three times is
+cut back (chattering). The tangent's pattern takes the blocks of the closed nodes' face pairs on
+top of the mesh's. With contact, the force scale of the convergence test is that of the
+converged states, the loads and the current state rather than the largest force of every trial
+(a trial can press a body deep into another before the active set settles). The augmentations'
+re-solutions are measured against the increment's start and its first correction; the next
+increment's size follows the increment's own iterations.
+
+**Small and finite sliding**: without nonlinear geometry the face pairs (those within a main
+element's thickness) and their mortar integrals D_ai = ∫ Φ_a N_i, M_aj = ∫ Φ_a N_j are fixed in the
+reference configuration, so g̃_a = n · (Σ M_aj x_j − Σ D_ai x_i) is linear: exact and quadratic-free.
+With nonlinear geometry the pairs are searched (bucket grid of the main faces' boxes grown by
+their depth limit) and integrated on the current configuration at every evaluation; a pair deeper
+than half the main element's thickness has passed through and is left out.
+
+**Initial overclosure**: nodes whose gap starts negative are reported; `adjust` takes the overlap
+out of their weighted gap (an offset: strain-free, nodes are not moved), `refuse` stops naming
+the node and the depth.
+
+**Output**: per secondary node the pressure (its normal contact force over the area it carries,
+∫ Φ_A over the overlaps, which is smoother than the multipliers at the contact's edge), the
+multiplier, the gap ĝ and the status (open, closed); per contact the force on the secondary
+surface, the normal force Σ p_A ∫Φ_A, the deepest penetration and the augmentations.
+`solve.nonlinear` summarises each contact, `solve.probe` gives a secondary node's `contact`
+entries, and the results display draws `contact_pressure`, `contact_gap` and `contact_status`.
+
+**Verification** (`crates/solver/tests/contact.rs`, `tests/oracle/nl-contact-patch`,
+`tests/oracle/nl-hertz-cylinder`): the contact patch test on non-matching hex8 and tet4 meshes
+(uniform σ_zz, pressure equal to it, no lateral stress: to 10⁻⁹ with small sliding, 10⁻⁴ with
+finite sliding, where the gaps the augmentation leaves enter through their geometric terms);
+Hertz's line contact, plane strain (peak pressure within 0.3%, the pressure at two nodes within
+3% and 6%, the vertical stress under the contact within 2%, the half-width bracketed); Hertz's
+sphere on a flat, a quarter model (peak pressure within 4%, contact radius bracketed; heavy);
+Newton's quadratic rate near the solution with finite sliding; initial overclosure adjusted and
+refused; bit-for-bit results on one and four threads; the refusals.
 
 ## Hyperelastic materials in explicit dynamics
 

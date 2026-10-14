@@ -1,0 +1,432 @@
+{
+ "title": "Contact patch test: two blocks with non-matching meshes in uniaxial compression (implicit mortar contact)",
+ "kind": "theory",
+ "source": "The contact patch test: a contact discretisation must transmit a uniform pressure across a non-matching interface exactly; Taylor & Papadopoulos, On a patch test for contact problems in two dimensions, Nonlinear Computational Mechanics, Springer 1991, 690–702; Crisfield, Re-visiting the contact patch test, IJNME 48:435–449, 2000; passed by mortar methods: Puso & Laursen, CMAME 193:601–629, 2004. Uniaxial stress between frictionless symmetry planes is uniform in both blocks",
+ "quantities": [
+  {
+   "id": "small_lower_corner",
+   "quantity": "Small: σ_zz of the lower block's corner element under the interface (element 10) over that of the upper block's corner element over it (element 19)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      10
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "small sliding is linear and its mortar integrals exact on these rectangular faces: a uniform stress is the discrete solution up to the convergence tolerance (10⁻¹⁰)"
+  },
+  {
+   "id": "small_lower_centre",
+   "quantity": "Small: σ_zz of the lower block's centre element under the interface (element 14) over that of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      14
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "small_lower_base",
+   "quantity": "Small: σ_zz of the lower block's bottom corner element (element 1) over that of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "small_upper_top",
+   "quantity": "Small: σ_zz of the upper block's top far corner element (element 26) over that of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      26
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "small_lateral",
+   "quantity": "Small: σ_xx of element 14 over its σ_zz (uniaxial stress: 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      14
+     ]
+    },
+    "pointer": "/elements/0/stress/0/0",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       14
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 1e-06
+   },
+   "reason": "frictionless symmetry planes and a frictionless interface leave the blocks free to expand sideways; the non-matching interface must not hold them"
+  },
+  {
+   "id": "small_pressure",
+   "quantity": "Small: the contact pressure at the secondary node (0.5, 0.5, 1) over −σ_zz of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "at": [
+      [
+       0.5,
+       0.5,
+       1.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/contact/0/pressure",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2",
+     "scale": -1.0
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "the mortar multipliers are the nodal values of the contact pressure, uniform and equal to the stress across the interface"
+  },
+  {
+   "id": "small_force",
+   "quantity": "Small: the integrated contact pressure over the reaction at the pushed top",
+   "measure": {
+    "from": "small",
+    "pointer": "/contacts/0/normal_force",
+    "over": {
+     "command": "results.reactions",
+     "params": {
+      "step": "Small",
+      "sets": [
+       "top"
+      ]
+     },
+     "pointer": "/sets/0/force/2",
+     "scale": -1.0
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "the pressure carries the whole load across the interface"
+  },
+  {
+   "id": "finite_lower_corner",
+   "quantity": "Finite: σ_zz of the lower block's corner element under the interface (element 10) over that of the upper block's corner element over it (element 19)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      10
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "finite sliding is exact up to the geometric terms of the gaps the augmentation leaves (10⁻⁵ of the element thickness) and the default convergence tolerances"
+  },
+  {
+   "id": "finite_lower_centre",
+   "quantity": "Finite: σ_zz of the lower block's centre element under the interface (element 14) over that of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      14
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "finite_lower_base",
+   "quantity": "Finite: σ_zz of the lower block's bottom corner element (element 1) over that of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "finite_upper_top",
+   "quantity": "Finite: σ_zz of the upper block's top far corner element (element 26) over that of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      26
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "finite_lateral",
+   "quantity": "Finite: σ_xx of element 14 over its σ_zz (uniaxial stress: 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      14
+     ]
+    },
+    "pointer": "/elements/0/stress/0/0",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       14
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2"
+    }
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 0.0002
+   },
+   "reason": "frictionless symmetry planes and a frictionless interface leave the blocks free to expand sideways; the non-matching interface must not hold them"
+  },
+  {
+   "id": "finite_pressure",
+   "quantity": "Finite: the contact pressure at the secondary node (0.5, 0.5, 1) over −σ_zz of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "at": [
+      [
+       0.5,
+       0.5,
+       1.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/contact/0/pressure",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/0/2",
+     "scale": -1.0
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "the mortar multipliers are the nodal values of the contact pressure, uniform and equal to the stress across the interface"
+  },
+  {
+   "id": "finite_force",
+   "quantity": "Finite: the integrated contact pressure over the reaction at the pushed top",
+   "measure": {
+    "from": "finite",
+    "pointer": "/contacts/0/normal_force",
+    "over": {
+     "command": "results.reactions",
+     "params": {
+      "step": "Finite",
+      "sets": [
+       "top"
+      ]
+     },
+     "pointer": "/sets/0/force/2",
+     "scale": -1.0
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "the pressure carries the whole load across the interface"
+  },
+  {
+   "id": "small_stress",
+   "quantity": "Small: σ_zz of element 19 (uniaxial stress E ε = −10 for the 1% squeeze)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      19
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2"
+   },
+   "value": -10.0,
+   "tolerance": {
+    "relative": 0.0001
+   },
+   "reason": "the squeeze less the penetration the augmented Lagrangian leaves (up to 10⁻⁵ of the element thickness, a few 10⁻⁵ of the squeeze)"
+  }
+ ]
+}

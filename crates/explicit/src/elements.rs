@@ -372,123 +372,288 @@ pub fn hex_scales(
     HexScales { size, coefficient, omega2 }
 }
 
+/// Elements per parallel task.
+const BLOCK: usize = 128;
+
+/// Tasks whose element forces are computed before they are added (bounds the memory of the
+/// element forces held at once).
+const ROUND: usize = 256;
+
+/// What one element gives an evaluation.
+enum Outcome<const N: usize> {
+    /// Eroded earlier: nothing.
+    Skipped,
+    /// Eroded now.
+    Eroded(Failure),
+    Forces(Forces<N>),
+}
+
+/// An element's nodal forces by origin and its critical increment.
+struct Forces<const N: usize> {
+    hourglass: Option<[[f64; 3]; N]>,
+    stress: [[f64; 3]; N],
+    viscous: Option<[[f64; 3]; N]>,
+    critical: f64,
+}
+
+/// A block of consecutive elements of one kind (positions `items` in their list) with the
+/// slice of element states that holds theirs, from state index `base` on.
+struct Piece<'s, T> {
+    items: std::ops::Range<usize>,
+    base: usize,
+    states: &'s mut [ElementState],
+    out: Vec<Result<T>>,
+}
+
+/// Cut the element states into one slice per block of [`BLOCK`] elements of a kind whose state
+/// indices (`index(i)` for item i) increase, as [`System`] builds them.
+fn pieces<'s, T>(states: &'s mut [ElementState], count: usize, index: &impl Fn(usize) -> usize) -> Result<Vec<Piece<'s, T>>> {
+    let ranges: Vec<std::ops::Range<usize>> = (0..count.div_ceil(BLOCK)).map(|k| k * BLOCK..((k + 1) * BLOCK).min(count)).collect();
+    let mut out = Vec::with_capacity(ranges.len());
+    let mut rest = states;
+    let mut at = 0;
+    for (k, items) in ranges.iter().enumerate() {
+        let base = index(items.start);
+        let end = ranges.get(k + 1).map_or(at + rest.len(), |r| index(r.start));
+        if base < at || end < base || end - at > rest.len() {
+            return Err(Error::Internal("element states out of order".into()));
+        }
+        let (_, tail) = std::mem::take(&mut rest).split_at_mut(base - at);
+        let (mine, tail) = tail.split_at_mut(end - base);
+        out.push(Piece { items: items.clone(), base, states: mine, out: Vec::new() });
+        rest = tail;
+        at = end;
+    }
+    Ok(out)
+}
+
+/// `f(i, state)` for every element i of a kind, in parallel by blocks and a round of blocks at a
+/// time; the outcomes go to `apply` in element order, so whatever it sums is summed as a
+/// sequential loop would. The first error in element order stops the evaluation.
+fn run<T: Send>(
+    states: &mut [ElementState],
+    count: usize,
+    index: impl Fn(usize) -> usize + Sync,
+    f: impl Fn(usize, &mut ElementState) -> Result<T> + Sync + Send,
+    mut apply: impl FnMut(usize, T) -> Result<()>,
+) -> Result<()> {
+    let mut all = pieces::<T>(states, count, &index)?;
+    for round in all.chunks_mut(ROUND) {
+        modelcraft_parallel::for_each_mut(round, |_, piece| {
+            let Piece { items, base, states, out } = piece;
+            *out = items
+                .clone()
+                .map(|i| match states.get_mut(index(i).wrapping_sub(*base)) {
+                    Some(es) => f(i, es),
+                    None => Err(Error::Internal("element state".into())),
+                })
+                .collect();
+        });
+        for piece in round.iter_mut() {
+            for (i, outcome) in piece.items.clone().zip(std::mem::take(&mut piece.out)) {
+                apply(i, outcome?)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Add an element's forces into the workspace and return its critical increment.
+fn add<const N: usize>(ws: &mut Workspace, nodes: &[usize; N], f: &Forces<N>) -> f64 {
+    if let Some(h) = &f.hourglass {
+        scatter(&mut ws.hourglass_force, nodes, h);
+    }
+    scatter(&mut ws.stress_force, nodes, &f.stress);
+    if let Some(q) = &f.viscous {
+        scatter(&mut ws.viscous_force, nodes, q);
+    }
+    f.critical
+}
+
+/// One hexahedron's update and forces.
+fn hexahedron(sys: &System, h: &crate::system::Hex, m: &Motion, es: &mut ElementState) -> Result<Outcome<8>> {
+    let Some(mat) = sys.materials.get(h.material) else { return Ok(Outcome::Skipped) };
+    if es.failed.is_some() {
+        return Ok(Outcome::Skipped);
+    }
+    let hourglass = modelcraft_model::Hourglass { kind: sys.hourglass, coefficient: sys.hourglass_coefficient };
+    let e = Nodal::gather(sys, &h.nodes, m);
+    let x_now = e.positions(0.0);
+    let (mid, now) = if sys.nonlinear {
+        let at = |x: &[[f64; 3]; 8]| Hex8::hex8_deformed(x).map_err(|_| inverted(h.label, m.time));
+        (at(&e.positions(0.5))?, at(&x_now)?)
+    } else {
+        (h.kinematics, h.kinematics)
+    };
+    let g = mid.gradient(&e.du);
+    let q = rotation_of(sys, mat, es, &g, h.label, m.time)?;
+    let (d, _) = rotation::split(&g);
+    let d = mechanical(d, h.thermal_rate * m.dt);
+    let (rho, c) = current(mat, h.kinematics.volume, now.volume);
+    update(mat, es, &q, &d, d[0] + d[1] + d[2], m.dt, rho, mid.volume);
+    if let Some(failure) = es.failed {
+        return Ok(Outcome::Eroded(failure));
+    }
+    // Hourglass forces with the current shape vectors and size (fixed without nonlinear
+    // geometry).
+    let (gamma, scales) = if sys.nonlinear {
+        let gamma = now.hourglass_vectors(&x_now);
+        let scales = hex_scales(&now, &gamma, &h.mass, mat, rho, hourglass);
+        (gamma, scales)
+    } else {
+        (h.gamma, h.rest)
+    };
+    let mut f = [[0.0; 3]; 8];
+    let modes = if sys.hourglass == HourglassKind::Viscous { &e.v } else { &e.du };
+    for (k, g) in gamma.iter().enumerate() {
+        let rate: [f64; 3] = [0, 1, 2].map(|i| modes.iter().zip(g).map(|(x, gk)| x[i] * gk).sum());
+        // Viscous: Q = C q̇; stiffness: Q accumulates k Δq.
+        let generalized = match (sys.hourglass, es.hourglass.get_mut(k)) {
+            (HourglassKind::Stiffness, Some(qa)) => {
+                for i in 0..3 {
+                    qa[i] += scales.coefficient * rate[i];
+                }
+                *qa
+            }
+            _ => rate.map(|r| scales.coefficient * r),
+        };
+        for (fk, gk) in f.iter_mut().zip(g) {
+            for i in 0..3 {
+                fk[i] += generalized[i] * gk;
+            }
+        }
+    }
+    let element = Element { now: &now, mid: &mid, density: rho, wave_speed: c, length: 2.0 * c / scales.omega2.sqrt() };
+    let mut forces = element.finish(&es.point.stress, &e.v, m.bulk);
+    forces.hourglass = Some(f);
+    Ok(Outcome::Forces(forces))
+}
+
+/// A tetrahedron's first pass: its increment (none when it has eroded).
+fn tetrahedron_increment(sys: &System, t: &crate::system::Tet, m: &Motion, state: &State) -> Result<Option<TetIncrement>> {
+    if state.elements.get(t.index).is_none_or(|e| e.failed.is_some()) {
+        return Ok(None);
+    }
+    let e = Nodal::gather(sys, &t.nodes, m);
+    let (mid, now) = if sys.nonlinear {
+        let at = |x: &[[f64; 3]; 4]| Tet4::tet4(x).map_err(|_| inverted(t.label, m.time));
+        (at(&e.positions(0.5))?, at(&e.positions(0.0))?)
+    } else {
+        (t.kinematics, t.kinematics)
+    };
+    let g = mid.gradient(&e.du);
+    Ok(Some(TetIncrement { g, mid, now, v: e.v }))
+}
+
+/// A tetrahedron's second pass: its update with the mean of its nodes' volumetric increments.
+fn tetrahedron(
+    sys: &System,
+    t: &crate::system::Tet,
+    inc: Option<TetIncrement>,
+    theta: &[f64],
+    m: &Motion,
+    es: &mut ElementState,
+) -> Result<Outcome<4>> {
+    let (Some(mat), Some(inc)) = (sys.materials.get(t.material), inc) else { return Ok(Outcome::Skipped) };
+    let averaged = t.nodes.iter().map(|n| theta.get(*n).copied().unwrap_or(0.0)).sum::<f64>() / 4.0;
+    let q = rotation_of(sys, mat, es, &inc.g, t.label, m.time)?;
+    let (d, _) = rotation::split(&inc.g);
+    let thermal = t.thermal_rate * m.dt;
+    let d = mechanical(d, thermal);
+    let (rho, c) = current(mat, t.kinematics.volume, inc.now.volume);
+    update(mat, es, &q, &d, averaged - 3.0 * thermal, m.dt, rho, inc.mid.volume);
+    if let Some(failure) = es.failed {
+        return Ok(Outcome::Eroded(failure));
+    }
+    let omega2 = if sys.nonlinear { frequency_bound(&inc.now, inc.now.gradient_norm(), mat.modulus, &t.mass) } else { t.omega2 };
+    let element = Element { now: &inc.now, mid: &inc.mid, density: rho, wave_speed: c, length: 2.0 * c / omega2.sqrt() };
+    Ok(Outcome::Forces(element.finish(&es.point.stress, &inc.v, m.bulk)))
+}
+
 /// Evaluate the internal forces at the motion `m` into `ws`, updating the element states, and
 /// return the smallest critical increment of the elements still in the analysis.
+///
+/// The elements are updated in parallel (each owns its state); their nodal forces are added in
+/// element order, hexahedra first, so every sum is the one of a sequential loop and the result
+/// does not depend on the number of threads.
 pub fn internal_forces(sys: &System, m: &Motion, state: &mut State, ws: &mut Workspace) -> Result<f64> {
     for f in [&mut ws.stress_force, &mut ws.hourglass_force, &mut ws.viscous_force] {
         f.fill(0.0);
     }
     state.eroded.clear();
     let mut critical = f64::INFINITY;
-    let hourglass = modelcraft_model::Hourglass { kind: sys.hourglass, coefficient: sys.hourglass_coefficient };
-    for h in &sys.hexes {
-        let (Some(mat), Some(es)) = (sys.materials.get(h.material), state.elements.get_mut(h.index)) else { continue };
-        if es.failed.is_some() {
-            continue;
-        }
-        let e = Nodal::gather(sys, &h.nodes, m);
-        let x_now = e.positions(0.0);
-        let (mid, now) = if sys.nonlinear {
-            let at = |x: &[[f64; 3]; 8]| Hex8::hex8_deformed(x).map_err(|_| inverted(h.label, m.time));
-            (at(&e.positions(0.5))?, at(&x_now)?)
-        } else {
-            (h.kinematics, h.kinematics)
-        };
-        let g = mid.gradient(&e.du);
-        let q = rotation_of(sys, mat, es, &g, h.label, m.time)?;
-        let (d, _) = rotation::split(&g);
-        let d = mechanical(d, h.thermal_rate * m.dt);
-        let (rho, c) = current(mat, h.kinematics.volume, now.volume);
-        update(mat, es, &q, &d, d[0] + d[1] + d[2], m.dt, rho, mid.volume);
-        if let Some(failure) = es.failed {
-            state.eroded.push((h.index, failure));
-            continue;
-        }
-        // Hourglass forces with the current shape vectors and size (fixed without nonlinear
-        // geometry).
-        let (gamma, scales) = if sys.nonlinear {
-            let gamma = now.hourglass_vectors(&x_now);
-            let scales = hex_scales(&now, &gamma, &h.mass, mat, rho, hourglass);
-            (gamma, scales)
-        } else {
-            (h.gamma, h.rest)
-        };
-        let mut f = [[0.0; 3]; 8];
-        let modes = if sys.hourglass == HourglassKind::Viscous { &e.v } else { &e.du };
-        for (k, g) in gamma.iter().enumerate() {
-            let rate: [f64; 3] = [0, 1, 2].map(|i| modes.iter().zip(g).map(|(x, gk)| x[i] * gk).sum());
-            // Viscous: Q = C q̇; stiffness: Q accumulates k Δq.
-            let generalized = match (sys.hourglass, es.hourglass.get_mut(k)) {
-                (HourglassKind::Stiffness, Some(qa)) => {
-                    for i in 0..3 {
-                        qa[i] += scales.coefficient * rate[i];
-                    }
-                    *qa
-                }
-                _ => rate.map(|r| scales.coefficient * r),
-            };
-            for (fk, gk) in f.iter_mut().zip(g) {
-                for i in 0..3 {
-                    fk[i] += generalized[i] * gk;
-                }
+    let State { elements, eroded } = state;
+    let hexes = &sys.hexes;
+    run(
+        elements,
+        hexes.len(),
+        |i| hexes.get(i).map_or(usize::MAX, |h| h.index),
+        |i, es| match hexes.get(i) {
+            Some(h) => hexahedron(sys, h, m, es),
+            None => Ok(Outcome::Skipped),
+        },
+        |i, outcome| {
+            let Some(h) = hexes.get(i) else { return Ok(()) };
+            match outcome {
+                Outcome::Skipped => {}
+                Outcome::Eroded(failure) => eroded.push((h.index, failure)),
+                Outcome::Forces(f) => critical = critical.min(add(ws, &h.nodes, &f)),
             }
-        }
-        scatter(&mut ws.hourglass_force, &h.nodes, &f);
-        let element = Element { now: &now, mid: &mid, nodes: &h.nodes, density: rho, wave_speed: c, length: 2.0 * c / scales.omega2.sqrt() };
-        critical = critical.min(element.finish(ws, &es.point.stress, &e.v, m.bulk));
-    }
+            Ok(())
+        },
+    )?;
     if !sys.tets.is_empty() {
+        let tets = &sys.tets;
         // Pass 1: each tetrahedron's increment, and each node's mean volumetric increment.
+        let increments = {
+            let st: &State = state;
+            modelcraft_parallel::map_grained(tets.len(), BLOCK, |k| match tets.get(k) {
+                Some(t) => tetrahedron_increment(sys, t, m, st),
+                None => Ok(None),
+            })
+        };
         ws.theta.fill(0.0);
         ws.tet_volume.fill(0.0);
-        for (k, t) in sys.tets.iter().enumerate() {
-            let Some(slot) = ws.tet_increment.get_mut(k) else { continue };
-            *slot = None;
-            if state.elements.get(t.index).is_none_or(|e| e.failed.is_some()) {
-                continue;
-            }
-            let e = Nodal::gather(sys, &t.nodes, m);
-            let (mid, now) = if sys.nonlinear {
-                let at = |x: &[[f64; 3]; 4]| Tet4::tet4(x).map_err(|_| inverted(t.label, m.time));
-                (at(&e.positions(0.5))?, at(&e.positions(0.0))?)
-            } else {
-                (t.kinematics, t.kinematics)
-            };
-            let g = mid.gradient(&e.du);
+        for ((t, slot), inc) in tets.iter().zip(ws.tet_increment.iter_mut()).zip(increments) {
+            *slot = inc?;
+            let Some(inc) = slot else { continue };
             for node in t.nodes {
                 if let (Some(x), Some(w)) = (ws.theta.get_mut(node), ws.tet_volume.get_mut(node)) {
-                    *x += mid.volume * (g[0][0] + g[1][1] + g[2][2]);
-                    *w += mid.volume;
+                    *x += inc.mid.volume * (inc.g[0][0] + inc.g[1][1] + inc.g[2][2]);
+                    *w += inc.mid.volume;
                 }
             }
-            *slot = Some(TetIncrement { g, mid, now, v: e.v });
         }
         for (x, w) in ws.theta.iter_mut().zip(&ws.tet_volume) {
             if *w > 0.0 {
                 *x /= w;
             }
         }
-        // Pass 2: each tetrahedron's update with the mean of its nodes' volumetric increments.
-        for (k, t) in sys.tets.iter().enumerate() {
-            let (Some(mat), Some(es), Some(Some(inc))) =
-                (sys.materials.get(t.material), state.elements.get_mut(t.index), ws.tet_increment.get(k).copied())
-            else {
-                continue;
-            };
-            let averaged = t.nodes.iter().map(|n| ws.theta.get(*n).copied().unwrap_or(0.0)).sum::<f64>() / 4.0;
-            let q = rotation_of(sys, mat, es, &inc.g, t.label, m.time)?;
-            let (d, _) = rotation::split(&inc.g);
-            let thermal = t.thermal_rate * m.dt;
-            let d = mechanical(d, thermal);
-            let (rho, c) = current(mat, t.kinematics.volume, inc.now.volume);
-            update(mat, es, &q, &d, averaged - 3.0 * thermal, m.dt, rho, inc.mid.volume);
-            if let Some(failure) = es.failed {
-                state.eroded.push((t.index, failure));
-                continue;
+        // Pass 2: each tetrahedron's update.
+        let State { elements, eroded } = state;
+        let (theta, increments) = (&ws.theta, &ws.tet_increment);
+        let mut forces: Vec<(usize, Forces<4>)> = Vec::new();
+        run(
+            elements,
+            tets.len(),
+            |k| tets.get(k).map_or(usize::MAX, |t| t.index),
+            |k, es| match tets.get(k) {
+                Some(t) => tetrahedron(sys, t, increments.get(k).copied().flatten(), theta, m, es),
+                None => Ok(Outcome::Skipped),
+            },
+            |k, outcome| {
+                match (tets.get(k), outcome) {
+                    (Some(t), Outcome::Eroded(failure)) => eroded.push((t.index, failure)),
+                    (Some(_), Outcome::Forces(f)) => forces.push((k, f)),
+                    _ => {}
+                }
+                Ok(())
+            },
+        )?;
+        for (k, f) in &forces {
+            if let Some(t) = tets.get(*k) {
+                critical = critical.min(add(ws, &t.nodes, f));
             }
-            let omega2 = if sys.nonlinear { frequency_bound(&inc.now, inc.now.gradient_norm(), mat.modulus, &t.mass) } else { t.omega2 };
-            let element = Element { now: &inc.now, mid: &inc.mid, nodes: &t.nodes, density: rho, wave_speed: c, length: 2.0 * c / omega2.sqrt() };
-            critical = critical.min(element.finish(ws, &es.point.stress, &inc.v, m.bulk));
         }
     }
     for r in &sys.rods {
@@ -524,21 +689,21 @@ struct TetIncrement {
 struct Element<'a, const N: usize> {
     now: &'a UniformStrain<N>,
     mid: &'a UniformStrain<N>,
-    nodes: &'a [usize; N],
     density: f64,
     wave_speed: f64,
     length: f64,
 }
 
 impl<const N: usize> Element<'_, N> {
-    /// Add the stress and bulk viscosity forces and return the critical increment.
-    fn finish(&self, ws: &mut Workspace, sigma: &[f64; 6], v: &[[f64; 3]; N], bulk: &BulkViscosity) -> f64 {
+    /// The stress and bulk viscosity forces and the critical increment.
+    fn finish(&self, sigma: &[f64; 6], v: &[[f64; 3]; N], bulk: &BulkViscosity) -> Forces<N> {
         let rate = self.mid.divergence(v);
         let q = bulk_pressure(rate, self.density, self.length, self.wave_speed, bulk);
-        scatter(&mut ws.stress_force, self.nodes, &self.now.forces(sigma));
-        if q != 0.0 {
-            scatter(&mut ws.viscous_force, self.nodes, &self.now.pressure_forces(q));
+        Forces {
+            hourglass: None,
+            stress: self.now.forces(sigma),
+            viscous: (q != 0.0).then(|| self.now.pressure_forces(q)),
+            critical: critical_increment(rate, self.length, self.wave_speed, bulk),
         }
-        critical_increment(rate, self.length, self.wave_speed, bulk)
     }
 }

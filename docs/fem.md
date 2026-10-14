@@ -450,3 +450,21 @@ contact patch test on non-matching meshes (σ_zz uniform to 0.1%), two spheres c
 Hertz (peak force +2.3%, duration −0.4% on a graded quarter-sphere mesh), a free body untouched
 by general contact on all its faces, initial penetrations adjusted or refused, the face cap, and
 bit-for-bit results on one and four threads.
+
+## Hyperelastic materials in explicit dynamics
+
+Hyperelastic materials (neo-Hookean, Mooney–Rivlin, Yeoh) use the shared finite-strain material
+point (`fieldcraft_fem::constitutive`) in explicit dynamics too, in total form, which is objective
+by construction (no stress rate): the one-point hexahedron takes F = I + ∂u/∂X, its mean over the
+undeformed element, and the Cauchy stress of the nodal forces τ/J; the tetrahedron takes the
+isochoric stress of its own F and the **average nodal pressure** of a decoupled material (each
+node's U′(J_a) from its tetrahedra's volume ratio, the element's the mean of its nodes': J. Bonet,
+A. J. Burton, Commun. Numer. Methods Eng. 14:437–449, 1998, at finite strain), which does not lock
+when the material is nearly incompressible. (Averaging J into an F-bar instead was unstable on
+the Kuhn mesh of the tests.) The stable increment follows the tangent: each element's frequency
+bound is scaled by the ratio of its tangent's largest normal stiffness, plus the stress, to the
+small-strain one. Logarithmic strain is the strain output. Hyperelastic elements need nonlinear
+geometry and take no thermal strain yet (both refused by name). Verified by uniaxial strain to
+λ = 1.5 of all three laws on hex8 and tet4 against the material point (`crates/explicit/tests/hyperelastic.rs`)
+and by `tests/oracle/explicit-neo-hookean-implicit`, a quasi-static explicit pull against the
+implicit nonlinear solver.

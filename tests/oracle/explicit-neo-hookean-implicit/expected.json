@@ -1,0 +1,17 @@
+{
+ "title": "Neo-Hookean cube stretched to λ = 1.5: explicit dynamics, loaded slowly, against the implicit nonlinear solver",
+ "kind": "theory",
+ "source": "Uniaxial stress of a compressible neo-Hookean solid (Holzapfel, Nonlinear Solid Mechanics, Wiley 2000, §6.5): a homogeneous state that a quasi-static explicit run must share with the implicit Newton solution on the same material point; the implicit solver is itself checked against the closed form by nl-neo-hookean-uniaxial",
+ "quantities": [
+  {"id": "lateral", "quantity": "lateral displacement of the corner (1, 1, 1) along y, explicit over implicit",
+   "measure": {"command": "solve.probe", "params": {"step": "Dynamic", "at": [[1, 1, 1]]}, "pointer": "/nodes/0/displacement/1",
+     "over": {"command": "solve.probe", "params": {"step": "Static", "at": [[1, 1, 1]]}, "pointer": "/nodes/0/displacement/1"}},
+   "value": 1.0, "tolerance": {"relative": 0.005},
+   "reason": "the same material point and a homogeneous state; the explicit run is pulled over a few hundred wave transits, and what is left of its waves is a fraction of a percent"},
+  {"id": "stress", "quantity": "σ_xx of element 1, explicit, over σ_xx at the node at (0, 0, 0), implicit",
+   "measure": {"command": "solve.probe", "params": {"step": "Dynamic", "elements": [1]}, "pointer": "/elements/0/stress/0",
+     "over": {"command": "solve.probe", "params": {"step": "Static", "at": [[0, 0, 0]]}, "pointer": "/nodes/0/stress/0"}},
+   "value": 1.0, "tolerance": {"relative": 0.005},
+   "reason": "as for the displacement"}
+ ]
+}

@@ -54,6 +54,7 @@
 //! reaches its material's erosion plastic strain is removed: it carries no stress from then on,
 //! its nodes keep their mass and momentum, and its internal energy at that moment is reported.
 
+use fieldcraft_fem::constitutive::MaterialModel;
 use fieldcraft_fem::material::stress;
 use fieldcraft_fem::plasticity::{Increment, PointState};
 use fieldcraft_fem::rotation::{self, IDENTITY, Mat3, Polar};
@@ -76,6 +77,10 @@ pub struct Workspace {
     /// volume.
     theta: Vec<f64>,
     tet_volume: Vec<f64>,
+    /// Per node, for hyperelastic tetrahedra: the current and the rest volume of its
+    /// tetrahedra, then their ratio.
+    tet_ratio: Vec<f64>,
+    tet_rest: Vec<f64>,
     /// Per tetrahedron (in [`System::tets`] order): its increment between the two passes.
     tet_increment: Vec<Option<TetIncrement>>,
 }
@@ -84,6 +89,7 @@ impl Workspace {
     pub fn new(sys: &System) -> Workspace {
         let n = sys.labels.len();
         let dofs = sys.dofs();
+        let hyper_tets = sys.tets.iter().any(|t| sys.materials.get(t.material).is_some_and(|m| m.hyperelastic.is_some()));
         Workspace {
             stress_force: vec![0.0; dofs],
             hourglass_force: vec![0.0; dofs],
@@ -91,6 +97,8 @@ impl Workspace {
             contact_force: if sys.contacts.is_empty() { Vec::new() } else { vec![0.0; dofs] },
             theta: vec![0.0; n],
             tet_volume: vec![0.0; n],
+            tet_ratio: if hyper_tets { vec![1.0; n] } else { Vec::new() },
+            tet_rest: if hyper_tets { vec![0.0; n] } else { Vec::new() },
             tet_increment: vec![None; sys.tets.len()],
         }
     }
@@ -314,6 +322,52 @@ fn update(mat: &Material, es: &mut ElementState, q: &Mat3, d: &[f64; 6], vol: f6
     }
 }
 
+/// The hyperelastic update of an element at deformation gradient `f` (the hexahedron's mean,
+/// or the tetrahedron's with its averaged volume ratio): the material point's Kirchhoff stress τ
+/// gives the stress of the nodal forces τ/`j` (`j` the element's own volume ratio, so the forces
+/// are ∫ τ ∇ₓN dV₀), the logarithmic strain is kept for output, and the stress work over the
+/// increment `d` (on the midpoint volume `volume`) is added to the element's energy. Returns the
+/// ratio of the tangent's largest normal stiffness (with the stress) to the material's
+/// small-strain one, at least 1, which scales the element's frequency bound.
+#[allow(clippy::too_many_arguments)]
+fn hyperelastic(
+    model: &MaterialModel,
+    mat: &Material,
+    es: &mut ElementState,
+    f: &Mat3,
+    j: f64,
+    pressure: Option<f64>,
+    d: &[f64; 6],
+    volume: f64,
+) -> Result<f64> {
+    let unstable = |e: fieldcraft_fem::Error| Error::Unstable(e.to_string());
+    if !(j > 0.0 && j.is_finite()) {
+        return Err(Error::Unstable(format!("the material is inverted (volume ratio {j:.3e})")));
+    }
+    let r = model.response(f, None, &[], &mut []).map_err(unstable)?;
+    let before = es.point.stress;
+    es.point.stress = match pressure {
+        // The isochoric part of the element's own F with the averaged pressure.
+        Some(p) => {
+            let iso = model.isochoric(f, None, &[], &mut []).map_err(unstable)?;
+            let mut s = iso.stress.map(|t| t / j);
+            for v in s.iter_mut().take(3) {
+                *v += p;
+            }
+            s
+        }
+        None => r.stress.map(|t| t / j),
+    };
+    let work: f64 = (0..6).map(|k| 0.5 * (before[k] + es.point.stress[k]) * d[k]).sum();
+    es.energy += work * volume;
+    if let Some(e) = fieldcraft_fem::constitutive::logarithmic_strain(f) {
+        es.strain = e;
+    }
+    let normal = (0..3).map(|k| r.tangent[k][k]).fold(0.0, f64::max) / j;
+    let stress = es.point.stress.iter().fold(0.0f64, |m, s| m.max(s.abs()));
+    Ok(((normal + stress) / mat.stiffest).max(1.0))
+}
+
 /// The mechanical part of a strain increment: less the thermal strain increment `thermal` in
 /// every normal direction (isotropic expansion, the same in any frame).
 fn mechanical(mut d: [f64; 6], thermal: f64) -> [f64; 6] {
@@ -493,7 +547,20 @@ fn hexahedron(sys: &System, h: &crate::system::Hex, m: &Motion, es: &mut Element
     let (d, _) = rotation::split(&g);
     let d = mechanical(d, h.thermal_rate * m.dt);
     let (rho, c) = current(mat, h.kinematics.volume, now.volume);
-    update(mat, es, &q, &d, d[0] + d[1] + d[2], m.dt, rho, mid.volume);
+    let stiffer = match &mat.hyperelastic {
+        Some(model) => {
+            let mut f = h.kinematics.gradient(&e.u);
+            for k in 0..3 {
+                f[k][k] += 1.0;
+            }
+            let j = fieldcraft_fem::dense::det3(&f);
+            hyperelastic(model, mat, es, &f, j, None, &d, mid.volume).map_err(|_| inverted(h.label, m.time))?
+        }
+        None => {
+            update(mat, es, &q, &d, d[0] + d[1] + d[2], m.dt, rho, mid.volume);
+            1.0
+        }
+    };
     if let Some(failure) = es.failed {
         return Ok(Outcome::Eroded(failure));
     }
@@ -526,7 +593,7 @@ fn hexahedron(sys: &System, h: &crate::system::Hex, m: &Motion, es: &mut Element
             }
         }
     }
-    let element = Element { now: &now, mid: &mid, density: rho, wave_speed: c, length: 2.0 * c / scales.omega2.sqrt() };
+    let element = Element { now: &now, mid: &mid, density: rho, wave_speed: c, length: 2.0 * c / (stiffer * scales.omega2).sqrt() };
     let mut forces = element.finish(&es.point.stress, &e.v, m.bulk);
     forces.hourglass = Some(f);
     Ok(Outcome::Forces(forces))
@@ -554,6 +621,7 @@ fn tetrahedron(
     t: &crate::system::Tet,
     inc: Option<TetIncrement>,
     theta: &[f64],
+    ratio: &[f64],
     m: &Motion,
     es: &mut ElementState,
 ) -> Result<Outcome<4>> {
@@ -564,11 +632,34 @@ fn tetrahedron(
     let thermal = t.thermal_rate * m.dt;
     let d = mechanical(d, thermal);
     let (rho, c) = current(mat, t.kinematics.volume, inc.now.volume);
-    update(mat, es, &q, &d, averaged - 3.0 * thermal, m.dt, rho, inc.mid.volume);
+    let stiffer = match &mat.hyperelastic {
+        // The average nodal pressure of a decoupled material (Bonet & Burton 1998, at finite
+        // strain): each node's pressure U′(J_a) from its tetrahedra's volume ratio, the element's
+        // the mean of its nodes', with the isochoric stress of its own F.
+        Some(model) => {
+            let u = gather(m.u, &t.nodes);
+            let mut f = t.kinematics.gradient(&u);
+            for k in 0..3 {
+                f[k][k] += 1.0;
+            }
+            let j = fieldcraft_fem::dense::det3(&f);
+            let pressure = if model.is_decoupled() {
+                let p: Option<f64> = t.nodes.iter().map(|n| model.volumetric(ratio.get(*n).copied().unwrap_or(1.0), false).map(|(p, _)| p)).sum();
+                p.map(|p| p / 4.0)
+            } else {
+                None
+            };
+            hyperelastic(model, mat, es, &f, j, pressure, &d, inc.mid.volume).map_err(|_| inverted(t.label, m.time))?
+        }
+        None => {
+            update(mat, es, &q, &d, averaged - 3.0 * thermal, m.dt, rho, inc.mid.volume);
+            1.0
+        }
+    };
     if let Some(failure) = es.failed {
         return Ok(Outcome::Eroded(failure));
     }
-    let omega2 = if sys.nonlinear { frequency_bound(&inc.now, inc.now.gradient_norm(), mat.modulus, &t.mass) } else { t.omega2 };
+    let omega2 = stiffer * if sys.nonlinear { frequency_bound(&inc.now, inc.now.gradient_norm(), mat.modulus, &t.mass) } else { t.omega2 };
     let element = Element { now: &inc.now, mid: &inc.mid, density: rho, wave_speed: c, length: 2.0 * c / omega2.sqrt() };
     Ok(Outcome::Forces(element.finish(&es.point.stress, &inc.v, m.bulk)))
 }
@@ -632,16 +723,32 @@ pub fn internal_forces(sys: &System, m: &Motion, state: &mut State, ws: &mut Wor
                 *x /= w;
             }
         }
+        if !ws.tet_ratio.is_empty() {
+            ws.tet_ratio.fill(0.0);
+            ws.tet_rest.fill(0.0);
+            for (t, inc) in tets.iter().zip(&ws.tet_increment) {
+                let Some(inc) = inc else { continue };
+                for node in t.nodes {
+                    if let (Some(x), Some(w)) = (ws.tet_ratio.get_mut(node), ws.tet_rest.get_mut(node)) {
+                        *x += inc.now.volume;
+                        *w += t.kinematics.volume;
+                    }
+                }
+            }
+            for (x, w) in ws.tet_ratio.iter_mut().zip(&ws.tet_rest) {
+                *x = if *w > 0.0 { *x / w } else { 1.0 };
+            }
+        }
         // Pass 2: each tetrahedron's update.
         let State { elements, eroded } = state;
-        let (theta, increments) = (&ws.theta, &ws.tet_increment);
+        let (theta, ratio, increments) = (&ws.theta, &ws.tet_ratio, &ws.tet_increment);
         let mut forces: Vec<(usize, Forces<4>)> = Vec::new();
         run(
             elements,
             tets.len(),
             |k| tets.get(k).map_or(usize::MAX, |t| t.index),
             |k, es| match tets.get(k) {
-                Some(t) => tetrahedron(sys, t, increments.get(k).copied().flatten(), theta, m, es),
+                Some(t) => tetrahedron(sys, t, increments.get(k).copied().flatten(), theta, ratio, m, es),
                 None => Ok(Outcome::Skipped),
             },
             |k, outcome| {

@@ -3,6 +3,7 @@
 //! ([`crate::discrete`]), prescribed velocities, rigid walls, initial velocities and the load
 //! vector of an explicit dynamic step.
 
+use fieldcraft_fem::constitutive::MaterialModel;
 use fieldcraft_fem::material::Elasticity;
 use fieldcraft_fem::plasticity::J2;
 use fieldcraft_fem::uniform::{Hex8, Tet4, modulus_bound};
@@ -38,6 +39,9 @@ pub struct Material {
     /// The hypoelastic(–plastic) update of an isotropic material; `None` for orthotropic
     /// elasticity, updated with [`Material::elasticity`].
     pub j2: Option<J2>,
+    /// The finite-strain material point of a hyperelastic material (its stress from the
+    /// deformation gradient; `None` for the rate-form materials).
+    pub hyperelastic: Option<MaterialModel>,
     /// The equivalent plastic strain at which elements erode.
     pub erosion: Option<f64>,
     /// The (isotropic) expansion coefficient and reference temperature, when the material
@@ -143,9 +147,6 @@ fn invalid(m: impl Into<String>) -> Error {
 fn material(model: &Model, name: &str) -> Result<Material> {
     let m = model.material(name).ok_or_else(|| invalid(format!("material `{name}` is missing")))?;
     let elastic = m.elastic.as_ref().ok_or_else(|| invalid(format!("material `{name}` has no elastic constants")))?;
-    if let Some(h) = m.hyperelastic {
-        return Err(Error::NotSupported(format!("{} hyperelastic material `{name}` in explicit dynamics", h.name())));
-    }
     let density = m
         .density
         .filter(|d| *d > 0.0 && d.is_finite())
@@ -174,6 +175,12 @@ fn material(model: &Model, name: &str) -> Result<Material> {
         stiffest,
         j2,
         erosion: m.erosion.map(|e| e.plastic_strain),
+        hyperelastic: m
+            .hyperelastic
+            .as_ref()
+            .map(|h| MaterialModel::from_model(elastic, Some(h)))
+            .transpose()
+            .map_err(|e| invalid(format!("material `{name}`: {e}")))?,
     })
 }
 
@@ -368,7 +375,31 @@ impl System {
         sys.load(model, resolved, step)?;
         sys.temperatures(model, resolved, step, settings.end_time)?;
         sys.conditions(resolved, settings)?;
+        sys.check_hyperelastic()?;
         Ok(sys)
+    }
+
+    /// Refuse what hyperelastic elements cannot take yet: small-displacement steps (the
+    /// material is a finite-strain law) and thermal strain.
+    fn check_hyperelastic(&self) -> Result<()> {
+        let solids =
+            self.hexes.iter().map(|h| (h.label, h.material, h.thermal_rate)).chain(self.tets.iter().map(|t| (t.label, t.material, t.thermal_rate)));
+        for (label, material, thermal) in solids {
+            let Some(m) = self.materials.get(material).filter(|m| m.hyperelastic.is_some()) else { continue };
+            if !self.nonlinear {
+                return Err(Error::NotSupported(format!(
+                    "hyperelastic material `{}` (element {label}) without nonlinear geometry; hyperelastic laws are finite-strain, set the step's nonlinear_geometry to true",
+                    m.name
+                )));
+            }
+            if thermal != 0.0 {
+                return Err(Error::NotSupported(format!(
+                    "thermal strain in hyperelastic material `{}` (element {label}) in explicit dynamics",
+                    m.name
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Add an element's row-sum lumped masses.

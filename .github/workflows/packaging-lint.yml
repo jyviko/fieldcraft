@@ -1,0 +1,79 @@
+# Quick static checks for the release pipeline (seconds, no Rust build): workflow syntax, the
+# packaging shell and PowerShell scripts, the macOS property lists and the Linux desktop entry.
+# These files are otherwise exercised only by a full release run (release.yml).
+# Adapted from SolidCraft's packaging-lint.yml, itself adapted from PhotoCraft's (see ATTRIBUTION.md).
+name: Packaging lint
+
+on:
+  push:
+    branches: [develop]
+    paths: [".github/workflows/**", "packaging/**"]
+  pull_request:
+    paths: [".github/workflows/**", "packaging/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaging-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Packaging lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      PSSCRIPTANALYZER_VERSION: 1.24.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck desktop-file-utils libxml2-utils
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+      - name: actionlint
+        # Also runs shellcheck on every `run:` script.
+        run: '"$RUNNER_TEMP/actionlint" -color'
+      - name: shellcheck
+        # packaging/.shellcheckrc lets the scripts' `source=../env.sh` directives resolve.
+        run: shellcheck packaging/*.sh packaging/*/*.sh packaging/linux/AppRun
+      - name: PowerShell
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($f in Get-ChildItem packaging/windows/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) {
+              $errors | ForEach-Object { Write-Output "::error file=$($f.FullName),line=$($_.Extent.StartLineNumber)::$($_.Message)" }
+              $failed = $true
+            } else {
+              Write-Output "parsed $($f.Name)"
+            }
+          }
+          if ($failed) { exit 1 }
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer | Where-Object Version -eq $env:PSSCRIPTANALYZER_VERSION)) {
+            Install-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Scope CurrentUser -Force
+          }
+          Import-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION
+          $issues = Invoke-ScriptAnalyzer -Path packaging/windows -Recurse -Severity Error, Warning
+          $issues | ForEach-Object { Write-Output "::error file=$($_.ScriptPath),line=$($_.Line)::$($_.RuleName): $($_.Message)" }
+          if ($issues) { exit 1 }
+      - name: Property lists and desktop entry
+        run: |
+          app_id="$(sed -n 's/^APP_ID=//p' packaging/env.sh)"
+          test -n "$app_id"
+          xmllint --noout packaging/macos/*.plist*
+          desktop="packaging/linux/$app_id.desktop"
+          desktop-file-validate "$desktop"
+          # The window's X11 class / Wayland app_id is packaging's APP_ID (apps/fieldcraft/src/main.rs).
+          grep -qx "StartupWMClass=$app_id" "$desktop"
+          grep -qF "const APP_ID: &str = \"$app_id\";" apps/fieldcraft/src/main.rs

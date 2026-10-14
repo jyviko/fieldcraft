@@ -30,6 +30,8 @@
 //! - [`face`]: consistent nodal forces of pressure on element faces;
 //! - [`contact`]: contact geometry: the closest point of an element face to a point and the
 //!   bucket grid of the global search;
+//! - [`mortar`]: mortar segmentation of a secondary face against a main face and the integration
+//!   points on the overlap, over [`dual`]'s automatic differentiation for the exact tangent;
 //! - [`heat`]: heat conduction (conductivity, capacity, sources, surface flux and convection,
 //!   heat flux); thermal strain loads and stresses are in [`element`];
 //! - [`uniform`]: uniform-strain (one-point) hexahedron and tetrahedron kinematics, hourglass
@@ -59,6 +61,7 @@ pub mod constitutive;
 pub mod contact;
 pub mod dense;
 pub mod dof;
+pub mod dual;
 pub mod elastoplastic;
 pub mod element;
 pub mod face;
@@ -68,6 +71,7 @@ pub mod heat;
 pub mod hybrid;
 pub mod jet;
 pub mod material;
+pub mod mortar;
 pub mod plane;
 pub mod plasticity;
 pub mod quadrature;

@@ -874,6 +874,12 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
             d.card([Field::from(1)]);
         }
         Procedure::NonlinearStatic(n) => {
+            if n.imperfection.is_some() {
+                return Err(Error::Unsupported {
+                    format: FORMAT,
+                    what: format!("step `{}`: an imperfection from a buckling mode (FieldCraft computes the mode when it solves)", step.name),
+                });
+            }
             // Nonlinear with a stiffness reformation every iteration (full Newton), at most
             // `max_iterations` per increment; LS-DYNA's own convergence norms and line search.
             d.line("*CONTROL_IMPLICIT_SOLUTION");

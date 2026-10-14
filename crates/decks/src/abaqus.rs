@@ -1191,6 +1191,15 @@ impl Deck {
                 Procedure::Fluid { .. } => return Err(crate::fluid_step(FORMAT, &step.name)),
                 Procedure::Static {} | Procedure::NonlinearStatic(_) => {
                     if let Procedure::NonlinearStatic(n) = &step.procedure {
+                        if n.imperfection.is_some() {
+                            return Err(Error::Unsupported {
+                                format: FORMAT,
+                                what: format!(
+                                    "step `{}`: an imperfection from a buckling mode (FieldCraft computes the mode when it solves)",
+                                    step.name
+                                ),
+                            });
+                        }
                         let nlgeom = if n.nonlinear_geometry { "YES" } else { "NO" };
                         self.line(&format!("*STEP, NAME={}, NLGEOM={nlgeom}, INC={}", step.name, n.max_increments));
                         self.line("*STATIC");

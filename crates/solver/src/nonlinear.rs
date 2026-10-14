@@ -98,7 +98,7 @@ use fieldcraft_fem::finite::{Kinematics, Temperature};
 use fieldcraft_fem::plane::Theory;
 use fieldcraft_fem::quadrature::Rule;
 use fieldcraft_fem::{DofKind, DofSet, ElementType, PointStress, face, von_mises};
-use fieldcraft_model::{BoundaryCondition, Extent, Hardening, Load, Model, NonlinearStatic, Plastic, Procedure, SectionKind, Step};
+use fieldcraft_model::{BoundaryCondition, Extent, Hardening, Imperfection, Load, Model, NonlinearStatic, Plastic, Procedure, SectionKind, Step};
 use fieldcraft_parallel as parallel;
 use serde::Serialize;
 
@@ -837,14 +837,50 @@ fn followers(model: &Model, resolved: &fieldcraft_model::Resolved, mesh: &Mesh, 
 /// Solve a nonlinear static step: the step named `step`, or the model's only nonlinear static
 /// step.
 pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Result<StaticResult> {
-    let resolved = model.resolve()?;
-    let step = model.select_step(step, |p| matches!(p, Procedure::NonlinearStatic(_)), "nonlinear static")?;
-    let Procedure::NonlinearStatic(settings) = &step.procedure else {
+    let chosen = model.select_step(step, |p| matches!(p, Procedure::NonlinearStatic(_)), "nonlinear static")?;
+    let Procedure::NonlinearStatic(settings) = &chosen.procedure else {
         return Err(Error::Internal("nonlinear static step".into()));
     };
     settings.validate()?;
+    let Some(imperfection) = &settings.imperfection else { return solve_on(model, chosen.name.as_str(), limits, Vec::new()) };
+    let (perturbed, note) = imperfect(model, imperfection, limits)?;
+    solve_on(&perturbed, chosen.name.as_str(), limits, vec![note])
+}
+
+/// The model with a buckling mode, scaled to a largest component of `scale`, added to its node
+/// coordinates (the buckling step solved first), and a note saying so.
+fn imperfect(model: &Model, imperfection: &Imperfection, limits: &Limits) -> Result<(Model, String)> {
+    let Imperfection { step, mode, scale } = imperfection;
+    if !matches!(model.step(step).map(|s| &s.procedure), Some(Procedure::Buckle { .. })) {
+        return Err(Error::Invalid(format!("the imperfection names step `{step}`, which is not a buckling step")));
+    }
+    let buckled = crate::buckle::solve_buckle(model, Some(step), limits)?;
+    let shape =
+        usize::try_from(*mode).ok().and_then(|m| m.checked_sub(1)).and_then(|m| buckled.modes.get(m)).ok_or_else(|| {
+            Error::Invalid(format!("the imperfection takes mode {mode} of step `{step}`, which found {} modes", buckled.modes.len()))
+        })?;
+    let mut out = model.clone();
+    for (label, u) in buckled.nodes.iter().zip(&shape.shape) {
+        let node = model.node(*label).ok_or_else(|| Error::Internal(format!("node {label}")))?;
+        let xyz: [f64; 3] = std::array::from_fn(|k| node.xyz[k] + scale * u[k]);
+        out.set_node(*label, xyz)?;
+    }
+    let note = format!(
+        "solved on an imperfect geometry: mode {mode} of buckling step `{step}` (load factor {:.6e}) scaled to {scale} added to the node coordinates",
+        shape.eigenvalue
+    );
+    Ok((out, note))
+}
+
+fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> Result<StaticResult> {
+    let resolved = model.resolve()?;
+    let step = model.step(step).ok_or_else(|| Error::Internal("nonlinear static step".into()))?;
+    let Procedure::NonlinearStatic(settings) = &step.procedure else {
+        return Err(Error::Internal("nonlinear static step".into()));
+    };
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
-    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).chain(mesh.warnings.iter().cloned()).collect();
+    let mut warnings: Vec<String> =
+        notes.into_iter().chain(resolved.warnings.iter().map(ToString::to_string)).chain(mesh.warnings.iter().cloned()).collect();
     check_supported(model, &mesh, step, settings, &mut warnings)?;
     let (graph, order) = pattern(&mesh);
     ignored_dashpots(&mesh, &mut warnings);

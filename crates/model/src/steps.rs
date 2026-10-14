@@ -145,6 +145,20 @@ pub struct NonlinearStatic {
     /// them (cyclic loading). Increments end at every point of the path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_path: Option<Vec<[f64; 2]>>,
+    /// A geometric imperfection: the mode shape of a buckling step, scaled, added to the node
+    /// coordinates before this step is solved (the step and its results are on that geometry).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imperfection: Option<Imperfection>,
+}
+
+/// Mode `mode` (from 1) of buckling step `step`, scaled so its largest component is `scale`
+/// (a length), as an initial imperfection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Imperfection {
+    pub step: String,
+    pub mode: u32,
+    pub scale: f64,
 }
 
 /// Most points of a nonlinear step's load path.
@@ -181,6 +195,7 @@ impl Default for NonlinearStatic {
             tolerances: Tolerances::default(),
             line_search: false,
             load_path: None,
+            imperfection: None,
         }
     }
 }
@@ -190,6 +205,12 @@ impl NonlinearStatic {
         let fraction = |what: &str, v: f64| {
             if v > 0.0 && v <= 1.0 { Ok(v) } else { Err(Error::Invalid(format!("the {what} is a fraction of the step in (0, 1], got {v}"))) }
         };
+        if let Some(imp) = &self.imperfection {
+            if !(1..=MAX_MODES).contains(&imp.mode) {
+                return Err(Error::Invalid(format!("an imperfection takes mode 1 to {MAX_MODES}, got {}", imp.mode)));
+            }
+            finite("imperfection scale", imp.scale)?;
+        }
         let initial = fraction("initial increment", self.initial_increment)?;
         let min = fraction("minimum increment", self.min_increment)?;
         let max = fraction("maximum increment", self.max_increment)?;

@@ -91,3 +91,37 @@ fn buckling_steps_refuse_what_they_cannot_do() {
     assert!(Procedure::Buckle { modes: 0, shift: None }.validate().is_err());
     assert!(Procedure::Buckle { modes: 1, shift: Some(f64::NAN) }.validate().is_err());
 }
+
+/// A clamped–free column given its first buckling mode as an imperfection δ₀ at the top, under a
+/// dead end force of half its buckling load: the top's lateral deflection grows to
+/// δ₀ / (1 − P/P_cr) = 2 δ₀ (Timoshenko & Gere 1961, §1.12, for the mode-shaped imperfection).
+#[test]
+fn an_imperfection_from_the_buckling_mode() {
+    let mut g = column(L / 2.0, 10, None);
+    g.fixed("base", |x| near(x[2], 0.0));
+    let critical = solve_buckle(&g.model, Some("Step"), &Limits::default()).unwrap().modes[0].eigenvalue * B * B;
+    let delta0 = 0.01;
+    g.node_set("tip", |x| near(x[2], 1.0));
+    g.model
+        .add_load("push", Load::Force { target: Target::Set("tip".into()), vector: [0.0, 0.0, -0.5 * critical], distribution: Distribution::Total })
+        .unwrap();
+    let settings = NonlinearStatic { imperfection: Some(Imperfection { step: "Step".into(), mode: 1, scale: delta0 }), ..NonlinearStatic::default() };
+    let mut nl = Step::new("Push", Procedure::NonlinearStatic(settings));
+    nl.boundary_conditions.insert("base".into());
+    nl.loads.insert("push".into());
+    g.model.add_step(nl, None).unwrap();
+    let r = fieldcraft_solver::solve_nonlinear(&g.model, Some("Push"), &Limits::default()).unwrap();
+    assert!(r.warnings.iter().any(|w| w.contains("imperfect geometry")), "{:?}", r.warnings);
+    let lateral = r.displacement.iter().map(|u| u[0].hypot(u[1])).fold(0.0, f64::max);
+    // The deflection added to δ₀: δ₀ α/(1 − α) = δ₀ at α = ½.
+    eprintln!("imperfection {delta0}: added top deflection {lateral:.6e}");
+    assert!((lateral / delta0 - 1.0).abs() < 0.05, "{lateral}");
+    // A mode the buckling step does not have, or a step that does not buckle.
+    let mut bad = g.model.clone();
+    let mut s = bad.step("Push").unwrap().clone();
+    if let Procedure::NonlinearStatic(n) = &mut s.procedure {
+        n.imperfection = Some(Imperfection { step: "Step".into(), mode: 9, scale: delta0 });
+    }
+    bad.replace_step(s).unwrap();
+    assert!(fieldcraft_solver::solve_nonlinear(&bad, Some("Push"), &Limits::default()).is_err());
+}

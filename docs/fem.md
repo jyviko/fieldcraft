@@ -193,6 +193,13 @@ buckle from, and with a shift); Nastran SOL 105 and LS-DYNA refuse it by name. V
 columns of hex20 (pinned and clamped–free, 0.18 % from Engesser's shear-corrected load) and the
 shifted form against the plain one.
 
+**Imperfections.** A nonlinear static step's `"imperfection": {"step": "Buckle", "mode": 1,
+"scale": 0.01}` solves that buckling step first and adds its mode, scaled to a largest component
+of `scale`, to the node coordinates; the step is solved and reported on that geometry, with a
+warning naming the mode. Abaqus and LS-DYNA decks refuse it by name (their imperfection reads a
+results file). Verified: a clamped–free column with its first mode as imperfection under half its
+buckling load deflects by δ₀ α/(1 − α) (2.8 %).
+
 ## Nonlinear static analysis (finite strain)
 
 A step `{"type": "nonlinear_static", …}` (`Procedure::NonlinearStatic`, solved by

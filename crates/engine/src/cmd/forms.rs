@@ -31,6 +31,7 @@ pub const BOUNDARY_CONDITION_DELETE: &[Field] = existing!("Boundary condition", 
 pub const LOAD_DELETE: &[Field] = existing!("Load", C::Load);
 pub const FLUID_DOMAIN_DELETE: &[Field] = existing!("Fluid domain", C::FluidDomain);
 pub const CONTACT_DELETE: &[Field] = existing!("Contact", C::Contact);
+pub const TIE_DELETE: &[Field] = existing!("Tie", C::Tie);
 pub const STEP_DELETE: &[Field] = existing!("Step", C::Step);
 pub const SET_RESOLVE: &[Field] = existing!("Set", C::Set);
 
@@ -613,6 +614,18 @@ pub const CONTACT_EDIT: &[Field] = &[
     FRICTION,
     PENALTY,
     PENETRATION,
+];
+pub const TIE: &[Field] = &[
+    NAME,
+    reference("main", "Main surface", C::Set).req(),
+    reference("secondary", "Secondary surface", C::Set).req(),
+    positive("position_tolerance", "Position tolerance", D::Length).hint("half the main element's thickness"),
+];
+pub const TIE_EDIT: &[Field] = &[
+    reference("name", "Tie", C::Tie).req(),
+    reference("main", "Main surface", C::Set).req(),
+    reference("secondary", "Secondary surface", C::Set).req(),
+    positive("position_tolerance", "Position tolerance", D::Length).hint("half the main element's thickness"),
 ];
 pub const CONTACT_FIND: &[Field] = &[
     positive("tolerance", "Tolerance", D::Length).hint("a tenth of the mean face size"),

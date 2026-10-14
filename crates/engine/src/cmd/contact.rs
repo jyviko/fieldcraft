@@ -1,5 +1,5 @@
 //! `interaction.contact.*`: contact definitions (pairs of surfaces, general contact) and the
-//! search for surfaces that touch.
+//! search for surfaces that touch; `interaction.tie*`: ties between non-matching meshes.
 //!
 //! A contact's surfaces are sets of element faces ([`fieldcraft_model::contact`]). The commands
 //! take the friction, penalty scale and initial-penetration choice of the model's form; `edit`
@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use fieldcraft_fem::contact::{Grid, bounds, closest_point};
-use fieldcraft_model::{Contact, ContactSurfaces, ElementFace, Friction, InitialPenetration, Model, Set};
+use fieldcraft_model::{Contact, ContactSurfaces, ElementFace, Friction, InitialPenetration, Model, Set, Tie};
 use serde_json::{Value, json};
 
 use super::{name, opt};
@@ -98,6 +98,53 @@ pub const DELETE: CommandSpec = CommandSpec {
     kind: CommandKind::Model,
     run: |s: &mut Session, p: &Value| {
         s.model.remove_contact(name(p)?)?;
+        Ok(Value::Null)
+    },
+};
+
+/// A tie from the parameters.
+fn tie(p: &Value) -> Result<Tie> {
+    Ok(Tie {
+        main: text(p, "main")?.to_string(),
+        secondary: text(p, "secondary")?.to_string(),
+        position_tolerance: opt::<f64>(p, "position_tolerance")?,
+    })
+}
+
+pub const TIE: CommandSpec = CommandSpec {
+    id: "interaction.tie",
+    label: "Tie",
+    params: r#"{"name": "glue", "main": "plate" (a set of element faces), "secondary": "rib" (another), "position_tolerance": 0.1 (optional: how far a secondary node may lie from the main surface and still be tied; default half the main element's thickness)} — bonds the secondary surface to the main one across non-matching meshes: each secondary node follows the main surface under it (dual mortar constraints in the implicit analyses; a constant stress crosses the tie exactly); fails if the name is taken"#,
+    form: Some(super::forms::TIE),
+    kind: CommandKind::Model,
+    run: |s: &mut Session, p: &Value| {
+        let n = name(p)?;
+        s.model.add_tie(n, tie(p)?)?;
+        Ok(json!({"name": n}))
+    },
+};
+
+pub const TIE_EDIT: CommandSpec = CommandSpec {
+    id: "interaction.tie.edit",
+    label: "Edit Tie",
+    params: r#"{"name": "glue", "main": "plate", "secondary": "rib", "position_tolerance": 0.1} — replaces the tie of that name (see interaction.tie)"#,
+    form: Some(super::forms::TIE_EDIT),
+    kind: CommandKind::Model,
+    run: |s: &mut Session, p: &Value| {
+        let n = name(p)?;
+        s.model.replace_tie(n, tie(p)?)?;
+        Ok(json!({"name": n}))
+    },
+};
+
+pub const TIE_DELETE: CommandSpec = CommandSpec {
+    id: "interaction.tie.delete",
+    label: "Delete Tie",
+    params: r#"{"name": "glue"}"#,
+    form: Some(super::forms::TIE_DELETE),
+    kind: CommandKind::Model,
+    run: |s: &mut Session, p: &Value| {
+        s.model.remove_tie(name(p)?)?;
         Ok(Value::Null)
     },
 };
@@ -332,6 +379,32 @@ mod tests {
             s.execute("interaction.contact.delete", &json!({"name": n})).unwrap();
         }
         assert!(s.model.contacts().is_empty());
+    }
+
+    #[test]
+    fn ties_are_created_edited_and_deleted() {
+        let mut s = Session::default();
+        stacked(&mut s);
+        s.execute("model.set.create", &json!({"name": "a", "faces": [{"element": 5, "face": 2}]})).unwrap();
+        s.execute("model.set.create", &json!({"name": "b", "faces": [{"element": 9, "face": 1}]})).unwrap();
+        s.execute("interaction.tie", &json!({"name": "glue", "main": "a", "secondary": "b"})).unwrap();
+        assert_eq!(s.model.tie("glue"), Some(&Tie::new("a", "b")));
+        for bad in [
+            json!({"name": "glue", "main": "a", "secondary": "b"}),
+            json!({"name": "x", "main": "a", "secondary": "a"}),
+            json!({"name": "x", "main": "a", "secondary": "nope"}),
+            json!({"name": "x", "main": "a", "secondary": "b", "position_tolerance": -1}),
+            json!({"name": "x", "main": "a", "secondary": "b", "position_tolerance": "far"}),
+            json!({"name": "x", "main": 3, "secondary": "b"}),
+        ] {
+            assert!(s.execute("interaction.tie", &bad).is_err(), "{bad}");
+        }
+        s.execute("interaction.tie.edit", &json!({"name": "glue", "main": "b", "secondary": "a", "position_tolerance": 0.01})).unwrap();
+        assert_eq!(s.model.tie("glue").and_then(|t| t.position_tolerance), Some(0.01));
+        assert!(s.execute("interaction.tie.edit", &json!({"name": "nope", "main": "a", "secondary": "b"})).is_err());
+        assert!(s.execute("model.set.delete", &json!({"name": "a"})).unwrap_err().to_string().contains("tie `glue`"));
+        s.execute("interaction.tie.delete", &json!({"name": "glue"})).unwrap();
+        assert!(s.model.ties().is_empty() && s.execute("interaction.tie.delete", &json!({"name": "glue"})).is_err());
     }
 
     #[test]

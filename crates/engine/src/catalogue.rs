@@ -414,7 +414,14 @@ pub static CATALOGUE: &[Capability] = &[
         "Kinematic or distributing coupling of a set to a reference point",
         &["model.coupling.edit", "model.coupling.delete"],
     ),
-    soon("interaction.tie", "Tie", Interactions, "Constraints", "M7", "Tie non-matching meshes together"),
+    ready_more(
+        "interaction.tie",
+        "Tie",
+        Interactions,
+        "Constraints",
+        "Tie non-matching meshes together (dual mortar constraints)",
+        &["interaction.tie.edit", "interaction.tie.delete"],
+    ),
     ready_more(
         "interaction.contact.general",
         "General Contact",

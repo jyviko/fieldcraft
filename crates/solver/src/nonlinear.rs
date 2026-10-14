@@ -88,6 +88,15 @@
 //! strain at the integration points.
 //! Couplings stay the linear (small-rotation) constraints of the linear solver, with a warning.
 //!
+//! **Contact** ([`crate::contact`]): the model's contact pairs add their mortar forces to the
+//! internal forces and their consistent tangent to the stiffness, whose pattern takes the blocks
+//! of the closed nodes' face pairs at every evaluation. Each converged increment is solved again
+//! with updated multipliers until the gaps are tight (the augmented Lagrangian's Uzawa loop, the
+//! increment's `augmentations`, each iteration tagged with its `augmentation`); an increment whose
+//! active set chatters is cut back. With contact the force scale of the convergence test is that
+//! of the converged states, the loads and the current state, not the largest force of every
+//! trial: a trial state can press a body deep into another before the active set settles.
+//!
 //! Element forces and tangents are computed in parallel and added in label order, so results are
 //! the same bit for bit on any number of threads.
 
@@ -111,8 +120,9 @@ use crate::analysis::{
 };
 use crate::cholesky::FactorError;
 use crate::constraints::Reduction;
+use crate::contact::{self, ContactResult, Interface};
 use crate::ldlt::{Kind, Symmetric};
-use crate::sparse::{Csr, add_block};
+use crate::sparse::{Csr, NodeGraph, add_block, add_entry};
 use crate::system::{Mesh, add_element_thermal_loads, loads, temperature_loads, translations};
 use crate::{Error, Limits, Result};
 
@@ -131,6 +141,9 @@ pub struct Iteration {
     /// tangent is factored by LDLᵀ, [`crate::ldlt`]).
     #[serde(skip_serializing_if = "is_zero")]
     pub negative_pivots: usize,
+    /// Contact: the augmentation it belongs to (0: the increment's first solution).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub augmentation: usize,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -155,6 +168,9 @@ pub struct Increment {
     /// factor it for the next predictor).
     #[serde(skip_serializing_if = "is_zero")]
     pub negative_pivots: usize,
+    /// Contact: the times the increment was solved again with updated multipliers.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub augmentations: usize,
 }
 
 /// Where the tangent's inertia changes along an arc-length path.
@@ -259,8 +275,12 @@ struct Problem<'a> {
     /// The step's temperature field at λ = 1, per mesh node (`None` where the field leaves a
     /// node at its material's reference temperature); `None` without one.
     field: Option<Vec<Option<f64>>>,
-    /// The tangent's pattern, zero.
+    /// The tangent's pattern, zero, and the mesh's node graph it comes from (contact adds the
+    /// blocks of its face pairs to it).
     pattern: Csr,
+    graph: NodeGraph,
+    /// The contact pairs ([`crate::contact`]).
+    contacts: Vec<Interface>,
 }
 
 /// The internal and external forces at a state, and the tangent when asked for.
@@ -271,6 +291,8 @@ struct Evaluation {
     /// Every element's material history at this state (committed when the increment
     /// converges).
     history: Vec<Vec<f64>>,
+    /// Each contact's state.
+    contact: Vec<contact::State>,
 }
 
 /// Why an attempt at an increment failed, when that calls for a cutback rather than an error.
@@ -289,6 +311,11 @@ impl From<Error> for Failure {
             e => Failure::Fatal(e),
         }
     }
+}
+
+/// One hash of the contacts' active sets.
+fn active_sets(e: &Evaluation) -> u64 {
+    e.contact.iter().fold(0u64, |h, s| h.rotate_left(17) ^ s.active_set())
 }
 
 fn norm_inf(v: &[f64]) -> f64 {
@@ -387,11 +414,30 @@ impl Problem<'_> {
 
     /// The forces at displacements `u` and load factor λ, and the tangent (symmetric part of the
     /// load stiffness included) when `tangent`.
-    fn evaluate(&self, u: &[f64], lambda: f64, tangent: bool, committed: &[Vec<f64>]) -> Result<Evaluation> {
+    /// `multipliers` are the contacts' augmented Lagrange multipliers per secondary node (none:
+    /// zero).
+    fn evaluate(&self, u: &[f64], lambda: f64, tangent: bool, committed: &[Vec<f64>], multipliers: &[Vec<f64>]) -> Result<Evaluation> {
         let layout = &self.mesh.layout;
         let n = u.len();
         let mut internal = vec![0.0; n];
-        let mut k = tangent.then(|| self.pattern.clone());
+        // Contact first: its face pairs extend the tangent's pattern.
+        let mut blocks = contact::Blocks::new();
+        let mut states = Vec::with_capacity(self.contacts.len());
+        for (i, c) in self.contacts.iter().enumerate() {
+            states.push(c.evaluate(self.mesh, u, multipliers.get(i).map(Vec::as_slice).unwrap_or_default(), tangent, &mut internal, &mut blocks)?);
+        }
+        let mut k = tangent.then(|| {
+            if blocks.is_empty() {
+                self.pattern.clone()
+            } else {
+                self.graph.with_blocks(blocks.iter().map(|(nodes, _)| nodes.as_slice())).zero_matrix(layout)
+            }
+        });
+        if let Some(k) = k.as_mut() {
+            for (nodes, data) in &blocks {
+                add_block(k, layout, nodes, self.mesh.translation_kinds(), data)?;
+            }
+        }
         let mut history = Vec::with_capacity(self.mesh.elements.len());
         for round in parallel::blocks(self.mesh.elements.len(), ROUND) {
             let start = round.start;
@@ -420,9 +466,18 @@ impl Problem<'_> {
             for (x, v) in internal.iter_mut().zip(&ku) {
                 *x += v;
             }
-            // Both are on the mesh's pattern.
+            // On the mesh's pattern, which contact may have extended.
             if let Some(k) = k.as_mut() {
-                k.val.iter_mut().zip(&s.val).for_each(|(x, v)| *x += v);
+                if k.ptr == s.ptr && k.idx == s.idx {
+                    k.val.iter_mut().zip(&s.val).for_each(|(x, v)| *x += v);
+                } else {
+                    for r in 0..s.n {
+                        let (cols, vals) = s.row(r);
+                        for (c, v) in cols.iter().zip(vals).filter(|(_, v)| **v != 0.0) {
+                            add_entry(k, r, *c, *v)?;
+                        }
+                    }
+                }
             }
         }
         let mut external: Vec<f64> = self.dead.iter().map(|f| lambda * f).collect();
@@ -440,7 +495,7 @@ impl Problem<'_> {
         if internal.iter().chain(&external).any(|v| !v.is_finite()) {
             return Err(Error::NotConverged("the forces are not finite".into()));
         }
-        Ok(Evaluation { internal, external, tangent: k, history })
+        Ok(Evaluation { internal, external, tangent: k, history, contact: states })
     }
 
     /// The loads at load factor 1 at displacements `u` (dead loads and follower pressures on
@@ -512,18 +567,33 @@ struct Run<'a> {
     path_dependent: bool,
     /// How the undeformed model's tangent factors (Cholesky), once asked.
     undeformed: Option<std::result::Result<(), FactorError>>,
+    /// The contacts' multipliers per secondary node (the last converged increment's, or the
+    /// current augmentation's), and the augmentations over the step.
+    multipliers: Vec<Vec<f64>>,
+    augmentations: usize,
+    /// The augmentation being solved in the current increment.
+    augmentation: usize,
+    /// The largest force of the converged states (contact's force scale, [`Run::residual`]).
+    converged_scale: f64,
 }
 
 /// The outcome of a converged increment.
 struct Converged {
     q: Vec<f64>,
     evaluation: Evaluation,
+    /// The work of the increment's first correction (the energy criterion's reference).
+    energy: Option<f64>,
 }
 
 impl Run<'_> {
     /// The residual over the free equations, T_fᵀ (f_ext − f_int), and the force scale.
+    ///
+    /// With contact a trial state can be far from equilibrium (a body pressed deep into another
+    /// before the active set settles, its contact forces huge), so the scale is not the largest
+    /// force of every trial but that of the converged states, the loads and the current state.
     fn residual(&mut self, e: &Evaluation) -> Vec<f64> {
-        self.force_scale = self.force_scale.max(norm_inf(&e.external)).max(norm_inf(&e.internal));
+        let current = norm_inf(&e.external).max(norm_inf(&e.internal));
+        self.force_scale = if self.problem.contacts.is_empty() { self.force_scale.max(current) } else { self.converged_scale.max(current) };
         free_residual(self.problem.red, e)
     }
 
@@ -541,7 +611,7 @@ impl Run<'_> {
     }
 
     fn state(&self, q: &[f64], lambda: f64, tangent: bool) -> std::result::Result<Evaluation, Failure> {
-        Ok(self.problem.evaluate(&self.problem.red.expand_scaled(q, lambda), lambda, tangent, &self.committed)?)
+        Ok(self.problem.evaluate(&self.problem.red.expand_scaled(q, lambda), lambda, tangent, &self.committed, &self.multipliers)?)
     }
 
     /// How the tangent of the undeformed, unloaded model factors (Cholesky): a first tangent
@@ -551,7 +621,7 @@ impl Run<'_> {
         if let Some(u) = &self.undeformed {
             return Ok(u.clone());
         }
-        let mut e = self.problem.evaluate(&vec![0.0; self.problem.mesh.dofs()], 0.0, true, &self.committed)?;
+        let mut e = self.problem.evaluate(&vec![0.0; self.problem.mesh.dofs()], 0.0, true, &self.committed, &[])?;
         let k = e.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
         let [kff] = self.problem.red.reduce([&k])?;
         let u = factor_raw(&kff, self.limits).map(|_| ());
@@ -600,7 +670,7 @@ impl Run<'_> {
     /// factored (the increment then starts from `q0`).
     fn tangent_predictor(&mut self, q0: &[f64], from: f64, to: f64) -> std::result::Result<Option<(Vec<f64>, f64)>, Failure> {
         let red = self.problem.red;
-        let mut e = self.problem.evaluate(&red.expand_scaled(q0, from), to, true, &self.committed)?;
+        let mut e = self.problem.evaluate(&red.expand_scaled(q0, from), to, true, &self.committed, &self.multipliers)?;
         let k = e.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
         let rf: Vec<f64> = free_residual(red, &e).iter().zip(prescribed_force(red, &k, to - from)).map(|(a, b)| a - b).collect();
         let mut dq = rf.clone();
@@ -642,11 +712,15 @@ impl Run<'_> {
         // predictor's when the increment started from one that is still in use.
         let mut first_energy: Option<f64> = predicted_energy.filter(|_| q.as_slice() != q0);
         let mut history: Vec<f64> = Vec::new();
+        // Contact: the active sets of the iterations, and how often they went back to the one
+        // before the last (chattering).
+        let mut sets = (None, active_sets(&eval));
+        let mut flips = 0usize;
         let max_iterations = usize::try_from(self.settings.max_iterations).unwrap_or(usize::MAX);
         for _ in 0..max_iterations {
             // The round-off rule: nothing left to correct.
             if norm_inf(&r) <= ROUND_OFF * tol.force * self.scale() && self.force_floor.is_some() {
-                return Ok(Converged { q, evaluation: eval });
+                return Ok(Converged { q, evaluation: eval, energy: first_energy });
             }
             if self.iterations >= self.limits.max_newton_iterations {
                 return Err(Failure::Fatal(Error::Limit(format!(
@@ -677,6 +751,16 @@ impl Run<'_> {
                 *x += s * d;
             }
             eval = next;
+            if !self.problem.contacts.is_empty() {
+                let set = active_sets(&eval);
+                if sets.0 == Some(set) && set != sets.1 {
+                    flips += 1;
+                    if flips >= contact::CHATTER_LIMIT {
+                        return Err(Failure::Cutback("the contact status alternates between two states (chattering)".into()));
+                    }
+                }
+                sets = (Some(sets.1), set);
+            }
             let r_old = std::mem::replace(&mut r, self.residual(&eval));
             let energy = (s * dot(&dq, &r_old)).abs();
             let first = *first_energy.get_or_insert(energy);
@@ -688,6 +772,7 @@ impl Run<'_> {
                 energy: if first > 0.0 { energy / first } else { 0.0 },
                 line_search: s,
                 negative_pivots: factor.inertia().negative,
+                augmentation: self.augmentation,
             };
             iterations.push(it);
             if !it.force.is_finite() {
@@ -695,7 +780,7 @@ impl Run<'_> {
             }
             let energy_met = it.energy <= tol.energy || started_converged;
             if (it.force <= tol.force && it.displacement <= tol.displacement && energy_met) || it.force <= ROUND_OFF * tol.force {
-                return Ok(Converged { q, evaluation: eval });
+                return Ok(Converged { q, evaluation: eval, energy: first_energy });
             }
             history.push(it.force);
             if let [.., a, b, c] = history[..]
@@ -706,6 +791,53 @@ impl Run<'_> {
             }
         }
         Err(Failure::Cutback(format!("no convergence in {} iterations", self.settings.max_iterations)))
+    }
+
+    /// The augmented Lagrangian loop of a converged increment (Uzawa: the contacts' multipliers
+    /// take the converged pressures, and the increment is solved again from its solution) until
+    /// the gaps are within [`contact::GAP_TOLERANCE`] ([`Interface::augmentation_error`]), at
+    /// most [`contact::MAX_AUGMENTATIONS`] times (then with a warning). Without contact it
+    /// returns the increment as it is.
+    fn augment(
+        &mut self,
+        mut c: Converged,
+        q0: &[f64],
+        lambda: f64,
+        size: f64,
+        iterations: &mut Vec<Iteration>,
+        count: &mut usize,
+        warnings: &mut Vec<String>,
+    ) -> std::result::Result<Converged, Failure> {
+        if self.problem.contacts.is_empty() {
+            return Ok(c);
+        }
+        loop {
+            let error = self
+                .problem
+                .contacts
+                .iter()
+                .zip(&self.multipliers)
+                .zip(&c.evaluation.contact)
+                .fold(0.0f64, |m, ((i, l), s)| m.max(i.augmentation_error(l, s)));
+            if error <= contact::GAP_TOLERANCE {
+                return Ok(c);
+            }
+            if *count >= contact::MAX_AUGMENTATIONS {
+                warnings.push(format!(
+                    "contact: at load factor {lambda:.6} a gap is still {error:.1e} of its element's thickness after {} augmentations (the penalty's regularisation)",
+                    contact::MAX_AUGMENTATIONS
+                ));
+                return Ok(c);
+            }
+            *count += 1;
+            self.augmentations += 1;
+            self.augmentation = *count;
+            self.multipliers = c.evaluation.contact.iter().map(|s| s.pressure.clone()).collect();
+            // From the converged state, measured against the increment's start and its first
+            // correction like the increment itself.
+            let start = std::mem::take(&mut c.q);
+            c = self.increment(q0, Some(&start), c.energy, lambda, size, iterations)?;
+        }
     }
 
     /// The line search along `dq` from `q`: the accepted step and the state there (with the
@@ -785,6 +917,14 @@ fn check_supported(model: &Model, mesh: &Mesh, step: &Step, settings: &Nonlinear
         return Err(at(format!("centrifugal loads (load `{name}`), which depend on the deformed position")));
     }
     plasticity(model, step, settings, warnings)?;
+    if let Some(name) = model.contacts().keys().next() {
+        if mesh.theory.is_some() {
+            return Err(at(format!("contact (`{name}`) in 2D models")));
+        }
+        if settings.arc_length.is_some() {
+            return Err(at(format!("contact (`{name}`) with arc-length control")));
+        }
+    }
     if settings.nonlinear_geometry
         && let Some(name) = model.couplings().keys().next()
     {
@@ -960,6 +1100,7 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
     } else {
         None
     };
+    let contacts = Interface::all(model, &resolved, &mesh, settings.nonlinear_geometry, &mut warnings)?;
     let element_kinds = mesh.elements.iter().map(|e| Ok(e.kernel()?.dofs().node)).collect::<Result<Vec<_>>>()?;
     let element_dofs = mesh
         .elements
@@ -988,6 +1129,8 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
             .collect(),
         field,
         pattern: graph.zero_matrix(&mesh.layout),
+        graph,
+        contacts,
     };
     // Elements on their linear stiffness take the thermal strain as the equivalent nodal
     // forces, a dead load proportional to the load factor like the temperatures.
@@ -1008,7 +1151,7 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
         .collect::<Result<Vec<_>>>()?;
     // The undeformed state first: an element that is bad before anything moves is an error in
     // the model, not a reason to cut increments back.
-    problem.evaluate(&vec![0.0; mesh.dofs()], 0.0, false, &committed)?;
+    problem.evaluate(&vec![0.0; mesh.dofs()], 0.0, false, &committed, &[])?;
     let path_dependent = problem.materials.iter().any(MaterialModel::is_path_dependent);
     let mut run = Run {
         problem: &problem,
@@ -1022,6 +1165,10 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
         committed,
         path_dependent,
         undeformed: None,
+        multipliers: problem.contacts.iter().map(|c| vec![0.0; c.nodes.len()]).collect(),
+        augmentations: 0,
+        augmentation: 0,
+        converged_scale: 0.0,
     };
 
     let mut history = History::default();
@@ -1085,10 +1232,21 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
                     Err(Failure::Fatal(e)) => return Err(e),
                 }
             }
-            match run.increment(&q, predictor.as_deref(), predicted_energy, target_lambda, change.abs(), &mut iterations) {
+            let multipliers = run.multipliers.clone();
+            let mut augmentations = 0;
+            run.augmentation = 0;
+            let solved = run
+                .increment(&q, predictor.as_deref(), predicted_energy, target_lambda, change.abs(), &mut iterations)
+                .and_then(|c| run.augment(c, &q, target_lambda, change.abs(), &mut iterations, &mut augmentations, &mut warnings));
+            if solved.is_err() {
+                run.multipliers = multipliers;
+            }
+            match solved {
                 Ok(c) => {
                     previous = Some((c.q.iter().zip(&q).map(|(a, b)| a - b).collect(), change));
-                    let count = iterations.len();
+                    // The increment's own Newton iterations size the next one (augmentations
+                    // solve the same increment again).
+                    let count = iterations.iter().filter(|i| i.augmentation == 0).count();
                     history.increments.push(Increment {
                         number,
                         load_factor: target_lambda,
@@ -1097,11 +1255,13 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
                         converged: true,
                         cutback: None,
                         negative_pivots: 0,
+                        augmentations,
                     });
                     (t, lambda) = (target, target_lambda);
                     q = c.q;
                     keep_frame(&mut history, lambda, &red.expand_scaled(&q, lambda), &mut warnings);
                     run.committed.clone_from(&c.evaluation.history);
+                    run.converged_scale = run.converged_scale.max(norm_inf(&c.evaluation.external)).max(norm_inf(&c.evaluation.internal));
                     last = Some(c.evaluation);
                     fast = if count <= FAST_ITERATIONS { fast + 1 } else { 0 };
                     if fast >= 2 {
@@ -1121,6 +1281,7 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
                         converged: false,
                         cutback: Some(reason.clone()),
                         negative_pivots: 0,
+                        augmentations: 0,
                     });
                     fast = 0;
                     size = this * CUTBACK;
@@ -1139,7 +1300,7 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
     let u = red.expand_scaled(&q, lambda);
     let evaluation = match last {
         Some(e) => e,
-        None => problem.evaluate(&u, lambda, false, &run.committed)?,
+        None => problem.evaluate(&u, lambda, false, &run.committed, &run.multipliers)?,
     };
     if let Some((at, negative)) = history
         .increments
@@ -1160,7 +1321,8 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
             "follower pressure: the skew part of its load stiffness ({a:.1e} of it, over the free degrees of freedom) is left out of the tangent; the solution is exact, Newton may converge more slowly"
         ));
     }
-    finish(&mesh, step, &red, &problem, u, lambda, evaluation, &run.committed, history, run.factor_entries, warnings)
+    let contacts = problem.contacts.iter().zip(&evaluation.contact).map(|(c, s)| c.result(&mesh, s, run.augmentations)).collect();
+    finish(&mesh, step, &red, &problem, u, lambda, evaluation, &run.committed, history, run.factor_entries, contacts, warnings)
 }
 
 /// The final state as a static result: displacements, reactions, Cauchy stresses and
@@ -1177,6 +1339,7 @@ fn finish(
     committed: &[Vec<f64>],
     history: History,
     factor_entries: usize,
+    contacts: Vec<ContactResult>,
     mut warnings: Vec<String>,
 ) -> Result<StaticResult> {
     let (displacement, rotation, point_motion) = split(&u, mesh);
@@ -1248,7 +1411,7 @@ fn finish(
     }
     let stress: Vec<[f64; 6]> = sum.iter().zip(&count).map(|(s, c)| s.map(|v| if *c > 0 { v / f64::from(*c) } else { 0.0 })).collect();
     let von_mises = stress.iter().map(von_mises).collect();
-    let scale = applied_total.iter().chain(&reaction_total).fold(0.0f64, |m, v| m.max(v.abs()));
+    let scale = crate::system::balance_scale(&applied_total, &reaction_total, &reaction);
     let ground = mesh.discrete.ground_force(&u, mesh);
     let imbalance = (0..3).map(|c| (applied_total[c] + reaction_total[c] + ground[c]).abs()).fold(0.0, f64::max);
     if scale > 0.0 && imbalance > 1e-6 * scale {
@@ -1273,6 +1436,7 @@ fn finish(
         warnings,
         temperature: None,
         nonlinear: Some(history),
+        contacts,
     })
 }
 
@@ -1403,6 +1567,7 @@ impl Run<'_> {
                 energy: if first > 0.0 { energy / first } else { 0.0 },
                 line_search: 1.0,
                 negative_pivots: factor.inertia().negative,
+                augmentation: 0,
             });
         }
         Err(Failure::Cutback(format!("no convergence in {} iterations", self.settings.max_iterations)))
@@ -1491,6 +1656,7 @@ fn arc_length(
                     converged: true,
                     cutback: None,
                     negative_pivots: negative,
+                    augmentations: 0,
                 });
                 states.push((number, lambda, negative));
                 last = Some(evaluation);
@@ -1516,6 +1682,7 @@ fn arc_length(
                     converged: false,
                     cutback: Some(reason.clone()),
                     negative_pivots: 0,
+                    augmentations: 0,
                 });
                 fast = 0;
                 size *= CUTBACK;

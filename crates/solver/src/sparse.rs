@@ -105,6 +105,30 @@ impl NodeGraph {
         NodeGraph { adjacency }
     }
 
+    /// The graph with more blocks, each coupling all its slots (contact: the slots a contact
+    /// element couples change with the deformation).
+    pub fn with_blocks<'a>(&self, blocks: impl Iterator<Item = &'a [usize]>) -> NodeGraph {
+        let mut adjacency = self.adjacency.clone();
+        let mut touched = Vec::new();
+        for b in blocks {
+            for &a in b {
+                if let Some(row) = adjacency.get_mut(a) {
+                    row.extend_from_slice(b);
+                    touched.push(a);
+                }
+            }
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        for a in touched {
+            if let Some(row) = adjacency.get_mut(a) {
+                row.sort_unstable();
+                row.dedup();
+            }
+        }
+        NodeGraph { adjacency }
+    }
+
     /// Nonzeros of the dof-level matrix: a dense block per node pair.
     pub fn entries(&self, layout: &DofLayout) -> usize {
         self.adjacency.iter().enumerate().map(|(a, row)| layout.range(a).len() * row.iter().map(|b| layout.range(*b).len()).sum::<usize>()).sum()

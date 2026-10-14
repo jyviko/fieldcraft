@@ -113,6 +113,8 @@ pub struct StaticResult {
     /// The increments of a nonlinear static step (its stresses are Cauchy stresses and its
     /// strains logarithmic strains).
     pub nonlinear: Option<crate::nonlinear::History>,
+    /// Each contact's state at the end of a nonlinear static step, by name.
+    pub contacts: Vec<crate::contact::ContactResult>,
 }
 
 /// One natural mode.
@@ -362,6 +364,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         |p| matches!(p, Procedure::Static {} | Procedure::CoupledTemperatureDisplacement {}),
         "static or coupled temperature–displacement",
     )?;
+    crate::system::refuse_contact(model, "linear static")?;
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).chain(mesh.warnings.iter().cloned()).collect();
     warnings.extend(inelastic_warnings(model));
@@ -497,7 +500,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     }
     let stress: Vec<[f64; 6]> = sum.iter().zip(&count).map(|(s, c)| s.map(|v| if *c > 0 { v / f64::from(*c) } else { 0.0 })).collect();
     let von_mises = stress.iter().map(von_mises).collect();
-    let scale = applied_total.iter().chain(&reaction_total).fold(0.0f64, |m, v| m.max(v.abs()));
+    let scale = crate::system::balance_scale(&applied_total, &reaction_total, &reaction);
     let ground = mesh.discrete.ground_force(&u, &mesh);
     let imbalance = (0..3).map(|c| (applied_total[c] + reaction_total[c] + ground[c]).abs()).fold(0.0, f64::max);
     if scale > 0.0 && imbalance > 1e-6 * scale {
@@ -522,6 +525,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         warnings,
         temperature,
         nonlinear: None,
+        contacts: Vec::new(),
     })
 }
 
@@ -568,6 +572,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     {
         return Err(Error::Invalid(format!("the shift must be a finite number, got {s}")));
     }
+    crate::system::refuse_contact(model, "frequency")?;
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).chain(mesh.warnings.iter().cloned()).collect();
     warnings.extend(inelastic_warnings(model));

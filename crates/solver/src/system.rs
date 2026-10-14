@@ -426,11 +426,6 @@ impl Mesh {
 
     /// Build it from the model and its resolved view, refusing what the solver cannot represent.
     pub fn new(model: &Model, resolved: &Resolved, max_dofs: usize) -> Result<Mesh> {
-        if let Some(name) = model.contacts().keys().next() {
-            return Err(Error::NotSupported(format!(
-                "contact (`{name}`) in implicit analyses (it comes with M7): a model's contacts apply to all its steps, so solve its explicit dynamic steps, or remove the contacts to solve the implicit ones"
-            )));
-        }
         let mut elements = Vec::new();
         let mut trusses = Vec::new();
         let mut structural = Vec::new();
@@ -658,6 +653,24 @@ impl Mesh {
     /// discrete element acts on them (couplings tie points through constraints, not the matrix).
     pub fn block_count(&self) -> usize {
         if self.discrete.couplings().flatten().any(|d| d >= self.mesh_dofs()) { self.layout.slots() } else { self.labels.len() }
+    }
+}
+
+/// The scale of the loads-and-reactions balance check: the largest load or reaction, nodal ones
+/// too, since reactions that cancel out (a part squeezed between held faces) still set it.
+pub(crate) fn balance_scale(applied: &[f64; 3], total: &[f64; 3], reaction: &[[f64; 3]]) -> f64 {
+    let largest = reaction.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()));
+    applied.iter().chain(total).fold(largest, |m, v| m.max(v.abs()))
+}
+
+/// Refuse contact in an analysis that cannot take it (linear static, frequency, buckling): a
+/// model's contacts apply to all its steps.
+pub fn refuse_contact(model: &Model, analysis: &str) -> Result<()> {
+    match model.contacts().keys().next() {
+        Some(name) => Err(Error::NotSupported(format!(
+            "contact (`{name}`) in {analysis} steps: a model's contacts apply to all its steps, so solve its nonlinear static or explicit dynamic steps, or remove the contacts to solve this one"
+        ))),
+        None => Ok(()),
     }
 }
 

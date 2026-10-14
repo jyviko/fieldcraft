@@ -1,0 +1,751 @@
+//! Contact in nonlinear static steps: mortar (segment-to-segment) normal contact enforced by an
+//! augmented Lagrangian, with its consistent tangent.
+//!
+//! **Discretisation: mortar, one pass.** A contact pair's `secondary` surface is the non-mortar
+//! side, its `main` surface the mortar side (M. A. Puso, T. A. Laursen, *A mortar
+//! segment-to-segment contact method for large deformation solid mechanics*, CMAME 193:601–629,
+//! 2004). Each secondary node A carries one normal pressure p_A and one weighted gap
+//!
+//!   g̃_A = Σ_segments ∫ Φ_A (x_m − x_s) · n dA,
+//!
+//! integrated over the overlaps of its faces with the main faces they face
+//! ([`fieldcraft_fem::mortar`]: projection along the secondary face's normal n, clipping,
+//! seven-point rule), with Φ_A the secondary face's own shape functions. The pressure field is
+//! interpolated like the displacements, so a uniform pressure across non-matching meshes is
+//! transmitted exactly: both sides receive the consistent nodal forces ∫ p N dA of it, which is
+//! the contact patch test that node-to-surface contact fails (R. L. Taylor, P. Papadopoulos,
+//! *On a patch test for contact problems in two dimensions*, 1991; T. W. McDevitt, T. A.
+//! Laursen, *A mortar-finite element formulation for frictional contact problems*, IJNME
+//! 48:1525–1547, 2000). A node's gap is normalised by its reference area A_A = ∫ Φ_A dA over its
+//! own faces: ĝ_A = g̃_A / A_A, a length (negative: penetration).
+//!
+//! **Enforcement: augmented Lagrangian** (J. C. Simo, T. A. Laursen, *An augmented Lagrangian
+//! treatment of contact problems involving friction*, Comput. Struct. 42(1):97–116, 1992;
+//! P. Alart, A. Curnier, *A mixed formulation for frictional contact problems prone to Newton
+//! like solution methods*, CMAME 92:353–375, 1991). With the node's multiplier λ_A held fixed,
+//! the pressure is p_A = ⟨λ_A − ε_A ĝ_A⟩ (⟨x⟩ = max(x, 0)), the derivative of the potential
+//! Π = Σ_A A_A/(2 ε_A) ⟨λ_A − ε_A ĝ_A⟩², whose forces −p_A ∂g̃_A/∂x enter the internal forces and
+//! whose Hessian
+//!
+//!   K_c = Σ_{A closed} (ε_A / A_A) ∂g̃_A ⊗ ∂g̃_A − p_A ∂²g̃_A
+//!
+//! the tangent: the consistent linearisation of the segmentation, the normal and the projection
+//! (the second term is the geometric stiffness of the contact, which matters on curved and
+//! sliding surfaces), both from the automatic differentiation of the mortar integrals
+//! ([`fieldcraft_fem::dual`]). The penalty only regularises: once Newton has converged an
+//! increment, the multipliers take the pressures (Uzawa's update λ_A ← p_A) and the increment is
+//! solved again from its solution, until every closed node's gap is within [`GAP_TOLERANCE`] of
+//! the thickness of the element under it and no open node keeps a multiplier
+//! ([`Interface::augmentation_error`]; at most [`MAX_AUGMENTATIONS`] times, then with a warning).
+//! The penalty per length is ε_A = s · 10 · 3Ḡ / h
+//! over the secondary faces at the node (Ḡ the mean shear modulus of the element under the face,
+//! h its thickness V/A, s the contact's `penalty_scale`): about ten times the stiffness of the
+//! element under the node, stiff enough that a few augmentations reach the tolerance and soft
+//! enough to leave the tangent well conditioned (3Ḡ rather than the constrained modulus keeps it
+//! so for nearly incompressible rubber).
+//!
+//! **Active set.** The pressure's max() is the active set: each evaluation decides which nodes
+//! are closed (p_A > 0) from the current gaps and multipliers, and Newton runs on the
+//! semismooth system (Alart & Curnier 1991; A. Popp, M. W. Gee, W. A. Wall, *A finite
+//! deformation mortar contact formulation using a primal–dual active set strategy*, IJNME
+//! 79:1354–1391, 2009). The nonlinear solver cuts the increment back when the set alternates
+//! between two states ([`CHATTER_LIMIT`] times: chattering).
+//!
+//! **Small and finite sliding.** Without nonlinear geometry the face pairs (the main faces within
+//! a main element's thickness of each secondary face) and their mortar integrals
+//! D_ai = ∫ Φ_a N_i and M_aj = ∫ Φ_a N_j are found once in the reference configuration, so that
+//! g̃_a = n · (Σ_j M_aj x_j − Σ_i D_ai x_i) is linear in the positions (small sliding: exact, and
+//! consistent with the small-strain elements); with nonlinear geometry they are searched and
+//! integrated on the current configuration at every evaluation (finite sliding).
+//!
+//! **Search.** Every evaluation of finite sliding: the main faces' boxes, grown by their depth limit, go into a
+//! bucket grid ([`fieldcraft_fem::contact::Grid`]); each secondary face takes the main faces in
+//! the cells its box overlaps that face it (unit normals more than [`FACING`] from parallel) and
+//! share no node with its element. A pair whose overlap reaches deeper than [`DEPTH_FRACTION`]
+//! of the main element's thickness has passed through and is left out. The pairs are integrated
+//! in parallel and summed in face order, so results do not depend on the thread count.
+//!
+//! **Initial overclosure.** Before the step, nodes whose gap starts negative are reported:
+//! `adjust` (the default) takes the initial overclosure out of their gap (an offset of the
+//! weighted gap: strain-free, the nodes are not moved), `refuse` refuses the step naming the
+//! first node and its depth.
+//!
+//! **Output.** Per secondary node the pressure as the node's normal contact force over the area
+//! it carries (∫ Φ_A over the overlaps: smoother than the multipliers, which are the coefficients
+//! of the pressure field and ring at the contact's edge), the multiplier, the gap and the status;
+//! per contact the force on the secondary surface and its normal part.
+//!
+//! **Scope.** Pairs of surfaces of linear solid faces (tri3 and quad4 faces: tet4, wedge6 and
+//! hex8 elements) in 3D models, frictionless. General (single-surface) contact, quadratic faces,
+//! 2D models and arc-length steps are refused by name.
+
+use std::collections::BTreeMap;
+
+use fieldcraft_fem::contact::{Aabb, Grid, bounds};
+use fieldcraft_fem::dual::{Dual, Hyper, Real, VARS};
+use fieldcraft_fem::frame::{Vec3, dot, norm, unit};
+use fieldcraft_fem::mortar::{area_vector, integrate};
+use fieldcraft_model::{Contact, ContactSurfaces, ElementKind, InitialPenetration, Model, Resolved};
+use fieldcraft_parallel as parallel;
+use serde::Serialize;
+
+use crate::system::{Mesh, translations};
+use crate::{Error, Result};
+
+/// Facing faces: the dot product of their unit normals is below minus this.
+pub const FACING: f64 = 0.1;
+
+/// A pair deeper than this fraction of the main element's thickness has passed through.
+pub const DEPTH_FRACTION: f64 = 0.5;
+
+/// ε = s · PENALTY_FACTOR · 3Ḡ / h (see the module docs).
+pub const PENALTY_FACTOR: f64 = 10.0;
+
+/// Augmentations stop when every closed node's gap is within this fraction of the thickness of
+/// the element under it (and no open node keeps a multiplier).
+pub const GAP_TOLERANCE: f64 = 1e-5;
+
+/// Most augmentations of one increment.
+pub const MAX_AUGMENTATIONS: usize = 25;
+
+/// An increment is cut back when the active set alternates between two states this many times.
+pub const CHATTER_LIMIT: usize = 3;
+
+/// Most faces over the contacts of a model.
+pub const MAX_CONTACT_FACES: usize = 2_000_000;
+
+/// Secondary faces per parallel task.
+const GRAIN: usize = 16;
+
+/// A face of a contact surface: its corners (mesh slots) and their translations.
+#[derive(Debug, Clone)]
+struct Face {
+    nodes: Vec<usize>,
+    dofs: Vec<[usize; 3]>,
+    /// The nodes of its element (never in contact with the face).
+    owner: Vec<usize>,
+    /// The penetration beyond which a point has passed through, and its element's thickness.
+    depth: f64,
+    thickness: f64,
+    /// The penalty per length its element sets (before the penalty scale).
+    stiffness: f64,
+}
+
+/// A contact pair as the solver runs it.
+#[derive(Debug, Clone)]
+pub struct Interface {
+    pub name: String,
+    secondary: Vec<Face>,
+    main: Vec<Face>,
+    /// The secondary nodes (mesh slots), sorted, and per node: its reference area A_A, its
+    /// penalty ε_A, the thinnest element under it and the offset taken out of its weighted gap
+    /// (initial overclosure).
+    pub nodes: Vec<usize>,
+    area: Vec<f64>,
+    penalty: Vec<f64>,
+    thickness: Vec<f64>,
+    offset: Vec<f64>,
+    /// Small sliding (steps without nonlinear geometry): the face pairs and their integrals,
+    /// fixed in the reference configuration; `None`: finite sliding, searched and integrated
+    /// on the current configuration at every evaluation.
+    fixed: Option<Vec<Vec<Fixed>>>,
+}
+
+/// Whether a secondary node presses on the main surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Open,
+    Closed,
+}
+
+impl ContactResult {
+    /// The closed nodes.
+    pub fn closed(&self) -> usize {
+        self.status.iter().filter(|s| **s == Status::Closed).count()
+    }
+}
+
+/// One evaluation of a contact: per secondary node (in [`Interface::nodes`] order).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct State {
+    /// ĝ_A, `None` where no main face lies over the node.
+    pub gap: Vec<Option<f64>>,
+    pub pressure: Vec<f64>,
+    /// ∫ Φ_A over the overlaps (the area the pressure acts on).
+    pub support: Vec<f64>,
+    /// The force the contact puts on each secondary node, and the node's unit outward normal
+    /// (its faces' area vectors summed).
+    pub nodal_force: Vec<Vec3>,
+    pub normal: Vec<Vec3>,
+}
+
+impl State {
+    /// A hash of which nodes are closed (for the chattering check).
+    pub fn active_set(&self) -> u64 {
+        // FNV-1a over the closed nodes' indices: deterministic on every platform.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for (i, _) in self.pressure.iter().enumerate().filter(|(_, p)| **p > 0.0) {
+            for b in (i as u64).to_le_bytes() {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        h
+    }
+}
+
+/// A contact's result at the end of a step, per secondary node.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ContactResult {
+    pub name: String,
+    /// The secondary surface's node labels, sorted.
+    pub nodes: Vec<u32>,
+    /// The contact pressure: the normal contact force on the node over the area it carries
+    /// (∫ Φ_A over the overlaps), so that Σ p_A ∫Φ_A is the force across the contact.
+    pub pressure: Vec<f64>,
+    /// The mortar multipliers (the coefficients of the pressure field, Φ_A-interpolated).
+    pub multiplier: Vec<f64>,
+    /// The normalised gap ĝ (negative: penetration), `None` where no main face is over the node.
+    pub gap: Vec<Option<f64>>,
+    pub status: Vec<Status>,
+    /// The force the contact puts on the secondary surface, and its normal part Σ p_A ∫Φ_A.
+    pub force: Vec3,
+    pub normal_force: f64,
+    /// The deepest penetration of a closed node.
+    pub penetration: f64,
+    /// Augmentations over the step.
+    pub augmentations: usize,
+}
+
+/// The contribution of one face pair to the forces and the tangent.
+struct PairTerms {
+    /// Mesh slots of the pair's corners (secondary first) and their degrees of freedom.
+    nodes: Vec<usize>,
+    dofs: Vec<[usize; 3]>,
+    /// Secondary node indices (in [`Interface::nodes`]) of the secondary corners.
+    corners: Vec<usize>,
+    /// ∂g̃_a/∂x per secondary corner (24 variables; corner c of the pair at 3c, main corners from 12).
+    gradient: Vec<[f64; VARS]>,
+    /// Σ_a p_a ∂²g̃_a, packed (tangent evaluations only).
+    hessian: Option<Vec<f64>>,
+}
+
+/// The tangent blocks of a contact: per block its mesh slots and the dense matrix over their
+/// translations (row-major, node by node).
+pub type Blocks = Vec<(Vec<usize>, Vec<f64>)>;
+
+fn position(mesh: &Mesh, u: &[f64], node: usize, dofs: &[usize; 3]) -> Vec3 {
+    let x = mesh.xyz.get(node).copied().unwrap_or_default();
+    [0, 1, 2].map(|k| x[k] + u.get(dofs[k]).copied().unwrap_or(0.0))
+}
+
+/// The element's volume (hex8, tet4) for the thickness under a face.
+fn volume(kind: ElementKind, x: &[Vec3]) -> Option<f64> {
+    match kind {
+        ElementKind::Hex8 => <[Vec3; 8]>::try_from(x).ok().and_then(|a| fieldcraft_fem::uniform::Hex8::hex8(&a).ok()).map(|k| k.volume),
+        ElementKind::Tet4 => <[Vec3; 4]>::try_from(x).ok().and_then(|a| fieldcraft_fem::uniform::Tet4::tet4(&a).ok()).map(|k| k.volume),
+        _ => None,
+    }
+}
+
+fn size(x: &[Vec3]) -> f64 {
+    let b = bounds(x, 0.0);
+    (0..3).map(|k| b[1][k] - b[0][k]).fold(0.0, f64::max)
+}
+
+/// The faces of a set, refused unless they are linear faces of analysed solid elements.
+fn faces(model: &Model, resolved: &Resolved, mesh: &Mesh, name: &str, set: &str) -> Result<Vec<Face>> {
+    let list = resolved.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default();
+    let mut out = Vec::with_capacity(list.len());
+    for f in list {
+        let at = |what: String| Error::Invalid(format!("contact `{name}`: element {} face {}: {what}", f.element, f.face));
+        let el = mesh.element(f.element).ok_or_else(|| at("the element is not a solid element of the analysis".into()))?;
+        let labels = model.face_nodes(*f).ok_or_else(|| at("no such face".into()))?;
+        if !matches!(labels.len(), 3 | 4) {
+            return Err(Error::NotSupported(format!(
+                "contact `{name}` on the faces of {} elements (element {}) in implicit steps; it takes the linear faces of tet4, wedge6 and hex8 elements",
+                el.kind.name(),
+                f.element
+            )));
+        }
+        let nodes: Vec<usize> = labels.iter().map(|l| mesh.node(*l).ok_or_else(|| at(format!("node {l} is not analysed")))).collect::<Result<_>>()?;
+        let dofs = nodes
+            .iter()
+            .map(|n| translations(mesh, *n).and_then(|d| <[usize; 3]>::try_from(d).map_err(|_| Error::Internal("solid node translations".into()))))
+            .collect::<Result<Vec<_>>>()?;
+        let x: Vec<Vec3> = nodes.iter().map(|n| mesh.xyz.get(*n).copied().unwrap_or_default()).collect();
+        let area = area_vector(&x).map_or(0.0, norm);
+        let thickness = volume(el.kind, &el.xyz).filter(|v| *v > 0.0 && area > 0.0).map_or(size(&x), |v| v / area);
+        if !(thickness > 0.0 && thickness.is_finite()) {
+            return Err(at("the face has no size".into()));
+        }
+        let shear = (el.d[3][3] + el.d[4][4] + el.d[5][5]) / 3.0;
+        let mut owner = el.nodes.clone();
+        owner.sort_unstable();
+        out.push(Face { nodes, dofs, owner, depth: DEPTH_FRACTION * thickness, thickness, stiffness: PENALTY_FACTOR * 3.0 * shear / thickness });
+    }
+    Ok(out)
+}
+
+/// A face pair of small-sliding contact: its mortar integrals in the reference configuration,
+/// D_ai = ∫ Φ_a N_i (secondary corners i) and M_aj = ∫ Φ_a N_j (main corners j), and the
+/// secondary face's normal there, so that g̃_a = n · (Σ_j M_aj x_j − Σ_i D_ai x_i).
+#[derive(Debug, Clone)]
+struct Fixed {
+    main: usize,
+    d: [[f64; 4]; 4],
+    m: [[f64; 4]; 4],
+    normal: Vec3,
+    support: [f64; 4],
+}
+
+impl Fixed {
+    /// ∂g̃_a/∂x over the pair's variables (secondary corners from 0, main corners from 12).
+    fn gradient(&self, a: usize) -> [f64; VARS] {
+        let mut g = [0.0; VARS];
+        let (Some(d), Some(m)) = (self.d.get(a), self.m.get(a)) else { return g };
+        for k in 0..3 {
+            for i in 0..4 {
+                g[3 * i + k] = -d[i] * self.normal[k];
+                g[12 + 3 * i + k] = m[i] * self.normal[k];
+            }
+        }
+        g
+    }
+}
+
+/// What a secondary face finds against the main surface: per main face, ∫ Φ_a g and ∫ Φ_a for
+/// each corner a.
+struct Found {
+    main: usize,
+    gap: [f64; 4],
+    support: [f64; 4],
+}
+
+/// The weighted gaps g̃_a of one face pair (corners `xs`, `xm`) over any scalar.
+fn weighted_gaps<T: Real>(xs: &[[T; 3]], xm: &[[T; 3]]) -> Option<[T; 4]> {
+    let mut g = [T::cst(0.0); 4];
+    integrate(xs, xm, |p| {
+        let w = p.weight * p.gap();
+        for a in 0..4 {
+            g[a] = g[a] + w * p.secondary[a];
+        }
+    })?;
+    Some(g)
+}
+
+/// The variables of a face pair: secondary corners at 0, main corners from 12.
+fn variables<T: Real>(xs: &[Vec3], xm: &[Vec3], var: impl Fn(f64, usize) -> T) -> (Vec<[T; 3]>, Vec<[T; 3]>) {
+    let s = xs.iter().enumerate().map(|(i, x)| [0, 1, 2].map(|k| var(x[k], 3 * i + k))).collect();
+    let m = xm.iter().enumerate().map(|(j, x)| [0, 1, 2].map(|k| var(x[k], 12 + 3 * j + k))).collect();
+    (s, m)
+}
+
+impl Interface {
+    /// The contact pairs of a model, ready for the nonlinear solver (initial overclosures
+    /// adjusted or refused, and reported in `warnings`).
+    pub fn all(model: &Model, resolved: &Resolved, mesh: &Mesh, finite: bool, warnings: &mut Vec<String>) -> Result<Vec<Interface>> {
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        for (name, contact) in model.contacts() {
+            let mut interface = Interface::new(model, resolved, mesh, name, contact)?;
+            if !finite {
+                interface.fixed = Some(interface.fixed_pairs(mesh)?);
+            }
+            total = total.saturating_add(interface.secondary.len() + interface.main.len());
+            if total > MAX_CONTACT_FACES {
+                return Err(Error::Limit(format!("the contacts have more than {MAX_CONTACT_FACES} faces")));
+            }
+            out.push(interface.overclosure(mesh, contact.initial_penetration, warnings)?);
+        }
+        Ok(out)
+    }
+
+    fn new(model: &Model, resolved: &Resolved, mesh: &Mesh, name: &str, contact: &Contact) -> Result<Interface> {
+        let ContactSurfaces::Pair { main, secondary } = &contact.surfaces else {
+            return Err(Error::NotSupported(format!(
+                "general (single-surface) contact `{name}` in implicit steps; define contact pairs (interaction.contact.pair), or solve it in explicit dynamics"
+            )));
+        };
+        if !contact.friction.is_frictionless() {
+            return Err(Error::NotSupported(format!("friction (contact `{name}`) in implicit steps")));
+        }
+        let secondary = faces(model, resolved, mesh, name, secondary)?;
+        let main = faces(model, resolved, mesh, name, main)?;
+        let mut nodes: Vec<usize> = secondary.iter().flat_map(|f| f.nodes.iter().copied()).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        let (mut area, mut penalty, mut thickness) = (vec![0.0; nodes.len()], vec![0.0f64; nodes.len()], vec![f64::INFINITY; nodes.len()]);
+        for f in &secondary {
+            let x: Vec<Vec3> = f.nodes.iter().map(|n| mesh.xyz.get(*n).copied().unwrap_or_default()).collect();
+            // ∫ Φ_a over the face itself (the face against its own mirror image).
+            let mirror: Vec<Vec3> = x.iter().rev().copied().collect();
+            let mut own = [0.0; 4];
+            integrate(&x, &mirror, |p| {
+                for a in 0..4 {
+                    own[a] += p.weight * p.secondary[a];
+                }
+            });
+            for (n, share) in f.nodes.iter().zip(own) {
+                if let Ok(i) = nodes.binary_search(n) {
+                    if let Some(a) = area.get_mut(i) {
+                        *a += share;
+                    }
+                    if let Some(e) = penalty.get_mut(i) {
+                        *e = e.max(contact.penalty_scale * f.stiffness);
+                    }
+                    if let Some(h) = thickness.get_mut(i) {
+                        *h = h.min(f.thickness);
+                    }
+                }
+            }
+        }
+        if let Some(i) = area.iter().position(|a| !(*a > 0.0 && a.is_finite())) {
+            let label = nodes.get(i).and_then(|n| mesh.labels.get(*n)).copied().unwrap_or(0);
+            return Err(Error::Invalid(format!("contact `{name}`: the secondary faces at node {label} have no area")));
+        }
+        let offset = vec![0.0; nodes.len()];
+        Ok(Interface { name: name.to_string(), secondary, main, nodes, area, penalty, thickness, offset, fixed: None })
+    }
+
+    /// Adjust (offset) or refuse the nodes that start behind the main surface.
+    fn overclosure(mut self, mesh: &Mesh, mode: InitialPenetration, warnings: &mut Vec<String>) -> Result<Interface> {
+        let zero = vec![0.0; mesh.dofs()];
+        let (gaps, _) = self.gaps(mesh, &zero)?;
+        let scale = mesh.xyz.iter().flatten().fold(1.0f64, |m, c| m.max(c.abs()));
+        let (mut count, mut deepest) = (0usize, (0.0f64, 0u32));
+        for (i, g) in gaps.iter().enumerate() {
+            let (Some(g), Some(a)) = (g, self.area.get(i)) else { continue };
+            let depth = -g / a;
+            // Coordinates are exact to a few units in the last place: a node a hair behind a
+            // face it was meshed on is touching.
+            if depth <= 1e-9 * scale {
+                continue;
+            }
+            let label = self.nodes.get(i).and_then(|n| mesh.labels.get(*n)).copied().unwrap_or(0);
+            if mode == InitialPenetration::Refuse {
+                return Err(Error::Invalid(format!(
+                    "contact `{}`: node {label} starts {depth:.4e} inside the main surface (move it out, or let the contact adjust it: initial_penetration \"adjust\")",
+                    self.name
+                )));
+            }
+            if let Some(o) = self.offset.get_mut(i) {
+                *o = *g;
+            }
+            count += 1;
+            if depth > deepest.0 {
+                deepest = (depth, label);
+            }
+        }
+        if count > 0 {
+            warnings.push(format!(
+                "contact `{}`: {count} node(s) start inside the main surface (deepest node {}, {:.4e}); their initial overclosure is taken out of the gap",
+                self.name, deepest.1, deepest.0
+            ));
+        }
+        Ok(self)
+    }
+
+    fn corners(mesh: &Mesh, u: &[f64], f: &Face) -> Vec<Vec3> {
+        f.nodes.iter().zip(&f.dofs).map(|(n, d)| position(mesh, u, *n, d)).collect()
+    }
+
+    /// The face pairs: per secondary face, the main faces it faces and their integrals.
+    fn pairs(&self, mesh: &Mesh, u: &[f64]) -> Result<Vec<Vec<Found>>> {
+        let Some(fixed) = &self.fixed else { return self.search(mesh, u, 1.0, |_, _, found| found) };
+        Ok(parallel::map_grained(self.secondary.len(), GRAIN, |s| {
+            let (Some(f), Some(list)) = (self.secondary.get(s), fixed.get(s)) else { return Vec::new() };
+            let xs = Interface::corners(mesh, u, f);
+            list.iter()
+                .map(|p| {
+                    let xm = self.main.get(p.main).map(|m| Interface::corners(mesh, u, m)).unwrap_or_default();
+                    let gap = std::array::from_fn(|a| {
+                        let (Some(d), Some(m)) = (p.d.get(a), p.m.get(a)) else { return 0.0 };
+                        let mut v = [0.0; 3];
+                        for (x, c) in xm.iter().zip(m) {
+                            (0..3).for_each(|k| v[k] += c * x[k]);
+                        }
+                        for (x, c) in xs.iter().zip(d) {
+                            (0..3).for_each(|k| v[k] -= c * x[k]);
+                        }
+                        dot(v, p.normal)
+                    });
+                    Found { main: p.main, gap, support: p.support }
+                })
+                .collect()
+        }))
+    }
+
+    /// The small-sliding pairs: found and integrated once, in the reference configuration.
+    fn fixed_pairs(&self, mesh: &Mesh) -> Result<Vec<Vec<Fixed>>> {
+        let zero = vec![0.0; mesh.dofs()];
+        // Faces within a main element's thickness may touch later.
+        self.search(mesh, &zero, 2.0, |xs, xm, found| {
+            found
+                .into_iter()
+                .filter_map(|f| {
+                    let xm = xm.get(f.main)?;
+                    let (mut d, mut m, mut normal) = ([[0.0; 4]; 4], [[0.0; 4]; 4], [0.0; 3]);
+                    integrate(xs, xm, |p| {
+                        normal = p.normal;
+                        for a in 0..4 {
+                            for i in 0..4 {
+                                d[a][i] += p.weight * p.secondary[a] * p.secondary[i];
+                                m[a][i] += p.weight * p.secondary[a] * p.main[i];
+                            }
+                        }
+                    })?;
+                    Some(Fixed { main: f.main, d, m, normal, support: f.support })
+                })
+                .collect()
+        })
+    }
+
+    /// The global and local search at displacements `u`: per secondary face (corners `xs`), the
+    /// main faces (corners `xm`, all of them) within `reach` times their depth limit that it
+    /// faces, with their integrals, passed through `keep`.
+    fn search<T: Send>(&self, mesh: &Mesh, u: &[f64], reach: f64, keep: impl Fn(&[Vec3], &[Vec<Vec3>], Vec<Found>) -> T + Sync) -> Result<Vec<T>> {
+        let main_x: Vec<Vec<Vec3>> = self.main.iter().map(|f| Interface::corners(mesh, u, f)).collect();
+        let boxes: Vec<Aabb> = self.main.iter().zip(&main_x).map(|(f, x)| bounds(x, reach * f.depth)).collect();
+        let grid = Grid::new(&boxes, 4 * boxes.len() + 64);
+        let main_normals: Vec<Option<Vec3>> = main_x.iter().map(|x| area_vector(x).filter(|a| norm(*a) > 0.0)).collect();
+        Ok(parallel::map_grained(self.secondary.len(), GRAIN, |i| {
+            let mut found = Vec::new();
+            let Some(f) = self.secondary.get(i) else { return keep(&[], &main_x, found) };
+            let xs = Interface::corners(mesh, u, f);
+            let Some(ns) = area_vector(&xs).filter(|a| norm(*a) > 0.0) else { return keep(&xs, &main_x, found) };
+            let mut candidates = Vec::new();
+            grid.candidates_in(&bounds(&xs, 0.0), &mut candidates);
+            for &c in &candidates {
+                let c = c as usize;
+                let (Some(m), Some(xm), Some(Some(nm))) = (self.main.get(c), main_x.get(c), main_normals.get(c)) else { continue };
+                if m.nodes.iter().any(|n| f.owner.binary_search(n).is_ok()) || f.nodes.iter().any(|n| m.owner.binary_search(n).is_ok()) {
+                    continue;
+                }
+                if dot(ns, *nm) >= -FACING * norm(ns) * norm(*nm) {
+                    continue;
+                }
+                let (mut gap, mut support, mut deepest, mut any) = ([0.0; 4], [0.0; 4], f64::INFINITY, false);
+                integrate(&xs, xm, |p| {
+                    any = true;
+                    let g = p.gap();
+                    deepest = deepest.min(g);
+                    for a in 0..4 {
+                        gap[a] += p.weight * g * p.secondary[a];
+                        support[a] += p.weight * p.secondary[a];
+                    }
+                });
+                if any && deepest >= -m.depth && gap.iter().chain(&support).all(|v| v.is_finite()) {
+                    found.push(Found { main: c, gap, support });
+                }
+            }
+            keep(&xs, &main_x, found)
+        }))
+    }
+
+    /// The weighted gaps g̃_A less the offsets (`None` where no main face lies over the node), and
+    /// the supports ∫ Φ_A, at displacements `u`.
+    fn gaps(&self, mesh: &Mesh, u: &[f64]) -> Result<(Vec<Option<f64>>, Vec<f64>)> {
+        let pairs = self.pairs(mesh, u)?;
+        let (gaps, support, _) = self.sums(&pairs);
+        Ok((gaps, support))
+    }
+
+    /// Node sums of the pairs' integrals, in face order.
+    fn sums(&self, pairs: &[Vec<Found>]) -> (Vec<Option<f64>>, Vec<f64>, Vec<Vec<usize>>) {
+        let n = self.nodes.len();
+        let (mut gap, mut support) = (vec![None; n], vec![0.0; n]);
+        let mut index = Vec::with_capacity(self.secondary.len());
+        for (f, found) in self.secondary.iter().zip(pairs) {
+            let corners: Vec<usize> = f.nodes.iter().filter_map(|x| self.nodes.binary_search(x).ok()).collect();
+            for p in found {
+                for (a, i) in corners.iter().enumerate() {
+                    if let (Some(g), Some(s)) = (gap.get_mut(*i), support.get_mut(*i)) {
+                        *g = Some(g.unwrap_or(0.0) + p.gap.get(a).copied().unwrap_or(0.0));
+                        *s += p.support.get(a).copied().unwrap_or(0.0);
+                    }
+                }
+            }
+            index.push(corners);
+        }
+        for (g, o) in gap.iter_mut().zip(&self.offset) {
+            if let Some(g) = g {
+                *g -= o;
+            }
+        }
+        (gap, support, index)
+    }
+
+    /// The contact's forces at displacements `u` (added to `internal`), its tangent blocks when
+    /// `tangent`, and its state, with the multipliers `multipliers` (per node).
+    pub fn evaluate(&self, mesh: &Mesh, u: &[f64], multipliers: &[f64], tangent: bool, internal: &mut [f64], blocks: &mut Blocks) -> Result<State> {
+        let pairs = self.pairs(mesh, u)?;
+        let (weighted, support, corner_index) = self.sums(&pairs);
+        let n = self.nodes.len();
+        let mut state = State { gap: vec![None; n], pressure: vec![0.0; n], support, nodal_force: vec![[0.0; 3]; n], normal: vec![[0.0; 3]; n] };
+        for (f, corners) in self.secondary.iter().zip(&corner_index) {
+            let Some(a) = area_vector(&Interface::corners(mesh, u, f)) else { continue };
+            for i in corners {
+                if let Some(v) = state.normal.get_mut(*i) {
+                    (0..3).for_each(|k| v[k] += a[k]);
+                }
+            }
+        }
+        for v in &mut state.normal {
+            *v = unit(*v).unwrap_or(*v);
+        }
+        for i in 0..self.nodes.len() {
+            let (Some(Some(g)), Some(a), Some(e)) = (weighted.get(i), self.area.get(i), self.penalty.get(i)) else { continue };
+            let gap = g / a;
+            let lambda = multipliers.get(i).copied().unwrap_or(0.0);
+            if let (Some(slot), Some(p)) = (state.gap.get_mut(i), state.pressure.get_mut(i)) {
+                *slot = Some(gap);
+                *p = (lambda - e * gap).max(0.0);
+            }
+        }
+        // The pairs with a closed secondary corner, linearised.
+        let mut active: Vec<(usize, usize)> = Vec::new();
+        for (s, found) in pairs.iter().enumerate() {
+            let closed = corner_index.get(s).is_some_and(|c| c.iter().any(|i| state.pressure.get(*i).is_some_and(|p| *p > 0.0)));
+            if closed {
+                active.extend((0..found.len()).map(|k| (s, k)));
+            }
+        }
+        let terms = parallel::map_grained(active.len(), GRAIN, |t| -> Result<Option<PairTerms>> {
+            let Some(&(s, k)) = active.get(t) else { return Ok(None) };
+            let (Some(f), Some(found), Some(corners)) = (self.secondary.get(s), pairs.get(s).and_then(|p| p.get(k)), corner_index.get(s)) else {
+                return Ok(None);
+            };
+            let Some(m) = self.main.get(found.main) else { return Ok(None) };
+            let (xs, xm) = (Interface::corners(mesh, u, f), Interface::corners(mesh, u, m));
+            let pressure: Vec<f64> = corners.iter().map(|i| state.pressure.get(*i).copied().unwrap_or(0.0)).collect();
+            let fixed = self.fixed.as_ref().and_then(|f| f.get(s)).and_then(|l| l.get(k));
+            let (gradient, hessian) = if let Some(fixed) = fixed {
+                // Small sliding: linear in the positions.
+                ((0..corners.len()).map(|a| fixed.gradient(a)).collect(), None)
+            } else if tangent {
+                let (vs, vm) = variables(&xs, &xm, Hyper::var);
+                let Some(g) = weighted_gaps(&vs, &vm) else { return Ok(None) };
+                let mut h = vec![0.0; fieldcraft_fem::dual::PACKED];
+                for (ga, p) in g.iter().zip(&pressure) {
+                    h.iter_mut().zip(&ga.h).for_each(|(x, y)| *x += p * y);
+                }
+                (g.iter().take(corners.len()).map(|ga| ga.g).collect::<Vec<_>>(), Some(h))
+            } else {
+                let (vs, vm) = variables(&xs, &xm, Dual::var);
+                let Some(g) = weighted_gaps(&vs, &vm) else { return Ok(None) };
+                (g.iter().take(corners.len()).map(|ga| ga.g).collect(), None)
+            };
+            let nodes = f.nodes.iter().chain(&m.nodes).copied().collect();
+            let dofs = f.dofs.iter().chain(&m.dofs).copied().collect();
+            Ok(Some(PairTerms { nodes, dofs, corners: corners.clone(), gradient, hessian }))
+        });
+        // Forces −p_A ∂g̃_A/∂x, and per closed node its gradient over the nodes it reaches.
+        let mut node_gradients: BTreeMap<usize, BTreeMap<usize, Vec3>> = BTreeMap::new();
+        for t in terms {
+            let Some(t) = t? else { continue };
+            for (a, i) in t.corners.iter().enumerate() {
+                let p = state.pressure.get(*i).copied().unwrap_or(0.0);
+                let Some(g) = t.gradient.get(a) else { continue };
+                for (c, (node, dofs)) in t.nodes.iter().zip(&t.dofs).enumerate() {
+                    let var = if c < t.corners.len() { 3 * c } else { 12 + 3 * (c - t.corners.len()) };
+                    let gv = [0, 1, 2].map(|k| g.get(var + k).copied().unwrap_or(0.0));
+                    let own = t.corners.get(c).and_then(|j| state.nodal_force.get_mut(*j));
+                    let mut on = [0.0; 3];
+                    for k in 0..3 {
+                        let f = -p * gv[k];
+                        if let Some(x) = internal.get_mut(dofs[k]) {
+                            *x += f;
+                        }
+                        on[k] = -f;
+                    }
+                    if let Some(own) = own {
+                        (0..3).for_each(|k| own[k] += on[k]);
+                    }
+                    if p > 0.0 && tangent {
+                        let entry = node_gradients.entry(*i).or_default().entry(*node).or_insert([0.0; 3]);
+                        for k in 0..3 {
+                            entry[k] += gv[k];
+                        }
+                    }
+                }
+            }
+            if let Some(h) = &t.hessian {
+                // −Σ_a p_a ∂²g̃_a over the pair's nodes.
+                let count = t.nodes.len();
+                let s = t.corners.len();
+                let var = |c: usize, k: usize| if c < s { 3 * c + k } else { 12 + 3 * (c - s) + k };
+                let width = 3 * count;
+                let mut data = vec![0.0; width * width];
+                for ci in 0..count {
+                    for ki in 0..3 {
+                        for cj in 0..count {
+                            for kj in 0..3 {
+                                let at = fieldcraft_fem::dual::packed(var(ci, ki), var(cj, kj));
+                                if let Some(x) = data.get_mut((3 * ci + ki) * width + 3 * cj + kj) {
+                                    *x = -h.get(at).copied().unwrap_or(0.0);
+                                }
+                            }
+                        }
+                    }
+                }
+                blocks.push((t.nodes.clone(), data));
+            }
+        }
+        // (ε_A / A_A) ∂g̃_A ⊗ ∂g̃_A per closed node.
+        for (i, gradient) in node_gradients {
+            let (Some(e), Some(a)) = (self.penalty.get(i), self.area.get(i)) else { continue };
+            let c = e / a;
+            let nodes: Vec<usize> = gradient.keys().copied().collect();
+            let g: Vec<f64> = gradient.values().flatten().copied().collect();
+            let width = g.len();
+            let mut data = vec![0.0; width * width];
+            for (r, gr) in g.iter().enumerate() {
+                for (s, gs) in g.iter().enumerate() {
+                    if let Some(x) = data.get_mut(r * width + s) {
+                        *x = c * gr * gs;
+                    }
+                }
+            }
+            blocks.push((nodes, data));
+        }
+        Ok(state)
+    }
+
+    /// The result of a converged state.
+    pub fn result(&self, mesh: &Mesh, state: &State, augmentations: usize) -> ContactResult {
+        let status: Vec<Status> = state.pressure.iter().map(|p| if *p > 0.0 { Status::Closed } else { Status::Open }).collect();
+        let penetration = state.gap.iter().zip(&status).filter(|(_, s)| **s == Status::Closed).filter_map(|(g, _)| *g).fold(0.0f64, |m, g| m.max(-g));
+        // The force on the secondary nodes pushes them back along −n.
+        let normal: Vec<f64> = state.nodal_force.iter().zip(&state.normal).map(|(f, n)| -dot(*f, *n)).collect();
+        let pressure = normal.iter().zip(&state.support).map(|(f, a)| if *a > 0.0 { f / a } else { 0.0 }).collect();
+        let force = state.nodal_force.iter().fold([0.0; 3], |s, f| [s[0] + f[0], s[1] + f[1], s[2] + f[2]]);
+        ContactResult {
+            name: self.name.clone(),
+            nodes: self.nodes.iter().map(|n| mesh.labels.get(*n).copied().unwrap_or(0)).collect(),
+            pressure,
+            multiplier: state.pressure.clone(),
+            gap: state.gap.clone(),
+            status,
+            force,
+            normal_force: normal.iter().sum(),
+            penetration,
+            augmentations,
+        }
+    }
+
+    /// How far the augmentation is from converged at `state`, computed with `multipliers`: the
+    /// largest gap of a closed node, or the gap equivalent λ_A / ε_A of the multiplier an open
+    /// node keeps, over the thickness of the element under the node.
+    pub fn augmentation_error(&self, multipliers: &[f64], state: &State) -> f64 {
+        let mut worst = 0.0f64;
+        for i in 0..self.nodes.len() {
+            let (Some(p), Some(e), Some(h)) = (state.pressure.get(i), self.penalty.get(i), self.thickness.get(i)) else { continue };
+            let lambda = multipliers.get(i).copied().unwrap_or(0.0);
+            let gap = if *p > 0.0 { state.gap.get(i).copied().flatten().unwrap_or(0.0).abs() } else { lambda.max(0.0) / e };
+            worst = worst.max(gap / h);
+        }
+        worst
+    }
+}

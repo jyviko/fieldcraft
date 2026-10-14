@@ -544,6 +544,18 @@ impl Picker<'_> {
         s
     }
 
+    /// The hovered item drawn over the scene in `color`. With `fill` off (while result contours
+    /// are shown) its faces are left out and only their outline, edges and nodes are drawn, so
+    /// the hover never hides the colours under the pointer.
+    pub fn hover(&self, item: &Item, color: Rgb, fill: bool) -> Scene {
+        let mut s = Scene::default();
+        self.mark(&Marks::of(self, std::iter::once(item)), color, &mut s);
+        if !fill {
+            s.tris.clear();
+        }
+        s
+    }
+
     fn mark(&self, m: &Marks, color: Rgb, s: &mut Scene) {
         if m.is_empty() {
             return;
@@ -961,6 +973,13 @@ mod tests {
         // Hovering an element adds its skin triangles in the hover colour, drawn after.
         let o = p.overlay(&sel, Some(&Item::Element(1)), sel_c, hov_c);
         assert_eq!(o.tris.iter().filter(|t| t.color == hov_c).count(), 6);
+        // Over result contours the hover is its outline only: no face fills.
+        let filled = p.hover(&Item::Element(1), hov_c, true);
+        assert_eq!(filled.tris.len(), 6);
+        let outlined = p.hover(&Item::Element(1), hov_c, false);
+        assert!(outlined.tris.is_empty());
+        assert_eq!(outlined.lines, filled.lines);
+        assert!(!outlined.lines.is_empty());
         // Nodes, the edge and the vertex.
         sel.apply(
             [

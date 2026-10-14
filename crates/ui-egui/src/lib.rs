@@ -873,8 +873,9 @@ impl ModelApp {
         }
         let mut s = (*self.pick.selected_overlay.1).clone();
         if let Some(hover) = self.pick.hover.clone() {
-            let h = self
-                .with_picker(|p| p.overlay(&selection::Selection::default(), Some(&hover), theme::rgb(t.pick_selected), theme::rgb(t.pick_hover)));
+            // Over result contours the hover is an outline, so it never hides the result (#207).
+            let fill = self.plot.1.is_none();
+            let h = self.with_picker(|p| p.hover(&hover, theme::rgb(t.pick_hover), fill));
             s.tris.extend(h.tris);
             s.lines.extend(h.lines);
             s.points.extend(h.points);

@@ -10,8 +10,8 @@
               "value": true
             }
           ],
-          "image-name": "03-mesh.svg",
-          "name": "03-mesh",
+          "image-name": "04-flow-front.svg",
+          "name": "04-flow-front",
           "position": {
             "scale": 0.9,
             "translation-in-points": [
@@ -21,7 +21,7 @@
           }
         }
       ],
-      "name": "03 Mesh",
+      "name": "04 Flow front",
       "shadow": {
         "kind": "none",
         "opacity": 0
@@ -41,8 +41,8 @@
               "value": true
             }
           ],
-          "image-name": "02-part.svg",
-          "name": "02-part",
+          "image-name": "03-part.svg",
+          "name": "03-part",
           "position": {
             "scale": 0.9,
             "translation-in-points": [
@@ -52,12 +52,43 @@
           }
         }
       ],
-      "name": "02 Part",
+      "name": "03 Part",
       "shadow": {
         "kind": "none",
         "opacity": 0
       },
       "specular": true,
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "glass-specializations": [
+            {
+              "appearance": "tinted",
+              "value": true
+            }
+          ],
+          "image-name": "02-flow-behind.svg",
+          "name": "02-flow-behind",
+          "position": {
+            "scale": 0.9,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "name": "02 Flow behind",
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": false,
       "translucency": {
         "enabled": false,
         "value": 0.3

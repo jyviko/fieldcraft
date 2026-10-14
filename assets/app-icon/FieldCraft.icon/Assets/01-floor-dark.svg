@@ -4,15 +4,15 @@
     <clipPath id="clip-path-1">
       <path d="M320 100 L704 100 C854 100 924 170 924 320 L924 704 C924 854 854 924 704 924 L320 924 C170 924 100 854 100 704 L100 320 C100 170 170 100 320 100 Z"/>
     </clipPath>
-    <radialGradient id="radial-gradient-1" cx="0" cy="0" r="578" gradientTransform="matrix(1 0 0 0.5 512 720)" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#4f8a82"/>
-      <stop offset="0.3" stop-color="#4f8a82" stop-opacity="0.9"/>
-      <stop offset="0.65" stop-color="#4f8a82" stop-opacity="0.35"/>
-      <stop offset="1" stop-color="#4f8a82" stop-opacity="0"/>
+    <radialGradient id="radial-gradient-1" cx="0" cy="0" r="560" gradientTransform="matrix(1 0 0 0.5 512 643)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4f6a86"/>
+      <stop offset="0.3" stop-color="#4f6a86" stop-opacity="0.9"/>
+      <stop offset="0.65" stop-color="#4f6a86" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#4f6a86" stop-opacity="0"/>
     </radialGradient>
   </defs>
   <title>FieldCraft icon floor grid (Dark)</title>
   <g id="Floor_grid" data-name="Floor grid" clip-path="url(#clip-path-1)">
-    <path id="floor_grid" data-name="floor grid" d="M154.62 100 L100 131.53 M869.38 100 L924 131.53 M368.82 100 L100 255.2 M655.18 100 L924 255.2 M583.01 100 L100 378.87 M440.99 100 L924 378.87 M797.21 100 L100 502.53 M226.79 100 L924 502.53 M924 150.47 L100 626.2 M100 150.47 L924 626.2 M924 274.13 L100 749.87 M100 274.13 L924 749.87 M924 397.8 L100 873.53 M100 397.8 L924 873.53 M924 521.47 L226.79 924 M100 521.47 L797.21 924 M924 645.13 L440.99 924 M100 645.13 L583.01 924 M924 768.8 L655.18 924 M100 768.8 L368.82 924 M924 892.47 L869.38 924 M100 892.47 L154.62 924" fill="none" stroke="url(#radial-gradient-1)" stroke-width="3" stroke-linejoin="round"/>
+    <path id="floor_grid" data-name="floor grid" d="M214.09 100 L100 165.87 M809.91 100 L924 165.87 M337.93 100 L100 237.37 M686.07 100 L924 237.37 M461.77 100 L100 308.87 M562.23 100 L924 308.87 M585.61 100 L100 380.37 M438.39 100 L924 380.37 M709.45 100 L100 451.87 M314.55 100 L924 451.87 M833.3 100 L100 523.37 M190.7 100 L924 523.37 M924 119.13 L100 594.87 M100 119.13 L924 594.87 M924 190.63 L100 666.37 M100 190.63 L924 666.37 M924 262.13 L100 737.87 M100 262.13 L924 737.87 M924 333.63 L100 809.37 M100 333.63 L924 809.37 M924 405.13 L100 880.87 M100 405.13 L924 880.87 M924 476.63 L149.14 924 M100 476.63 L874.86 924 M924 548.13 L272.98 924 M100 548.13 L751.02 924 M924 619.63 L396.82 924 M100 619.63 L627.18 924 M924 691.13 L520.66 924 M100 691.13 L503.34 924 M924 762.63 L644.5 924 M100 762.63 L379.5 924 M924 834.13 L768.34 924 M100 834.13 L255.66 924 M924 905.63 L892.19 924 M100 905.63 L131.81 924" fill="none" stroke="url(#radial-gradient-1)" stroke-width="3" stroke-linejoin="round"/>
   </g>
 </svg>

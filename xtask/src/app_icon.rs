@@ -1,25 +1,27 @@
 //! `cargo xtask app-icon`: draw FieldCraft's application icon family with VectorCraft.
 //!
-//! The mark is an L-shaped bracket with a bolt hole, drawn in isometric view and covered by a
-//! structured hexahedral mesh (an O-grid around the hole). The faces are separated by
-//! transparent gaps instead of painted edge lines, so the backdrop shows through them in every
-//! appearance. All geometry is computed here, turned into VectorCraft commands and run headlessly
-//! with `vectorcraft-cli run` (`VECTORCRAFT_CLI`, else `vectorcraft-cli` on the PATH), which
-//! saves each document's editable `.vectorcraft` source and exports its SVG (and PNG).
+//! The mark is a hexahedral-meshed cube in isometric view whose faces carry a banded colour
+//! fringe (blue to red, hottest at the cube's front corner) as a stress or temperature result
+//! would, with flow streamlines wrapping around it: structures and fluids. The faces are
+//! separated by transparent gaps instead of painted edge lines, so the backdrop shows through
+//! them in every appearance. All geometry is computed here, turned into VectorCraft commands and
+//! run headlessly with `vectorcraft-cli run` (`VECTORCRAFT_CLI`, else `vectorcraft-cli` on the
+//! PATH), which saves each document's editable `.vectorcraft` source and exports its SVG (and PNG).
 //!
 //! Outputs, all under `assets/app-icon/` (see its README.md):
 //! - `icon.vectorcraft`, `icon.svg`, `icon.png`: the full icon on its backdrop, 1024 × 1024.
-//! - `icon-small.vectorcraft`, `icon-small.svg`, `icon-small.png`: simplified artwork (no mesh,
-//!   no floor grid, faces meeting edge to edge so the tones alone separate them) for 16–32 px.
+//! - `icon-small.vectorcraft`, `icon-small.svg`, `icon-small.png`: simplified artwork for 16–32 px
+//!   (no mesh or floor grid, faces edge to edge, one bolder streamline).
 //! - `icon.iconset/` (sips), `icon.icns` (iconutil) and `icon.ico` (ImageMagick).
 //! - `FieldCraft.icon/`: an Icon Composer document with separate floor-grid (Default and Dark),
-//!   part and mesh layers; their editable sources are `layers/*.vectorcraft`.
+//!   flow (behind and in front) and cube layers (the mesh shares the cube's: Icon Composer allows
+//!   four groups); their editable sources are `layers/*.vectorcraft`.
 //! - `Assets.car`: Apple's actool compilation of `FieldCraft.icon`, when Xcode 26 or later is
 //!   installed (otherwise the step is skipped with a note and the checked-in catalog stays).
 //!
 //! macOS only (sips, iconutil); ImageMagick (`magick`) writes the Windows icon.
 
-use std::f64::consts::{FRAC_PI_2, TAU};
+use std::f64::consts::{FRAC_PI_2, PI};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -30,32 +32,31 @@ type P3 = [f64; 3];
 
 /// Canvas side in pixels; every document is one square artboard.
 const CANVAS: f64 = 1024.0;
-/// Pixels per model unit, and the screen point the model origin's bounding box centres on.
-const SCALE: f64 = 371.0;
-const CENTRE: P2 = [512.0, 512.0];
+/// Pixels per model unit, and the screen point the model origin projects to.
+const SCALE: f64 = 286.0;
+const CENTRE: P2 = [512.0, 500.0];
 const COS30: f64 = 0.866_025_403_784_438_6;
 
-/// The bracket, in model units (x to the right-front, y to the left-front, z up): a base plate
-/// `L × D × T` with an upright wall `L × T × H` along its back edge.
-const L: f64 = 1.0;
-const D: f64 = 1.0;
-const H: f64 = 1.0;
-const T: f64 = 0.32;
-/// The bolt hole through the base plate, and the half-side of the O-grid block around it (the
-/// block spans the plate's depth exactly).
-const HOLE: P2 = [0.5, 0.66];
-const HOLE_R: f64 = 0.19;
-const BLOCK: f64 = 0.34;
+/// The cube's half side, in model units (x to the right-front, y to the left-front, z up); the
+/// cube is centred on the origin.
+const A: f64 = 0.5;
+/// Mesh cells along each edge.
+const CELLS: usize = 4;
+
+/// The fringe: a field that grows towards the hot point (the cube's front corner), shown as
+/// bands of constant colour. `BAND_RADII[k]` is the distance from the hot point inside which
+/// band `k + 1` of `FRINGE` starts; the coldest band fills the rest of the face.
+const HOT: P3 = [A, A, A];
+const FRINGE: [&str; 7] = ["#2c4fbf", "#2f86e0", "#22bcd8", "#3fc584", "#f0d13a", "#f28a2b", "#de3b2f"];
+const BAND_RADII: [f64; 6] = [1.28, 1.07, 0.87, 0.67, 0.47, 0.27];
 
 /// The macOS icon grid: the backdrop's square, inset 100 px on a 1024 canvas.
 const BACKDROP: [f64; 2] = [100.0, 924.0];
 
-/// Part palette: lit top faces, the left (+y) faces and the right (+x) faces, each a vertical
-/// gradient, and the bolt hole's inner wall.
-const TOP: [&str; 2] = ["#86e3d3", "#4cc4b1"];
-const LEFT: [&str; 2] = ["#20b39f", "#118c7c"];
-const RIGHT: [&str; 2] = ["#0f786d", "#0a544e"];
-const BORE: [&str; 2] = ["#0b665e", "#04302c"];
+/// The streamlines' core and halo colours (the same in both appearances: the dark halo keeps the
+/// light core readable on the light backdrop and on the fringe's yellow).
+const FLOW_CORE: &str = "#ffffff";
+const FLOW_HALO: &str = "#0b2236";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Appearance {
@@ -63,7 +64,7 @@ enum Appearance {
     Dark,
 }
 
-/// How much of the mark is drawn: the full mesh and floor grid, or the small-size artwork.
+/// How much of the mark is drawn: the full mesh, flow and floor grid, or the small-size artwork.
 #[derive(Clone, Copy, PartialEq)]
 enum Detail {
     Full,
@@ -74,7 +75,7 @@ impl Detail {
     /// Width of the transparent gap between neighbouring faces, in pixels on the 1024 canvas.
     fn gap(self) -> f64 {
         match self {
-            Detail::Full => 16.0,
+            Detail::Full => 14.0,
             Detail::Small => 0.0,
         }
     }
@@ -191,32 +192,27 @@ fn inset(poly: &[P2], flagged: &[bool], by: f64) -> Result<Vec<P2>, String> {
     Ok(out)
 }
 
-/// A circle of radius `r` around `c` on the horizontal plane at height `z`, projected: four
-/// cubic arcs (projection is affine, so the projected Béziers are exact). `ccw` picks the
-/// screen winding (positive shoelace area when true).
-fn circle_d(c: P2, r: f64, z: f64, ccw: bool) -> String {
-    let arcs = |sign: f64| -> Vec<[P2; 3]> {
-        let k = 0.552_284_749_830_793_4 * r;
-        let at = |t: f64| [c[0] + r * t.cos(), c[1] + sign * r * t.sin()];
-        let tangent = |t: f64| [-t.sin(), sign * t.cos()];
-        (0..4)
-            .map(|i| {
-                let (t0, t1) = (i as f64 * FRAC_PI_2, (i + 1) as f64 * FRAC_PI_2);
-                let (p0, p1, d0, d1) = (at(t0), at(t1), tangent(t0), tangent(t1));
-                let c1 = [p0[0] + k * d0[0], p0[1] + k * d0[1]];
-                let c2 = [p1[0] - k * d1[0], p1[1] - k * d1[1]];
-                [project([c1[0], c1[1], z]), project([c2[0], c2[1], z]), project([p1[0], p1[1], z])]
-            })
-            .collect()
-    };
-    let mut segs = arcs(1.0);
-    let anchors: Vec<P2> = segs.iter().map(|s| s[2]).collect();
-    if (signed_area(&anchors) > 0.0) != ccw {
-        segs = arcs(-1.0);
-    }
-    let start = segs[3][2];
+fn add3(a: P3, b: P3, k: f64) -> P3 {
+    [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k]
+}
+
+fn dot3(a: P3, b: P3) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// A circle of radius `r` around `c` in the plane spanned by the unit vectors `u` and `v`,
+/// projected: four cubic arcs (projection is affine, so the projected Béziers are exact).
+fn circle_d(c: P3, u: P3, v: P3, r: f64) -> String {
+    let k = 0.552_284_749_830_793_4 * r;
+    let at = |t: f64| add3(add3(c, u, r * t.cos()), v, r * t.sin());
+    let dir = |t: f64| add3(add3([0.0; 3], u, -t.sin()), v, t.cos());
+    let start = project(at(0.0));
     let mut d = format!("M{} {}", num(start[0]), num(start[1]));
-    for [c1, c2, p] in &segs {
+    for i in 0..4 {
+        let (t0, t1) = (i as f64 * FRAC_PI_2, (i + 1) as f64 * FRAC_PI_2);
+        let c1 = project(add3(at(t0), dir(t0), k));
+        let c2 = project(add3(at(t1), dir(t1), -k));
+        let p = project(at(t1));
         d.push_str(&format!(" C{} {} {} {} {} {}", num(c1[0]), num(c1[1]), num(c2[0]), num(c2[1]), num(p[0]), num(p[1])));
     }
     d.push_str(" Z");
@@ -233,42 +229,40 @@ enum Tone {
 struct Face {
     name: &'static str,
     /// Corners in model space and, per edge (corner i to i + 1), whether another face of the
-    /// part meets it there (those edges get the gap).
-    corners: Vec<P3>,
-    shared: Vec<bool>,
+    /// cube meets it there (those edges get the gap).
+    corners: [P3; 4],
+    shared: [bool; 4],
+    /// The face's outward normal and two in-plane unit axes.
+    normal: P3,
+    axes: [P3; 2],
     tone: Tone,
 }
 
-fn faces() -> Vec<Face> {
-    vec![
+fn faces() -> [Face; 3] {
+    let shared = [false, true, true, false];
+    [
         Face {
-            name: "wall top",
-            corners: vec![[0.0, 0.0, H], [L, 0.0, H], [L, T, H], [0.0, T, H]],
-            shared: vec![false, true, true, false],
+            name: "top",
+            corners: [[-A, -A, A], [A, -A, A], [A, A, A], [-A, A, A]],
+            shared,
+            normal: [0.0, 0.0, 1.0],
+            axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             tone: Tone::Top,
         },
         Face {
-            name: "base top",
-            corners: vec![[0.0, T, T], [L, T, T], [L, D, T], [0.0, D, T]],
-            shared: vec![true, true, true, false],
-            tone: Tone::Top,
-        },
-        Face {
-            name: "wall front",
-            corners: vec![[0.0, T, T], [L, T, T], [L, T, H], [0.0, T, H]],
-            shared: vec![true, true, true, false],
+            name: "left",
+            corners: [[-A, A, -A], [A, A, -A], [A, A, A], [-A, A, A]],
+            shared,
+            normal: [0.0, 1.0, 0.0],
+            axes: [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
             tone: Tone::Left,
         },
         Face {
-            name: "base front",
-            corners: vec![[0.0, D, 0.0], [L, D, 0.0], [L, D, T], [0.0, D, T]],
-            shared: vec![false, true, true, false],
-            tone: Tone::Left,
-        },
-        Face {
-            name: "end",
-            corners: vec![[L, 0.0, 0.0], [L, D, 0.0], [L, D, T], [L, T, T], [L, T, H], [L, 0.0, H]],
-            shared: vec![false, true, true, true, true, false],
+            name: "right",
+            corners: [[A, -A, -A], [A, A, -A], [A, A, A], [A, -A, A]],
+            shared,
+            normal: [1.0, 0.0, 0.0],
+            axes: [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             tone: Tone::Right,
         },
     ]
@@ -278,31 +272,108 @@ fn ccw(poly: Vec<P2>) -> Vec<P2> {
     if signed_area(&poly) < 0.0 { poly.into_iter().rev().collect() } else { poly }
 }
 
-/// A face's outline as path data, with its tone and its vertical extent on screen.
-struct Outline {
-    name: &'static str,
-    tone: Tone,
-    d: String,
-    top: f64,
-    bottom: f64,
+/// A face's outline on screen, inset at the shared edges by half the gap, wound
+/// counter-clockwise (positive area).
+fn outline_d(face: &Face, detail: Detail) -> Result<String, String> {
+    let screen: Vec<P2> = face.corners.iter().map(|&p| project(p)).collect();
+    Ok(polyline(&ccw(inset(&screen, &face.shared, detail.gap() / 2.0)?), true))
 }
 
-/// Each face's outline on screen, inset at the shared edges by half the gap, wound
-/// counter-clockwise (positive area); the base top carries the bolt hole wound the other way.
-fn face_outlines(detail: Detail) -> Result<Vec<Outline>, String> {
-    let mut out = Vec::new();
-    for f in faces() {
-        let screen: Vec<P2> = f.corners.iter().map(|&p| project(p)).collect();
-        let poly = ccw(inset(&screen, &f.shared, detail.gap() / 2.0)?);
-        let (top, bottom) = poly.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p[1]), b.max(p[1])));
-        let mut d = polyline(&poly, true);
-        if f.name == "base top" {
-            d.push(' ');
-            d.push_str(&circle_d(HOLE, HOLE_R, T, false));
-        }
-        out.push(Outline { name: f.name, tone: f.tone, d, top, bottom });
+/// The fringe's band boundaries on a face: for each band radius that reaches the face's plane,
+/// the band's colour and the circle (centre, radius) where the sphere around the hot point cuts
+/// the plane, largest first.
+fn bands(face: &Face) -> Vec<(&'static str, P3, f64)> {
+    let dist = dot3(add3(HOT, face.corners[0], -1.0), face.normal);
+    let centre = add3(HOT, face.normal, -dist);
+    BAND_RADII.iter().zip(&FRINGE[1..]).filter(|(r, _)| **r > dist.abs()).map(|(r, colour)| (*colour, centre, (r * r - dist * dist).sqrt())).collect()
+}
+
+/// The hexahedral mesh's edges on the visible faces, as path data. The interior nodes are
+/// shared, so lines run on across the face boundaries as a real structured mesh would.
+fn mesh_d() -> String {
+    let cs: Vec<f64> = (1..CELLS).map(|i| -A + 2.0 * A * i as f64 / CELLS as f64).collect();
+    let mut segs: Vec<(P3, P3)> = Vec::new();
+    for &c in &cs {
+        // Top.
+        segs.push(([c, -A, A], [c, A, A]));
+        segs.push(([-A, c, A], [A, c, A]));
+        // Left (y = A).
+        segs.push(([c, A, -A], [c, A, A]));
+        segs.push(([-A, A, c], [A, A, c]));
+        // Right (x = A).
+        segs.push(([A, c, -A], [A, c, A]));
+        segs.push(([A, -A, c], [A, A, c]));
     }
-    Ok(out)
+    segs.iter().map(|&(a, b)| polyline(&[project(a), project(b)], false)).collect::<Vec<_>>().join(" ")
+}
+
+/// A streamline: a swept curve around the cube's vertical axis at radius `r`, its height
+/// `z0 + tilt · sin(θ − 45°)`, from angle `from` to `to` (degrees, decreasing: the flow passes
+/// in front of the cube from screen left to right), `width` pixels at its widest.
+struct Stream {
+    r: f64,
+    z0: f64,
+    tilt: f64,
+    from: f64,
+    to: f64,
+    width: f64,
+}
+
+const STREAMS: [Stream; 3] = [
+    Stream { r: 0.86, z0: 0.34, tilt: 0.2, from: 195.0, to: -40.0, width: 15.0 },
+    Stream { r: 0.98, z0: 0.0, tilt: 0.24, from: 215.0, to: -75.0, width: 19.0 },
+    Stream { r: 0.88, z0: -0.33, tilt: 0.16, from: 160.0, to: -100.0, width: 15.0 },
+];
+
+/// Samples along each streamline.
+const STREAM_SAMPLES: usize = 180;
+
+/// A streamline's tapered outline, split into the runs behind the cube and in front of it: the
+/// filled shapes at half-width `w/2 + grow` (`grow` widens the halo). Returns (behind, in front).
+fn stream_runs(s: &Stream, width: f64, grow: f64) -> (Vec<String>, Vec<String>) {
+    let n = STREAM_SAMPLES;
+    let pts3: Vec<P3> = (0..=n)
+        .map(|i| {
+            let t = (s.from + (s.to - s.from) * i as f64 / n as f64).to_radians();
+            [s.r * t.cos(), s.r * t.sin(), s.z0 + s.tilt * (t - PI / 4.0).sin()]
+        })
+        .collect();
+    let pts: Vec<P2> = pts3.iter().map(|&p| project(p)).collect();
+    let half: Vec<f64> = (0..=n).map(|i| width / 2.0 * (PI * i as f64 / n as f64).sin().powf(0.55) + grow).collect();
+    let normal = |i: usize| {
+        let (a, b) = (pts[i.saturating_sub(1)], pts[(i + 1).min(n)]);
+        let v = sub(b, a);
+        let len = v[0].hypot(v[1]).max(1e-9);
+        [-v[1] / len, v[0] / len]
+    };
+    let shape = |lo: usize, hi: usize| {
+        let mut poly = Vec::new();
+        for i in lo..=hi {
+            let m = normal(i);
+            poly.push([pts[i][0] + m[0] * half[i], pts[i][1] + m[1] * half[i]]);
+        }
+        for i in (lo..=hi).rev() {
+            let m = normal(i);
+            poly.push([pts[i][0] - m[0] * half[i], pts[i][1] - m[1] * half[i]]);
+        }
+        polyline(&poly, true)
+    };
+    let front = |i: usize| pts3[i][0] + pts3[i][1] > 0.0;
+    let (mut behind, mut ahead) = (Vec::new(), Vec::new());
+    let mut lo = 0;
+    for i in 1..=n {
+        if i == n || front(i) != front(lo) {
+            // Neighbouring runs share their boundary sample, so they meet without a seam.
+            let hi = i;
+            if front(lo) {
+                ahead.push(shape(lo, hi))
+            } else {
+                behind.push(shape(lo, hi))
+            }
+            lo = i;
+        }
+    }
+    (behind, ahead)
 }
 
 /// Clip a segment to the axis-aligned square [lo, hi]² (Liang–Barsky).
@@ -326,80 +397,13 @@ fn clip_to_square(a: P2, b: P2, lo: f64, hi: f64) -> Option<(P2, P2)> {
     (t0 < t1).then(|| ([a[0] + d[0] * t0, a[1] + d[1] * t0], [a[0] + d[0] * t1, a[1] + d[1] * t1]))
 }
 
-/// The hexahedral mesh's edges on the visible faces, as path data. The interior nodes are
-/// shared, so lines run on across the face boundaries as a real structured mesh would.
-fn mesh_d() -> String {
-    let (x0, x1) = (HOLE[0] - BLOCK, HOLE[0] + BLOCK);
-    let xs: Vec<f64> = (0..=4).map(|i| x0 + (x1 - x0) * i as f64 / 4.0).collect();
-    let ys: Vec<f64> = (1..4).map(|i| T + (D - T) * i as f64 / 4.0).collect();
-    let zs: Vec<f64> = (1..4).map(|i| T + (H - T) * i as f64 / 4.0).collect();
-    let mid = T / 2.0;
-    let mut segs: Vec<(P3, P3)> = Vec::new();
-    // Base top: the O-grid block's sides and the strips either side of it.
-    for x in [x0, x1] {
-        segs.push(([x, T, T], [x, D, T]));
-    }
-    for &y in &ys {
-        segs.push(([0.0, y, T], [x0, y, T]));
-        segs.push(([x1, y, T], [L, y, T]));
-    }
-    // Wall front and wall top.
-    for &x in &xs {
-        segs.push(([x, T, T], [x, T, H]));
-        segs.push(([x, 0.0, H], [x, T, H]));
-    }
-    for &z in &zs {
-        segs.push(([0.0, T, z], [L, T, z]));
-    }
-    segs.push(([0.0, mid, H], [L, mid, H]));
-    // Base front.
-    for &x in &xs {
-        segs.push(([x, D, 0.0], [x, D, T]));
-    }
-    segs.push(([0.0, D, mid], [L, D, mid]));
-    // End face (x = L), an L shape.
-    segs.push(([L, mid, 0.0], [L, mid, H]));
-    for &y in std::iter::once(&T).chain(&ys) {
-        segs.push(([L, y, 0.0], [L, y, T]));
-    }
-    segs.push(([L, 0.0, mid], [L, D, mid]));
-    segs.push(([L, 0.0, T], [L, T, T]));
-    for &z in &zs {
-        segs.push(([L, 0.0, z], [L, T, z]));
-    }
-    let mut parts: Vec<String> = segs.iter().map(|&(a, b)| polyline(&[project(a), project(b)], false)).collect();
-    // O-grid around the hole: spokes from the block's boundary nodes to the hole, and one ring
-    // halfway between the hole and the block's square.
-    for i in -2_i32..=2 {
-        for j in -2_i32..=2 {
-            if i.abs() != 2 && j.abs() != 2 {
-                continue;
-            }
-            let node = [HOLE[0] + BLOCK * i as f64 / 2.0, HOLE[1] + BLOCK * j as f64 / 2.0];
-            let t = (j as f64).atan2(i as f64);
-            let rim = [HOLE[0] + HOLE_R * t.cos(), HOLE[1] + HOLE_R * t.sin()];
-            parts.push(polyline(&[project([rim[0], rim[1], T]), project([node[0], node[1], T])], false));
-        }
-    }
-    let ring: Vec<P2> = (0..96)
-        .map(|k| {
-            let t = k as f64 * TAU / 96.0;
-            let square = BLOCK / t.cos().abs().max(t.sin().abs());
-            let r = HOLE_R + 0.5 * (square - HOLE_R);
-            project([HOLE[0] + r * t.cos(), HOLE[1] + r * t.sin(), T])
-        })
-        .collect();
-    parts.push(polyline(&ring, true));
-    parts.join(" ")
-}
-
-/// The floor grid on the ground plane under the part, clipped to the backdrop's square.
+/// The floor grid on the ground plane under the cube, clipped to the backdrop's square.
 fn floor_d() -> String {
-    let step = 1.0 / 3.0;
+    let step = 1.0 / 4.0;
     let mut parts = Vec::new();
-    for k in -12..=15 {
-        let c = k as f64 * step;
-        for (a, b) in [([c, -6.0, 0.0], [c, 6.0, 0.0]), ([-6.0, c, 0.0], [6.0, c, 0.0])] {
+    for k in -24..=24 {
+        let c = A + k as f64 * step;
+        for (a, b) in [([c, -8.0, -A], [c, 8.0, -A]), ([-8.0, c, -A], [8.0, c, -A])] {
             if let Some((p, q)) = clip_to_square(project(a), project(b), BACKDROP[0], BACKDROP[1]) {
                 parts.push(polyline(&[p, q], false));
             }
@@ -442,36 +446,77 @@ fn linear(stops: [&str; 2], top: f64, bottom: f64) -> Value {
         "start": [CANVAS / 2.0, top], "end": [CANVAS / 2.0, bottom]}})
 }
 
-fn part_layer(detail: Detail) -> Result<Layer, String> {
-    let mut shapes = Vec::new();
-    for Outline { name, tone, d, top, bottom } in face_outlines(detail)? {
-        let colours = match tone {
-            Tone::Top => TOP,
-            Tone::Left => LEFT,
-            Tone::Right => RIGHT,
-        };
-        shapes.push(Shape::filled(name, d, linear(colours, top, bottom)));
+fn colour(c: &str) -> Value {
+    json!({"color": c})
+}
+
+/// One face of the cube: the coldest band filling it, the warmer bands as nested discs, and a
+/// translucent shade that sets the face's tone, all clipped to the face.
+fn face_layer(face: &Face, detail: Detail) -> Result<Layer, String> {
+    let outline = outline_d(face, detail)?;
+    let mut shapes = vec![Shape::filled(face.name, outline.clone(), colour(FRINGE[0]))];
+    for (i, (c, centre, r)) in bands(face).into_iter().enumerate() {
+        shapes.push(Shape::filled(&format!("{} band {}", face.name, i + 1), circle_d(centre, face.axes[0], face.axes[1], r), colour(c)));
     }
-    let centre = project([HOLE[0], HOLE[1], T]);
-    let half = HOLE_R * SCALE * 0.5_f64.sqrt();
-    shapes.push(Shape::filled("bolt hole", circle_d(HOLE, HOLE_R, T, true), linear(BORE, centre[1] - half, centre[1] + half)));
-    Ok(Layer { name: "Part", shapes, clip: None })
+    let shade = match face.tone {
+        Tone::Top => Some(("#ffffff", 0.1)),
+        Tone::Left => Some(("#000000", 0.12)),
+        Tone::Right => Some(("#000000", 0.3)),
+    };
+    if let Some((c, opacity)) = shade {
+        let mut s = Shape::filled(&format!("{} shade", face.name), outline.clone(), colour(c));
+        s.opacity = opacity;
+        shapes.push(s);
+    }
+    let name = match face.tone {
+        Tone::Top => "Top face",
+        Tone::Left => "Left face",
+        Tone::Right => "Right face",
+    };
+    Ok(Layer { name, shapes, clip: Some(outline) })
+}
+
+fn part_layers(detail: Detail) -> Result<Vec<Layer>, String> {
+    faces().iter().map(|f| face_layer(f, detail)).collect()
 }
 
 fn mesh_layer() -> Result<Layer, String> {
-    let clip = face_outlines(Detail::Full)?.into_iter().map(|o| o.d).collect::<Vec<_>>().join(" ");
-    let stroke = Stroke { paint: json!({"color": "#ffffff"}), width: 4.5, cap: "butt" };
-    Ok(Layer { name: "Mesh", shapes: vec![Shape::stroked("hexahedral mesh", mesh_d(), stroke, 0.5)], clip: Some(clip) })
+    let clip = faces().iter().map(|f| outline_d(f, Detail::Full)).collect::<Result<Vec<_>, _>>()?.join(" ");
+    let stroke = Stroke { paint: colour("#0b2236"), width: 3.5, cap: "butt" };
+    Ok(Layer { name: "Mesh", shapes: vec![Shape::stroked("hexahedral mesh", mesh_d(), stroke, 0.45)], clip: Some(clip) })
+}
+
+/// The streamlines' runs behind the cube (`front == false`) or in front of it.
+fn flow_layer(detail: Detail, front: bool) -> Layer {
+    let streams: Vec<(&Stream, f64)> = match detail {
+        Detail::Full => STREAMS.iter().map(|s| (s, s.width)).collect(),
+        Detail::Small => vec![(&STREAMS[1], 48.0)],
+    };
+    let mut shapes = Vec::new();
+    for (k, (s, width)) in streams.into_iter().enumerate() {
+        let pick = |(behind, ahead): (Vec<String>, Vec<String>)| if front { ahead } else { behind };
+        let halo = pick(stream_runs(s, width, width * 0.22)).join(" ");
+        let core = pick(stream_runs(s, width, 0.0)).join(" ");
+        if core.is_empty() {
+            continue;
+        }
+        let mut h = Shape::filled(&format!("streamline {} halo", k + 1), halo, colour(FLOW_HALO));
+        h.opacity = 0.4;
+        shapes.push(h);
+        shapes.push(Shape::filled(&format!("streamline {}", k + 1), core, colour(FLOW_CORE)));
+    }
+    Layer { name: if front { "Flow in front" } else { "Flow behind" }, shapes, clip: None }
 }
 
 fn floor_layer(appearance: Appearance) -> Layer {
     let colour = match appearance {
-        Appearance::Light => "#7fa8a2",
-        Appearance::Dark => "#4f8a82",
+        Appearance::Light => "#8aa0b4",
+        Appearance::Dark => "#4f6a86",
     };
     let fade = [(0.0, 1.0), (0.3, 0.9), (0.65, 0.35), (1.0, 0.0)];
     let stops: Vec<Value> = fade.iter().map(|(o, a)| json!({"offset": o, "color": colour, "opacity": a})).collect();
-    let paint = json!({"gradient": {"kind": "radial", "stops": stops, "start": [512.0, 720.0], "end": [1090.0, 720.0], "aspect": 50}});
+    let floor = project([0.0, 0.0, -A]);
+    let paint = json!({"gradient": {"kind": "radial", "stops": stops, "start": floor, "end": [floor[0] + 560.0, floor[1]], "aspect": 50}});
     let stroke = Stroke { paint, width: 3.0, cap: "butt" };
     // Clipped to the backdrop, so the flattened icon's grid stops at its rounded corners (Icon
     // Composer masks its own layers the same way).
@@ -480,8 +525,8 @@ fn floor_layer(appearance: Appearance) -> Layer {
 
 fn backdrop_layer(appearance: Appearance) -> Layer {
     let (colours, shadow) = match appearance {
-        Appearance::Light => (["#fbfdfd", "#dbe5e4"], "#1d3b38"),
-        Appearance::Dark => (["#2b3433", "#141a1a"], "#000000"),
+        Appearance::Light => (["#fbfcfe", "#dce3ec"], "#1d2b3b"),
+        Appearance::Dark => (["#2a303a", "#13171d"], "#000000"),
     };
     let mut shape = Shape::filled("backdrop", backdrop_d(), linear(colours, BACKDROP[0], BACKDROP[1]));
     shape.shadow = Some(json!({"mode": "multiply", "opacity": 22, "x": 0, "y": 10, "blur": 14, "color": shadow}));
@@ -493,10 +538,12 @@ fn composite(detail: Detail, appearance: Appearance) -> Result<Doc, String> {
     if detail == Detail::Full {
         layers.push(floor_layer(appearance));
     }
-    layers.push(part_layer(detail)?);
+    layers.push(flow_layer(detail, false));
+    layers.extend(part_layers(detail)?);
     if detail == Detail::Full {
         layers.push(mesh_layer()?);
     }
+    layers.push(flow_layer(detail, true));
     let title = match (detail, appearance) {
         (Detail::Full, Appearance::Light) => "FieldCraft application icon",
         (Detail::Full, Appearance::Dark) => "FieldCraft application icon (dark preview)",
@@ -599,13 +646,16 @@ fn icon_json() -> Value {
             "translucency": {"enabled": false, "value": 0.3}})
     };
     let position = json!({"scale": 0.9, "translation-in-points": [0, 0]});
+    let plain = |file: &str| {
+        json!({"image-name": format!("{file}.svg"), "name": file, "position": position,
+            "glass-specializations": [{"appearance": "tinted", "value": true}]})
+    };
     json!({
         "fill": "system-light",
         "groups": [
-            group("03 Mesh", json!({"image-name": "03-mesh.svg", "name": "03-mesh", "position": position,
-                "glass-specializations": [{"appearance": "tinted", "value": true}]}), false),
-            group("02 Part", json!({"image-name": "02-part.svg", "name": "02-part", "position": position,
-                "glass-specializations": [{"appearance": "tinted", "value": true}]}), true),
+            group("04 Flow front", plain("04-flow-front"), false),
+            group("03 Part", plain("03-part"), true),
+            group("02 Flow behind", plain("02-flow-behind"), false),
             group("01 Floor", json!({"image-name-specializations": [{"value": "01-floor.svg"}, {"appearance": "dark", "value": "01-floor-dark.svg"}],
                 "name": "01-floor", "fill": "none", "position": position,
                 "glass-specializations": [{"value": false}, {"appearance": "tinted", "value": true}]}), false),
@@ -637,12 +687,16 @@ pub fn run(root: &Path) -> Result<(), String> {
     vectorcraft(&composite(Detail::Small, Appearance::Dark)?, &work.join("icon-small-dark.vectorcraft"), &[work.join("icon-small-dark.png")])?;
 
     // Icon Composer layers: the system supplies the backdrop.
+    // Icon Composer allows four groups, so the mesh shares the cube's.
     let single = |title, layer| Doc { title, layers: vec![layer] };
+    let mut part_with_mesh = part_layers(Detail::Full)?;
+    part_with_mesh.push(mesh_layer()?);
     let layer_docs = [
         ("01-floor", single("FieldCraft icon floor grid", floor_layer(Appearance::Light))),
         ("01-floor-dark", single("FieldCraft icon floor grid (Dark)", floor_layer(Appearance::Dark))),
-        ("02-part", single("FieldCraft icon part", part_layer(Detail::Full)?)),
-        ("03-mesh", single("FieldCraft icon mesh", mesh_layer()?)),
+        ("02-flow-behind", single("FieldCraft icon flow behind the cube", flow_layer(Detail::Full, false))),
+        ("03-part", Doc { title: "FieldCraft icon cube", layers: part_with_mesh }),
+        ("04-flow-front", single("FieldCraft icon flow in front of the cube", flow_layer(Detail::Full, true))),
     ];
     for (name, doc) in &layer_docs {
         vectorcraft(doc, &layers.join(format!("{name}.vectorcraft")), &[assets.join(format!("{name}.svg"))])?;
@@ -717,21 +771,21 @@ mod tests {
     }
 
     #[test]
-    fn the_hole_winds_against_its_face() {
-        for o in face_outlines(Detail::Full).unwrap() {
-            assert!(o.d.starts_with('M') && o.d.contains('Z'), "{}: {}", o.name, o.d);
+    fn every_face_shows_every_band_hottest_last() {
+        for f in faces() {
+            let b = bands(&f);
+            assert_eq!(b.len(), BAND_RADII.len(), "{}", f.name);
+            assert!(b.windows(2).all(|w| w[0].2 > w[1].2), "{}", f.name);
+            assert_eq!(b.last().map(|x| x.0), Some(FRINGE[FRINGE.len() - 1]));
         }
-        let anchors = |d: &str| -> Vec<P2> {
-            d.split('C')
-                .skip(1)
-                .map(|s| {
-                    let n: Vec<f64> = s.split_whitespace().filter_map(|x| x.trim_end_matches('Z').parse().ok()).collect();
-                    [n[4], n[5]]
-                })
-                .collect()
-        };
-        assert!(signed_area(&anchors(&circle_d(HOLE, HOLE_R, T, true))) > 0.0);
-        assert!(signed_area(&anchors(&circle_d(HOLE, HOLE_R, T, false))) < 0.0);
+    }
+
+    #[test]
+    fn streamlines_pass_behind_and_in_front() {
+        for s in &STREAMS {
+            let (behind, ahead) = stream_runs(s, s.width, 0.0);
+            assert!(!behind.is_empty() && !ahead.is_empty());
+        }
     }
 
     #[test]
@@ -746,8 +800,9 @@ mod tests {
         let steps = commands(&doc, Path::new("/tmp/icon.vectorcraft"));
         assert_eq!(steps.first().map(|s| s.0), Some("file.new"));
         assert_eq!(steps.last().map(|s| s.0), Some("document.save"));
-        assert_eq!(steps.iter().filter(|s| s.0 == "layer.new").count(), 3);
-        // The floor grid is clipped to the backdrop and the mesh to the faces.
-        assert_eq!(steps.iter().filter(|s| s.0 == "layer.clippingMask.toggle").count(), 2);
+        // Floor, flow behind, three faces, mesh, flow in front.
+        assert_eq!(steps.iter().filter(|s| s.0 == "layer.new").count(), 7);
+        // The floor grid is clipped to the backdrop, each face's fringe and the mesh to the faces.
+        assert_eq!(steps.iter().filter(|s| s.0 == "layer.clippingMask.toggle").count(), 5);
     }
 }

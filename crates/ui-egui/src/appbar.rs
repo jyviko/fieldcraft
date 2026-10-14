@@ -61,30 +61,40 @@ fn button_style(t: &Tokens) -> IconButtonStyle {
     }
 }
 
-/// FieldCraft's mark: the application icon's bracket (`assets/app-icon/icon-small.svg`) drawn in
-/// code from the SVG's own coordinates, without its tile, each face in the middle of its gradient.
+/// FieldCraft's mark: the application icon's fringe cube (`assets/app-icon/icon-small.svg`, after
+/// `xtask/src/app_icon.rs`) drawn in code without its tile or streamline: each visible face split
+/// into small cells coloured by the fringe band at the cell's centre, shaded per face.
 fn mark(p: &egui::Painter, c: egui::Pos2) {
-    // The bracket spans y 141–883 in the SVG; draw it 22 points tall around its centre.
-    let s = 22.0 / 742.0;
-    let at = |x: f32, y: f32| c + vec2((x - 512.0) * s, (y - 512.0) * s);
-    let face = |col: Color32, pts: &[(f32, f32)]| {
-        p.add(egui::Shape::convex_polygon(pts.iter().map(|&(x, y)| at(x, y)).collect(), col, Stroke::NONE));
-    };
-    let (top, front, end) = (Color32::from_rgb(0x69, 0xd4, 0xc2), Color32::from_rgb(0x19, 0xa0, 0x8d), Color32::from_rgb(0x0d, 0x66, 0x5d));
-    face(top, &[(512.0, 141.0), (833.3, 326.5), (730.48, 385.86), (409.19, 200.36)]);
-    face(front, &[(409.19, 200.36), (730.48, 385.86), (730.48, 638.14), (409.19, 452.64)]);
-    face(top, &[(409.19, 452.64), (730.48, 638.14), (512.0, 764.28), (190.7, 578.78)]);
-    face(front, &[(190.7, 578.78), (512.0, 764.28), (512.0, 883.0), (190.7, 697.5)]);
-    face(end, &[(730.48, 385.86), (833.3, 326.5), (833.3, 697.5), (730.48, 638.14)]);
-    face(end, &[(730.48, 638.14), (833.3, 697.5), (512.0, 883.0), (512.0, 764.28)]);
-    // The bolt hole.
-    let hole: Vec<egui::Pos2> = (0..24)
-        .map(|k| {
-            let a = k as f32 / 24.0 * std::f32::consts::TAU;
-            at(460.6 + 86.0 * a.cos(), 608.5 + 49.5 * a.sin())
-        })
-        .collect();
-    p.add(egui::Shape::convex_polygon(hole, Color32::from_rgb(0x08, 0x46, 0x3f), Stroke::NONE));
+    // The cube is 2 units tall on screen (half side 0.5, isometric); draw it 22 points tall.
+    const S: f32 = 11.0;
+    const N: usize = 8;
+    const FRINGE: [(u8, u8, u8); 7] =
+        [(0x2c, 0x4f, 0xbf), (0x2f, 0x86, 0xe0), (0x22, 0xbc, 0xd8), (0x3f, 0xc5, 0x84), (0xf0, 0xd1, 0x3a), (0xf2, 0x8a, 0x2b), (0xde, 0x3b, 0x2f)];
+    const RADII: [f32; 6] = [1.28, 1.07, 0.87, 0.67, 0.47, 0.27];
+    let at = |q: [f32; 3]| c + vec2((q[0] - q[1]) * 0.866 * S, ((q[0] + q[1]) * 0.5 - q[2]) * S);
+    // Each face: origin corner, two edge vectors, and how much it is darkened (0 to 1).
+    let faces: [([f32; 3], [f32; 3], [f32; 3], f32); 3] = [
+        ([-0.5, -0.5, 0.5], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.0),
+        ([-0.5, 0.5, -0.5], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.12),
+        ([0.5, -0.5, -0.5], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 0.3),
+    ];
+    let point = |o: [f32; 3], u: [f32; 3], v: [f32; 3], a: f32, b: f32| [0, 1, 2].map(|k| o[k] + u[k] * a + v[k] * b);
+    for (o, u, v, shade) in faces {
+        for i in 0..N {
+            for j in 0..N {
+                let (a0, a1, b0, b1) = (i as f32 / N as f32, (i + 1) as f32 / N as f32, j as f32 / N as f32, (j + 1) as f32 / N as f32);
+                let m = point(o, u, v, (a0 + a1) / 2.0, (b0 + b1) / 2.0);
+                let r = m.iter().map(|x| (0.5 - x) * (0.5 - x)).sum::<f32>().sqrt();
+                let band = RADII.iter().filter(|&&rad| r < rad).count();
+                let (cr, cg, cb) = FRINGE.get(band).copied().unwrap_or(FRINGE[0]);
+                let k = 1.0 - shade;
+                let col = Color32::from_rgb((cr as f32 * k) as u8, (cg as f32 * k) as u8, (cb as f32 * k) as u8);
+                let quad = vec![at(point(o, u, v, a0, b0)), at(point(o, u, v, a1, b0)), at(point(o, u, v, a1, b1)), at(point(o, u, v, a0, b1))];
+                // A hairline in the cell's own colour closes the seams between neighbouring cells.
+                p.add(egui::Shape::convex_polygon(quad, col, Stroke::new(0.5, col)));
+            }
+        }
+    }
 }
 
 /// Where the title bar's parts go.

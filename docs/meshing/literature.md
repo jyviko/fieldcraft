@@ -569,7 +569,7 @@ new set of refinement templates.** **Verdict: reference.**
   midpoint subdivision gives hexahedra with a proven positive Jacobian (Bernstein coefficients) and
   a boundary that is pillowed by construction; 17 of the 31 cube cases are refined locally first.
 - **Limits (stated there).** Sharp edges and corners are lost (marching cubes smooths them), and
-  the convex-only transitions over-refine. ModelCraft keeps the core-padding-pillow boundary with
+  the convex-only transitions over-refine. FieldCraft keeps the core-padding-pillow boundary with
   feature capture for CAD parts; MCHex's cut cells are the candidate for organic shapes.
 
 **Implemented (`fieldcraft-mesh::octree`, `mesh.hex.octree`, 2026-10).** B1.7 templates on a

@@ -1,9 +1,19 @@
 name: CI
 
+# CI runs once per merge, on main (AGENTS.md, "Workflow for every change"): pull requests are
+# checked locally on the crates they touch and merged; a red main is fixed forward.
 on:
-  pull_request:
   push:
     branches: [main]
+    # A merge that only touches prose starts no run. The generated pages are checked by the jobs
+    # (features.md by `cargo xtask ci`, oracle.md by the oracle job), so they still count.
+    # (Later patterns override earlier ones.)
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - 'docs/features.md'
+      - 'docs/oracle.md'
   schedule:
     # Nightly: the heavy tests on main.
     - cron: '23 3 * * *'
@@ -12,53 +22,18 @@ on:
 permissions:
   contents: read
 
+# A newer merge cancels the run still going for the one before it, so a burst of merges is tested
+# once, at the tip. Nightly and manual runs are grouped apart and never cancelled by a merge.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Pull requests that only touch Markdown or docs/ skip the build jobs (they still report, as
-  # skipped). Pushes to main and manual runs always run everything.
-  changes:
-    name: Select checks
-    runs-on: ubuntu-24.04
-    outputs:
-      code: ${{ steps.paths.outputs.code }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - id: paths
-        name: Detect code changes
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if [ "$EVENT_NAME" != "pull_request" ]; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          code=false
-          while IFS= read -r f; do
-            case "$f" in
-              docs/features.md|docs/oracle.md) code=true ;;
-              *.md|docs/*) ;;
-              "") ;;
-              *) code=true ;;
-            esac
-          done <<< "$changed"
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "code changes: $code"
-
   ci:
     name: cargo xtask ci
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -69,15 +44,12 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # Branches restore main's cache; saving their own would only evict it.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo xtask ci
 
   heavy:
-    # The heavy verification and corpus tests (#[ignore]d) and the doc tests: on main, nightly
-    # and on demand, not on every pull request.
+    # The heavy verification and corpus tests (#[ignore]d) and the doc tests.
     name: cargo xtask test --heavy
-    if: contains(fromJSON('["push", "schedule", "workflow_dispatch"]'), github.event_name)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -93,8 +65,6 @@ jobs:
     # its fixture, and docs/oracle.md must be the table the cases produce. Cases marked `slow`
     # run here too while the whole set stays within a few minutes; `--quick` skips them.
     name: cargo xtask oracle
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -110,8 +80,6 @@ jobs:
 
   advisories:
     name: Dependency advisories and sources
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

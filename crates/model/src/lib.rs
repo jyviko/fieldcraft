@@ -35,6 +35,7 @@ pub mod bcs;
 pub mod check;
 pub mod constraints;
 pub mod contact;
+pub mod datums;
 pub mod discrete;
 pub mod fluids;
 pub mod geometry;
@@ -56,6 +57,7 @@ pub use bcs::{BoundaryCondition, Dofs, Symmetry, TEMPERATURE_DOF, Target};
 pub use check::{Diagnostic, Resolved, ResolvedSet, Severity};
 pub use constraints::{Coupling, CouplingKind, ReferencePoint};
 pub use contact::{Contact, ContactSurfaces, Friction, InitialPenetration};
+pub use datums::{Datum, Partition};
 pub use discrete::{Direction, Mass, PointMass, ResolvedDirection, ResolvedMass, ResolvedSpring, Spring};
 pub use fluids::{BoxFace, BoxFaces, FaceCondition, FluidBoundary, FluidDomain, Profile, SurfaceBoundary, SurfaceCondition};
 pub use geometry::{Classification, Entity, GeometryRef};
@@ -141,6 +143,11 @@ pub struct Model {
     fluid_domains: BTreeMap<String, FluidDomain>,
     /// In analysis order.
     steps: Vec<Step>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    datums: BTreeMap<String, Datum>,
+    /// In the order they cut.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    partitions: Vec<Partition>,
 }
 
 /// A [`Model`] as stored, before it is checked.
@@ -181,6 +188,10 @@ struct ModelData {
     fluid_domains: BTreeMap<String, FluidDomain>,
     #[serde(default)]
     steps: Vec<Step>,
+    #[serde(default)]
+    datums: BTreeMap<String, Datum>,
+    #[serde(default)]
+    partitions: Vec<Partition>,
 }
 
 impl TryFrom<ModelData> for Model {
@@ -251,6 +262,12 @@ impl TryFrom<ModelData> for Model {
         }
         for s in d.steps {
             m.add_step(s, None)?;
+        }
+        for (n, v) in d.datums {
+            m.add_datum(&n, v)?;
+        }
+        for p in d.partitions {
+            m.add_partition(p)?;
         }
         Ok(m)
     }
@@ -357,11 +374,13 @@ impl Model {
             loads: self.loads.clone(),
             fluid_domains: self.fluid_domains.clone(),
             steps: self.steps.clone(),
+            datums: self.datums.clone(),
+            partitions: self.partitions.clone(),
         }
     }
 
     /// Counts of each kind of definition, for summaries.
-    pub fn definition_counts(&self) -> [(&'static str, usize); 13] {
+    pub fn definition_counts(&self) -> [(&'static str, usize); 15] {
         [
             ("sets", self.sets.len()),
             ("materials", self.materials.len()),
@@ -376,6 +395,8 @@ impl Model {
             ("loads", self.loads.len()),
             ("fluid_domains", self.fluid_domains.len()),
             ("steps", self.steps.len()),
+            ("datums", self.datums.len()),
+            ("partitions", self.partitions.len()),
         ]
     }
 }

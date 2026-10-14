@@ -58,11 +58,17 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
         });
 }
 
-/// The open command's parameters as JSON, with the command's parameter documentation; OK runs it.
+/// JSON shorter than this is shown pretty-printed in the JSON view.
+const MAX_PRETTY: usize = 100_000;
+
+/// The open command's form: typed fields drawn from its schema (or its JSON text, the Advanced
+/// view), with the command's parameter documentation; OK runs it.
 /// A command that applies to part of the model (a set, a boundary condition, a load, a section, a
 /// coupling) has a Target row that takes the viewport's selection.
 fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     let selected = (!app.pick.selection.is_empty()).then(|| app.pick.selection.summary());
+    let units = app.session.model.units();
+    let session = &app.session;
     let mut use_selection = false;
     let Some(d) = app.dialog.as_mut() else { return };
     let Some(spec) = fieldcraft_engine::find_command(d.command) else {
@@ -90,15 +96,47 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             };
             use_selection = ui.add_enabled(selected.is_some(), egui::Button::new("Use selection")).on_hover_text(tip).clicked();
             match &selected {
-                Some(text) => ui.label(RichText::new(text).color(t.pick_selected)),
-                None => ui.label(RichText::new("Pick in the viewport, or type the names below").color(t.text_dim)),
+                Some(text) => ui.add(egui::Label::new(RichText::new(text).color(t.pick_selected)).wrap()),
+                None => ui.add(egui::Label::new(RichText::new("Pick in the viewport, or choose below").color(t.text_dim)).wrap()),
             };
         });
     }
+    let mut advanced = d.advanced;
     heading(ui, t, Level::Section, |ui| {
         ui.label(RichText::new("Parameters").size(12.0));
+        if spec.form.is_some() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.toggle_value(&mut advanced, RichText::new("{ } JSON").small()).on_hover_text("Advanced: edit the parameters as JSON");
+            });
+        }
     });
-    ui.add(egui::TextEdit::multiline(&mut d.text).code_editor().desired_rows(6).desired_width(f32::INFINITY));
+    let mut invalid = 0;
+    // The typed fields edit the JSON text's object; text that is not an object stays in the
+    // JSON view until it is.
+    let object = params.as_object().cloned();
+    if advanced != d.advanced && !advanced && object.is_none() {
+        d.error = Some("fix the JSON before going back to the fields".into());
+        advanced = true;
+    }
+    // Pretty-printed once, when the JSON view opens.
+    if advanced && !d.advanced && params.is_object() && d.text.len() < MAX_PRETTY {
+        d.text = serde_json::to_string_pretty(&params).unwrap_or_else(|_| d.text.clone());
+    }
+    d.advanced = advanced;
+    match (spec.form, object) {
+        (Some(fields), Some(mut obj)) if !d.advanced => {
+            let cx = crate::form::Context { units, names: &|c| session.names(c), salt: spec.id };
+            let out = crate::form::show(ui, t, &cx, fields, &mut obj);
+            invalid = out.invalid;
+            if out.changed {
+                d.text = Value::Object(obj).to_string();
+                d.error = None;
+            }
+        }
+        _ => {
+            ui.add(egui::TextEdit::multiline(&mut d.text).code_editor().desired_rows(6).desired_width(f32::INFINITY));
+        }
+    }
     if let Some(e) = &d.error {
         ui.label(RichText::new(e).color(t.error));
     }
@@ -109,7 +147,13 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             cancel |= ui.button("Cancel").clicked();
-            run = ui.add(egui::Button::new(RichText::new("OK").color(egui::Color32::WHITE)).fill(t.accent).min_size(vec2(64.0, 0.0))).clicked();
+            run = ui
+                .add_enabled(
+                    invalid == 0,
+                    egui::Button::new(RichText::new("OK").color(egui::Color32::WHITE)).fill(t.accent).min_size(vec2(64.0, 0.0)),
+                )
+                .on_disabled_hover_text("A field holds something that is not a value")
+                .clicked();
         });
     });
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) && app.ui.menu.is_none() && !app.ui.palette {

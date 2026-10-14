@@ -1030,7 +1030,7 @@ mod tests {
         assert!(!app.display().bounds.is_empty());
 
         app.start("mesh.tet.generate").unwrap();
-        assert_eq!(app.dialog.as_ref().map(|d| (d.command, d.text.as_str())), Some(("mesh.tet.generate", "{}")));
+        assert_eq!(app.dialog.as_ref().map(|d| (d.command, d.text.as_str())), Some(("mesh.tet.generate", r#"{"order":"linear","quality":true}"#)));
         app.submit_dialog();
         assert_eq!(app.busy(), Some("Generate Tet Mesh"), "meshing runs off the window thread");
         app.wait_loaded();

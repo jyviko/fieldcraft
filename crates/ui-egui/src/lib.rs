@@ -28,7 +28,9 @@ pub mod browser;
 pub mod capture;
 pub mod context;
 pub mod control;
+pub mod fields;
 pub mod files;
+pub mod form;
 pub mod frame;
 pub mod gpu;
 pub mod icons;
@@ -155,6 +157,8 @@ pub struct ParamsDialog {
     /// The parameters as JSON text.
     pub text: String,
     pub error: Option<String>,
+    /// The JSON text is shown instead of the typed fields.
+    pub advanced: bool,
 }
 
 /// A status bar message.
@@ -519,7 +523,9 @@ impl ModelApp {
     /// Open a command's parameter form with `params` filled in.
     pub fn open_form(&mut self, command: &str, params: Value) {
         if let Some(spec) = fieldcraft_engine::find_command(command) {
-            self.dialog = Some(ParamsDialog { command: spec.id, text: params.to_string(), error: None });
+            // The schema's defaults are filled in, so the form starts as the command would run.
+            let params = spec.form.map_or(params.clone(), |form| fieldcraft_engine::schema::prefill(form, &params));
+            self.dialog = Some(ParamsDialog { command: spec.id, text: params.to_string(), error: None, advanced: spec.form.is_none() });
         }
     }
 

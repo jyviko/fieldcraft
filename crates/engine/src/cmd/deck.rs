@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use modelcraft_io::roots::Access;
 use serde_json::{Value, json};
 
 use super::req;
@@ -22,10 +23,10 @@ fn write(s: &mut Session, p: &Value) -> Result<Value> {
         let known: Vec<&str> = modelcraft_decks::FORMATS.iter().map(|f| f.name).collect();
         EngineError::Params(format!("unknown deck format `{shown}`; known: {}", known.join(", ")))
     })?;
-    let path = super::path_param(p, "path")?;
+    let path = super::file_param(s, p, "path", Access::Write)?;
     let steps: Option<Vec<String>> = super::opt(p, "steps")?;
     let deck = format.write_steps(&s.model, steps.as_deref())?;
-    modelcraft_io::fs::write_atomic(Path::new(path), deck.text.as_bytes(), false)?;
+    modelcraft_io::fs::write_atomic(Path::new(&path), deck.text.as_bytes(), false)?;
     Ok(json!({"format": format.name, "path": path, "bytes": deck.text.len(), "warnings": deck.warnings}))
 }
 

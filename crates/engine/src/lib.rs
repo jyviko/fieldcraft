@@ -174,6 +174,9 @@ pub struct Session {
     pub results_view: Option<results::ResultsView>,
     /// The default work caps of commands; a file replacing the session keeps them.
     pub limits: Limits,
+    /// The folders commands may read and write files in (an automation client's roots,
+    /// docs/mcp.md); unconfined by default. A file replacing the session keeps them.
+    pub file_access: modelcraft_io::roots::Roots,
 }
 
 impl Session {
@@ -253,6 +256,15 @@ impl Session {
             Some(_) => {}
         }
         self.results.insert(result.step().to_string(), (self.revision, Arc::new(result)));
+    }
+
+    /// The path to use for `access` to the file at `path`, checked against [`Session::file_access`].
+    pub fn checked_path(&self, path: &str, access: modelcraft_io::roots::Access) -> Result<String> {
+        let checked = self.file_access.check(std::path::Path::new(path), access)?;
+        match checked.to_str() {
+            Some(p) => Ok(p.to_string()),
+            None => Err(EngineError::Params(format!("`{path}` resolves to a path that is not valid UTF-8"))),
+        }
     }
 
     /// The current state is what `path` now holds.

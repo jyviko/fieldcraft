@@ -16,7 +16,9 @@ use modelcraft_model::MAX_LABEL;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{CommandSpec, EngineError, Result};
+use modelcraft_io::roots::Access;
+
+use crate::{CommandSpec, EngineError, Result, Session};
 
 pub static ALL: &[CommandSpec] = &[
     model::INFO,
@@ -158,12 +160,20 @@ pub(crate) fn labels(p: &Value, key: &str, max_len: usize) -> Result<Vec<u32>> {
         .ok_or_else(|| EngineError::Params(format!("`{key}` must be labels in 1..={MAX_LABEL}")))
 }
 
-/// A required path parameter.
-pub(crate) fn path_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
+/// A required path parameter, as given.
+fn path_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
     p.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty() && s.len() <= modelcraft_io::MAX_PATH_LEN && !s.contains('\0'))
         .ok_or_else(|| EngineError::Params(format!("`{key}` must be a file path")))
+}
+
+/// A required path parameter naming a file (or folder) the command reads or writes: the path
+/// to use, checked against the session's [`Session::file_access`] (as given while unconfined;
+/// resolved, links followed, when confined). Every command that touches a file named by a
+/// parameter takes its path from here.
+pub(crate) fn file_param(s: &Session, p: &Value, key: &str, access: Access) -> Result<String> {
+    s.checked_path(path_param(p, key)?, access)
 }
 
 /// An optional number parameter.

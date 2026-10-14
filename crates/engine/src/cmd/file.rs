@@ -14,7 +14,9 @@ use modelcraft_geometry::{Design, MAX_DESIGN_BYTES, open_design};
 use modelcraft_io::{Geometry, ModelFile, SourceFile};
 use serde_json::{Value, json};
 
-use super::{path_param, req};
+use modelcraft_io::roots::{Access, Roots};
+
+use super::{file_param, req};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session, next_revision};
 
 pub const OPEN: CommandSpec = CommandSpec {
@@ -110,18 +112,27 @@ fn resolved_path(path: &str, base: Option<&Path>) -> String {
 }
 
 /// Open one geometry file again: what it gives, and the source as now read (or as stored, with
-/// its path resolved, when it could not be).
+/// its path resolved, when it could not be). A file outside the read root of `roots` is not
+/// opened.
 fn reopen<T>(
     what: &str,
     stored: &SourceFile,
     base: Option<&Path>,
+    roots: &Roots,
     max: usize,
     open: impl FnOnce(&[u8]) -> modelcraft_geometry::Result<T>,
     warnings: &mut Vec<String>,
 ) -> (Option<T>, SourceFile) {
     let path = resolved_path(stored.path(), base);
     let kept = stored.with_path(path.clone()).unwrap_or_else(|_| stored.clone());
-    let bytes = match modelcraft_geometry::read_file(&path, max) {
+    let checked = match roots.check(Path::new(&path), Access::Read) {
+        Ok(p) => p.to_string_lossy().into_owned(),
+        Err(e) => {
+            warnings.push(format!("{what} `{path}` was not opened ({e}); the model opens without it"));
+            return (None, kept);
+        }
+    };
+    let bytes = match modelcraft_geometry::read_file(&checked, max) {
         Ok(b) => b,
         Err(e) => {
             warnings.push(format!("{what} `{path}` was not opened ({e}); the model opens without it"));
@@ -155,19 +166,20 @@ impl Session {
     }
 
     /// A session holding what a file holds, its geometry opened again from the paths it names
-    /// (relative ones against `base`); problems with the geometry come back as warnings.
-    pub fn from_file(file: ModelFile, base: Option<&Path>) -> (Session, Vec<String>) {
+    /// (relative ones against `base`) where `roots` lets it read them; problems with the
+    /// geometry come back as warnings. The session's own file access is unconfined.
+    pub fn from_file(file: ModelFile, base: Option<&Path>, roots: &Roots) -> (Session, Vec<String>) {
         let mut warnings = Vec::new();
         let mut sources = Geometry::default();
         let mut design: Option<Arc<Design>> = None;
         if let Some(stored) = &file.geometry.design {
-            let (opened, source) = reopen("design", stored, base, MAX_DESIGN_BYTES, open_design, &mut warnings);
+            let (opened, source) = reopen("design", stored, base, roots, MAX_DESIGN_BYTES, open_design, &mut warnings);
             design = opened.map(Arc::new);
             sources.design = Some(source);
         }
         let mut surfaces = Vec::new();
         for stored in &file.geometry.meshes {
-            let (opened, source) = reopen("mesh", stored, base, tagged_mesh::MAX_FILE_BYTES, tagged_mesh::read_3mf, &mut warnings);
+            let (opened, source) = reopen("mesh", stored, base, roots, tagged_mesh::MAX_FILE_BYTES, tagged_mesh::read_3mf, &mut warnings);
             surfaces.extend(opened.into_iter().flatten().map(Arc::new));
             sources.meshes.push(source);
         }
@@ -176,11 +188,12 @@ impl Session {
         (session, warnings)
     }
 
-    /// Replace this session with `opened`, keeping its undo memory limit and its work caps; the
-    /// history starts empty.
+    /// Replace this session with `opened`, keeping its undo memory limit, its work caps and its
+    /// file access; the history starts empty.
     fn replace_with(&mut self, mut opened: Session) {
         opened.history = std::mem::take(&mut self.history);
         opened.limits = self.limits;
+        opened.file_access = std::mem::take(&mut self.file_access);
         opened.clear_history();
         *self = opened;
     }
@@ -202,7 +215,7 @@ fn summary(s: &Session, warnings: &[String]) -> Value {
 /// paths are relative to its folder), `saved` whether that file holds this content.
 fn load(s: &mut Session, bytes: &[u8], path: Option<String>, saved: bool) -> Result<Value> {
     let file = modelcraft_io::read(bytes)?;
-    let (mut opened, warnings) = Session::from_file(file, path.as_deref().and_then(|p| Path::new(p).parent()));
+    let (mut opened, warnings) = Session::from_file(file, path.as_deref().and_then(|p| Path::new(p).parent()), &s.file_access);
     opened.path = path;
     if saved {
         opened.saved_revision = Some(opened.revision);
@@ -212,7 +225,7 @@ fn load(s: &mut Session, bytes: &[u8], path: Option<String>, saved: bool) -> Res
 }
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = absolute(path_param(p, "path")?);
+    let path = absolute(&file_param(s, p, "path", Access::Read)?);
     let max = usize::try_from(modelcraft_io::MAX_FILE_BYTES).unwrap_or(usize::MAX);
     let bytes = modelcraft_geometry::read_file(&path, max)?;
     load(s, &bytes, Some(path.clone()), true).map_err(|e| EngineError::Params(format!("{path}: {e}")))
@@ -232,41 +245,45 @@ fn save_to(s: &mut Session, path: &str) -> Result<Value> {
 
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let path = match p.get("path") {
-        Some(_) => path_param(p, "path")?.to_string(),
-        None => s.path.clone().ok_or_else(|| EngineError::Params("the model has no file yet: give `path` (or use file.save_as)".into()))?,
+        Some(_) => file_param(s, p, "path", Access::Write)?,
+        None => {
+            let own = s.path.as_deref().ok_or_else(|| EngineError::Params("the model has no file yet: give `path` (or use file.save_as)".into()))?;
+            s.checked_path(own, Access::Write)?
+        }
     };
     save_to(s, &path)
 }
 
 fn save_as(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = path_param(p, "path")?.to_string();
+    let path = file_param(s, p, "path", Access::Write)?;
     save_to(s, &path)
 }
 
-/// The recovery folder: `dir`, else the default one.
-fn recovery_dir(p: &Value) -> Result<PathBuf> {
+/// The recovery folder: `dir` (checked for `access`), else the default one (the app's own folder,
+/// which no client names, so it is not confined).
+fn recovery_dir(s: &Session, p: &Value, access: Access) -> Result<PathBuf> {
     match p.get("dir") {
-        Some(_) => Ok(PathBuf::from(path_param(p, "dir")?)),
+        Some(_) => Ok(PathBuf::from(file_param(s, p, "dir", access)?)),
         None => {
             crate::autosave::default_dir().ok_or_else(|| EngineError::Params("no recovery folder: set MODELCRAFT_RECOVERY_DIR or give `dir`".into()))
         }
     }
 }
 
-fn recovery_list(_: &mut Session, p: &Value) -> Result<Value> {
-    let entries = modelcraft_io::recovery::orphans(&recovery_dir(p)?);
+fn recovery_list(s: &mut Session, p: &Value) -> Result<Value> {
+    let entries = modelcraft_io::recovery::orphans(&recovery_dir(s, p, Access::Read)?);
     serde_json::to_value(entries).map_err(|e| EngineError::Params(e.to_string()))
 }
 
 fn recover(s: &mut Session, p: &Value) -> Result<Value> {
-    let dir = recovery_dir(p)?;
+    let dir = recovery_dir(s, p, Access::Read)?;
     let (bytes, entry) = modelcraft_io::recovery::load(&dir, req::<&str>(p, "id")?)?;
     // Recovered work is unsaved until it is saved. Autosaves keep geometry paths absolute.
     load(s, &bytes, entry.path, false)
 }
 
-fn recovery_discard(_: &mut Session, p: &Value) -> Result<Value> {
-    let dir = recovery_dir(p)?;
+fn recovery_discard(s: &mut Session, p: &Value) -> Result<Value> {
+    let dir = recovery_dir(s, p, Access::Write)?;
     if p.get("all").and_then(Value::as_bool) == Some(true) {
         let ids: Vec<String> = modelcraft_io::recovery::orphans(&dir).into_iter().map(|e| e.id).collect();
         for id in &ids {
@@ -346,6 +363,51 @@ mod tests {
         assert!(t.design.is_none());
         assert_eq!(t.model, s.model);
         assert_eq!(t.sources.design.as_ref().unwrap().path(), design.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_confined_session_reads_and_writes_only_inside_its_roots() {
+        let d = dir("roots");
+        let (input, output, outside) = (d.join("in"), d.join("out"), d.join("outside"));
+        for f in [&input, &output, &outside] {
+            std::fs::create_dir_all(f).unwrap();
+        }
+        let design = plate_design(&Plate::default()).unwrap();
+        std::fs::write(input.join("plate.solidcraft"), &design).unwrap();
+        std::fs::write(outside.join("plate.solidcraft"), &design).unwrap();
+        let mut s = Session { file_access: Roots::new(Some(&input), Some(&output)).unwrap(), ..Session::default() };
+        let refused = |r: Result<Value>| {
+            let e = r.unwrap_err().to_string();
+            assert!(e.starts_with("automation"), "{e}");
+        };
+        refused(s.execute("geometry.open", &json!({"path": outside.join("plate.solidcraft")})));
+        refused(s.execute("geometry.import.mesh", &json!({"path": outside.join("x.3mf")})));
+        refused(s.execute("file.open", &json!({"path": outside.join("x.modelcraft")})));
+        refused(s.execute("file.recovery.list", &json!({"dir": outside})));
+        refused(s.execute("file.recovery.discard", &json!({"all": true, "dir": input})));
+        s.execute("geometry.open", &json!({"path": input.join("plate.solidcraft")})).unwrap();
+        defined(&mut s);
+        // Writes go to the write root only: not the read root, not elsewhere.
+        refused(s.execute("file.save_as", &json!({"path": input.join("m.modelcraft")})));
+        refused(s.execute("file.save_as", &json!({"path": outside.join("m.modelcraft")})));
+        refused(s.execute("file.save_as", &json!({"path": output.join("../outside/m.modelcraft")})));
+        refused(s.execute("deck.write", &json!({"format": "abaqus", "path": outside.join("m.inp")})));
+        let saved = output.join("m.modelcraft");
+        s.execute("file.save_as", &json!({"path": saved})).unwrap();
+        assert!(saved.is_file());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "nothing written outside");
+
+        // The roots survive opening a file; a model whose design lies outside the read root
+        // opens without it.
+        let mut other = Session::default();
+        other.execute("geometry.open", &json!({"path": outside.join("plate.solidcraft")})).unwrap();
+        other.execute("file.save_as", &json!({"path": input.join("other.modelcraft")})).unwrap();
+        let r = s.execute("file.open", &json!({"path": input.join("other.modelcraft")})).unwrap();
+        assert!(r["warnings"][0].as_str().unwrap().contains("automation path rejected"), "{r}");
+        assert!(s.design.is_none());
+        assert!(s.file_access.is_confined());
+        refused(s.execute("file.save", &json!({})));
         let _ = std::fs::remove_dir_all(&d);
     }
 

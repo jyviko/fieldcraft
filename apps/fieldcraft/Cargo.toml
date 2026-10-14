@@ -32,7 +32,7 @@ embed-resource = "3.0.12"
 # NEEDED entries and the tools cannot find them: they are listed here.
 [package.metadata.deb]
 name = "fieldcraft"
-maintainer = "FieldCraft contributors"
+maintainer = "FieldCraft contributors <jyviko@users.noreply.github.com>"
 copyright = "FieldCraft contributors"
 section = "science"
 priority = "optional"

@@ -159,7 +159,9 @@ jobs:
           dpkg-deb --info "$deb"
           rpm -qpi "$rpm"
           echo "rpm requires:"; rpm -qpR "$rpm"
-          lintian --info --fail-on error "$deb"
+          # The release notes live on GitHub, so the package has no Debian changelog (a native
+          # package built upstream, not by a distribution).
+          lintian --info --fail-on error --suppress-tags no-changelog "$deb"
           ldd target/release/fieldcraft
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"

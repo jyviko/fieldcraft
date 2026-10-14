@@ -99,7 +99,7 @@ if has deb; then
   case "$ARCH" in x86_64) DEB_ARCH=amd64 ;; *) DEB_ARCH="$ARCH" ;; esac
   OUT="$DIST/fieldcraft_${VERSION}_$DEB_ARCH.deb"
   (cd "$ROOT" && cargo deb --locked -p fieldcraft --no-build --deb-version "$PKG_VERSION" \
-    --maintainer "${FIELDCRAFT_MAINTAINER:-FieldCraft contributors}" -o "$OUT")
+    --maintainer "${FIELDCRAFT_MAINTAINER:-FieldCraft contributors <jyviko@users.noreply.github.com>}" -o "$OUT")
   echo "wrote $OUT"
 fi
 if has rpm; then

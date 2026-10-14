@@ -9,8 +9,6 @@ frozen so it cannot drift.
 | Experiment | The model predicts reality | Measurements published in papers and reports (Taylor bar, cavity and cylinder flows, FSI experiments…) |
 | Published benchmarks | Agreement with established codes on standard problems | NAFEMS benchmarks, vendor benchmark and verification manuals (e.g. Abaqus Benchmarks and Verification manuals), other published reference solutions |
 
-How our results compare with the values Abaqus publishes for the same benchmarks: [README, How FieldCraft compares with Abaqus](../README.md#how-fieldcraft-compares-with-abaqus).
-
 Rules:
 - Each case is **our own model** of the problem, built from the published description (geometry,
   material, loads, boundary conditions). We never run a commercial product and never copy its

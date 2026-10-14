@@ -2,7 +2,7 @@
 
 `make.py` regenerates the README's demo, `docs/media/ibeam-analysis.mp4` and
 `docs/media/ibeam-analysis.gif`: an agent analyses an I-beam cantilever over MCP while the
-desktop app shows each step.
+FieldCraft desktop app shows each step.
 
 ```sh
 python3 tools/demo-video/make.py                  # build, run, encode into docs/media
@@ -11,7 +11,7 @@ python3 tools/demo-video/make.py --frames /tmp/f  # also keep the captured pictu
 cd tools/demo-video && python3 -m unittest        # test the caption drawing
 ```
 
-Needs Python 3 (standard library only), a display for the app window (the pictures are drawn
+Needs Python 3 (standard library only), a display for the FieldCraft window (the pictures are drawn
 offscreen, so a locked screen is fine) and `ffmpeg` with libx264 on the `PATH` (or `FFMPEG`).
 It honours `CARGO_TARGET_DIR`.
 
@@ -21,7 +21,7 @@ What it does:
 2. Writes the corpus cantilever I-beam (`tests/corpus/cantilever-i-beam`: 40 x 40 mm, 3 mm
    flanges, a 2 mm web upright, 200 mm long along x) as a `.solidcraft` design to a temporary
    folder with `corpus --part cantilever-i-beam --design`.
-3. Starts the app with `--control PORT` and `fieldcraft-cli mcp --connect 127.0.0.1:PORT`, and
+3. Starts FieldCraft (`fieldcraft`) with `--control PORT` and `fieldcraft-cli mcp --connect 127.0.0.1:PORT`, and
    speaks MCP (JSON-RPC over stdio) to it. Every step is an MCP tool call: `open` the design,
    `mesh` (`hex_sweep`, 4 mm), `batch` (steel, a solid section, the root clamp, a kinematic
    coupling of the free end at x = 200 mm to a reference point loaded with 1000 N down, −z), `check_model`, `solve`
@@ -43,7 +43,7 @@ What it does:
    1280 x 848) and the GIF (960 px, its own palette), and prints the tip deflection and the peak
    von Mises stress.
 
-The theme is the app's default (dark).
+The theme is FieldCraft's default (dark).
 
 The script checks the solution against beam theory and stops when it is off. Tip deflection:
 P L³ / 3 E I = 0.1429 mm in bending plus P L / G A_web = 0.0335 mm in shear, 0.1763 mm; the

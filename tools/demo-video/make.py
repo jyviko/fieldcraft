@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Regenerate the README demo video: an I-beam cantilever analysed by an agent over MCP.
+"""Regenerate the README demo video: an agent analyses an I-beam cantilever in FieldCraft over MCP.
 
 Every analysis step goes through the MCP server (`fieldcraft-cli mcp --connect`), bridged to
-the desktop app, and every frame is the app window captured offscreen through the MCP
+the FieldCraft desktop app, and every frame is its window captured offscreen through the MCP
 `screenshot` tool (`source: window`). A caption bar names the tool behind each stage
 (caption.py draws it; ffmpeg's `overlay` filter composites it). See README.md beside this file.
 
@@ -91,13 +91,13 @@ def wait_for_port(port, app, timeout=180.0):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         if app.poll() is not None:
-            raise SystemExit(f"the app exited with {app.returncode} before its control channel opened")
+            raise SystemExit(f"FieldCraft exited with {app.returncode} before its control channel opened")
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1.0):
                 return
         except OSError:
             time.sleep(0.5)
-    raise SystemExit(f"the app's control channel on port {port} did not open within {timeout:.0f} s")
+    raise SystemExit(f"FieldCraft's control channel on port {port} did not open within {timeout:.0f} s")
 
 
 class Mcp:

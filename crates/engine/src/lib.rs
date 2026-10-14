@@ -184,7 +184,8 @@ impl Session {
     /// Run a command. On an error or a panic the model, the design and the surfaces are left as
     /// they were.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
-        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        // An id from hostile input is not echoed in full.
+        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.chars().take(100).collect()))?;
         // Session commands (open, save, undo, redo) change the session only in their last step,
         // after everything that can fail, so they need no copy of the model to restore.
         let before = (spec.kind == CommandKind::Model).then(|| self.snapshot());

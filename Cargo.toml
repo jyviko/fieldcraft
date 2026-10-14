@@ -25,6 +25,7 @@ modelcraft-engine = { path = "crates/engine" }
 modelcraft-testkit = { path = "crates/testkit" }
 modelcraft-render = { path = "crates/render" }
 modelcraft-ui-egui = { path = "crates/ui-egui" }
+modelcraft-mcp = { path = "crates/mcp" }
 
 # foundation
 thiserror = "2"

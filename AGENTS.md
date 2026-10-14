@@ -111,9 +111,12 @@ People trust FieldCraft with their models; a crash loses their work. **This outr
      `git rebase -i --autosquash origin/main` (`GIT_SEQUENCE_EDITOR=true` keeps it
      non-interactive). A regenerated page goes into the commit that changed what it lists.
   4. Rebase onto the latest `origin/main` (never merge `main` into a branch), rerun the tests of
-     the touched crates, push, open the PR and merge it yourself with a rebase merge, which keeps
-     `main` linear and every commit bisectable: `gh pr merge <N> --rebase --delete-branch`, run as
-     its own command. Never squash. Then remove your worktree and delete your local branch.
+     the touched crates, push, open the PR and merge it with a rebase merge, which keeps `main`
+     linear and every commit bisectable. `main` is protected (CODEOWNERS review, linear history,
+     rebase merges only); the core team merges as the maintainer with
+     `gh pr merge <N> --rebase --admin --delete-branch`, run as its own command. Outside
+     contributors' pull requests wait for the maintainer's review (CONTRIBUTING.md). Never squash.
+     Then remove your worktree and delete your local branch.
   5. Never run the full gate locally: no `cargo xtask ci`, no `cargo clippy --workspace`, no
      `cargo xtask wasm` or `oracle` unless step 2 calls for it. Never watch CI. GitHub CI runs
      `cargo xtask ci` (fmt, assets, licences, layers, clippy -D warnings, tests, wasm), the

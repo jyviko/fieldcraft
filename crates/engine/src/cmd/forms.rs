@@ -439,8 +439,18 @@ const PROCEDURE: Field = variants(
                 ),
                 flag("line_search", "Line search").def("false"),
                 json("load_path", "Load path").hint("[[fraction, factor], …]; a ramp when empty"),
+                group(
+                    "imperfection",
+                    "Imperfection",
+                    &[
+                        reference("step", "Buckling step", C::Step).req(),
+                        int("mode", "Mode", 1, 100_000).req().def("1"),
+                        num("scale", "Largest component", D::Length).req(),
+                    ],
+                ),
             ],
         ),
+        variant("buckle", "Buckling", &[int("modes", "Modes", 1, 100_000).req().def("4"), num("shift", "Shift", D::None)]),
         variant(
             "frequency",
             "Frequency",
@@ -803,6 +813,7 @@ pub const SOLVE_FREQUENCY: &[Field] = &[
     int("max_iterations", "Max Lanczos vectors", 1, 3000).hint("3000"),
     THREADS,
 ];
+pub const SOLVE_BUCKLE: &[Field] = &[STEP, MAX_DOFS, MAX_FACTOR, int("max_iterations", "Max Lanczos vectors", 1, 3000).hint("3000"), THREADS];
 pub const SOLVE_EXPLICIT: &[Field] = &[
     STEP,
     MAX_DOFS,

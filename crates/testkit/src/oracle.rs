@@ -549,6 +549,16 @@ fn fixture_text(f: &FixtureCheck) -> &'static str {
     }
 }
 
+/// The fixture column of docs/oracle.md. A value blessed in this run matches its new fixture by
+/// construction, so the page reads the same whether or not the run blessed anything; otherwise
+/// a page written by a blessing run would differ from the one CI regenerates.
+fn page_fixture_text(f: &FixtureCheck) -> &'static str {
+    match f {
+        FixtureCheck::Blessed => fixture_text(&FixtureCheck::Matches),
+        other => fixture_text(other),
+    }
+}
+
 fn cell(s: &str) -> String {
     s.replace('|', "\\|").replace('\n', " ")
 }
@@ -609,7 +619,7 @@ benchmark, {} experiment; {} pending cases wait for capabilities still being bui
                     error_of(r),
                     r.quantity.tolerance.describe(),
                     cell(&result),
-                    fixture_text(&r.fixture),
+                    page_fixture_text(&r.fixture),
                 );
             }
         }

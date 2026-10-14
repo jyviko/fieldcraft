@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use crate::ModelApp;
 use crate::icons::{self, Look};
-use crate::theme::Tokens;
+use crate::theme::{Tokens, label_font};
 
 /// The ribbon's height.
 pub const HEIGHT: f32 = 92.0;
@@ -126,7 +126,7 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
         let mut x = r.left() + PANELS_X;
         for &tab in app.ui.workspace.tabs() {
             let label = tab.label().to_uppercase();
-            let w = 12.0 + painter.layout_no_wrap(label.clone(), FontId::proportional(12.0), t.text).size().x.max(28.0);
+            let w = 12.0 + painter.layout_no_wrap(label.clone(), label_font(ui.ctx(), 12.0), t.text).size().x.max(28.0);
             let tr = Rect::from_min_size(pos2(x, r.top() + 2.0), vec2(w, 22.0));
             let active = app.ui.tab == tab;
             let resp = craft_ui::tabs::Tab::new(egui::Id::new(("mc_tab", panel_key(tab, ""))), &label, active)
@@ -141,7 +141,7 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
                     } else if resp.hovered() {
                         p.rect_filled(tr, 4.0, t.hover);
                     }
-                    p.text(tr.center(), Align2::CENTER_CENTER, &label, FontId::proportional(12.0), if active { t.text } else { t.text_dim });
+                    p.text(tr.center(), Align2::CENTER_CENTER, &label, label_font(ui.ctx(), 12.0), if active { t.text } else { t.text_dim });
                 });
             if resp.clicked() {
                 app.ui.tab = tab;
@@ -154,7 +154,13 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
         let top = r.top() + 26.0;
         let panels: Vec<&'static [Capability]> = catalogue::panels(tab).collect();
         let shown: Vec<Vec<&'static Capability>> = panels.iter().map(|p| buttons(p)).collect();
-        let widths: Vec<f32> = shown.iter().map(|b| panel_width(b.len())).collect();
+        // A panel is as wide as its buttons, and wide enough for its label's longest word (plus
+        // the caret beside it).
+        let label_word = |entries: &[Capability]| {
+            let label = entries.first().map_or(String::new(), |c| c.panel.to_uppercase());
+            label.split_whitespace().map(|w| painter.layout_no_wrap(w.to_string(), label_font(ui.ctx(), 10.5), t.text).size().x).fold(0.0, f32::max)
+        };
+        let widths: Vec<f32> = shown.iter().zip(&panels).map(|(b, p)| panel_width(b.len()).max(label_word(p) + 26.0)).collect();
         let fits = fit(&widths, r.right() - 8.0 - (r.left() + PANELS_X));
         let mut px = r.left() + PANELS_X;
         let mut overflow: Vec<&'static [Capability]> = Vec::new();
@@ -211,9 +217,9 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
             let label = panel.to_uppercase();
             let widest_word = label
                 .split_whitespace()
-                .map(|w| painter.layout_no_wrap(w.to_string(), FontId::proportional(10.5), t.text).size().x)
+                .map(|w| painter.layout_no_wrap(w.to_string(), label_font(ui.ctx(), 10.5), t.text).size().x)
                 .fold(0.0, f32::max);
-            let mut job = egui::text::LayoutJob::simple(label, FontId::proportional(10.5), t.text, (width - 14.0).max(widest_word + 1.0));
+            let mut job = egui::text::LayoutJob::simple(label, label_font(ui.ctx(), 10.5), t.text, (width - 14.0).max(widest_word + 1.0));
             job.wrap.overflow_character = None;
             job.wrap.max_rows = 2;
             job.halign = egui::Align::Center;
@@ -282,8 +288,9 @@ fn workspace_switcher(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, r: Rect
     icons::paint(app, ui, w.icon(), Rect::from_center_size(pos2(ws.center().x, ws.top() + 24.0), Vec2::splat(26.0)), Look::Normal);
     let p = ui.painter();
     let label = w.label().to_uppercase();
-    let label_w = p.layout_no_wrap(label.clone(), FontId::proportional(12.0), t.text).size().x;
-    p.text(pos2(ws.center().x - 5.0, ws.top() + 52.0), Align2::CENTER_CENTER, label, FontId::proportional(12.0), t.text);
+    let font = label_font(ui.ctx(), 12.0);
+    let label_w = p.layout_no_wrap(label.clone(), font.clone(), t.text).size().x;
+    p.text(pos2(ws.center().x - 5.0, ws.top() + 52.0), Align2::CENTER_CENTER, label, font, t.text);
     caret(p, pos2(ws.center().x - 5.0 + label_w / 2.0 + 7.0, ws.top() + 52.0), t.text);
     p.text(pos2(ws.center().x, ws.top() + 69.0), Align2::CENTER_CENTER, "workspace", FontId::proportional(10.0), t.text_dim);
     app.place("workspace_switcher", ws);
@@ -299,7 +306,7 @@ fn workspace_switcher(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, r: Rect
             }
             icons::paint(app, ui, w.icon(), Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), Vec2::splat(24.0)), Look::Normal);
             let p = ui.painter();
-            p.text(pos2(rect.left() + 40.0, rect.top() + 12.0), Align2::LEFT_CENTER, w.label().to_uppercase(), FontId::proportional(12.5), t.text);
+            p.text(pos2(rect.left() + 40.0, rect.top() + 12.0), Align2::LEFT_CENTER, w.label().to_uppercase(), label_font(ui.ctx(), 12.5), t.text);
             p.text(pos2(rect.left() + 40.0, rect.top() + 28.0), Align2::LEFT_CENTER, w.about(), FontId::proportional(11.0), t.text_dim);
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, w.label()));
             if resp.clicked() {

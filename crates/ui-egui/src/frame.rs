@@ -137,7 +137,7 @@ pub fn menu_row(ui: &mut Ui, t: &crate::theme::Tokens, label: &str, right: Optio
 /// A menu section's small heading.
 pub fn menu_heading(ui: &mut Ui, t: &crate::theme::Tokens, text: &str) {
     ui.add_space(2.0);
-    ui.label(egui::RichText::new(text).size(11.0).color(t.text_dim));
+    ui.label(egui::RichText::new(text).font(crate::theme::label_font(ui.ctx(), 10.5)).color(t.text_dim));
 }
 
 #[cfg(test)]

@@ -203,7 +203,13 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
             Stroke::NONE,
         ));
         if !lay.compact {
-            ui.painter().text(pos2(solve.left() + 28.0, solve.center().y), Align2::LEFT_CENTER, "Solve", FontId::proportional(13.0), Color32::WHITE);
+            ui.painter().text(
+                pos2(solve.left() + 28.0, solve.center().y),
+                Align2::LEFT_CENTER,
+                "Solve",
+                crate::theme::label_font(ui.ctx(), 13.0),
+                Color32::WHITE,
+            );
         }
         let tip = if app.session.model.steps().is_empty() {
             "Solve: the model has no steps yet (try Help › Samples)"
@@ -312,11 +318,11 @@ pub fn shortcut(key: &str) -> String {
 fn help_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
     ui.set_max_width(340.0);
-    ui.label(egui::RichText::new("SAMPLES").size(11.0).color(t.text_dim));
+    crate::frame::menu_heading(ui, &t, "SAMPLES");
     let mut open = None;
     crate::files::sample_rows(ui, &t, &mut open);
     ui.separator();
-    ui.label(egui::RichText::new("NAVIGATION").size(11.0).color(t.text_dim));
+    crate::frame::menu_heading(ui, &t, "NAVIGATION");
     ui.label("Left drag orbits (or pans or zooms: the navigation bar), right or middle drag pans, the wheel zooms, F or a double click fits.");
     ui.label(format!("S or {} searches every command; the command line at the bottom runs `id {{json}}`.", shortcut("K")));
     ui.separator();

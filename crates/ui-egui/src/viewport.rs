@@ -310,14 +310,14 @@ fn nav_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
     if let Some(br) = style_button {
         crate::frame::settings_menu(app, ui, "view", br, |app, ui| {
             let t = Tokens::get(app.ui.dark);
-            ui.label(egui::RichText::new("STYLE").size(11.0).color(t.text_dim));
+            crate::frame::menu_heading(ui, &t, "STYLE");
             for s in Style::ALL {
                 if ui.radio(app.ui.style == s, s.label()).clicked() {
                     app.ui.style = s;
                 }
             }
             ui.separator();
-            ui.label(egui::RichText::new("SHOW").size(11.0).color(t.text_dim));
+            crate::frame::menu_heading(ui, &t, "SHOW");
             ui.checkbox(&mut app.ui.show_geometry, "Geometry");
             ui.checkbox(&mut app.ui.show_mesh, "Mesh");
             ui.checkbox(&mut app.ui.show_nodes, "Nodes");

@@ -225,8 +225,33 @@ fn visuals(dark: bool) -> egui::Visuals {
     v
 }
 
-/// Style the context for the dark or light theme.
+/// The font family of the interface's caps labels (tabs, panel labels, workspaces, headings):
+/// Inter SemiBold, then egui's own proportional fonts for what it lacks. egui has no bold weight
+/// of its default font, so labels need a face of their own to read at small sizes.
+pub const LABEL_FAMILY: &str = "label";
+/// Inter SemiBold 4.1 (SIL OFL 1.1, unmodified; fonts/OFL.txt, ATTRIBUTION.md).
+static INTER_SEMIBOLD: &[u8] = include_bytes!("../fonts/Inter-SemiBold.ttf");
+
+/// The font definitions: egui's defaults plus the label family.
+pub fn fonts() -> egui::FontDefinitions {
+    let mut f = egui::FontDefinitions::default();
+    f.font_data.insert("inter-semibold".into(), std::sync::Arc::new(egui::FontData::from_static(INTER_SEMIBOLD)));
+    let mut family = vec!["inter-semibold".to_string()];
+    family.extend(f.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default());
+    f.families.insert(egui::FontFamily::Name(LABEL_FAMILY.into()), family);
+    f
+}
+
+/// The caps-label font at `size`: the label family once the context has it (fonts set with
+/// [`apply`] take effect from the next pass), the default proportional font until then.
+pub fn label_font(ctx: &egui::Context, size: f32) -> egui::FontId {
+    let family = egui::FontFamily::Name(LABEL_FAMILY.into());
+    if ctx.fonts(|f| f.families().contains(&family)) { egui::FontId::new(size, family) } else { egui::FontId::proportional(size) }
+}
+
+/// Style the context for the dark or light theme, with the interface's fonts.
 pub fn apply(ctx: &egui::Context, dark: bool) {
+    ctx.set_fonts(fonts());
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.set_visuals(visuals(dark));
     ctx.global_style_mut(|s| {
@@ -247,6 +272,26 @@ mod tests {
             assert!(luma(t.heading_bg) < luma(t.subheading_bg), "{t:?}");
             assert!(luma(t.subheading_bg) < luma(t.dialog_bg), "{t:?}");
         }
+    }
+
+    /// The label font is used only once the context has it; before that, the default font.
+    #[test]
+    fn the_label_font_falls_back_until_it_is_installed() {
+        let ctx = egui::Context::default();
+        let run = |ctx: &egui::Context| {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let f = label_font(ui.ctx(), 12.0);
+                // Laying text out in it never panics.
+                let _ = ui.painter().layout_no_wrap("PREPARE".into(), f, Color32::WHITE);
+            });
+            out.textures_delta.clear();
+        };
+        run(&ctx);
+        assert_eq!(label_font(&ctx, 12.0).family, egui::FontFamily::Proportional);
+        apply(&ctx, true);
+        run(&ctx);
+        assert_eq!(label_font(&ctx, 12.0).family, egui::FontFamily::Name(LABEL_FAMILY.into()));
+        run(&ctx);
     }
 
     /// Every element kind has a colour, and edges stand out from the faces they lie on.

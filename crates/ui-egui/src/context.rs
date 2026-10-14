@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::ModelApp;
 use crate::browser::{self, Def};
 use crate::frame::{Level, heading};
-use crate::theme::Tokens;
+use crate::theme::{Tokens, label_font};
 
 /// The panel's width.
 pub const WIDTH: f32 = 310.0;
@@ -39,7 +39,7 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
                 if let Some(plot) = app.plot() {
                     let mut close = false;
                     heading(ui, &t, Level::Title, |ui| {
-                        ui.label(RichText::new("RESULTS").strong().size(12.0));
+                        ui.label(RichText::new("RESULTS").font(label_font(ui.ctx(), 12.0)));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             close = ui.small_button("Close").on_hover_text("Back to the model (results.clear)").clicked();
                         });
@@ -67,7 +67,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     };
     let (mut run, mut cancel) = (false, false);
     heading(ui, t, Level::Title, |ui| {
-        ui.label(RichText::new(spec.label.to_uppercase()).strong().size(12.0));
+        ui.label(RichText::new(spec.label.to_uppercase()).font(label_font(ui.ctx(), 12.0)));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             cancel = ui.small_button("×").on_hover_text("Cancel (Esc)").clicked();
         });
@@ -127,7 +127,7 @@ fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name
     let Some(rows) = property_rows(app, kind, name) else { return };
     let mut deselect = false;
     heading(ui, t, Level::Title, |ui| {
-        ui.label(RichText::new(kind.label().to_uppercase()).strong().size(12.0));
+        ui.label(RichText::new(kind.label().to_uppercase()).font(label_font(ui.ctx(), 12.0)));
         ui.label(RichText::new(name).size(12.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             deselect = ui.small_button("×").on_hover_text("Deselect").clicked();

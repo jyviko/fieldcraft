@@ -151,6 +151,7 @@ is committed and listed here with its exports.
 | assets/app-icon/icon.iconset/icon_256x256@2x.png | ModelCraft contributors | sips export (512 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
 | assets/app-icon/icon.iconset/icon_512x512.png | ModelCraft contributors | sips export (512 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
 | assets/app-icon/icon.iconset/icon_512x512@2x.png | ModelCraft contributors | sips export (1024 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
+| crates/ui-egui/fonts/Inter-SemiBold.ttf | The Inter Project Authors | https://github.com/rsms/inter release v4.1 (Inter-4.1.zip, extras/ttf/Inter-SemiBold.ttf), unmodified; licence text in crates/ui-egui/fonts/OFL.txt; the interface's caps labels (theme::LABEL_FAMILY) | SIL OFL 1.1 |
 
 ## Adapted code
 

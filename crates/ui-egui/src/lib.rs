@@ -47,6 +47,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use fieldcraft_engine::Session;
 use fieldcraft_engine::catalogue::{self, Tab, Workspace};
+use fieldcraft_render::glyphs::Glyphs;
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -69,6 +70,10 @@ pub struct UiState {
     pub show_geometry: bool,
     /// Elements.
     pub show_mesh: bool,
+    /// Boundary condition and load symbols.
+    pub show_loads: bool,
+    /// Reference point, coupling and rigid wall symbols.
+    pub show_interactions: bool,
     pub perspective: bool,
     pub dark: bool,
     /// The browser (left).
@@ -92,6 +97,8 @@ impl Default for UiState {
             show_nodes: false,
             show_geometry: true,
             show_mesh: true,
+            show_loads: true,
+            show_interactions: true,
             perspective: false,
             dark: true,
             show_tree: true,
@@ -119,7 +126,13 @@ impl UiState {
 
     /// What the viewport shows.
     pub fn show(&self) -> scene::Show {
-        scene::Show { geometry: self.show_geometry, mesh: self.show_mesh, nodes: self.show_nodes }
+        scene::Show {
+            geometry: self.show_geometry,
+            mesh: self.show_mesh,
+            nodes: self.show_nodes,
+            loads: self.show_loads,
+            interactions: self.show_interactions,
+        }
     }
 }
 
@@ -218,6 +231,8 @@ pub struct ModelApp {
     /// Bumped whenever the model may have changed.
     revision: u64,
     display: (Option<u64>, DisplayMesh),
+    /// The analysis setup's symbols, built with the display data.
+    glyphs: Glyphs,
     /// The results plot and what it was built for.
     plot: (Option<PlotKey>, Option<Arc<results::Plot>>),
     /// The node probed last (a click on a results plot).
@@ -230,8 +245,8 @@ pub struct ModelApp {
     bodies: (Option<Arc<fieldcraft_geometry::Design>>, Vec<fieldcraft_geometry::SurfaceMesh>),
     /// The frame-independent part of the results plot (scale, contour) and what it was built for.
     prepared: (Option<PlotKey>, results::Prepared),
-    /// The built scene and its key.
-    scene: (Option<u64>, Scene),
+    /// The built scene, its key and the box around its symbols (they reach beyond the model).
+    scene: (Option<u64>, Scene, Aabb3),
     /// The theme last applied to the context.
     styled: Option<bool>,
     /// Input injected by the control channel, fed to egui one pointer event per frame.
@@ -295,13 +310,14 @@ impl ModelApp {
             gpu_info: None,
             revision: 0,
             display: (None, DisplayMesh::default()),
+            glyphs: Glyphs::default(),
             plot: (None, None),
             probe: None,
             reactions: None,
             results_shown: false,
             bodies: (None, Vec::new()),
             prepared: (None, results::Prepared::default()),
-            scene: (None, Scene::default()),
+            scene: (None, Scene::default(), Aabb3::EMPTY),
             styled: None,
             synthetic: Vec::new(),
             synthetic_mods: egui::Modifiers::default(),
@@ -567,11 +583,17 @@ impl ModelApp {
             }
             let was_empty = self.display.1.bounds.is_empty();
             self.display = (Some(self.revision), d);
+            self.glyphs = Glyphs::from_model(&self.session.model);
             if was_empty && !self.display.1.bounds.is_empty() {
                 self.cam.fit(&self.display.1.bounds);
             }
         }
         &self.display.1
+    }
+
+    /// Definitions whose symbols are a sample (`Clamp: 400 of 12000 nodes`).
+    pub fn glyph_notes(&self) -> &[String] {
+        &self.glyphs.notes
     }
 
     /// The key of the current scene: the model revision, every setting the scene depends on and
@@ -619,17 +641,20 @@ impl ModelApp {
         if self.scene.0 != Some(key) {
             let t = theme::Tokens::get(self.ui.dark);
             let (style, show) = (self.ui.style, self.ui.show());
-            let s = match &self.plot.1 {
+            let mut s = match &self.plot.1 {
                 Some(p) => results::scene(p, style, show, &t),
                 None => scene::build(&self.display.1, style, show, &t),
             };
-            self.scene = (Some(key), s);
+            // Symbols follow the drawn nodes: the deformed shape of a results plot.
+            let drawn = self.plot.1.as_ref().map_or(&self.display.1, |p| &p.display);
+            let symbols = scene::symbols(&mut s, &self.glyphs, |n| drawn.node_position(n), show, self.plot.1.is_some(), &t);
+            self.scene = (Some(key), s, symbols);
         }
         let mut bounds = self.display.1.bounds;
         if let Some(p) = &self.plot.1 {
-            bounds.add(p.display.bounds.min);
-            bounds.add(p.display.bounds.max);
+            bounds.union(p.display.bounds);
         }
+        bounds.union(self.scene.2);
         self.scene.1.radius = scene::radius(&bounds, &self.cam);
         (key, &self.scene.1)
     }
@@ -994,6 +1019,29 @@ mod tests {
     }
 
     #[test]
+    fn setup_symbols_show_with_their_toggles_and_fade_over_results() {
+        let mut app = ModelApp::new(Session::default());
+        app.run_script(&fieldcraft_engine::sample::cantilever()).unwrap();
+        let t = theme::Tokens::get(app.ui.dark);
+        let count = |app: &mut ModelApp, c: egui::Color32| app.scene().1.tris.iter().filter(|x| x.color == theme::rgb(c)).count();
+        assert!(count(&mut app, t.glyph_constraint) > 0, "the clamp's cones");
+        assert!(app.scene().1.lines.iter().any(|l| l.color == theme::rgb(t.glyph_load)), "the push's arrows");
+        // The symbols reach beyond the model: the clipping radius holds them.
+        let radius = app.scene().1.radius;
+        app.ui.show_loads = false;
+        assert_eq!(count(&mut app, t.glyph_constraint), 0);
+        assert!(app.scene().1.radius <= radius);
+        app.ui.show_loads = true;
+        // Over a results plot they are muted.
+        app.run("solve.static", json!({})).unwrap();
+        app.run("results.deformed", json!({"step": "Load"})).unwrap();
+        assert_eq!(count(&mut app, t.glyph_constraint), 0);
+        let muted = t.glyph_colors().over_results(theme::rgb(t.viewport_bottom));
+        assert!(app.scene().1.tris.iter().any(|x| x.color == muted.constraint));
+        assert!(app.glyph_notes().is_empty());
+    }
+
+    #[test]
     fn solving_shows_the_result_on_the_results_tab() {
         let mut app = ModelApp::new(Session::default());
         app.run_script(&fieldcraft_engine::sample::cantilever()).unwrap();
@@ -1012,6 +1060,8 @@ mod tests {
         assert!(app.scene().1.tris.len() > faces);
         app.run("results.clear", json!({})).unwrap();
         assert!(app.plot().is_none());
+        // The model's faces again (without the setup's symbols).
+        app.ui.show_loads = false;
         assert_eq!(app.scene().1.tris.len(), faces);
     }
 

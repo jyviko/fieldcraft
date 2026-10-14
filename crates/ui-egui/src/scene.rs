@@ -3,9 +3,11 @@
 //!
 //! Geometry (the open design, imported surfaces) draws as faces with their boundaries while
 //! the model has no element faces; once it is meshed, as boundaries only, so the mesh is not
-//! hidden behind coincident faces.
+//! hidden behind coincident faces. The analysis setup's symbols ([`symbols`]) go over the model,
+//! muted over a results plot.
 
-use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, SceneLine, ScenePoint, SceneTri};
+use fieldcraft_render::glyphs::{GlyphShow, Glyphs};
+use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, SceneLine, ScenePoint, SceneTri, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{Tokens, rgb};
@@ -48,11 +50,23 @@ pub struct Show {
     /// Elements.
     pub mesh: bool,
     pub nodes: bool,
+    /// Boundary conditions and loads.
+    pub loads: bool,
+    /// Reference points, couplings and rigid walls.
+    pub interactions: bool,
 }
 
 impl Show {
-    /// Geometry and mesh, without nodes.
-    pub const DEFAULT: Show = Show { geometry: true, mesh: true, nodes: false };
+    /// Geometry, mesh and the analysis setup, without nodes.
+    pub const DEFAULT: Show = Show { geometry: true, mesh: true, nodes: false, loads: true, interactions: true };
+}
+
+/// Draw the analysis setup's symbols into `s` at the nodes' positions `pos`, muted over a
+/// results plot; returns the box around them.
+pub fn symbols(s: &mut Scene, glyphs: &Glyphs, pos: impl Fn(u32) -> Option<Vec3>, show: Show, results: bool, t: &Tokens) -> Aabb3 {
+    let colors = t.glyph_colors();
+    let colors = if results { colors.over_results(rgb(t.viewport_bottom)) } else { colors };
+    glyphs.draw(pos, GlyphShow { loads: show.loads, interactions: show.interactions }, &colors, s)
 }
 
 /// The scene for `display` drawn in `style`.

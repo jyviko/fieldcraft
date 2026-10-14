@@ -1,7 +1,8 @@
 //! The browser (left): the model as a tree. Geometry and Mesh with eye toggles, then the model's
 //! definitions (sets, materials, sections, steps, loads and boundary conditions, interactions)
-//! with counts, and the solved steps' results. Clicking a definition selects it (its properties
-//! show on the right), a double click opens its edit form, and clicking a result step shows it.
+//! with counts (Loads & BCs and Interactions with eye toggles for their viewport symbols), and
+//! the solved steps' results. Clicking a definition selects it (its properties show on the
+//! right), a double click opens its edit form, and clicking a result step shows it.
 //!
 //! Row drawing follows SolidCraft's `crates/ui-egui/src/browser.rs` (MIT OR Apache-2.0), see
 //! ATTRIBUTION.md.
@@ -305,6 +306,15 @@ pub fn browser(app: &mut ModelApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The viewport setting a definition group's eye shows and hides: the setup's symbols.
+fn eye_flag<'u>(state: &'u mut crate::UiState, group: &str) -> Option<&'u mut bool> {
+    match group {
+        "loads" => Some(&mut state.show_loads),
+        "interactions" => Some(&mut state.show_interactions),
+        _ => None,
+    }
+}
+
 fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     let t = Tokens::get(app.ui.dark);
     let open = |app: &ModelApp, key: &str| app.tree_open.contains(key);
@@ -438,6 +448,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     for (key, label, kinds) in groups {
         let items: Vec<(Def, String)> = kinds.iter().flat_map(|k| k.names(&app.session.model).into_iter().map(move |n| (*k, n))).collect();
         let icon = kinds.first().map(|k| k.icon());
+        let eye = eye_flag(&mut app.ui, key).map(|v| *v);
         let r = draw_row(
             app,
             ui,
@@ -445,6 +456,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
             &Row {
                 depth: 1,
                 fold: Some(open(app, key)),
+                eye,
                 icon,
                 label,
                 note: Some(format!("{}", items.len())),
@@ -452,7 +464,11 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
                 ..Default::default()
             },
         );
-        if r.fold || r.clicked {
+        if r.eye
+            && let Some(v) = eye_flag(&mut app.ui, key)
+        {
+            *v = !*v;
+        } else if r.fold || r.clicked {
             acts.push(Act::Fold(key.into()));
         }
         if open(app, key) {

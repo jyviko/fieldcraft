@@ -8,6 +8,7 @@
 use egui::{Color32, Stroke};
 use fieldcraft_model::ElementKind;
 use fieldcraft_render::Rgb;
+use fieldcraft_render::glyphs::GlyphColors;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
@@ -70,6 +71,15 @@ pub struct Tokens {
     pub contour: [Color32; 5],
     /// Faces with no result at a node.
     pub no_result: Color32,
+    // ---- analysis setup symbols ----
+    /// Boundary conditions and rigid walls.
+    pub glyph_constraint: Color32,
+    /// Forces, moments, pressures, body loads and initial velocities.
+    pub glyph_load: Color32,
+    /// Reference points and couplings.
+    pub glyph_interaction: Color32,
+    /// Temperatures, heat fluxes, convection and heat sources.
+    pub glyph_thermal: Color32,
 }
 
 /// The contour colour scale: blue, cyan, green, yellow, red.
@@ -129,6 +139,10 @@ impl Tokens {
             geometry_edge: Color32::from_rgb(40, 44, 52),
             contour: CONTOUR,
             no_result: Color32::from_rgb(0x9a, 0xa0, 0xaa),
+            glyph_constraint: Color32::from_rgb(0x00, 0x8a, 0xa8),
+            glyph_load: Color32::from_rgb(0xd0, 0x24, 0x24),
+            glyph_interaction: Color32::from_rgb(0x9a, 0x30, 0xc0),
+            glyph_thermal: Color32::from_rgb(0xe8, 0x4c, 0x00),
         }
     }
 
@@ -175,12 +189,27 @@ impl Tokens {
         t.geometry = Color32::from_rgb(152, 156, 162);
         t.geometry_edge = Color32::from_rgb(16, 16, 18);
         t.no_result = Color32::from_rgb(0x70, 0x76, 0x80);
+        t.glyph_constraint = Color32::from_rgb(0x3c, 0xdc, 0xf0);
+        t.glyph_load = Color32::from_rgb(0xff, 0x5a, 0x4c);
+        t.glyph_interaction = Color32::from_rgb(0xd2, 0x82, 0xff);
+        t.glyph_thermal = Color32::from_rgb(0xff, 0x8c, 0x00);
         t
     }
 
     /// The contour colour scale for the renderer, low to high.
     pub fn contour_stops(&self) -> [Rgb; 5] {
         self.contour.map(rgb)
+    }
+
+    /// The colours of the analysis setup's symbols; their names in the overlay text colour.
+    pub fn glyph_colors(&self) -> GlyphColors {
+        GlyphColors {
+            constraint: rgb(self.glyph_constraint),
+            load: rgb(self.glyph_load),
+            interaction: rgb(self.glyph_interaction),
+            thermal: rgb(self.glyph_thermal),
+            label: rgb(self.overlay_text),
+        }
     }
 
     /// The colour elements of this kind are drawn in.
@@ -292,6 +321,29 @@ mod tests {
         run(&ctx);
         assert_eq!(label_font(&ctx, 12.0).family, egui::FontFamily::Name(LABEL_FAMILY.into()));
         run(&ctx);
+    }
+
+    /// Setup symbols differ from every element colour and from each other, and stand out from
+    /// the viewport background.
+    #[test]
+    fn symbol_colours_stand_out() {
+        let luma = |c: Color32| i32::from(c.r()) * 3 + i32::from(c.g()) * 6 + i32::from(c.b());
+        let far = |a: Color32, b: Color32| {
+            (i32::from(a.r()) - i32::from(b.r())).abs() + (i32::from(a.g()) - i32::from(b.g())).abs() + (i32::from(a.b()) - i32::from(b.b())).abs()
+        };
+        for dark in [true, false] {
+            let t = Tokens::get(dark);
+            let symbols = [t.glyph_constraint, t.glyph_load, t.glyph_interaction, t.glyph_thermal];
+            for (i, s) in symbols.iter().enumerate() {
+                assert!((luma(*s) - luma(t.viewport_bottom)).abs() > 400 || far(*s, t.viewport_bottom) > 250, "{s:?} dark={dark}");
+                for k in ElementKind::ALL {
+                    assert!(far(*s, t.element(k)) > 90, "{s:?} vs {k:?} dark={dark}");
+                }
+                for o in symbols.iter().skip(i + 1) {
+                    assert!(far(*s, *o) > 90, "{s:?} vs {o:?} dark={dark}");
+                }
+            }
+        }
     }
 
     /// Every element kind has a colour, and edges stand out from the faces they lie on.

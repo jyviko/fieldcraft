@@ -33,9 +33,11 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     gradient(&painter, rect, t.viewport_top, t.viewport_bottom);
     if app.viewport.gpu.is_some() {
         paint_gpu(app, ui, &painter, rect);
+        labels(app, &painter, &t);
     } else {
         paint_cpu(app, ui, &painter, rect);
     }
+    sampled_note(app, &painter, rect, &t);
     if app.display().bounds.is_empty() && app.busy().is_none() {
         start_screen(app, ui, rect, &t);
     }
@@ -174,6 +176,32 @@ fn paint_cpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
     if let Some((tex, ..)) = &app.viewport.cpu {
         painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
+}
+
+/// The scene's labels (reference point names) beside their points, with the interface's font.
+/// The CPU renderer draws them into its image.
+fn labels(app: &mut ModelApp, painter: &egui::Painter, t: &Tokens) {
+    let labels: Vec<(Vec3, String)> = app.scene().1.labels.iter().map(|l| (l.p, l.text.clone())).collect();
+    let offset = fieldcraft_render::LABEL_OFFSET as f32;
+    for (p, text) in labels {
+        if let Some(at) = to_screen(app, p) {
+            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), t.overlay_text);
+            let r = Rect::from_min_size(at + vec2(offset, -offset - galley.size().y), galley.size()).expand2(vec2(4.0, 1.0));
+            painter.rect_filled(r, 3.0, t.overlay);
+            painter.galley(r.min + vec2(4.0, 1.0), galley, t.overlay_text);
+        }
+    }
+}
+
+/// Bottom left: the definitions whose symbols are a sample of their nodes or faces.
+fn sampled_note(app: &ModelApp, painter: &egui::Painter, rect: Rect, t: &Tokens) {
+    let show = app.ui.show();
+    let notes = &app.glyph_notes();
+    if notes.is_empty() || !(show.loads || show.interactions) {
+        return;
+    }
+    let text = format!("Symbols sampled: {}", notes.join("; "));
+    painter.text(rect.left_bottom() + vec2(10.0, -10.0), egui::Align2::LEFT_BOTTOM, text, egui::FontId::proportional(11.0), t.text_dim);
 }
 
 /// The orientation gizmo's arm length and tip radius (points).
@@ -321,6 +349,8 @@ fn nav_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
             ui.checkbox(&mut app.ui.show_geometry, "Geometry");
             ui.checkbox(&mut app.ui.show_mesh, "Mesh");
             ui.checkbox(&mut app.ui.show_nodes, "Nodes");
+            ui.checkbox(&mut app.ui.show_loads, "Loads & BCs");
+            ui.checkbox(&mut app.ui.show_interactions, "Interactions");
             ui.separator();
             ui.checkbox(&mut app.ui.show_tree, "Browser");
             ui.checkbox(&mut app.ui.show_timeline, "Timeline");

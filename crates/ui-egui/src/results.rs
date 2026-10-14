@@ -86,7 +86,7 @@ impl Plot {
 
     /// The node's position in the plot, if it is drawn.
     pub fn node_position(&self, label: u32) -> Option<Vec3> {
-        self.display.nodes.binary_search_by_key(&label, |n| n.label).ok().and_then(|i| self.display.nodes.get(i)).map(|n| n.p)
+        self.display.node_position(label)
     }
 }
 

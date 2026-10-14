@@ -1,0 +1,99 @@
+{
+ "title": "Filleted L-bracket on the octree all-hex mesh: equilibrium, beam bending, fillet stress convergence",
+ "kind": "theory",
+ "source": "equilibrium; Euler–Bernoulli bending of the 8 × 40 mm leg, σ = M c / I with M = F (50 − y) (S. P. Timoshenko, J. N. Goodier, Theory of Elasticity, 3rd ed., 1970, §102); grid convergence of the fillet stress against the 4 mm mesh of this case (P. J. Roache, Verification and Validation in Computational Science and Engineering, 1998, ch. 5)",
+ "slow": true,
+ "quantities": [
+  {
+   "id": "reaction_x",
+   "quantity": "x reaction on the clamped face (5 mm mesh)",
+   "measure": {
+    "from": "solve5",
+    "pointer": "/reaction_total/0"
+   },
+   "value": -2000.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "the reactions balance the 2 kN load to solver precision"
+  },
+  {
+   "id": "invalid",
+   "quantity": "elements the certified Jacobian check does not prove valid (5 mm mesh)",
+   "measure": {
+    "from": "quality5",
+    "pointer": "/invalid/count"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "exact": true
+   },
+   "reason": "the octree mesher returns only elements proven valid"
+  },
+  {
+   "id": "volume",
+   "quantity": "mesh volume against the CAD volume (5 mm mesh)",
+   "measure": {
+    "from": "mesh5",
+    "pointer": "/bodies/0/volume"
+   },
+   "value": 32144.778925,
+   "tolerance": {
+    "relative": 0.003
+   },
+   "reason": "bilinear boundary faces on the R6 fillet and the two Ø8 holes, and the 1e-3 chordal tessellation they are fitted to"
+  },
+  {
+   "id": "syy_outer",
+   "quantity": "σ_yy on the outer face of the upright leg at y = 19, z = 6 (5 mm mesh)",
+   "measure": {
+    "from": "probe5",
+    "pointer": "/nodes/1/stress/1"
+   },
+   "value": 145.3125,
+   "tolerance": {
+    "relative": 0.05
+   },
+   "reason": "beam theory ignores the corner 5 mm below and the hole 9 mm above; the probe takes the nearest node's extrapolated stress"
+  },
+  {
+   "id": "syy_inner",
+   "quantity": "σ_yy on the inner face of the upright leg at y = 19, z = 6 (5 mm mesh)",
+   "measure": {
+    "from": "probe5",
+    "pointer": "/nodes/2/stress/1"
+   },
+   "value": -145.3125,
+   "tolerance": {
+    "relative": 0.05
+   },
+   "reason": "as for the outer face"
+  },
+  {
+   "id": "fillet_7",
+   "quantity": "von Mises stress at the middle of the fillet, 7 mm mesh",
+   "measure": {
+    "from": "probe7",
+    "pointer": "/nodes/0/von_mises"
+   },
+   "value": 143.21,
+   "tolerance": {
+    "relative": 0.05
+   },
+   "reason": "the coarsest mesh, within 5% of the 4 mm mesh"
+  },
+  {
+   "id": "fillet_5",
+   "quantity": "von Mises stress at the middle of the fillet, 5 mm mesh",
+   "measure": {
+    "from": "probe5",
+    "pointer": "/nodes/0/von_mises"
+   },
+   "value": 143.21,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "converging: within 2% of the 4 mm mesh"
+  }
+ ]
+}

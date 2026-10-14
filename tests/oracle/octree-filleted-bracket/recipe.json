@@ -1,0 +1,228 @@
+[
+ {
+  "command": "model.material.create",
+  "params": {
+   "name": "Steel",
+   "elastic": {
+    "type": "isotropic",
+    "young": 210000.0,
+    "poisson": 0.3
+   }
+  }
+ },
+ {
+  "command": "mesh.hex.octree",
+  "params": {
+   "body": "Bracket",
+   "size": 7.0
+  },
+  "id": "mesh7"
+ },
+ {
+  "command": "model.set.create",
+  "params": {
+   "name": "all",
+   "geometry": [
+    {
+     "body": "Bracket"
+    }
+   ]
+  }
+ },
+ {
+  "command": "model.set.create",
+  "params": {
+   "name": "base",
+   "geometry": [
+    {
+     "body": "Bracket",
+     "face": "F2:side:l1"
+    }
+   ]
+  }
+ },
+ {
+  "command": "model.set.create",
+  "params": {
+   "name": "top",
+   "geometry": [
+    {
+     "body": "Bracket",
+     "face": "F2:side:l5"
+    }
+   ]
+  }
+ },
+ {
+  "command": "model.section.create",
+  "params": {
+   "name": "solid",
+   "set": "all",
+   "material": "Steel",
+   "kind": {
+    "type": "solid"
+   },
+   "formulation": {
+    "incompatible_modes": true
+   }
+  }
+ },
+ {
+  "command": "model.boundary_condition.create",
+  "params": {
+   "name": "clamp",
+   "type": "fixed",
+   "target": {
+    "set": "base"
+   }
+  }
+ },
+ {
+  "command": "model.load.create",
+  "params": {
+   "name": "F",
+   "type": "force",
+   "target": {
+    "set": "top"
+   },
+   "vector": [
+    2000.0,
+    0,
+    0
+   ]
+  }
+ },
+ {
+  "command": "model.step.create",
+  "params": {
+   "name": "Load",
+   "procedure": {
+    "type": "static"
+   },
+   "boundary_conditions": [
+    "clamp"
+   ],
+   "loads": [
+    "F"
+   ]
+  }
+ },
+ {
+  "command": "mesh.quality",
+  "params": {},
+  "id": "quality7"
+ },
+ {
+  "command": "solve.static",
+  "params": {},
+  "id": "solve7"
+ },
+ {
+  "command": "solve.probe",
+  "params": {
+   "step": "Load",
+   "at": [
+    [
+     9.757359312880714,
+     9.757359312880714,
+     10.0
+    ],
+    [
+     0.0,
+     19.0,
+     6.0
+    ],
+    [
+     8.0,
+     19.0,
+     6.0
+    ]
+   ]
+  },
+  "id": "probe7"
+ },
+ {
+  "command": "mesh.hex.octree",
+  "params": {
+   "body": "Bracket",
+   "size": 5.0
+  },
+  "id": "mesh5"
+ },
+ {
+  "command": "mesh.quality",
+  "params": {},
+  "id": "quality5"
+ },
+ {
+  "command": "solve.static",
+  "params": {},
+  "id": "solve5"
+ },
+ {
+  "command": "solve.probe",
+  "params": {
+   "step": "Load",
+   "at": [
+    [
+     9.757359312880714,
+     9.757359312880714,
+     10.0
+    ],
+    [
+     0.0,
+     19.0,
+     6.0
+    ],
+    [
+     8.0,
+     19.0,
+     6.0
+    ]
+   ]
+  },
+  "id": "probe5"
+ },
+ {
+  "command": "mesh.hex.octree",
+  "params": {
+   "body": "Bracket",
+   "size": 4.0
+  },
+  "id": "mesh4"
+ },
+ {
+  "command": "mesh.quality",
+  "params": {},
+  "id": "quality4"
+ },
+ {
+  "command": "solve.static",
+  "params": {},
+  "id": "solve4"
+ },
+ {
+  "command": "solve.probe",
+  "params": {
+   "step": "Load",
+   "at": [
+    [
+     9.757359312880714,
+     9.757359312880714,
+     10.0
+    ],
+    [
+     0.0,
+     19.0,
+     6.0
+    ],
+    [
+     8.0,
+     19.0,
+     6.0
+    ]
+   ]
+  },
+  "id": "probe4"
+ }
+]

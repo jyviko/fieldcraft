@@ -73,7 +73,7 @@ hex8/20/27 with first and second derivatives).
 | wedge6 | Swept meshes from triangles, transitions | done |
 | hex8 one-point with hourglass control, nodal-pressure tet4 (explicit) | Explicit dynamics | done |
 | wedge15, pyramid5/13 | Quadratic transitions, tet–hex transition | planned (M5); wedge15 and pyramid5 shape functions done |
-| Hybrid (mixed u–p) solids | Nearly incompressible materials (rubber) | in progress (FEM foundation, phase C); pressure DOF kind done |
+| Hybrid (mixed u–p) solids | Nearly incompressible materials (rubber) | done for hex8 (constant pressure), hex20 (linear pressure) and tet10 (constant pressure), discontinuous pressure condensed, isotropic materials; tet4/wedge6 refused (they lock); continuous-pressure (Taylor–Hood) elements planned with an indefinite factorization |
 | Modified quadratic tet (tet10 for contact/plasticity) | Robust quadratic tets | planned |
 
 ## Special-purpose and multiphysics

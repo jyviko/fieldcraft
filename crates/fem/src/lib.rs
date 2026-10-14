@@ -50,6 +50,7 @@ pub mod element;
 pub mod face;
 pub mod frame;
 pub mod heat;
+pub mod hybrid;
 pub mod jet;
 pub mod material;
 pub mod plane;

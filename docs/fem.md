@@ -133,3 +133,19 @@ or per axis, and `reference_temperature`), `BoundaryCondition::Temperature`, loa
 in a static step), procedures `HeatTransfer { transient }` and `CoupledTemperatureDisplacement`.
 Commands: `solve.heat`, and `solve.static` for coupled steps. The deck writers refuse heat
 transfer by name for now.
+## Hybrid (mixed u–p) solids
+
+A section with `"formulation": {"hybrid": true}` gives `Formulation::Hybrid { pressures }`
+(`crate::hybrid`): the isotropic elasticity splits as D = D_dev + K m mᵀ, the mean stress is an
+independent field discontinuous between elements (hex20: 1, x, y, z; hex8 and tet10: constant),
+and it is condensed out element by element, p̂ = K M⁻¹ Gᵀ u, leaving the stiffness
+K_dev + K G M⁻¹ Gᵀ. `ElementDofs.internal.pressure` counts the condensed unknowns; nothing
+global changes, and Cholesky still applies. Stresses are D_dev ε + p m with the element's
+pressure field. The choice of pressure space follows the inf-sup analysis (docs in
+`crates/fem/src/hybrid.rs`): Q2–P1disc and P2–P0 are stable; Q1–P0 does not lock but may show
+checkerboard pressures; linear tetrahedra and wedges lock even so and are refused. A thermal
+strain splits the same way: ∫ Bᵀ D_dev ε_th on the nodes and, through the pressure,
+K G M⁻¹ ∫ N_p tr ε_th, so a heated nearly incompressible solid takes its bulk stress −3KαΔT
+when confined. A continuous
+nodal pressure (`DofKind::P`, Taylor–Hood) needs a symmetric indefinite factorization and is
+planned.

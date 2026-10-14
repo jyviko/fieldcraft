@@ -270,6 +270,7 @@ impl<'a> Plane<'a> {
             Formulation::Full => true,
             Formulation::Reduced => ty.reduced.is_some(),
             Formulation::IncompatibleModes => ty.incompatible_modes,
+            Formulation::Hybrid { .. } => false,
         };
         if !ok {
             return Err(Error::NotSupported(format!("{formulation:?} formulation of 2D {} elements", kind.name())));

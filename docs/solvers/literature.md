@@ -1141,3 +1141,17 @@ update are written from (cited again in the module docs):
   constrained thermal expansion (σ = −EαΔT), the bimetal strip (S. Timoshenko, *Analysis of
   bi-metal thermostats*, J. Opt. Soc. Am. 11(3):233–255, 1925), and the coupled step against
   the heat step followed by the static step.
+
+## Part L: Hybrid (mixed u–p) solids, as implemented
+
+- Perturbed-Lagrangian u–p formulation with element-wise condensed discontinuous pressure:
+  T. J. R. Hughes, *The Finite Element Method*, Dover 2000, §4.3–4.5 (B-bar and mean
+  dilatation as the constant-pressure case); J. C. Nagtegaal, D. M. Parks, J. R. Rice, CMAME
+  4(2):153–177, 1974 (locking of displacement elements near incompressibility).
+- Pressure spaces and the inf-sup condition: F. Brezzi, M. Fortin, *Mixed and Hybrid Finite
+  Element Methods*, Springer 1991, ch. VI; K.-J. Bathe, *Finite Element Procedures*, 2nd ed.,
+  2014, §4.5 (Q2–P1disc and P2–P0 stable, Q1–P0 checkerboard-prone, P1–P0 locks).
+- Verification (`crates/solver/tests/hybrid.rs`, analytic): a block in uniaxial strain at
+  ν = 0.4999 (exact), Lamé's thick cylinder in plane strain at ν = 0.4999 (hex20 1e-5,
+  tet10 1e-3, hex8 3e-3 relative error in the bore displacement, where the displacement hex8
+  is 80 % too stiff). Cook's membrane is a published benchmark, not part of the analytic gate.

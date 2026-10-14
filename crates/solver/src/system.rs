@@ -17,7 +17,7 @@ use modelcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, ElementDofs, PointS
 use modelcraft_model::nodal::edge_pressure;
 use std::collections::BTreeSet;
 
-use modelcraft_model::{ElementKind, Integration, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
+use modelcraft_model::{Elastic, ElementKind, Integration, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
 
 use crate::analysis::MassKind;
 use crate::{Error, Result};
@@ -398,6 +398,12 @@ impl Mesh {
                 .ok_or_else(|| Error::Invalid(format!("section `{name}`: material `{}` is missing", section.material)))?;
             let elastic =
                 material.elastic.as_ref().ok_or_else(|| Error::Invalid(format!("material `{}` has no elastic constants", section.material)))?;
+            if section.formulation.hybrid && !matches!(elastic, Elastic::Isotropic { .. }) {
+                return Err(Error::NotSupported(format!(
+                    "hybrid elements of the orthotropic material `{}` (section `{name}`): the pressure split needs isotropic elasticity",
+                    section.material
+                )));
+            }
             let set = resolved.sets.get(&section.set).ok_or_else(|| Error::Invalid(format!("set `{}` is not resolved", section.set)))?;
             let bad = |e: modelcraft_fem::Error| match e {
                 modelcraft_fem::Error::NotSupported(m) => Error::NotSupported(format!("section `{name}`: {m}")),

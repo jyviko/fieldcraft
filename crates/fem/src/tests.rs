@@ -34,7 +34,7 @@ fn distorted(kind: ElementKind, curved: bool) -> Vec<[f64; 3]> {
     xyz
 }
 
-const CASES: [(ElementKind, Formulation); 7] = [
+const CASES: [(ElementKind, Formulation); 10] = [
     (ElementKind::Tet4, Formulation::Full),
     (ElementKind::Tet10, Formulation::Full),
     (ElementKind::Wedge6, Formulation::Full),
@@ -42,6 +42,9 @@ const CASES: [(ElementKind, Formulation); 7] = [
     (ElementKind::Hex8, Formulation::IncompatibleModes),
     (ElementKind::Hex20, Formulation::Full),
     (ElementKind::Hex20, Formulation::Reduced),
+    (ElementKind::Tet10, Formulation::Hybrid { pressures: 1 }),
+    (ElementKind::Hex8, Formulation::Hybrid { pressures: 1 }),
+    (ElementKind::Hex20, Formulation::Hybrid { pressures: 4 }),
 ];
 
 fn rigid_modes(xyz: &[[f64; 3]]) -> Vec<Vec<f64>> {
@@ -75,8 +78,11 @@ fn stiffness_is_symmetric_with_exactly_six_rigid_body_modes() {
         }
         // Holding six degrees of freedom (node 1 fully, node 2 in y and z, node 3 in z) leaves a
         // positive definite matrix: no other zero-energy mode. Reduced hex20 has spurious modes
-        // on a single element, so it is skipped.
-        if f != Formulation::Reduced {
+        // on a single element, and so has hybrid tet10: its deviatoric stiffness is blind to the
+        // four dilatations with a linear volumetric strain, and its constant pressure controls
+        // one; neighbouring elements restrain the other three (P2–P0, crate::hybrid). Both are
+        // skipped.
+        if f != Formulation::Reduced && !(kind == ElementKind::Tet10 && matches!(f, Formulation::Hybrid { .. })) {
             let mut held = k.clone();
             for dof in [0, 1, 2, 4, 5, 8] {
                 held.add(dof, dof, 1e3 * scale);
@@ -95,7 +101,9 @@ fn constant_strain_is_reproduced_exactly() {
     let strain = [a[0][0], a[1][1], a[2][2], a[0][1] + a[1][0], a[0][2] + a[2][0], a[1][2] + a[2][1]];
     for d in [isotropic(210e3, 0.3).unwrap(), orthotropic([140e3, 10e3, 12e3], [0.3, 0.25, 0.4], [5e3, 4e3, 3.8e3]).unwrap()] {
         let want = stress(&d, &strain);
-        for (kind, f) in CASES {
+        // Hybrid elements need an isotropic material.
+        let hybrid_ok = crate::hybrid::split(&d).is_ok();
+        for (kind, f) in CASES.into_iter().filter(|(_, f)| hybrid_ok || !matches!(f, Formulation::Hybrid { .. })) {
             // Curved mid-sides keep the field in the isoparametric span only for straight edges.
             let xyz = distorted(kind, false);
             let u: Vec<[f64; 3]> = xyz.iter().map(|x| [0, 1, 2].map(|i| (0..3).map(|j| a[i][j] * x[j]).sum())).collect();
@@ -213,9 +221,12 @@ fn section_formulations() {
 fn uniform_thermal_strain_is_free_expansion_and_its_load_balances_it() {
     // A uniform ΔT with orthotropic α: the free expansion u = diag(α ΔT) x is stress-free, and
     // the thermal load equals K u for it (the element is in equilibrium with no other load).
-    let d = orthotropic([1000.0, 800.0, 600.0], [0.3, 0.25, 0.2], [400.0, 300.0, 350.0]).unwrap();
+    let ortho = orthotropic([1000.0, 800.0, 600.0], [0.3, 0.25, 0.2], [400.0, 300.0, 350.0]).unwrap();
+    let iso = isotropic(1000.0, 0.4999).unwrap();
     let alpha = [1.2e-5, 2.0e-5, 0.7e-5];
     for (kind, f) in CASES {
+        // Hybrid elements take isotropic (here nearly incompressible) materials.
+        let d = if matches!(f, Formulation::Hybrid { .. }) { iso } else { ortho };
         let xyz = distorted(kind, true);
         let solid = Solid::new(kind, &xyz, f).unwrap();
         let th = crate::ThermalStrain { alpha, delta: vec![80.0; xyz.len()] };

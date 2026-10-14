@@ -146,6 +146,11 @@ pub enum Formulation {
     Full,
     Reduced,
     IncompatibleModes,
+    /// Mixed displacement–pressure with `pressures` discontinuous pressure unknowns condensed
+    /// out of the element ([`crate::hybrid`]).
+    Hybrid {
+        pressures: usize,
+    },
 }
 
 impl Formulation {
@@ -153,14 +158,23 @@ impl Formulation {
     /// incompatible modes it condenses out.
     pub fn dofs(self) -> ElementDofs {
         let incompatible_modes = if self == Formulation::IncompatibleModes { INCOMPATIBLE_DOFS } else { 0 };
-        ElementDofs { node: DofSet::TRANSLATIONS, internal: Internal { incompatible_modes, pressure: 0 } }
+        let pressure = if let Formulation::Hybrid { pressures } = self { pressures } else { 0 };
+        ElementDofs { node: DofSet::TRANSLATIONS, internal: Internal { incompatible_modes, pressure } }
     }
 
     /// The formulation a model section asks for, if this element type has it.
     pub fn from_section(kind: ElementKind, f: &modelcraft_model::Formulation) -> Result<Formulation> {
         let ty = element_type(kind)?;
         if f.hybrid {
-            return Err(Error::NotSupported("hybrid (mixed displacement–pressure) elements".into()));
+            if f.incompatible_modes || f.integration == modelcraft_model::Integration::Reduced {
+                return Err(Error::NotSupported("hybrid elements with incompatible modes or reduced integration".into()));
+            }
+            return crate::hybrid::pressures(kind).map(|pressures| Formulation::Hybrid { pressures }).ok_or_else(|| {
+                Error::NotSupported(format!(
+                    "hybrid {} elements (with one pressure per element the linear tetrahedron and wedge still lock; use hex8, hex20 or tet10)",
+                    kind.name()
+                ))
+            });
         }
         if f.incompatible_modes {
             return if ty.incompatible_modes {
@@ -189,10 +203,10 @@ pub struct PointStress {
 }
 
 /// Shape function gradients in physical coordinates at one point.
-struct Gradients {
-    shape: Shape,
-    dx: [[f64; 3]; MAX_NODES],
-    det: f64,
+pub(crate) struct Gradients {
+    pub(crate) shape: Shape,
+    pub(crate) dx: [[f64; 3]; MAX_NODES],
+    pub(crate) det: f64,
 }
 
 /// A thermal strain field over an element: the expansion coefficients along X, Y, Z and the
@@ -219,8 +233,8 @@ impl ThermalStrain {
 #[derive(Debug, Clone, Copy)]
 pub struct Solid<'a> {
     pub ty: &'static ElementType,
-    xyz: &'a [[f64; 3]],
-    formulation: Formulation,
+    pub(crate) xyz: &'a [[f64; 3]],
+    pub(crate) formulation: Formulation,
 }
 
 /// The stiffness blocks of the incompatible-modes element.
@@ -245,6 +259,7 @@ impl<'a> Solid<'a> {
             Formulation::Full => true,
             Formulation::Reduced => ty.reduced.is_some(),
             Formulation::IncompatibleModes => ty.incompatible_modes,
+            Formulation::Hybrid { pressures } => crate::hybrid::pressures(kind) == Some(pressures),
         };
         if !ok {
             return Err(Error::NotSupported(format!("{formulation:?} formulation of {} elements", kind.name())));
@@ -283,7 +298,7 @@ impl<'a> Solid<'a> {
         j
     }
 
-    fn gradients(&self, xi: [f64; 3]) -> Result<Gradients> {
+    pub(crate) fn gradients(&self, xi: [f64; 3]) -> Result<Gradients> {
         let shape = (self.ty.shape)(xi);
         let j = self.jacobian(&shape);
         let (inv, det) = positive_inverse(&j).ok_or_else(|| self.degenerate())?;
@@ -302,11 +317,15 @@ impl<'a> Solid<'a> {
 
     /// Position of a natural point.
     pub fn position(&self, xi: [f64; 3]) -> [f64; 3] {
-        let s = (self.ty.shape)(xi);
+        self.position_of((self.ty.shape)(xi).values())
+    }
+
+    /// The position Σ Nᵢ xᵢ for shape values `n`.
+    pub(crate) fn position_of(&self, n: &[f64]) -> [f64; 3] {
         let mut p = [0.0; 3];
-        for (n, x) in s.values().iter().zip(self.xyz) {
+        for (ni, x) in n.iter().zip(self.xyz) {
             for k in 0..3 {
-                p[k] += n * x[k];
+                p[k] += ni * x[k];
             }
         }
         p
@@ -364,6 +383,9 @@ impl<'a> Solid<'a> {
 
     /// The stiffness matrix, 3n × 3n, degrees of freedom ordered node by node (x, y, z).
     pub fn stiffness(&self, d: &Elasticity) -> Result<Matrix> {
+        if let Formulation::Hybrid { .. } = self.formulation {
+            return self.hybrid_stiffness(d);
+        }
         let n = 3 * self.ty.nodes;
         if self.formulation == Formulation::IncompatibleModes {
             let IncompatibleParts { kuu: mut k, kua, kaa, .. } = self.incompatible_parts(d, true)?;
@@ -444,7 +466,7 @@ impl<'a> Solid<'a> {
     }
 
     /// The thermal strain α ΔT at a point with shape values `n` (xx, yy, zz; no shear).
-    fn thermal_strain(thermal: &ThermalStrain, n: &[f64]) -> [f64; 6] {
+    pub(crate) fn thermal_strain(thermal: &ThermalStrain, n: &[f64]) -> [f64; 6] {
         let dt: f64 = n.iter().zip(&thermal.delta).map(|(a, b)| a * b).sum();
         [thermal.alpha[0] * dt, thermal.alpha[1] * dt, thermal.alpha[2] * dt, 0.0, 0.0, 0.0]
     }
@@ -454,6 +476,9 @@ impl<'a> Solid<'a> {
     /// are condensed out as in the stiffness, f = f_u − K_ua K_aa⁻¹ f_a.
     pub fn thermal_load(&self, d: &Elasticity, thermal: &ThermalStrain) -> Result<Vec<[f64; 3]>> {
         thermal.check(self.ty.nodes)?;
+        if let Formulation::Hybrid { .. } = self.formulation {
+            return self.hybrid_thermal_load(d, thermal);
+        }
         if self.formulation == Formulation::IncompatibleModes {
             let IncompatibleParts { kua, kaa, j0, .. } = self.incompatible_parts(d, false)?;
             let (mut f, mut fa) = self.thermal_forces(d, thermal, Some(&j0))?;
@@ -511,6 +536,8 @@ impl<'a> Solid<'a> {
         if let Some(t) = thermal {
             t.check(self.ty.nodes)?;
         }
+        // Hybrid: the element's pressure field, and σ = D_dev (ε − ε_th) + p m.
+        let hybrid = if let Formulation::Hybrid { .. } = self.formulation { Some(self.pressure_field(d, u, thermal)?) } else { None };
         // Incompatible modes: recover the internal amplitudes from K_aa α + K_au u = f_a (the
         // thermal load on the modes; zero without one).
         let alpha = if self.formulation == Formulation::IncompatibleModes {
@@ -552,18 +579,18 @@ impl<'a> Solid<'a> {
                 }
             }
             let strain = [grad[0][0], grad[1][1], grad[2][2], grad[0][1] + grad[1][0], grad[0][2] + grad[2][0], grad[1][2] + grad[2][1]];
-            let mut xyz = [0.0; 3];
-            for (n, x) in g.shape.values().iter().zip(self.xyz) {
-                for k in 0..3 {
-                    xyz[k] += n * x[k];
-                }
-            }
-            let sigma = match thermal {
+            let xyz = self.position_of(g.shape.values());
+            // The mechanical strain, less the thermal strain when there is one.
+            let mechanical = match thermal {
                 Some(t) => {
                     let eth = Self::thermal_strain(t, g.shape.values());
-                    stress(d, &[0, 1, 2, 3, 4, 5].map(|k| strain[k] - eth[k]))
+                    [0, 1, 2, 3, 4, 5].map(|k| strain[k] - eth[k])
                 }
-                None => stress(d, &strain),
+                None => strain,
+            };
+            let sigma = match &hybrid {
+                Some(h) => h.stress(&mechanical, xyz),
+                None => stress(d, &mechanical),
             };
             out.push(PointStress { xyz, strain, stress: sigma });
         }
@@ -606,7 +633,7 @@ pub(crate) fn symmetrize(k: &mut Matrix) {
 }
 
 /// The strain-displacement block of one gradient g: ε = B u for a single node's (x, y, z).
-fn b_block(g: &[f64; 3]) -> [[f64; 3]; 6] {
+pub(crate) fn b_block(g: &[f64; 3]) -> [[f64; 3]; 6] {
     [[g[0], 0.0, 0.0], [0.0, g[1], 0.0], [0.0, 0.0, g[2]], [g[1], g[0], 0.0], [g[2], 0.0, g[0]], [0.0, g[2], g[1]]]
 }
 
@@ -638,7 +665,7 @@ fn accumulate(out: &mut [f64], cols: usize, ga: &[[f64; 3]], gb: &[[f64; 3]], d:
 
 /// The symmetric case of [`accumulate`] (rows and columns from the same gradients, `out` square):
 /// computes the blocks with j ≥ i and mirrors them, so the result is exactly symmetric.
-fn accumulate_symmetric(out: &mut [f64], g: &[[f64; 3]], d: &Elasticity, w: f64) {
+pub(crate) fn accumulate_symmetric(out: &mut [f64], g: &[[f64; 3]], d: &Elasticity, w: f64) {
     let cols = 3 * g.len();
     for (j, gj) in g.iter().enumerate() {
         let bj = b_block(gj);

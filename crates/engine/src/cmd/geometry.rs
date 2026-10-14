@@ -1,9 +1,12 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use fieldcraft_geometry::tagged_mesh;
-use fieldcraft_geometry::{MAX_DESIGN_BYTES, Shape, SurfaceMesh, open_design};
+use fieldcraft_geometry::{Design, MAX_DESIGN_BYTES, Shape, SurfaceMesh, open_design};
 use fieldcraft_io::SourceFile;
 use fieldcraft_io::roots::Access;
+use fieldcraft_model::Model;
+use fieldcraft_model::geometry::{Entity, GeometryRef};
 use serde_json::{Value, json};
 
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
@@ -11,7 +14,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const OPEN: CommandSpec = CommandSpec {
     id: "geometry.open",
     label: "Open Design",
-    params: r#"{"path": "part.solidcraft"} — rebuilds the SolidCraft design and makes its bodies the geometry; opening it again after an edit picks up the change"#,
+    params: r#"{"path": "part.solidcraft", "model"?: "keep"} — rebuilds the SolidCraft design and makes its bodies the geometry. `model`: "keep" (default) keeps the mesh and every definition, so opening the same design again after an edit picks up the change and sets follow their persistent face names; "new" starts a new model with the design (no mesh, sets, materials, sections, BCs, loads or steps; the unit system stays). The reply's `related` is false when the model (before the open) refers to bodies (mesh tags, set geometry) and the design has none of them, and `stale` lists what no longer resolves: `mesh_bodies` (bodies the mesh is tagged with that the design lacks) and `sets` (sets naming a body or face it lacks). One undo step"#,
     form: Some(super::forms::OPEN_DESIGN),
     kind: CommandKind::Model,
     run: open,
@@ -45,18 +48,67 @@ pub const IMPORT_MESH: CommandSpec = CommandSpec {
 };
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
+    let new_model = match p.get("model") {
+        None | Some(Value::Null) => false,
+        Some(v) => match v.as_str() {
+            Some("keep") => false,
+            Some("new") => true,
+            _ => return Err(EngineError::Params(r#"`model` must be "keep" or "new""#.into())),
+        },
+    };
     let path = super::file_param(s, p, "path", Access::Read)?;
     let bytes = super::file::read_file(&path, MAX_DESIGN_BYTES as u64)?;
     let source = SourceFile::of(super::file::absolute(&path), &bytes)?;
     let design = open_design(&bytes)?;
+    let mut fit = fit(s, &design);
+    if new_model {
+        let mut model = Model::default();
+        model.set_units(s.model.units());
+        s.model = model;
+        s.surfaces.clear();
+        s.sources.meshes.clear();
+        s.results_view = None;
+        fit.mesh_bodies.clear();
+        fit.sets.clear();
+    }
     let out = json!({
         "name": design.name,
         "bodies": design.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
         "errors": design.errors.iter().map(|e| json!({"feature": e.feature, "message": e.message})).collect::<Vec<_>>(),
+        "model": if new_model { "new" } else { "kept" },
+        "related": fit.related,
+        "stale": {"mesh_bodies": fit.mesh_bodies, "sets": fit.sets},
     });
     s.design = Some(Arc::new(design));
     s.sources.design = Some(source);
     Ok(out)
+}
+
+/// How the model's geometry references fit a design about to become the geometry.
+struct Fit {
+    /// Whether the design (or an imported surface) has a body the model refers to, or the model
+    /// refers to none: `false` means the model is of another part.
+    related: bool,
+    /// Bodies the mesh is tagged with that neither the design nor a surface has.
+    mesh_bodies: Vec<String>,
+    /// Sets naming a body or a face that is not there.
+    sets: Vec<String>,
+}
+
+fn fit(s: &Session, design: &Design) -> Fit {
+    let has = |body: &str| design.body(body).is_some() || s.surfaces.iter().any(|t| t.name == body);
+    let resolves = |r: &GeometryRef| match (&r.entity, design.body(&r.body)) {
+        (Entity::Face(face), Some(b)) => b.faces().iter().any(|f| &f.name == face),
+        _ => has(&r.body),
+    };
+    let tagged: BTreeSet<&str> = s.model.classification().entities().iter().map(|r| r.body.as_str()).collect();
+    let mut referenced = tagged.clone();
+    referenced.extend(s.model.sets().values().flat_map(|set| set.geometry.iter().map(|r| r.body.as_str())));
+    Fit {
+        related: referenced.is_empty() || referenced.iter().any(|b| has(b)),
+        mesh_bodies: tagged.into_iter().filter(|b| !has(b)).map(str::to_string).collect(),
+        sets: s.model.sets().iter().filter(|(_, set)| !set.geometry.iter().all(resolves)).map(|(n, _)| n.clone()).collect(),
+    }
 }
 
 fn bodies(s: &mut Session, _: &Value) -> Result<Value> {

@@ -799,7 +799,10 @@ pub const TAG: &[Field] = &[
 
 // ---- Geometry and files ----
 
-pub const OPEN_DESIGN: &[Field] = &[path("path", "Design", false).req()];
+pub const OPEN_DESIGN: &[Field] = &[
+    path("path", "Design", false).req(),
+    choice("model", "Model", &[("keep", "Keep the current model"), ("new", "Start a new model")]).def("\"keep\""),
+];
 pub const TESSELLATE: &[Field] = &[reference("body", "Body", C::Body).req(), TOLERANCE];
 pub const IMPORT_MESH: &[Field] = &[path("path", "3MF file", false).req()];
 pub const FILE_OPEN: &[Field] = &[path("path", "Model", false).req()];

@@ -651,4 +651,69 @@ mod tests {
         assert_eq!(wider[0]["faces"], bodies[0]["faces"]);
         assert_eq!(s.journal.len(), 2);
     }
+
+    /// A meshed, defined model of body `body` (a hex block whose bottom face is named `bottom`)
+    /// with a set on it and one on its face `face`.
+    fn defined_model(body: &str, face: &str) -> Session {
+        let mut s = Session::default();
+        let cube = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 10], [10, 0, 10], [10, 10, 10], [0, 10, 10]];
+        let script = json!([
+            {"command": "mesh.block", "params": {"body": body, "kind": "hex8", "corners": cube, "divisions": [1, 1, 1], "faces": {"1": "bottom"}}},
+            {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": body}]}},
+            {"command": "model.set.create", "params": {"name": "hole", "geometry": [{"body": body, "face": face}]}},
+            {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}}},
+        ]);
+        s.run_script(&script).unwrap();
+        s
+    }
+
+    #[test]
+    fn reopening_the_same_design_keeps_the_mesh_and_definitions() {
+        let (_dir, path) = sample_design_file(&Plate::default());
+        let mut probe = Session::default();
+        probe.execute("geometry.open", &json!({"path": path})).unwrap();
+        let faces = probe.execute("geometry.bodies", &json!({})).unwrap()[0]["faces"].clone();
+        let mut s = defined_model("Body1", faces[0]["name"].as_str().unwrap());
+        let before = s.model.clone();
+        let r = s.execute("geometry.open", &json!({"path": path})).unwrap();
+        assert_eq!((r["model"].as_str(), r["related"].as_bool()), (Some("kept"), Some(true)), "{r}");
+        assert_eq!(r["stale"], json!({"mesh_bodies": [], "sets": []}));
+        assert_eq!(s.model, before);
+    }
+
+    #[test]
+    fn a_different_design_starts_a_new_model_or_reports_what_is_stale() {
+        let (_dir, path) = sample_design_file(&Plate::default());
+        let defined = defined_model("Seal", "no-such-face");
+        let before = defined.model.clone();
+        assert!(!before.elements().is_empty() && before.sets().len() == 2);
+
+        // Kept (the default): nothing is lost, and the reply names what no longer resolves.
+        let mut kept = defined.clone();
+        let r = kept.execute("geometry.open", &json!({"path": path})).unwrap();
+        assert_eq!((r["model"].as_str(), r["related"].as_bool()), (Some("kept"), Some(false)), "{r}");
+        assert_eq!(r["stale"], json!({"mesh_bodies": ["Seal"], "sets": ["all", "hole"]}));
+        assert_eq!(kept.model, before);
+
+        // New: the mesh and every definition go, the units stay; one undo brings them back.
+        let mut fresh = defined.clone();
+        fresh.execute("model.units", &json!({"system": "m-kg-s-N-Pa"})).unwrap();
+        let units = fresh.model.units();
+        let before = fresh.model.clone();
+        let r = fresh.execute("geometry.open", &json!({"path": path, "model": "new"})).unwrap();
+        assert_eq!((r["model"].as_str(), r["related"].as_bool()), (Some("new"), Some(false)), "{r}");
+        assert_eq!(r["stale"], json!({"mesh_bodies": [], "sets": []}));
+        assert!(fresh.model.elements().is_empty() && fresh.model.nodes().is_empty());
+        assert!(fresh.model.definition_counts().iter().all(|(_, n)| *n == 0));
+        assert_eq!(fresh.model.units(), units);
+        assert!(fresh.design.is_some());
+        fresh.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(fresh.model, before);
+        assert!(fresh.design.is_none());
+
+        // A bad choice changes nothing.
+        let mut s = defined.clone();
+        assert!(s.execute("geometry.open", &json!({"path": path, "model": "discard"})).is_err());
+        assert!(s.design.is_none() && s.model == defined.model);
+    }
 }

@@ -23,7 +23,8 @@
 //!   node set), distributing as `*CONSTRAINED_INTERPOLATION` (the reference point dependent on
 //!   the set's translations, equal weights);
 //! - contact: a pair as `*CONTACT_AUTOMATIC_SURFACE_TO_SURFACE` between segment sets (the
-//!   secondary surface first), general contact as `*CONTACT_AUTOMATIC_SINGLE_SURFACE` on a segment
+//!   secondary surface first; a tie as `*CONTACT_TIED_SURFACE_TO_SURFACE` likewise), general
+//!   contact as `*CONTACT_AUTOMATIC_SINGLE_SURFACE` on a segment
 //!   set or on every part (`surfatyp` 5); the static and kinetic coefficients and the decay
 //!   coefficient (`fs`, `fd`, `dc`: the same exponential decay law) and the penalty scale on both
 //!   sides (`sfsa`, `sfsb`, a factor on LS-DYNA's own default stiffness). LS-DYNA moves nodes
@@ -279,6 +280,9 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
     // Contact surfaces are segment sets.
     for c in model.contacts().values() {
         segment_sets.extend(c.surfaces.sets());
+    }
+    for t in model.ties().values() {
+        segment_sets.extend([t.main.as_str(), t.secondary.as_str()]);
     }
     let mut gravity_sets: BTreeSet<Option<&str>> = BTreeSet::new();
     for step in model.steps() {
@@ -732,6 +736,21 @@ fn contacts(d: &mut Deck, model: &Model, plan: &Plan) -> Result<()> {
         d.card([Field::from(f.static_coefficient), Field::from(f.kinetic_coefficient()), Field::from(f.decay)]);
         d.header(&["sfsa", "sfsb"]);
         d.card([Field::from(c.penalty_scale), Field::from(c.penalty_scale)]);
+    }
+    // Ties: a tied surface-to-surface contact between the segment sets, secondary first.
+    for (name, t) in model.ties() {
+        let sid = |set: &str| plan.sets.get(set).copied().ok_or_else(|| broken(format!("tie `{name}`: set `{set}`")));
+        d.comment(&format!("tie `{name}`"));
+        if t.position_tolerance.is_some() {
+            d.comment("FieldCraft's position tolerance: LS-DYNA ties the nodes within its own search distance");
+        }
+        d.line("*CONTACT_TIED_SURFACE_TO_SURFACE");
+        d.header(&["surfa", "surfb", "surfatyp", "surfbtyp"]);
+        d.card([Field::from(sid(&t.secondary)?), Field::from(sid(&t.main)?), Field::from(0), Field::from(0)]);
+        d.header(&["fs", "fd", "dc"]);
+        d.card([Field::from(0.0), Field::from(0.0), Field::from(0.0)]);
+        d.header(&["sfsa", "sfsb"]);
+        d.card([Field::from(1.0), Field::from(1.0)]);
     }
     Ok(())
 }

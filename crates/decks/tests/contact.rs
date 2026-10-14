@@ -4,7 +4,7 @@
 use fieldcraft_decks::{Error, abaqus, lsdyna, nastran};
 use fieldcraft_model::{
     BoundaryCondition, Contact, ContactSurfaces, Elastic, ElementFace, ElementKind, Friction, InitialPenetration, Material, Model, Procedure,
-    Section, SectionKind, Set, Step, Target, UnitSystem,
+    Section, SectionKind, Set, Step, Target, Tie, UnitSystem,
 };
 
 /// Two unit hex8 cubes, the second on top of the first (separate nodes), with face sets for the
@@ -42,6 +42,7 @@ fn model() -> Model {
     m.add_contact("stack", pair).unwrap();
     m.add_contact("everything", Contact { friction: Friction::coulomb(0.1), ..Contact::new(ContactSurfaces::General { surface: None }) }).unwrap();
     m.add_contact("fold", Contact { penalty_scale: 0.5, ..Contact::new(ContactSurfaces::General { surface: Some("upper".into()) }) }).unwrap();
+    m.add_tie("glue", Tie { position_tolerance: Some(0.05), ..Tie::new("lower", "upper") }).unwrap();
     m
 }
 
@@ -56,6 +57,7 @@ fn abaqus_writes_interactions_pairs_and_general_contact() {
         "*SURFACE INTERACTION, NAME=fold-interaction\n*FRICTION\n0.0\n",
         "*CONTACT\n*CONTACT INCLUSIONS, ALL EXTERIOR\n*CONTACT INCLUSIONS\nupper,\n*CONTACT PROPERTY ASSIGNMENT\n, , everything-interaction\nupper, upper, fold-interaction\n",
         "** contact `fold`: penalty scale 0.5",
+        "*TIE, NAME=glue, ADJUST=NO, POSITION TOLERANCE=0.05\nupper, lower\n",
     ] {
         assert!(deck.contains(expected), "{expected}\n{deck}");
     }
@@ -83,6 +85,7 @@ fn lsdyna_writes_automatic_contacts_on_segment_sets() {
     for set in ["lower", "upper"] {
         assert!(deck.contains(&format!("*SET_SEGMENT_TITLE\n{set}\n")), "{set}\n{deck}");
     }
+    assert_eq!(after("*CONTACT_TIED_SURFACE_TO_SURFACE"), ["4 3 0 0", "0.0 0.0 0.0", "1.0 1.0"], "{deck}");
 }
 
 #[test]
@@ -92,6 +95,7 @@ fn nastran_refuses_contact_by_name() {
             for name in ["everything", "fold", "stack"] {
                 assert!(what.contains(&format!("contact `{name}`")), "{what}");
             }
+            assert!(what.contains("tie `glue`"), "{what}");
         }
         other => panic!("{other:?}"),
     }

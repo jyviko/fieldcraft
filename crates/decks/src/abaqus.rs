@@ -28,6 +28,11 @@
 //! initial overclosure have no Abaqus counterpart and are noted in comments (Abaqus chooses its
 //! own penalty and resolves overclosure in the first increment).
 //!
+//! # Ties
+//!
+//! Each tie is `*TIE, NAME=…, ADJUST=NO` with the secondary surface first and its position
+//! tolerance when it has one: FieldCraft ties the nodes where they are (no adjustment).
+//!
 //! # Steps and the activity table
 //!
 //! The model lists, for every step, exactly the boundary conditions and loads active in it; Abaqus
@@ -187,6 +192,7 @@ pub fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
     d.discrete_properties(&discrete)?;
     d.couplings(model, r);
     d.contacts(model, r)?;
+    d.ties(model)?;
     d.steps(model, r)?;
     Ok(d.out)
 }
@@ -1038,6 +1044,20 @@ impl Deck {
                 Some(s) => self.line(&format!("{s}, {s}, {interaction}")),
                 None => self.line(&format!(", , {interaction}")),
             }
+        }
+        Ok(())
+    }
+
+    /// Ties: `*TIE` per tie, secondary surface first.
+    fn ties(&mut self, model: &Model) -> Result<()> {
+        if model.ties().is_empty() {
+            return Ok(());
+        }
+        self.comment("Ties: each secondary surface bonded to its main surface");
+        for (name, t) in model.ties() {
+            let tolerance = t.position_tolerance.map_or(String::new(), |v| format!(", POSITION TOLERANCE={v:?}"));
+            self.line(&format!("*TIE, NAME={name}, ADJUST=NO{tolerance}"));
+            self.line(&format!("{}, {}", t.secondary, t.main));
         }
         Ok(())
     }

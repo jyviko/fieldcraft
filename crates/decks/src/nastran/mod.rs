@@ -337,6 +337,9 @@ impl<'m> Deck<'m> {
         for name in self.model.contacts().keys() {
             self.problems.insert(format!("contact `{name}` (Nastran's linear solutions SOL 101 and 103 have no contact)"));
         }
+        for name in self.model.ties().keys() {
+            self.problems.insert(format!("tie `{name}` (this writer does not write glued contact yet)"));
+        }
         for sub in &mut self.subcases {
             if matches!(sub.step.procedure, Procedure::Frequency { .. }) {
                 sub.method = Some(next_id(&mut self.next_sid)?);

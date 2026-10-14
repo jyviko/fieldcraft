@@ -91,6 +91,7 @@ Rust 1.95 or later, with the `wasm32-unknown-unknown` target for `cargo xtask ci
 - [Libraries and licences](docs/adr/0001-libraries.md)
 - [AI agents (MCP)](docs/mcp.md): `claude mcp add fieldcraft -- /path/to/fieldcraft-cli mcp`
 - [Control protocol](docs/control-protocol.md): driving the desktop app
+- [Releasing](docs/releasing.md): how a release is built, verified and published
 - [Contributing](CONTRIBUTING.md) and [agent instructions](AGENTS.md)
 
 ## License

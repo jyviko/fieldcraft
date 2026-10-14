@@ -1,0 +1,252 @@
+# Release builds (docs/releasing.md), after SolidCraft's and VectorCraft's release.yml
+# (MIT OR Apache-2.0; see ATTRIBUTION.md).
+#
+# A push to `release` (fast-forwarded from main) builds every package and creates or updates the
+# DRAFT GitHub Release "FieldCraft v<version>", with SHA256SUMS.txt and generated notes. The
+# version is [workspace.package] version in Cargo.toml; a suffix (0.2.0-rc.1) makes a
+# pre-release. A person verifies the draft and publishes it; this workflow never publishes,
+# and pushes to main or tags never start it.
+#
+#   macOS universal (arm64 + x86_64)   .dmg with FieldCraft.app, the CLI as a .zip   packaging/macos
+#   Linux x86_64 (glibc 2.35+)         .tar.gz and .AppImage                          packaging/linux
+#   Windows x64                        .zip with fieldcraft.exe and fieldcraft-cli.exe packaging/windows
+#
+# macOS: signed with a Developer ID and notarized when the APPLE_* secrets exist, ad-hoc
+# otherwise (the release notes say which). Linux and Windows builds are not signed.
+#
+# Dry run: `gh workflow run release.yml --ref <branch>` builds everything and uploads the
+# `release-assets` artifact without creating a release. `-f draft=true` on `release` retries
+# the draft.
+name: Release
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create/update the draft release (release branch only; off: build artifacts only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a run mid-notarization or mid-upload; a newer push waits its turn.
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      draft: ${{ steps.v.outputs.draft }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: v
+        name: Resolve the version
+        env:
+          REQUEST_DRAFT: ${{ github.event_name == 'push' || inputs.draft }}
+        run: |
+          . packaging/env.sh
+          if ! printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "::error::Cargo.toml must contain a version like 1.2.3 or 1.2.3-rc.1, not '$VERSION'"
+            exit 1
+          fi
+          if [ "$REQUEST_DRAFT" = true ] && [ "$GITHUB_REF" != refs/heads/release ]; then
+            echo "::error::Draft releases are built from the release branch only"
+            exit 1
+          fi
+          case "$VERSION" in *-*) pre=true ;; *) pre=false ;; esac
+          { echo "version=$VERSION"; echo "prerelease=$pre"; echo "draft=$REQUEST_DRAFT"; } >>"$GITHUB_OUTPUT"
+          echo "### FieldCraft v$VERSION (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
+
+  macos:
+    name: macOS universal
+    needs: version
+    runs-on: macos-14
+    timeout-minutes: 120
+    outputs:
+      signing: ${{ steps.package.outputs.signing }}
+    env:
+      FIELDCRAFT_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-macos-universal
+          # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
+          save-if: ${{ github.ref == 'refs/heads/release' }}
+      - name: Import the signing certificate (skipped without APPLE_CERTIFICATE)
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: packaging/macos/import-cert.sh
+      - name: Build, sign, notarize and package (the dmg is mounted and checked)
+        id: package
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: packaging/macos/package.sh --arch universal
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-macos
+          path: dist/release/*
+          if-no-files-found: error
+      - name: Remove the temporary keychain
+        if: always()
+        run: |
+          if [ -n "${MACOS_KEYCHAIN:-}" ]; then security delete-keychain "$MACOS_KEYCHAIN" || true; fi
+
+  linux:
+    name: Linux x86_64
+    needs: version
+    # The oldest GitHub-hosted image, so the binaries need only glibc >= 2.35.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      FIELDCRAFT_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends desktop-file-utils
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-linux-x86_64
+          # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
+          save-if: ${{ github.ref == 'refs/heads/release' }}
+      - name: Build and package (tar.gz, AppImage)
+        run: packaging/linux/package.sh
+      - name: Check the packages
+        run: |
+          . packaging/env.sh
+          list="$(tar -tzf dist/release/*.tar.gz)"
+          for f in bin/fieldcraft bin/fieldcraft-cli "share/applications/$APP_ID.desktop" \
+            share/doc/fieldcraft/THIRD-PARTY-LICENSES.txt; do
+            grep -Fx -- "fieldcraft-$VERSION-linux-x86_64/$f" <<<"$list"
+          done
+          ldd target/release/fieldcraft
+          for appimage in dist/release/*.AppImage; do
+            chmod +x "$appimage"
+            APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux-x86_64
+          path: dist/release/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      FIELDCRAFT_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-windows-x64
+          # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
+          save-if: ${{ github.ref == 'refs/heads/release' }}
+      - name: Build and package (zip)
+        shell: pwsh
+        run: ./packaging/windows/package.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-x64
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    name: Draft release (or dry-run artifacts)
+    needs: [version, macos, linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      MACOS_SIGNING: ${{ needs.macos.outputs.signing }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - name: Check the set, checksums and notes
+        run: |
+          for f in "fieldcraft-$VERSION-macos-universal.dmg" "fieldcraft-cli-$VERSION-macos-universal.zip" \
+            "fieldcraft-$VERSION-linux-x86_64.tar.gz" "fieldcraft-$VERSION-linux-x86_64.AppImage" \
+            "fieldcraft-$VERSION-windows-x64.zip"; do
+            test -s "artifacts/$f" || { echo "::error::missing $f"; exit 1; }
+          done
+          (cd artifacts && sha256sum -- * | tee SHA256SUMS.txt)
+          # The macOS paragraph says how the app was signed (packaging/macos/package.sh).
+          case "$MACOS_SIGNING" in
+            notarized) macos="The macOS app is signed with a Developer ID and notarized by Apple." ;;
+            signed) macos="The macOS app is signed with a Developer ID but **not notarized**: the first time, right-click \`FieldCraft.app\` in Applications and choose **Open**." ;;
+            *) macos="The macOS app is **ad-hoc signed and not notarized**: macOS blocks the first launch. Right-click \`FieldCraft.app\` in Applications and choose **Open** (then **Open** again), or run \`xattr -dr com.apple.quarantine /Applications/FieldCraft.app\`." ;;
+          esac
+          awk -v v="$VERSION" -v m="$macos" '{ gsub(/\{version\}/, v); gsub(/\{macos_signing\}/, m); print }' \
+            .github/release-notes.md >notes.md
+          cat notes.md >>"$GITHUB_STEP_SUMMARY"
+      - name: Upload the dry-run artifacts
+        if: needs.version.outputs.draft != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: |
+            artifacts/*
+            notes.md
+          if-no-files-found: error
+      - name: Create or update the draft release
+        if: needs.version.outputs.draft == 'true'
+        working-directory: artifacts
+        run: |
+          tag="v$VERSION"
+          title="FieldCraft v$VERSION"
+          if gh api "repos/$GH_REPO/git/matching-refs/tags/$tag" --jq '.[].ref' | grep -Fxq "refs/tags/$tag"; then
+            echo "::error::Tag $tag already exists. Choose a new version; never move a release tag."
+            exit 1
+          fi
+          if draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" != true ]; then
+              echo "::error::Release $tag is already published. Bump the version before releasing."
+              exit 1
+            fi
+            # A rebuild of the same version replaces the draft's assets (removing names it no longer
+            # makes); its notes are kept.
+            assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+            while IFS= read -r asset; do
+              if [ -n "$asset" ]; then gh release delete-asset "$tag" "$asset" --yes; fi
+            done <<<"$assets"
+            gh release edit "$tag" --draft --title "$title" --target "$GITHUB_SHA" --prerelease="$PRERELEASE"
+            gh release upload "$tag" -- *
+          else
+            gh release create "$tag" --draft --title "$title" --target "$GITHUB_SHA" \
+              --notes-file ../notes.md --generate-notes --prerelease="$PRERELEASE" -- *
+          fi
+          echo "Draft release **$title** at \`${GITHUB_SHA::9}\`: $(gh release view "$tag" --json url --jq .url)" >>"$GITHUB_STEP_SUMMARY"

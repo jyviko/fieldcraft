@@ -22,6 +22,8 @@ hand. It runs on macOS (sips, iconutil, `xcrun actool`) with ImageMagick (`magic
 | `Assets.car` | `actool` compilation of `FieldCraft.icon` for macOS 26 and later (needs Xcode 26 or later; the task skips it with a note otherwise) |
 
 The desktop app embeds `icon.iconset/icon_128x128@2x.png` as its window and Dock icon
-(`apps/fieldcraft/src/main.rs`). There is no macOS bundle yet; packaging will copy
-`Assets.car` and `icon.icns` into `Contents/Resources` and name `FieldCraft` in
-`CFBundleIconName` / `CFBundleIconFile`.
+(`apps/fieldcraft/src/main.rs`). The release packages (docs/releasing.md) use the rest:
+`packaging/macos/package.sh` copies `Assets.car` and `icon.icns` (as `FieldCraft.icns`) into
+`FieldCraft.app/Contents/Resources`, named by `CFBundleIconName` / `CFBundleIconFile`;
+`apps/fieldcraft/build.rs` embeds `icon.ico` in `fieldcraft.exe`; and
+`packaging/linux/package.sh` installs the iconset PNGs as the hicolor icons.

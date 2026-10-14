@@ -1,0 +1,20 @@
+{
+ "title": "Euler buckling of a pinned column of solids",
+ "kind": "theory",
+ "source": "Euler's column with Engesser's shear correction P = P_e/(1 + P_e/(κ G A)), κ = 5/6 (S. P. Timoshenko, J. M. Gere, Theory of Elastic Stability, 2nd ed., McGraw-Hill 1961, §2.1, §2.17): square section 1 × 1, E = 1000, ν = 0, effective length 20, P_e = π² E I/20², so σ_cr = P/A = 2.046071",
+ "quantities": [
+  {
+   "id": "lambda",
+   "quantity": "first buckling stress (load factor of a unit end pressure)",
+   "measure": {
+    "from": "solve",
+    "pointer": "/modes/0/load_factor"
+   },
+   "value": 2.046070629714299,
+   "tolerance": {
+    "relative": 0.005
+   },
+   "reason": "hex20, 2 × 2 across and 10 along: the 3D solid's bending and shear against beam theory, and the preload concentrated at the held face"
+  }
+ ]
+}

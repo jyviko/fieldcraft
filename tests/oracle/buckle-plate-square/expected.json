@@ -1,0 +1,20 @@
+{
+ "title": "Buckling of a simply supported square plate in uniaxial compression",
+ "kind": "theory",
+ "source": "Bryan's plate buckling stress σ_cr = k π² E/(12 (1 − ν²)) (t/b)² with k = 4 for a square plate simply supported on four edges (G. H. Bryan, Proc. London Math. Soc. 22:54–67, 1891; Timoshenko & Gere 1961, §9.2): b = 50, t = 0.5, E = 1000, ν = 0.3, σ_cr = 0.361524",
+ "quantities": [
+  {
+   "id": "lambda",
+   "quantity": "buckling stress of a unit edge pressure",
+   "measure": {
+    "from": "solve",
+    "pointer": "/modes/0/load_factor"
+   },
+   "value": 0.36152397073587395,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "a quarter plate of 10 × 10 × 2 hex20 (b/t = 100) supported on its bottom edge lines: the solid against thin-plate theory (−1.5 % at b/t = 50, falling with t/b) and the discretisation"
+  }
+ ]
+}

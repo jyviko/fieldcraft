@@ -1,0 +1,19 @@
+[
+ {"command": "mesh.block", "params": {"body": "Plate", "kind": "hex20", "corners": [[0, 0, 0], [25.0, 0, 0], [25.0, 25.0, 0], [0, 25.0, 0], [0, 0, 0.5], [25.0, 0, 0.5], [25.0, 25.0, 0.5], [0, 25.0, 0.5]], "divisions": [10, 10, 2], "faces": {"6": "x0", "3": "y0", "4": "x1", "5": "y1"}, "edges": [{"corners": [1, 4], "name": "sx"}, {"corners": [1, 2], "name": "sy"}]}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Plate"}]}},
+ {"command": "model.set.create", "params": {"name": "x0", "geometry": [{"body": "Plate", "face": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "y0", "geometry": [{"body": "Plate", "face": "y0"}]}},
+ {"command": "model.set.create", "params": {"name": "x1", "geometry": [{"body": "Plate", "face": "x1"}]}},
+ {"command": "model.set.create", "params": {"name": "y1", "geometry": [{"body": "Plate", "face": "y1"}]}},
+ {"command": "model.set.create", "params": {"name": "sx", "geometry": [{"body": "Plate", "edge": "sx"}]}},
+ {"command": "model.set.create", "params": {"name": "sy", "geometry": [{"body": "Plate", "edge": "sy"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.3}}},
+ {"command": "model.section.create", "params": {"name": "plate", "set": "all", "material": "Mat", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "ssx", "type": "displacement", "target": {"set": "sx"}, "values": [null, null, 0.0, null, null, null]}},
+ {"command": "model.boundary_condition.create", "params": {"name": "ssy", "type": "displacement", "target": {"set": "sy"}, "values": [null, null, 0.0, null, null, null]}},
+ {"command": "model.boundary_condition.create", "params": {"name": "symx", "type": "symmetry", "target": {"set": "x1"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "symy", "type": "symmetry", "target": {"set": "y1"}, "plane": "y"}},
+ {"command": "model.load.create", "params": {"name": "press", "type": "pressure", "set": "x0", "magnitude": 1.0}},
+ {"command": "model.step.create", "params": {"name": "Buckle", "procedure": {"type": "buckle", "modes": 1}, "boundary_conditions": ["ssx", "ssy", "symx", "symy"], "loads": ["press"]}},
+ {"command": "solve.buckle", "params": {"step": "Buckle"}, "id": "solve"}
+]

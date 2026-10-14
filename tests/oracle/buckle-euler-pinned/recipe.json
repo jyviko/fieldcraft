@@ -1,0 +1,13 @@
+[
+ {"command": "mesh.block", "params": {"body": "Column", "kind": "hex20", "corners": [[0, 0, 0], [10.0, 0, 0], [10.0, 1.0, 0], [0, 1.0, 0], [0, 0, 1.0], [10.0, 0, 1.0], [10.0, 1.0, 1.0], [0, 1.0, 1.0]], "divisions": [10, 2, 2], "faces": {"6": "x0", "4": "x1"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Column"}]}},
+ {"command": "model.set.create", "params": {"name": "x0", "geometry": [{"body": "Column", "face": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "x1", "geometry": [{"body": "Column", "face": "x1"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.0}}},
+ {"command": "model.section.create", "params": {"name": "col", "set": "all", "material": "Mat", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "pin", "type": "displacement", "target": {"set": "x0"}, "values": [null, 0.0, 0.0, null, null, null]}},
+ {"command": "model.boundary_condition.create", "params": {"name": "mid", "type": "symmetry", "target": {"set": "x1"}, "plane": "x"}},
+ {"command": "model.load.create", "params": {"name": "press", "type": "pressure", "set": "x0", "magnitude": 1.0}},
+ {"command": "model.step.create", "params": {"name": "Buckle", "procedure": {"type": "buckle", "modes": 2}, "boundary_conditions": ["pin", "mid"], "loads": ["press"]}},
+ {"command": "solve.buckle", "params": {"step": "Buckle"}, "id": "solve"}
+]

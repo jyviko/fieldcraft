@@ -106,6 +106,10 @@ fn kind_of_command(command: &str) -> Option<Kind> {
     [Kind::Model, Kind::Design, Kind::Mesh].into_iter().find(|k| k.command() == command)
 }
 
+/// Commands a form runs in the background: they can take a while on a large part.
+pub const BACKGROUND: &[&str] =
+    &["mesh.tet.generate", "mesh.hex.generate", "mesh.hex.sweep", "mesh.hex.mapped", "mesh.hex.blocks", "mesh.hex.octree"];
+
 /// Most entries the recent-files list keeps, and the longest path it keeps.
 pub const MAX_RECENT: usize = 10;
 const MAX_RECENT_PATH: usize = 4096;
@@ -160,7 +164,8 @@ impl Recent {
     }
 }
 
-/// A command running in the background on a copy of the session: a file opening, a solve.
+/// A command running in the background on a copy of the session: a file opening, a solve, a
+/// mesher started from its form.
 pub struct Loading {
     /// What the window shows while it runs ("Opening beam.fieldcraft").
     pub title: String,
@@ -170,6 +175,8 @@ pub struct Loading {
     recent: Option<String>,
     /// Whether it brings a different model or new geometry, which the view then frames.
     fit: bool,
+    /// The command form that started it: closed when it succeeds, showing the error when not.
+    form: Option<&'static str>,
     /// The finished session copy and the command's reply.
     rx: Receiver<(Box<Session>, Result<Value, String>)>,
 }
@@ -277,8 +284,26 @@ impl ModelApp {
         let rx = spawn(base, command, params);
         self.set_status(format!("{title}…"), false);
         let fit = fresh || recent.is_some();
-        self.loading = Some(Loading { title, done, recent, fit, rx });
+        self.loading = Some(Loading { title, done, recent, fit, form: None, rx });
         true
+    }
+
+    /// The form's OK: run its command, in the background for the meshers ([`BACKGROUND`]) so the
+    /// window keeps drawing (with Cancel) while a large part meshes; the form closes when the
+    /// command succeeds and shows the error when it fails.
+    pub fn submit_dialog(&mut self) {
+        let Some(command) = self.dialog.as_ref().map(|d| d.command) else { return };
+        if !BACKGROUND.contains(&command) {
+            let _ = self.run_dialog();
+            return;
+        }
+        let Ok((command, params)) = self.dialog_params() else { return };
+        let label = crate::command_label(command).to_string();
+        if self.begin_job(command, params, false, label.clone(), format!("{label} done"), None)
+            && let Some(l) = self.loading.as_mut()
+        {
+            l.form = Some(command);
+        }
     }
 
     /// File > Open: pick a model, design or tagged mesh and open it. `None` asks for any of them.
@@ -400,6 +425,9 @@ impl ModelApp {
                 if let Some(p) = &l.recent {
                     self.recent.add(p);
                 }
+                if self.dialog.as_ref().is_some_and(|d| l.form == Some(d.command)) {
+                    self.dialog = None;
+                }
                 let warnings: Vec<&str> = reply.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
                 if warnings.is_empty() {
                     self.set_status(l.done, false);
@@ -410,6 +438,9 @@ impl ModelApp {
             Some((_, Err(e))) => {
                 let what = l.recent.as_deref().map_or_else(|| l.title.clone(), file_name);
                 self.set_status(format!("{what}: {e}"), true);
+                if let Some(d) = self.dialog.as_mut().filter(|d| l.form == Some(d.command)) {
+                    d.error = Some(e);
+                }
             }
             None => self.set_status(format!("{}: stopped unexpectedly", l.title), true),
         }
@@ -948,6 +979,44 @@ mod tests {
         let mut empty = ModelApp::new(Session::default());
         empty.solve_all();
         assert!(empty.busy().is_none() && empty.status.as_ref().is_some_and(|s| s.error));
+    }
+
+    /// A first-time user's path: Open picks a SolidCraft design, the Tet Mesh button opens its
+    /// form, OK with the defaults meshes it in the background, and the mesh is there. A mesher
+    /// that does not fit says why in the form, which stays open.
+    #[test]
+    fn a_picked_design_meshes_from_the_ribbon_with_the_defaults() {
+        let dir = temp("path");
+        let design = dir.join("plate.solidcraft").to_string_lossy().to_string();
+        std::fs::write(&design, fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap()).unwrap();
+        let offered = Rc::new(RefCell::new(Vec::new()));
+        let mut app = ModelApp::new(Session::default());
+        app.services.pick_open = Some(answering(Some(design.clone()), offered));
+        app.open_dialog(None);
+        app.wait_loaded();
+        assert_eq!(app.session.design.as_ref().map(|d| d.bodies.len()), Some(1), "{:?}", app.status);
+        assert!(!app.display().bounds.is_empty());
+
+        app.start("mesh.tet.generate").unwrap();
+        assert_eq!(app.dialog.as_ref().map(|d| (d.command, d.text.as_str())), Some(("mesh.tet.generate", "{}")));
+        app.submit_dialog();
+        assert_eq!(app.busy(), Some("Generate Tet Mesh"), "meshing runs off the window thread");
+        app.wait_loaded();
+        assert!(app.dialog.is_none(), "the form closes when it succeeded: {:?}", app.status);
+        assert_eq!(app.status.as_ref().map(|s| (s.text.as_str(), s.error)), Some(("Generate Tet Mesh done", false)));
+        let counts = app.session.model.element_counts();
+        assert!(matches!(counts.as_slice(), [(fieldcraft_model::ElementKind::Tet4, n)] if *n > 0), "{counts:?}");
+        assert_eq!(app.session.journal.len(), 2, "open and mesh, each an undo step");
+
+        // A plate with a hole is not one mapped block: the form stays with the reason.
+        app.start("mesh.hex.mapped").unwrap();
+        app.submit_dialog();
+        app.wait_loaded();
+        let error = app.dialog.as_ref().and_then(|d| d.error.clone()).unwrap_or_default();
+        assert!(error.contains("not a logical cube"), "{error}");
+        assert!(app.status.as_ref().is_some_and(|s| s.error));
+        assert_eq!(app.session.model.element_counts(), counts, "a failed mesher changes nothing");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The control channel's `ui.start` never opens a picker: it opens the form.

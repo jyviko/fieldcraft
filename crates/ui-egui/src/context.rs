@@ -118,7 +118,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     if cancel {
         app.dialog = None;
     } else if run {
-        let _ = app.run_dialog();
+        app.submit_dialog();
     } else if use_selection
         && let Err(e) = app.use_selection_in_dialog()
         && let Some(d) = app.dialog.as_mut()

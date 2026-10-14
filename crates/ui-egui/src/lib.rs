@@ -523,8 +523,8 @@ impl ModelApp {
 
     /// Run the open parameter form; it closes when the command succeeds.
     pub fn run_dialog(&mut self) -> Result<Value, String> {
-        let Some(d) = self.dialog.clone() else { return Err("no command form is open".into()) };
-        let r = serde_json::from_str::<Value>(&d.text).map_err(|e| format!("the parameters are not JSON: {e}")).and_then(|p| self.run(d.command, p));
+        let (command, params) = self.dialog_params()?;
+        let r = self.run(command, params);
         match &r {
             Ok(_) => self.dialog = None,
             Err(e) => {
@@ -534,6 +534,22 @@ impl ModelApp {
             }
         }
         r
+    }
+
+    /// The open form's command and parameters; parameters that are not JSON are the form's error.
+    pub(crate) fn dialog_params(&mut self) -> Result<(&'static str, Value), String> {
+        let Some(d) = self.dialog.as_mut() else { return Err("no command form is open".into()) };
+        match serde_json::from_str::<Value>(&d.text) {
+            Ok(params) => {
+                d.error = None;
+                Ok((d.command, params))
+            }
+            Err(e) => {
+                let e = format!("the parameters are not JSON: {e}");
+                d.error = Some(e.clone());
+                Err(e)
+            }
+        }
     }
 
     /// Probe a node of the results shown (`solve.probe`) and keep its values for the viewport.

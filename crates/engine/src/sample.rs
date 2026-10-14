@@ -9,7 +9,13 @@
 //! [`cantilever`], a model ready to solve: a steel beam clamped at one end with a load on the
 //! other, a static and a frequency step. [`impact`]: the same beam flying onto a rigid wall, an
 //! explicit dynamic step.
+//!
+//! The examples gallery (docs/examples.md), each ready to solve with `solve.run`:
+//! [`drop_test`], [`rubber_seal`], [`flow_past`], [`heated_bracket`] and [`bracket_hex`]. Their
+//! geometry is a SolidCraft script run when the sample opens ([`Sample::design`]): a corpus
+//! recipe (`tests/corpus`) or [`UPRIGHT_BRACKET`].
 
+use fieldcraft_geometry::Shape;
 use serde_json::{Value, json};
 
 /// A sample the app offers (Help › Samples, the empty viewport, `file.sample`, `--sample NAME`).
@@ -18,23 +24,35 @@ pub struct Sample {
     pub label: &'static str,
     /// One line: what it shows.
     pub about: &'static str,
-    pub script: fn() -> Value,
+    /// The SolidCraft script (`{"commands": [...]}`, the corpus recipe form) that builds the
+    /// sample's geometry, opened as its design before [`Sample::script`] runs.
+    pub design: Option<&'static str>,
+    /// The model's commands, given the design's bodies (none without a design).
+    pub script: fn(&[Shape]) -> Value,
 }
 
 /// Every sample, the default first.
 pub const SAMPLES: &[Sample] = &[
-    Sample { name: "parts", label: "Hex and Tet Parts", about: "A hex8 block beside a tet4 cube: meshes to look at, nothing to solve", script },
+    Sample {
+        name: "parts",
+        label: "Hex and Tet Parts",
+        about: "A hex8 block beside a tet4 cube: meshes to look at, nothing to solve",
+        design: None,
+        script: |_| script(),
+    },
     Sample {
         name: "cantilever",
         label: "Cantilever",
         about: "A clamped steel beam with an end load: a static and a frequency step, ready to solve",
-        script: cantilever,
+        design: None,
+        script: |_| cantilever(),
     },
     Sample {
         name: "impact",
         label: "Bar Impact",
         about: "The steel beam flying onto a rigid wall: an explicit dynamic step, ready to solve",
-        script: impact,
+        design: None,
+        script: |_| impact(),
     },
 ];
 
@@ -224,6 +242,17 @@ fn signed_volume(p: &[[f64; 3]]) -> f64 {
 mod tests {
     use super::*;
     use crate::Session;
+
+    /// The `file.sample` form offers every sample, by name.
+    #[test]
+    fn the_form_lists_every_sample() {
+        let Some(crate::schema::Kind::Choice(options)) = crate::cmd::forms::SAMPLE.first().map(|f| f.kind) else { panic!("not a choice") };
+        let mut offered: Vec<&str> = options.iter().map(|(n, _)| *n).collect();
+        let mut names: Vec<&str> = SAMPLES.iter().map(|s| s.name).collect();
+        offered.sort_unstable();
+        names.sort_unstable();
+        assert_eq!(offered, names);
+    }
 
     #[test]
     fn the_sample_builds_positive_elements_that_fill_both_parts() {

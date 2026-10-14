@@ -76,7 +76,7 @@ pub const RECOVERY_DISCARD: CommandSpec = CommandSpec {
 pub const SAMPLE: CommandSpec = CommandSpec {
     id: "file.sample",
     label: "Open Sample",
-    params: r#"{"name": "parts|cantilever|impact"} — opens a sample model (fieldcraft_engine::sample) in place of the current one, unsaved changes discarded; `cantilever` and `impact` are ready to solve (solve.run)"#,
+    params: r#"{"name": "cantilever"} — opens a sample model (fieldcraft_engine::sample; the list is in docs/examples.md) in place of the current one, unsaved changes discarded; every sample but `parts` is ready to solve (solve.run)"#,
     form: Some(super::forms::SAMPLE),
     kind: CommandKind::Session,
     run: open_sample,
@@ -87,7 +87,12 @@ fn open_sample(s: &mut Session, p: &Value) -> Result<Value> {
     let names = || crate::sample::SAMPLES.iter().map(|x| x.name).collect::<Vec<_>>().join(", ");
     let sample = crate::sample::find(name).ok_or_else(|| EngineError::Params(format!("no sample `{name}` (samples: {})", names())))?;
     let mut opened = Session::default();
-    opened.run_script(&(sample.script)())?;
+    if let Some(recipe) = sample.design {
+        opened.design = Some(Arc::new(open_design(&fieldcraft_geometry::script_design(recipe)?)?));
+    }
+    let bodies = opened.design.as_ref().map_or(&[][..], |d| d.bodies.as_slice());
+    let script = (sample.script)(bodies);
+    opened.run_script(&script)?;
     // A sample just opened has nothing to save: it opens again the same way.
     opened.saved_revision = Some(opened.revision);
     s.replace_with(opened);

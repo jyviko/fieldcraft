@@ -10,7 +10,8 @@ workspace = true
 
 [dependencies]
 fieldcraft-model = { workspace = true }
-fieldcraft-geometry = { workspace = true }
+# Samples build their geometry from SolidCraft scripts (sample.rs).
+fieldcraft-geometry = { workspace = true, features = ["scripts"] }
 fieldcraft-mesh = { workspace = true }
 fieldcraft-io = { workspace = true }
 fieldcraft-decks = { workspace = true }
@@ -27,5 +28,3 @@ log = { workspace = true }
 
 [dev-dependencies]
 zip = { workspace = true }
-# Multi-body designs from SolidCraft scripts in tests.
-fieldcraft-geometry = { workspace = true, features = ["scripts"] }

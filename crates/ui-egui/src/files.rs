@@ -740,6 +740,10 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
 /// One row per sample: its name, what it shows and an Open button; `open` gets the one clicked.
 pub fn sample_rows(ui: &mut egui::Ui, t: &crate::theme::Tokens, open: &mut Option<&'static str>) {
     let width = ui.available_width().clamp(280.0, 420.0);
+    egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| sample_list(ui, t, open, width));
+}
+
+fn sample_list(ui: &mut egui::Ui, t: &crate::theme::Tokens, open: &mut Option<&'static str>, width: f32) {
     for sample in fieldcraft_engine::sample::SAMPLES {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {

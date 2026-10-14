@@ -175,6 +175,7 @@ is committed and listed here with its exports.
 | packaging/env.sh, packaging/.shellcheckrc, packaging/macos/package.sh, packaging/macos/Info.plist.in, packaging/linux/package.sh, packaging/linux/AppRun, packaging/windows/package.ps1 | SolidCraft `packaging/` and VectorCraft `packaging/` (signing and notarization in macos/package.sh) | MIT OR Apache-2.0 |
 | packaging/macos/import-cert.sh | VectorCraft `packaging/macos/import-cert.sh` | MIT OR Apache-2.0 |
 | packaging/windows/check-exe.ps1 | SolidCraft `packaging/windows/check-icon.ps1` | MIT OR Apache-2.0 |
+| crates/io/src/memory.rs (files kept in memory for the browser build) | SolidCraft `crates/io/src/vfs.rs` | MIT OR Apache-2.0 |
 | .github/workflows/release.yml, .github/release-notes.md, docs/releasing.md | SolidCraft `.github/workflows/release.yml`, `.github/release-notes.md`, `docs/releasing.md`; VectorCraft `.github/workflows/release.yml` | MIT OR Apache-2.0 |
 | .github/workflows/packaging-lint.yml | SolidCraft `.github/workflows/packaging-lint.yml` (itself adapted from PhotoCraft, https://github.com/storytold/photocraft, Apache-2.0) | MIT OR Apache-2.0 |
 | .github/workflows/arch-check.yml (the riscv64 cross build) | SolidCraft `.github/workflows/ci.yml` (`riscv64-gates`) | MIT OR Apache-2.0 |

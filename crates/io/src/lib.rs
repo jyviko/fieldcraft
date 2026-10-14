@@ -18,11 +18,12 @@
 //! capped before anything is allocated, every part's checksum is verified, and the model is
 //! rebuilt through the same checked methods commands use, so a file cannot hold what commands
 //! would refuse. Reading and writing work on bytes (they build for the browser); only [`fs`],
-//! [`recovery`] and [`roots`] touch the file system.
+//! [`recovery`] and [`roots`] touch the file system, which in the browser is [`memory`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 pub mod fs;
+pub mod memory;
 pub mod mesh;
 pub mod recovery;
 pub mod roots;

@@ -6,20 +6,29 @@
 //! nobody holds belongs to an app that crashed or closed with unsaved changes: [`orphans`] lists
 //! it for the next launch to offer.
 //!
+//! In the browser the folder is [`BROWSER_DIR`] in the page's files ([`crate::memory`]), which
+//! the web host keeps in the browser's storage, and an entry is held while the page that wrote it
+//! is open (the page holds no file locks; another tab's entry counts as left behind).
+//!
 //! Adapted from SolidCraft's `crates/engine/src/recovery.rs` (MIT OR Apache-2.0), see
 //! ATTRIBUTION.md. The engine decides when to autosave; this module only stores.
 
-use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::fs::{read_capped, write_atomic};
+use crate::fs::{create_dir_all, is_file, list, read_capped, remove as remove_file, write_atomic};
 use crate::{EXTENSION, Error, MAX_FILE_BYTES, Result};
 
+/// The recovery folder of the browser build.
+pub const BROWSER_DIR: &str = "/recovery";
+
 /// The recovery folder: `FIELDCRAFT_RECOVERY_DIR`, else `FieldCraft/recovery` (`fieldcraft/` on
-/// Linux) in the platform's per-user data folder.
+/// Linux) in the platform's per-user data folder; [`BROWSER_DIR`] in the browser.
 pub fn default_dir() -> Option<PathBuf> {
+    if cfg!(target_arch = "wasm32") {
+        return Some(PathBuf::from(BROWSER_DIR));
+    }
     let env = |k: &str| std::env::var_os(k).filter(|d| !d.is_empty()).map(PathBuf::from);
     if let Some(d) = env("FIELDCRAFT_RECOVERY_DIR") {
         return Some(d);
@@ -47,12 +56,28 @@ pub struct Entry {
     pub elements: usize,
 }
 
-/// Seconds since 1970 (0 where the platform has no clock, such as the browser's plain wasm).
-fn unix_now() -> u64 {
+/// Milliseconds since 1970 from the host, where the platform has no clock of its own (the
+/// browser's plain wasm); see [`set_clock`].
+static CLOCK: std::sync::OnceLock<fn() -> u64> = std::sync::OnceLock::new();
+
+/// Give the module a clock (milliseconds since 1970) on a platform without one: the web host
+/// passes the browser's. Entries then record when they were saved and get ids no other page
+/// takes. The first clock given stays.
+pub fn set_clock(now_ms: fn() -> u64) {
+    let _ = CLOCK.set(now_ms);
+}
+
+/// Milliseconds since 1970 (0 without a clock).
+fn unix_now_ms() -> u64 {
     if cfg!(target_arch = "wasm32") {
-        return 0;
+        return CLOCK.get().map_or(0, |now| now());
     }
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis().try_into().unwrap_or(u64::MAX)).unwrap_or(0)
+}
+
+/// Seconds since 1970 (0 without a clock).
+fn unix_now() -> u64 {
+    unix_now_ms() / 1000
 }
 
 fn valid_id(id: &str) -> bool {
@@ -63,10 +88,105 @@ fn file(dir: &Path, id: &str, ext: &str) -> PathBuf {
     dir.join(format!("{id}.{ext}"))
 }
 
-/// Whether a running app holds entry `id`'s lock.
-fn held(dir: &Path, id: &str) -> bool {
-    File::open(file(dir, id, "lock")).is_ok_and(|l| l.try_lock().is_err())
+/// Entry locks on the desktop: `<id>.lock`, locked while the app runs.
+#[cfg(not(target_arch = "wasm32"))]
+mod lock {
+    use std::fs::{self, File, OpenOptions};
+    use std::path::Path;
+
+    use super::{MAX_LISTED, file};
+    use crate::{Error, Result};
+
+    /// A held entry lock.
+    #[derive(Debug)]
+    pub struct Lock(#[allow(dead_code)] File);
+
+    /// Whether a running app holds entry `id`'s lock.
+    pub fn held(dir: &Path, id: &str) -> bool {
+        File::open(file(dir, id, "lock")).is_ok_and(|l| l.try_lock().is_err())
+    }
+
+    pub fn take(dir: &Path, id: &str) -> Result<Lock> {
+        let io = |e: std::io::Error| Error::Io(format!("{}: {e}", dir.display()));
+        let lock = OpenOptions::new().create(true).truncate(false).write(true).open(file(dir, id, "lock")).map_err(io)?;
+        lock.lock().map_err(io)?;
+        Ok(Lock(lock))
+    }
+
+    /// Remove the locks of apps that ended with nothing to recover.
+    pub fn sweep(dir: &Path) {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten().take(10 * MAX_LISTED) {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) == Some("lock")
+                && !p.with_extension("json").exists()
+                && File::open(&p).is_ok_and(|l| l.try_lock().is_ok())
+            {
+                let _ = fs::remove_file(&p);
+            }
+        }
+    }
+
+    /// A process-unique part of new entry ids.
+    pub fn instance() -> String {
+        std::process::id().to_string()
+    }
+
+    /// Let go of the lock; its file goes unless an autosave stays for the next launch.
+    pub fn release(lock: Lock, dir: &Path, id: &str, keep: bool) {
+        drop(lock);
+        if !keep {
+            let _ = fs::remove_file(file(dir, id, "lock"));
+        }
+    }
 }
+
+/// Entry "locks" in the browser: the entries this page holds, kept in memory (a page that is
+/// gone holds none).
+#[cfg(target_arch = "wasm32")]
+mod lock {
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    use crate::Result;
+
+    thread_local! {
+        static HELD: RefCell<BTreeSet<String>> = const { RefCell::new(BTreeSet::new()) };
+    }
+
+    /// Releases the entry when dropped (the slot is gone).
+    #[derive(Debug)]
+    pub struct Lock(String);
+
+    impl Drop for Lock {
+        fn drop(&mut self) {
+            HELD.with(|h| h.borrow_mut().remove(&self.0));
+        }
+    }
+
+    pub fn held(_dir: &Path, id: &str) -> bool {
+        HELD.with(|h| h.borrow().contains(id))
+    }
+
+    pub fn take(_dir: &Path, id: &str) -> Result<Lock> {
+        HELD.with(|h| h.borrow_mut().insert(id.to_string()));
+        Ok(Lock(id.to_string()))
+    }
+
+    pub fn sweep(_dir: &Path) {}
+
+    /// The page's part of new entry ids: the milliseconds of the clock (the id has its seconds),
+    /// so pages started in the same second take different ids (unless in the same millisecond).
+    pub fn instance() -> String {
+        format!("w{}", super::unix_now_ms() % 1000)
+    }
+
+    pub fn release(lock: Lock, _dir: &Path, _id: &str, _keep: bool) {
+        drop(lock);
+    }
+}
+
+use lock::held;
 
 fn missing(id: &str) -> Error {
     Error::Io(format!("no recovered model `{}`", id.chars().take(64).collect::<String>()))
@@ -84,17 +204,14 @@ fn read_entry(path: &Path) -> Option<Entry> {
 
 /// Entries left by apps that are no longer running, newest first.
 pub fn orphans(dir: &Path) -> Vec<Entry> {
-    let mut out: Vec<Entry> = fs::read_dir(dir)
+    let mut out: Vec<Entry> = list(dir)
         .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| {
-            let p = e.path();
+        .filter_map(|p| {
             if p.extension().and_then(|x| x.to_str()) != Some("json") {
                 return None;
             }
             let entry = read_entry(&p)?;
-            if !valid_id(&entry.id) || p.file_stem().and_then(|s| s.to_str()) != Some(entry.id.as_str()) || !file(dir, &entry.id, EXTENSION).is_file()
+            if !valid_id(&entry.id) || p.file_stem().and_then(|s| s.to_str()) != Some(entry.id.as_str()) || !is_file(&file(dir, &entry.id, EXTENSION))
             {
                 return None;
             }
@@ -126,7 +243,7 @@ pub fn remove(dir: &Path, id: &str) -> Result<()> {
         return Err(Error::Io(format!("recovered model `{id}` belongs to a running app")));
     }
     for ext in ["json", EXTENSION, "lock"] {
-        let _ = fs::remove_file(file(dir, id, ext));
+        let _ = remove_file(&file(dir, id, ext));
     }
     Ok(())
 }
@@ -136,32 +253,21 @@ pub fn remove(dir: &Path, id: &str) -> Result<()> {
 pub struct Slot {
     dir: PathBuf,
     id: String,
-    lock: Option<File>,
+    lock: Option<lock::Lock>,
     has_entry: bool,
 }
 
 impl Slot {
     /// Take a new entry in `dir` (created if needed), holding its lock.
     pub fn new(dir: &Path) -> Result<Slot> {
-        let io = |e: std::io::Error| Error::Io(format!("{}: {e}", dir.display()));
-        fs::create_dir_all(dir).map_err(io)?;
-        // Locks of apps that ended with nothing to recover.
-        for e in fs::read_dir(dir).into_iter().flatten().flatten().take(10 * MAX_LISTED) {
-            let p = e.path();
-            if p.extension().and_then(|x| x.to_str()) == Some("lock")
-                && !p.with_extension("json").exists()
-                && File::open(&p).is_ok_and(|l| l.try_lock().is_ok())
-            {
-                let _ = fs::remove_file(&p);
-            }
-        }
+        create_dir_all(dir)?;
+        lock::sweep(dir);
         // Unique within the process too: an app started again in the same second (tests that
         // "crash" and restart) must not take over the crashed app's entry.
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let id = format!("{}-{}-{seq}", unix_now(), std::process::id());
-        let lock = OpenOptions::new().create(true).truncate(false).write(true).open(file(dir, &id, "lock")).map_err(io)?;
-        lock.lock().map_err(io)?;
+        let id = format!("{}-{}-{seq}", unix_now(), lock::instance());
+        let lock = lock::take(dir, &id)?;
         Ok(Slot { dir: dir.to_path_buf(), id, lock: Some(lock), has_entry: false })
     }
 
@@ -189,7 +295,7 @@ impl Slot {
     pub fn clear(&mut self) {
         if self.has_entry {
             for ext in ["json", EXTENSION] {
-                let _ = fs::remove_file(file(&self.dir, &self.id, ext));
+                let _ = remove_file(&file(&self.dir, &self.id, ext));
             }
             self.has_entry = false;
         }
@@ -198,15 +304,16 @@ impl Slot {
     /// The app is closing: the lock is released; with no autosave the lock file goes too, while
     /// an autosave stays for the next launch to offer.
     pub fn close(mut self) {
-        self.lock = None;
-        if !self.has_entry {
-            let _ = fs::remove_file(file(&self.dir, &self.id, "lock"));
+        if let Some(lock) = self.lock.take() {
+            lock::release(lock, &self.dir, &self.id, self.has_entry);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     fn dir(tag: &str) -> PathBuf {

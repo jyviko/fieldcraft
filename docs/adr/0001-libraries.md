@@ -38,7 +38,28 @@ build. Our code is sequential with a fixed operation order, `unsafe`-free and wa
 factor size is known (and capped) before any value is computed. Cost if this is wrong: large
 models (beyond a few hundred thousand equations) factor slower than they could; the remedy is a
 supernodal factorization of our own, or `faer` behind the same `Factor` interface with a stated
-tolerance instead of bit-identity, as the GPU exception already does.
+tolerance instead of bit-identity, as the GPU exception already does. *Updated 2026-10-13 (CPU
+parallelism task):* the factorization is now our own supernodal left-looking Cholesky (Liu–Ng–Peyton
+1993 fundamental supernodes on a postordered elimination tree, Ng–Peyton 1993, Rothberg–Gupta
+1994), multithreaded with a fixed operation order (below). Its rounding differs from the old
+up-looking factor in the last digits; every oracle fixture stays within its band.
+
+**Threads: rayon** (MIT OR Apache-2.0), in `modelcraft-parallel` only (an L0 crate with no
+workspace dependencies; *decided 2026-10-13*). The solvers keep the bit-for-bit rule on any
+number of threads by construction: work is cut into blocks whose sizes are constants of the
+algorithm, never derived from the thread count; each floating-point value is computed by one task
+in an order fixed by the input; results come back in block order and every sum over blocks or
+elements (nodal forces, assembly, wall forces, energies) runs on one thread in the order the
+sequential algorithm used. No float atomics, no `reduce` whose tree depends on work stealing:
+rayon decides only when a block runs. `std::thread::scope` was the alternative and needs no
+dependency, but it spawns threads per parallel region; the explicit solver enters several regions
+per time increment (10⁵–10⁷ increments), so a persistent pool is needed, and writing our own would
+re-implement rayon's. rayon was already in the shipped dependency tree (THIRD-PARTY-LICENSES.txt
+unchanged). In the browser build (`wasm32`) the crate does not depend on rayon and runs the same
+blocks one after another, with the same results. The thread count is a session and `solve.*`
+parameter (`threads`, 1–256) whose default is `MODELCRAFT_THREADS` or the available cores. Cost if
+this is wrong: rayon's pool is a process-wide resource and nested pools add latency; replacing it
+touches only `modelcraft-parallel`.
 
 **Allowed:** MIT, BSD-2/3, Apache-2.0, ISC, Zlib, Unicode, MPL-2.0 (as an unmodified dependency),
 CC0 and public domain.

@@ -84,7 +84,8 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   L7 depends on egui/eframe/winit/wgpu/rfd. **Only
   `crates/geometry` may use `solidcraft-*`.**
 - **Determinism.** The same input gives the same mesh, deck and CPU solver result, bit for bit, on
-  every platform: no hash-order iteration into output, no thread-count-dependent results. GPU
+  every platform: no hash-order iteration into output, no thread-count-dependent results (threads
+  go through `modelcraft-parallel`: fixed blocks, sums in a fixed order, docs/adr/0001). GPU
   solver backends (wgpu, f32) are the one exception: deterministic per device, and checked against
   the CPU reference within a stated tolerance.
 - **Robust geometry.** Meshing decisions (orientation, in-sphere, intersection) use exact or

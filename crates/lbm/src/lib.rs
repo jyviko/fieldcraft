@@ -39,8 +39,10 @@
 //! the book.
 //!
 //! # Determinism
-//! Double precision, fixed loop orders, no threads and no parallel reductions: the same model
-//! gives the same result bit for bit on every platform, wasm included.
+//! Double precision and fixed loop orders. Collision and streaming run on threads by fixed blocks
+//! of cells ([`modelcraft_parallel`]), each cell's update independent of the others; the wall
+//! forces and every other sum run in a fixed order on one thread. The same model gives the same
+//! result bit for bit on any number of threads and on every platform, wasm included.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 // Population arrays are indexed by cell and direction counts fixed when they are allocated.

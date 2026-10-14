@@ -19,6 +19,7 @@ crates in strictly lower layers.
 | Layer | Crate | Role | Status |
 |---|---|---|---|
 | L0 | `modelcraft-model` | Solver-neutral FE model: nodes and elements by label, their geometry tags, sets, materials, sections, couplings, BCs, loads and steps, the model check and the resolved view the writers read. Knows no file format and no geometry type. | started |
+| L0 | `modelcraft-parallel` | Deterministic data parallelism for the solvers: fixed work partitions on a rayon pool, results in block order, the thread-count setting (`MODELCRAFT_THREADS`, `threads`); sequential in the browser. No workspace dependencies. | started |
 | L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`; face-tagged 3MF files read into the same type without the kernel (docs/formats/tagged-mesh.md). No SolidCraft type in its API. | started |
 | L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
 | L1 | `modelcraft-fem` | Element kernels shared by every structural solver: the element table (tet4, tet10, wedge6, hex8 full and incompatible modes, hex20 full and reduced), shape functions, quadrature, element stiffness, consistent and lumped mass, body and pressure loads, stresses and their extrapolation, isotropic and orthotropic elasticity, the uniform-strain (one-point) hex8 and tet4 kinematics, hourglass shape vectors and element frequency bounds of the explicit solver, objective stress rates and J2/Johnson–Cook return mapping. Pure functions, no solver loop. | started |
@@ -185,8 +186,9 @@ module docs; ADR 0001 records why the linear algebra is our own.
    symmetric positive definite (no penalty, no multipliers). Free mesh equations follow the
    node order, reference point equations come last. Without couplings T is a selection and the
    numbers are those of plain elimination, bit for bit.
-4. **Static solution.** Up-looking sparse Cholesky (the factor size is computed and capped before
-   any value), reactions T_pᵀ (K u − f) (at nodes and at prescribed reference points, forces and
+4. **Static solution.** Supernodal left-looking sparse Cholesky on the postordered elimination
+   tree (the factor size is computed and capped before any value; subtrees and dense row tiles on
+   threads with a fixed operation order, so the factor is the same on any thread count), reactions T_pᵀ (K u − f) (at nodes and at prescribed reference points, forces and
    moments), integration-point stresses extrapolated to the nodes and averaged, von Mises. Shells
    report section forces and bottom, middle and top stresses at their nodes (their top surface
    joins the nodal average), beams their end section forces; nodes report rotations and reaction

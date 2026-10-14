@@ -32,8 +32,9 @@
 //! pulls: every population of a cell comes from one source (a neighbour, a periodic image, the
 //! cell itself through a wall, or an open boundary). Cells whose 18 neighbours are all fluid
 //! cells inside the box stream by one shifted copy per direction; the others follow per-link
-//! rules. Every loop runs in a fixed order with no parallel reductions, so the result is the
-//! same bit for bit on every platform.
+//! rules. Collision and streaming run by fixed blocks of cells in parallel, each cell writing
+//! only its own populations; the wall forces are summed in link order. There are no parallel
+//! reductions, so the result is the same bit for bit on any number of threads and platform.
 
 use modelcraft_model::{BoxFace, FaceCondition, Profile};
 

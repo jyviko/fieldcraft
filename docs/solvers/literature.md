@@ -974,7 +974,10 @@ the module docs):
 - Ordering: A. George, SIAM J. Numer. Anal. 10(2):345–363, 1973; H. D. Simon, Computing Systems
   in Engineering 2:135–148, 1991.
 - Sparse Cholesky: T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM 2006; J. W. H.
-  Liu, SIAM J. Matrix Anal. Appl. 11(1):134–172, 1990.
+  Liu, SIAM J. Matrix Anal. Appl. 11(1):134–172, 1990; supernodes: J. W. H. Liu, E. G. Ng, B. W.
+  Peyton, SIAM J. Matrix Anal. Appl. 14(1):242–252, 1993; left-looking supernodal factorization:
+  E. Ng, B. W. Peyton, SIAM J. Sci. Comput. 14(5):1034–1056, 1993; parallel block factorization:
+  E. Rothberg, A. Gupta, SIAM J. Sci. Comput. 15(6):1413–1439, 1994.
 - Eigenvalues: T. Ericsson, A. Ruhe, Math. Comp. 35(152):1251–1268, 1980; R. G. Grimes, J. G.
   Lewis, H. D. Simon, SIAM J. Matrix Anal. Appl. 15(1):228–272, 1994; B. N. Parlett, *The
   Symmetric Eigenvalue Problem*, SIAM 1998; G. H. Golub, C. F. Van Loan, *Matrix Computations*,

@@ -15,8 +15,11 @@
 //!    von Mises. Frequency analysis ([`eigen`]) runs shift-invert block Lanczos on the same
 //!    kind of factorization.
 //!
-//! Everything is sequential and in a fixed order, so the same model gives the same numbers bit
-//! for bit; sizes and iterations are capped by [`Limits`].
+//! Element matrices and stresses, the factorization's subtrees and dense tiles, the Lanczos
+//! block solves and matrix products run on threads ([`modelcraft_parallel`]), but every number
+//! is computed by one task in an order fixed by the model alone and sums are taken in a fixed
+//! order, so the same model gives the same numbers bit for bit on any number of threads and on
+//! every platform; sizes and iterations are capped by [`Limits`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 // Matrix kernels read as the textbook formulas with index loops.

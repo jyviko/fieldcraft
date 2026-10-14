@@ -24,9 +24,10 @@
 //! docs/solvers/literature.md, Parts F and J). Without it the gradients stay those of the
 //! undeformed mesh (small displacements).
 //!
-//! Everything is sequential, with elements in label order and no parallel reductions, so the
-//! same model gives the same numbers bit for bit; sizes, increments and output are capped by
-//! [`Limits`].
+//! Elements are updated on threads ([`modelcraft_parallel`]), each owning its state, and their
+//! nodal forces are added in label order as a sequential loop adds them, with no parallel
+//! reductions, so the same model gives the same numbers bit for bit on any number of threads;
+//! sizes, increments and output are capped by [`Limits`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 // Small fixed-size vector kernels read as the textbook formulas with index loops.

@@ -154,9 +154,11 @@ impl Session {
         (session, warnings)
     }
 
-    /// Replace this session with `opened`, keeping its undo memory limit; the history starts empty.
+    /// Replace this session with `opened`, keeping its undo memory limit and its work caps; the
+    /// history starts empty.
     fn replace_with(&mut self, mut opened: Session) {
         opened.history = std::mem::take(&mut self.history);
+        opened.limits = self.limits;
         opened.clear_history();
         *self = opened;
     }

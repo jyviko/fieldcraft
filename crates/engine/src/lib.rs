@@ -124,6 +124,25 @@ pub(crate) fn next_revision() -> u64 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The defaults of the work caps that commands take as parameters: what a command may spend
+/// when its parameters name no cap of their own. A parameter still overrides them within the
+/// command's documented range. The defaults are the production ones; a host may lower them (the
+/// tests do, so hostile input is refused quickly).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// `mesh.tet.generate`'s `max_steiner`.
+    pub max_steiner: usize,
+    /// `mesh.tet.generate`'s `max_tets`.
+    pub max_tets: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        let cdt = modelcraft_mesh::cdt::CdtOptions::default();
+        Limits { max_steiner: cdt.max_steiner, max_tets: cdt.max_tets }
+    }
+}
+
 /// The model being edited, the geometry it is built on and the commands that built it.
 #[derive(Debug, Clone, Default)]
 pub struct Session {
@@ -153,6 +172,8 @@ pub struct Session {
     results: BTreeMap<String, (u64, Arc<StepResult>)>,
     /// What the results display shows (`results.*`); `None` shows the model.
     pub results_view: Option<results::ResultsView>,
+    /// The default work caps of commands; a file replacing the session keeps them.
+    pub limits: Limits,
 }
 
 impl Session {
@@ -400,16 +421,20 @@ mod tests {
             json!({"geometry": {"body": "Bar"}, "elements": [1, 99], "faces": [{"element": 1, "face": 200}]}),
             json!({"geometry": {"body": "Bar", "vertex": "v"}, "nodes": [1], "edges": [{"element": 1, "edge": 0}]}),
         ];
+        // Small work caps, so input that would mesh up to the production caps (needle triangles
+        // need Steiner points all along them) is refused at once. The caps themselves are what
+        // `tet_generate_honours_the_session_caps` checks.
+        let capped = || Session { limits: Limits { max_steiner: 64, max_tets: 100_000 }, ..Session::default() };
         for spec in commands() {
             for p in &hostile {
-                let mut s = Session::default();
+                let mut s = capped();
                 let _ = s.execute(spec.id, &p.clone());
             }
         }
-        assert!(Session::default().execute("no.such", &json!({})).is_err());
+        assert!(capped().execute("no.such", &json!({})).is_err());
 
         // The same against a defined model, so edits and deletes reach existing definitions.
-        let mut defined = Session::default();
+        let mut defined = capped();
         crate::cmd::define::tests::defined_bar(&mut defined);
         for spec in commands() {
             for p in &hostile {
@@ -423,7 +448,7 @@ mod tests {
 
         // The same against an open design.
         let (_dir, path) = sample_design_file(&Plate::default());
-        let mut opened = Session::default();
+        let mut opened = capped();
         opened.execute("geometry.open", &json!({"path": path})).unwrap();
         let tess = [
             json!({"body": "Body1"}),

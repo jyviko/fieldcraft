@@ -126,10 +126,9 @@ fn surface_options(p: &Value, mesh: &SurfaceMesh) -> Result<SurfaceOptions> {
 }
 
 fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
-    let defaults = CdtOptions::default();
     let cdt_options = CdtOptions {
-        max_steiner: optional_count(p, "max_steiner", defaults.max_steiner as u64, 0..=TET_MAX_STEINER)?,
-        max_tets: optional_count(p, "max_tets", defaults.max_tets as u64, 1..=TET_MAX_TETS)?,
+        max_steiner: optional_count(p, "max_steiner", s.limits.max_steiner as u64, 0..=TET_MAX_STEINER)?,
+        max_tets: optional_count(p, "max_tets", s.limits.max_tets as u64, 1..=TET_MAX_TETS)?,
     };
     let (surface, body, face_names) = {
         let Input { mesh, body, faces } = surface_input(s, p)?;
@@ -646,6 +645,26 @@ mod tests {
             assert!(s.execute("mesh.tet.generate", &bad).is_err(), "{bad}");
         }
         assert_eq!((s.journal.len(), &s.model), (journal, &model), "failures change nothing");
+    }
+
+    /// The session's caps are the defaults of `max_steiner` and `max_tets`; a parameter overrides them.
+    #[test]
+    fn tet_generate_honours_the_session_caps() {
+        use std::sync::Arc;
+
+        use modelcraft_geometry::open_design;
+        use modelcraft_geometry::sample::{Plate, plate_design};
+
+        use crate::{EngineError, Limits};
+
+        let design = Arc::new(open_design(&plate_design(&Plate::default()).unwrap()).unwrap());
+        let mut s = Session { design: Some(design), limits: Limits { max_tets: 10, ..Limits::default() }, ..Session::default() };
+        let plate = json!({"body": "Body1", "tolerance": 0.5});
+        let refused = s.execute("mesh.tet.generate", &plate).unwrap_err();
+        assert!(matches!(refused, EngineError::Mesh(modelcraft_mesh::Error::Limit(_))), "{refused}");
+        assert!(s.model.elements().is_empty());
+        let r = s.execute("mesh.tet.generate", &json!({"body": "Body1", "tolerance": 0.5, "max_tets": 1_000_000})).unwrap();
+        assert!(r["elements"].as_u64().unwrap() > 0, "{r}");
     }
 
     #[test]

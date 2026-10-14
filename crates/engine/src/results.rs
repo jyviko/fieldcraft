@@ -92,12 +92,17 @@ pub enum Field {
     ContactPressure,
     /// The normalised contact gap of the secondary surfaces' nodes (negative: penetration).
     ContactGap,
-    /// Contact status of the secondary surfaces' nodes: 0 open, 1 closed.
+    /// Contact status of the secondary surfaces' nodes: 0 open, 1 closed (frictionless) or
+    /// sticking, 2 slipping.
     ContactStatus,
+    /// The magnitude of the friction's shear traction (0 off the secondary surfaces).
+    ContactShear,
+    /// The magnitude of the frictional slip over the last increment (secondary surfaces' nodes).
+    ContactSlip,
 }
 
 impl Field {
-    pub const ALL: [Field; 20] = [
+    pub const ALL: [Field; 22] = [
         Field::Displacement,
         Field::DisplacementX,
         Field::DisplacementY,
@@ -118,6 +123,8 @@ impl Field {
         Field::ContactPressure,
         Field::ContactGap,
         Field::ContactStatus,
+        Field::ContactShear,
+        Field::ContactSlip,
     ];
 
     /// The id commands take (`von_mises`…).
@@ -143,6 +150,8 @@ impl Field {
             Field::ContactPressure => "contact_pressure",
             Field::ContactGap => "contact_gap",
             Field::ContactStatus => "contact_status",
+            Field::ContactShear => "contact_shear",
+            Field::ContactSlip => "contact_slip",
         }
     }
 
@@ -167,7 +176,9 @@ impl Field {
             Field::HeatFlux => "Heat flux magnitude",
             Field::ContactPressure => "Contact pressure",
             Field::ContactGap => "Contact gap",
-            Field::ContactStatus => "Contact status (0 open, 1 closed)",
+            Field::ContactStatus => "Contact status (0 open, 1 closed or stick, 2 slip)",
+            Field::ContactShear => "Contact shear traction",
+            Field::ContactSlip => "Contact slip",
         }
     }
 
@@ -191,7 +202,7 @@ impl Field {
 
     /// Whether it is a contact quantity.
     pub fn is_contact(self) -> bool {
-        matches!(self, Field::ContactPressure | Field::ContactGap | Field::ContactStatus)
+        matches!(self, Field::ContactPressure | Field::ContactGap | Field::ContactStatus | Field::ContactShear | Field::ContactSlip)
     }
 
     /// Whether it is a heat transfer quantity.
@@ -356,7 +367,7 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
             Kind::Heat(h) => Ok(h.flux.iter().map(|v| magnitude(*v)).collect()),
             _ => Err(unavailable()),
         },
-        Field::ContactPressure | Field::ContactGap | Field::ContactStatus => match r.kind() {
+        Field::ContactPressure | Field::ContactGap | Field::ContactStatus | Field::ContactShear | Field::ContactSlip => match r.kind() {
             Kind::Static(s) if !s.contacts.is_empty() => Ok(contact_values(s, field)),
             _ => Err(unavailable()),
         },
@@ -373,24 +384,37 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
     }
 }
 
-/// A contact field at every node of a static result: the largest pressure, the smallest gap or
-/// the closed status over the contacts a node is a secondary node of; off them 0 pressure and no
-/// gap or status (NaN).
+/// A contact field at every node of a static result: the largest pressure, shear, slip or status
+/// code, or the smallest gap, over the contacts a node is a secondary node of; off them 0
+/// pressure and shear, and no gap, status or slip (NaN).
 fn contact_values(s: &StaticResult, field: Field) -> Vec<f64> {
-    let mut out = vec![if field == Field::ContactPressure { 0.0 } else { f64::NAN }; s.nodes.len()];
+    use fieldcraft_solver::contact::Status;
+    let zero = matches!(field, Field::ContactPressure | Field::ContactShear);
+    let mut out = vec![if zero { 0.0 } else { f64::NAN }; s.nodes.len()];
+    let larger = |v: &mut f64, x: f64| *v = if v.is_nan() { x } else { v.max(x) };
     for c in &s.contacts {
         for (k, label) in c.nodes.iter().enumerate() {
             let Some(v) = s.nodes.binary_search(label).ok().and_then(|i| out.get_mut(i)) else { continue };
             match field {
-                Field::ContactPressure => *v = v.max(c.pressure.get(k).copied().unwrap_or(0.0)),
+                Field::ContactPressure => larger(v, c.pressure.get(k).copied().unwrap_or(0.0)),
+                Field::ContactShear => larger(v, c.shear.get(k).map_or(0.0, |t| magnitude(*t))),
+                Field::ContactSlip => {
+                    if let Some(g) = c.slip.get(k) {
+                        larger(v, magnitude(*g));
+                    }
+                }
                 Field::ContactGap => {
                     if let Some(Some(g)) = c.gap.get(k) {
                         *v = if v.is_nan() { *g } else { v.min(*g) };
                     }
                 }
                 Field::ContactStatus => {
-                    let closed = c.status.get(k).is_some_and(|s| *s == fieldcraft_solver::contact::Status::Closed);
-                    *v = if closed || (!v.is_nan() && *v > 0.0) { 1.0 } else { 0.0 };
+                    let code = match c.status.get(k) {
+                        Some(Status::Closed | Status::Stick) => 1.0,
+                        Some(Status::Slip) => 2.0,
+                        Some(Status::Open) | None => 0.0,
+                    };
+                    larger(v, code);
                 }
                 _ => {}
             }
@@ -525,7 +549,7 @@ mod tests {
         }
         let (modes, _) = s.latest_result("Modes").unwrap();
         assert_eq!(Field::available(modes).count(), 4);
-        assert_eq!(Field::available(bend).count(), Field::ALL.len() - 6, "all but velocity, the thermal and the contact fields");
+        assert_eq!(Field::available(bend).count(), Field::ALL.len() - 8, "all but velocity, the thermal and the contact fields");
         assert!(field_values(&s.model, modes, Field::VonMises, Pick { mode: 1, frame: None }).is_err());
         assert!(field_values(&s.model, modes, Field::Displacement, Pick { mode: 9, frame: None }).is_err());
         assert_eq!(field_values(&s.model, modes, Field::Displacement, Pick { mode: 2, frame: None }).unwrap().len(), modes.nodes().len());

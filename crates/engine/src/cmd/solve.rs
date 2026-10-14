@@ -36,7 +36,7 @@ pub const STATIC: CommandSpec = CommandSpec {
 pub const NONLINEAR: CommandSpec = CommandSpec {
     id: "solve.nonlinear",
     label: "Solve Nonlinear Static Step",
-    params: r#"{"step": "Inflate", "max_dofs": 6000000, "max_factor_entries": 400000000, "max_newton_iterations": 100000, "threads": 8} — solves a nonlinear static step (the only one when `step` is left out) in load increments with Newton–Raphson iterations and keeps the result in the session: the final displacements, reactions, Cauchy stresses and logarithmic strains (small strains without nonlinear geometry), the equivalent plastic strain of plastic materials (the largest in the summary), every increment's load factor, iterations and residuals (force, displacement and energy, relative to their tolerances' scales), and a displacement frame per converged increment, and with contact pairs (interaction.contact.pair: mortar contact by augmented Lagrangian, frictionless) each contact's normal force, largest pressure, closed nodes, deepest penetration and augmentations (solve.probe gives each secondary node's pressure, gap and status); the caps may only be lowered (`max_newton_iterations` over the whole step); `threads` as for solve.static"#,
+    params: r#"{"step": "Inflate", "max_dofs": 6000000, "max_factor_entries": 400000000, "max_newton_iterations": 100000, "threads": 8} — solves a nonlinear static step (the only one when `step` is left out) in load increments with Newton–Raphson iterations and keeps the result in the session: the final displacements, reactions, Cauchy stresses and logarithmic strains (small strains without nonlinear geometry), the equivalent plastic strain of plastic materials (the largest in the summary), every increment's load factor, iterations and residuals (force, displacement and energy, relative to their tolerances' scales), and a displacement frame per converged increment, and with contact pairs (interaction.contact.pair: mortar contact by augmented Lagrangian, Coulomb friction by a return map) each contact's force, normal force, largest pressure, closed and slipping nodes, deepest penetration and augmentations (solve.probe gives each secondary node's pressure, gap and status, and with friction its shear traction and slip); the caps may only be lowered (`max_newton_iterations` over the whole step); `threads` as for solve.static"#,
     form: Some(super::forms::SOLVE_NONLINEAR),
     kind: CommandKind::Model,
     run: run_nonlinear,
@@ -245,6 +245,7 @@ fn run_nonlinear(s: &mut Session, p: &Value) -> Result<Value> {
             "force": c.force,
             "max_pressure": largest(c.nodes.iter().copied().zip(c.pressure.iter().copied())),
             "closed_nodes": c.closed(),
+            "slipping_nodes": c.status.iter().filter(|s| **s == fieldcraft_solver::contact::Status::Slip).count(),
             "penetration": c.penetration,
             "augmentations": c.augmentations,
         })).collect::<Vec<_>>(),
@@ -635,7 +636,12 @@ fn probe_implicit(result: &ImplicitResult, step: &str, nodes: &[u32], p: &Value)
                             .iter()
                             .filter_map(|c| {
                                 let k = c.nodes.binary_search(&l).ok()?;
-                                Some(json!({"contact": c.name, "pressure": c.pressure.get(k), "gap": c.gap.get(k), "status": c.status.get(k)}))
+                                let mut entry = json!({"contact": c.name, "pressure": c.pressure.get(k), "gap": c.gap.get(k), "status": c.status.get(k)});
+                                if let (Some(shear), Some(slip)) = (c.shear.get(k), c.slip.get(k)) {
+                                    entry["shear"] = json!(shear);
+                                    entry["slip"] = json!(slip);
+                                }
+                                Some(entry)
                             })
                             .collect();
                         if !contact.is_empty() {
@@ -1587,5 +1593,32 @@ pub(crate) mod tests {
         .unwrap();
         let e = s.execute("solve.static", &json!({"step": "Linear"})).unwrap_err().to_string();
         assert!(e.contains("interface"), "{e}");
+    }
+
+    #[test]
+    fn solve_and_probe_a_frictional_contact() {
+        let mut s = Session::default();
+        pressed_blocks(&mut s);
+        s.execute("interaction.contact.edit", &json!({"name": "interface", "surfaces": {"type": "pair", "main": "lower_top", "secondary": "upper_bottom"}, "friction": {"static": 0.2}})).unwrap();
+        s.execute(
+            "model.boundary_condition.edit",
+            &json!({"name": "push", "type": "displacement", "target": {"set": "top"}, "values": [0.05, 0, -0.02, null, null, null]}),
+        )
+        .unwrap();
+        let r = s.execute("solve.nonlinear", &json!({"step": "Squeeze"})).unwrap();
+        let c = &r["contacts"][0];
+        assert_eq!(c["slipping_nodes"], 16, "{r}");
+        // Slipping, the interface carries μ N sideways.
+        let (n, t) = (c["force"][2].as_f64().unwrap(), c["force"][0].as_f64().unwrap());
+        assert!((t + 0.2 * n).abs() < 1e-3 * n, "{r}");
+        let third = 1.0 / 3.0;
+        let probe = s.execute("solve.probe", &json!({"step": "Squeeze", "at": [[third, third, 1.0]]})).unwrap();
+        let contact = &probe["nodes"][0]["contact"][0];
+        assert_eq!(contact["status"], "slip", "{probe}");
+        assert!(contact["shear"][0].as_f64().unwrap() < 0.0 && contact["slip"][0].as_f64().unwrap() > 0.0, "{probe}");
+        let v = s.execute("results.contour", &json!({"step": "Squeeze", "field": "contact_status"})).unwrap();
+        assert_eq!(v["contour"]["range"]["max"]["value"], 2.0, "{v}");
+        let v = s.execute("results.contour", &json!({"step": "Squeeze", "field": "contact_shear"})).unwrap();
+        assert!(v["contour"]["range"]["max"]["value"].as_f64().unwrap() > 1.0, "{v}");
     }
 }

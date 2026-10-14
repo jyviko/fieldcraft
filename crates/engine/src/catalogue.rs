@@ -428,7 +428,7 @@ pub static CATALOGUE: &[Capability] = &[
         "Contact Pair",
         Interactions,
         "Contact",
-        "Contact between two surfaces: with friction in explicit dynamics, frictionless mortar contact in nonlinear static steps",
+        "Contact between two surfaces: with friction in explicit dynamics, mortar contact with friction in nonlinear static steps",
         &["interaction.contact.edit", "interaction.contact.delete"],
     ),
     ready(

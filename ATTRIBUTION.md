@@ -154,6 +154,7 @@ is committed and listed here with its exports.
 | assets/app-icon/icon.iconset/icon_256x256@2x.png | FieldCraft contributors | sips export (512 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
 | assets/app-icon/icon.iconset/icon_512x512.png | FieldCraft contributors | sips export (512 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
 | assets/app-icon/icon.iconset/icon_512x512@2x.png | FieldCraft contributors | sips export (1024 px) of assets/app-icon/icon.png | MIT OR Apache-2.0 |
+| packaging/macos/README.txt, packaging/linux/io.github.jyviko.fieldcraft.desktop, packaging/macos/entitlements.plist | FieldCraft contributors | Original packaging text: the disk image's install note, the Linux desktop entry and the (empty) hardened-runtime entitlements | MIT OR Apache-2.0 |
 | crates/ui-egui/fonts/Inter-SemiBold.ttf | The Inter Project Authors | https://github.com/rsms/inter release v4.1 (Inter-4.1.zip, extras/ttf/Inter-SemiBold.ttf), unmodified; licence text in crates/ui-egui/fonts/OFL.txt; the interface's caps labels (theme::LABEL_FAMILY) | SIL OFL 1.1 |
 
 ## Adapted code
@@ -171,6 +172,9 @@ is committed and listed here with its exports.
 | apps/fieldcraft/src/control_server.rs | SolidCraft `apps/solidcraft/src/control_server.rs` | MIT OR Apache-2.0 |
 | crates/mcp/src/ (JSON-RPC framing, MCP lifecycle, tool schema checks, the control-channel backend, base64) | SolidCraft `crates/mcp/src/` | MIT OR Apache-2.0 |
 | crates/io/src/roots.rs (the rules of read and write roots) | VectorCraft's automation roots (docs/mcp.md there) | MIT OR Apache-2.0 |
+| packaging/env.sh, packaging/macos/package.sh, packaging/macos/Info.plist.in, packaging/linux/package.sh, packaging/linux/AppRun, packaging/windows/package.ps1 | SolidCraft `packaging/` and VectorCraft `packaging/` (signing and notarization in macos/package.sh) | MIT OR Apache-2.0 |
+| packaging/macos/import-cert.sh | VectorCraft `packaging/macos/import-cert.sh` | MIT OR Apache-2.0 |
+| packaging/windows/check-exe.ps1 | SolidCraft `packaging/windows/check-icon.ps1` | MIT OR Apache-2.0 |
 
 ## Test oracles
 

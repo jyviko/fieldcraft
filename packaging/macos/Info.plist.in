@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: packaging/macos/package.sh substitutes @APP_ID@, @VERSION@ (full, e.g. 0.2.0-rc.1),
+     @SHORT_VERSION@ (numeric X.Y.Z), @BUILD_SHA@ and @MIN_MACOS@
+     (MACOSX_DEPLOYMENT_TARGET). Adapted from SolidCraft's and VectorCraft's
+     (MIT OR Apache-2.0; see ATTRIBUTION.md). -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>FieldCraft</string>
+  <key>CFBundleName</key>
+  <string>FieldCraft</string>
+  <key>CFBundleExecutable</key>
+  <string>FieldCraft</string>
+  <key>CFBundleIdentifier</key>
+  <string>@APP_ID@</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@SHORT_VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@SHORT_VERSION@</string>
+  <key>FieldCraftVersion</key>
+  <string>@VERSION@</string>
+  <key>FieldCraftBuildCommit</key>
+  <string>@BUILD_SHA@</string>
+  <!-- Contents/Resources/FieldCraft.icns (assets/app-icon/icon.icns) for macOS before 26, and the
+       FieldCraft icon in Contents/Resources/Assets.car (assets/app-icon/Assets.car) from 26 on. -->
+  <key>CFBundleIconFile</key>
+  <string>FieldCraft</string>
+  <key>CFBundleIconName</key>
+  <string>FieldCraft</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.graphics-design</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>@MIN_MACOS@</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © FieldCraft contributors. MIT OR Apache-2.0.</string>
+</dict>
+</plist>

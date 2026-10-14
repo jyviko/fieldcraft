@@ -1,0 +1,6 @@
+#!/bin/sh
+# FieldCraft AppImage entry point (packaging/linux/AppRun; installed by package.sh): run the app
+# from the AppImage's own tree.
+set -eu
+APPDIR="$(dirname "$(readlink -f "$0")")"
+exec "$APPDIR/usr/bin/fieldcraft" "$@"

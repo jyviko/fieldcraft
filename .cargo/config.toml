@@ -1,2 +1,8 @@
 [alias]
 xtask = "run --package xtask --"
+
+# Windows release binaries link the C runtime statically, so they run without the VC++
+# redistributable (packaging/windows/package.ps1 builds with --target, which keeps the flag
+# off build scripts and proc-macros).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -35,7 +35,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
 
 # 3MF packages (docs/formats/tagged-mesh.md): the same versions SolidCraft uses.
-zip = { version = "3", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 quick-xml = "0.41"
 
 # content hashes and part checksums of .fieldcraft files (the version SolidCraft uses)

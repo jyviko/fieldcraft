@@ -86,11 +86,45 @@ The same part also meshes all-hex automatically with the octree mesher (`mesh.he
 - **Verification:** every capability is checked against closed forms and published benchmarks
   (NAFEMS, MacNeal–Harder, Scordelis–Lo, the elastica, Hill's plastic cylinder, Rivlin's tube) in [`tests/oracle`](tests/oracle), with results frozen
   so they cannot drift: 170 of 176 quantities pass in 50 cases, the 6 others documented known
-  failures ([docs/oracle.md](docs/oracle.md)).
+  failures ([docs/oracle.md](docs/oracle.md)); against Abaqus's published benchmark results in [How FieldCraft compares with Abaqus](#how-fieldcraft-compares-with-abaqus).
 - **Driving it:** a desktop app in the Craft family's layout, a CLI, a JSON control channel and an
   MCP server; every capability is a command ([docs/features.md](docs/features.md)).
 
 ![The FieldCraft window: a clamped cantilever with its supports, pressure, gravity and a coupled reference point drawn in the viewport](docs/media/setup-symbols.png)
+
+## How FieldCraft compares with Abaqus
+
+The Abaqus values are the ones Abaqus publishes in its Benchmarks Guide [^bg]. We never run Abaqus.
+The FieldCraft values come from [docs/oracle.md](docs/oracle.md). Errors are measured against the benchmark's reference.
+For each element we list Abaqus's best published mesh. The Guide doesn't give element counts for the NAFEMS meshes.
+
+| Benchmark | Reference | Abaqus (element, result, error) | FieldCraft (element, result, error) |
+|---|---|---|---|
+| NAFEMS LE1 elliptic membrane, σ_yy at D | 92.7 MPa | CPS8 fine: 92.81, +0.12 %; CPS8R fine: 90.07, −2.8 % [^le1] | quad8 24 × 48: 92.648, −0.06 %; hex20 layer 24 × 48: 92.869, +0.18 % |
+| NAFEMS LE10 thick plate, σ_yy at D | −5.38 MPa | C3D20R fine: −5.53, +2.8 %; C3D20 fine: −5.64, +4.8 %; C3D10HS fine: −5.51, +2.4 % [^le10] | hex20, 2 × (8 × 16 × 3): −5.334, −0.86 % |
+| NAFEMS FV32 tapered membrane, f₁…f₆ | 44.623 … 391.44 Hz | CPS8R: worst mode 5, 381.32, +0.37 %; CPS6: worst +0.02 % [^fv32] | hex20 layer 16 × 8: every mode within 0.004 % |
+| NAFEMS LE11 thermal cylinder, σ_zz at A | −105 MPa | C3D20 fine: −103.26, −1.7 %; C3D20R fine: −99.60, −5.1 % [^le11] | pending (thermal loads) |
+| Scordelis–Lo roof, free-edge midpoint u_z | 0.3024 (MacNeal–Harder); Abaqus uses 91.2 mm | S4 18 × 18: 91.89 mm, +0.77 %; S8R 9 × 9: 91.90 mm, +0.8 % [^sl] | hex20R one layer, quarter 16 × 16: −0.3014, −0.33 % |
+| Pinched cylinder, radial u under the load | 1.825 × 10⁻⁵ | S8R5, 2646 dof: 1.833 × 10⁻⁵, +0.44 %; S4R, 2646 dof: 1.779 × 10⁻⁵, −2.5 % [^pc] | pending (shells) |
+| MacNeal–Harder twisted beam, thick, in-plane tip u | 5.424 × 10⁻³ | S4R 8 × 48: 5.430 × 10⁻³, +0.11 % [^tb] | pending (shells) |
+| MacNeal–Harder pinched hemisphere | 0.0940 | not found (Abaqus publishes NAFEMS LE3, a different load and material) | pending (shells) |
+| MacNeal–Harder patch, straight and curved cantilever, thick cylinder | see [docs/oracle.md](docs/oracle.md) | not found | hex8 incompatible: patch exact; straight cantilever −1.2 % to −10.8 %; curved −12 % / −20 %; thick cylinder −1.4 % |
+| Cook's membrane, Euler and plate buckling | — | not found | see [docs/oracle.md](docs/oracle.md) |
+
+Not like for like:
+- **LE1 and FV32:** our hex20 rows model plane stress with a thin solid layer. Only the quad8 row matches Abaqus's CPS8 directly.
+- **LE10:** our mesh is probably finer than Abaqus's "fine" mesh, but the Guide gives no element count, so this isn't certain. The Guide notes that only one element touches D in its fine mesh.
+- **Scordelis–Lo:** Abaqus publishes shell elements only. Our row uses a single layer of solid elements. The two references differ slightly: 91.2 mm against MacNeal–Harder's normalised 0.3024.
+- **Pinched cylinder:** Abaqus reports mesh size as degrees of freedom.
+
+[^bg]: Abaqus 2017 Benchmarks Guide, hosted at <https://abaqus-docs.mit.edu/2017/English/SIMACAEBMKRefMap/>. Each footnote names the page, and the values are in its "Results and discussion".
+[^le1]: "LE1: Plane stress elements—elliptic membrane", Table 1, Abaqus/Standard: [simabmk-c-le1.htm](https://abaqus-docs.mit.edu/2017/English/SIMACAEBMKRefMap/simabmk-c-le1.htm)
+[^le10]: "LE10: Thick plate under pressure", Table 1, Abaqus/Standard: [simabmk-c-le10.htm](https://abaqus-docs.mit.edu/2017/English/SIMACAEBMKRefMap/simabmk-c-le10.htm)
+[^fv32]: "FV32: Cantilevered tapered membrane", frequency table: [simabmk-c-fv32.htm](https://abaqus-docs.mit.edu/2017/English/SIMACAEBMKRefMap/simabmk-c-fv32.htm)
+[^le11]: "LE11: Solid cylinder/taper/sphere—temperature loading": [simabmk-c-le11.htm](https://abaqus-docs.mit.edu/2017/English/SIMACAEBMKRefMap/simabmk-c-le11.htm)
+[^sl]: "Barrel vault roof problem", Table 1, regular meshes: [simabmk-c-barrelvault.htm](https://abaqus-docs.mit.edu/2017/English/SIMACAEBMKRefMap/simabmk-c-barrelvault.htm)
+[^pc]: "Pinched cylinder", regular-mesh table: [simabmk-c-pinchcyl.htm](https://abaqus-docs.mit.edu/2017/English/SIMACAEBMKRefMap/simabmk-c-pinchcyl.htm)
+[^tb]: "Twisted beam" results table: [simabmk-c-twistedbeam.htm](https://abaqus-docs.mit.edu/2017/English/SIMACAEBMKRefMap/simabmk-c-twistedbeam.htm)
 
 ## Build
 

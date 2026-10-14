@@ -710,6 +710,12 @@ pub const CELLS: &[Field] = &[
     TOLERANCE,
 ];
 
+pub const MIRROR: &[Field] = &[
+    json("plane", "Plane").req().hint(r#""Datum" or {"point": [x, y, z], "normal": [nx, ny, nz]}"#),
+    references("bodies", "Bodies", C::Body).hint("every meshed body"),
+    json("as", "Images").hint(r#"{"body": "image body"}; default: the design's body at the reflected place"#),
+];
+
 pub const HEX_OCTREE: &[Field] = &[
     BODY,
     SURFACE,

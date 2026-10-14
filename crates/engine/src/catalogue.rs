@@ -315,7 +315,7 @@ pub static CATALOGUE: &[Capability] = &[
         Mesh,
         "Edit",
         "Add an element on existing nodes, or a mapped block of them",
-        &["mesh.element.remove", "mesh.block"],
+        &["mesh.element.remove", "mesh.block", "mesh.mirror"],
     ),
     soon("mesh.node.merge", "Merge Nodes", Mesh, "Edit", "M6", "Merge coincident nodes"),
     soon("mesh.region.remesh", "Remesh Region", Mesh, "Edit", "M6", "Remesh a region in place; split and collapse elements"),

@@ -14,6 +14,7 @@ mod hex;
 pub(crate) mod mesh;
 
 pub use mesh::analytic_surfaces;
+mod mirror;
 mod model;
 pub(crate) mod octree;
 mod results;
@@ -55,6 +56,7 @@ pub static ALL: &[CommandSpec] = &[
     hex::HEX_MAPPED,
     hex::HEX_BLOCKS,
     cells::CELLS,
+    mirror::MIRROR,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

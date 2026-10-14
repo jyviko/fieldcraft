@@ -39,7 +39,7 @@ zip = { version = "3", default-features = false, features = ["deflate"] }
 quick-xml = "0.41"
 
 # content hashes and part checksums of .fieldcraft files (the version SolidCraft uses)
-sha2 = "0.10"
+sha2 = "0.11"
 
 # images (PNG snapshots and screenshots)
 png = "0.18"

@@ -1,9 +1,11 @@
 //! modelcraft-cli commands
 //! modelcraft-cli run <script.json>
 //! modelcraft-cli features
+//! modelcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use modelcraft_engine::Session;
@@ -16,6 +18,14 @@ usage:
                                        and print the model summary
   modelcraft-cli features              print docs/features.md (every capability, ready or
                                        coming soon) from the capability catalogue
+  modelcraft-cli mcp [options]         serve the Model Context Protocol on stdin/stdout
+                                       (docs/mcp.md):
+      --headless                       an in-process session (the default)
+      --connect ADDR                   drive the app at ADDR (`modelcraft --control PORT`);
+                                       headless when it cannot be reached
+      --automation-read-root DIR       files may be read only inside DIR
+      --automation-write-root DIR      files may be written only inside DIR (with either root,
+                                       the access a root left out is not granted)
 ";
 
 /// Largest script accepted (bytes).
@@ -34,6 +44,7 @@ fn main() -> ExitCode {
             print!("{}", modelcraft_engine::catalogue::features_page());
             Ok(())
         }
+        Some("mcp") => mcp(args.get(1..).unwrap_or(&[])),
         Some("run") => args.get(1).ok_or_else(|| format!("run needs a script\n\n{USAGE}")).and_then(|p| run(p)),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
@@ -50,6 +61,54 @@ fn main() -> ExitCode {
     }
 }
 
+/// The `mcp` options: each given once, as `--flag value` or `--flag=value`.
+fn mcp_options(args: &[String]) -> Result<modelcraft_mcp::Options, String> {
+    let mut connect = None;
+    let mut headless = false;
+    let mut read = None;
+    let mut write = None;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        let mut value = || inline.clone().or_else(|| it.next().cloned()).filter(|v| !v.is_empty()).ok_or_else(|| format!("{flag} needs a value"));
+        let slot = match flag {
+            "--headless" if inline.is_none() => {
+                if std::mem::replace(&mut headless, true) {
+                    return Err("--headless is given twice".into());
+                }
+                continue;
+            }
+            "--connect" => &mut connect,
+            "--automation-read-root" => &mut read,
+            "--automation-write-root" => &mut write,
+            other => return Err(format!("mcp: unknown option `{other}`\n\n{USAGE}")),
+        };
+        if slot.replace(value()?).is_some() {
+            return Err(format!("{flag} is given twice"));
+        }
+    }
+    if headless && connect.is_some() {
+        return Err("--connect and --headless exclude each other".into());
+    }
+    let roots = match (&read, &write) {
+        (None, None) => modelcraft_io::roots::Roots::default(),
+        _ => modelcraft_io::roots::Roots::new(read.as_deref().map(Path::new), write.as_deref().map(Path::new)).map_err(|e| e.to_string())?,
+    };
+    Ok(modelcraft_mcp::Options { connect, roots })
+}
+
+fn mcp(args: &[String]) -> Result<(), String> {
+    let (backend, note) = modelcraft_mcp::backend(mcp_options(args)?)?;
+    if let Some(note) = note {
+        eprintln!("modelcraft-cli mcp: {note}");
+    }
+    let mut server = modelcraft_mcp::Server::new(backend);
+    server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| format!("mcp: {e}"))
+}
+
 fn run(path: &str) -> Result<(), String> {
     let size = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.len();
     if size > MAX_SCRIPT_BYTES {
@@ -62,4 +121,36 @@ fn run(path: &str) -> Result<(), String> {
     let info = session.execute("model.info", &json!({})).map_err(|e| e.to_string())?;
     println!("{}", serde_json::to_string_pretty(&info).map_err(|e| e.to_string())?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(args: &[&str]) -> Result<modelcraft_mcp::Options, String> {
+        mcp_options(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn mcp_options_are_checked() {
+        let dir = std::env::temp_dir();
+        let d = dir.to_string_lossy();
+        assert!(opts(&[]).unwrap().connect.is_none());
+        assert_eq!(opts(&["--connect", "127.0.0.1:7070"]).unwrap().connect.as_deref(), Some("127.0.0.1:7070"));
+        assert_eq!(opts(&["--connect=127.0.0.1:7070"]).unwrap().connect.as_deref(), Some("127.0.0.1:7070"));
+        assert!(opts(&["--automation-read-root", &d]).unwrap().roots.is_confined());
+        assert!(opts(&[&format!("--automation-write-root={d}")]).unwrap().roots.is_confined());
+        for bad in [
+            vec!["--connect"],
+            vec!["--connect", "a", "--connect", "b"],
+            vec!["--headless", "--headless"],
+            vec!["--headless", "--connect", "a"],
+            vec!["--automation-read-root", "/no/such/folder"],
+            vec!["--automation-read-root="],
+            vec!["--nope"],
+            vec!["--headless=yes"],
+        ] {
+            assert!(opts(&bad).is_err(), "{bad:?}");
+        }
+    }
 }

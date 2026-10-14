@@ -1874,6 +1874,8 @@ name = "modelcraft-cli"
 version = "0.1.0"
 dependencies = [
  "modelcraft-engine",
+ "modelcraft-io",
+ "modelcraft-mcp",
  "serde_json",
 ]
 

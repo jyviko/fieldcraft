@@ -353,10 +353,6 @@ fn what_implicit_contact_refuses() {
     b.model.add_step(Step::new("Linear", Procedure::Static {}), None).unwrap();
     let e = fieldcraft_solver::solve_static(&b.model, Some("Linear"), &Limits::default()).unwrap_err().to_string();
     assert!(e.contains("interface") && e.contains("linear static"), "{e}");
-    // General contact.
-    let mut b = stacked(0.0, InitialPenetration::Adjust);
-    b.model.add_contact("all", Contact::new(ContactSurfaces::General { surface: None })).unwrap();
-    assert!(solve(&b.model).contains("general"));
     // Arc-length control.
     let mut b = stacked(0.0, InitialPenetration::Adjust);
     let arc = NonlinearStatic { arc_length: Some(ArcLength::default()), ..NonlinearStatic::default() };
@@ -559,4 +555,148 @@ fn what_ties_refuse() {
     b.model.replace_tie("glue", Tie { position_tolerance: Some(1e-9), ..Tie::new("lower_top", "upper_bottom") }).unwrap();
     let r = fieldcraft_solver::solve_static(&b.model, Some("Step"), &Limits::default()).unwrap();
     assert!(r.warnings.iter().all(|w| !w.contains("stay free")), "{:?}", r.warnings);
+}
+
+/// A C-shaped ring of rubber (an annulus of radii 1 and 1.5 with a 10° opening at +x, one hex8
+/// layer thick in z with z held: plane strain) whose two ends are pressed together through the
+/// outer nodes two elements from each end, against general (single-surface) contact on every
+/// exterior face of the body: Mooney–Rivlin, nearly incompressible, hybrid elements.
+fn c_ring(finite: bool, closing: f64) -> (Blocks, StaticResult) {
+    let mut b = Blocks::default();
+    let (n, open) = (36usize, 5f64.to_radians());
+    let angle = move |i: f64| open + i * (2.0 * std::f64::consts::PI - 2.0 * open);
+    b.block(ElementKind::Hex8, [n, 2, 1], |p| {
+        let (t, r) = (angle(p[0]), 1.5 - 0.5 * p[1]);
+        [r * t.cos(), r * t.sin(), 0.2 * p[2]]
+    });
+    let all: Vec<u32> = b.model.elements().keys().copied().collect();
+    b.model.add_set("all", Set { elements: all, ..Set::default() }).unwrap();
+    let rubber = Material {
+        elastic: Some(Elastic::Isotropic { young: 3.0, poisson: 0.499 }),
+        hyperelastic: Some(Hyperelastic::MooneyRivlin { c01: 0.1 }),
+        ..Material::default()
+    };
+    b.model.add_material("Rubber", rubber).unwrap();
+    b.model
+        .add_section(
+            "solid",
+            Section {
+                set: "all".into(),
+                material: "Rubber".into(),
+                kind: SectionKind::Solid {},
+                formulation: Formulation { hybrid: true, ..Formulation::default() },
+            },
+        )
+        .unwrap();
+    let settings = NonlinearStatic { nonlinear_geometry: finite, initial_increment: 0.1, max_increments: 200, ..NonlinearStatic::default() };
+    b.model.add_step(Step::new("Step", Procedure::NonlinearStatic(settings)), None).unwrap();
+    b.model.add_contact("self", Contact::new(ContactSurfaces::General { surface: None })).unwrap();
+    // The outer nodes two elements from each end close towards the axis of symmetry y = 0; the
+    // back of the ring is held in its plane; every node in z.
+    let step = 2.0 * std::f64::consts::PI - 2.0 * open;
+    let at = |x: [f64; 3], i: f64| {
+        ((x[0] * x[0] + x[1] * x[1]).sqrt() - 1.5).abs() < 1e-9
+            && (x[1].atan2(x[0]).rem_euclid(2.0 * std::f64::consts::PI) - angle(i)).abs() < 1e-6 * step
+    };
+    let near_end = 2.0 / n as f64;
+    b.bc("upper", [None, Some(-closing), None], move |x| at(x, near_end));
+    b.bc("lower", [None, Some(closing), None], move |x| at(x, 1.0 - near_end));
+    b.bc("back", [Some(0.0), Some(0.0), None], move |x| at(x, 0.5));
+    b.bc("plane", [None, None, Some(0.0)], |_| true);
+    let r = solve_nonlinear(&b.model, Some("Step"), &Limits::default()).unwrap();
+    report(&r);
+    (b, r)
+}
+
+/// Self-contact: the ring's two ends, faces of one body and one general contact, meet and press
+/// on each other without passing through, and the result keeps the model's mirror symmetry
+/// about y = 0.
+#[test]
+fn a_rubber_ring_closes_on_itself_without_penetration() {
+    for finite in [true] {
+        let (b, r) = c_ring(finite, 0.15);
+        let c = &r.contacts[0];
+        assert!(c.closed() > 0, "finite {finite}: the ends touch");
+        // No penetration beyond the augmented Lagrangian's tolerance.
+        assert!(c.penetration < 1e-4, "finite {finite}: {}", c.penetration);
+        let deformed = |l: u32| -> [f64; 3] {
+            let u = r.displacement[r.nodes.binary_search(&l).unwrap()];
+            let x = b.xyz[&l];
+            [x[0] + u[0], x[1] + u[1], x[2] + u[2]]
+        };
+        // The ends' nodes stay on their own side of the plane of symmetry, up to the overlap the
+        // mortar's weak (weighted) enforcement allows at the edge of a contact zone: a hundredth
+        // of the elements' size (0.25).
+        for (l, x) in &b.xyz {
+            let y = x[1];
+            if x[0] > 0.9 && y.abs() < 0.2 {
+                let d = deformed(*l);
+                assert!(d[1] * y.signum() >= -2.5e-3, "finite {finite}: node {l} crossed: {y} → {}", d[1]);
+            }
+        }
+        // Mirror symmetry: the node at (x, −y) moves as the mirror of the node at (x, y).
+        let mut checked = 0;
+        for (l, x) in &b.xyz {
+            let Some((m, _)) = b.xyz.iter().find(|(_, y)| (y[0] - x[0]).abs() < 1e-9 && (y[1] + x[1]).abs() < 1e-9 && (y[2] - x[2]).abs() < 1e-9)
+            else {
+                continue;
+            };
+            let (u, v) = (r.displacement[r.nodes.binary_search(l).unwrap()], r.displacement[r.nodes.binary_search(m).unwrap()]);
+            assert!((u[0] - v[0]).abs() < 1e-6 && (u[1] + v[1]).abs() < 1e-6, "finite {finite}: nodes {l}, {m}: {u:?} {v:?}");
+            checked += 1;
+        }
+        assert!(checked > 50, "{checked}");
+        eprintln!("finite {finite}: closed {} penetration {:.2e} force {:?}", c.closed(), c.penetration, c.force);
+    }
+}
+
+/// A rubber bellows (a quarter of a corrugated tube: three convolutions, mean radius 2, fold
+/// depth 0.5, wall 0.15, height 3) squeezed axially by 0.8 with general contact on all its faces:
+/// its folds close and press on one another, as in a boot seal. (Squeezed to half its height
+/// the step stalls at 57%: deeply folded rubber needs better increment control; see M7.)
+#[test]
+#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+fn a_rubber_bellows_folds_onto_itself() {
+    let mut b = Blocks::default();
+    let (folds, height, depth, wall) = (3.0, 3.0, 0.5, 0.15);
+    let quarter = std::f64::consts::FRAC_PI_2;
+    b.block(ElementKind::Hex8, [4, 48, 1], move |p| {
+        let theta = quarter * p[0];
+        let s = p[1] * folds;
+        let tri = 1.0 - 2.0 * (s - s.floor() - 0.5).abs(); // 0 → 1 → 0 per convolution
+        let r = 2.0 + depth * tri + wall * p[2];
+        [r * theta.cos(), r * theta.sin(), height * p[1]]
+    });
+    let all: Vec<u32> = b.model.elements().keys().copied().collect();
+    b.model.add_set("all", Set { elements: all, ..Set::default() }).unwrap();
+    let rubber = Material {
+        elastic: Some(Elastic::Isotropic { young: 3.0, poisson: 0.499 }),
+        hyperelastic: Some(Hyperelastic::MooneyRivlin { c01: 0.1 }),
+        ..Material::default()
+    };
+    b.model.add_material("Rubber", rubber).unwrap();
+    b.model
+        .add_section(
+            "solid",
+            Section {
+                set: "all".into(),
+                material: "Rubber".into(),
+                kind: SectionKind::Solid {},
+                formulation: Formulation { hybrid: true, ..Formulation::default() },
+            },
+        )
+        .unwrap();
+    let settings = NonlinearStatic { initial_increment: 0.05, max_increment: 0.1, max_increments: 400, ..NonlinearStatic::default() };
+    b.model.add_step(Step::new("Step", Procedure::NonlinearStatic(settings)), None).unwrap();
+    b.model.add_contact("folds", Contact::new(ContactSurfaces::General { surface: None })).unwrap();
+    b.bc("x0", [Some(0.0), None, None], |x| near(x[0], 0.0));
+    b.bc("y0", [None, Some(0.0), None], |x| near(x[1], 0.0));
+    b.bc("base", [None, None, Some(0.0)], |x| near(x[2], 0.0));
+    b.bc("squeeze", [None, None, Some(-0.8)], move |x| near(x[2], height));
+    let r = solve_nonlinear(&b.model, Some("Step"), &Limits::default()).unwrap();
+    report(&r);
+    let c = &r.contacts[0];
+    eprintln!("closed {} penetration {:.2e} augmentations {}", c.closed(), c.penetration, c.augmentations);
+    assert!(c.closed() > 0, "the folds touch");
+    assert!(c.penetration < 1e-3 * wall, "{}", c.penetration);
 }

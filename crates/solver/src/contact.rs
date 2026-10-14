@@ -75,9 +75,15 @@
 //! of the pressure field and ring at the contact's edge), the multiplier, the gap and the status;
 //! per contact the force on the secondary surface and its normal part.
 //!
-//! **Scope.** Pairs of surfaces of linear solid faces (tri3 and quad4 faces: tet4, wedge6 and
-//! hex8 elements) in 3D models, with Coulomb friction ([`Interface::friction`]). General (single-surface) contact, quadratic faces,
-//! 2D models and arc-length steps are refused by name.
+//! **Single-surface (general) contact** is the same mortar contact with one face list as both
+//! sides: a set's faces, or every exterior face of the solids. Each face is a secondary face
+//! against every other one that faces it, that shares no node with its element (its neighbours)
+//! and that it does not reach through more than half an element (the far side of a thin wall),
+//! so two faces pressing together are paired both ways, symmetrically: self-contact of folds.
+//!
+//! **Scope.** Linear solid faces (tri3 and quad4 faces: tet4, wedge6 and hex8 elements) in 3D
+//! models, with Coulomb friction ([`Interface::friction`]). Quadratic faces, 2D models and
+//! arc-length steps are refused by name.
 
 use std::collections::BTreeMap;
 
@@ -85,7 +91,7 @@ use fieldcraft_fem::contact::{Aabb, Grid, bounds};
 use fieldcraft_fem::dual::{Dual, Hyper, Real, VARS};
 use fieldcraft_fem::frame::{Vec3, dot, norm, unit};
 use fieldcraft_fem::mortar::{area_vector, integrate};
-use fieldcraft_model::{Contact, ContactSurfaces, ElementKind, Friction, InitialPenetration, Model, Resolved};
+use fieldcraft_model::{Contact, ContactSurfaces, ElementFace, ElementKind, Friction, InitialPenetration, Model, Resolved};
 use fieldcraft_parallel as parallel;
 use serde::Serialize;
 
@@ -306,7 +312,11 @@ fn size(x: &[Vec3]) -> f64 {
 /// The faces of set `set` for definition `owner` (``contact `name` ``, ``tie `name` ``), refused
 /// unless they are linear faces of analysed solid elements.
 pub(crate) fn faces(model: &Model, resolved: &Resolved, mesh: &Mesh, owner: &str, set: &str) -> Result<Vec<Face>> {
-    let list = resolved.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default();
+    face_list(model, mesh, owner, resolved.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default())
+}
+
+/// The faces `list` for definition `owner`, as [`faces`].
+fn face_list(model: &Model, mesh: &Mesh, owner: &str, list: &[ElementFace]) -> Result<Vec<Face>> {
     let mut out = Vec::with_capacity(list.len());
     for f in list {
         let at = |what: String| Error::Invalid(format!("{owner}: element {} face {}: {what}", f.element, f.face));
@@ -459,14 +469,21 @@ impl Interface {
     }
 
     fn new(model: &Model, resolved: &Resolved, mesh: &Mesh, name: &str, contact: &Contact) -> Result<Interface> {
-        let ContactSurfaces::Pair { main, secondary } = &contact.surfaces else {
-            return Err(Error::NotSupported(format!(
-                "general (single-surface) contact `{name}` in implicit steps; define contact pairs (interaction.contact.pair), or solve it in explicit dynamics"
-            )));
-        };
         let owner = format!("contact `{name}`");
-        let secondary = faces(model, resolved, mesh, &owner, secondary)?;
-        let main = faces(model, resolved, mesh, &owner, main)?;
+        let (secondary, main) = match &contact.surfaces {
+            ContactSurfaces::Pair { main, secondary } => {
+                (faces(model, resolved, mesh, &owner, secondary)?, faces(model, resolved, mesh, &owner, main)?)
+            }
+            // Single surface: every face against every other one that faces it and shares no node
+            // with its element (its neighbours), both ways.
+            ContactSurfaces::General { surface } => {
+                let list = match surface {
+                    Some(set) => faces(model, resolved, mesh, &owner, set)?,
+                    None => face_list(model, mesh, &owner, &model.exterior_faces())?,
+                };
+                (list.clone(), list)
+            }
+        };
         let mut nodes: Vec<usize> = secondary.iter().flat_map(|f| f.nodes.iter().copied()).collect();
         nodes.sort_unstable();
         nodes.dedup();

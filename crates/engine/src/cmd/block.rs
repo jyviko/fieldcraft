@@ -1,10 +1,11 @@
-//! `mesh.block`: a structured mesh of one six-sided block from its corners and curved edges
-//! ([`modelcraft_mesh::block`]), joined to the mesh already there and tagged as a body with named
-//! faces, edges and vertices, so sets by geometry select it.
+//! `mesh.block`: a structured mesh of one six-sided block (solid elements) or four-sided planar
+//! patch (2D elements) from its corners and curved edges ([`modelcraft_mesh::block`]), joined to
+//! the mesh already there and tagged as a body (a patch: a face of the body) with named faces,
+//! edges and vertices, so sets by geometry select it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use modelcraft_mesh::block::{Block, Curve, block};
+use modelcraft_mesh::block::{Block, BlockMesh, Curve, Patch, block, patch};
 use modelcraft_mesh::join::{check_conforming, weld};
 use modelcraft_model::{ElementKind, Entity, GeometryRef, Model};
 use serde::Deserialize;
@@ -16,7 +17,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const BLOCK: CommandSpec = CommandSpec {
     id: "mesh.block",
     label: "Mesh Block",
-    params: r#"{"body": "Plate", "kind": "hex8|hex20|tet4|tet10|wedge6", "corners": [[x, y, z] × 8] (hex8 order: 1-2-3-4 counter-clockwise seen from 5-6-7-8), "divisions": [n12, n14, n15] (elements along 1→2, 1→4, 1→5), "bias": [1, 1, 1] (optional: last over first element size along each direction), "edges": [{"corners": [1, 2], "arc": {"center": [x, y, z]}} | {"corners": [2, 3], "ellipse": {"center": [x, y, z], "axes": [[a], [b]] (perpendicular)}} | {"corners": [5, 6], "name": "tip_edge"}] (optional: curved edges, the shorter arc between the corners, and edge names), "faces": {"1": "bottom", "4": "tip"} (optional: names of block faces, numbered as hex8 faces: 1 = 1-2-3-4, 2 = 5-6-7-8, 3 = 1-2-6-5, 4 = 2-3-7-6, 5 = 3-4-8-7, 6 = 4-1-5-8), "vertices": {"1": "A"} (optional: names of corners), "merge": distance (optional, default 1e-6 of the block's diagonal; 0 never joins)} — adds a mapped mesh of the block (transfinite interpolation of its edges; quadratic nodes on the curves), uses existing nodes within `merge` of new ones so blocks that share a face join (the shared face must have the same elements on both sides, or nothing changes), and tags the elements with the body and element faces, edges and nodes with the named faces, edges and vertices"#,
+    params: r#"{"body": "Plate", "kind": "hex8|hex20|tet4|tet10|wedge6", "corners": [[x, y, z] × 8] (hex8 order: 1-2-3-4 counter-clockwise seen from 5-6-7-8), "divisions": [n12, n14, n15] (elements along 1→2, 1→4, 1→5), "bias": [1, 1, 1] (optional: last over first element size along each direction), "edges": [{"corners": [1, 2], "arc": {"center": [x, y, z]}} | {"corners": [2, 3], "ellipse": {"center": [x, y, z], "axes": [[a], [b]] (perpendicular)}} | {"corners": [5, 6], "name": "tip_edge"}] (optional: curved edges, the shorter arc between the corners, and edge names), "faces": {"1": "bottom", "4": "tip"} (optional: names of block faces, numbered as hex8 faces: 1 = 1-2-3-4, 2 = 5-6-7-8, 3 = 1-2-6-5, 4 = 2-3-7-6, 5 = 3-4-8-7, 6 = 4-1-5-8), "vertices": {"1": "A"} (optional: names of corners), "merge": distance (optional, default 1e-6 of the block's diagonal; 0 never joins)} — adds a mapped mesh of the block (transfinite interpolation of its edges; quadratic nodes on the curves), uses existing nodes within `merge` of new ones so blocks that share a face join (the shared face must have the same elements on both sides, or nothing changes), and tags the elements with the body and element faces, edges and nodes with the named faces, edges and vertices. 2D: "kind": "quad4|quad8|tri3|tri6", four "corners" at z = 0 (counter-clockwise from +z), "divisions": [n12, n14], "bias": [r, r], "face": "area" (the face of the body the elements fill, default `area`), edges and vertices numbered among the four corners; for plane stress, plane strain and axisymmetric sections"#,
     kind: CommandKind::Model,
     run: block_mesh,
 };
@@ -26,21 +27,22 @@ pub const BLOCK: CommandSpec = CommandSpec {
 struct Params {
     body: String,
     kind: String,
-    corners: [[f64; 3]; 8],
-    divisions: [usize; 3],
-    #[serde(default = "uniform")]
-    bias: [f64; 3],
+    corners: Vec<[f64; 3]>,
+    divisions: Vec<usize>,
+    bias: Option<Vec<f64>>,
     #[serde(default)]
     edges: Vec<EdgeParams>,
     #[serde(default)]
     faces: BTreeMap<String, String>,
+    face: Option<String>,
     #[serde(default)]
     vertices: BTreeMap<String, String>,
     merge: Option<f64>,
 }
 
-fn uniform() -> [f64; 3] {
-    [1.0; 3]
+/// A list parameter of exactly `N` entries.
+fn exactly<T: Copy, const N: usize>(v: &[T], what: &str, dimension: u8) -> Result<[T; N]> {
+    <[T; N]>::try_from(v).map_err(|_| EngineError::Params(format!("a {dimension}D block needs {N} {what}, got {}", v.len())))
 }
 
 #[derive(Deserialize)]
@@ -77,12 +79,14 @@ fn numbered(key: &str, n: usize, what: &str) -> Result<usize> {
 fn block_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let p: Params = serde_json::from_value(p.clone()).map_err(|e| EngineError::Params(format!("mesh.block: {e}")))?;
     let kind = ElementKind::from_name(&p.kind).ok_or_else(|| EngineError::Params(format!("unknown element kind `{}`", p.kind)))?;
+    let planar = kind.dimension() == 2;
+    let (corner_count, dimension) = if planar { (4, 2) } else { (8, 3) };
+    let edge_index = |pair: [usize; 2]| if planar { Patch::edge_index(pair) } else { Block::edge_index(pair) };
     let mut curves = Vec::new();
     let mut edge_names = Vec::new();
     for e in &p.edges {
         let pair = [0, 1].map(|i| e.corners[i].wrapping_sub(1));
-        let index =
-            Block::edge_index(pair).ok_or_else(|| EngineError::Params(format!("corners {:?} are not the two ends of a block edge", e.corners)))?;
+        let index = edge_index(pair).ok_or_else(|| EngineError::Params(format!("corners {:?} are not the two ends of an edge", e.corners)))?;
         let curve = match (&e.arc, &e.ellipse) {
             (Some(a), None) => Some(Curve::Arc { center: a.center }),
             (None, Some(el)) => Some(Curve::Ellipse { center: el.center, axes: el.axes }),
@@ -100,16 +104,42 @@ fn block_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     // Check every name before meshing.
-    let body = GeometryRef::body(p.body.clone())?;
+    let region = match (planar, &p.face) {
+        (true, face) => GeometryRef::face(p.body.clone(), face.clone().unwrap_or_else(|| "area".into()))?,
+        (false, None) => GeometryRef::body(p.body.clone())?,
+        (false, Some(_)) => return Err(EngineError::Params("`face` names the region of 2D elements; a solid block fills its body".into())),
+    };
+    if planar && !p.faces.is_empty() {
+        return Err(EngineError::Params("a 2D patch has no faces to name: name its edges".into()));
+    }
     let named = |entries: &BTreeMap<String, String>, n: usize, what: &str, entity: fn(String) -> Entity| -> Result<Vec<(usize, GeometryRef)>> {
         entries.iter().map(|(k, name)| Ok((numbered(k, n, what)?, GeometryRef::new(p.body.clone(), entity(name.clone()))?))).collect()
     };
     let face_refs = named(&p.faces, 6, "face", Entity::Face)?;
-    let vertex_refs = named(&p.vertices, 8, "vertex", Entity::Vertex)?;
+    let vertex_refs = named(&p.vertices, corner_count, "vertex", Entity::Vertex)?;
     let edge_refs: Vec<(usize, GeometryRef)> =
         edge_names.into_iter().map(|(k, n)| Ok((k, GeometryRef::new(p.body.clone(), Entity::Edge(n))?))).collect::<Result<_>>()?;
 
-    let mesh = block(&Block { kind, corners: p.corners, divisions: p.divisions, bias: p.bias, curves })?;
+    let bias = p.bias.clone().unwrap_or_else(|| vec![1.0; dimension as usize]);
+    let mesh: BlockMesh = if planar {
+        let corners = exactly(&p.corners, "corners", dimension)?;
+        patch(&Patch {
+            kind,
+            corners,
+            divisions: exactly(&p.divisions, "divisions", dimension)?,
+            bias: exactly(&bias, "bias values", dimension)?,
+            curves,
+        })?
+    } else {
+        let corners = exactly(&p.corners, "corners", dimension)?;
+        block(&Block {
+            kind,
+            corners,
+            divisions: exactly(&p.divisions, "divisions", dimension)?,
+            bias: exactly(&bias, "bias values", dimension)?,
+            curves,
+        })?
+    };
     let diagonal = {
         let lo = (0..3).map(|d| p.corners.iter().map(|c| c[d]).fold(f64::INFINITY, f64::min));
         let hi = (0..3).map(|d| p.corners.iter().map(|c| c[d]).fold(f64::NEG_INFINITY, f64::max));
@@ -142,7 +172,7 @@ fn block_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         mesh.elements.iter().map(|e| Ok((kind, e.iter().map(|&i| label_of(i)).collect::<Result<_>>()?))).collect::<Result<_>>()?;
     check_conforming(&s.model, &elements, &joined, merge)?;
 
-    let body_tag = s.model.geometry_tag(&body)?;
+    let body_tag = s.model.geometry_tag(&region)?;
     for (label, (_, nodes)) in (first_element..).zip(elements) {
         s.model.set_element(label, kind, nodes)?;
         s.model.tag_element(label, body_tag)?;
@@ -293,5 +323,63 @@ mod tests {
             assert!(s.execute("mesh.block", &bad).is_err(), "{bad}");
         }
         assert_eq!(s.journal.len(), journal);
+    }
+
+    #[test]
+    fn patches_mesh_2d_regions_that_join_and_solve() {
+        let mut s = Session::default();
+        let o = [0, 0, 0];
+        // Two quarter annuli of quad8 (a = 1, b = 2), side by side: a half annulus.
+        for (corners, names, vertices) in [
+            (
+                json!([[1, 0, 0], [2, 0, 0], [0, 2, 0], [0, 1, 0]]),
+                json!([{"corners": [1, 2], "name": "y0"}, {"corners": [1, 4], "arc": {"center": o}, "name": "bore"}]),
+                json!({"3": "top"}),
+            ),
+            (
+                json!([[0, 1, 0], [0, 2, 0], [-2, 0, 0], [-1, 0, 0]]),
+                json!([{"corners": [1, 4], "arc": {"center": o}, "name": "bore"}, {"corners": [3, 4], "name": "y0"}]),
+                json!({}),
+            ),
+        ] {
+            let mut edges = names.as_array().unwrap().clone();
+            edges.push(json!({"corners": [2, 3], "arc": {"center": o}}));
+            s.execute(
+                "mesh.block",
+                &json!({"body": "Ring", "kind": "quad8", "corners": corners, "divisions": [4, 8], "edges": edges, "vertices": vertices}),
+            )
+            .unwrap();
+        }
+        assert_eq!(s.model.elements().len(), 64);
+        for (cmd, params) in [
+            ("model.set.create", json!({"name": "all", "geometry": [{"body": "Ring", "face": "area"}]})),
+            ("model.set.create", json!({"name": "y0", "geometry": [{"body": "Ring", "edge": "y0"}]})),
+            ("model.set.create", json!({"name": "bore", "geometry": [{"body": "Ring", "edge": "bore"}]})),
+            ("model.set.create", json!({"name": "top", "geometry": [{"body": "Ring", "vertex": "top"}]})),
+            ("model.boundary_condition.create", json!({"name": "hold", "type": "symmetry", "target": {"set": "top"}, "plane": "x"})),
+            ("model.material.create", json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.3}})),
+            ("model.section.create", json!({"name": "ring", "set": "all", "material": "Steel", "kind": {"type": "plane_strain", "thickness": 1.0}})),
+            ("model.boundary_condition.create", json!({"name": "sym", "type": "symmetry", "target": {"set": "y0"}, "plane": "y"})),
+            ("model.load.create", json!({"name": "p", "type": "pressure", "set": "bore", "magnitude": 10.0})),
+            ("model.step.create", json!({"name": "Load", "procedure": {"type": "static"}, "boundary_conditions": ["sym", "hold"], "loads": ["p"]})),
+        ] {
+            s.execute(cmd, &params).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        s.execute("solve.static", &json!({})).unwrap();
+        // Lamé, plane strain: u_r(a) = (1 + ν) a² p / (E (b² − a²)) ((1 − 2ν) a + b²/a).
+        let exact = 1.3 * 10.0 / (1000.0 * 3.0) * (0.4 + 4.0);
+        let r = s.execute("solve.probe", &json!({"step": "Load", "at": [[0, 1, 0]]})).unwrap();
+        let u = r["nodes"][0]["displacement"][1].as_f64().unwrap();
+        assert!((u - exact).abs() < 2e-3 * exact, "{u} vs {exact}");
+        // 2D patches refuse solid parameters, and the other way round.
+        for bad in [
+            json!({"body": "P", "kind": "quad4", "corners": [[5, 0, 0], [6, 0, 0], [6, 1, 0], [5, 1, 0]], "divisions": [1, 1, 1]}),
+            json!({"body": "P", "kind": "quad4", "corners": [[5, 0, 0], [6, 0, 0], [6, 1, 0], [5, 1, 0]], "divisions": [1, 1], "faces": {"1": "x"}}),
+            json!({"body": "P", "kind": "quad4", "corners": [[5, 0, 1], [6, 0, 1], [6, 1, 1], [5, 1, 1]], "divisions": [1, 1]}),
+            json!({"body": "P", "kind": "hex8", "corners": [[5, 0, 0], [6, 0, 0], [6, 1, 0], [5, 1, 0]], "divisions": [1, 1]}),
+            json!({"body": "P", "kind": "hex8", "corners": cube(5.0), "divisions": [1, 1, 1], "face": "area"}),
+        ] {
+            assert!(s.execute("mesh.block", &bad).is_err(), "{bad}");
+        }
     }
 }

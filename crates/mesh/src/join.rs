@@ -98,7 +98,8 @@ fn key(nodes: impl Iterator<Item = u32>) -> Vec<u32> {
     k
 }
 
-/// The faces (by sorted corners, with their sorted nodes) and the corner edges of elements.
+/// The sides (faces of solids, edges of 2D elements; by sorted corners, with their sorted
+/// nodes) and the corner edges of elements.
 struct Skin {
     faces: BTreeMap<Vec<u32>, Vec<u32>>,
     edges: BTreeSet<[u32; 2]>,
@@ -112,7 +113,9 @@ impl Skin {
         let mut all_edges = BTreeSet::new();
         for (kind, nodes) in elements {
             let corners = kind.corner_count();
-            for local in kind.faces() {
+            // The sides that join neighbours: faces of solids, edges of 2D elements.
+            let sides = if kind.dimension() == 3 { kind.faces() } else { kind.edges() };
+            for local in sides {
                 let cs: Vec<u32> = local.iter().filter(|&&i| i < corners).filter_map(|&i| nodes.get(i).copied()).collect();
                 let entry = count.entry(key(cs.iter().copied())).or_insert_with(|| (0, key(local.iter().filter_map(|&i| nodes.get(i).copied())), cs));
                 entry.0 += 1;

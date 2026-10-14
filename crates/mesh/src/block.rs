@@ -18,7 +18,7 @@
 
 use modelcraft_model::{ElementKind, MAX_COORD};
 
-use crate::quality::{Validity, element_validity};
+use crate::quality::{Validity, element_validity, planar_quad_validity};
 use crate::vec3::{P, cross, dot, norm, sub};
 use crate::{Error, Result};
 
@@ -76,7 +76,7 @@ pub struct BlockMesh {
     pub faces: Vec<(u32, u8, u8)>,
     /// `(element, edge 1-based, block edge 0..12)`: block edges as in [`EDGES`].
     pub edges: Vec<(u32, u8, u8)>,
-    /// The point at each block corner.
+    /// The point at each block corner (a patch fills the first four).
     pub corners: [u32; 8],
 }
 
@@ -401,6 +401,184 @@ pub fn block(b: &Block) -> Result<BlockMesh> {
     Ok(BlockMesh { points, elements, faces, edges, corners })
 }
 
+/// The corners of a patch's four edges, as [`EDGES`] for blocks: two along 1→2 (at the start
+/// and the end of 1→4), then two along 1→4.
+pub const PATCH_EDGES: [[usize; 2]; 4] = [[0, 1], [3, 2], [0, 3], [1, 2]];
+
+/// One four-sided planar patch to mesh with 2D elements (plane stress, plane strain and
+/// axisymmetric sections live in the XY plane, so its corners and curves are at z = 0).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Patch {
+    /// quad4, quad8, tri3 or tri6.
+    pub kind: ElementKind,
+    /// The corners counter-clockwise seen from +z.
+    pub corners: [P; 4],
+    /// Elements along 1→2 and 1→4.
+    pub divisions: [usize; 2],
+    pub bias: [f64; 2],
+    pub curves: Vec<([usize; 2], Curve)>,
+}
+
+impl Patch {
+    /// The patch edge ([`PATCH_EDGES`] index) joining two 0-based corners, either way round.
+    pub fn edge_index(corners: [usize; 2]) -> Option<usize> {
+        PATCH_EDGES.iter().position(|e| *e == corners || *e == [corners[1], corners[0]])
+    }
+}
+
+/// Lattice offsets of each 2D element of one cell, in the model's node order.
+fn cell_elements_2d(kind: ElementKind) -> Vec<Vec<[usize; 2]>> {
+    let nodes = |corners: &[[usize; 2]]| -> Vec<[usize; 2]> {
+        if !kind.is_quadratic() {
+            return corners.to_vec();
+        }
+        let mut out: Vec<[usize; 2]> = corners.iter().map(|c| c.map(|x| 2 * x)).collect();
+        for edge in kind.edges() {
+            if let (Some(a), Some(b)) = (edge.first().and_then(|&i| corners.get(i)), edge.get(1).and_then(|&i| corners.get(i))) {
+                out.push([a[0] + b[0], a[1] + b[1]]);
+            }
+        }
+        out
+    };
+    match kind {
+        ElementKind::Quad4 | ElementKind::Quad8 => vec![nodes(&[[0, 0], [1, 0], [1, 1], [0, 1]])],
+        ElementKind::Tri3 | ElementKind::Tri6 => vec![nodes(&[[0, 0], [1, 0], [1, 1]]), nodes(&[[0, 0], [1, 1], [0, 1]])],
+        _ => Vec::new(),
+    }
+}
+
+/// Mesh one patch with 2D elements by the Coons (bilinearly blended) transfinite interpolation of
+/// its four edges. Each element's corners must turn counter-clockwise (exact predicates); mid-side
+/// nodes come from the map, so quadratic elements follow the curved edges. In the result,
+/// `faces` is empty and `edges` lists element edges on the patch edges ([`PATCH_EDGES`]).
+pub fn patch(b: &Patch) -> Result<BlockMesh> {
+    let kind = b.kind;
+    if !matches!(kind, ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Tri3 | ElementKind::Tri6) {
+        return Err(Error::Invalid(format!("a patch is meshed with quad4, quad8, tri3 or tri6 elements, not {}", kind.name())));
+    }
+    if b.corners.iter().flatten().any(|c| !c.is_finite() || c.abs() > MAX_COORD) {
+        return Err(Error::Invalid(format!("patch corners must be finite and within ±{MAX_COORD}")));
+    }
+    if b.corners.iter().any(|c| c[2] != 0.0) {
+        return Err(Error::Invalid("2D elements lie in the XY plane: give the patch corners with z = 0".into()));
+    }
+    if b.divisions.iter().any(|&n| n == 0 || n > MAX_DIVISIONS) {
+        return Err(Error::Invalid(format!("divisions must be 1 to {MAX_DIVISIONS} in each direction")));
+    }
+    if b.bias.iter().any(|&r| !(r.is_finite() && (1e-6..=1e6).contains(&r))) {
+        return Err(Error::Invalid("bias must be between 1e-6 and 1e6 (1 is uniform)".into()));
+    }
+    let pattern = cell_elements_2d(kind);
+    b.divisions[0]
+        .checked_mul(b.divisions[1])
+        .and_then(|c| c.checked_mul(pattern.len()))
+        .filter(|&n| n <= MAX_BLOCK_ELEMENTS)
+        .ok_or_else(|| Error::Limit(format!("a patch makes at most {MAX_BLOCK_ELEMENTS} elements; {:?} divisions are more", b.divisions)))?;
+    let mut curves: [Option<Curve>; 4] = [None; 4];
+    for (pair, curve) in &b.curves {
+        let k = Patch::edge_index(*pair)
+            .ok_or_else(|| Error::Invalid(format!("corners {} and {} are not joined by a patch edge", pair[0] + 1, pair[1] + 1)))?;
+        if let Curve::Arc { center } | Curve::Ellipse { center, .. } = curve
+            && center[2] != 0.0
+        {
+            return Err(Error::Invalid("a patch's curves lie in the XY plane: give their centres with z = 0".into()));
+        }
+        if curves[k].replace(*curve).is_some() {
+            return Err(Error::Invalid(format!("the edge from corner {} to {} is given twice", pair[0] + 1, pair[1] + 1)));
+        }
+    }
+    let order = if kind.is_quadratic() { 2 } else { 1 };
+    let params: [Vec<f64>; 2] = [0, 1].map(|d| parameters(b.divisions[d], b.bias[d], order));
+    let mut edges: [Vec<P>; 4] = Default::default();
+    for (k, [from, to]) in PATCH_EDGES.iter().enumerate() {
+        let path = Path::new(curves[k].unwrap_or(Curve::Line), b.corners[*from], b.corners[*to])?;
+        edges[k] = params[k / 2].iter().map(|&t| path.point(t)).collect();
+    }
+    let at = |i: usize, j: usize| -> P {
+        let (u, v) = (params[0].get(i).copied().unwrap_or(0.0), params[1].get(j).copied().unwrap_or(0.0));
+        let e = |k: usize, n: usize| edges[k].get(n).copied().unwrap_or([f64::NAN; 3]);
+        let [c0, c1, c2, c3] = b.corners;
+        let mut x = [0.0; 3];
+        for (f, p) in [(1.0 - v, e(0, i)), (v, e(1, i)), (1.0 - u, e(2, j)), (u, e(3, j))] {
+            x = add_scaled(x, f, p);
+        }
+        for (f, c) in [((1.0 - u) * (1.0 - v), c0), (u * (1.0 - v), c1), (u * v, c2), ((1.0 - u) * v, c3)] {
+            x = add_scaled(x, -f, c);
+        }
+        x[2] = 0.0;
+        x
+    };
+    let size = [params[0].len(), params[1].len()];
+    let mut used = vec![false; size[0] * size[1]];
+    let mut lattice: Vec<Vec<[usize; 2]>> = Vec::new();
+    for j in 0..b.divisions[1] {
+        for i in 0..b.divisions[0] {
+            for e in &pattern {
+                let nodes: Vec<[usize; 2]> = e.iter().map(|o| [i * order + o[0], j * order + o[1]]).collect();
+                for c in &nodes {
+                    if let Some(slot) = used.get_mut(c[0] + size[0] * c[1]) {
+                        *slot = true;
+                    }
+                }
+                lattice.push(nodes);
+            }
+        }
+    }
+    let mut number: Vec<Option<u32>> = vec![None; used.len()];
+    let mut points = Vec::new();
+    for j in 0..size[1] {
+        for i in 0..size[0] {
+            let k = i + size[0] * j;
+            if used.get(k) == Some(&true)
+                && let Some(slot) = number.get_mut(k)
+            {
+                *slot = Some(u32::try_from(points.len()).map_err(|_| Error::Limit("too many points in one patch".into()))?);
+                points.push(at(i, j));
+            }
+        }
+    }
+    let point_of = |c: [usize; 2]| number.get(c[0] + size[0] * c[1]).copied().flatten();
+    let last = [size[0] - 1, size[1] - 1];
+    let mut corners = [0u32; 8];
+    for (slot, c) in corners.iter_mut().zip([[0, 0], [last[0], 0], [last[0], last[1]], [0, last[1]]]) {
+        *slot = point_of(c).ok_or_else(|| Error::Failed("a patch corner has no point".into()))?;
+    }
+    // Each patch edge: the direction it runs along and the lattice coordinate fixed on it.
+    let patch_edges: [(usize, usize); 4] = [(0, 0), (0, last[1]), (1, 0), (1, last[0])];
+    let mut elements = Vec::with_capacity(lattice.len());
+    let mut on_edges = Vec::new();
+    for (e, nodes) in lattice.iter().enumerate() {
+        let label = u32::try_from(e).map_err(|_| Error::Limit("too many elements in one patch".into()))?;
+        let ids: Vec<u32> =
+            nodes.iter().map(|c| point_of(*c)).collect::<Option<_>>().ok_or_else(|| Error::Failed("an element node has no point".into()))?;
+        let xy: Vec<[f64; 2]> =
+            ids.iter().take(kind.corner_count()).map(|&i| points.get(i as usize).map_or([f64::NAN; 2], |p| [p[0], p[1]])).collect();
+        let valid = match xy.as_slice() {
+            [a, b, c, d] => planar_quad_validity(&[*a, *b, *c, *d])? == Validity::Valid,
+            [a, b, c] => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) > 0.0,
+            _ => false,
+        };
+        if !valid {
+            let cell = nodes.first().map(|c| [c[0] / order, c[1] / order]).unwrap_or_default();
+            return Err(Error::Invalid(format!(
+                "the patch's {} element in cell {cell:?} is inverted or degenerate: give the corners counter-clockwise seen from +z and curves that do not fold the patch",
+                kind.name()
+            )));
+        }
+        for (k, local) in kind.edges().iter().enumerate() {
+            let (Some(a), Some(c)) = (local.first().and_then(|&i| nodes.get(i)), local.get(1).and_then(|&i| nodes.get(i))) else { continue };
+            for (pe, (along, fixed)) in patch_edges.iter().enumerate() {
+                let other = 1 - along;
+                if a[other] == *fixed && c[other] == *fixed {
+                    on_edges.push((label, k as u8 + 1, pe as u8));
+                }
+            }
+        }
+        elements.push(ids);
+    }
+    Ok(BlockMesh { points, elements, faces: Vec::new(), edges: on_edges, corners })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,6 +672,52 @@ mod tests {
             .collect();
         assert!(!inner.is_empty());
         assert!(inner.iter().all(|&i| (m.points[i as usize][0].hypot(m.points[i as usize][1]) - a).abs() < 1e-12));
+    }
+
+    #[test]
+    fn patches_mesh_a_quarter_annulus_with_every_2d_kind() {
+        let (a, b) = (1.0, 2.0);
+        let o = [0.0; 3];
+        for (kind, per_cell) in [(ElementKind::Quad4, 1), (ElementKind::Quad8, 1), (ElementKind::Tri3, 2), (ElementKind::Tri6, 2)] {
+            let p = Patch {
+                kind,
+                corners: [[a, 0.0, 0.0], [b, 0.0, 0.0], [0.0, b, 0.0], [0.0, a, 0.0]],
+                divisions: [3, 6],
+                bias: [1.0; 2],
+                curves: vec![([1, 2], Curve::Arc { center: o }), ([0, 3], Curve::Arc { center: o })],
+            };
+            let m = patch(&p).unwrap();
+            assert_eq!(m.elements.len(), 18 * per_cell, "{kind:?}");
+            assert!(m.points.iter().all(|q| q[2] == 0.0 && q[0].hypot(q[1]) > a - 1e-12 && q[0].hypot(q[1]) < b + 1e-12));
+            // Element edges on each patch edge: 3, 3, 6, 6 segments.
+            for (pe, n) in [(0, 3), (1, 3), (2, 6), (3, 6)] {
+                assert_eq!(m.edges.iter().filter(|e| e.2 == pe).count(), n, "{kind:?} edge {pe}");
+            }
+            if kind.is_quadratic() {
+                // Mid-side nodes of the inner arc lie on it.
+                let on_inner = m.edges.iter().filter(|e| e.2 == 2).all(|&(e, k, _)| {
+                    let mid = kind.edges()[k as usize - 1][2];
+                    let q = m.points[m.elements[e as usize][mid] as usize];
+                    (q[0].hypot(q[1]) - a).abs() < 1e-12
+                });
+                assert!(on_inner, "{kind:?}");
+            }
+        }
+        let mut clockwise = Patch {
+            kind: ElementKind::Quad4,
+            corners: [[0.0; 3], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+            divisions: [1, 1],
+            bias: [1.0; 2],
+            curves: vec![],
+        };
+        assert!(patch(&clockwise).is_err());
+        clockwise.corners.swap(1, 3);
+        assert!(patch(&clockwise).is_ok());
+        clockwise.corners[0][2] = 1.0;
+        assert!(patch(&clockwise).is_err(), "off the XY plane");
+        clockwise.corners[0][2] = 0.0;
+        clockwise.kind = ElementKind::Hex8;
+        assert!(patch(&clockwise).is_err());
     }
 
     #[test]

@@ -103,7 +103,7 @@ fn face_key(e: &[u32], face: &[usize]) -> Option<[u32; 4]> {
 }
 
 /// Newell's normal of a polygon (robust for non-planar quads); `None` when degenerate.
-fn polygon_normal(p: &[Vec3]) -> Option<Vec3> {
+pub(crate) fn polygon_normal(p: &[Vec3]) -> Option<Vec3> {
     let mut n = Vec3::ZERO;
     for (i, a) in p.iter().enumerate() {
         let b = p.get((i + 1) % p.len()).copied().unwrap_or(*a);
@@ -112,7 +112,7 @@ fn polygon_normal(p: &[Vec3]) -> Option<Vec3> {
     n.normalized()
 }
 
-fn centre(p: &[Vec3]) -> Vec3 {
+pub(crate) fn centre(p: &[Vec3]) -> Vec3 {
     p.iter().fold(Vec3::ZERO, |s, q| s + *q) * (1.0 / p.len().max(1) as f64)
 }
 
@@ -241,6 +241,11 @@ impl DisplayMesh {
                 self.surface_edges.push([a, b]);
             }
         }
+    }
+
+    /// Where node `label` is drawn, if it is (nodes are kept in label order).
+    pub fn node_position(&self, label: u32) -> Option<Vec3> {
+        self.nodes.binary_search_by_key(&label, |n| n.label).ok().and_then(|i| self.nodes.get(i)).map(|n| n.p)
     }
 
     /// The node nearest to where a ray (`origin`, `dir`) first hits an element face ahead of

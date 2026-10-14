@@ -108,6 +108,13 @@ impl Aabb3 {
         self.min = Vec3::new(self.min.x.min(p.x), self.min.y.min(p.y), self.min.z.min(p.z));
         self.max = Vec3::new(self.max.x.max(p.x), self.max.y.max(p.y), self.max.z.max(p.z));
     }
+    /// Grow to hold `o` too (an empty box adds nothing).
+    pub fn union(&mut self, o: Aabb3) {
+        if !o.is_empty() {
+            self.add(o.min);
+            self.add(o.max);
+        }
+    }
     pub fn center(&self) -> Vec3 {
         (self.min + self.max) * 0.5
     }

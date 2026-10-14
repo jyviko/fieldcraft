@@ -5,7 +5,7 @@
 //! Adapted from SolidCraft's `crates/render/src/raster.rs` (MIT OR Apache-2.0), see
 //! ATTRIBUTION.md.
 
-use crate::{Camera, Vec3};
+use crate::{Camera, Vec3, font};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -41,11 +41,21 @@ pub struct ScenePoint {
     pub size: f64,
 }
 
+/// Text beside a point (a reference point's name), drawn over everything else. The GPU viewport
+/// draws labels with the interface's font; the CPU rasterizer with [`crate::font`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneLabel {
+    pub p: Vec3,
+    pub text: String,
+    pub color: Rgb,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
     pub tris: Vec<SceneTri>,
     pub lines: Vec<SceneLine>,
     pub points: Vec<ScenePoint>,
+    pub labels: Vec<SceneLabel>,
     /// Background gradient top → bottom.
     pub background: Option<(Rgb, Rgb)>,
     /// Scene radius around the camera target, for the clipping planes.
@@ -131,6 +141,12 @@ pub fn fit_size(w: usize, h: usize) -> (usize, usize) {
 }
 /// Largest half-width of a line or point, in supersampled pixels.
 const MAX_MARK: f64 = 64.0;
+/// Most labels drawn, and most characters drawn of one.
+const MAX_LABELS: usize = 200;
+const MAX_LABEL_CHARS: usize = 48;
+/// Output pixels per font pixel, and a label's offset from its point (output pixels).
+const LABEL_SCALE: usize = 2;
+pub const LABEL_OFFSET: f64 = 8.0;
 /// Most samples drawn along one line segment (a segment from far off screen is bounded).
 const MAX_LINE_STEPS: usize = 20_000;
 
@@ -166,7 +182,7 @@ pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Canvas,
     if !size_ok(w, h) {
         return Err(RenderError::Size { w, h });
     }
-    let primitives = scene.tris.len().saturating_add(scene.lines.len()).saturating_add(scene.points.len());
+    let primitives = scene.tris.len().saturating_add(scene.lines.len()).saturating_add(scene.points.len()).saturating_add(scene.labels.len());
     if primitives > MAX_PRIMITIVES {
         return Err(RenderError::SceneTooLarge { primitives });
     }
@@ -238,7 +254,47 @@ pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Canvas,
             dot(&mut c, q, p.size * SS as f64, p.color.f(), false);
         }
     }
+    for l in scene.labels.iter().take(MAX_LABELS) {
+        if let Some(q) = project(l.p) {
+            label(&mut c, q, &l.text, l.color.f());
+        }
+    }
     downsample(&c, w, h)
+}
+
+/// Text above and right of screen point `p`, over everything, with a halo of the opposite
+/// lightness so it reads on any background.
+fn label(c: &mut Canvas, p: [f64; 3], text: &str, col: [f64; 3]) {
+    if !(p[0].is_finite() && p[1].is_finite()) {
+        return;
+    }
+    let px = LABEL_SCALE * SS;
+    let (x0, y0) = (p[0] + LABEL_OFFSET * SS as f64, p[1] - LABEL_OFFSET * SS as f64 - (font::H * px) as f64);
+    let (sw, sh) = (c.w as f64, c.h as f64);
+    if x0 > sw || y0 > sh || x0 < -sw || y0 < -sh {
+        return;
+    }
+    let luma = 0.3 * col[0] + 0.6 * col[1] + 0.1 * col[2];
+    let halo = if luma > 0.5 { [0.0; 3] } else { [1.0; 3] };
+    let (x0, y0) = (x0.floor() as i64, y0.floor() as i64);
+    let chars: Vec<char> = text.chars().take(MAX_LABEL_CHARS).collect();
+    // The halo, spread a supersampled pixel pair around each font pixel, then the text.
+    for (grow, color, a) in [(SS as i64, halo, 0.7), (0, col, 1.0)] {
+        for (i, ch) in chars.iter().enumerate() {
+            for fy in 0..font::H {
+                for fx in (0..font::W).filter(|&fx| font::on(*ch, fx, fy)) {
+                    let (bx, by) = (x0 + ((i * font::ADVANCE + fx) * px) as i64, y0 + (fy * px) as i64);
+                    for y in by - grow..by + px as i64 + grow {
+                        for x in bx - grow..bx + px as i64 + grow {
+                            if x >= 0 && y >= 0 && (x as usize) < c.w && (y as usize) < c.h {
+                                c.put(x as usize, y as usize, color, a);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A depth-tested disc (`round`) or square of diameter `size` at screen point `p` (x, y, depth).
@@ -371,6 +427,30 @@ mod tests {
             ..scene
         };
         let _ = render(&wild, &cam, 32, 32);
+    }
+
+    #[test]
+    fn labels_draw_over_everything_beside_their_point() {
+        let mut scene = red_triangle();
+        let mut cam = Camera { distance: 50.0, ..Default::default() };
+        cam.set_view(StandardView::Front);
+        let plain = render(&scene, &cam, 64, 64).unwrap();
+        scene.labels.push(SceneLabel { p: Vec3::new(0.0, 0.0, 0.0), text: "RP".into(), color: Rgb(0, 0, 0) });
+        let c = render(&scene, &cam, 64, 64).unwrap();
+        // Up and right of the centre, some pixels turned dark; left of it nothing changed.
+        let dark = |c: &Canvas, x0: usize, x1: usize| {
+            (x0..x1).flat_map(|x| (0..32).map(move |y| (x, y))).filter(|&(x, y)| c.rgba[(y * 64 + x) * 4] < 40).count()
+        };
+        assert!(dark(&c, 32, 64) > 10 && dark(&plain, 32, 64) == 0, "{}", dark(&c, 32, 64));
+        assert_eq!(dark(&c, 0, 32), 0);
+        // Labels far off screen, empty or very long, or at a non-finite point, are bounded.
+        scene.labels = vec![
+            SceneLabel { p: Vec3::new(1e9, 0.0, 0.0), text: "far".into(), color: Rgb(0, 0, 0) },
+            SceneLabel { p: Vec3::new(f64::NAN, 0.0, 0.0), text: "nan".into(), color: Rgb(0, 0, 0) },
+            SceneLabel { p: Vec3::ZERO, text: String::new(), color: Rgb(255, 255, 255) },
+            SceneLabel { p: Vec3::ZERO, text: "x".repeat(100_000), color: Rgb(255, 255, 255) },
+        ];
+        assert!(render(&scene, &cam, 64, 64).is_ok());
     }
 
     #[test]

@@ -43,7 +43,7 @@ pub const ANIMATE: CommandSpec = CommandSpec {
 pub const FRAME: CommandSpec = CommandSpec {
     id: "results.frame",
     label: "Field Frame",
-    params: r#"{"step": "Impact", "frame": 3, "time": 0.002} — shows a field frame of a solved explicit step, by index from 0 or the frame nearest a time (neither: the last); the deformed shape and contours follow it"#,
+    params: r#"{"step": "Impact", "frame": 3, "time": 0.002} — shows a field frame of a solved explicit step, by index from 0 or the frame nearest a time (neither: the last), or of a nonlinear static step (one per converged increment, `time` its load factor; the deformed shape follows it, its contours show the final state); the deformed shape and contours follow it"#,
     kind: CommandKind::Session,
     run: frame,
 };
@@ -79,21 +79,23 @@ fn solved_list(s: &Session) -> String {
 enum Want {
     Any,
     Frequency,
-    Explicit,
+    /// Steps with frames: explicit dynamics and nonlinear static (one per converged increment).
+    Frames,
 }
 
 impl Want {
     fn fits(self, s: &Session, step: &str) -> bool {
         s.latest_result(step).is_some_and(|(r, _)| match (self, r.kind()) {
-            (Want::Any, _) | (Want::Frequency, Kind::Frequency(_)) | (Want::Explicit, Kind::Explicit(_)) => true,
-            (Want::Frequency | Want::Explicit, _) => false,
+            (Want::Any, _) | (Want::Frequency, Kind::Frequency(_)) | (Want::Frames, Kind::Explicit(_)) => true,
+            (Want::Frames, Kind::Static(r)) => r.nonlinear.is_some(),
+            (Want::Frequency | Want::Frames, _) => false,
         })
     }
     fn name(self) -> &'static str {
         match self {
             Want::Any => "solved",
             Want::Frequency => "frequency",
-            Want::Explicit => "explicit",
+            Want::Frames => "explicit or nonlinear static",
         }
     }
 }
@@ -222,9 +224,10 @@ fn animate(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn frame(s: &mut Session, p: &Value) -> Result<Value> {
-    let step = step_for(s, p, Want::Explicit)?;
+    let step = step_for(s, p, Want::Frames)?;
     let times: Vec<f64> = match s.latest_result(&step).map(|(r, _)| r.kind()) {
         Some(Kind::Explicit(e)) => e.frames.iter().map(|f| f.time).collect(),
+        Some(Kind::Static(r)) => r.nonlinear.as_ref().map(|h| h.load_factors()).unwrap_or_default(),
         _ => Vec::new(),
     };
     let last = times.len().checked_sub(1).ok_or_else(|| EngineError::Params(format!("step `{step}` has no field frames")))?;

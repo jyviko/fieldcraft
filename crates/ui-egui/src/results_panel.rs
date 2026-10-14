@@ -162,6 +162,17 @@ pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) 
     if let Kind::Explicit(e) = plot.result.kind() {
         ui.separator();
         explicit(ui, e, plot, t, &mut run);
+    } else if let Some((k, factor, n)) = plot.frame().filter(|_| matches!(plot.result.kind(), Kind::Static(_))) {
+        // A nonlinear static step: its increments, the deformed shape following the slider.
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Increment");
+            let mut frame = k;
+            if ui.add(egui::Slider::new(&mut frame, 0..=n.saturating_sub(1))).changed() {
+                run.push(("results.frame", json!({"frame": frame})));
+            }
+        });
+        ui.label(RichText::new(format!("load factor {}", number(factor))).color(t.text_dim));
     } else if let Kind::Frequency(f) = plot.result.kind() {
         ui.separator();
         ui.label(RichText::new("Modes").color(t.text_dim));

@@ -1,0 +1,897 @@
+//! Nonlinear static analysis: equilibrium followed in load increments with Newton–Raphson
+//! iterations.
+//!
+//! **Load path.** The step's load factor λ runs from 0 to 1. The dead loads (forces, tractions,
+//! gravity, body forces; pressure too without nonlinear geometry) are λ times their values, a
+//! follower pressure λ p on the deformed faces, and every prescribed displacement λ times its
+//! value (u = T_f q + λ T_p u_p, the constraint elimination of the linear solver,
+//! [`crate::constraints`]).
+//!
+//! **Newton–Raphson** with the full consistent tangent, refactored every iteration (Bathe
+//! 2014, §8.4; M. A. Crisfield, *Non-linear Finite Element Analysis of Solids and Structures*,
+//! vol. 1, Wiley 1991, ch. 9): K_T δq = r with r = T_fᵀ (λ f_ext(u) − f_int(u)), then, when the
+//! step asks for it (it is off by default: on large elastic rotations the full Newton step
+//! converges in fewer iterations), a line search on the work of the residual along δq, G(s) = δq · r(q + s δq): s = 1 is taken when
+//! |G(1)| ≤ 0.8 |G(0)| (always near the solution, so quadratic convergence is kept), otherwise
+//! s is moved to the root of the line through (0, G(0)) and (s, G(s)), within [0.1, 1], at most
+//! five times (Crisfield 1991, §9.3). An increment has converged when, at once,
+//! - **force**: the largest residual component is at most `force` times the largest force the
+//!   step has seen (applied, internal, reaction), never less than a round-off floor of 10⁻⁸ of a
+//!   typical diagonal stiffness times the model's size;
+//! - **displacement**: the largest correction is at most `displacement` times the largest
+//!   displacement of the increment;
+//! - **energy**: the work of the correction against the residual, s δq · r, is at most `energy`
+//!   times that of the first iteration (K.-J. Bathe, A. P. Cimento, *Some practical procedures
+//!   for the solution of nonlinear finite element equations*, CMAME 22:59–85, 1980);
+//!
+//! or when the force residual is a thousandth of its tolerance (round-off: no correction can
+//! improve it).
+//!
+//! **Automatic incrementation.** Each increment starts from the linear extrapolation of the
+//! last converged one (the free motion scaled by the ratio of their sizes), which keeps the
+//! inner nodes in step with the prescribed ones; from the last converged state when the
+//! extrapolation inverts an element. The first increment is the step's `initial_increment`; two
+//! increments in a row that converge in at most four iterations let the next grow by half (up
+//! to `max_increment`), one that needs more than eight shrinks it by a quarter. An increment is
+//! cut back to a quarter of its size when it fails: an element inverts, the residual is not
+//! finite, the residual grows in two successive iterations, the tangent is not positive definite
+//! (a limit point or an unstable material), or it does not converge in `max_iterations`. The
+//! step fails cleanly, naming the load factor and the last reason, when an increment falls below
+//! `min_increment`, when it has taken `max_increments` increments, or when the Newton iterations
+//! of the whole step reach [`crate::Limits::max_newton_iterations`].
+//!
+//! **Follower pressure** and the Cholesky factorization: the load stiffness of a pressure on the
+//! deformed surface is not symmetric (Schweizerhof & Ramm 1984); its skew part is left out of the
+//! tangent (the symmetric part is kept), so the factorization stays the supernodal Cholesky of the
+//! linear solver. The residual is always exact, so the converged solution is unchanged; only the
+//! rate of convergence can drop where the skew part matters. Over a closed surface, or one whose
+//! boundary is held, the skew parts of neighbouring faces cancel and nothing is left out; the
+//! result reports the skew part's size relative to the load stiffness when it is not small.
+//!
+//! **Elements.** Solids (tet4, tet10, wedge6, hex8, hex20 full and reduced, hybrid hex8, hex20
+//! and tet10) and 2D plane strain and axisymmetric elements, total Lagrangian
+//! ([`fieldcraft_fem::finite`]); without nonlinear geometry the elements are the linear ones
+//! (every material is elastic today, so such a step is the linear solution reached by Newton).
+//! Springs act along their fixed directions. Trusses, shells and beams (large rotations), plane
+//! stress, incompatible modes, temperature and centrifugal loads are refused by name.
+//! Couplings stay the linear (small-rotation) constraints of the linear solver, with a warning.
+//!
+//! Element forces and tangents are computed in parallel and added in label order, so results are
+//! the same bit for bit on any number of threads.
+
+use fieldcraft_fem::constitutive::MaterialModel;
+use fieldcraft_fem::dense::Matrix;
+use fieldcraft_fem::element::{Extrapolation, extrapolation};
+use fieldcraft_fem::quadrature::Rule;
+use fieldcraft_fem::{DofKind, DofSet, ElementType, PointStress, face, von_mises};
+use fieldcraft_model::{Extent, Load, Model, NonlinearStatic, Procedure, Step};
+use fieldcraft_parallel as parallel;
+use serde::Serialize;
+
+use crate::analysis::{
+    ElementStress, GRAIN, PointResult, ROUND, Setup, StaticResult, Stats, budget, factor_error, factor_raw, ignored_dashpots, pattern, reduction,
+    split,
+};
+use crate::cholesky::FactorError;
+use crate::constraints::Reduction;
+use crate::sparse::{Csr, add_block};
+use crate::system::{Mesh, inelastic_warnings, loads, translations};
+use crate::{Error, Limits, Result};
+
+/// One Newton iteration of an increment.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Iteration {
+    /// Largest residual component over the force scale.
+    pub force: f64,
+    /// Largest correction over the largest displacement of the increment.
+    pub displacement: f64,
+    /// Work of the correction against the residual over the first iteration's.
+    pub energy: f64,
+    /// The line search's step along the correction (1: the full Newton step).
+    pub line_search: f64,
+}
+
+/// One increment (converged, or cut back).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Increment {
+    /// From 1, attempts included.
+    pub number: usize,
+    /// The load factor reached (when converged) or attempted.
+    pub load_factor: f64,
+    /// Its size, as a fraction of the step.
+    pub size: f64,
+    pub iterations: Vec<Iteration>,
+    pub converged: bool,
+    /// Why it was cut back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutback: Option<String>,
+}
+
+/// The displacements at the end of a converged increment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Frame {
+    pub load_factor: f64,
+    /// Per node, in [`StaticResult::nodes`] order.
+    pub displacement: Vec<[f64; 3]>,
+}
+
+/// The increments of a nonlinear static step and the displacements after each converged one.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct History {
+    pub increments: Vec<Increment>,
+    /// The undeformed state (load factor 0), then one per converged increment while they fit
+    /// [`MAX_FRAME_VALUES`].
+    pub frames: Vec<Frame>,
+    /// Newton iterations over the step.
+    pub iterations: usize,
+}
+
+impl History {
+    /// The load factor of every frame.
+    pub fn load_factors(&self) -> Vec<f64> {
+        self.frames.iter().map(|f| f.load_factor).collect()
+    }
+}
+
+/// Most displacement values the frames of one step keep (3 per node per frame).
+pub const MAX_FRAME_VALUES: usize = 30_000_000;
+
+/// Line search: accept a step whose residual work is at most this fraction of the first.
+const LINE_SEARCH_ACCEPT: f64 = 0.8;
+/// Line search: most trial steps, and the range of the step.
+const LINE_SEARCH_TRIALS: usize = 5;
+const LINE_SEARCH_MIN: f64 = 0.1;
+/// Cutback factor of a failed increment, growth after fast ones and shrinking after slow ones.
+const CUTBACK: f64 = 0.25;
+const GROWTH: f64 = 1.5;
+const SHRINK: f64 = 0.75;
+const FAST_ITERATIONS: usize = 4;
+const SLOW_ITERATIONS: usize = 8;
+/// A force residual this fraction of its tolerance is round-off.
+const ROUND_OFF: f64 = 1e-3;
+
+/// A pressure on element faces (or 2D edges) that follows the deformation.
+struct Follower {
+    element: u32,
+    /// Layout slots of the face's nodes, and their reference positions.
+    nodes: Vec<usize>,
+    xyz: Vec<[f64; 3]>,
+    magnitude: f64,
+    /// The out-of-plane extent of a 2D edge; `None` for a solid face.
+    extent: Option<Extent>,
+    /// The translations of its nodes (x, y, z, or x, y per node).
+    dofs: Vec<usize>,
+}
+
+/// Everything an evaluation of the out-of-balance forces needs.
+struct Problem<'a> {
+    mesh: &'a Mesh,
+    red: &'a Reduction,
+    /// Dead loads at λ = 1.
+    dead: Vec<f64>,
+    followers: Vec<Follower>,
+    /// Springs (linear along their fixed directions), on the pattern.
+    springs: Option<Csr>,
+    /// Large-deformation kinematics.
+    finite: bool,
+    /// Each element's global degrees of freedom, in its matrices' order, and the kinds per node.
+    element_dofs: Vec<Vec<usize>>,
+    element_kinds: Vec<DofSet>,
+    /// Each element's material model.
+    materials: Vec<MaterialModel>,
+    /// The tangent's pattern, zero.
+    pattern: Csr,
+}
+
+/// The internal and external forces at a state, and the tangent when asked for.
+struct Evaluation {
+    internal: Vec<f64>,
+    external: Vec<f64>,
+    tangent: Option<Csr>,
+    /// Every element's material history at this state (committed when the increment
+    /// converges).
+    history: Vec<Vec<f64>>,
+}
+
+/// Why an attempt at an increment failed, when that calls for a cutback rather than an error.
+enum Failure {
+    Cutback(String),
+    Fatal(Error),
+}
+
+impl From<Error> for Failure {
+    fn from(e: Error) -> Failure {
+        match e {
+            // An inverted element or a material that cannot take the deformation: a smaller
+            // increment may avoid it.
+            Error::Element { label, source: fieldcraft_fem::Error::Degenerate(m) } => Failure::Cutback(format!("element {label}: {m}")),
+            Error::NotConverged(m) => Failure::Cutback(m),
+            e => Failure::Fatal(e),
+        }
+    }
+}
+
+fn norm_inf(v: &[f64]) -> f64 {
+    v.iter().fold(0.0, |m, x| m.max(x.abs()))
+}
+
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// ½(K + sign Kᵀ) of a row-major m × m matrix: its symmetric (sign 1) or skew (−1) part.
+fn half(k: &[f64], m: usize, sign: f64) -> Vec<f64> {
+    (0..m * m).map(|i| 0.5 * (k.get(i).copied().unwrap_or(0.0) + sign * k.get((i % m) * m + i / m).copied().unwrap_or(0.0))).collect()
+}
+
+/// The out-of-balance forces over the free equations, T_fᵀ (f_ext − f_int).
+fn free_residual(red: &Reduction, e: &Evaluation) -> Vec<f64> {
+    let r: Vec<f64> = e.external.iter().zip(&e.internal).map(|(a, b)| a - b).collect();
+    red.restrict(&r)
+}
+
+impl Problem<'_> {
+    /// Nodal displacements of an element (3 per node for solids, 2 for 2D elements).
+    fn element_vector(&self, e: usize, u: &[f64]) -> Vec<f64> {
+        self.element_dofs.get(e).map(|dofs| dofs.iter().map(|d| u.get(*d).copied().unwrap_or(0.0)).collect()).unwrap_or_default()
+    }
+
+    /// Internal forces and the tangent of element `e` at displacements `u` (all degrees of
+    /// freedom).
+    fn element(&self, e: usize, u: &[f64], tangent: bool, committed: &[f64]) -> Result<(Vec<f64>, Option<Matrix>, Vec<f64>)> {
+        let el = self.mesh.elements.get(e).ok_or_else(|| Error::Internal("element index".into()))?;
+        let at = |err| Error::element(el.label, err);
+        let ue = self.element_vector(e, u);
+        let kernel = el.kernel()?;
+        if !self.finite {
+            let k = kernel.stiffness(&el.d).map_err(at)?;
+            let f = k.mul_vec(&ue);
+            return Ok((f, tangent.then_some(k), committed.to_vec()));
+        }
+        let material = self.materials.get(e).ok_or_else(|| Error::Internal("element material".into()))?;
+        let mut updated = committed.to_vec();
+        let r = kernel.finite_strain(material, &ue, committed, &mut updated, tangent).map_err(at)?;
+        Ok((r.force, r.tangent, updated))
+    }
+
+    /// The forces of a follower pressure at λ (on [`Follower::dofs`]) and its load stiffness
+    /// (full, not symmetric).
+    fn follower(&self, f: &Follower, u: &[f64], lambda: f64) -> Result<(Vec<f64>, Vec<f64>)> {
+        let at = |err| Error::element(f.element, err);
+        let ue: Vec<f64> = f.dofs.iter().map(|d| u.get(*d).copied().unwrap_or(0.0)).collect();
+        let p = lambda * f.magnitude;
+        let (force, k) = match f.extent {
+            None => {
+                let (force, k) = face::follower_pressure(&f.xyz, ue.as_chunks::<3>().0, p).map_err(at)?;
+                (force.into_iter().flatten().collect(), k)
+            }
+            Some(extent) => {
+                let (force, k) = face::follower_edge_pressure(&f.xyz, ue.as_chunks::<2>().0, extent, p).map_err(at)?;
+                (force.into_iter().flatten().collect(), k)
+            }
+        };
+        Ok((force, k))
+    }
+
+    /// The forces at displacements `u` and load factor λ, and the tangent (symmetric part of the
+    /// load stiffness included) when `tangent`.
+    fn evaluate(&self, u: &[f64], lambda: f64, tangent: bool, committed: &[Vec<f64>]) -> Result<Evaluation> {
+        let layout = &self.mesh.layout;
+        let n = u.len();
+        let mut internal = vec![0.0; n];
+        let mut k = tangent.then(|| self.pattern.clone());
+        let mut history = Vec::with_capacity(self.mesh.elements.len());
+        for round in parallel::blocks(self.mesh.elements.len(), ROUND) {
+            let start = round.start;
+            let computed = parallel::map_grained(round.len(), GRAIN, |i| {
+                self.element(start + i, u, tangent, committed.get(start + i).map(Vec::as_slice).unwrap_or_default())
+            });
+            for (i, c) in computed.into_iter().enumerate() {
+                let (f, ke, updated) = c?;
+                history.push(updated);
+                let e = start + i;
+                let el = self.mesh.elements.get(e).ok_or_else(|| Error::Internal("element index".into()))?;
+                for (d, v) in self.element_dofs.get(e).into_iter().flatten().zip(&f) {
+                    if let Some(x) = internal.get_mut(*d) {
+                        *x += v;
+                    }
+                }
+                if let (Some(k), Some(ke)) = (k.as_mut(), ke) {
+                    let kinds = self.element_kinds.get(e).copied().ok_or_else(|| Error::Internal("element kinds".into()))?;
+                    add_block(k, layout, &el.nodes, kinds, &ke.data)?;
+                }
+            }
+        }
+        if let Some(s) = &self.springs {
+            let mut ku = vec![0.0; s.n];
+            s.mul(u.get(..s.n).unwrap_or_default(), &mut ku);
+            for (x, v) in internal.iter_mut().zip(&ku) {
+                *x += v;
+            }
+            // Both are on the mesh's pattern.
+            if let Some(k) = k.as_mut() {
+                k.val.iter_mut().zip(&s.val).for_each(|(x, v)| *x += v);
+            }
+        }
+        let mut external: Vec<f64> = self.dead.iter().map(|f| lambda * f).collect();
+        for f in &self.followers {
+            let (force, kl) = self.follower(f, u, lambda)?;
+            for (d, v) in f.dofs.iter().zip(&force) {
+                if let Some(x) = external.get_mut(*d) {
+                    *x += v;
+                }
+            }
+            if let Some(k) = k.as_mut() {
+                add_block(k, layout, &f.nodes, self.mesh.translation_kinds(), &half(&kl, f.dofs.len(), 1.0))?;
+            }
+        }
+        if internal.iter().chain(&external).any(|v| !v.is_finite()) {
+            return Err(Error::NotConverged("the forces are not finite".into()));
+        }
+        Ok(Evaluation { internal, external, tangent: k, history })
+    }
+
+    /// The size of the follower load stiffness's skew part relative to the whole, over the free
+    /// degrees of freedom (Frobenius norms), at `u` and λ; `None` without followers.
+    fn follower_asymmetry(&self, u: &[f64], lambda: f64) -> Result<Option<f64>> {
+        if self.followers.is_empty() {
+            return Ok(None);
+        }
+        let layout = &self.mesh.layout;
+        let (mut skew, mut whole) = (self.pattern.clone(), self.pattern.clone());
+        for f in &self.followers {
+            let (_, kl) = self.follower(f, u, lambda)?;
+            add_block(&mut skew, layout, &f.nodes, self.mesh.translation_kinds(), &half(&kl, f.dofs.len(), -1.0))?;
+            add_block(&mut whole, layout, &f.nodes, self.mesh.translation_kinds(), &kl)?;
+        }
+        let mut free = vec![false; skew.n];
+        for d in &self.red.eq_dof {
+            if let Some(x) = free.get_mut(*d) {
+                *x = true;
+            }
+        }
+        let norm = |a: &Csr| -> f64 {
+            let mut sum = 0.0;
+            for r in (0..a.n).filter(|r| free.get(*r).copied().unwrap_or(false)) {
+                let (cols, vals) = a.row(r);
+                for (c, v) in cols.iter().zip(vals) {
+                    if free.get(*c).copied().unwrap_or(false) {
+                        sum += v * v;
+                    }
+                }
+            }
+            sum.sqrt()
+        };
+        let total = norm(&whole);
+        Ok((total > 0.0).then(|| norm(&skew) / total))
+    }
+}
+
+/// Mutable state of the Newton loop over the step.
+struct Run<'a> {
+    problem: &'a Problem<'a>,
+    settings: &'a NonlinearStatic,
+    limits: &'a Limits,
+    /// The largest force seen so far (∞-norm), and the round-off floor of the force scale.
+    force_scale: f64,
+    force_floor: Option<f64>,
+    length: f64,
+    iterations: usize,
+    factor_entries: usize,
+    /// Every element's material history at the end of the last converged increment
+    /// (integration points × the material's history length).
+    committed: Vec<Vec<f64>>,
+}
+
+/// The outcome of a converged increment.
+struct Converged {
+    q: Vec<f64>,
+    evaluation: Evaluation,
+}
+
+impl Run<'_> {
+    /// The residual over the free equations, T_fᵀ (f_ext − f_int), and the force scale.
+    fn residual(&mut self, e: &Evaluation) -> Vec<f64> {
+        self.force_scale = self.force_scale.max(norm_inf(&e.external)).max(norm_inf(&e.internal));
+        free_residual(self.problem.red, e)
+    }
+
+    fn scale(&self) -> f64 {
+        self.force_scale.max(self.force_floor.unwrap_or(0.0)).max(f64::MIN_POSITIVE)
+    }
+
+    fn state(&self, q: &[f64], lambda: f64, tangent: bool) -> std::result::Result<Evaluation, Failure> {
+        Ok(self.problem.evaluate(&self.problem.red.expand_scaled(q, lambda), lambda, tangent, &self.committed)?)
+    }
+
+    /// Newton iterations from the converged `q0` (at the previous load factor) to load factor
+    /// `lambda`.
+    fn increment(
+        &mut self,
+        q0: &[f64],
+        predictor: Option<&[f64]>,
+        lambda: f64,
+        size: f64,
+        iterations: &mut Vec<Iteration>,
+    ) -> std::result::Result<Converged, Failure> {
+        let red = self.problem.red;
+        let tol = self.settings.tolerances;
+        // Start from the extrapolated predictor when it is a valid state, else from q0.
+        let start = predictor.map(|p| self.state(p, lambda, true).map(|e| (p.to_vec(), e)));
+        let (mut q, mut eval) = match start {
+            Some(Ok(s)) => s,
+            Some(Err(Failure::Fatal(e))) => return Err(Failure::Fatal(e)),
+            Some(Err(Failure::Cutback(_))) | None => (q0.to_vec(), self.state(q0, lambda, true)?),
+        };
+        let mut r = self.residual(&eval);
+        let prescribed = size * red.largest_prescribed();
+        let mut first_energy: Option<f64> = None;
+        let mut history: Vec<f64> = Vec::new();
+        let max_iterations = usize::try_from(self.settings.max_iterations).unwrap_or(usize::MAX);
+        for _ in 0..max_iterations {
+            // The round-off rule: nothing left to correct.
+            if norm_inf(&r) <= ROUND_OFF * tol.force * self.scale() && self.force_floor.is_some() {
+                return Ok(Converged { q, evaluation: eval });
+            }
+            if self.iterations >= self.limits.max_newton_iterations {
+                return Err(Failure::Fatal(Error::Limit(format!(
+                    "the step took {} Newton iterations, the limit (raise max_newton_iterations or loosen the tolerances)",
+                    self.iterations
+                ))));
+            }
+            self.iterations += 1;
+            let k = eval.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
+            let [kff] = red.reduce([&k])?;
+            // The first tangent of the step: a singular one is a modelling error, not a cutback.
+            let first = self.force_floor.is_none();
+            if first {
+                let diagonal = kff.diagonal();
+                let mean = diagonal.iter().map(|d| d.abs()).sum::<f64>() / diagonal.len().max(1) as f64;
+                self.force_floor = Some(1e-8 * mean * self.length);
+            }
+            drop(k);
+            let chol = match factor_raw(&kff, self.limits) {
+                Ok(c) => c,
+                Err(FactorError::NotPositiveDefinite { .. }) if !first => {
+                    return Err(Failure::Cutback(
+                        "the tangent stiffness is not positive definite (a limit point, a bifurcation or an unstable material)".into(),
+                    ));
+                }
+                Err(e) => return Err(Failure::Fatal(factor_error(e, self.problem.mesh, red))),
+            };
+            self.factor_entries = chol.entries();
+            drop(kff);
+            let mut dq = r.clone();
+            chol.solve(&mut dq)?;
+            if dq.iter().any(|v| !v.is_finite()) {
+                return Err(Failure::Cutback("the Newton correction is not finite".into()));
+            }
+            let g0 = dot(&dq, &r);
+            let (s, next) = self.line_search(&q, &dq, lambda, g0)?;
+            for (x, d) in q.iter_mut().zip(&dq) {
+                *x += s * d;
+            }
+            eval = next;
+            let r_old = std::mem::replace(&mut r, self.residual(&eval));
+            let energy = (s * dot(&dq, &r_old)).abs();
+            let first = *first_energy.get_or_insert(energy);
+            let moved = q.iter().zip(q0).fold(0.0f64, |m, (a, b)| m.max((a - b).abs()));
+            let reference = moved.max(prescribed).max(1e-12 * self.length);
+            let it = Iteration {
+                force: norm_inf(&r) / self.scale(),
+                displacement: s * norm_inf(&dq) / reference,
+                energy: if first > 0.0 { energy / first } else { 0.0 },
+                line_search: s,
+            };
+            iterations.push(it);
+            if !it.force.is_finite() {
+                return Err(Failure::Cutback("the residual is not finite".into()));
+            }
+            if (it.force <= tol.force && it.displacement <= tol.displacement && it.energy <= tol.energy) || it.force <= ROUND_OFF * tol.force {
+                return Ok(Converged { q, evaluation: eval });
+            }
+            history.push(it.force);
+            if let [.., a, b, c] = history[..]
+                && c > b
+                && b > a
+            {
+                return Err(Failure::Cutback(format!("the residual grows ({a:.2e}, {b:.2e}, {c:.2e} of the force scale)")));
+            }
+        }
+        Err(Failure::Cutback(format!("no convergence in {} iterations", self.settings.max_iterations)))
+    }
+
+    /// The line search along `dq` from `q`: the accepted step and the state there (with the
+    /// tangent).
+    fn line_search(&mut self, q: &[f64], dq: &[f64], lambda: f64, g0: f64) -> std::result::Result<(f64, Evaluation), Failure> {
+        let at = |s: f64| -> Vec<f64> { q.iter().zip(dq).map(|(a, b)| a + s * b).collect() };
+        // The full step, with its tangent (taken in most iterations).
+        let full = self.state(&at(1.0), lambda, true);
+        if !self.settings.line_search {
+            return full.map(|e| (1.0, e));
+        }
+        let red = self.problem.red;
+        let work = |e: &Evaluation| dot(dq, &free_residual(red, e));
+        let mut s = 1.0;
+        let mut g = match &full {
+            Ok(e) => {
+                let g1 = work(e);
+                if g1.abs() <= LINE_SEARCH_ACCEPT * g0.abs() {
+                    return full.map(|e| (1.0, e));
+                }
+                Some(g1)
+            }
+            Err(Failure::Cutback(_)) => None,
+            Err(Failure::Fatal(_)) => return full.map(|e| (1.0, e)),
+        };
+        let mut best: Option<(f64, f64)> = g.map(|g| (1.0, g.abs()));
+        for _ in 0..LINE_SEARCH_TRIALS {
+            // Root of the line through (0, g0) and (s, g), or half the step after a failure.
+            let next = match g {
+                Some(gs) if (g0 - gs).abs() > 0.0 => (s * g0 / (g0 - gs)).clamp(LINE_SEARCH_MIN, 1.0),
+                Some(_) => break,
+                None => (0.5 * s).max(LINE_SEARCH_MIN),
+            };
+            if next == s {
+                break;
+            }
+            s = next;
+            g = match self.state(&at(s), lambda, false) {
+                Ok(e) => Some(work(&e)),
+                Err(Failure::Cutback(_)) => None,
+                Err(f) => return Err(f),
+            };
+            if let Some(gs) = g {
+                if best.is_none_or(|(_, b)| gs.abs() < b) {
+                    best = Some((s, gs.abs()));
+                }
+                if gs.abs() <= LINE_SEARCH_ACCEPT * g0.abs() {
+                    break;
+                }
+            }
+        }
+        let Some((s, _)) = best else {
+            return Err(Failure::Cutback("every step along the Newton correction inverts an element".into()));
+        };
+        if s == 1.0 {
+            return full.map(|e| (1.0, e));
+        }
+        self.state(&at(s), lambda, true).map(|e| (s, e))
+    }
+}
+
+/// Refuse what nonlinear steps cannot take yet, and warn about what they simplify.
+fn check_supported(model: &Model, mesh: &Mesh, step: &Step, settings: &NonlinearStatic, warnings: &mut Vec<String>) -> Result<()> {
+    let at = |what: String| Error::NotSupported(format!("{what} in nonlinear steps (step `{}`)", step.name));
+    if let Some(t) = mesh.trusses.first() {
+        return Err(at(format!("trusses (element {})", t.label)));
+    }
+    if let Some(s) = mesh.structural.first() {
+        return Err(at(format!("shells and beams, whose large rotations are not implemented yet (element {})", s.label)));
+    }
+    for e in &mesh.elements {
+        if !settings.nonlinear_geometry && e.hyperelastic.is_some() {
+            return Err(at(format!("a hyperelastic material without nonlinear geometry (element {})", e.label)));
+        }
+    }
+    for name in &step.loads {
+        match model.load(name) {
+            Some(Load::Temperature { .. }) => return Err(at(format!("temperature loads (load `{name}`): thermal strain"))),
+            Some(Load::Centrifugal { .. }) => return Err(at(format!("centrifugal loads (load `{name}`), which depend on the deformed position"))),
+            _ => {}
+        }
+    }
+    if settings.nonlinear_geometry
+        && let Some(name) = model.couplings().keys().next()
+    {
+        warnings.push(format!(
+            "coupling `{name}` and the others are linear constraints (small rotations of their reference points) in this nonlinear step"
+        ));
+    }
+    Ok(())
+}
+
+/// The follower pressures of a step (with nonlinear geometry), and the step without them for
+/// the dead loads.
+fn followers(model: &Model, resolved: &fieldcraft_model::Resolved, mesh: &Mesh, step: &Step) -> Result<(Vec<Follower>, Step)> {
+    let mut out = Vec::new();
+    let mut dead = step.clone();
+    for name in &step.loads {
+        let Some(Load::Pressure { set, magnitude }) = model.load(name) else { continue };
+        dead.loads.remove(name);
+        let slots = |labels: Vec<u32>| -> Result<(Vec<usize>, Vec<[f64; 3]>, Vec<usize>)> {
+            let idx: Vec<usize> = labels
+                .iter()
+                .map(|l| mesh.node(*l).ok_or_else(|| Error::Invalid(format!("load `{name}`: node {l} belongs to no solid element"))))
+                .collect::<Result<_>>()?;
+            let xyz = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
+            let mut dofs = Vec::with_capacity(3 * idx.len());
+            for n in &idx {
+                dofs.extend(translations(mesh, *n)?);
+            }
+            Ok((idx, xyz, dofs))
+        };
+        if let Some(theory) = mesh.theory {
+            if resolved.sets.get(set).is_some_and(|s| !s.faces.is_empty()) {
+                return Err(Error::Invalid(format!("load `{name}`: a 2D model's pressures act on element edges, and set `{set}` has element faces")));
+            }
+            for g in resolved.planar_edges(set) {
+                let labels =
+                    model.edge_nodes(g).ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} edge {} is missing", g.element, g.edge)))?;
+                let (nodes, xyz, dofs) = slots(labels)?;
+                out.push(Follower { element: g.element, nodes, xyz, magnitude: *magnitude, extent: Some(theory.extent()), dofs });
+            }
+        } else {
+            for fc in resolved.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default() {
+                let labels = model
+                    .face_nodes(*fc)
+                    .ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} face {} is missing", fc.element, fc.face)))?;
+                let (nodes, xyz, dofs) = slots(labels)?;
+                out.push(Follower { element: fc.element, nodes, xyz, magnitude: *magnitude, extent: None, dofs });
+            }
+        }
+    }
+    Ok((out, dead))
+}
+
+/// Solve a nonlinear static step: the step named `step`, or the model's only nonlinear static
+/// step.
+pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Result<StaticResult> {
+    let resolved = model.resolve()?;
+    let step = model.select_step(step, |p| matches!(p, Procedure::NonlinearStatic(_)), "nonlinear static")?;
+    let Procedure::NonlinearStatic(settings) = &step.procedure else {
+        return Err(Error::Internal("nonlinear static step".into()));
+    };
+    settings.validate()?;
+    let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
+    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).chain(mesh.warnings.iter().cloned()).collect();
+    warnings.extend(inelastic_warnings(model));
+    check_supported(model, &mesh, step, settings, &mut warnings)?;
+    let (graph, order) = pattern(&mesh);
+    ignored_dashpots(&mesh, &mut warnings);
+    let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
+    let red = reduction(&setup, true, &order, budget(limits, &mesh, &graph, 1), &mut warnings)?;
+    if red.neq() == 0 {
+        return Err(Error::Invalid("every degree of freedom is prescribed; there is nothing to solve".into()));
+    }
+    let (follower_loads, dead_step) =
+        if settings.nonlinear_geometry { followers(model, &resolved, &mesh, step)? } else { (Vec::new(), step.clone()) };
+    let dead = loads(model, &resolved, &mesh, &dead_step, &red.active)?;
+    let springs = if mesh.discrete.springs.iter().any(|s| !s.dashpot) {
+        let mut s = graph.zero_matrix(&mesh.layout);
+        mesh.discrete.add_stiffness(&mut s)?;
+        Some(s)
+    } else {
+        None
+    };
+    let element_kinds = mesh.elements.iter().map(|e| Ok(e.kernel()?.dofs().node)).collect::<Result<Vec<_>>>()?;
+    let element_dofs = mesh
+        .elements
+        .iter()
+        .zip(&element_kinds)
+        .map(|(e, kinds)| {
+            mesh.layout.element_dofs(&e.nodes, *kinds).ok_or_else(|| Error::Internal(format!("element {} degrees of freedom", e.label)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let problem = Problem {
+        mesh: &mesh,
+        red: &red,
+        dead,
+        followers: follower_loads,
+        springs,
+        finite: settings.nonlinear_geometry,
+        element_dofs,
+        element_kinds,
+        materials: mesh.elements.iter().map(|e| MaterialModel::from_elasticity(&e.d, e.hyperelastic.as_ref())).collect(),
+        pattern: graph.zero_matrix(&mesh.layout),
+    };
+    let (lo, hi) = mesh.xyz.iter().fold(([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]), |(lo, hi), p| {
+        (std::array::from_fn(|k| lo[k].min(p[k])), std::array::from_fn(|k| hi[k].max(p[k])))
+    });
+    let length = (0..3).map(|k| (hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt().max(f64::MIN_POSITIVE);
+    let committed = mesh
+        .elements
+        .iter()
+        .zip(&problem.materials)
+        .map(|(e, m)| Ok(vec![0.0; e.kernel()?.rule().points().len() * m.history_len()]))
+        .collect::<Result<Vec<_>>>()?;
+    // The undeformed state first: an element that is bad before anything moves is an error in
+    // the model, not a reason to cut increments back.
+    problem.evaluate(&vec![0.0; mesh.dofs()], 0.0, false, &committed)?;
+    let mut run =
+        Run { problem: &problem, settings, limits, force_scale: 0.0, force_floor: None, length, iterations: 0, factor_entries: 0, committed };
+
+    let mut history = History::default();
+    let (mut frame_values, mut frames_full) = (0usize, false);
+    let values = 3 * mesh.labels.len();
+    let mut keep_frame = |history: &mut History, lambda: f64, u: &[f64], warnings: &mut Vec<String>| {
+        if frames_full {
+            return;
+        }
+        if frame_values.saturating_add(values) > MAX_FRAME_VALUES {
+            warnings.push(format!("the displacement frames stop at load factor {lambda}: the step keeps at most {MAX_FRAME_VALUES} values"));
+            frames_full = true;
+            return;
+        }
+        frame_values += values;
+        history.frames.push(Frame { load_factor: lambda, displacement: split(u, &mesh).0 });
+    };
+    keep_frame(&mut history, 0.0, &vec![0.0; mesh.dofs()], &mut warnings);
+    let mut q = vec![0.0; red.neq()];
+    let mut lambda = 0.0f64;
+    let mut size = settings.initial_increment;
+    let mut fast = 0usize;
+    let mut last: Option<Evaluation> = None;
+    let mut previous: Option<(Vec<f64>, f64)> = None;
+    let max_increments = usize::try_from(settings.max_increments).unwrap_or(usize::MAX);
+    while lambda < 1.0 {
+        if history.increments.len() >= max_increments {
+            return Err(Error::Limit(format!(
+                "step `{}`: {} increments reached the step's cap at load factor {lambda:.6} (raise max_increments)",
+                step.name, settings.max_increments
+            )));
+        }
+        let remaining = 1.0 - lambda;
+        let (target, this) = if size >= remaining * (1.0 - 1e-9) { (1.0, remaining) } else { (lambda + size, size) };
+        let mut iterations = Vec::new();
+        let number = history.increments.len() + 1;
+        // Linear extrapolation of the last converged increment's free motion.
+        let predictor: Option<Vec<f64>> =
+            previous.as_ref().map(|(dq, prev): &(Vec<f64>, f64)| q.iter().zip(dq).map(|(a, d)| a + this / prev * d).collect());
+        match run.increment(&q, predictor.as_deref(), target, this, &mut iterations) {
+            Ok(c) => {
+                previous = Some((c.q.iter().zip(&q).map(|(a, b)| a - b).collect(), this));
+                let count = iterations.len();
+                history.increments.push(Increment { number, load_factor: target, size: this, iterations, converged: true, cutback: None });
+                lambda = target;
+                q = c.q;
+                keep_frame(&mut history, lambda, &red.expand_scaled(&q, lambda), &mut warnings);
+                run.committed.clone_from(&c.evaluation.history);
+                last = Some(c.evaluation);
+                fast = if count <= FAST_ITERATIONS { fast + 1 } else { 0 };
+                if fast >= 2 {
+                    size *= GROWTH;
+                } else if count > SLOW_ITERATIONS {
+                    size *= SHRINK;
+                }
+                size = size.clamp(settings.min_increment, settings.max_increment);
+            }
+            Err(Failure::Fatal(e)) => return Err(e),
+            Err(Failure::Cutback(reason)) => {
+                history.increments.push(Increment {
+                    number,
+                    load_factor: target,
+                    size: this,
+                    iterations,
+                    converged: false,
+                    cutback: Some(reason.clone()),
+                });
+                fast = 0;
+                size = this * CUTBACK;
+                if size < settings.min_increment * (1.0 - 1e-9) {
+                    return Err(Error::NotConverged(format!(
+                        "step `{}` stopped at load factor {lambda:.6}: the increment to {target:.6} failed ({reason}) and a smaller one would be below the minimum increment {}",
+                        step.name, settings.min_increment
+                    )));
+                }
+            }
+        }
+    }
+    history.iterations = run.iterations;
+    let u = red.expand_scaled(&q, lambda);
+    let evaluation = match last {
+        Some(e) => e,
+        None => problem.evaluate(&u, lambda, false, &run.committed)?,
+    };
+    if let Some(a) = problem.follower_asymmetry(&u, lambda)?
+        && a > 1e-6
+    {
+        warnings.push(format!(
+            "follower pressure: the skew part of its load stiffness ({a:.1e} of it, over the free degrees of freedom) is left out of the tangent; the solution is exact, Newton may converge more slowly"
+        ));
+    }
+    finish(&mesh, step, &red, &problem, u, evaluation, &run.committed, history, run.factor_entries, warnings)
+}
+
+/// The final state as a static result: displacements, reactions, Cauchy stresses and
+/// logarithmic strains.
+#[allow(clippy::too_many_arguments)]
+fn finish(
+    mesh: &Mesh,
+    step: &Step,
+    red: &Reduction,
+    problem: &Problem,
+    u: Vec<f64>,
+    e: Evaluation,
+    committed: &[Vec<f64>],
+    history: History,
+    factor_entries: usize,
+    mut warnings: Vec<String>,
+) -> Result<StaticResult> {
+    let (displacement, rotation, point_motion) = split(&u, mesh);
+    let out_of_balance: Vec<f64> = e.internal.iter().zip(&e.external).map(|(a, b)| a - b).collect();
+    let reactions = red.reactions_of(&out_of_balance);
+    let (reaction, reaction_moment, point_reaction) = split(&reactions, mesh);
+    let (mut applied_total, mut reaction_total) = ([0.0; 3], [0.0; 3]);
+    for (dof, (fv, rv)) in e.external.iter().zip(&reactions).enumerate() {
+        let Some(d) = mesh.kind(dof).and_then(DofKind::direction) else { continue };
+        if let (Some(a), Some(r)) = (applied_total.get_mut(d), reaction_total.get_mut(d)) {
+            *a += fv;
+            *r += rv;
+        }
+    }
+    let reference_points = mesh
+        .points
+        .iter()
+        .zip(point_motion.iter().zip(&point_reaction))
+        .map(|(p, (d, r))| PointResult { name: p.name.clone(), label: p.label, displacement: *d, reaction: *r })
+        .collect();
+    let all_points = parallel::map_grained(mesh.elements.len(), GRAIN, |i| -> Result<(Vec<PointStress>, &'static ElementType, Rule)> {
+        let el = mesh.elements.get(i).ok_or_else(|| Error::Internal("element index".into()))?;
+        let at = |err| Error::element(el.label, err);
+        let ue = problem.element_vector(i, &u);
+        let kernel = el.kernel()?;
+        let points = if problem.finite {
+            let material = problem.materials.get(i).ok_or_else(|| Error::Internal("element material".into()))?;
+            kernel.finite_strain_stresses(material, &ue, committed.get(i).map(Vec::as_slice).unwrap_or_default())
+        } else {
+            let per_node: Vec<[f64; 3]> = el.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
+            kernel.stresses_with(&el.d, &per_node, None)
+        }
+        .map_err(at)?;
+        Ok((points, kernel.ty(), kernel.rule()))
+    });
+    let mut extrapolations: Vec<(&'static ElementType, Rule, Extrapolation)> = Vec::new();
+    let mut elements = Vec::with_capacity(mesh.elements.len());
+    let mut sum = vec![[0.0; 6]; mesh.labels.len()];
+    let mut count = vec![0u32; mesh.labels.len()];
+    for (el, computed) in mesh.elements.iter().zip(all_points) {
+        let (points, ty, rule) = computed?;
+        let values: Vec<[f64; 6]> = points.iter().map(|p| p.stress).collect();
+        let index = match extrapolations.iter().position(|(t, r, _)| std::ptr::eq(*t, ty) && *r == rule) {
+            Some(i) => i,
+            None => {
+                extrapolations.push((ty, rule, extrapolation(ty, rule).map_err(|err| Error::element(el.label, err))?));
+                extrapolations.len() - 1
+            }
+        };
+        let nodal = extrapolations.get(index).map(|(_, _, x)| x.apply(&values)).unwrap_or_default();
+        for (n, s) in el.nodes.iter().zip(&nodal) {
+            if let (Some(acc), Some(c)) = (sum.get_mut(*n), count.get_mut(*n)) {
+                for k in 0..6 {
+                    acc[k] += s[k];
+                }
+                *c += 1;
+            }
+        }
+        elements.push(ElementStress { label: el.label, kind: el.kind, points, nodal });
+    }
+    let stress: Vec<[f64; 6]> = sum.iter().zip(&count).map(|(s, c)| s.map(|v| if *c > 0 { v / f64::from(*c) } else { 0.0 })).collect();
+    let von_mises = stress.iter().map(von_mises).collect();
+    let scale = applied_total.iter().chain(&reaction_total).fold(0.0f64, |m, v| m.max(v.abs()));
+    let ground = mesh.discrete.ground_force(&u, mesh);
+    let imbalance = (0..3).map(|c| (applied_total[c] + reaction_total[c] + ground[c]).abs()).fold(0.0, f64::max);
+    if scale > 0.0 && imbalance > 1e-6 * scale {
+        warnings.push(format!("loads and reactions differ by {imbalance:.3e} (relative {:.1e})", imbalance / scale));
+    }
+    Ok(StaticResult {
+        step: step.name.clone(),
+        nodes: mesh.labels.clone(),
+        displacement,
+        rotation,
+        reaction,
+        reaction_moment,
+        stress,
+        von_mises,
+        elements,
+        shells: Vec::new(),
+        beams: Vec::new(),
+        reference_points,
+        applied_total,
+        reaction_total,
+        stats: Stats { dofs: mesh.dofs(), equations: red.neq(), factor_entries, lanczos_vectors: 0 },
+        warnings,
+        temperature: None,
+        nonlinear: Some(history),
+    })
+}

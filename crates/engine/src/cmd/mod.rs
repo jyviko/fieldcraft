@@ -95,6 +95,7 @@ pub static ALL: &[CommandSpec] = &[
     deck::WRITE,
     solve::RUN,
     solve::STATIC,
+    solve::NONLINEAR,
     solve::FREQUENCY,
     solve::HEAT,
     solve::EXPLICIT,

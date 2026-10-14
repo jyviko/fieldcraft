@@ -56,7 +56,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
 | Panel | Capability | Status | Command |
 |---|---|---|---|
-| Materials | Material — Elastic (isotropic, orthotropic) material with density | ready | `model.material.create`, `model.material.edit`, `model.material.delete` |
+| Materials | Material — Elastic (isotropic, orthotropic) material with density; neo-Hookean hyperelasticity for nonlinear steps | ready | `model.material.create`, `model.material.edit`, `model.material.delete` |
 | Materials | Plasticity — Von Mises plasticity: bilinear, hardening table or Johnson–Cook | ready | `model.material.plasticity` |
 | Materials | Hyperelastic — Hyperelastic material models | coming soon (M8) |  |
 | Materials | Damage — Johnson–Cook damage and element erosion | ready | `model.material.damage` |
@@ -78,7 +78,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
 | Panel | Capability | Status | Command |
 |---|---|---|---|
-| Steps | Step — A linear static or frequency step with its output | ready | `model.step.create`, `model.step.edit`, `model.step.delete` |
+| Steps | Step — A linear or nonlinear static, frequency, heat or explicit step with its output | ready | `model.step.create`, `model.step.edit`, `model.step.delete` |
 | Steps | Activate — Choose which loads and boundary conditions act in a step | ready | `model.step.activate` |
 | Steps | Step Table — The step by load and boundary condition table | ready | `model.activity` |
 | Procedures | Amplitude — Time and frequency amplitudes | coming soon (M7) |  |
@@ -122,7 +122,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Decks | Nastran Deck — Write Nastran bulk data (SOL 101, 103) | ready | `deck.write {"format":"nastran"}` |
 | Decks | LS-DYNA Deck — Write an LS-DYNA keyword file | ready | `deck.write {"format":"lsdyna"}` |
 | Decks | Read Deck — Read a deck, keeping keywords FieldCraft does not know | coming soon (M9) |  |
-| Implicit | Static — Linear static (or coupled temperature–displacement) solve of a step with FieldCraft's own solver; heat transfer in the drop-down | ready | `solve.static`, `solve.heat` |
+| Implicit | Static — Linear static (or coupled temperature–displacement) solve of a step with FieldCraft's own solver; nonlinear static and heat transfer in the drop-down | ready | `solve.static`, `solve.nonlinear`, `solve.heat` |
 | Implicit | Frequency — Natural frequencies and mode shapes of a frequency step | ready | `solve.frequency` |
 | Explicit | Explicit — Transient dynamics of an explicit step by central differences (contact and erosion coming in M10) | ready | `solve.explicit` |
 | Explicit | Blast & Impact — EOS-driven fluids with fluid–structure contact (ALE or SPH) | coming soon (M14) |  |

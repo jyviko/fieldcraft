@@ -106,6 +106,9 @@ pub struct StaticResult {
     pub warnings: Vec<String>,
     /// The temperatures of a coupled temperature–displacement step, per node.
     pub temperature: Option<Vec<f64>>,
+    /// The increments of a nonlinear static step (its stresses are Cauchy stresses and its
+    /// strains logarithmic strains).
+    pub nonlinear: Option<crate::nonlinear::History>,
 }
 
 /// One natural mode.
@@ -167,10 +170,10 @@ struct Assembled {
 }
 
 /// Elements whose matrices are computed together before they are added.
-const ROUND: usize = 4096;
+pub(crate) const ROUND: usize = 4096;
 
 /// Elements per parallel task.
-const GRAIN: usize = 16;
+pub(crate) const GRAIN: usize = 16;
 
 /// Assemble the stiffness (and the mass when `mass` is set) on the mesh's node graph.
 fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<Assembled> {
@@ -240,13 +243,13 @@ fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<As
 }
 
 /// Factor a free-dof matrix; a singular pivot is reported as the free-dof column it hit.
-fn factor_raw(a: &Csr, limits: &Limits) -> std::result::Result<Factor, FactorError> {
+pub(crate) fn factor_raw(a: &Csr, limits: &Limits) -> std::result::Result<Factor, FactorError> {
     Factor::new(&UpperColumns::from_symmetric(a), limits.max_factor_entries)
 }
 
 /// A factorization failure in the user's terms: the node (or reference point) and direction of
 /// a singular pivot.
-fn factor_error(e: FactorError, mesh: &Mesh, reduction: &Reduction) -> Error {
+pub(crate) fn factor_error(e: FactorError, mesh: &Mesh, reduction: &Reduction) -> Error {
     match e {
         FactorError::TooLarge { entries, limit } => {
             Error::Limit(format!("the factorization needs {entries} entries; the limit is {limit} (refine less or raise the limit)"))
@@ -270,7 +273,7 @@ fn directions<const N: usize>(full: &[f64], layout: &DofLayout, slot: usize) -> 
 
 /// A full vector split into the mesh nodes' translations and rotations (zero where a node has
 /// none), per node, and the reference points' translations and rotations, per point.
-fn split(full: &[f64], mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[f64; 3]>, Vec<[f64; 6]>) {
+pub(crate) fn split(full: &[f64], mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[f64; 3]>, Vec<[f64; 6]>) {
     let l = &mesh.layout;
     let (translation, rotation) = (0..l.nodes())
         .map(|n| {
@@ -283,7 +286,7 @@ fn split(full: &[f64], mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[f64; 3]>, Vec<[f64; 
 
 /// The matrix pattern of the mesh (node blocks of its elements, trusses and discrete elements)
 /// and the order of its nodes for the factorization.
-fn pattern(mesh: &Mesh) -> (NodeGraph, Vec<usize>) {
+pub(crate) fn pattern(mesh: &Mesh) -> (NodeGraph, Vec<usize>) {
     let graph = NodeGraph::new(mesh.block_count(), mesh.blocks());
     // The order covers the mesh nodes; reference point equations follow them.
     let n = mesh.labels.len();
@@ -297,7 +300,7 @@ fn pattern(mesh: &Mesh) -> (NodeGraph, Vec<usize>) {
 }
 
 /// Warnings for what a step without velocities ignores.
-fn ignored_dashpots(mesh: &Mesh, warnings: &mut Vec<String>) {
+pub(crate) fn ignored_dashpots(mesh: &Mesh, warnings: &mut Vec<String>) {
     let names = mesh.discrete.dashpots();
     if !names.is_empty() {
         warnings.push(format!(
@@ -309,20 +312,20 @@ fn ignored_dashpots(mesh: &Mesh, warnings: &mut Vec<String>) {
 
 /// Constraint rows, prescribed values and their elimination for a step.
 /// The model, its resolved view, the mesh and the step being solved.
-struct Setup<'a> {
-    model: &'a Model,
-    resolved: &'a Resolved,
-    mesh: &'a Mesh,
-    step: &'a Step,
+pub(crate) struct Setup<'a> {
+    pub(crate) model: &'a Model,
+    pub(crate) resolved: &'a Resolved,
+    pub(crate) mesh: &'a Mesh,
+    pub(crate) step: &'a Step,
 }
 
-fn reduction(s: &Setup, values: bool, order: &[usize], budget: Budget, warnings: &mut Vec<String>) -> Result<Reduction> {
+pub(crate) fn reduction(s: &Setup, values: bool, order: &[usize], budget: Budget, warnings: &mut Vec<String>) -> Result<Reduction> {
     let rows = coupling_rows(s.model, s.resolved, s.mesh)?;
     Reduction::new(s.mesh, order, &rows, |active| prescribed(s.model, s.resolved, s.mesh, s.step, values, active, warnings), budget)
 }
 
 /// The reduced matrices' memory budget: the factorization's.
-fn budget(limits: &Limits, mesh: &Mesh, graph: &NodeGraph, matrices: usize) -> Budget {
+pub(crate) fn budget(limits: &Limits, mesh: &Mesh, graph: &NodeGraph, matrices: usize) -> Budget {
     Budget { max_bytes: limits.max_factor_entries.saturating_mul(8), pattern_entries: graph.entries(&mesh.layout), matrices }
 }
 
@@ -499,6 +502,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         stats: Stats { dofs: mesh.dofs(), equations: red.neq(), factor_entries: chol.entries(), lanczos_vectors: 0 },
         warnings,
         temperature,
+        nonlinear: None,
     })
 }
 

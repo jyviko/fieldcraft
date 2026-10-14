@@ -268,7 +268,12 @@ impl ResultsView {
 /// of the picked mode or the picked frame's displacement, in [`StepResult::nodes`] order.
 pub fn displacements(r: &StepResult, pick: Pick) -> Result<&[[f64; 3]]> {
     match r.kind() {
-        Kind::Static(s) => Ok(&s.displacement),
+        Kind::Static(s) => match (pick.frame, &s.nonlinear) {
+            (Some(k), Some(h)) => h.frames.get(k).map(|f| f.displacement.as_slice()).ok_or_else(|| {
+                EngineError::Params(format!("step `{}` has frames 0 to {}; there is no frame {k}", s.step, h.frames.len().saturating_sub(1)))
+            }),
+            _ => Ok(&s.displacement),
+        },
         Kind::Frequency(f) => pick
             .mode
             .checked_sub(1)
@@ -418,7 +423,13 @@ impl Session {
                     out["time"] = json!(t);
                 }
             }
-            Kind::Static(_) => {}
+            Kind::Static(s) => {
+                if let Some(h) = &s.nonlinear {
+                    out["frames"] = json!(h.load_factors());
+                    let shown = v.frame.and_then(|k| h.frames.get(k)).or(h.frames.last());
+                    out["load_factor"] = json!(shown.map(|f| f.load_factor));
+                }
+            }
         }
         out
     }

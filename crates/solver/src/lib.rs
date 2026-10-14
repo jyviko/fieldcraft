@@ -31,6 +31,7 @@ pub mod constraints;
 pub mod discrete;
 pub mod eigen;
 pub mod heat;
+pub mod nonlinear;
 pub mod ordering;
 pub mod sparse;
 pub mod system;
@@ -40,6 +41,7 @@ pub use analysis::{
     solve_static,
 };
 pub use heat::{HeatResult, solve_heat};
+pub use nonlinear::solve_nonlinear;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
@@ -82,16 +84,24 @@ pub struct Limits {
     pub max_factor_entries: usize,
     /// Lanczos vectors (iterations × block size).
     pub max_lanczos_vectors: usize,
+    /// Newton iterations of a nonlinear step, over all its increments.
+    pub max_newton_iterations: usize,
 }
 
 impl Limits {
     pub const MAX_DOFS: usize = 6_000_000;
     pub const MAX_FACTOR_ENTRIES: usize = 400_000_000;
     pub const MAX_LANCZOS_VECTORS: usize = 3_000;
+    pub const MAX_NEWTON_ITERATIONS: usize = 100_000;
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { max_dofs: Limits::MAX_DOFS, max_factor_entries: Limits::MAX_FACTOR_ENTRIES, max_lanczos_vectors: Limits::MAX_LANCZOS_VECTORS }
+        Limits {
+            max_dofs: Limits::MAX_DOFS,
+            max_factor_entries: Limits::MAX_FACTOR_ENTRIES,
+            max_lanczos_vectors: Limits::MAX_LANCZOS_VECTORS,
+            max_newton_iterations: Limits::MAX_NEWTON_ITERATIONS,
+        }
     }
 }

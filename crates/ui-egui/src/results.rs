@@ -73,10 +73,15 @@ impl Plot {
         }
     }
 
-    /// An explicit or transient heat step's frame shown, its time and the number of frames.
+    /// An explicit or transient heat step's frame shown, its time (a nonlinear static step's:
+    /// its load factor) and the number of frames.
     pub fn frame(&self) -> Option<(usize, f64, usize)> {
         let (n, time): (usize, &dyn Fn(usize) -> Option<f64>) = match self.result.kind() {
             Kind::Explicit(e) => (e.frames.len(), &|k| e.frames.get(k).map(|f| f.time)),
+            Kind::Static(r) if r.nonlinear.is_some() => {
+                let frames = r.nonlinear.as_ref().map(|h| h.frames.as_slice()).unwrap_or_default();
+                (frames.len(), &|k| frames.get(k).map(|f| f.load_factor))
+            }
             Kind::Heat(h) if h.times.len() > 1 => (h.times.len(), &|k| h.times.get(k).copied()),
             _ => return None,
         };
@@ -109,6 +114,8 @@ pub fn swing(result: &StepResult, frame: Option<u64>) -> f64 {
     let a = std::f64::consts::TAU * k as f64 / FRAMES as f64;
     match result.kind() {
         Kind::Frequency(_) => a.sin(),
+        // A nonlinear step plays its increments' frames.
+        Kind::Static(r) if r.nonlinear.is_some() => 1.0,
         Kind::Static(_) => 0.5 * (1.0 - a.cos()),
         Kind::Explicit(_) | Kind::Fluid(_) | Kind::Heat(_) => 1.0,
     }
@@ -118,10 +125,13 @@ pub fn swing(result: &StepResult, frame: Option<u64>) -> f64 {
 /// step running through its field frames once per cycle.
 pub fn pick(view: &ResultsView, result: &StepResult, frame: Option<u64>) -> Pick {
     let mut p = view.pick();
-    if let (Some(k), Kind::Explicit(e)) = (frame, result.kind())
-        && let Some(last) = e.frames.len().checked_sub(1)
-    {
-        p.frame = Some((k as usize * e.frames.len() / FRAMES as usize).min(last));
+    let frames = match result.kind() {
+        Kind::Explicit(e) => e.frames.len(),
+        Kind::Static(r) => r.nonlinear.as_ref().map_or(0, |h| h.frames.len()),
+        _ => 0,
+    };
+    if let (Some(k), Some(last)) = (frame, frames.checked_sub(1)) {
+        p.frame = Some((k as usize * frames / FRAMES as usize).min(last));
     }
     p
 }

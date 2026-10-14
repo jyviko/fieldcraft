@@ -7,7 +7,8 @@ use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 use fieldcraft_model::FluidDomain;
 use fieldcraft_parallel as parallel;
 use fieldcraft_solver::{
-    FrequencyOptions, Limits, Location, MassKind, StaticResult, StepResult as ImplicitResult, solve_frequency, solve_heat, solve_static,
+    FrequencyOptions, Limits, Location, MassKind, StaticResult, StepResult as ImplicitResult, solve_frequency, solve_heat, solve_nonlinear,
+    solve_static,
 };
 use serde_json::{Value, json};
 
@@ -28,6 +29,14 @@ pub const STATIC: CommandSpec = CommandSpec {
     params: r#"{"step": "Load", "max_dofs": 6000000, "max_factor_entries": 400000000, "threads": 8} — solves a linear static or coupled temperature–displacement step (the only one when `step` is left out) and keeps the result in the session; the caps may only be lowered; `threads` (1 to 256, by default the session's: `FIELDCRAFT_THREADS` or the cores) changes only the time, never the result"#,
     kind: CommandKind::Model,
     run: run_static,
+};
+
+pub const NONLINEAR: CommandSpec = CommandSpec {
+    id: "solve.nonlinear",
+    label: "Solve Nonlinear Static Step",
+    params: r#"{"step": "Inflate", "max_dofs": 6000000, "max_factor_entries": 400000000, "max_newton_iterations": 100000, "threads": 8} — solves a nonlinear static step (the only one when `step` is left out) in load increments with Newton–Raphson iterations and keeps the result in the session: the final displacements, reactions, Cauchy stresses and logarithmic strains, every increment's load factor, iterations and residuals (force, displacement and energy, relative to their tolerances' scales), and a displacement frame per converged increment; the caps may only be lowered (`max_newton_iterations` over the whole step); `threads` as for solve.static"#,
+    kind: CommandKind::Model,
+    run: run_nonlinear,
 };
 
 pub const HEAT: CommandSpec = CommandSpec {
@@ -117,6 +126,7 @@ fn limits(p: &Value) -> Result<Limits> {
         max_dofs: cap(p, "max_dofs", Limits::MAX_DOFS)?,
         max_factor_entries: cap(p, "max_factor_entries", Limits::MAX_FACTOR_ENTRIES)?,
         max_lanczos_vectors: cap(p, "max_iterations", Limits::MAX_LANCZOS_VECTORS)?,
+        max_newton_iterations: cap(p, "max_newton_iterations", Limits::MAX_NEWTON_ITERATIONS)?,
     })
 }
 
@@ -194,8 +204,34 @@ fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(summary)
 }
 
-fn run_nonlinear(_: &mut Session, _: &Value) -> Result<Value> {
-    Err(EngineError::Params("not supported yet: nonlinear static steps (the nonlinear solver arrives with solve.nonlinear)".into()))
+fn run_nonlinear(s: &mut Session, p: &Value) -> Result<Value> {
+    let limits = limits(p)?;
+    let step = opt::<String>(p, "step")?;
+    let model = &s.model;
+    let r = parallel::with_threads(threads(s, p)?, || solve_nonlinear(model, step.as_deref(), &limits))?;
+    let history = r.nonlinear.as_ref();
+    let summary = json!({
+        "step": r.step,
+        "dofs": r.stats.dofs,
+        "equations": r.stats.equations,
+        "factor_entries": r.stats.factor_entries,
+        "increments": history.map(|h| &h.increments),
+        "iterations": history.map(|h| h.iterations),
+        "frames": history.map(|h| h.load_factors()),
+        "max_displacement": largest(r.nodes.iter().zip(&r.displacement).map(|(l, u)| (*l, crate::results::magnitude(*u)))),
+        "max_von_mises": largest(r.nodes.iter().zip(&r.von_mises).map(|(l, v)| (*l, *v))),
+        "applied_total": r.applied_total,
+        "reaction_total": r.reaction_total,
+        "reference_points": r.reference_points.iter().map(|p| json!({
+            "name": p.name,
+            "label": p.label,
+            "displacement": p.displacement,
+            "reaction": p.reaction,
+        })).collect::<Vec<_>>(),
+        "warnings": r.warnings,
+    });
+    s.store_result(StepResult::Implicit(ImplicitResult::Static(r)));
+    Ok(summary)
 }
 
 fn run_heat(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1358,5 +1394,52 @@ pub(crate) mod tests {
         let fields: Vec<_> = crate::results::Field::available(heat).collect();
         assert_eq!(fields, vec![crate::results::Field::Temperature, crate::results::Field::HeatFlux]);
         assert!(crate::results::displacements(heat, crate::results::Pick::default()).is_err());
+    }
+
+    /// `solve.nonlinear`: a cantilever bent far by a dead tip load, with its increment history,
+    /// a frame per converged increment shown by `results.frame`, `solve.run` dispatching to it,
+    /// and the same bits on 1, 2 and 7 threads.
+    #[test]
+    fn nonlinear_steps_solve_with_their_history_and_frames() {
+        let solve = |threads: usize| -> (Value, u64, Session) {
+            let mut s = Session::default();
+            cantilever(&mut s);
+            let script = json!([
+                {"command": "model.section.edit", "params": {"name": "bar", "set": "all", "material": "Mat", "kind": {"type": "solid"}, "formulation": {}}},
+                {"command": "model.step.create", "params": {"name": "Large", "procedure": {"type": "nonlinear_static", "initial_increment": 0.25},
+                    "boundary_conditions": ["clamp"], "loads": ["push"]}},
+                {"command": "model.load.edit", "params": {"name": "push", "type": "force", "target": {"set": "tip"}, "vector": [0, 0, -15]}},
+            ]);
+            s.run_script(&script).unwrap();
+            let r = s.execute("solve.nonlinear", &json!({"step": "Large", "threads": threads})).unwrap();
+            let hash = result_hash(&s, "Large");
+            (r, hash, s)
+        };
+        let (r, one, mut s) = solve(1);
+        for threads in [2, 7] {
+            assert_eq!(solve(threads).1, one, "{threads} threads");
+        }
+        let increments = r["increments"].as_array().unwrap();
+        assert!(increments.iter().any(|i| i["converged"] == true) && increments.last().unwrap()["load_factor"] == 1.0, "{r}");
+        assert!(increments[0]["iterations"].as_array().is_some_and(|it| !it.is_empty() && it[0]["force"].is_number()), "{r}");
+        let frames = r["frames"].as_array().unwrap().len();
+        assert_eq!(frames, 1 + increments.iter().filter(|i| i["converged"] == true).count());
+        // Far from linear: P L² / (E I) = 15·100/(1000/12) = 18, the tip swings well down and in.
+        let tip = r["max_displacement"]["value"].as_f64().unwrap();
+        assert!(tip > 8.0 && tip < 12.0, "{r}");
+        let view = s.execute("results.frame", &json!({"step": "Large", "frame": 1})).unwrap();
+        assert_eq!(view["view"]["frame"], 1, "{view}");
+        assert!(view["load_factor"].as_f64().is_some_and(|f| f > 0.0 && f < 1.0), "{view}");
+        assert!(s.execute("results.frame", &json!({"step": "Large", "frame": frames})).is_err());
+        let probe = s.execute("solve.probe", &json!({"step": "Large", "nodes": [11]})).unwrap();
+        assert!(probe["nodes"][0]["displacement"][2].as_f64().is_some_and(|w| w < -5.0), "{probe}");
+        // solve.run solves every step with its own solver; the hostile caps are refused.
+        assert!(s.execute("solve.nonlinear", &json!({"step": "Large", "max_newton_iterations": 0})).is_err());
+        assert!(s.execute("solve.nonlinear", &json!({"step": "Large", "max_newton_iterations": 1e300})).is_err());
+        let e = s.execute("solve.nonlinear", &json!({"step": "Large", "max_newton_iterations": 2})).unwrap_err().to_string();
+        assert!(e.contains("Newton iterations"), "{e}");
+        assert!(s.execute("solve.nonlinear", &json!({"step": "Bend"})).is_err(), "a linear step");
+        let all = s.execute("solve.run", &json!({})).unwrap();
+        assert_eq!(all["steps"].as_array().map(Vec::len), Some(3), "{all}");
     }
 }

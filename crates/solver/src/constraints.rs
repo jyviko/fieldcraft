@@ -650,6 +650,50 @@ impl Reduction {
             .collect()
     }
 
+    /// T_fᵀ r: a vector over every degree of freedom (a residual) restricted to the free
+    /// equations.
+    pub fn restrict(&self, r: &[f64]) -> Vec<f64> {
+        let mut out = vec![0.0; self.neq()];
+        for (dof, v) in r.iter().enumerate() {
+            for (e, c) in self.free.row(dof) {
+                if let Some(x) = out.get_mut(e) {
+                    *x += c * v;
+                }
+            }
+        }
+        out
+    }
+
+    /// Every degree of freedom from the free equations' values `q` with the prescribed values
+    /// scaled by `scale` (a load factor): T_f q + scale T_p u_p.
+    pub fn expand_scaled(&self, q: &[f64], scale: f64) -> Vec<f64> {
+        (0..self.prescribed_motion.len())
+            .map(|d| {
+                let free: f64 = self.free.row(d).map(|(e, c)| c * q.get(e).copied().unwrap_or(0.0)).sum();
+                free + scale * self.prescribed_motion.get(d).copied().unwrap_or(0.0)
+            })
+            .collect()
+    }
+
+    /// The largest prescribed motion, |T_p u_p|∞.
+    pub fn largest_prescribed(&self) -> f64 {
+        self.prescribed_motion.iter().fold(0.0, |m, v| m.max(v.abs()))
+    }
+
+    /// T_pᵀ g for a vector g over every degree of freedom (the reactions of the out-of-balance
+    /// forces g = f_int − f_ext), zero where nothing is prescribed.
+    pub fn reactions_of(&self, g: &[f64]) -> Vec<f64> {
+        let mut out = vec![0.0; self.prescribed_motion.len()];
+        for (dof, v) in g.iter().enumerate() {
+            for (p, c) in self.fixed.row(dof) {
+                if let Some(x) = out.get_mut(p) {
+                    *x += c * v;
+                }
+            }
+        }
+        out
+    }
+
     /// The reactions at the prescribed degrees of freedom, T_pᵀ (K u − f), over every degree of
     /// freedom (zero where nothing is prescribed).
     pub fn reactions(&self, k: &Csr, u: &[f64], f: &[f64]) -> Vec<f64> {

@@ -8,6 +8,7 @@
 //! name): translations along X, Y, Z and rotations about them.
 
 use fieldcraft_fem::beam::{Beam, BeamSection};
+use fieldcraft_fem::constitutive::MaterialModel;
 use fieldcraft_fem::dense::Matrix;
 use fieldcraft_fem::element::{Formulation, Solid, ThermalStrain};
 use fieldcraft_fem::plane::{Plane, Theory};
@@ -17,7 +18,7 @@ use fieldcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, ElementDofs, PointS
 use fieldcraft_model::nodal::edge_pressure;
 use std::collections::BTreeSet;
 
-use fieldcraft_model::{Elastic, ElementKind, Integration, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
+use fieldcraft_model::{Elastic, ElementKind, Hyperelastic, Integration, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
 
 use crate::analysis::MassKind;
 use crate::{Error, Result};
@@ -38,6 +39,8 @@ pub struct Elem {
     /// The expansion coefficients along X, Y, Z and the reference temperature, when the
     /// material expands.
     pub expansion: Option<([f64; 3], f64)>,
+    /// The large-strain option of the element's material (nonlinear steps).
+    pub hyperelastic: Option<Hyperelastic>,
 }
 
 /// An element's kernel: a solid or a 2D element.
@@ -107,6 +110,30 @@ impl Kernel<'_> {
         match self {
             Kernel::Solid(s) => s.thermal_load(d, thermal),
             Kernel::Plane(p) => Ok(p.thermal_load(d, thermal)?.into_iter().map(|v| [v[0], v[1], 0.0]).collect()),
+        }
+    }
+
+    /// Finite-strain internal forces and tangent ([`fieldcraft_fem::finite`]) for the element's
+    /// displacements `u` (its degrees of freedom in order: 3 per node, or 2 for 2D elements).
+    pub fn finite_strain(
+        &self,
+        m: &MaterialModel,
+        u: &[f64],
+        committed: &[f64],
+        updated: &mut [f64],
+        tangent: bool,
+    ) -> fieldcraft_fem::Result<fieldcraft_fem::finite::Finite> {
+        match self {
+            Kernel::Solid(s) => s.finite_strain(m, u.as_chunks::<3>().0, committed, updated, tangent),
+            Kernel::Plane(p) => p.finite_strain(m, u.as_chunks::<2>().0, committed, updated, tangent),
+        }
+    }
+
+    /// Cauchy stress and logarithmic strain at the integration points, as [`Self::finite_strain`].
+    pub fn finite_strain_stresses(&self, m: &MaterialModel, u: &[f64], committed: &[f64]) -> fieldcraft_fem::Result<Vec<PointStress>> {
+        match self {
+            Kernel::Solid(s) => s.finite_strain_stresses(m, u.as_chunks::<3>().0, committed),
+            Kernel::Plane(p) => p.finite_strain_stresses(m, u.as_chunks::<2>().0, committed),
         }
     }
 
@@ -449,7 +476,7 @@ impl Mesh {
                 }
                 .map_err(|e| Error::element(label, e))?;
                 let expansion = material.thermal.and_then(|t| t.expansion.map(|a| (a.axes(), t.reference_temperature)));
-                elements.push((label, el.kind, el.nodes.clone(), formulation, d, material.density, theory, dofs, expansion));
+                elements.push((label, el.kind, el.nodes.clone(), formulation, d, material.density, theory, dofs, expansion, material.hyperelastic));
             }
         }
         if let (Some(_), Some(name)) = (planar, model.couplings().keys().next()) {
@@ -515,10 +542,10 @@ impl Mesh {
             warnings,
             discrete: crate::discrete::Discrete::default(),
         };
-        for (label, kind, nodes, formulation, d, density, theory, _, expansion) in elements {
+        for (label, kind, nodes, formulation, d, density, theory, _, expansion, hyperelastic) in elements {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
-            mesh.elements.push(Elem { label, kind, nodes: idx, xyz: exyz, formulation, d, density, theory, expansion });
+            mesh.elements.push(Elem { label, kind, nodes: idx, xyz: exyz, formulation, d, density, theory, expansion, hyperelastic });
         }
         for (label, kind, nodes, young, area, density, expansion) in trusses {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
@@ -648,7 +675,7 @@ fn vector_dofs(mesh: &Mesh, slot: usize, rotation: bool) -> Option<Vec<usize>> {
 }
 
 /// The translations of mesh node `node`.
-fn translations(mesh: &Mesh, node: usize) -> Result<Vec<usize>> {
+pub(crate) fn translations(mesh: &Mesh, node: usize) -> Result<Vec<usize>> {
     vector_dofs(mesh, node, false).ok_or_else(|| Error::Internal(format!("mesh node {node} has no translations")))
 }
 

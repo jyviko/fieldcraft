@@ -11,7 +11,7 @@ are in `packaging/` and run the same way on a developer machine.
 | Platform | Files | Script |
 |---|---|---|
 | macOS 11+, universal (arm64 + x86_64) | `fieldcraft-<v>-macos-universal.dmg` (FieldCraft.app on a drag-to-Applications image), `fieldcraft-cli-<v>-macos-universal.zip` | `packaging/macos/package.sh` |
-| Linux x86_64, glibc 2.35+ | `fieldcraft-<v>-linux-x86_64.tar.gz` (`bin/`, `share/`), `fieldcraft-<v>-linux-x86_64.AppImage` | `packaging/linux/package.sh` |
+| Linux x86_64, glibc 2.35+ | `fieldcraft-<v>-linux-x86_64.tar.gz` (`bin/`, `share/`), `fieldcraft-<v>-linux-x86_64.AppImage`, `fieldcraft_<v>_amd64.deb` (Debian, Ubuntu 22.04+), `fieldcraft-<v>.x86_64.rpm` (Fedora, RHEL, openSUSE) | `packaging/linux/package.sh` |
 | Windows x64 | `fieldcraft-<v>-windows-x64.zip` (`fieldcraft.exe`, `fieldcraft-cli.exe`) | `packaging/windows/package.ps1` |
 
 Plus `SHA256SUMS.txt` and the notes from `.github/release-notes.md` followed by GitHub's
@@ -22,6 +22,17 @@ entry and icon name, and the window's Wayland app_id / X11 class. The icons come
 `assets/app-icon`: `icon.icns` and `Assets.car` (macOS 26 and later) in the app bundle,
 `icon.ico` embedded in `fieldcraft.exe` (`apps/fieldcraft/build.rs`), the iconset PNGs as the
 Linux hicolor icons.
+
+The `.deb` and `.rpm` are built by `cargo-deb` and `cargo-generate-rpm` (versions pinned in
+`release.yml`) from the same stripped release binaries as the tar.gz, with the same files under
+`/usr` (`/usr/bin`, the desktop entry, the hicolor icons, the licences in
+`/usr/share/doc/fieldcraft`); their metadata and file lists are in `apps/fieldcraft/Cargo.toml`.
+The binaries link only glibc; the windowing, GPU and file-dialog libraries they open at run time
+are listed as dependencies by hand (Debian package names, RPM soname capabilities). A
+pre-release `0.2.0-rc.1` is versioned `0.2.0~rc.1` inside the packages so it sorts before
+`0.2.0`; the file names keep the release version. The Linux job compares both file lists with
+the tar.gz, runs lintian, and installs the packages in Ubuntu 22.04 and Fedora containers to run
+`fieldcraft-cli --version`.
 
 ## Signing
 
@@ -85,7 +96,8 @@ Publishing is a maintainer's call; an agent preparing a release stops at the dra
    run `shasum -a 256 -c SHA256SUMS.txt`, and check every platform's files are there.
 3. Smoke-test what you can run: open the dmg, drag the app to Applications, launch it with
    `--sample cantilever`; run `fieldcraft-cli --version` from the zip or tar.gz; on Linux run the
-   AppImage; on Windows unzip and start `fieldcraft.exe`. Look at the run's logs for the
+   AppImage, or install the `.deb` (`sudo apt install ./fieldcraft_<v>_amd64.deb`) or `.rpm`
+   (`sudo dnf install ./fieldcraft-<v>.x86_64.rpm`); on Windows unzip and start `fieldcraft.exe`. Look at the run's logs for the
    platforms you could not try (each job checks its own package).
 4. Edit the notes: what is new, fixes, breaking changes, known limitations. Keep the install and
    signing paragraphs; never claim signing the notes don't state.
@@ -99,4 +111,6 @@ Publishing is a maintainer's call; an agent preparing a release stops at the dra
 uploads them with the notes as the `release-assets` artifact of the run, without creating a
 release. `-f draft=true` creates or updates the draft, and is accepted on `main` only.
 Locally, `packaging/macos/package.sh --arch aarch64` (or `x86_64`, `universal`) and
-`packaging/linux/package.sh` write to `dist/release/`.
+`packaging/linux/package.sh` write to `dist/release/` (the `.deb` and `.rpm` need
+`cargo install --locked cargo-deb cargo-generate-rpm` at the versions in `release.yml`;
+`--formats "tar appimage"` skips them).

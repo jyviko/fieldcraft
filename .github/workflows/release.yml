@@ -9,7 +9,7 @@
 # and pushes to develop or tags never start it.
 #
 #   macOS universal (arm64 + x86_64)   .dmg with FieldCraft.app, the CLI as a .zip   packaging/macos
-#   Linux x86_64 (glibc 2.35+)         .tar.gz and .AppImage                          packaging/linux
+#   Linux x86_64 (glibc 2.35+)         .tar.gz, .AppImage, .deb and .rpm              packaging/linux
 #   Windows x64                        .zip with fieldcraft.exe and fieldcraft-cli.exe packaging/windows
 #
 # macOS: signed with a Developer ID and notarized when the APPLE_* secrets exist, ad-hoc
@@ -119,33 +119,69 @@ jobs:
     timeout-minutes: 90
     env:
       FIELDCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      # The .deb and .rpm builders (both MIT), pinned.
+      CARGO_DEB_VERSION: 3.8.0
+      CARGO_GENERATE_RPM_VERSION: 0.21.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends desktop-file-utils
+          sudo apt-get install -y --no-install-recommends desktop-file-utils lintian rpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: release-linux-x86_64
           # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build and package (tar.gz, AppImage)
+      - name: Install cargo-deb and cargo-generate-rpm
+        run: |
+          cargo install --locked --version "$CARGO_DEB_VERSION" cargo-deb
+          cargo install --locked --version "$CARGO_GENERATE_RPM_VERSION" cargo-generate-rpm
+      - name: Build and package (tar.gz, AppImage, deb, rpm)
         run: packaging/linux/package.sh
       - name: Check the packages
         run: |
           . packaging/env.sh
-          list="$(tar -tzf dist/release/*.tar.gz)"
+          base="fieldcraft-$VERSION-linux-x86_64"
+          deb="dist/release/fieldcraft_${VERSION}_amd64.deb"
+          rpm="dist/release/fieldcraft-$VERSION.x86_64.rpm"
+          list="$(tar -tzf "dist/release/$base.tar.gz")"
           for f in bin/fieldcraft bin/fieldcraft-cli "share/applications/$APP_ID.desktop" \
             share/doc/fieldcraft/THIRD-PARTY-LICENSES.txt; do
-            grep -Fx -- "fieldcraft-$VERSION-linux-x86_64/$f" <<<"$list"
+            grep -Fx -- "$base/$f" <<<"$list"
           done
+          # The .deb and .rpm carry the tar.gz's files under /usr (the .deb adds its copyright
+          # file); their lists live in apps/fieldcraft/Cargo.toml, so a drift fails here.
+          files() { grep -v '/$' | sed -E "s#^(\./|/|$base/)##; s#^usr/##" | grep -vx 'share/doc/fieldcraft/copyright' | sort; }
+          diff <(files <<<"$list") <(dpkg-deb --fsys-tarfile "$deb" | tar -t | files)
+          diff <(files <<<"$list") <(rpm -qpl "$rpm" | files)
+          dpkg-deb --info "$deb"
+          rpm -qpi "$rpm"
+          echo "rpm requires:"; rpm -qpR "$rpm"
+          lintian --info --fail-on error "$deb"
           ldd target/release/fieldcraft
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"
             APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version
           done
+      - name: Install the .deb and .rpm in containers
+        run: |
+          # The oldest supported Ubuntu (the build's glibc) and a current Fedora. Recommended and
+          # weak dependencies (GPU drivers) are skipped to keep it quick; the hard ones must resolve.
+          docker run --rm -v "$PWD/dist/release:/dist:ro" ubuntu:22.04 bash -euxc '
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends /dist/*.deb
+            fieldcraft-cli --version
+            fieldcraft --version
+            test -f /usr/share/doc/fieldcraft/THIRD-PARTY-LICENSES.txt'
+          docker run --rm -v "$PWD/dist/release:/dist:ro" fedora:44 bash -euxc '
+            dnf install -y -q --setopt=install_weak_deps=False /dist/*.rpm
+            fieldcraft-cli --version
+            fieldcraft --version
+            test -f /usr/share/doc/fieldcraft/THIRD-PARTY-LICENSES.txt
+            dnf install -y -q rpmlint
+            rpmlint /dist/*.rpm || true'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-x86_64
@@ -201,6 +237,7 @@ jobs:
         run: |
           for f in "fieldcraft-$VERSION-macos-universal.dmg" "fieldcraft-cli-$VERSION-macos-universal.zip" \
             "fieldcraft-$VERSION-linux-x86_64.tar.gz" "fieldcraft-$VERSION-linux-x86_64.AppImage" \
+            "fieldcraft_${VERSION}_amd64.deb" "fieldcraft-$VERSION.x86_64.rpm" \
             "fieldcraft-$VERSION-windows-x64.zip"; do
             test -s "artifacts/$f" || { echo "::error::missing $f"; exit 1; }
           done

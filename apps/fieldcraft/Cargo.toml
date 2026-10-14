@@ -1,6 +1,6 @@
 [package]
 name = "fieldcraft"
-description = "FieldCraft desktop app"
+description = "Finite element modeling: meshing, model setup, solver decks and a linear solver"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -22,3 +22,83 @@ log = { workspace = true }
 [build-dependencies]
 # The Windows executable's icon resource (build.rs).
 embed-resource = "3.0.12"
+
+# Linux .deb and .rpm packages (cargo-deb, cargo-generate-rpm), built by packaging/linux/package.sh
+# from the release binaries it has already built and stripped; it sets the version and the file
+# names. The file list matches the tar.gz's (package.sh's staged tree; the release workflow
+# compares them).
+# The binaries link only glibc and libgcc_s. Windowing (Wayland, X11, xkbcommon), the GPU (Vulkan
+# or EGL) and the file dialogs (the XDG desktop portal) are opened at run time, so they are no ELF
+# NEEDED entries and the tools cannot find them: they are listed here.
+[package.metadata.deb]
+name = "fieldcraft"
+maintainer = "FieldCraft contributors"
+copyright = "FieldCraft contributors"
+section = "science"
+priority = "optional"
+extended-description = """\
+FieldCraft turns geometry into analysis-ready finite element models: volume \
+meshes, materials, sections, boundary conditions, loads and steps. It writes \
+Abaqus input, Nastran bulk data and LS-DYNA keyword decks, and solves linear \
+static and modal problems with its own solver. Includes fieldcraft-cli, a \
+headless command runner and MCP server."""
+depends = "$auto, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libvulkan1 | libegl1"
+recommends = "mesa-vulkan-drivers, libegl-mesa0, xdg-desktop-portal"
+assets = [
+    ["target/release/fieldcraft", "usr/bin/", "755"],
+    ["target/release/fieldcraft-cli", "usr/bin/", "755"],
+    ["../../packaging/linux/io.github.jyviko.fieldcraft.desktop", "usr/share/applications/", "644"],
+    ["../../assets/app-icon/icon.iconset/icon_16x16.png", "usr/share/icons/hicolor/16x16/apps/io.github.jyviko.fieldcraft.png", "644"],
+    ["../../assets/app-icon/icon.iconset/icon_32x32.png", "usr/share/icons/hicolor/32x32/apps/io.github.jyviko.fieldcraft.png", "644"],
+    ["../../assets/app-icon/icon.iconset/icon_32x32@2x.png", "usr/share/icons/hicolor/64x64/apps/io.github.jyviko.fieldcraft.png", "644"],
+    ["../../assets/app-icon/icon.iconset/icon_128x128.png", "usr/share/icons/hicolor/128x128/apps/io.github.jyviko.fieldcraft.png", "644"],
+    ["../../assets/app-icon/icon.iconset/icon_256x256.png", "usr/share/icons/hicolor/256x256/apps/io.github.jyviko.fieldcraft.png", "644"],
+    ["../../assets/app-icon/icon.iconset/icon_512x512.png", "usr/share/icons/hicolor/512x512/apps/io.github.jyviko.fieldcraft.png", "644"],
+    ["../../assets/app-icon/icon.iconset/icon_512x512@2x.png", "usr/share/icons/hicolor/1024x1024/apps/io.github.jyviko.fieldcraft.png", "644"],
+    ["../../README.md", "usr/share/doc/fieldcraft/", "644"],
+    ["../../LICENSE-MIT", "usr/share/doc/fieldcraft/", "644"],
+    ["../../LICENSE-APACHE", "usr/share/doc/fieldcraft/", "644"],
+    ["../../NOTICE", "usr/share/doc/fieldcraft/", "644"],
+    ["../../THIRD-PARTY-LICENSES.txt", "usr/share/doc/fieldcraft/", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "fieldcraft"
+license = "MIT OR Apache-2.0"
+url = "https://github.com/jyviko/fieldcraft"
+assets = [
+    { source = "target/release/fieldcraft", dest = "/usr/bin/fieldcraft", mode = "755" },
+    { source = "target/release/fieldcraft-cli", dest = "/usr/bin/fieldcraft-cli", mode = "755" },
+    { source = "../../packaging/linux/io.github.jyviko.fieldcraft.desktop", dest = "/usr/share/applications/io.github.jyviko.fieldcraft.desktop", mode = "644" },
+    { source = "../../assets/app-icon/icon.iconset/icon_16x16.png", dest = "/usr/share/icons/hicolor/16x16/apps/io.github.jyviko.fieldcraft.png", mode = "644" },
+    { source = "../../assets/app-icon/icon.iconset/icon_32x32.png", dest = "/usr/share/icons/hicolor/32x32/apps/io.github.jyviko.fieldcraft.png", mode = "644" },
+    { source = "../../assets/app-icon/icon.iconset/icon_32x32@2x.png", dest = "/usr/share/icons/hicolor/64x64/apps/io.github.jyviko.fieldcraft.png", mode = "644" },
+    { source = "../../assets/app-icon/icon.iconset/icon_128x128.png", dest = "/usr/share/icons/hicolor/128x128/apps/io.github.jyviko.fieldcraft.png", mode = "644" },
+    { source = "../../assets/app-icon/icon.iconset/icon_256x256.png", dest = "/usr/share/icons/hicolor/256x256/apps/io.github.jyviko.fieldcraft.png", mode = "644" },
+    { source = "../../assets/app-icon/icon.iconset/icon_512x512.png", dest = "/usr/share/icons/hicolor/512x512/apps/io.github.jyviko.fieldcraft.png", mode = "644" },
+    { source = "../../assets/app-icon/icon.iconset/icon_512x512@2x.png", dest = "/usr/share/icons/hicolor/1024x1024/apps/io.github.jyviko.fieldcraft.png", mode = "644" },
+    { source = "../../README.md", dest = "/usr/share/doc/fieldcraft/README.md", mode = "644", doc = true },
+    { source = "../../LICENSE-MIT", dest = "/usr/share/doc/fieldcraft/LICENSE-MIT", mode = "644", doc = true },
+    { source = "../../LICENSE-APACHE", dest = "/usr/share/doc/fieldcraft/LICENSE-APACHE", mode = "644", doc = true },
+    { source = "../../NOTICE", dest = "/usr/share/doc/fieldcraft/NOTICE", mode = "644", doc = true },
+    { source = "../../THIRD-PARTY-LICENSES.txt", dest = "/usr/share/doc/fieldcraft/THIRD-PARTY-LICENSES.txt", mode = "644", doc = true },
+]
+# The binaries' ELF dependencies (glibc, libgcc_s) are found automatically; these are opened at run
+# time. Soname provides rather than package names, so the same requirements resolve on Fedora/RHEL
+# and openSUSE.
+require-sh = false
+
+[package.metadata.generate-rpm.requires]
+"libxkbcommon.so.0()(64bit)" = "*"
+"libxkbcommon-x11.so.0()(64bit)" = "*"
+"libwayland-client.so.0()(64bit)" = "*"
+"libX11.so.6()(64bit)" = "*"
+"libX11-xcb.so.1()(64bit)" = "*"
+"libxcb.so.1()(64bit)" = "*"
+"libXcursor.so.1()(64bit)" = "*"
+"libXi.so.6()(64bit)" = "*"
+"(libvulkan.so.1()(64bit) or libEGL.so.1()(64bit))" = ""
+
+[package.metadata.generate-rpm.recommends]
+mesa-vulkan-drivers = "*"
+xdg-desktop-portal = "*"

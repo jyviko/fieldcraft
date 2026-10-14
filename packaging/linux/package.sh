@@ -4,12 +4,17 @@
 #   $DIST/fieldcraft-<version>-linux-x86_64.tar.gz    bin/fieldcraft, bin/fieldcraft-cli, the
 #                                                     .desktop entry, icons and licences
 #   $DIST/fieldcraft-<version>-linux-x86_64.AppImage  the app as one file (chmod +x, run)
+#   $DIST/fieldcraft_<version>_amd64.deb              Debian/Ubuntu package (cargo-deb)
+#   $DIST/fieldcraft-<version>.x86_64.rpm             Fedora/RHEL/openSUSE package (cargo-generate-rpm)
 #
-# Usage: packaging/linux/package.sh [--skip-build] [--formats "tar appimage"]
+# Usage: packaging/linux/package.sh [--skip-build] [--formats "tar appimage deb rpm"]
 #
 # Build on an old distribution (CI: Ubuntu 22.04, glibc 2.35) so the binaries run on newer ones.
 # The AppImage uses appimagetool and the type 2 runtime at pinned releases, checked against their
-# SHA-256 (downloaded into $CARGO_TARGET_DIR). Optional: desktop-file-validate.
+# SHA-256 (downloaded into $CARGO_TARGET_DIR). The .deb and .rpm need cargo-deb and
+# cargo-generate-rpm (the versions release.yml installs); their metadata and file lists are in
+# apps/fieldcraft/Cargo.toml. FIELDCRAFT_MAINTAINER sets the .deb's Maintainer field.
+# Optional: desktop-file-validate.
 # Adapted from SolidCraft's packaging/linux/package.sh (MIT OR Apache-2.0; see ATTRIBUTION.md).
 set -euo pipefail
 # shellcheck source=../env.sh
@@ -18,12 +23,12 @@ HERE="$ROOT/packaging/linux"
 ICONSET="$ROOT/assets/app-icon/icon.iconset"
 
 SKIP_BUILD=0
-FORMATS="tar appimage"
+FORMATS="tar appimage deb rpm"
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
-    -h | --help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -50,6 +55,8 @@ if [ "$SKIP_BUILD" = 0 ]; then
   (cd "$ROOT" && cargo build --release --locked -p fieldcraft -p fieldcraft-cli)
 fi
 BIN="$CARGO_TARGET_DIR/release"
+# Every format ships stripped binaries; cargo-generate-rpm packages target/release as it is.
+strip "$BIN/fieldcraft" "$BIN/fieldcraft-cli"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root/usr"
 rm -rf "$WORK"
@@ -57,7 +64,6 @@ rm -rf "$WORK"
 # ---- an FHS tree, shared by both formats --------------------------------------------------------
 install -Dm755 "$BIN/fieldcraft" "$STAGE/bin/fieldcraft"
 install -Dm755 "$BIN/fieldcraft-cli" "$STAGE/bin/fieldcraft-cli"
-strip "$STAGE/bin/fieldcraft" "$STAGE/bin/fieldcraft-cli"
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
 # hicolor icons: <size> <the iconset export of that size>.
 while read -r size file; do
@@ -83,6 +89,23 @@ if has tar; then
   cp -R "$STAGE" "$WORK/tar/$BASENAME"
   tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
   echo "wrote $DIST/$BASENAME.tar.gz"
+fi
+
+# ---- .deb and .rpm ------------------------------------------------------------------------------
+# From the binaries built and stripped above (--no-build). Semver pre-releases (0.2.0-rc.1) become
+# 0.2.0~rc.1 inside the packages so they sort before the release; the file names keep $VERSION.
+PKG_VERSION="$(printf '%s' "$VERSION" | sed 's/-/~/')"
+if has deb; then
+  case "$ARCH" in x86_64) DEB_ARCH=amd64 ;; *) DEB_ARCH="$ARCH" ;; esac
+  OUT="$DIST/fieldcraft_${VERSION}_$DEB_ARCH.deb"
+  (cd "$ROOT" && cargo deb --locked -p fieldcraft --no-build --deb-version "$PKG_VERSION" \
+    --maintainer "${FIELDCRAFT_MAINTAINER:-FieldCraft contributors}" -o "$OUT")
+  echo "wrote $OUT"
+fi
+if has rpm; then
+  OUT="$DIST/fieldcraft-$VERSION.$ARCH.rpm"
+  (cd "$ROOT" && cargo generate-rpm -p apps/fieldcraft -s "version = \"$PKG_VERSION\"" -o "$OUT")
+  echo "wrote $OUT"
 fi
 
 # ---- AppImage -----------------------------------------------------------------------------------

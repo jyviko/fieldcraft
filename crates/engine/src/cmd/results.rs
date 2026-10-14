@@ -11,7 +11,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const DEFORMED: CommandSpec = CommandSpec {
     id: "results.deformed",
     label: "Deformed Shape",
-    params: r#"{"step": "Load", "show": true, "scale": "auto"} — shows a solved step's deformed shape (`show: false` the undeformed mesh); `scale` is a factor or "auto" (the largest displacement drawn a tenth of the model's size); `step` defaults to the step shown or the first solved one"#,
+    params: r#"{"step": "Load", "show": true, "scale": "auto"} — shows a solved step's deformed shape (`show: false` the undeformed mesh); `scale` is a factor (0 draws the undeformed shape, so a sequence from 0 swings it out) or "auto" (the largest displacement drawn a tenth of the model's size); `step` defaults to the step shown or the first solved one"#,
     kind: CommandKind::Session,
     run: deformed,
 };
@@ -141,8 +141,9 @@ fn deformed(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(a)) if a == "auto" => Some(None),
         Some(v) => Some(Some(
             v.as_f64()
-                .filter(|x| x.is_finite() && *x > 0.0 && *x <= MAX_SCALE)
-                .ok_or_else(|| EngineError::Params(format!("`scale` must be \"auto\" or a factor above 0 and at most {MAX_SCALE}")))?,
+                .filter(|x| x.is_finite() && (0.0..=MAX_SCALE).contains(x))
+                .map(f64::abs)
+                .ok_or_else(|| EngineError::Params(format!("`scale` must be \"auto\" or a factor from 0 (undeformed) to {MAX_SCALE}")))?,
         )),
     };
     let v = view_of(s, &step)?;
@@ -336,6 +337,9 @@ mod tests {
         assert!(r["contour"]["range"]["max"]["value"].as_f64().unwrap() > 0.0, "{r}");
         let r = s.execute("results.deformed", &json!({"scale": 2.5})).unwrap();
         assert_eq!((r["view"]["deformed"].as_bool(), r["view"]["scale"].as_f64()), (Some(true), Some(2.5)));
+        // Scale 0: the undeformed shape, still the deformed view (an animation's first picture).
+        let r = s.execute("results.deformed", &json!({"scale": 0})).unwrap();
+        assert_eq!((r["view"]["deformed"].as_bool(), r["view"]["scale"].as_f64()), (Some(true), Some(0.0)));
         s.execute("results.deformed", &json!({"scale": "auto", "show": false})).unwrap();
         assert_eq!(s.results_view.as_ref().map(|v| (v.deformed, v.scale)), Some((false, None)));
         // Modes switch to the frequency step (its own first look) and list the frequencies.
@@ -418,6 +422,7 @@ mod tests {
             json!({"field": "von_mises", "bands": 0}),
             json!({"field": "von_mises", "bands": 25}),
             json!({"scale": -1}),
+            json!({"scale": -0.0001}),
             json!({"scale": 1e300}),
             json!({"scale": "big"}),
             json!({"scale": f64::NAN}),

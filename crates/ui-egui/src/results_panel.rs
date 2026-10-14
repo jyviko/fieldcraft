@@ -143,10 +143,10 @@ pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) 
             }
             let mut auto = plot.view.scale.is_none();
             if ui.checkbox(&mut auto, "Auto").on_hover_text("Scale the largest displacement to a tenth of the model").changed() {
-                run.push(("results.deformed", json!({"scale": if auto { json!("auto") } else { json!(plot.scale.max(f64::MIN_POSITIVE)) }})));
+                run.push(("results.deformed", json!({"scale": if auto { json!("auto") } else { json!(plot.scale) }})));
             }
             let mut scale = plot.scale;
-            let drag = egui::DragValue::new(&mut scale).speed(plot.scale.abs().max(1e-6) * 0.01).range(1e-9..=1e12).prefix("× ");
+            let drag = egui::DragValue::new(&mut scale).speed(plot.scale.abs().max(1e-6) * 0.01).range(0.0..=1e12).prefix("× ");
             if ui.add_enabled(plot.view.deformed, drag).changed() {
                 run.push(("results.deformed", json!({"scale": scale})));
             }

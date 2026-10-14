@@ -210,7 +210,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "show_results",
             "Show results",
             "Choose what the results display shows and read it back: the step, the deformed shape (`deformed`, `scale`: \
-             a factor or \"auto\"), contours of a nodal field (`field`: displacement, displacement_x/y/z, von_mises, \
+             a factor, 0 for the undeformed shape, or \"auto\"), contours of a nodal field (`field`: displacement, displacement_x/y/z, von_mises, \
              max/mid/min_principal, stress_xx/yy/zz/xy/xz/yz, or none; `bands` 2–24), a frequency step's mode or an \
              explicit step's frame. The reply has the contour's range: its smallest and largest value and their nodes \
              (field displacement gives the largest displacement). Only `step`: show that step.",
@@ -220,7 +220,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "field": string("Contour field, or \"none\""),
                     "bands": integer("Contour bands, 2 to 24"),
                     "deformed": {"type": "boolean", "description": "Draw the deformed shape"},
-                    "scale": {"type": ["number", "string"], "description": "Deformation scale factor or \"auto\""},
+                    "scale": {"type": ["number", "string"], "description": "Deformation scale factor (0: undeformed) or \"auto\""},
                     "mode": integer("Mode of a frequency step, from 1"),
                     "frame": integer("Field frame of an explicit step, from 0"),
                     "time": {"type": "number", "description": "Show the explicit step's frame nearest this time"},

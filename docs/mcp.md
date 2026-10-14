@@ -96,7 +96,7 @@ software on the computer.
 | `batch` | `commands: [{command, params}]` | Run steps in order, stop at the first error; the reply has every result and the failing step (`failed.index`, `failed.command`, `failed.error`). Steps before it stay applied (`undo` takes them back). |
 | `inspect_model` | — | `model.info` (counts, units, definitions), `model.activity` (the step table) and `geometry.bodies` (bodies with measures and persistent face names, which sets name as `{body, face}`). |
 | `check_model` | — | `model.check`: errors and warnings, each naming its item. |
-| `open` | `path` | By extension: `.fieldcraft` (`file.open`), `.solidcraft` (`geometry.open`), `.3mf` (`geometry.import.mesh`). |
+| `open` | `path`, `model?` | By extension: `.fieldcraft` (`file.open`), `.solidcraft` (`geometry.open`), `.3mf` (`geometry.import.mesh`). For a design, `model` is `keep` (default: the mesh and definitions stay, as a reopen after an edit wants) or `new` (a new model with the design); the reply's `related` is false when the design has none of the bodies the model refers to, and `stale` lists the mesh bodies and sets that no longer resolve. |
 | `save` | `path?` | `file.save`: to `path` or the model's own file. |
 | `write_deck` | `format` (abaqus, nastran, lsdyna), `path`, `steps?` | `deck.write`. |
 | `mesh` | `method`, `params?` | Runs the mesher (`tet`: `mesh.tet.generate`; `planar`: `mesh.planar`; the hex and block meshers as they land) and replies with its result, `model.info` and `mesh.quality`. |

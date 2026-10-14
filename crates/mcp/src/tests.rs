@@ -163,6 +163,7 @@ fn hostile_tool_arguments_are_tool_errors() {
         ("open", json!({"path": "/etc/passwd"})),
         ("open", json!({"path": "/no/such/model.fieldcraft"})),
         ("open", json!({"path": huge.clone() + ".solidcraft"})),
+        ("open", json!({"path": "/no/such/model.fieldcraft", "model": "new"})),
         ("save", json!({})),
         ("write_deck", json!({"format": "abaqus", "path": "/no/such/dir/x.inp"})),
         ("mesh", json!({"method": "tet", "params": {"body": "Nope", "tolerance": 0.5}})),
@@ -270,6 +271,7 @@ fn file_access_stays_inside_the_roots() {
     refused(&mut s, "open", json!({"path": input.join("link.solidcraft")}));
     refused(&mut s, "execute", json!({"command": "geometry.open", "params": {"path": input.join("../outside/c.solidcraft")}}));
     ok(&mut s, "open", json!({"path": input.join("c.solidcraft")}));
+    ok(&mut s, "open", json!({"path": input.join("c.solidcraft"), "model": "new"}));
     refused(&mut s, "save", json!({"path": outside.join("m.fieldcraft")}));
     refused(&mut s, "save", json!({"path": input.join("m.fieldcraft")}));
     refused(&mut s, "execute", json!({"command": "file.save_as", "params": {"path": outside.join("m.fieldcraft")}}));

@@ -139,9 +139,17 @@ pub fn tool_definitions() -> Vec<Value> {
             "open",
             "Open a file",
             "Open by extension: a .fieldcraft model (file.open: replaces the model; its design and meshes open again), a \
-             SolidCraft design .solidcraft (geometry.open: its bodies become the geometry) or a face-tagged .3mf mesh \
-             (geometry.import.mesh: added as a surface).",
-            obj(json!({"path": string("Path to a .fieldcraft, .solidcraft or .3mf file")}), &["path"]),
+             SolidCraft design .solidcraft (geometry.open: its bodies become the geometry; `model` \"keep\", the default, \
+             keeps the mesh and definitions for a reopen after an edit, \"new\" starts a new model; the reply's `related` \
+             and `stale` say what no longer resolves on another part) or a face-tagged .3mf mesh (geometry.import.mesh: \
+             added as a surface).",
+            obj(
+                json!({
+                    "path": string("Path to a .fieldcraft, .solidcraft or .3mf file"),
+                    "model": {"type": "string", "enum": ["keep", "new"], "description": "For a .solidcraft design: keep the current model (default) or start a new one"},
+                }),
+                &["path"],
+            ),
             false,
             true,
         ),
@@ -450,7 +458,14 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Map<String, Value>) -> Result<V
                 Some("3mf") => "geometry.import.mesh",
                 _ => return Err("open: a .fieldcraft model, a .solidcraft design or a .3mf mesh".into()),
             };
-            let r = b.execute(command, json!({"path": path}))?;
+            let mut params = json!({"path": path});
+            if let Some(model) = a.get("model").filter(|m| !m.is_null()) {
+                if command != "geometry.open" {
+                    return Err("open: `model` applies to a .solidcraft design only".into());
+                }
+                params["model"] = model.clone();
+            }
+            let r = b.execute(command, params)?;
             Ok(json!({"command": command, "result": r}))
         }
         "save" => b.execute("file.save", pick(a, &["path"])),

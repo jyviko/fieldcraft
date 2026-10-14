@@ -78,7 +78,93 @@ pub(crate) fn weld(positions: &[[f64; 3]], triangles: &[[u32; 3]], relative: f64
             source_triangle.push(index(t));
         }
     }
+    if tol > 0.0 {
+        split_t_junctions(&points, &mut out, &mut source_triangle, tol);
+    }
     Ok(Welded { points, triangles: out, source_vertex, source_triangle })
+}
+
+/// Rounds of T-junction splitting, and the most open edges looked at.
+const T_JUNCTION_ROUNDS: usize = 8;
+const MAX_OPEN_EDGES: usize = 100_000;
+
+/// Close T-junctions: where a vertex of one face's boundary lies on an edge of the neighbouring
+/// face (within `tol`) that the tessellation did not divide there, split that edge's triangle at
+/// it. Only edges no other triangle uses are looked at, so a closed surface is left as it is.
+/// The standard repair of tessellations whose faces are triangulated independently (Barequet and
+/// Kumar 1997, *Repairing CAD models*).
+fn split_t_junctions(points: &[[f64; 3]], triangles: &mut Vec<[u32; 3]>, source: &mut Vec<u32>, tol: f64) {
+    use std::collections::{BTreeMap, BTreeSet};
+    for _ in 0..T_JUNCTION_ROUNDS {
+        let mut used: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+        for tri in triangles.iter() {
+            for k in 0..3 {
+                *used.entry((tri[k], tri[(k + 1) % 3])).or_default() += 1;
+            }
+        }
+        // Edges used once, in one direction only.
+        let open: BTreeSet<(u32, u32)> = used.iter().filter(|(e, n)| **n == 1 && !used.contains_key(&(e.1, e.0))).map(|(e, _)| *e).collect();
+        if open.is_empty() || open.len() > MAX_OPEN_EDGES {
+            return;
+        }
+        let ends: BTreeSet<u32> = open.iter().flat_map(|&(a, b)| [a, b]).collect();
+        let at = |v: u32| points.get(v as usize).copied();
+        let mut changed = false;
+        let mut next = Vec::with_capacity(triangles.len() + 8);
+        let mut next_source = Vec::with_capacity(triangles.len() + 8);
+        for (tri, &src) in triangles.iter().zip(source.iter()) {
+            let mut split = None;
+            for k in 0..3 {
+                let (a, b, c) = (tri[k], tri[(k + 1) % 3], tri[(k + 2) % 3]);
+                if !open.contains(&(a, b)) {
+                    continue;
+                }
+                let (Some(pa), Some(pb)) = (at(a), at(b)) else { continue };
+                let ab = sub(pb, pa);
+                let len2 = dot(ab, ab);
+                if !(len2 > 0.0) {
+                    continue;
+                }
+                let mut on: Vec<(f64, u32)> = ends
+                    .iter()
+                    .filter(|&&v| v != a && v != b && v != c)
+                    .filter_map(|&v| {
+                        let p = at(v)?;
+                        let t = dot(sub(p, pa), ab) / len2;
+                        let q = [pa[0] + ab[0] * t, pa[1] + ab[1] * t, pa[2] + ab[2] * t];
+                        let d = sub(p, q);
+                        let inside = t * len2.sqrt() > tol && (1.0 - t) * len2.sqrt() > tol;
+                        (inside && dot(d, d) <= tol * tol).then_some((t, v))
+                    })
+                    .collect();
+                if !on.is_empty() {
+                    on.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+                    split = Some((a, b, c, on));
+                    break;
+                }
+            }
+            match split {
+                Some((a, b, c, on)) => {
+                    let mut prev = a;
+                    for (_, v) in on.iter().copied().chain(std::iter::once((1.0, b))) {
+                        next.push([prev, v, c]);
+                        next_source.push(src);
+                        prev = v;
+                    }
+                    changed = true;
+                }
+                None => {
+                    next.push(*tri);
+                    next_source.push(src);
+                }
+            }
+        }
+        *triangles = next;
+        *source = next_source;
+        if !changed {
+            return;
+        }
+    }
 }
 
 /// Representatives found so far.

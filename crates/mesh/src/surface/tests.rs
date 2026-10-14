@@ -392,3 +392,23 @@ fn orient2d_sign(a: &Point3, b: &Point3, c: &Point3) -> i32 {
     let p = |q: &Point3| crate::predicates::Point2::new(q.coords()[0], q.coords()[1]).unwrap();
     crate::predicates::orient2d(&p(a), &p(b), &p(c)) as i32
 }
+
+/// A vertex of one face on an undivided edge of its neighbour (a T-junction, as independent
+/// face tessellations leave where a face is split) is closed by splitting that edge.
+#[test]
+fn t_junctions_are_closed() {
+    let (mut p, mut t, mut f) = cube([0.0; 3], 1.0);
+    // Edge 0–2 (x = 0, z = 0) gets a vertex at its middle on the x = 0 side only.
+    let m = p.len() as u32;
+    p.push([0.0, 0.5, 0.0]);
+    let i = t.iter().position(|x| *x == [0, 6, 2]).unwrap();
+    t[i] = [0, 6, m];
+    t.push([m, 6, 2]);
+    f.push(f[i]);
+    let (sp, st, sf) = soup(&(p, t, f));
+    let s = BoundarySurface::new(&sp, &st, &sf, &SurfaceOptions { weld_tolerance: 0.0, weld_distance: 1e-9, feature_angle: 30.0 }).unwrap();
+    assert!((s.volume() - 1.0).abs() < 1e-12, "{}", s.volume());
+    assert_eq!(s.triangles().len(), 14);
+    // Without a weld distance nothing is split, and the open edge is reported.
+    assert!(BoundarySurface::new(&sp, &st, &sf, &SurfaceOptions { weld_tolerance: 0.0, weld_distance: 0.0, feature_angle: 30.0 }).is_err());
+}

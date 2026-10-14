@@ -531,7 +531,7 @@ impl<'a> Plane<'a> {
             Self::thermal_forces(&d2, thermal, &self.points()?, None, self.ty.nodes).0
         };
         fu.resize(n, 0.0);
-        Ok(fu.chunks_exact(2).map(|c| [c.first().copied().unwrap_or(0.0), c.get(1).copied().unwrap_or(0.0)]).collect())
+        Ok(fu.as_chunks::<2>().0.to_vec())
     }
 
     /// Strain and stress at every integration point for the nodal displacements `u` (u, v).

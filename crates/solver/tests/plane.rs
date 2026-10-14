@@ -592,7 +592,7 @@ fn thermal_expansion_in_every_theory() {
         for section in [SectionKind::PlaneStress { thickness: 0.5 }, SectionKind::PlaneStrain { thickness: 0.5 }, SectionKind::Axisymmetric {}] {
             let axisymmetric = matches!(section, SectionKind::Axisymmetric {});
             let mut g = grid([2, 2], kind, |p| [0.5 + 2.0 * p[0] + 0.2 * p[1], p[1]]);
-            g.define(section.clone(), e, nu, None, f, Procedure::Static {});
+            g.define(section, e, nu, None, f, Procedure::Static {});
             heat(&mut g, alpha, dt);
             g.symmetry("bottom", Symmetry::Y, |p| near(p[1], 0.0) && near(p[0], 0.0));
             if !axisymmetric {

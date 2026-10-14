@@ -61,7 +61,7 @@ fn button_style(t: &Tokens) -> IconButtonStyle {
     }
 }
 
-/// ModelCraft's mark: the application icon's bracket (`assets/app-icon/icon-small.svg`) drawn in
+/// FieldCraft's mark: the application icon's bracket (`assets/app-icon/icon-small.svg`) drawn in
 /// code from the SVG's own coordinates, without its tile, each face in the middle of its gradient.
 fn mark(p: &egui::Painter, c: egui::Pos2) {
     // The bracket spans y 141–883 in the SVG; draw it 22 points tall around its centre.
@@ -142,7 +142,7 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
     let style = button_style(&t);
     let mut anchors: Vec<(Quick, Rect)> = Vec::new();
-    egui::Panel::top("mc_appbar").exact_size(HEIGHT).show_separator_line(false).frame(egui::Frame::NONE.fill(t.app_bar)).show(ui, |ui| {
+    egui::Panel::top("fc_appbar").exact_size(HEIGHT).show_separator_line(false).frame(egui::Frame::NONE.fill(t.app_bar)).show(ui, |ui| {
         let r = ui.max_rect();
         app.place("app_bar", r);
         if app.custom_titlebar || app.integrated_titlebar {
@@ -154,7 +154,7 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
         let lay = bar_layout(r, app.integrated_titlebar && !fullscreen(ui.ctx()), captions, version_w);
         mark(ui.painter(), lay.mark);
         if let Some(at) = lay.name {
-            ui.painter().text(at, Align2::LEFT_CENTER, "ModelCraft", FontId::proportional(14.0), t.app_bar_text);
+            ui.painter().text(at, Align2::LEFT_CENTER, "FieldCraft", FontId::proportional(14.0), t.app_bar_text);
         }
         let (undo, redo) = app.session.undo_depth();
         let busy = app.busy().is_some();
@@ -185,7 +185,7 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
         }
         // Solve: the one prominent action, a filled button with its label.
         let solve = lay.solve;
-        let resp = ui.interact(solve, ui.id().with("mc_solve"), Sense::click());
+        let resp = ui.interact(solve, ui.id().with("fc_solve"), Sense::click());
         let can = !app.session.model.steps().is_empty() && !busy;
         let fill = if resp.hovered() && can {
             t.accent.gamma_multiply(1.15)
@@ -230,7 +230,7 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
         if tab_w > 40.0 {
             let tab = Rect::from_min_size(pos2(tab_x, r.top() + 5.0), vec2(tab_w, r.height() - 5.0));
             let path = app.session.path.clone();
-            craft_ui::tabs::Tab::new(egui::Id::new("mc_document_tab"), &label, true).show_at(ui, tab, |ui, resp| {
+            craft_ui::tabs::Tab::new(egui::Id::new("fc_document_tab"), &label, true).show_at(ui, tab, |ui, resp| {
                 ui.painter().rect_filled(tab, CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 }, t.toolbar);
                 let clip = tab.shrink2(vec2(10.0, 0.0));
                 ui.painter().with_clip_rect(clip).text(
@@ -297,7 +297,7 @@ fn quick_button(
     selected: bool,
 ) -> bool {
     let resp = ui
-        .scope_builder(egui::UiBuilder::new().max_rect(rect).id_salt(("mc_quick", key)), |ui| {
+        .scope_builder(egui::UiBuilder::new().max_rect(rect).id_salt(("fc_quick", key)), |ui| {
             ui.add_enabled_ui(enabled, |ui| {
                 IconButton::new(tip, rect.size(), style).selected(selected).show(ui, |_, _, _| {}).on_hover_text(tip).on_disabled_hover_text(tip)
             })
@@ -326,7 +326,7 @@ fn help_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
     ui.label("Left drag orbits (or pans or zooms: the navigation bar), right or middle drag pans, the wheel zooms, F or a double click fits.");
     ui.label(format!("S or {} searches every command; the command line at the bottom runs `id {{json}}`.", shortcut("K")));
     ui.separator();
-    ui.label(egui::RichText::new(format!("ModelCraft {}", crate::VERSION)).color(t.text_dim));
+    ui.label(egui::RichText::new(format!("FieldCraft {}", crate::VERSION)).color(t.text_dim));
     if let Some(n) = open {
         app.ui.menu = None;
         app.open_sample(n);

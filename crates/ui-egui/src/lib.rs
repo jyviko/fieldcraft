@@ -1,6 +1,6 @@
-//! The ModelCraft egui front end.
+//! The FieldCraft egui front end.
 //!
-//! A thin shell over [`modelcraft_engine::Session`]: panels read engine state and act through
+//! A thin shell over [`fieldcraft_engine::Session`]: panels read engine state and act through
 //! commands ([`ModelApp::run`]); nothing here owns model data. The window follows the Craft
 //! family's layout (SolidCraft, VectorCraft):
 //!
@@ -45,9 +45,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
-use modelcraft_engine::Session;
-use modelcraft_engine::catalogue::{self, Tab, Workspace};
-use modelcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView};
+use fieldcraft_engine::Session;
+use fieldcraft_engine::catalogue::{self, Tab, Workspace};
+use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -185,9 +185,9 @@ struct PlotKey {
     /// The result's identity: every solve stores a new one.
     result: usize,
     current: bool,
-    view: modelcraft_engine::results::ResultsView,
+    view: fieldcraft_engine::results::ResultsView,
     /// The mode and field frame drawn (an animated explicit step changes frames).
-    pick: modelcraft_engine::results::Pick,
+    pick: fieldcraft_engine::results::Pick,
     frame: Option<u64>,
 }
 
@@ -227,7 +227,7 @@ pub struct ModelApp {
     /// Whether results were shown last frame (the Results tab comes up when they appear).
     results_shown: bool,
     /// Tessellated design bodies, kept while the same design is open.
-    bodies: (Option<Arc<modelcraft_geometry::Design>>, Vec<modelcraft_geometry::SurfaceMesh>),
+    bodies: (Option<Arc<fieldcraft_geometry::Design>>, Vec<fieldcraft_geometry::SurfaceMesh>),
     /// The frame-independent part of the results plot (scale, contour) and what it was built for.
     prepared: (Option<PlotKey>, results::Prepared),
     /// The built scene and its key.
@@ -274,7 +274,7 @@ pub struct ModelApp {
     /// The timeline's items and the journal state they were built for.
     timeline: Option<((u64, usize, (usize, usize)), std::sync::Arc<Vec<timeline::Item>>)>,
     /// The browser's element counts and the model revision they were counted at.
-    element_counts: Option<(u64, Vec<(modelcraft_model::ElementKind, usize)>)>,
+    element_counts: Option<(u64, Vec<(fieldcraft_model::ElementKind, usize)>)>,
     /// The selected definition's property rows and what they were read for.
     properties: Option<((u64, browser::Def, String), std::sync::Arc<Vec<(String, String)>>)>,
     /// The search's query and its results.
@@ -415,7 +415,7 @@ impl ModelApp {
             },
             None => (id, json!({})),
         };
-        let spec = modelcraft_engine::find_command(command).ok_or_else(|| format!("unknown command `{command}`"))?;
+        let spec = fieldcraft_engine::find_command(command).ok_or_else(|| format!("unknown command `{command}`"))?;
         if self.file_action(spec.id, &preset, interactive) {
             self.dialog = None;
             return Ok(());
@@ -432,7 +432,7 @@ impl ModelApp {
 
     /// Open a command's parameter form with `params` filled in.
     pub fn open_form(&mut self, command: &str, params: Value) {
-        if let Some(spec) = modelcraft_engine::find_command(command) {
+        if let Some(spec) = fieldcraft_engine::find_command(command) {
             self.dialog = Some(ParamsDialog { command: spec.id, text: params.to_string(), error: None });
         }
     }
@@ -472,7 +472,7 @@ impl ModelApp {
         let triple = |v: [f64; 3]| format!("{}, {}, {}", results::number(v[0]), results::number(v[1]), results::number(v[2]));
         let mut lines = vec![format!("Node {node}")];
         if let Some(u) = vector("displacement") {
-            lines.push(format!("U {}  |U| {}", triple(u), results::number(modelcraft_engine::results::magnitude(u))));
+            lines.push(format!("U {}  |U| {}", triple(u), results::number(fieldcraft_engine::results::magnitude(u))));
         }
         if let Some(rf) = vector("reaction").filter(|r| r.iter().any(|c| *c != 0.0)) {
             lines.push(format!("RF {}", triple(rf)));
@@ -481,13 +481,13 @@ impl ModelApp {
             lines.push(format!("Von Mises {}", results::number(m)));
         }
         if let Some(v) = vector("velocity") {
-            lines.push(format!("V {}  |V| {}", triple(v), results::number(modelcraft_engine::results::magnitude(v))));
+            lines.push(format!("V {}  |V| {}", triple(v), results::number(fieldcraft_engine::results::magnitude(v))));
         }
         if let Some(shape) = vector("shape") {
             lines.push(format!("Mode {} shape {}", pick.mode, triple(shape)));
         }
         let contour = self.plot().and_then(|p| p.contour.as_ref().map(|c| (c.field, c.at(p.result.nodes(), node))));
-        if let Some((field, v)) = contour.filter(|(f, _)| *f != modelcraft_engine::results::Field::VonMises) {
+        if let Some((field, v)) = contour.filter(|(f, _)| *f != fieldcraft_engine::results::Field::VonMises) {
             lines.push(format!("{} {}", field.label(), results::number(v)));
         }
         self.set_status(lines.join("   "), false);
@@ -615,10 +615,10 @@ impl ModelApp {
     }
 
     /// A CPU render of the viewport's scene with the current camera, as PNG bytes.
-    pub fn render_png(&mut self, w: usize, h: usize) -> Result<Vec<u8>, modelcraft_render::RenderError> {
+    pub fn render_png(&mut self, w: usize, h: usize) -> Result<Vec<u8>, fieldcraft_render::RenderError> {
         let cam = self.cam;
         let (_, scene) = self.scene();
-        modelcraft_render::render_png(scene, &cam, w, h)
+        fieldcraft_render::render_png(scene, &cam, w, h)
     }
 
     /// Frame the whole model.
@@ -850,12 +850,12 @@ const PERSPECTIVE_FOV: f64 = 0.6;
 
 /// A command's name as people see it (its label).
 pub fn command_label(id: &str) -> &str {
-    modelcraft_engine::find_command(id).map_or(id, |c| c.label)
+    fieldcraft_engine::find_command(id).map_or(id, |c| c.label)
 }
 
 #[cfg(test)]
 mod tests {
-    use modelcraft_render::Vec3;
+    use fieldcraft_render::Vec3;
 
     use super::*;
 
@@ -910,7 +910,7 @@ mod tests {
     #[test]
     fn the_sample_fills_the_view_and_renders() {
         let mut app = ModelApp::new(Session::default());
-        app.run_script(&modelcraft_engine::sample::script()).unwrap();
+        app.run_script(&fieldcraft_engine::sample::script()).unwrap();
         let d = app.display().clone();
         assert!(!d.tris.is_empty() && !d.edges.is_empty());
         // Fitted: the model's centre is the camera target.
@@ -921,10 +921,10 @@ mod tests {
 
     #[test]
     fn the_open_design_and_imported_surfaces_are_drawn() {
-        let dir = std::env::temp_dir().join(format!("modelcraft-ui-design-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("fieldcraft-ui-design-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let design = dir.join("plate.solidcraft");
-        let bytes = modelcraft_geometry::sample::plate_design(&modelcraft_geometry::sample::Plate::default()).unwrap();
+        let bytes = fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap();
         std::fs::write(&design, bytes).unwrap();
         let mut app = ModelApp::new(Session::default());
         app.run("geometry.open", json!({"path": design.to_string_lossy()})).unwrap();
@@ -952,17 +952,17 @@ mod tests {
     #[test]
     fn solving_shows_the_result_on_the_results_tab() {
         let mut app = ModelApp::new(Session::default());
-        app.run_script(&modelcraft_engine::sample::cantilever()).unwrap();
+        app.run_script(&fieldcraft_engine::sample::cantilever()).unwrap();
         app.start("solve.static").unwrap();
         app.run_dialog().unwrap();
         let view = app.session.results_view.clone().unwrap();
-        assert_eq!((view.step.as_str(), view.contour, view.deformed), ("Load", Some(modelcraft_engine::results::Field::VonMises), true));
+        assert_eq!((view.step.as_str(), view.contour, view.deformed), ("Load", Some(fieldcraft_engine::results::Field::VonMises), true));
         app.logic(&egui::Context::default());
         assert_eq!(app.ui.tab, Tab::Results);
         app.run("solve.frequency", json!({})).unwrap();
         app.run("results.deformed", json!({"step": "Modes"})).unwrap();
         let view = app.session.results_view.clone().unwrap();
-        assert_eq!((view.step.as_str(), view.mode, view.contour), ("Modes", 1, Some(modelcraft_engine::results::Field::Displacement)));
+        assert_eq!((view.step.as_str(), view.mode, view.contour), ("Modes", 1, Some(fieldcraft_engine::results::Field::Displacement)));
         // The plot draws contour bands: more triangles than the model's faces.
         let faces = app.display().tris.len();
         assert!(app.scene().1.tris.len() > faces);
@@ -984,7 +984,7 @@ mod tests {
         let (w, h) = (400, 200);
         let cam = app.cam;
         let radius = app.scene().1.radius;
-        let canvas = modelcraft_render::render(app.scene().1, &cam, w, h).unwrap();
+        let canvas = fieldcraft_render::render(app.scene().1, &cam, w, h).unwrap();
         let pixel = |p: Vec3| {
             let (x, y, _) = cam.to_screen(p, w as f64, h as f64, radius).unwrap();
             let i = (y as usize * w + x as usize) * 4;
@@ -1027,13 +1027,13 @@ mod tests {
     #[test]
     fn explicit_frames_are_drawn_and_animated() {
         let mut app = ModelApp::new(Session::default());
-        app.run_script(&modelcraft_engine::sample::impact()).unwrap();
+        app.run_script(&fieldcraft_engine::sample::impact()).unwrap();
         app.run("solve.explicit", json!({})).unwrap();
         // The last frame at true scale: the bar has moved back off the wall's side (x < 0 is
         // the wall, so nothing passes it) and carries stress contours.
         let last = app.plot().unwrap();
         assert_eq!(last.frame().map(|(k, _, n)| (k, n)), Some((10, 11)));
-        assert!(last.contour.as_ref().is_some_and(|c| c.field == modelcraft_engine::results::Field::VonMises));
+        assert!(last.contour.as_ref().is_some_and(|c| c.field == fieldcraft_engine::results::Field::VonMises));
         assert!(last.display.bounds.min.x > -1e-6, "{:?}", last.display.bounds);
         // Frame 0 is the undeformed bar at rest on its initial velocity.
         app.run("results.frame", json!({"frame": 0})).unwrap();

@@ -1172,6 +1172,209 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 
 [[package]]
+name = "fieldcraft"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "fieldcraft-engine",
+ "fieldcraft-io",
+ "fieldcraft-ui-egui",
+ "log",
+ "rfd",
+ "serde_json",
+]
+
+[[package]]
+name = "fieldcraft-cli"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-engine",
+ "fieldcraft-io",
+ "fieldcraft-mcp",
+ "serde_json",
+]
+
+[[package]]
+name = "fieldcraft-decks"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-model",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "fieldcraft-engine"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-decks",
+ "fieldcraft-explicit",
+ "fieldcraft-fem",
+ "fieldcraft-geometry",
+ "fieldcraft-io",
+ "fieldcraft-lbm",
+ "fieldcraft-mesh",
+ "fieldcraft-model",
+ "fieldcraft-parallel",
+ "fieldcraft-render",
+ "fieldcraft-solver",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
+name = "fieldcraft-explicit"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-fem",
+ "fieldcraft-model",
+ "fieldcraft-parallel",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "fieldcraft-fem"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-model",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "fieldcraft-geometry"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-model",
+ "quick-xml",
+ "serde_json",
+ "solidcraft-doc",
+ "solidcraft-engine",
+ "solidcraft-geom",
+ "solidcraft-io",
+ "solidcraft-kernel",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
+name = "fieldcraft-io"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-model",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
+name = "fieldcraft-lbm"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-mesh",
+ "fieldcraft-model",
+ "fieldcraft-parallel",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "fieldcraft-mcp"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-engine",
+ "fieldcraft-io",
+ "fieldcraft-render",
+ "fieldcraft-testkit",
+ "serde_json",
+]
+
+[[package]]
+name = "fieldcraft-mesh"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-model",
+ "num-bigint",
+ "num-rational",
+ "num-traits",
+ "robust",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "fieldcraft-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "fieldcraft-parallel"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
+name = "fieldcraft-render"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-model",
+ "png",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fieldcraft-solver"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-fem",
+ "fieldcraft-model",
+ "fieldcraft-parallel",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "fieldcraft-testkit"
+version = "0.1.0"
+dependencies = [
+ "fieldcraft-engine",
+ "fieldcraft-geometry",
+ "fieldcraft-mesh",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "fieldcraft-ui-egui"
+version = "0.1.0"
+dependencies = [
+ "craft-ui",
+ "egui",
+ "egui-wgpu",
+ "fieldcraft-decks",
+ "fieldcraft-engine",
+ "fieldcraft-explicit",
+ "fieldcraft-geometry",
+ "fieldcraft-model",
+ "fieldcraft-render",
+ "log",
+ "resvg",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1853,209 +2056,6 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
-]
-
-[[package]]
-name = "modelcraft"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "log",
- "modelcraft-engine",
- "modelcraft-io",
- "modelcraft-ui-egui",
- "rfd",
- "serde_json",
-]
-
-[[package]]
-name = "modelcraft-cli"
-version = "0.1.0"
-dependencies = [
- "modelcraft-engine",
- "modelcraft-io",
- "modelcraft-mcp",
- "serde_json",
-]
-
-[[package]]
-name = "modelcraft-decks"
-version = "0.1.0"
-dependencies = [
- "modelcraft-model",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "modelcraft-engine"
-version = "0.1.0"
-dependencies = [
- "log",
- "modelcraft-decks",
- "modelcraft-explicit",
- "modelcraft-fem",
- "modelcraft-geometry",
- "modelcraft-io",
- "modelcraft-lbm",
- "modelcraft-mesh",
- "modelcraft-model",
- "modelcraft-parallel",
- "modelcraft-render",
- "modelcraft-solver",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "zip",
-]
-
-[[package]]
-name = "modelcraft-explicit"
-version = "0.1.0"
-dependencies = [
- "modelcraft-fem",
- "modelcraft-model",
- "modelcraft-parallel",
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "modelcraft-fem"
-version = "0.1.0"
-dependencies = [
- "modelcraft-model",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "modelcraft-geometry"
-version = "0.1.0"
-dependencies = [
- "modelcraft-model",
- "quick-xml",
- "serde_json",
- "solidcraft-doc",
- "solidcraft-engine",
- "solidcraft-geom",
- "solidcraft-io",
- "solidcraft-kernel",
- "thiserror 2.0.21",
- "zip",
-]
-
-[[package]]
-name = "modelcraft-io"
-version = "0.1.0"
-dependencies = [
- "log",
- "modelcraft-model",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.21",
- "zip",
-]
-
-[[package]]
-name = "modelcraft-lbm"
-version = "0.1.0"
-dependencies = [
- "modelcraft-mesh",
- "modelcraft-model",
- "modelcraft-parallel",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "modelcraft-mcp"
-version = "0.1.0"
-dependencies = [
- "modelcraft-engine",
- "modelcraft-io",
- "modelcraft-render",
- "modelcraft-testkit",
- "serde_json",
-]
-
-[[package]]
-name = "modelcraft-mesh"
-version = "0.1.0"
-dependencies = [
- "modelcraft-model",
- "num-bigint",
- "num-rational",
- "num-traits",
- "robust",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "modelcraft-model"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "modelcraft-parallel"
-version = "0.1.0"
-dependencies = [
- "rayon",
-]
-
-[[package]]
-name = "modelcraft-render"
-version = "0.1.0"
-dependencies = [
- "modelcraft-model",
- "png",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "modelcraft-solver"
-version = "0.1.0"
-dependencies = [
- "modelcraft-fem",
- "modelcraft-model",
- "modelcraft-parallel",
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "modelcraft-testkit"
-version = "0.1.0"
-dependencies = [
- "modelcraft-engine",
- "modelcraft-geometry",
- "modelcraft-mesh",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "modelcraft-ui-egui"
-version = "0.1.0"
-dependencies = [
- "craft-ui",
- "egui",
- "egui-wgpu",
- "log",
- "modelcraft-decks",
- "modelcraft-engine",
- "modelcraft-explicit",
- "modelcraft-geometry",
- "modelcraft-model",
- "modelcraft-render",
- "resvg",
- "serde",
- "serde_json",
 ]
 
 [[package]]

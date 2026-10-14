@@ -14,9 +14,9 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use modelcraft_geometry::Design;
-use modelcraft_geometry::tagged_mesh::TaggedSurface;
-use modelcraft_model::Model;
+use fieldcraft_geometry::Design;
+use fieldcraft_geometry::tagged_mesh::TaggedSurface;
+use fieldcraft_model::Model;
 use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
@@ -44,7 +44,7 @@ pub(crate) struct State {
     model: Model,
     design: Option<Arc<Design>>,
     surfaces: Vec<Arc<TaggedSurface>>,
-    sources: modelcraft_io::Geometry,
+    sources: fieldcraft_io::Geometry,
     revision: u64,
 }
 

@@ -51,9 +51,9 @@
 
 use std::collections::BTreeMap;
 
-use modelcraft_fem::dense::inverse3;
-use modelcraft_fem::{DofKind, DofSet};
-use modelcraft_model::{CouplingKind, Model, Resolved};
+use fieldcraft_fem::dense::inverse3;
+use fieldcraft_fem::{DofKind, DofSet};
+use fieldcraft_model::{CouplingKind, Model, Resolved};
 
 use crate::sparse::Csr;
 use crate::system::Mesh;

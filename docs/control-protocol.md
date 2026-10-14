@@ -1,13 +1,13 @@
 # Control protocol
 
-`modelcraft --control PORT` (or `MODELCRAFT_CONTROL_PORT=PORT`) listens on `127.0.0.1:PORT` for
+`fieldcraft --control PORT` (or `FIELDCRAFT_CONTROL_PORT=PORT`) listens on `127.0.0.1:PORT` for
 JSON lines. Each request is one line `{"id": …, "method": "…", "params": {…}}`; each reply is one
 line `{"id": …, "ok": true, "result": …}` or `{"id": …, "ok": false, "error": "…"}`. Requests are
 handled on the UI thread between frames; pointer and keyboard input is injected as real egui
 events, one pointer event per frame. The protocol has the same shape as SolidCraft's.
 
 ```text
-modelcraft --sample --control 7070          # or --sample cantilever | impact
+fieldcraft --sample --control 7070          # or --sample cantilever | impact
 {"id":1,"method":"engine.execute","params":{"command":"model.info","params":{}}}
 → {"id":1,"ok":true,"result":{"elements":{"hex8":64,"tet4":162},"nodes":199}}
 {"id":2,"method":"ui.render","params":{"path":"/tmp/model.png","width":900,"height":600}}
@@ -28,7 +28,7 @@ checked and clamped (drag steps, wheel lines, window size); `ui.render` refuses 
 | `engine.script` | `commands`: `[{command, params}, …]` | stops at the first error; `journal`: commands that changed the model so far |
 | `engine.commands` | — | every command: `id`, `label`, `params` (the parameter documentation) |
 
-Commands never open forms or file pickers when run this way. `modelcraft-cli commands` prints the
+Commands never open forms or file pickers when run this way. `fieldcraft-cli commands` prints the
 same registry. `file.sample {name}` opens a sample (`parts`, `cantilever`, `impact`) and
 `solve.run {}` solves every step; the Results workspace comes up when a result appears.
 
@@ -53,8 +53,8 @@ same registry. `file.sample {name}` opens a sample (`parts`, `cantilever`, `impa
 | `ui.worldToScreen` | `points`: `[[x, y, z]…]` (at most 1000) | screen points in the viewport drawn last frame (null when not on screen) |
 | `ui.resize` | `width`, `height` | window inner size in points |
 | `ui.fullscreen` | `on?` (default true) | into or out of full screen; on macOS the title bar's left group moves into the traffic lights' room while there are none |
-| `ui.screenshot` | `path?` | PNG of the window, taken a few frames later; waits for a presented frame; when none comes within 8 seconds (a hidden window, a locked screen) it answers with `ui.capture`'s offscreen picture (`"offscreen": true`). Without `path`: `modelcraft-shot.png` in the temporary folder |
-| `ui.capture` | `path?`, `width?`, `height?` (points; default the window's), `scale?` (pixels per point, 0.5–4; default the window's) | PNG of the whole window (title bar, ribbon, open menus and search, panels, forms and the viewport) drawn offscreen, without fade-in animations: the UI pass runs in a separate egui context and is rasterised on the CPU, so it works with the window hidden, minimised or the screen locked. At most 8192 pixels a side and 16 megapixels. Without `path`: `modelcraft-shot.png` in the temporary folder |
+| `ui.screenshot` | `path?` | PNG of the window, taken a few frames later; waits for a presented frame; when none comes within 8 seconds (a hidden window, a locked screen) it answers with `ui.capture`'s offscreen picture (`"offscreen": true`). Without `path`: `fieldcraft-shot.png` in the temporary folder |
+| `ui.capture` | `path?`, `width?`, `height?` (points; default the window's), `scale?` (pixels per point, 0.5–4; default the window's) | PNG of the whole window (title bar, ribbon, open menus and search, panels, forms and the viewport) drawn offscreen, without fade-in animations: the UI pass runs in a separate egui context and is rasterised on the CPU, so it works with the window hidden, minimised or the screen locked. At most 8192 pixels a side and 16 megapixels. Without `path`: `fieldcraft-shot.png` in the temporary folder |
 | `ui.render` | `path`, `width?` (default 1280), `height?` (default 800): whole pixels, each 1–8192 and at most 16 megapixels in all | CPU render of the model with the current camera and view settings (no window or GPU needed). A size out of range, or a scene over 20 million primitives, is an error |
 | `app.quit` | — | closes the window |
 

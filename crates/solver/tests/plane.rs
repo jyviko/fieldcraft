@@ -6,11 +6,11 @@
 use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
-use modelcraft_model::{
+use fieldcraft_model::{
     BoundaryCondition, Elastic, ElementEdge, ElementKind, Formulation, Integration, Load, Material, Model, Procedure, Section, SectionKind, Set,
     Step, Symmetry, Target,
 };
-use modelcraft_solver::{FrequencyOptions, Limits, StaticResult, solve_frequency, solve_static};
+use fieldcraft_solver::{FrequencyOptions, Limits, StaticResult, solve_frequency, solve_static};
 
 /// A structured 2D mesh of `n` cells on [0, 1]², mapped by `map`; nodes on the doubled lattice so
 /// quadratic elements take their mid-side nodes from the map.
@@ -540,15 +540,15 @@ fn two_dimensional_results_are_deterministic_and_errors_name_the_problem() {
     assert_eq!(g.solve(), g.solve());
     // A coupling is not supported in 2D yet.
     let mut g = make();
-    g.model.add_reference_point("RP", modelcraft_model::ReferencePoint { xyz: [0.0, 2.0, 0.0], label: 0 }).unwrap();
+    g.model.add_reference_point("RP", fieldcraft_model::ReferencePoint { xyz: [0.0, 2.0, 0.0], label: 0 }).unwrap();
     g.model
         .add_coupling(
             "c",
-            modelcraft_model::Coupling {
+            fieldcraft_model::Coupling {
                 reference_point: "RP".into(),
                 set: "bottom".into(),
-                kind: modelcraft_model::CouplingKind::Kinematic,
-                dofs: modelcraft_model::Dofs::all(),
+                kind: fieldcraft_model::CouplingKind::Kinematic,
+                dofs: fieldcraft_model::Dofs::all(),
             },
         )
         .unwrap();
@@ -571,8 +571,8 @@ fn two_dimensional_results_are_deterministic_and_errors_name_the_problem() {
 /// Give the material an expansion coefficient and heat every node by `dt` above the reference.
 fn heat(g: &mut Grid, alpha: f64, dt: f64) {
     let mut m = g.model.material("Mat").unwrap().clone();
-    m.thermal = Some(modelcraft_model::Thermal {
-        expansion: Some(modelcraft_model::Directional::Isotropic(alpha)),
+    m.thermal = Some(fieldcraft_model::Thermal {
+        expansion: Some(fieldcraft_model::Directional::Isotropic(alpha)),
         reference_temperature: 20.0,
         ..Default::default()
     });

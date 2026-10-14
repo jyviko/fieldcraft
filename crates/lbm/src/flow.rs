@@ -36,9 +36,9 @@
 //! only its own populations; the wall forces are summed in link order. There are no parallel
 //! reductions, so the result is the same bit for bit on any number of threads and platform.
 
-use modelcraft_model::{BoxFace, FaceCondition, Profile};
+use fieldcraft_model::{BoxFace, FaceCondition, Profile};
 
-use modelcraft_parallel as parallel;
+use fieldcraft_parallel as parallel;
 
 use crate::lattice::{C, Q, W, c, equilibrium, moving_wall, opposite};
 use crate::setup::{MAX_LATTICE_SPEED, Obstacle, Setup};

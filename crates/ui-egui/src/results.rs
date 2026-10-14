@@ -1,17 +1,17 @@
 //! The results display in the viewport: what the engine's [`ResultsView`] asks for, drawn on the
 //! model's display data. The deformed shape moves every element by its nodes' displacements
 //! (or a mode shape) times the scale; contours split the faces into flat-coloured bands
-//! ([`modelcraft_render::contour`]); animation steps the deformation through a fixed number of
+//! ([`fieldcraft_render::contour`]); animation steps the deformation through a fixed number of
 //! frames per cycle (an explicit step's animation runs through its field frames, contours
 //! following). A plot of a stale result (the model changed since the solve) is drawn the
 //! same way and marked.
 
 use std::sync::Arc;
 
-use modelcraft_engine::results::{Field, Kind, Pick, ResultsView, displacements, field_values, magnitude, range};
-use modelcraft_engine::{Session, StepResult};
-use modelcraft_render::contour::{Bands, band_color, split_triangle};
-use modelcraft_render::{DisplayMesh, Scene, SceneTri, Vec3};
+use fieldcraft_engine::results::{Field, Kind, Pick, ResultsView, displacements, field_values, magnitude, range};
+use fieldcraft_engine::{Session, StepResult};
+use fieldcraft_render::contour::{Bands, band_color, split_triangle};
+use fieldcraft_render::{DisplayMesh, Scene, SceneTri, Vec3};
 
 use crate::Style;
 use crate::theme::{Tokens, rgb};
@@ -227,7 +227,7 @@ pub(crate) mod tests {
     /// The sample cantilever, solved (static step `Load`, frequency step `Modes`).
     pub(crate) fn solved_cantilever() -> Session {
         let mut s = Session::default();
-        s.run_script(&modelcraft_engine::sample::cantilever()).unwrap();
+        s.run_script(&fieldcraft_engine::sample::cantilever()).unwrap();
         s.execute("solve.static", &json!({})).unwrap();
         s.execute("solve.frequency", &json!({})).unwrap();
         s

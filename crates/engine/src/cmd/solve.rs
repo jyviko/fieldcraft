@@ -1,12 +1,12 @@
 //! `solve.*`: run the model's steps with the implicit, the explicit or the lattice Boltzmann
 //! solver, keep the results in the session, and read them back.
 
-use modelcraft_explicit::{ExplicitResult, solve_explicit};
-use modelcraft_lbm::{FluidResult, Obstacle};
-use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
-use modelcraft_model::FluidDomain;
-use modelcraft_parallel as parallel;
-use modelcraft_solver::{
+use fieldcraft_explicit::{ExplicitResult, solve_explicit};
+use fieldcraft_lbm::{FluidResult, Obstacle};
+use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
+use fieldcraft_model::FluidDomain;
+use fieldcraft_parallel as parallel;
+use fieldcraft_solver::{
     FrequencyOptions, Limits, Location, MassKind, StaticResult, StepResult as ImplicitResult, solve_frequency, solve_heat, solve_static,
 };
 use serde_json::{Value, json};
@@ -25,7 +25,7 @@ pub const RUN: CommandSpec = CommandSpec {
 pub const STATIC: CommandSpec = CommandSpec {
     id: "solve.static",
     label: "Solve Static Step",
-    params: r#"{"step": "Load", "max_dofs": 6000000, "max_factor_entries": 400000000, "threads": 8} — solves a linear static or coupled temperature–displacement step (the only one when `step` is left out) and keeps the result in the session; the caps may only be lowered; `threads` (1 to 256, by default the session's: `MODELCRAFT_THREADS` or the cores) changes only the time, never the result"#,
+    params: r#"{"step": "Load", "max_dofs": 6000000, "max_factor_entries": 400000000, "threads": 8} — solves a linear static or coupled temperature–displacement step (the only one when `step` is left out) and keeps the result in the session; the caps may only be lowered; `threads` (1 to 256, by default the session's: `FIELDCRAFT_THREADS` or the cores) changes only the time, never the result"#,
     kind: CommandKind::Model,
     run: run_static,
 };
@@ -129,7 +129,7 @@ fn extreme(values: impl Iterator<Item = (u32, f64)>, better: fn(f64, f64) -> boo
 }
 
 fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
-    use modelcraft_model::Procedure;
+    use fieldcraft_model::Procedure;
     type Solve = fn(&mut Session, &Value) -> Result<Value>;
     let steps: Vec<(String, &'static str, Solve)> = s
         .model
@@ -242,7 +242,7 @@ fn run_frequency(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_explicit(s: &mut Session, p: &Value) -> Result<Value> {
-    use modelcraft_explicit::Limits as ExplicitLimits;
+    use fieldcraft_explicit::Limits as ExplicitLimits;
     let limits = ExplicitLimits {
         max_dofs: cap(p, "max_dofs", ExplicitLimits::MAX_DOFS)?,
         max_increments: cap(p, "max_increments", ExplicitLimits::MAX_INCREMENTS)?,
@@ -340,18 +340,18 @@ fn obstacles(s: &Session, domain: &FluidDomain) -> Result<Vec<Obstacle>> {
 }
 
 fn run_fluid(s: &mut Session, p: &Value) -> Result<Value> {
-    let defaults = modelcraft_lbm::Limits::default();
-    let limits = modelcraft_lbm::Limits {
+    let defaults = fieldcraft_lbm::Limits::default();
+    let limits = fieldcraft_lbm::Limits {
         max_cells: cap(p, "max_cells", defaults.max_cells)?,
         max_steps: cap(p, "max_steps", defaults.max_steps)?,
         max_cell_updates: cap(p, "max_cell_updates", defaults.max_cell_updates)?,
         max_frame_bytes: cap(p, "max_frame_bytes", defaults.max_frame_bytes)?,
     };
     let step = opt::<String>(p, "step")?;
-    let (_, domain) = modelcraft_lbm::fluid_step(&s.model, step.as_deref())?;
+    let (_, domain) = fieldcraft_lbm::fluid_step(&s.model, step.as_deref())?;
     let obstacles = obstacles(s, domain)?;
     let model = &s.model;
-    let r = parallel::with_threads(threads(s, p)?, || modelcraft_lbm::solve_fluid(model, step.as_deref(), &obstacles, &limits))?;
+    let r = parallel::with_threads(threads(s, p)?, || fieldcraft_lbm::solve_fluid(model, step.as_deref(), &obstacles, &limits))?;
     let summary = fluid_summary(&r);
     s.store_result(StepResult::Fluid(r));
     Ok(summary)
@@ -475,7 +475,7 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The node with a result nearest to each point (lowest label on a tie), where it is and how far.
-fn nearest_nodes(model: &modelcraft_model::Model, with_result: &[u32], at: &[[f64; 3]]) -> Result<Vec<(u32, [f64; 3], f64)>> {
+fn nearest_nodes(model: &fieldcraft_model::Model, with_result: &[u32], at: &[[f64; 3]]) -> Result<Vec<(u32, [f64; 3], f64)>> {
     let candidates: Vec<(u32, [f64; 3])> = with_result.iter().filter_map(|&l| Some((l, model.node(l)?.xyz))).collect();
     at.iter()
         .map(|p| {
@@ -604,7 +604,7 @@ fn probe_frame(r: &ExplicitResult, step: &str, nodes: &[u32], elements: &[u32], 
             Ok(json!({
                 "element": l,
                 "stress": f.stress.get(i),
-                "von_mises": f.stress.get(i).map(modelcraft_fem::von_mises),
+                "von_mises": f.stress.get(i).map(fieldcraft_fem::von_mises),
                 "strain": f.strain.get(i),
                 "plastic_strain": f.plastic_strain.get(i),
                 "damage": f.damage.get(i),
@@ -855,8 +855,8 @@ pub(crate) mod tests {
 
     #[test]
     fn a_fluid_domain_takes_its_obstacles_from_the_open_design() {
-        use modelcraft_geometry::sample::{Plate, plate_design};
-        let dir = std::env::temp_dir().join(format!("modelcraft-fluid-{}", std::process::id()));
+        use fieldcraft_geometry::sample::{Plate, plate_design};
+        let dir = std::env::temp_dir().join(format!("fieldcraft-fluid-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("plate.solidcraft");
         std::fs::write(&path, plate_design(&Plate::default()).unwrap()).unwrap();
@@ -965,7 +965,7 @@ pub(crate) mod tests {
     /// ρ = 1, clamped at x = 0; one node set per cross-section (`x0`, `x1`, …) and the tip's
     /// corner node `tip`; a frequency step `Modes` and the section `beam`.
     fn explicit_cantilever(s: &mut Session, length: f64, n: [usize; 2]) {
-        use modelcraft_model::{ElementKind, Set};
+        use fieldcraft_model::{ElementKind, Set};
         let [nx, ny] = n;
         let label = |i: usize, j: usize, k: usize| (1 + i + (nx + 1) * (j + (ny + 1) * k)) as u32;
         for k in 0..=ny {

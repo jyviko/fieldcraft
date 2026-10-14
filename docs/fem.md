@@ -39,13 +39,13 @@ Lookups: `node(label)` / `slot(label)` (a slot is a position: mesh nodes `0..nod
 `point_slot(k)`), `dof(slot, kind)`, `range(slot)`, `kinds(slot)`, `locate(dof) -> (slot,
 kind)`, `element_dofs(slots, kinds)`, `describe(dof)`, `stride()` (uniform layouts).
 
-Trusses declare `modelcraft_fem::truss::DOFS` (translations, on `Basis::Line2`/`Line3`).
+Trusses declare `fieldcraft_fem::truss::DOFS` (translations, on `Basis::Line2`/`Line3`).
 Point masses, springs and dashpots are not mesh elements: the implicit solver asks the layout
-for what each needs at its nodes (`modelcraft_solver::discrete::needs`: translations for a mass
+for what each needs at its nodes (`fieldcraft_solver::discrete::needs`: translations for a mass
 or a translational spring, rotations for an inertia or a torsional spring; a reference point
 they use is a point with six) and finds its unknowns with `discrete::dof_of`.
 
-Solvers: `modelcraft_solver::system::Mesh::layout` numbers the implicit system (mesh nodes,
+Solvers: `fieldcraft_solver::system::Mesh::layout` numbers the implicit system (mesh nodes,
 then six per coupled reference point); assembly (`sparse::add_block(k, layout, slots, kinds,
 data)`, `add_scalar`, `add_diagonal`) works for any mix of kinds per node, so a solid sharing
 nodes with a shell adds its translation block into the shell nodes' six-unknown blocks.
@@ -108,7 +108,7 @@ A heat conduction element carries one temperature per node (`heat::HEAT_DOFS`, k
 `heat::Conduction` gives the conductivity ∫ ∇Nᵀ k ∇N dV (full rule), the capacity ∫ ρc N Nᵀ dV
 and a source ∫ N Q dV (mass rule), and the heat flux −k∇T at the integration points;
 `heat::face_weights` and `face_film` integrate surface flux and convection on tri3/tri6/quad4/quad8
-faces. The solver (`modelcraft_solver::heat`) numbers the temperatures with
+faces. The solver (`fieldcraft_solver::heat`) numbers the temperatures with
 `DofLayout::uniform(…, DofSet::TEMPERATURE)` and assembles with the same `sparse::add_block`.
 
 Thermal strain ε_th = α (T − T_ref) along the material axes enters a solid as the load

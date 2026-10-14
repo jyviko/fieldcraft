@@ -16,10 +16,10 @@ It honours `CARGO_TARGET_DIR`.
 
 What it does:
 
-1. Builds `modelcraft`, `modelcraft-cli` and the testkit's `corpus` tool (release).
+1. Builds `fieldcraft`, `fieldcraft-cli` and the testkit's `corpus` tool (release).
 2. Writes the corpus I-beam (`tests/corpus/i-beam`) as a `.solidcraft` design to a temporary
    folder with `corpus --part i-beam --design`.
-3. Starts the app with `--control PORT` and `modelcraft-cli mcp --connect 127.0.0.1:PORT`, and
+3. Starts the app with `--control PORT` and `fieldcraft-cli mcp --connect 127.0.0.1:PORT`, and
    speaks MCP (JSON-RPC over stdio) to it. Every step is an MCP tool call: `open` the design,
    `mesh` (`hex_sweep`, 4 mm), `batch` (steel, a solid section, the root clamp, a kinematic
    coupling of the free end to a reference point loaded with 1000 N), `check_model`, `solve`

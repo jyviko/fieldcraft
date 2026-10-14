@@ -1,9 +1,9 @@
-//! `.modelcraft` files: round trips, stable bytes and hostile files.
+//! `.fieldcraft` files: round trips, stable bytes and hostile files.
 
 use std::io::{Cursor, Read, Write};
 
-use modelcraft_io::{Error, Geometry, ModelFile, SourceFile, mesh, read, write};
-use modelcraft_model::{ElementKind, Entity, GeometryRef, Model, UnitSystem};
+use fieldcraft_io::{Error, Geometry, ModelFile, SourceFile, mesh, read, write};
+use fieldcraft_model::{ElementKind, Entity, GeometryRef, Model, UnitSystem};
 use serde_json::{Value, json};
 
 /// A hex and a tet sharing a face, tagged on geometry, with a few definitions.
@@ -71,7 +71,7 @@ fn package(parts: &[(String, Vec<u8>)]) -> Vec<u8> {
 fn with_part(bytes: &[u8], name: &str, new: Vec<u8>) -> Vec<u8> {
     let mut ps = parts(bytes);
     let mut manifest: Value = serde_json::from_slice(&ps[0].1).unwrap();
-    manifest["parts"][name] = json!({"bytes": new.len(), "sha256": modelcraft_io::sha256_hex(&new)});
+    manifest["parts"][name] = json!({"bytes": new.len(), "sha256": fieldcraft_io::sha256_hex(&new)});
     ps[0].1 = serde_json::to_vec(&manifest).unwrap();
     for p in &mut ps {
         if p.0 == name {
@@ -100,10 +100,10 @@ fn round_trip_keeps_everything_and_bytes_are_stable() {
 
     // The parts, in order, all stored as plain bytes.
     let names: Vec<String> = parts(&bytes).into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names, ["modelcraft.json", "model.json", "mesh.bin", "journal.json"]);
+    assert_eq!(names, ["fieldcraft.json", "model.json", "mesh.bin", "journal.json"]);
     let ps = parts(&bytes);
     let manifest: Value = serde_json::from_slice(&ps[0].1).unwrap();
-    assert_eq!(manifest["format"], "modelcraft/1");
+    assert_eq!(manifest["format"], "fieldcraft/1");
     assert_eq!(manifest["geometry"]["design"]["path"], "parts/plate.solidcraft");
     let model_text = String::from_utf8(ps[1].1.clone()).unwrap();
     assert!(model_text.contains("\"Steel\"") && !model_text.contains("\"nodes\""), "{model_text}");
@@ -148,12 +148,12 @@ fn hostile_files_are_refused_cleanly() {
     }
 
     // Not a model file at all.
-    for junk in [&b""[..], b"PK", b"PK\x03\x04garbage", b"{\"format\": \"modelcraft/1\"}", &[0u8; 4096]] {
+    for junk in [&b""[..], b"PK", b"PK\x03\x04garbage", b"{\"format\": \"fieldcraft/1\"}", &[0u8; 4096]] {
         assert!(matches!(read(junk), Err(Error::Invalid(_))), "{junk:?}");
     }
 
     // Wrong and future versions.
-    let v2 = with_manifest(&good, |m| m["format"] = json!("modelcraft/2"));
+    let v2 = with_manifest(&good, |m| m["format"] = json!("fieldcraft/2"));
     assert!(matches!(read(&v2), Err(Error::Version(_))));
     for f in [json!("solidcraft/16"), json!(null), json!(1)] {
         let b = with_manifest(&good, |m| m["format"] = f.clone());

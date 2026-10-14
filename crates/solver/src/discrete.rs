@@ -1,6 +1,6 @@
 //! Point masses, rotary inertia, springs and dashpots in the implicit system.
 //!
-//! The model resolves each definition to its nodes ([`modelcraft_model::Resolved::masses`] and
+//! The model resolves each definition to its nodes ([`fieldcraft_model::Resolved::masses`] and
 //! `springs`); here each copy is turned into global degrees of freedom and its matrix:
 //!
 //! - a point mass adds m_x, m_y, m_z on the node's translations and its inertia tensor J (3 × 3,
@@ -12,11 +12,11 @@
 //! - a dashpot has the same form on velocities; static and frequency steps have no velocities, so
 //!   they ignore dashpots with a warning (damping enters dynamic steps).
 //!
-//! What each copy needs at its nodes ([`needs`]) goes into the mesh's [`modelcraft_fem::DofLayout`]
+//! What each copy needs at its nodes ([`needs`]) goes into the mesh's [`fieldcraft_fem::DofLayout`]
 //! like an element's declared kinds; [`dof_of`] then finds its unknowns there.
 
-use modelcraft_fem::{DofKind, DofSet};
-use modelcraft_model::{Resolved, ResolvedSpring};
+use fieldcraft_fem::{DofKind, DofSet};
+use fieldcraft_model::{Resolved, ResolvedSpring};
 
 use crate::sparse::{Csr, add_entry};
 use crate::system::Mesh;
@@ -103,7 +103,7 @@ impl Discrete {
                 .filter(|d| m.mass[*d] != 0.0 && DofKind::translation(*d).is_some_and(|k| planar.contains(k)))
                 .map(|d| dof_of(mesh, m.node, d).map(|dof| (dof, m.mass[d])).ok_or_else(|| missing("point mass", &m.name, m.node, d)))
                 .collect::<Result<_>>()?;
-            let inertia = modelcraft_model::discrete::inertia_matrix(m.inertia);
+            let inertia = fieldcraft_model::discrete::inertia_matrix(m.inertia);
             let rotations = if m.inertia.iter().any(|c| *c != 0.0) {
                 (3..6).map(|d| dof_of(mesh, m.node, d).ok_or_else(|| missing("point mass", &m.name, m.node, d))).collect::<Result<_>>()?
             } else {

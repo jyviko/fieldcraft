@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-parallel"
-description = "ModelCraft's deterministic data parallelism: fixed work partitions on a thread pool, results independent of the thread count"
+name = "fieldcraft-parallel"
+description = "FieldCraft's deterministic data parallelism: fixed work partitions on a thread pool, results independent of the thread count"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

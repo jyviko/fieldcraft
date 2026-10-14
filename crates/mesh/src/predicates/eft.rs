@@ -3,7 +3,7 @@
 //! Each function returns `(x, y)` with `x = fl(a ∘ b)` and `y` the exact roundoff, so that
 //! `a ∘ b = x + y` exactly. They assume IEEE 754 binary64 with round-to-nearest-even, no
 //! intermediate extended precision and no fused multiply-add contraction; that is what Rust's
-//! `f64` guarantees on every target ModelCraft builds for (x86_64 with SSE2, aarch64, wasm32):
+//! `f64` guarantees on every target FieldCraft builds for (x86_64 with SSE2, aarch64, wasm32):
 //! rustc never contracts `a * b + c` into an FMA and does not use x87. No overflow or underflow
 //! may occur, which the coordinate domain of [`super::Point2`] / [`super::Point3`] guarantees.
 

@@ -1,27 +1,27 @@
-//! modelcraft-cli commands
-//! modelcraft-cli run <script.json>
-//! modelcraft-cli features
-//! modelcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
+//! fieldcraft-cli commands
+//! fieldcraft-cli run <script.json>
+//! fieldcraft-cli features
+//! fieldcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 use std::path::Path;
 use std::process::ExitCode;
 
-use modelcraft_engine::Session;
+use fieldcraft_engine::Session;
 use serde_json::json;
 
 const USAGE: &str = "\
 usage:
-  modelcraft-cli commands              list every command with its parameters
-  modelcraft-cli run <script.json>     run a script (a JSON array of {\"command\", \"params\"})
+  fieldcraft-cli commands              list every command with its parameters
+  fieldcraft-cli run <script.json>     run a script (a JSON array of {\"command\", \"params\"})
                                        and print the model summary
-  modelcraft-cli features              print docs/features.md (every capability, ready or
+  fieldcraft-cli features              print docs/features.md (every capability, ready or
                                        coming soon) from the capability catalogue
-  modelcraft-cli mcp [options]         serve the Model Context Protocol on stdin/stdout
+  fieldcraft-cli mcp [options]         serve the Model Context Protocol on stdin/stdout
                                        (docs/mcp.md):
       --headless                       an in-process session (the default)
-      --connect ADDR                   drive the app at ADDR (`modelcraft --control PORT`);
+      --connect ADDR                   drive the app at ADDR (`fieldcraft --control PORT`);
                                        headless when it cannot be reached
       --automation-read-root DIR       files may be read only inside DIR
       --automation-write-root DIR      files may be written only inside DIR (with either root,
@@ -35,13 +35,13 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("commands") => {
-            for c in modelcraft_engine::commands() {
+            for c in fieldcraft_engine::commands() {
                 println!("{:<24} {:<18} {}", c.id, c.label, c.params);
             }
             Ok(())
         }
         Some("features") => {
-            print!("{}", modelcraft_engine::catalogue::features_page());
+            print!("{}", fieldcraft_engine::catalogue::features_page());
             Ok(())
         }
         Some("mcp") => mcp(args.get(1..).unwrap_or(&[])),
@@ -62,7 +62,7 @@ fn main() -> ExitCode {
 }
 
 /// The `mcp` options: each given once, as `--flag value` or `--flag=value`.
-fn mcp_options(args: &[String]) -> Result<modelcraft_mcp::Options, String> {
+fn mcp_options(args: &[String]) -> Result<fieldcraft_mcp::Options, String> {
     let mut connect = None;
     let mut headless = false;
     let mut read = None;
@@ -94,18 +94,18 @@ fn mcp_options(args: &[String]) -> Result<modelcraft_mcp::Options, String> {
         return Err("--connect and --headless exclude each other".into());
     }
     let roots = match (&read, &write) {
-        (None, None) => modelcraft_io::roots::Roots::default(),
-        _ => modelcraft_io::roots::Roots::new(read.as_deref().map(Path::new), write.as_deref().map(Path::new)).map_err(|e| e.to_string())?,
+        (None, None) => fieldcraft_io::roots::Roots::default(),
+        _ => fieldcraft_io::roots::Roots::new(read.as_deref().map(Path::new), write.as_deref().map(Path::new)).map_err(|e| e.to_string())?,
     };
-    Ok(modelcraft_mcp::Options { connect, roots })
+    Ok(fieldcraft_mcp::Options { connect, roots })
 }
 
 fn mcp(args: &[String]) -> Result<(), String> {
-    let (backend, note) = modelcraft_mcp::backend(mcp_options(args)?)?;
+    let (backend, note) = fieldcraft_mcp::backend(mcp_options(args)?)?;
     if let Some(note) = note {
-        eprintln!("modelcraft-cli mcp: {note}");
+        eprintln!("fieldcraft-cli mcp: {note}");
     }
-    let mut server = modelcraft_mcp::Server::new(backend);
+    let mut server = fieldcraft_mcp::Server::new(backend);
     server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| format!("mcp: {e}"))
 }
 
@@ -127,7 +127,7 @@ fn run(path: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn opts(args: &[&str]) -> Result<modelcraft_mcp::Options, String> {
+    fn opts(args: &[&str]) -> Result<fieldcraft_mcp::Options, String> {
         mcp_options(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     }
 

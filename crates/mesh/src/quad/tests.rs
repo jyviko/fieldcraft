@@ -511,7 +511,7 @@ fn planar_quad_metrics() {
 }
 
 #[test]
-#[ignore = "timing and quality report: cargo test --release -p modelcraft-mesh quad_report -- --ignored --nocapture"]
+#[ignore = "timing and quality report: cargo test --release -p fieldcraft-mesh quad_report -- --ignored --nocapture"]
 fn quad_report() {
     let cases: Vec<(&str, Vec<Vec<[f64; 2]>>, f64)> = vec![
         ("rectangle", vec![rect(0.0, 0.0, 10.0, 5.0, 20, 10)], 0.5),

@@ -3,7 +3,7 @@
 //! - **Trusses** (rod2, rod3), elastic, with lumped (HRZ) mass. With nonlinear geometry a rod2
 //!   is corotational: its strain is (l − L)/L from its current length l and its force acts along
 //!   its current axis (Belytschko et al. 2014, §2.4 and §4.5); a rod3 then is not supported yet.
-//!   Without it the internal force is K u with the kernel's stiffness ([`modelcraft_fem::truss`]).
+//!   Without it the internal force is K u with the kernel's stiffness ([`fieldcraft_fem::truss`]).
 //!   The stress is the uniaxial tensor along the axis (the mean of the integration points'), and
 //!   the critical increment comes from the kernel's frequency bound (exact for rod2: L/c).
 //! - **Point masses** add to the lumped mass of their node, per direction.
@@ -21,10 +21,10 @@
 //!   §6.3), which is 2/D for a dashpot alone. Rotary inertia and rotational springs need
 //!   rotational degrees of freedom, which this solver does not have yet.
 
-use modelcraft_fem::DofKind;
-use modelcraft_fem::dense::Matrix;
-use modelcraft_fem::truss::{Truss, uniaxial};
-use modelcraft_model::{ElementKind, Resolved, ResolvedDirection};
+use fieldcraft_fem::DofKind;
+use fieldcraft_fem::dense::Matrix;
+use fieldcraft_fem::truss::{Truss, uniaxial};
+use fieldcraft_model::{ElementKind, Resolved, ResolvedDirection};
 
 use crate::system::NODE_DOFS;
 use crate::{Error, Result};
@@ -92,7 +92,7 @@ impl Rod {
 
     /// The element's degrees of freedom, node by node.
     pub fn dofs(&self) -> impl Iterator<Item = usize> + '_ {
-        self.nodes.iter().flat_map(|n| modelcraft_fem::truss::DOFS.node.iter().filter_map(DofKind::direction).map(|d| dof(*n, d)))
+        self.nodes.iter().flat_map(|n| fieldcraft_fem::truss::DOFS.node.iter().filter_map(DofKind::direction).map(|d| dof(*n, d)))
     }
 
     /// Add its internal force into `force` and return the element's mean stress and strain

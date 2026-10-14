@@ -1,8 +1,8 @@
 //! Trusses (rod3), point masses, rotary inertia, springs and dashpots in every deck format:
 //! what each writes, and what each reports as unsupported.
 
-use modelcraft_decks::{Error, abaqus, lsdyna, nastran};
-use modelcraft_model::{
+use fieldcraft_decks::{Error, abaqus, lsdyna, nastran};
+use fieldcraft_model::{
     BoundaryCondition, Direction, Elastic, ElementKind, Formulation, Mass, Material, Model, PointMass, Procedure, ReferencePoint, Section,
     SectionKind, Set, Spring, Step, Target, UnitSystem,
 };

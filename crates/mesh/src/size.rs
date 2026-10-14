@@ -68,7 +68,7 @@ fn check_polyline(polyline: &[[f64; 3]]) -> Result<()> {
     if polyline.len() > MAX_POLYLINE_POINTS {
         return Err(Error::Limit(format!("polyline has {} points; the limit is {MAX_POLYLINE_POINTS}", polyline.len())));
     }
-    modelcraft_model::check_coordinates(polyline.as_flattened())?;
+    fieldcraft_model::check_coordinates(polyline.as_flattened())?;
     Ok(())
 }
 

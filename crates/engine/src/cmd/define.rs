@@ -2,11 +2,11 @@
 //! points, couplings, point masses, springs and dashpots, boundary conditions, loads, fluid
 //! domains and steps, and the step activity table.
 //!
-//! Each definition's parameters are its JSON form in the model (the same form a `.modelcraft`
+//! Each definition's parameters are its JSON form in the model (the same form a `.fieldcraft`
 //! file stores), plus its `name`. `create` fails when the name is taken, `edit` replaces an
 //! existing definition, `delete` refuses while another definition refers to it.
 
-use modelcraft_model::{
+use fieldcraft_model::{
     BoundaryCondition, Coupling, FaceCondition, FluidBoundary, FluidDomain, Load, Material, Model, PointMass, ReferencePoint, Section, Set, Spring,
     Step,
 };

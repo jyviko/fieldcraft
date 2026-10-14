@@ -1,4 +1,4 @@
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 use super::*;
 use crate::quality::{GateOptions, enclosed_volume, validity_gate_elements};

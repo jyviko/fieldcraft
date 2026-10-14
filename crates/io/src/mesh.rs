@@ -1,4 +1,4 @@
-//! The binary mesh part of a `.modelcraft` file (`mesh.bin`): nodes, elements and the geometry
+//! The binary mesh part of a `.fieldcraft` file (`mesh.bin`): nodes, elements and the geometry
 //! tags that say how the mesh lies on the geometry.
 //!
 //! Little-endian throughout:
@@ -21,8 +21,8 @@
 //! in the manifest; decoding checks every count against the bytes present before reading, and
 //! every value through the model's own checked methods.
 
-use modelcraft_model::geometry::MAX_ENTITIES;
-use modelcraft_model::{ElementKind, Entity, GeometryRef, MAX_ELEMENTS, MAX_NODES, Model};
+use fieldcraft_model::geometry::MAX_ENTITIES;
+use fieldcraft_model::{ElementKind, Entity, GeometryRef, MAX_ELEMENTS, MAX_NODES, Model};
 
 use crate::{Error, MAX_FILE_BYTES, Result, invalid, model_error};
 
@@ -221,7 +221,7 @@ pub fn decode_into(model: &mut Model, bytes: &[u8]) -> Result<()> {
     }
     let mut r = Reader { bytes, pos: 0 };
     if r.take(MAGIC.len()).ok() != Some(MAGIC.as_slice()) {
-        return invalid(format!("{PART} is not a ModelCraft mesh (no {} header)", String::from_utf8_lossy(MAGIC)));
+        return invalid(format!("{PART} is not a FieldCraft mesh (no {} header)", String::from_utf8_lossy(MAGIC)));
     }
     let nodes = count(&mut r, "nodes", MAX_NODES)?;
     let elements = count(&mut r, "elements", MAX_ELEMENTS)?;

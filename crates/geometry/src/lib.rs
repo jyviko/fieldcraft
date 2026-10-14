@@ -1,6 +1,6 @@
 //! The geometry boundary.
 //!
-//! Meshing in ModelCraft starts from a triangulated boundary surface. This crate produces it:
+//! Meshing in FieldCraft starts from a triangulated boundary surface. This crate produces it:
 //! B-rep bodies come from SolidCraft's kernel (`solidcraft-kernel`, a pinned git dependency;
 //! plan/adr/0001-libraries.md) and leave it as a [`SurfaceMesh`] from SolidCraft's tessellator,
 //! with each triangle tagged by the B-rep face it lies on (for feature edges and for loads and

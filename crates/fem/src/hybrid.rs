@@ -36,7 +36,7 @@
 //! symmetric indefinite saddle point that the Cholesky factorization cannot solve; it waits for
 //! an indefinite (LDLᵀ) factorization.
 
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 use crate::dense::{Cholesky, Matrix};
 use crate::element::{Formulation, Solid, ThermalStrain, accumulate_symmetric, b_block};

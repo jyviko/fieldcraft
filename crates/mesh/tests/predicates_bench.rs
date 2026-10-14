@@ -1,10 +1,10 @@
 //! Throughput and filter hit rate of the exact predicates. Ignored by default; run with
-//! `cargo test --release -p modelcraft-mesh --test predicates_bench -- --ignored --nocapture`.
+//! `cargo test --release -p fieldcraft-mesh --test predicates_bench -- --ignored --nocapture`.
 
 use std::hint::black_box;
 use std::time::Instant;
 
-use modelcraft_mesh::predicates::{
+use fieldcraft_mesh::predicates::{
     GenericPoint, Lpi, Point3, Sign, generic_orient3d, insphere, insphere_filter, insphere_sos, orient3d, orient3d_filter,
 };
 

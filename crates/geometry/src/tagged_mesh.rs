@@ -30,7 +30,7 @@ const MAX_BUILD_ITEMS: usize = 10_000;
 const MAX_XML_DEPTH: usize = 256;
 /// Largest coordinate magnitude accepted, in the file and after units and transforms: the FE
 /// model's own limit, so every imported vertex can become a node.
-use modelcraft_model::MAX_COORD;
+use fieldcraft_model::MAX_COORD;
 /// A transform whose determinant is below this fraction of its largest row length cubed
 /// flattens the object (relative, so a uniform scale is never refused).
 const MIN_RELATIVE_DET: f64 = 1e-12;

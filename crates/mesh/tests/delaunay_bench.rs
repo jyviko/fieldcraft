@@ -1,10 +1,10 @@
 //! Throughput of the Delaunay tetrahedralization on 1M random points and on a 100³ grid (every
 //! cell cospherical). Ignored by default; run with
-//! `cargo test --release -p modelcraft-mesh --test delaunay_bench -- --ignored --nocapture`.
+//! `cargo test --release -p fieldcraft-mesh --test delaunay_bench -- --ignored --nocapture`.
 
 use std::time::Instant;
 
-use modelcraft_mesh::delaunay::Triangulation;
+use fieldcraft_mesh::delaunay::Triangulation;
 
 struct Rng(u64);
 

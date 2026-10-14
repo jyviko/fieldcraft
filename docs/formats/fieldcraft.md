@@ -1,26 +1,26 @@
-# The `.modelcraft` file (format `modelcraft/1`)
+# The `.fieldcraft` file (format `fieldcraft/1`)
 
-A `.modelcraft` file holds one model: its definition, its mesh, the geometry it is built on and
-the commands that built it. It is written and read by `modelcraft-io` (`write`, `read`; bytes in,
+A `.fieldcraft` file holds one model: its definition, its mesh, the geometry it is built on and
+the commands that built it. It is written and read by `fieldcraft-io` (`write`, `read`; bytes in,
 bytes out, so the browser build uses the same code) and by the commands `file.save`,
 `file.save_as` and `file.open`.
 
 ## Package
 
 The file is a ZIP package with exactly four parts, in this order, all stored uncompressed (so any
-unzip tool reads them: `unzip -p bracket.modelcraft model.json`):
+unzip tool reads them: `unzip -p bracket.fieldcraft model.json`):
 
 | Part | Content |
 |---|---|
-| `modelcraft.json` | Manifest: `format` (`"modelcraft/1"`), `generator` (`"ModelCraft 0.1.0"`), `geometry`, and `parts`: the byte size and SHA-256 of each other part. |
+| `fieldcraft.json` | Manifest: `format` (`"fieldcraft/1"`), `generator` (`"FieldCraft 0.1.0"`), `geometry`, and `parts`: the byte size and SHA-256 of each other part. |
 | `model.json` | The model definition: unit system, sets, materials, sections, reference points, couplings, boundary conditions, loads and steps. Pretty-printed JSON with a fixed key order (maps sorted by name), so a change shows as a line diff. Its form is the model's own JSON form, which commands take as parameters. |
 | `mesh.bin` | Nodes, elements and geometry tags, binary (below). |
-| `journal.json` | The commands that built the model, `[{"command": id, "params": {...}}, ...]`, one per line. It is a script `modelcraft-cli run` replays. |
+| `journal.json` | The commands that built the model, `[{"command": id, "params": {...}}, ...]`, one per line. It is a script `fieldcraft-cli run` replays. |
 
 The same model gives the same bytes on every platform: entry times are fixed (1980-01-01),
 permissions are fixed, and every map is written in sorted order. To diff two versions with git,
-add `*.modelcraft diff=modelcraft` to `.gitattributes` and
-`git config diff.modelcraft.textconv "unzip -p"`; the definition and the journal show line by
+add `*.fieldcraft diff=fieldcraft` to `.gitattributes` and
+`git config diff.fieldcraft.textconv "unzip -p"`; the definition and the journal show line by
 line, the mesh part as binary.
 
 ## Geometry
@@ -68,8 +68,8 @@ Every file is treated as hostile:
   allocation is larger than the input.
 - Only the four parts, each once. The ZIP CRC and the manifest's size and SHA-256 are checked for
   every part.
-- A `format` other than `modelcraft/1` is refused: a later `modelcraft/N` as a version error, any
-  other value as not a ModelCraft file. Unknown fields are errors.
+- A `format` other than `fieldcraft/1` is refused: a later `fieldcraft/N` as a version error, any
+  other value as not a FieldCraft file. Unknown fields are errors.
 - `mesh.bin`: counts are capped (50 million nodes and elements, one million entities) and checked
   against the bytes present before anything is read; labels must ascend; unknown kinds and
   trailing bytes are refused.
@@ -87,8 +87,8 @@ refused.
 ## Autosave and recovery
 
 The desktop app autosaves every 30 seconds while there are unsaved changes, into the recovery
-folder (`MODELCRAFT_RECOVERY_DIR`, else `ModelCraft/recovery` in the per-user data folder):
-`<id>.modelcraft`, `<id>.json` (the model's own path, time, counts) and `<id>.lock`, held while
+folder (`FIELDCRAFT_RECOVERY_DIR`, else `FieldCraft/recovery` in the per-user data folder):
+`<id>.fieldcraft`, `<id>.json` (the model's own path, time, counts) and `<id>.lock`, held while
 the app runs. Saving (or undoing back to the saved state) drops the autosave. After a crash, the
 next launch reports the entries; `file.recovery.list` lists them, `file.recover` opens one as
 unsaved work under its original path, and `file.recovery.discard` deletes them.

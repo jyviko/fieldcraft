@@ -20,7 +20,7 @@
 //! The run starts from u = 0 and the initial velocities with the half increment
 //! v^{½} = v^0 + ½Δt^{½} a^0.
 
-use modelcraft_model::{ExplicitDynamic, Model, OutputVariable, Procedure, Step};
+use fieldcraft_model::{ExplicitDynamic, Model, OutputVariable, Procedure, Step};
 
 use crate::elements::{Motion, State, Workspace, internal_forces};
 use crate::result::{ControllingElement, Energies, ErodedElement, ExplicitResult, Frame, History};

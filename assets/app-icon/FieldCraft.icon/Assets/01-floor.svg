@@ -11,7 +11,7 @@
       <stop offset="1" stop-color="#7fa8a2" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <title>ModelCraft icon floor grid</title>
+  <title>FieldCraft icon floor grid</title>
   <g id="Floor_grid" data-name="Floor grid" clip-path="url(#clip-path-1)">
     <path id="floor_grid" data-name="floor grid" d="M154.62 100 L100 131.53 M869.38 100 L924 131.53 M368.82 100 L100 255.2 M655.18 100 L924 255.2 M583.01 100 L100 378.87 M440.99 100 L924 378.87 M797.21 100 L100 502.53 M226.79 100 L924 502.53 M924 150.47 L100 626.2 M100 150.47 L924 626.2 M924 274.13 L100 749.87 M100 274.13 L924 749.87 M924 397.8 L100 873.53 M100 397.8 L924 873.53 M924 521.47 L226.79 924 M100 521.47 L797.21 924 M924 645.13 L440.99 924 M100 645.13 L583.01 924 M924 768.8 L655.18 924 M100 768.8 L368.82 924 M924 892.47 L869.38 924 M100 892.47 L154.62 924" fill="none" stroke="url(#radial-gradient-1)" stroke-width="3" stroke-linejoin="round"/>
   </g>

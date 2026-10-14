@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use modelcraft_io::roots::Roots;
+use fieldcraft_io::roots::Roots;
 use serde_json::{Value, json};
 
 use crate::{Headless, MAX_LINE, Options, Server};
@@ -38,7 +38,7 @@ fn ok(s: &mut Server, name: &str, args: Value) -> Value {
 struct Dir(PathBuf);
 impl Dir {
     fn new(tag: &str) -> Dir {
-        let d = std::env::temp_dir().join(format!("modelcraft-mcp-{tag}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("fieldcraft-mcp-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         Dir(std::fs::canonicalize(&d).unwrap())
@@ -55,7 +55,7 @@ fn initialize_lists_tools_and_resources() {
     let mut s = server();
     let r = send(&mut s, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}}}));
     assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
-    assert_eq!(r["result"]["serverInfo"]["name"], "modelcraft");
+    assert_eq!(r["result"]["serverInfo"]["name"], "fieldcraft");
     assert!(r["result"]["instructions"].as_str().unwrap().contains("headless"));
     let r = send(&mut s, json!({"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "1999-01-01"}}));
     assert_eq!(r["result"]["protocolVersion"], crate::PROTOCOL_VERSION);
@@ -83,9 +83,9 @@ fn initialize_lists_tools_and_resources() {
     ] {
         assert!(names.contains(&t), "{t}");
     }
-    let r = send(&mut s, json!({"jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": {"uri": "modelcraft://model"}}));
+    let r = send(&mut s, json!({"jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": {"uri": "fieldcraft://model"}}));
     assert!(r["result"]["contents"][0]["text"].as_str().unwrap().contains("nodes"));
-    let r = send(&mut s, json!({"jsonrpc": "2.0", "id": 5, "method": "resources/read", "params": {"uri": "modelcraft://commands"}}));
+    let r = send(&mut s, json!({"jsonrpc": "2.0", "id": 5, "method": "resources/read", "params": {"uri": "fieldcraft://commands"}}));
     assert!(r["result"]["contents"][0]["text"].as_str().unwrap().contains("solve.static"));
     assert_eq!(send(&mut s, json!({"jsonrpc": "2.0", "id": 6, "method": "ping"}))["result"], json!({}));
 }
@@ -159,7 +159,7 @@ fn hostile_tool_arguments_are_tool_errors() {
         ("execute", json!({"command": "mesh.element.add", "params": {"label": 1, "kind": "hex20", "nodes": vec![u32::MAX; 20]}})),
         ("execute", json!({"command": "file.open", "params": {"path": "\u{0}"}})),
         ("open", json!({"path": "/etc/passwd"})),
-        ("open", json!({"path": "/no/such/model.modelcraft"})),
+        ("open", json!({"path": "/no/such/model.fieldcraft"})),
         ("open", json!({"path": huge.clone() + ".solidcraft"})),
         ("save", json!({})),
         ("write_deck", json!({"format": "abaqus", "path": "/no/such/dir/x.inp"})),
@@ -221,7 +221,7 @@ fn file_access_stays_inside_the_roots() {
     for f in [&input, &output, &outside] {
         std::fs::create_dir_all(f).unwrap();
     }
-    let design = modelcraft_testkit::corpus::Analytic::Cylinder { radius: 5.0, height: 10.0 }.design().unwrap();
+    let design = fieldcraft_testkit::corpus::Analytic::Cylinder { radius: 5.0, height: 10.0 }.design().unwrap();
     std::fs::write(outside.join("c.solidcraft"), &design).unwrap();
     std::fs::write(input.join("c.solidcraft"), &design).unwrap();
     #[cfg(unix)]
@@ -236,16 +236,16 @@ fn file_access_stays_inside_the_roots() {
     refused(&mut s, "open", json!({"path": input.join("link.solidcraft")}));
     refused(&mut s, "execute", json!({"command": "geometry.open", "params": {"path": input.join("../outside/c.solidcraft")}}));
     ok(&mut s, "open", json!({"path": input.join("c.solidcraft")}));
-    refused(&mut s, "save", json!({"path": outside.join("m.modelcraft")}));
-    refused(&mut s, "save", json!({"path": input.join("m.modelcraft")}));
-    refused(&mut s, "execute", json!({"command": "file.save_as", "params": {"path": outside.join("m.modelcraft")}}));
+    refused(&mut s, "save", json!({"path": outside.join("m.fieldcraft")}));
+    refused(&mut s, "save", json!({"path": input.join("m.fieldcraft")}));
+    refused(&mut s, "execute", json!({"command": "file.save_as", "params": {"path": outside.join("m.fieldcraft")}}));
     refused(&mut s, "write_deck", json!({"format": "abaqus", "path": outside.join("m.inp")}));
     refused(&mut s, "screenshot", json!({"path": outside.join("x.png")}));
     refused(&mut s, "screenshot", json!({"path": input.join("x.png")}));
     refused(&mut s, "execute", json!({"command": "file.recovery.list", "params": {"dir": outside}}));
-    ok(&mut s, "save", json!({"path": output.join("m.modelcraft")}));
+    ok(&mut s, "save", json!({"path": output.join("m.fieldcraft")}));
     ok(&mut s, "screenshot", json!({"path": output.join("x.png")}));
-    assert!(output.join("m.modelcraft").is_file() && output.join("x.png").is_file());
+    assert!(output.join("m.fieldcraft").is_file() && output.join("x.png").is_file());
     assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "nothing written outside");
 }
 

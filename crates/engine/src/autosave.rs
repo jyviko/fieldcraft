@@ -2,16 +2,16 @@
 //!
 //! The desktop app keeps an [`Autosaver`] and calls [`Autosaver::save`] on a timer: while the
 //! session has unsaved changes not yet autosaved, the whole model is written to the app's entry in
-//! the recovery folder ([`modelcraft_io::recovery`]); once nothing is unsaved the entry goes. After
+//! the recovery folder ([`fieldcraft_io::recovery`]); once nothing is unsaved the entry goes. After
 //! a crash the next launch lists the entry (`file.recovery.list`) and opens it (`file.recover`).
 
 use std::path::Path;
 
-use modelcraft_io::recovery::Slot;
+use fieldcraft_io::recovery::Slot;
 
 use crate::{Result, Session};
 
-pub use modelcraft_io::recovery::default_dir;
+pub use fieldcraft_io::recovery::default_dir;
 
 /// One app's autosaver.
 #[derive(Debug)]
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn autosaves_unsaved_work_and_recovers_it_after_a_crash() {
-        let dir = std::env::temp_dir().join(format!("modelcraft-autosave-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("fieldcraft-autosave-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut s = Session::default();
         let mut a = Autosaver::new(&dir).unwrap();

@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 use crate::quad::{QuadOptions, free_quad_mesh, free_tri_mesh};
 use crate::size::{UniformSize, divide_polyline, edge_divisions, even_divisions, ideal_divisions};

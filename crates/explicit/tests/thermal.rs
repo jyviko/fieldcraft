@@ -2,8 +2,8 @@
 //! a free bar by α ΔT L without stress; a bar held at both ends carries σ = −E α ΔT, and with
 //! perfectly plastic J2 the stress stops at the yield stress.
 
-use modelcraft_explicit::{Limits, solve_explicit};
-use modelcraft_model::*;
+use fieldcraft_explicit::{Limits, solve_explicit};
+use fieldcraft_model::*;
 
 const YOUNG: f64 = 1.0e4;
 const ALPHA: f64 = 1.0e-4;
@@ -115,7 +115,7 @@ fn a_clamped_bar_carries_minus_e_alpha_dt_up_to_yield() {
         let r = solve_explicit(&bar(kind, true, Some(plastic)), None, &Limits::default()).unwrap();
         let last = r.frames.last().unwrap();
         for (s, ep) in last.stress.iter().zip(&last.plastic_strain) {
-            let mises = modelcraft_fem::von_mises(s);
+            let mises = fieldcraft_fem::von_mises(s);
             assert!((mises - 0.5 * sigma.abs()).abs() < 0.02 * sigma.abs(), "{kind:?}: {s:?}");
             assert!(*ep > 0.0, "{kind:?}: plastic strain {ep}");
         }

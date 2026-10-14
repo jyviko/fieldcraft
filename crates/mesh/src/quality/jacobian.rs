@@ -1,7 +1,7 @@
 //! The Jacobian determinant of a solid element as an exact polynomial, its certified sign and
 //! the element's exact volume.
 //!
-//! The geometry map of every solid element ModelCraft knows is a polynomial on its reference
+//! The geometry map of every solid element FieldCraft knows is a polynomial on its reference
 //! domain, so its Jacobian determinant is one too: constant for tet4, cubic for tet10, degree
 //! (2, 2) on triangle × segment for wedge6, degree (2, 2, 2) for hex8 and (5, 5, 5) for hex20. It
 //! is built here in Bernstein form ([`super::bernstein`]) and its sign is settled by bounds and
@@ -22,7 +22,7 @@
 //! - hex8/hex20: face 1-2-3-4, then 5-6-7-8 above it; mid-side nodes 9–12 on the edges of 1-2-3-4,
 //!   13–16 on those of 5-6-7-8, 17–20 on edges 1-5, 2-6, 3-7, 4-8.
 
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 use super::bernstein::{Bernstein, Factor};
 use crate::{Error, Result};

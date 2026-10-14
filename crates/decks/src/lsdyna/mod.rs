@@ -61,7 +61,7 @@ mod elements;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use modelcraft_model::{
+use fieldcraft_model::{
     BoundaryCondition, CouplingKind, Diagnostic, Dofs, Elastic, Element, ElementKind, Hardening, Load, Material, Model, OutputVariable, Plastic,
     Procedure, Resolved, ResolvedDirection, Section, SectionKind, Step, Target,
 };
@@ -102,7 +102,7 @@ const MAX_SHELL_POINTS: u32 = 10;
 
 /// A resolved model that breaks its own invariants (unreachable after `resolve`).
 fn broken(what: String) -> Error {
-    Error::Model(modelcraft_model::Error::Invalid(format!("inconsistent resolved model: {what}")))
+    Error::Model(fieldcraft_model::Error::Invalid(format!("inconsistent resolved model: {what}")))
 }
 
 /// One `*PART`: a section's elements of one kind.
@@ -159,7 +159,7 @@ fn write_with(model: &Model, r: &Resolved) -> Result<Written> {
     let cases = if steps.len() > 1 { steps.len() } else { 0 };
 
     d.line("*KEYWORD long=y");
-    d.comment("Written by ModelCraft: implicit linear analysis, long format (20-column fields).");
+    d.comment("Written by FieldCraft: implicit linear analysis, long format (20-column fields).");
     d.comment(&format!("Units: {} (consistent; nothing is converted).", model.units().label()));
     if cases > 0 {
         d.comment(&format!("{cases} steps are written as *CASE analyses: run LS-DYNA with CASE on its command line."));
@@ -676,7 +676,7 @@ fn discrete(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan) -> Result<()
     let limit = |what: &str| Error::Limit(format!("no {what} id left for point masses, springs and dashpots"));
     let mut eid = model.elements().keys().next_back().copied().unwrap_or(0);
     let mut next_eid = || -> Result<u32> {
-        eid = eid.checked_add(1).filter(|e| *e <= modelcraft_model::MAX_LABEL).ok_or_else(|| limit("element"))?;
+        eid = eid.checked_add(1).filter(|e| *e <= fieldcraft_model::MAX_LABEL).ok_or_else(|| limit("element"))?;
         Ok(eid)
     };
     d.comment("Point masses");
@@ -754,7 +754,7 @@ fn discrete(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan) -> Result<()
                 while taken.contains(&node) {
                     node = node.checked_add(1).ok_or_else(|| limit("node"))?;
                 }
-                if node > modelcraft_model::MAX_LABEL {
+                if node > fieldcraft_model::MAX_LABEL {
                     return Err(limit("node"));
                 }
                 ground.push((node, model.label_xyz(s.first).ok_or_else(|| broken(format!("node {}", s.first)))?));

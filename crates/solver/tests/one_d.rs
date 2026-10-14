@@ -8,15 +8,15 @@
 //!   bars, P / (1 + 2 cos³θ) in the vertical one.
 //! - rod3: constant-stress patch with off-centre middle nodes; a bar hanging under its own
 //!   weight (quadratic displacement, exact at the nodes); curved members are checked in
-//!   `modelcraft_fem::truss` (a ring's radial expansion gives the hoop strain δ/R exactly).
+//!   `fieldcraft_fem::truss` (a ring's radial expansion gives the hoop strain δ/R exactly).
 //! - Spring–mass ω = √(k/m), springs along three skew directions, the two-mass chain, a bar with
 //!   a tip mass ω = √(EA/(LM)), the torsional pendulum ω = √(k_t/J).
 
 use std::f64::consts::PI;
 
-use modelcraft_fem::truss::axial;
-use modelcraft_model::*;
-use modelcraft_solver::{FrequencyOptions, FrequencyResult, Limits, MassKind, StaticResult, solve_frequency, solve_static};
+use fieldcraft_fem::truss::axial;
+use fieldcraft_model::*;
+use fieldcraft_solver::{FrequencyOptions, FrequencyResult, Limits, MassKind, StaticResult, solve_frequency, solve_static};
 
 const ZERO_Z: [Option<f64>; 6] = [None, None, Some(0.0), None, None, None];
 

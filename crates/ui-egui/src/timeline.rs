@@ -123,7 +123,7 @@ fn transport_glyph(p: &egui::Painter, c: egui::Pos2, what: &str, col: Color32) {
 pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
     let mut roll: Option<usize> = None;
-    egui::Panel::bottom("mc_timeline").exact_size(HEIGHT).show_separator_line(false).frame(egui::Frame::NONE.fill(t.timeline)).show(ui, |ui| {
+    egui::Panel::bottom("fc_timeline").exact_size(HEIGHT).show_separator_line(false).frame(egui::Frame::NONE.fill(t.timeline)).show(ui, |ui| {
         let r = ui.max_rect();
         app.place("timeline", r);
         let p = ui.painter().clone();
@@ -140,7 +140,7 @@ pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
         ] {
             let br = Rect::from_center_size(pos2(x + 11.0, r.center().y), Vec2::splat(22.0));
             let enabled = target != done && target >= oldest && target <= done + redo;
-            let resp = ui.interact(br, ui.id().with(("mc_transport", what)), if enabled { Sense::click() } else { Sense::hover() });
+            let resp = ui.interact(br, ui.id().with(("fc_transport", what)), if enabled { Sense::click() } else { Sense::hover() });
             if resp.hovered() && enabled {
                 p.rect_filled(br, 3.0, t.hover);
             }
@@ -165,7 +165,7 @@ pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
             return;
         }
         ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
-            egui::ScrollArea::horizontal().id_salt("mc_timeline_scroll").stick_to_right(true).auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::horizontal().id_salt("fc_timeline_scroll").stick_to_right(true).auto_shrink([false, false]).show(ui, |ui| {
                 let marker_at = list.iter().position(|i| i.start >= done).unwrap_or(list.len());
                 let width = list.len() as f32 * STRIDE + 12.0;
                 let (area, _) = ui.allocate_exact_size(vec2(width, r.height()), Sense::hover());
@@ -185,10 +185,10 @@ pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
                     }
                     let undone = item.start >= done;
                     let reachable = item.end >= oldest;
-                    let resp = ui.interact(br, ui.id().with(("mc_journal", k)), if reachable { Sense::click() } else { Sense::hover() });
+                    let resp = ui.interact(br, ui.id().with(("fc_journal", k)), if reachable { Sense::click() } else { Sense::hover() });
                     let bg = if resp.hovered() && reachable { t.hover } else { t.timeline_item };
                     p.rect(br, 3.0, bg, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                    let icon = modelcraft_engine::catalogue::entry_of(&item.command).map_or("ui.views", |c| c.id);
+                    let icon = fieldcraft_engine::catalogue::entry_of(&item.command).map_or("ui.views", |c| c.id);
                     let tint = if undone || !reachable { Color32::from_white_alpha(110) } else { Color32::WHITE };
                     icons::paint_tinted(app, ui, icon, br.shrink(4.0), Look::of(!undone), tint);
                     if item.count() > 1 {
@@ -222,7 +222,7 @@ pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
-    use modelcraft_engine::Session;
+    use fieldcraft_engine::Session;
 
     use super::*;
 

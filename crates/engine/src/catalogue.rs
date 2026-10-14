@@ -1,4 +1,4 @@
-//! The capability catalogue: everything ModelCraft does or will do, in one table.
+//! The capability catalogue: everything FieldCraft does or will do, in one table.
 //!
 //! Each [`Capability`] is a toolbar entry: its tab and panel, its label and one-line tip, and
 //! either the command of the same id it runs ([`Status::Ready`]) or the milestone that brings it
@@ -138,7 +138,7 @@ pub enum Status {
     Ready,
     /// Coming in this roadmap milestone (`M2`…).
     Planned { milestone: &'static str },
-    /// Runs `deck.write` with this `format` once `modelcraft_decks::FORMATS` has a writer for it;
+    /// Runs `deck.write` with this `format` once `fieldcraft_decks::FORMATS` has a writer for it;
     /// until then coming in `milestone`.
     Deck { format: &'static str, milestone: &'static str },
 }
@@ -163,7 +163,7 @@ impl Capability {
         match self.status {
             Status::Ready => Some(self.id),
             Status::Planned { .. } => None,
-            Status::Deck { format, .. } => modelcraft_decks::format(format).map(|_| crate::cmd::deck::WRITE.id),
+            Status::Deck { format, .. } => fieldcraft_decks::format(format).map(|_| crate::cmd::deck::WRITE.id),
         }
     }
 
@@ -431,13 +431,13 @@ pub static CATALOGUE: &[Capability] = &[
     deck("deck.write.abaqus", "Abaqus Input", "abaqus", "Write an Abaqus input file (.inp)"),
     deck("deck.write.nastran", "Nastran Deck", "nastran", "Write Nastran bulk data (SOL 101, 103)"),
     deck("deck.write.lsdyna", "LS-DYNA Deck", "lsdyna", "Write an LS-DYNA keyword file"),
-    soon("deck.read", "Read Deck", Solve, "Decks", "M9", "Read a deck, keeping keywords ModelCraft does not know"),
+    soon("deck.read", "Read Deck", Solve, "Decks", "M9", "Read a deck, keeping keywords FieldCraft does not know"),
     ready_more(
         "solve.static",
         "Static",
         Solve,
         "Implicit",
-        "Linear static (or coupled temperature–displacement) solve of a step with ModelCraft's own solver; heat transfer in the drop-down",
+        "Linear static (or coupled temperature–displacement) solve of a step with FieldCraft's own solver; heat transfer in the drop-down",
         &["solve.heat"],
     ),
     ready("solve.frequency", "Frequency", Solve, "Implicit", "Natural frequencies and mode shapes of a frequency step"),
@@ -482,10 +482,10 @@ pub static CATALOGUE: &[Capability] = &[
     soon("results.convergence", "Convergence", Results, "Files", "M9", "Mesh convergence studies"),
     // ---- Tools ----
     ready("model.info", "Model Info", Tools, "Model", "Node and element counts and the model summary"),
-    ready("file.open", "Open Model", Tools, "File", "Open a .modelcraft model"),
+    ready("file.open", "Open Model", Tools, "File", "Open a .fieldcraft model"),
     ready("file.sample", "Samples", Tools, "File", "Open a sample model, ready to solve"),
-    ready("file.save", "Save", Tools, "File", "Save the model to its .modelcraft file"),
-    ready("file.save_as", "Save As", Tools, "File", "Save the model to a new .modelcraft file"),
+    ready("file.save", "Save", Tools, "File", "Save the model to its .fieldcraft file"),
+    ready("file.save_as", "Save As", Tools, "File", "Save the model to a new .fieldcraft file"),
     ready_more(
         "file.recover",
         "Recover",
@@ -527,7 +527,7 @@ pub fn features_page() -> String {
     let mut md = String::from(
         "# Features\n\n\
          Generated from the capability catalogue (`crates/engine/src/catalogue.rs`) by\n\
-         `cargo run -p modelcraft-cli -- features > docs/features.md`; a test fails when it is out of date.\n\
+         `cargo run -p fieldcraft-cli -- features > docs/features.md`; a test fails when it is out of date.\n\
          Every entry is a toolbar button. **Ready** entries run their command; **coming soon** entries are\n\
          shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,\n\
          the control channel and AI agents over MCP (docs/mcp.md) run the same commands.\n\n",
@@ -592,16 +592,16 @@ mod tests {
     }
 
     /// Deck entries follow the writers: one entry per format, ready exactly when its writer is in
-    /// `modelcraft_decks::FORMATS`, running `deck.write` with its format.
+    /// `fieldcraft_decks::FORMATS`, running `deck.write` with its format.
     #[test]
     fn deck_entries_follow_the_writers() {
         let decks: Vec<(&Capability, &str)> =
             CATALOGUE.iter().filter_map(|c| if let Status::Deck { format, .. } = c.status { Some((c, format)) } else { None }).collect();
-        for f in modelcraft_decks::FORMATS {
+        for f in fieldcraft_decks::FORMATS {
             assert!(decks.iter().any(|(_, name)| *name == f.name), "deck format `{}` has no catalogue entry", f.name);
         }
         for (c, format) in decks {
-            let written = modelcraft_decks::format(format).is_some();
+            let written = fieldcraft_decks::format(format).is_some();
             assert_eq!(c.command(), written.then_some("deck.write"), "{}", c.id);
             assert_eq!(c.milestone().is_none(), written, "{}", c.id);
             assert_eq!(c.preset(), serde_json::json!({"format": format}));
@@ -640,6 +640,6 @@ mod tests {
     fn features_page_is_current() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/features.md");
         let committed = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
-        assert!(committed == features_page(), "docs/features.md is out of date: run `cargo run -p modelcraft-cli -- features > docs/features.md`");
+        assert!(committed == features_page(), "docs/features.md is out of date: run `cargo run -p fieldcraft-cli -- features > docs/features.md`");
     }
 }

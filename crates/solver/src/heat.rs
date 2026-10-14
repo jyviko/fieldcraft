@@ -1,9 +1,9 @@
 //! Heat transfer: steady and transient conduction with prescribed temperatures, surface fluxes,
 //! convection and internal heat sources.
 //!
-//! Every node of the solid elements carries one temperature ([`modelcraft_fem::heat::HEAT_DOFS`]).
+//! Every node of the solid elements carries one temperature ([`fieldcraft_fem::heat::HEAT_DOFS`]).
 //! The conductivity K (with the convection films) and capacity C are assembled on the node
-//! graph in element label order ([`modelcraft_fem::heat`]); prescribed temperatures are
+//! graph in element label order ([`fieldcraft_fem::heat`]); prescribed temperatures are
 //! eliminated, the free ones numbered by nested dissection and solved by sparse Cholesky.
 //!
 //! - **Steady**: K T = f.
@@ -16,10 +16,10 @@
 //! The heat flux −k∇T is reported at the integration points and averaged at the nodes; the heat
 //! flow at prescribed temperatures is the reaction K T − f (C Ṫ included in transient steps).
 
-use modelcraft_fem::element::{Extrapolation, extrapolation};
-use modelcraft_fem::heat::{Conduction, PointFlux, face_film, face_weights};
-use modelcraft_fem::{DofLayout, DofSet};
-use modelcraft_model::{ElementKind, Load, Model, Procedure, Resolved, SectionKind, Step, TEMPERATURE_DOF};
+use fieldcraft_fem::element::{Extrapolation, extrapolation};
+use fieldcraft_fem::heat::{Conduction, PointFlux, face_film, face_weights};
+use fieldcraft_fem::{DofLayout, DofSet};
+use fieldcraft_model::{ElementKind, Load, Model, Procedure, Resolved, SectionKind, Step, TEMPERATURE_DOF};
 
 use crate::cholesky::{Factor, FactorError, UpperColumns};
 use crate::ordering::nested_dissection;

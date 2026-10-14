@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-io"
-description = "ModelCraft's files: the .modelcraft model file, atomic saves and autosave recovery"
+name = "fieldcraft-io"
+description = "FieldCraft's files: the .fieldcraft model file, atomic saves and autosave recovery"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-modelcraft-model = { workspace = true }
+fieldcraft-model = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -1,4 +1,4 @@
-//! `corpus [--part NAME] [--no-write]`: see [`modelcraft_testkit::runner`]; run it as
+//! `corpus [--part NAME] [--no-write]`: see [`fieldcraft_testkit::runner`]; run it as
 //! `cargo xtask corpus`.
 //!
 //! `corpus --part NAME --design PATH` writes that part's `.solidcraft` design to `PATH` instead
@@ -31,7 +31,7 @@ fn main() -> ExitCode {
     let result = match (design, only) {
         (Some(path), Some(name)) => write_design(name, Path::new(path)),
         (Some(_), None) => Err(format!("--design needs --part\n{USAGE}")),
-        (None, _) => modelcraft_testkit::runner::run(&modelcraft_testkit::corpus::workspace_root(), only, write),
+        (None, _) => fieldcraft_testkit::runner::run(&fieldcraft_testkit::corpus::workspace_root(), only, write),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -44,9 +44,9 @@ fn main() -> ExitCode {
 
 /// Write the design of the corpus part `name` to `path`.
 fn write_design(name: &str, path: &Path) -> Result<(), String> {
-    let parts = modelcraft_testkit::corpus::parts().map_err(|e| e.to_string())?;
+    let parts = fieldcraft_testkit::corpus::parts().map_err(|e| e.to_string())?;
     let part = parts.iter().find(|p| p.name == name).ok_or_else(|| format!("no corpus part named `{name}`"))?;
-    let bytes = modelcraft_testkit::corpus::design_bytes(part).map_err(|e| e.to_string())?;
+    let bytes = fieldcraft_testkit::corpus::design_bytes(part).map_err(|e| e.to_string())?;
     std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     eprintln!("corpus: wrote {} ({name})", path.display());
     Ok(())

@@ -1,13 +1,13 @@
 //! `mesh.block`: a structured mesh of one six-sided block (solid elements) or four-sided planar
-//! patch (2D elements) from its corners and curved edges ([`modelcraft_mesh::block`]), joined to
+//! patch (2D elements) from its corners and curved edges ([`fieldcraft_mesh::block`]), joined to
 //! the mesh already there and tagged as a body (a patch: a face of the body) with named faces,
 //! edges and vertices, so sets by geometry select it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use modelcraft_mesh::block::{Block, BlockMesh, Curve, Patch, block, patch};
-use modelcraft_mesh::join::{check_conforming, weld};
-use modelcraft_model::{ElementKind, Entity, GeometryRef, Model};
+use fieldcraft_mesh::block::{Block, BlockMesh, Curve, Patch, block, patch};
+use fieldcraft_mesh::join::{check_conforming, weld};
+use fieldcraft_model::{ElementKind, Entity, GeometryRef, Model};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -178,7 +178,7 @@ fn block_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         s.model.tag_element(label, body_tag)?;
     }
     for (refs, pieces, tag) in [
-        (&face_refs, &mesh.faces, Model::tag_element_face as fn(&mut Model, u32, u8, u32) -> modelcraft_model::Result<()>),
+        (&face_refs, &mesh.faces, Model::tag_element_face as fn(&mut Model, u32, u8, u32) -> fieldcraft_model::Result<()>),
         (&edge_refs, &mesh.edges, Model::tag_element_edge),
     ] {
         for (k, r) in refs {

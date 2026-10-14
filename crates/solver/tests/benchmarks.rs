@@ -17,11 +17,11 @@
 //! Both are modelled on one symmetric part (a quarter of the roof, an eighth of the cylinder)
 //! with quad4 (MITC4) shells on a structured mesh whose quadrilaterals are exactly flat.
 
-use modelcraft_model::{
+use fieldcraft_model::{
     BoundaryCondition, Distribution, Elastic, ElementKind, Formulation, Load, Material, Model, Procedure, Section, SectionKind, Set, Step, Symmetry,
     Target,
 };
-use modelcraft_solver::{Limits, solve_static};
+use fieldcraft_solver::{Limits, solve_static};
 
 /// A cylindrical shell patch: x from 0 to `length`, angle φ from 0 (top, z = R) to `arc`,
 /// y = R sin φ, z = R cos φ; n × n quad4 cells. Returns the model and the node at (x, φ).

@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-ui-egui"
-description = "ModelCraft desktop interface (egui + wgpu): viewport, model tree, commands, status bar and the control channel's request handling"
+name = "fieldcraft-ui-egui"
+description = "FieldCraft desktop interface (egui + wgpu): viewport, model tree, commands, status bar and the control channel's request handling"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,12 +9,12 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-modelcraft-model = { workspace = true }
-modelcraft-engine = { workspace = true }
-modelcraft-render = { workspace = true }
-modelcraft-explicit = { workspace = true }
-modelcraft-geometry = { workspace = true }
-modelcraft-decks = { workspace = true }
+fieldcraft-model = { workspace = true }
+fieldcraft-engine = { workspace = true }
+fieldcraft-render = { workspace = true }
+fieldcraft-explicit = { workspace = true }
+fieldcraft-geometry = { workspace = true }
+fieldcraft-decks = { workspace = true }
 egui = { workspace = true }
 craft-ui = { workspace = true }
 egui-wgpu = { workspace = true }

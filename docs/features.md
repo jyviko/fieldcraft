@@ -1,7 +1,7 @@
 # Features
 
 Generated from the capability catalogue (`crates/engine/src/catalogue.rs`) by
-`cargo run -p modelcraft-cli -- features > docs/features.md`; a test fails when it is out of date.
+`cargo run -p fieldcraft-cli -- features > docs/features.md`; a test fails when it is out of date.
 Every entry is a toolbar button. **Ready** entries run their command; **coming soon** entries are
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
@@ -121,8 +121,8 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Decks | Abaqus Input — Write an Abaqus input file (.inp) | ready | `deck.write {"format":"abaqus"}` |
 | Decks | Nastran Deck — Write Nastran bulk data (SOL 101, 103) | ready | `deck.write {"format":"nastran"}` |
 | Decks | LS-DYNA Deck — Write an LS-DYNA keyword file | ready | `deck.write {"format":"lsdyna"}` |
-| Decks | Read Deck — Read a deck, keeping keywords ModelCraft does not know | coming soon (M9) |  |
-| Implicit | Static — Linear static (or coupled temperature–displacement) solve of a step with ModelCraft's own solver; heat transfer in the drop-down | ready | `solve.static`, `solve.heat` |
+| Decks | Read Deck — Read a deck, keeping keywords FieldCraft does not know | coming soon (M9) |  |
+| Implicit | Static — Linear static (or coupled temperature–displacement) solve of a step with FieldCraft's own solver; heat transfer in the drop-down | ready | `solve.static`, `solve.heat` |
 | Implicit | Frequency — Natural frequencies and mode shapes of a frequency step | ready | `solve.frequency` |
 | Explicit | Explicit — Transient dynamics of an explicit step by central differences (contact and erosion coming in M10) | ready | `solve.explicit` |
 | Explicit | Blast & Impact — EOS-driven fluids with fluid–structure contact (ALE or SPH) | coming soon (M14) |  |
@@ -153,10 +153,10 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Panel | Capability | Status | Command |
 |---|---|---|---|
 | Model | Model Info — Node and element counts and the model summary | ready | `model.info` |
-| File | Open Model — Open a .modelcraft model | ready | `file.open` |
+| File | Open Model — Open a .fieldcraft model | ready | `file.open` |
 | File | Samples — Open a sample model, ready to solve | ready | `file.sample` |
-| File | Save — Save the model to its .modelcraft file | ready | `file.save` |
-| File | Save As — Save the model to a new .modelcraft file | ready | `file.save_as` |
+| File | Save — Save the model to its .fieldcraft file | ready | `file.save` |
+| File | Save As — Save the model to a new .fieldcraft file | ready | `file.save_as` |
 | File | Recover — Open a model autosaved by an app that crashed or closed with unsaved changes | ready | `file.recover`, `file.recovery.list`, `file.recovery.discard` |
 | History | Undo — Undo the last command that changed the model | ready | `edit.undo` |
 | History | Redo — Redo the command undone last | ready | `edit.redo` |

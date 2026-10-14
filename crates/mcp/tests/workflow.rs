@@ -4,8 +4,8 @@
 
 use std::path::PathBuf;
 
-use modelcraft_io::roots::Roots;
-use modelcraft_mcp::{Headless, Server};
+use fieldcraft_io::roots::Roots;
+use fieldcraft_mcp::{Headless, Server};
 use serde_json::{Value, json};
 
 struct Client {
@@ -57,18 +57,18 @@ fn base64_decode(s: &str) -> Vec<u8> {
 
 #[test]
 fn a_corpus_part_is_meshed_loaded_solved_and_rendered_over_mcp() {
-    let dir: PathBuf = std::env::temp_dir().join(format!("modelcraft-mcp-workflow-{}", std::process::id()));
+    let dir: PathBuf = std::env::temp_dir().join(format!("fieldcraft-mcp-workflow-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dir = std::fs::canonicalize(&dir).unwrap();
-    let part = modelcraft_testkit::corpus::read_recipe(&modelcraft_testkit::corpus::corpus_dir().join("stepped-block")).unwrap();
+    let part = fieldcraft_testkit::corpus::read_recipe(&fieldcraft_testkit::corpus::corpus_dir().join("stepped-block")).unwrap();
     let design = dir.join("steps.solidcraft");
-    std::fs::write(&design, modelcraft_testkit::corpus::design_bytes(&part).unwrap()).unwrap();
+    std::fs::write(&design, fieldcraft_testkit::corpus::design_bytes(&part).unwrap()).unwrap();
 
     let roots = Roots::new(Some(&dir), Some(&dir)).unwrap();
     let mut c = Client { server: Server::new(Box::new(Headless::new(roots))), next: 0 };
     let init = c.request("initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}));
-    assert_eq!(init["serverInfo"]["name"], "modelcraft");
+    assert_eq!(init["serverInfo"]["name"], "fieldcraft");
     assert!(c.server.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
 
     // Open the design and look at its faces.
@@ -134,8 +134,8 @@ fn a_corpus_part_is_meshed_loaded_solved_and_rendered_over_mcp() {
     assert_eq!(info["results"]["step"], "Load", "{info}");
 
     // Save the model and write a deck, both inside the root.
-    c.json("save", json!({"path": dir.join("steps.modelcraft")}));
+    c.json("save", json!({"path": dir.join("steps.fieldcraft")}));
     c.json("write_deck", json!({"format": "abaqus", "path": dir.join("steps.inp")}));
-    assert!(dir.join("steps.modelcraft").is_file() && dir.join("steps.inp").is_file());
+    assert!(dir.join("steps.fieldcraft").is_file() && dir.join("steps.inp").is_file());
     let _ = std::fs::remove_dir_all(&dir);
 }

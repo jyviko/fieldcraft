@@ -39,7 +39,7 @@
 //!   webs or the two flanges of a box) (W. D. Pilkey, *Analysis and Design of Elastic Beams*,
 //!   Wiley 2002, ch. 6).
 
-use modelcraft_model::{BeamProfile, Elastic};
+use fieldcraft_model::{BeamProfile, Elastic};
 
 use crate::dense::Matrix;
 use crate::dof::{DofSet, ElementDofs};
@@ -211,7 +211,7 @@ fn line_axis(xyz: &[[f64; 3]]) -> Result<(Vec3, f64)> {
     let [a, b] = xyz else {
         return Err(Error::Invalid(format!("a two-node line element has 2 nodes, got {}", xyz.len())));
     };
-    modelcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
+    fieldcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
     let d = sub(*b, *a);
     let length = norm(d);
     let ex = unit(d).ok_or_else(|| Error::Degenerate("a line element has zero length".into()))?;

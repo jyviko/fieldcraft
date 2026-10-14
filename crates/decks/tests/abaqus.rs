@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use modelcraft_decks::{Error, abaqus};
-use modelcraft_model::{
+use fieldcraft_decks::{Error, abaqus};
+use fieldcraft_model::{
     BeamProfile, BoundaryCondition, Coupling, CouplingKind, Distribution, Dofs, Elastic, ElementFace, ElementKind, Formulation, Integration, Load,
     Material, Model, OutputVariable, Procedure, ReferencePoint, Section, SectionKind, Set, Step, Symmetry, Target, UnitSystem,
 };
@@ -185,12 +185,12 @@ fn read(deck: &str) -> Parsed {
 
 fn golden(name: &str, deck: &str) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/abaqus").join(format!("{name}.inp"));
-    if std::env::var_os("MODELCRAFT_BLESS").is_some() {
+    if std::env::var_os("FIELDCRAFT_BLESS").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, deck).unwrap();
     }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (run with MODELCRAFT_BLESS=1 to write it)", path.display()));
-    assert!(expected == deck, "{name}.inp differs from the written deck (MODELCRAFT_BLESS=1 rewrites it):\n{deck}");
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (run with FIELDCRAFT_BLESS=1 to write it)", path.display()));
+    assert!(expected == deck, "{name}.inp differs from the written deck (FIELDCRAFT_BLESS=1 rewrites it):\n{deck}");
 }
 
 fn assert_lines_fit(deck: &str) {
@@ -513,16 +513,16 @@ fn numbers_read_back_exactly() {
 #[test]
 fn largest_labels_longest_numbers_and_names_fit_a_line() {
     let mut m = Model::default();
-    let base = modelcraft_model::MAX_LABEL - 30;
+    let base = fieldcraft_model::MAX_LABEL - 30;
     let ugly = -1.234_567_890_123_456_7e-300;
     let mut xyz = one_element(ElementKind::Hex20).nodes().values().map(|n| n.xyz).collect::<Vec<_>>();
     xyz[0] = [ugly, ugly, ugly];
     for (i, p) in xyz.iter().enumerate() {
         m.set_node(base + i as u32, *p).unwrap();
     }
-    m.set_element(modelcraft_model::MAX_LABEL, ElementKind::Hex20, (0..20).map(|i| base + i).collect()).unwrap();
-    let long = format!("A{}", "x".repeat(modelcraft_model::MAX_NAME_LEN - 1));
-    m.add_set(&long, Set { elements: vec![modelcraft_model::MAX_LABEL], nodes: (0..20).map(|i| base + i).collect(), ..Set::default() }).unwrap();
+    m.set_element(fieldcraft_model::MAX_LABEL, ElementKind::Hex20, (0..20).map(|i| base + i).collect()).unwrap();
+    let long = format!("A{}", "x".repeat(fieldcraft_model::MAX_NAME_LEN - 1));
+    m.add_set(&long, Set { elements: vec![fieldcraft_model::MAX_LABEL], nodes: (0..20).map(|i| base + i).collect(), ..Set::default() }).unwrap();
     m.add_material(
         &long,
         Material { elastic: Some(Elastic::Isotropic { young: ugly.abs(), poisson: 0.3 }), density: Some(1.0), ..Material::default() },
@@ -537,7 +537,7 @@ fn largest_labels_longest_numbers_and_names_fit_a_line() {
     let deck = abaqus::write(&m).unwrap();
     assert_lines_fit(&deck);
     let p = read(&deck);
-    assert_eq!(p.elements[&modelcraft_model::MAX_LABEL].1.len(), 20, "a hex20 continues onto a second line");
+    assert_eq!(p.elements[&fieldcraft_model::MAX_LABEL].1.len(), 20, "a hex20 continues onto a second line");
     assert_eq!(p.nodes[&base], [ugly; 3]);
 }
 
@@ -704,7 +704,7 @@ fn a_model_that_is_not_ready_is_refused() {
 }
 
 /// The cantilever with its steel given each plasticity in turn.
-fn plastic_cantilever(p: modelcraft_model::Plastic) -> Model {
+fn plastic_cantilever(p: fieldcraft_model::Plastic) -> Model {
     let mut m = cantilever();
     m.replace_material("Steel", Material { plastic: Some(p), ..steel() }).unwrap();
     m
@@ -714,7 +714,7 @@ fn plastic_cantilever(p: modelcraft_model::Plastic) -> Model {
 /// erosion, failure models of Abaqus/Explicit, are reported.
 #[test]
 fn plasticity_is_written_and_failure_reported() {
-    use modelcraft_model::{Damage, Erosion, Hardening, HardeningPoint, Plastic};
+    use fieldcraft_model::{Damage, Erosion, Hardening, HardeningPoint, Plastic};
     let section = |deck: &str| deck.split("*MATERIAL, NAME=Steel").nth(1).and_then(|s| s.split("*SOLID SECTION").next()).unwrap().to_string();
     let deck =
         abaqus::write(&plastic_cantilever(Plastic::Bilinear { yield_stress: 250.0, hardening_modulus: 1000.0, hardening: Hardening::Isotropic }))

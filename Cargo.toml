@@ -7,26 +7,26 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
-authors = ["ModelCraft contributors"]
-repository = "https://github.com/jyviko/modelcraft"
+authors = ["FieldCraft contributors"]
+repository = "https://github.com/jyviko/fieldcraft"
 
 [workspace.dependencies]
 # internal
-modelcraft-model = { path = "crates/model" }
-modelcraft-parallel = { path = "crates/parallel" }
-modelcraft-geometry = { path = "crates/geometry" }
-modelcraft-mesh = { path = "crates/mesh" }
-modelcraft-decks = { path = "crates/decks" }
-modelcraft-io = { path = "crates/io" }
-modelcraft-fem = { path = "crates/fem" }
-modelcraft-solver = { path = "crates/solver" }
-modelcraft-explicit = { path = "crates/explicit" }
-modelcraft-lbm = { path = "crates/lbm" }
-modelcraft-engine = { path = "crates/engine" }
-modelcraft-testkit = { path = "crates/testkit" }
-modelcraft-render = { path = "crates/render" }
-modelcraft-ui-egui = { path = "crates/ui-egui" }
-modelcraft-mcp = { path = "crates/mcp" }
+fieldcraft-model = { path = "crates/model" }
+fieldcraft-parallel = { path = "crates/parallel" }
+fieldcraft-geometry = { path = "crates/geometry" }
+fieldcraft-mesh = { path = "crates/mesh" }
+fieldcraft-decks = { path = "crates/decks" }
+fieldcraft-io = { path = "crates/io" }
+fieldcraft-fem = { path = "crates/fem" }
+fieldcraft-solver = { path = "crates/solver" }
+fieldcraft-explicit = { path = "crates/explicit" }
+fieldcraft-lbm = { path = "crates/lbm" }
+fieldcraft-engine = { path = "crates/engine" }
+fieldcraft-testkit = { path = "crates/testkit" }
+fieldcraft-render = { path = "crates/render" }
+fieldcraft-ui-egui = { path = "crates/ui-egui" }
+fieldcraft-mcp = { path = "crates/mcp" }
 
 # foundation
 thiserror = "2"
@@ -38,7 +38,7 @@ log = "0.4"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 quick-xml = "0.41"
 
-# content hashes and part checksums of .modelcraft files (the version SolidCraft uses)
+# content hashes and part checksums of .fieldcraft files (the version SolidCraft uses)
 sha2 = "0.10"
 
 # images (PNG snapshots and screenshots)
@@ -62,7 +62,7 @@ solidcraft-geom = { git = "https://github.com/bherbruck/solidcraft", rev = "de14
 solidcraft-kernel = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
 solidcraft-doc = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
 solidcraft-io = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
-# Runs SolidCraft command scripts (the test corpus recipes); only behind modelcraft-geometry's
+# Runs SolidCraft command scripts (the test corpus recipes); only behind fieldcraft-geometry's
 # `scripts` feature.
 solidcraft-engine = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
 
@@ -85,7 +85,7 @@ opt-level = 1
 
 # The lattice Boltzmann kernels are compute loops over millions of cells; their verification
 # runs (tests) need them optimised.
-[profile.dev.package.modelcraft-lbm]
+[profile.dev.package.fieldcraft-lbm]
 opt-level = 3
 
 # Tests and lints (`cargo xtask ci`, GitHub CI). Debug assertions are off because truck's
@@ -101,7 +101,7 @@ incremental = false
 [profile.ci.package."*"]
 opt-level = 2
 
-[profile.ci.package.modelcraft-lbm]
+[profile.ci.package.fieldcraft-lbm]
 opt-level = 3
 
 [profile.release]
@@ -111,7 +111,7 @@ codegen-units = 16
 debug = "line-tables-only"
 
 # SolidCraft builds truck and egui-wgpu with local fixes (its vendor/ directory). Patches don't
-# reach a dependent workspace, so ModelCraft applies the same ones from the same pinned commit;
+# reach a dependent workspace, so FieldCraft applies the same ones from the same pinned commit;
 # keep this list and the rev in step with SolidCraft's [patch.crates-io].
 [patch.crates-io]
 truck-shapeops = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }

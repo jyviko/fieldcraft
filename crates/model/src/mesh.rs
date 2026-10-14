@@ -105,7 +105,7 @@ impl ElementKind {
         }
     }
 
-    /// The name used in commands and `.modelcraft` files (`hex8`, `tet10`, …).
+    /// The name used in commands and `.fieldcraft` files (`hex8`, `tet10`, …).
     pub fn name(self) -> &'static str {
         match self {
             ElementKind::Rod2 => "rod2",

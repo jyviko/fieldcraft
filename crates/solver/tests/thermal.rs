@@ -7,8 +7,8 @@
 mod common;
 
 use common::*;
-use modelcraft_model::*;
-use modelcraft_solver::{Limits, solve_heat, solve_static};
+use fieldcraft_model::*;
+use fieldcraft_solver::{Limits, solve_heat, solve_static};
 
 const K: f64 = 45.0;
 
@@ -26,7 +26,7 @@ fn hold(g: &mut Grid, name: &str, value: f64, f: impl Fn([f64; 3]) -> bool) {
     g.bc(name, BoundaryCondition::Temperature { target: Target::Set(name.into()), value });
 }
 
-fn temperature_at(r: &modelcraft_solver::HeatResult, label: u32) -> f64 {
+fn temperature_at(r: &fieldcraft_solver::HeatResult, label: u32) -> f64 {
     r.temperature()[r.nodes.binary_search(&label).unwrap()]
 }
 
@@ -384,7 +384,7 @@ fn heat_steps_refuse_what_they_cannot_solve() {
 
 /// One rod3 or two rod2 along X over [0, `len`], heated by `dt`, fixed at x = 0, the other
 /// nodes held in Y and Z, and the end held along X too when `held`.
-fn heated_rod(kind: ElementKind, len: f64, alpha: [f64; 3], dt: f64, held: bool) -> modelcraft_solver::StaticResult {
+fn heated_rod(kind: ElementKind, len: f64, alpha: [f64; 3], dt: f64, held: bool) -> fieldcraft_solver::StaticResult {
     let mut m = Model::default();
     for (label, x) in [(1, 0.0), (2, len), (3, 0.5 * len)] {
         m.set_node(label, [x, 0.0, 0.0]).unwrap();

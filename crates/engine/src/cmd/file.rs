@@ -1,4 +1,4 @@
-//! Files: open and save `.modelcraft` models, and recover autosaved ones.
+//! Files: open and save `.fieldcraft` models, and recover autosaved ones.
 //!
 //! A saved model refers to its design and imported meshes by path and content hash; opening it
 //! opens them again. Paths inside the model file's folder are stored relative to it, so a folder
@@ -9,12 +9,12 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use modelcraft_geometry::tagged_mesh;
-use modelcraft_geometry::{Design, MAX_DESIGN_BYTES, open_design};
-use modelcraft_io::{Geometry, ModelFile, SourceFile};
+use fieldcraft_geometry::tagged_mesh;
+use fieldcraft_geometry::{Design, MAX_DESIGN_BYTES, open_design};
+use fieldcraft_io::{Geometry, ModelFile, SourceFile};
 use serde_json::{Value, json};
 
-use modelcraft_io::roots::{Access, Roots};
+use fieldcraft_io::roots::{Access, Roots};
 
 use super::{file_param, req};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session, next_revision};
@@ -22,7 +22,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session, next_revisio
 pub const OPEN: CommandSpec = CommandSpec {
     id: "file.open",
     label: "Open Model",
-    params: r#"{"path": "bracket.modelcraft"} — opens the model, its mesh and its journal, and opens its design and imported meshes again from their files (one that is missing or changed is listed in `warnings`; the model still opens); unsaved changes of the current model are discarded and the undo history starts empty"#,
+    params: r#"{"path": "bracket.fieldcraft"} — opens the model, its mesh and its journal, and opens its design and imported meshes again from their files (one that is missing or changed is listed in `warnings`; the model still opens); unsaved changes of the current model are discarded and the undo history starts empty"#,
     kind: CommandKind::Session,
     run: open,
 };
@@ -30,7 +30,7 @@ pub const OPEN: CommandSpec = CommandSpec {
 pub const SAVE: CommandSpec = CommandSpec {
     id: "file.save",
     label: "Save Model",
-    params: r#"{"path"?: "bracket.modelcraft"} — saves to `path`, else to the file the model was opened from or last saved to; written atomically, the previous version kept as `<file>.bak`"#,
+    params: r#"{"path"?: "bracket.fieldcraft"} — saves to `path`, else to the file the model was opened from or last saved to; written atomically, the previous version kept as `<file>.bak`"#,
     kind: CommandKind::Session,
     run: save,
 };
@@ -38,7 +38,7 @@ pub const SAVE: CommandSpec = CommandSpec {
 pub const SAVE_AS: CommandSpec = CommandSpec {
     id: "file.save_as",
     label: "Save Model As",
-    params: r#"{"path": "bracket.modelcraft"} — saves to a new file, which becomes the model's file"#,
+    params: r#"{"path": "bracket.fieldcraft"} — saves to a new file, which becomes the model's file"#,
     kind: CommandKind::Session,
     run: save_as,
 };
@@ -46,7 +46,7 @@ pub const SAVE_AS: CommandSpec = CommandSpec {
 pub const RECOVERY_LIST: CommandSpec = CommandSpec {
     id: "file.recovery.list",
     label: "Recoverable Models",
-    params: r#"{"dir"?: "…"} — models autosaved by apps that crashed or closed with unsaved changes, newest first (default folder: MODELCRAFT_RECOVERY_DIR or the per-user data folder)"#,
+    params: r#"{"dir"?: "…"} — models autosaved by apps that crashed or closed with unsaved changes, newest first (default folder: FIELDCRAFT_RECOVERY_DIR or the per-user data folder)"#,
     kind: CommandKind::Session,
     run: recovery_list,
 };
@@ -70,7 +70,7 @@ pub const RECOVERY_DISCARD: CommandSpec = CommandSpec {
 pub const SAMPLE: CommandSpec = CommandSpec {
     id: "file.sample",
     label: "Open Sample",
-    params: r#"{"name": "parts|cantilever|impact"} — opens a sample model (modelcraft_engine::sample) in place of the current one, unsaved changes discarded; `cantilever` and `impact` are ready to solve (solve.run)"#,
+    params: r#"{"name": "parts|cantilever|impact"} — opens a sample model (fieldcraft_engine::sample) in place of the current one, unsaved changes discarded; `cantilever` and `impact` are ready to solve (solve.run)"#,
     kind: CommandKind::Session,
     run: open_sample,
 };
@@ -120,7 +120,7 @@ fn reopen<T>(
     base: Option<&Path>,
     roots: &Roots,
     max: usize,
-    open: impl FnOnce(&[u8]) -> modelcraft_geometry::Result<T>,
+    open: impl FnOnce(&[u8]) -> fieldcraft_geometry::Result<T>,
     warnings: &mut Vec<String>,
 ) -> (Option<T>, SourceFile) {
     let path = resolved_path(stored.path(), base);
@@ -132,7 +132,7 @@ fn reopen<T>(
             return (None, kept);
         }
     };
-    let bytes = match modelcraft_geometry::read_file(&checked, max) {
+    let bytes = match fieldcraft_geometry::read_file(&checked, max) {
         Ok(b) => b,
         Err(e) => {
             warnings.push(format!("{what} `{path}` was not opened ({e}); the model opens without it"));
@@ -154,15 +154,15 @@ fn reopen<T>(
 }
 
 impl Session {
-    /// The bytes of the `.modelcraft` file holding this session, with geometry paths inside
+    /// The bytes of the `.fieldcraft` file holding this session, with geometry paths inside
     /// `base` (the folder the file goes to) stored relative to it.
     pub fn file_bytes(&self, base: Option<&Path>) -> Result<Vec<u8>> {
         let stored = |s: &SourceFile| s.with_path(stored_path(s.path(), base));
         let geometry = Geometry {
             design: self.sources.design.as_ref().map(stored).transpose()?,
-            meshes: self.sources.meshes.iter().map(stored).collect::<modelcraft_io::Result<_>>()?,
+            meshes: self.sources.meshes.iter().map(stored).collect::<fieldcraft_io::Result<_>>()?,
         };
-        Ok(modelcraft_io::write(&self.model, &geometry, &self.journal)?)
+        Ok(fieldcraft_io::write(&self.model, &geometry, &self.journal)?)
     }
 
     /// A session holding what a file holds, its geometry opened again from the paths it names
@@ -211,10 +211,10 @@ fn summary(s: &Session, warnings: &[String]) -> Value {
     })
 }
 
-/// Replace the session with a `.modelcraft` file's content; `path` is its own file (geometry
+/// Replace the session with a `.fieldcraft` file's content; `path` is its own file (geometry
 /// paths are relative to its folder), `saved` whether that file holds this content.
 fn load(s: &mut Session, bytes: &[u8], path: Option<String>, saved: bool) -> Result<Value> {
-    let file = modelcraft_io::read(bytes)?;
+    let file = fieldcraft_io::read(bytes)?;
     let (mut opened, warnings) = Session::from_file(file, path.as_deref().and_then(|p| Path::new(p).parent()), &s.file_access);
     opened.path = path;
     if saved {
@@ -226,8 +226,8 @@ fn load(s: &mut Session, bytes: &[u8], path: Option<String>, saved: bool) -> Res
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = absolute(&file_param(s, p, "path", Access::Read)?);
-    let max = usize::try_from(modelcraft_io::MAX_FILE_BYTES).unwrap_or(usize::MAX);
-    let bytes = modelcraft_geometry::read_file(&path, max)?;
+    let max = usize::try_from(fieldcraft_io::MAX_FILE_BYTES).unwrap_or(usize::MAX);
+    let bytes = fieldcraft_geometry::read_file(&path, max)?;
     load(s, &bytes, Some(path.clone()), true).map_err(|e| EngineError::Params(format!("{path}: {e}")))
 }
 
@@ -238,7 +238,7 @@ fn save_to(s: &mut Session, path: &str) -> Result<Value> {
         return Err(EngineError::Params(format!("`{target}` exists and is not a regular file")));
     }
     let bytes = s.file_bytes(Path::new(&target).parent())?;
-    modelcraft_io::fs::write_atomic(Path::new(&target), &bytes, true)?;
+    fieldcraft_io::fs::write_atomic(Path::new(&target), &bytes, true)?;
     s.mark_saved(target.clone());
     Ok(json!({"path": target, "bytes": bytes.len()}))
 }
@@ -265,19 +265,19 @@ fn recovery_dir(s: &Session, p: &Value, access: Access) -> Result<PathBuf> {
     match p.get("dir") {
         Some(_) => Ok(PathBuf::from(file_param(s, p, "dir", access)?)),
         None => {
-            crate::autosave::default_dir().ok_or_else(|| EngineError::Params("no recovery folder: set MODELCRAFT_RECOVERY_DIR or give `dir`".into()))
+            crate::autosave::default_dir().ok_or_else(|| EngineError::Params("no recovery folder: set FIELDCRAFT_RECOVERY_DIR or give `dir`".into()))
         }
     }
 }
 
 fn recovery_list(s: &mut Session, p: &Value) -> Result<Value> {
-    let entries = modelcraft_io::recovery::orphans(&recovery_dir(s, p, Access::Read)?);
+    let entries = fieldcraft_io::recovery::orphans(&recovery_dir(s, p, Access::Read)?);
     serde_json::to_value(entries).map_err(|e| EngineError::Params(e.to_string()))
 }
 
 fn recover(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = recovery_dir(s, p, Access::Read)?;
-    let (bytes, entry) = modelcraft_io::recovery::load(&dir, req::<&str>(p, "id")?)?;
+    let (bytes, entry) = fieldcraft_io::recovery::load(&dir, req::<&str>(p, "id")?)?;
     // Recovered work is unsaved until it is saved. Autosaves keep geometry paths absolute.
     load(s, &bytes, entry.path, false)
 }
@@ -285,26 +285,26 @@ fn recover(s: &mut Session, p: &Value) -> Result<Value> {
 fn recovery_discard(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = recovery_dir(s, p, Access::Write)?;
     if p.get("all").and_then(Value::as_bool) == Some(true) {
-        let ids: Vec<String> = modelcraft_io::recovery::orphans(&dir).into_iter().map(|e| e.id).collect();
+        let ids: Vec<String> = fieldcraft_io::recovery::orphans(&dir).into_iter().map(|e| e.id).collect();
         for id in &ids {
-            modelcraft_io::recovery::remove(&dir, id)?;
+            fieldcraft_io::recovery::remove(&dir, id)?;
         }
         return Ok(json!({"discarded": ids}));
     }
     let id = req::<&str>(p, "id")?;
-    modelcraft_io::recovery::remove(&dir, id)?;
+    fieldcraft_io::recovery::remove(&dir, id)?;
     Ok(json!({"discarded": [id]}))
 }
 
 #[cfg(test)]
 mod tests {
-    use modelcraft_geometry::sample::{Plate, plate_design};
+    use fieldcraft_geometry::sample::{Plate, plate_design};
     use serde_json::json;
 
     use super::*;
 
     fn dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("modelcraft-file-{tag}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("fieldcraft-file-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -327,17 +327,17 @@ mod tests {
         s.execute("geometry.open", &json!({"path": design})).unwrap();
         defined(&mut s);
         assert!(s.execute("file.save", &json!({})).is_err(), "no file yet, and no dialog");
-        let path = d.join("bracket.modelcraft");
+        let path = d.join("bracket.fieldcraft");
         s.execute("file.save_as", &json!({"path": path})).unwrap();
         assert!(!s.is_dirty());
         let bytes = std::fs::read(&path).unwrap();
-        let file = modelcraft_io::read(&bytes).unwrap();
+        let file = fieldcraft_io::read(&bytes).unwrap();
         assert_eq!(file.geometry.design.as_ref().unwrap().path(), "plate.solidcraft", "stored next to the model, relative");
 
         // Saving again keeps the previous version and gives the same bytes.
         s.execute("file.save", &json!({})).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert_eq!(std::fs::read(modelcraft_io::fs::backup_path(&path)).unwrap(), bytes);
+        assert_eq!(std::fs::read(fieldcraft_io::fs::backup_path(&path)).unwrap(), bytes);
 
         let mut t = Session::default();
         t.execute("mesh.node.add", &json!({"label": 9, "xyz": [0, 0, 0]})).unwrap();
@@ -383,17 +383,17 @@ mod tests {
         };
         refused(s.execute("geometry.open", &json!({"path": outside.join("plate.solidcraft")})));
         refused(s.execute("geometry.import.mesh", &json!({"path": outside.join("x.3mf")})));
-        refused(s.execute("file.open", &json!({"path": outside.join("x.modelcraft")})));
+        refused(s.execute("file.open", &json!({"path": outside.join("x.fieldcraft")})));
         refused(s.execute("file.recovery.list", &json!({"dir": outside})));
         refused(s.execute("file.recovery.discard", &json!({"all": true, "dir": input})));
         s.execute("geometry.open", &json!({"path": input.join("plate.solidcraft")})).unwrap();
         defined(&mut s);
         // Writes go to the write root only: not the read root, not elsewhere.
-        refused(s.execute("file.save_as", &json!({"path": input.join("m.modelcraft")})));
-        refused(s.execute("file.save_as", &json!({"path": outside.join("m.modelcraft")})));
-        refused(s.execute("file.save_as", &json!({"path": output.join("../outside/m.modelcraft")})));
+        refused(s.execute("file.save_as", &json!({"path": input.join("m.fieldcraft")})));
+        refused(s.execute("file.save_as", &json!({"path": outside.join("m.fieldcraft")})));
+        refused(s.execute("file.save_as", &json!({"path": output.join("../outside/m.fieldcraft")})));
         refused(s.execute("deck.write", &json!({"format": "abaqus", "path": outside.join("m.inp")})));
-        let saved = output.join("m.modelcraft");
+        let saved = output.join("m.fieldcraft");
         s.execute("file.save_as", &json!({"path": saved})).unwrap();
         assert!(saved.is_file());
         assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "nothing written outside");
@@ -402,8 +402,8 @@ mod tests {
         // opens without it.
         let mut other = Session::default();
         other.execute("geometry.open", &json!({"path": outside.join("plate.solidcraft")})).unwrap();
-        other.execute("file.save_as", &json!({"path": input.join("other.modelcraft")})).unwrap();
-        let r = s.execute("file.open", &json!({"path": input.join("other.modelcraft")})).unwrap();
+        other.execute("file.save_as", &json!({"path": input.join("other.fieldcraft")})).unwrap();
+        let r = s.execute("file.open", &json!({"path": input.join("other.fieldcraft")})).unwrap();
         assert!(r["warnings"][0].as_str().unwrap().contains("automation path rejected"), "{r}");
         assert!(s.design.is_none());
         assert!(s.file_access.is_confined());
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn hostile_file_params_and_files_change_nothing() {
         let d = dir("hostile");
-        let junk = d.join("junk.modelcraft");
+        let junk = d.join("junk.fieldcraft");
         std::fs::write(&junk, b"PK\x03\x04 not a model").unwrap();
         let mut s = Session::default();
         defined(&mut s);
@@ -422,12 +422,12 @@ mod tests {
         for (id, p) in [
             ("file.open", json!({"path": junk})),
             ("file.open", json!({"path": d})),
-            ("file.open", json!({"path": d.join("missing.modelcraft")})),
+            ("file.open", json!({"path": d.join("missing.fieldcraft")})),
             ("file.open", json!({"path": "\u{0}"})),
             ("file.open", json!({"path": 5})),
             ("file.save", json!({"path": ""})),
             ("file.save", json!({"path": d})),
-            ("file.save_as", json!({"path": d.join("no/such/dir/a.modelcraft")})),
+            ("file.save_as", json!({"path": d.join("no/such/dir/a.fieldcraft")})),
             ("file.save_as", json!({"path": "x".repeat(5000)})),
             ("file.save_as", json!({})),
             ("file.recover", json!({"id": "../../etc/passwd", "dir": d})),

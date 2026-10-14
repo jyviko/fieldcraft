@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-mcp"
-description = "ModelCraft's MCP server: JSON-RPC 2.0 over stdio, driving a headless session or the running app"
+name = "fieldcraft-mcp"
+description = "FieldCraft's MCP server: JSON-RPC 2.0 over stdio, driving a headless session or the running app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,10 +9,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-modelcraft-engine = { workspace = true }
-modelcraft-io = { workspace = true }
-modelcraft-render = { workspace = true }
+fieldcraft-engine = { workspace = true }
+fieldcraft-io = { workspace = true }
+fieldcraft-render = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-modelcraft-testkit = { workspace = true }
+fieldcraft-testkit = { workspace = true }

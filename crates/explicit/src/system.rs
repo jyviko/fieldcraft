@@ -3,11 +3,11 @@
 //! ([`crate::discrete`]), prescribed velocities, rigid walls, initial velocities and the load
 //! vector of an explicit dynamic step.
 
-use modelcraft_fem::material::Elasticity;
-use modelcraft_fem::plasticity::J2;
-use modelcraft_fem::uniform::{Hex8, Tet4, modulus_bound};
-use modelcraft_fem::{DofKind, DofLayout, DofSet, face};
-use modelcraft_model::{
+use fieldcraft_fem::material::Elasticity;
+use fieldcraft_fem::plasticity::J2;
+use fieldcraft_fem::uniform::{Hex8, Tet4, modulus_bound};
+use fieldcraft_fem::{DofKind, DofLayout, DofSet, face};
+use fieldcraft_model::{
     Elastic, ElementKind, ExplicitDynamic, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step, StressRate, Target,
 };
 
@@ -30,7 +30,7 @@ pub struct Material {
     /// Dilatational wave speed √(M/ρ), with M the largest normal stiffness (λ + 2μ when
     /// isotropic).
     pub wave_speed: f64,
-    /// The bound of [`modelcraft_fem::uniform::modulus_bound`].
+    /// The bound of [`fieldcraft_fem::uniform::modulus_bound`].
     pub modulus: f64,
     /// The largest normal stiffness M (λ + 2μ when isotropic): c = √(M/ρ).
     pub stiffest: f64,
@@ -143,7 +143,7 @@ fn material(model: &Model, name: &str) -> Result<Material> {
         .density
         .filter(|d| *d > 0.0 && d.is_finite())
         .ok_or_else(|| invalid(format!("material `{name}` has no density, and explicit dynamics needs one")))?;
-    let d = modelcraft_fem::elasticity(elastic).map_err(|e| invalid(format!("material `{name}`: {e}")))?;
+    let d = fieldcraft_fem::elasticity(elastic).map_err(|e| invalid(format!("material `{name}`: {e}")))?;
     let stiffest = d[0][0].max(d[1][1]).max(d[2][2]);
     // The model keeps plasticity, damage and erosion to isotropic materials.
     let j2 = match *elastic {
@@ -171,7 +171,7 @@ fn material(model: &Model, name: &str) -> Result<Material> {
 }
 
 /// The section's elements of a kind the explicit solver has, or why not.
-fn check_formulation(kind: ElementKind, section_name: &str, f: &modelcraft_model::Formulation) -> Result<()> {
+fn check_formulation(kind: ElementKind, section_name: &str, f: &fieldcraft_model::Formulation) -> Result<()> {
     let refuse = |why: &str| Err(Error::NotSupported(format!("section `{section_name}`: {why}")));
     if f.hybrid {
         return refuse("hybrid elements in explicit dynamics");
@@ -327,7 +327,7 @@ impl System {
                         )));
                     }
                     let young =
-                        modelcraft_fem::truss::young_modulus(source.elastic.as_ref().ok_or_else(|| Error::Internal("truss material".into()))?)
+                        fieldcraft_fem::truss::young_modulus(source.elastic.as_ref().ok_or_else(|| Error::Internal("truss material".into()))?)
                             .map_err(|e| invalid(format!("material `{}` of element {label}: {e}", mat.name)))?;
                     let x: Vec<[f64; 3]> = idx.iter().map(|i| sys.xyz.get(*i).copied().unwrap_or_default()).collect();
                     let rod = Rod::new(label, index, kind, idx.clone(), &x, mi, crate::discrete::RodSection { young, density: rho, area })?;
@@ -518,7 +518,7 @@ impl System {
                     self.each_element(chosen, |nodes, weights, rho| {
                         for (node, w) in nodes.iter().zip(weights) {
                             let x = xyz.get(*node).copied().unwrap_or_default();
-                            let a = modelcraft_model::centrifugal_acceleration(*angular_velocity, *point, *axis, x);
+                            let a = fieldcraft_model::centrifugal_acceleration(*angular_velocity, *point, *axis, x);
                             add_at(&mut f, *node, &a.map(|c| rho * w * c));
                         }
                     });

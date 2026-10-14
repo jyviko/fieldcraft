@@ -1,13 +1,13 @@
 //! LS-DYNA deck writer: golden files of our own small models, node-order mappings checked by the
 //! sign of the element Jacobian, a re-read of our own output, and what the format cannot take.
 //!
-//! Golden files live in `tests/lsdyna/`; `MODELCRAFT_BLESS=1 cargo test -p modelcraft-decks`
+//! Golden files live in `tests/lsdyna/`; `FIELDCRAFT_BLESS=1 cargo test -p fieldcraft-decks`
 //! rewrites them after an intended change (review the diff).
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use modelcraft_decks::{Error, lsdyna};
-use modelcraft_model::*;
+use fieldcraft_decks::{Error, lsdyna};
+use fieldcraft_model::*;
 
 // ---------------------------------------------------------------------------------------------
 // Our own models.
@@ -200,11 +200,11 @@ fn golden(name: &str, model: &Model) -> lsdyna::Written {
     let again = lsdyna::write(model).unwrap();
     assert_eq!(written, again, "deterministic");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lsdyna").join(format!("{name}.k"));
-    if std::env::var_os("MODELCRAFT_BLESS").is_some() {
+    if std::env::var_os("FIELDCRAFT_BLESS").is_some() {
         std::fs::write(&path, &written.text).unwrap();
     }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (run with MODELCRAFT_BLESS=1)", path.display()));
-    assert!(written.text == expected, "{name}.k differs from the golden file (MODELCRAFT_BLESS=1 rewrites it)");
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (run with FIELDCRAFT_BLESS=1)", path.display()));
+    assert!(written.text == expected, "{name}.k differs from the golden file (FIELDCRAFT_BLESS=1 rewrites it)");
     assert!(written.text.is_ascii());
     for line in written.text.lines() {
         assert!(line.len() <= 200 && line == line.trim_end(), "{line:?}");
@@ -688,7 +688,7 @@ fn hostile_numbers_stay_within_their_fields() {
 fn explicit_steps_are_refused_by_every_format() {
     let mut m = cantilever();
     m.add_step(step("Impact", Procedure::ExplicitDynamic(ExplicitDynamic::new(1e-3)), &["clamp"], &[]), None).unwrap();
-    for f in modelcraft_decks::FORMATS {
+    for f in fieldcraft_decks::FORMATS {
         let e = f.write(&m).unwrap_err();
         assert!(matches!(e, Error::Unsupported { .. }), "{}: {e}", f.name);
         assert!(e.to_string().contains("step `Impact`: explicit dynamic"), "{}: {e}", f.name);

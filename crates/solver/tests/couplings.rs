@@ -6,8 +6,8 @@ mod common;
 use std::f64::consts::PI;
 
 use common::*;
-use modelcraft_model::{BoundaryCondition, CouplingKind, Distribution, ElementKind, Load, Procedure, Symmetry, Target};
-use modelcraft_solver::{FrequencyOptions, Limits, StaticResult, solve_frequency, solve_static};
+use fieldcraft_model::{BoundaryCondition, CouplingKind, Distribution, ElementKind, Load, Procedure, Symmetry, Target};
+use fieldcraft_solver::{FrequencyOptions, Limits, StaticResult, solve_frequency, solve_static};
 
 const ALL: [u8; 6] = [1, 2, 3, 4, 5, 6];
 
@@ -221,7 +221,7 @@ fn tube(nr: usize, nt: usize, nz: usize, ri: f64, ro: f64, length: f64) -> Grid 
         .filter(|(_, p)| near(p[1], 1.0))
         .map(|(l, p)| (*l, *g.param.iter().find(|(_, o)| near(o[1], 0.0) && near(o[0], p[0]) && near(o[2], p[2])).unwrap().0))
         .collect();
-    let elements: Vec<(u32, modelcraft_model::Element)> = g.model.elements().iter().map(|(l, e)| (*l, e.clone())).collect();
+    let elements: Vec<(u32, fieldcraft_model::Element)> = g.model.elements().iter().map(|(l, e)| (*l, e.clone())).collect();
     for (label, e) in elements {
         let nodes: Vec<u32> = e.nodes.iter().map(|n| seam.iter().find(|(a, _)| a == n).map_or(*n, |(_, b)| *b)).collect();
         g.model.set_element(label, e.kind, nodes).unwrap();
@@ -308,7 +308,7 @@ fn coupling_errors_name_the_problem() {
     g.load("m", moment(rp("Tip"), [1.0, 0.0, 0.0]));
     assert!(err(&g).contains("rotation about X is not coupled"), "{}", err(&g));
 
-    let loose = |g: &mut Grid| g.model.add_reference_point("Loose", modelcraft_model::ReferencePoint { xyz: [3.0, 0.0, 0.0], label: 0 }).unwrap();
+    let loose = |g: &mut Grid| g.model.add_reference_point("Loose", fieldcraft_model::ReferencePoint { xyz: [3.0, 0.0, 0.0], label: 0 }).unwrap();
 
     // A force on a reference point nothing couples.
     let mut g = base();

@@ -1,23 +1,23 @@
-//! ModelCraft desktop app.
+//! FieldCraft desktop app.
 //!
-//! Usage: `modelcraft [--sample [NAME]] [--control PORT] [FILE…]` (files open as if dropped on the
-//! window; NAME is a sample of `modelcraft_engine::sample`, `parts` by default)
+//! Usage: `fieldcraft [--sample [NAME]] [--control PORT] [FILE…]` (files open as if dropped on the
+//! window; NAME is a sample of `fieldcraft_engine::sample`, `parts` by default)
 //!
-//! `--sample` opens a sample model (`modelcraft_engine::sample`). `--control PORT` (or
-//! `MODELCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
+//! `--sample` opens a sample model (`fieldcraft_engine::sample`). `--control PORT` (or
+//! `FIELDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"method":"engine.execute","params":{"command":"model.info","params":{}}}`. See
-//! `modelcraft_ui_egui::control` and docs/control-protocol.md.
+//! `fieldcraft_ui_egui::control` and docs/control-protocol.md.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 mod control_server;
 
-use modelcraft_engine::Session;
-use modelcraft_engine::autosave::{self, Autosaver};
-use modelcraft_ui_egui::{Filter, ModelApp, Services};
+use fieldcraft_engine::Session;
+use fieldcraft_engine::autosave::{self, Autosaver};
+use fieldcraft_ui_egui::{Filter, ModelApp, Services};
 
-const USAGE: &str = "usage: modelcraft [--sample [parts|cantilever|impact]] [--control PORT] [FILE…]  (FILE: .modelcraft, .solidcraft or .3mf)";
+const USAGE: &str = "usage: fieldcraft [--sample [parts|cantilever|impact]] [--control PORT] [FILE…]  (FILE: .fieldcraft, .solidcraft or .3mf)";
 const DEPTH_BITS: u8 = 24;
 /// The window draws its own caption buttons where the OS ones would sit apart from the app bar.
 const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
@@ -90,7 +90,7 @@ fn services() -> Services {
             dialog(filters).set_file_name(name).save_file().map(|p| p.to_string_lossy().to_string())
         })),
         // Beside the recovery folder in the per-user data folder.
-        recent_path: modelcraft_io::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("recent.json"))),
+        recent_path: fieldcraft_io::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("recent.json"))),
     }
 }
 
@@ -111,7 +111,7 @@ fn parse_args(args: impl IntoIterator<Item = String>, env_port: Option<String>) 
         match a.as_str() {
             "--sample" => {
                 // An optional sample name follows.
-                let name = args.peek().filter(|a| modelcraft_engine::sample::find(a).is_some()).cloned();
+                let name = args.peek().filter(|a| fieldcraft_engine::sample::find(a).is_some()).cloned();
                 if name.is_some() {
                     args.next();
                 }
@@ -122,7 +122,7 @@ fn parse_args(args: impl IntoIterator<Item = String>, env_port: Option<String>) 
                 out.control = Some(port.parse().map_err(|_| format!("--control: `{port}` is not a port number"))?);
             }
             "--version" | "-V" => {
-                println!("modelcraft {}", modelcraft_ui_egui::VERSION);
+                println!("fieldcraft {}", fieldcraft_ui_egui::VERSION);
                 return Ok(None);
             }
             "--help" | "-h" => {
@@ -137,17 +137,17 @@ fn parse_args(args: impl IntoIterator<Item = String>, env_port: Option<String>) 
 }
 
 fn main() -> eframe::Result {
-    let args = match parse_args(std::env::args().skip(1), std::env::var("MODELCRAFT_CONTROL_PORT").ok()) {
+    let args = match parse_args(std::env::args().skip(1), std::env::var("FIELDCRAFT_CONTROL_PORT").ok()) {
         Ok(Some(a)) => a,
         Ok(None) => return Ok(()),
         Err(e) => {
-            eprintln!("modelcraft: {e}");
+            eprintln!("fieldcraft: {e}");
             std::process::exit(2);
         }
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("ModelCraft")
+            .with_title("FieldCraft")
             .with_icon(app_icon())
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([960.0, 600.0])
@@ -163,7 +163,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "ModelCraft",
+        "FieldCraft",
         options,
         Box::new(move |cc| {
             let mut app = ModelApp::new(Session::default()).with_services(services());
@@ -171,7 +171,7 @@ fn main() -> eframe::Result {
             app.integrated_titlebar = cfg!(target_os = "macos");
             if let Some(rs) = &cc.wgpu_render_state {
                 let info = rs.adapter.get_info();
-                eprintln!("modelcraft: graphics {:?} {}, MSAA {}x (requested {MSAA}x)", info.backend, info.name, rs.msaa_samples);
+                eprintln!("fieldcraft: graphics {:?} {}, MSAA {}x (requested {MSAA}x)", info.backend, info.name, rs.msaa_samples);
                 app.set_wgpu(rs, DEPTH_BITS, rs.msaa_samples, &cc.egui_ctx);
             }
             if let Some(port) = args.control {
@@ -224,9 +224,9 @@ mod tests {
         assert!(parse(&["--control", "99999"], None).is_err());
         assert!(parse(&["--frobnicate"], None).is_err());
         assert_eq!(parse(&["--sample", "impact"], None).map(|a| a.and_then(|a| a.sample)), Ok(Some("impact".into())));
-        let a = parse(&["--sample", "x.modelcraft"], None).unwrap().unwrap();
-        assert_eq!((a.sample.as_deref(), a.files), (Some("parts"), vec!["x.modelcraft".to_string()]));
-        assert_eq!(parse(&["a.modelcraft", "--sample"], None).map(|a| a.map(|a| a.files)), Ok(Some(vec!["a.modelcraft".to_string()])));
+        let a = parse(&["--sample", "x.fieldcraft"], None).unwrap().unwrap();
+        assert_eq!((a.sample.as_deref(), a.files), (Some("parts"), vec!["x.fieldcraft".to_string()]));
+        assert_eq!(parse(&["a.fieldcraft", "--sample"], None).map(|a| a.map(|a| a.files)), Ok(Some(vec!["a.fieldcraft".to_string()])));
         assert_eq!(parse(&["--help"], None), Ok(None));
     }
 }

@@ -7,17 +7,17 @@
 //! translations for solids, Ux and Uy for 2D elements), nodes by label, then six per coupled reference point (points by
 //! name): translations along X, Y, Z and rotations about them.
 
-use modelcraft_fem::beam::{Beam, BeamSection};
-use modelcraft_fem::dense::Matrix;
-use modelcraft_fem::element::{Formulation, Solid, ThermalStrain};
-use modelcraft_fem::plane::{Plane, Theory};
-use modelcraft_fem::shell::{Shell, ShellSection};
-use modelcraft_fem::truss::{Truss, young_modulus};
-use modelcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, ElementDofs, PointStress, elasticity, face, plane};
-use modelcraft_model::nodal::edge_pressure;
+use fieldcraft_fem::beam::{Beam, BeamSection};
+use fieldcraft_fem::dense::Matrix;
+use fieldcraft_fem::element::{Formulation, Solid, ThermalStrain};
+use fieldcraft_fem::plane::{Plane, Theory};
+use fieldcraft_fem::shell::{Shell, ShellSection};
+use fieldcraft_fem::truss::{Truss, young_modulus};
+use fieldcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, ElementDofs, PointStress, elasticity, face, plane};
+use fieldcraft_model::nodal::edge_pressure;
 use std::collections::BTreeSet;
 
-use modelcraft_model::{Elastic, ElementKind, Integration, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
+use fieldcraft_model::{Elastic, ElementKind, Integration, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
 
 use crate::analysis::MassKind;
 use crate::{Error, Result};
@@ -56,21 +56,21 @@ impl Kernel<'_> {
         }
     }
 
-    pub fn stiffness(&self, d: &Elasticity) -> modelcraft_fem::Result<modelcraft_fem::dense::Matrix> {
+    pub fn stiffness(&self, d: &Elasticity) -> fieldcraft_fem::Result<fieldcraft_fem::dense::Matrix> {
         match self {
             Kernel::Solid(s) => s.stiffness(d),
             Kernel::Plane(p) => p.stiffness(d),
         }
     }
 
-    pub fn mass(&self, density: f64) -> modelcraft_fem::Result<modelcraft_fem::dense::Matrix> {
+    pub fn mass(&self, density: f64) -> fieldcraft_fem::Result<fieldcraft_fem::dense::Matrix> {
         match self {
             Kernel::Solid(s) => s.mass(density),
             Kernel::Plane(p) => p.mass(density),
         }
     }
 
-    pub fn lumped_mass(&self, density: f64) -> modelcraft_fem::Result<Vec<f64>> {
+    pub fn lumped_mass(&self, density: f64) -> fieldcraft_fem::Result<Vec<f64>> {
         match self {
             Kernel::Solid(s) => s.lumped_mass(density),
             Kernel::Plane(p) => p.lumped_mass(density),
@@ -78,7 +78,7 @@ impl Kernel<'_> {
     }
 
     /// Consistent nodal forces of a uniform force per volume, as 3-vectors (Z zero for 2D).
-    pub fn body_force(&self, b: [f64; 3]) -> modelcraft_fem::Result<Vec<[f64; 3]>> {
+    pub fn body_force(&self, b: [f64; 3]) -> fieldcraft_fem::Result<Vec<[f64; 3]>> {
         match self {
             Kernel::Solid(s) => s.body_force(b),
             Kernel::Plane(p) => Ok(p.body_force_field(|_| b)?.into_iter().map(|v| [v[0], v[1], 0.0]).collect()),
@@ -86,7 +86,7 @@ impl Kernel<'_> {
     }
 
     /// Consistent nodal forces of a force per volume b(x), as 3-vectors (Z zero for 2D).
-    pub fn body_force_field(&self, b: impl Fn([f64; 3]) -> [f64; 3]) -> modelcraft_fem::Result<Vec<[f64; 3]>> {
+    pub fn body_force_field(&self, b: impl Fn([f64; 3]) -> [f64; 3]) -> fieldcraft_fem::Result<Vec<[f64; 3]>> {
         match self {
             Kernel::Solid(s) => s.body_force_field(b),
             Kernel::Plane(p) => Ok(p.body_force_field(b)?.into_iter().map(|v| [v[0], v[1], 0.0]).collect()),
@@ -95,7 +95,7 @@ impl Kernel<'_> {
 
     /// Integration-point stresses for nodal displacements given as 3-vectors, with a thermal
     /// strain when given.
-    pub fn stresses_with(&self, d: &Elasticity, u: &[[f64; 3]], thermal: Option<&ThermalStrain>) -> modelcraft_fem::Result<Vec<PointStress>> {
+    pub fn stresses_with(&self, d: &Elasticity, u: &[[f64; 3]], thermal: Option<&ThermalStrain>) -> fieldcraft_fem::Result<Vec<PointStress>> {
         match self {
             Kernel::Solid(s) => s.stresses_with(d, u, thermal),
             Kernel::Plane(p) => p.stresses_with(d, &u.iter().map(|v| [v[0], v[1]]).collect::<Vec<_>>(), thermal),
@@ -103,21 +103,21 @@ impl Kernel<'_> {
     }
 
     /// The equivalent nodal forces of a thermal strain, as 3-vectors (Z zero for 2D).
-    pub fn thermal_load(&self, d: &Elasticity, thermal: &ThermalStrain) -> modelcraft_fem::Result<Vec<[f64; 3]>> {
+    pub fn thermal_load(&self, d: &Elasticity, thermal: &ThermalStrain) -> fieldcraft_fem::Result<Vec<[f64; 3]>> {
         match self {
             Kernel::Solid(s) => s.thermal_load(d, thermal),
             Kernel::Plane(p) => Ok(p.thermal_load(d, thermal)?.into_iter().map(|v| [v[0], v[1], 0.0]).collect()),
         }
     }
 
-    pub fn rule(&self) -> modelcraft_fem::quadrature::Rule {
+    pub fn rule(&self) -> fieldcraft_fem::quadrature::Rule {
         match self {
             Kernel::Solid(s) => s.rule(),
             Kernel::Plane(p) => p.rule(),
         }
     }
 
-    pub fn ty(&self) -> &'static modelcraft_fem::ElementType {
+    pub fn ty(&self) -> &'static fieldcraft_fem::ElementType {
         match self {
             Kernel::Solid(s) => s.ty,
             Kernel::Plane(p) => p.ty,
@@ -217,7 +217,7 @@ impl Structural {
 }
 
 impl StructuralKernel {
-    pub fn stiffness(&self) -> modelcraft_fem::Result<Matrix> {
+    pub fn stiffness(&self) -> fieldcraft_fem::Result<Matrix> {
         match self {
             StructuralKernel::Shell(s) => s.stiffness(),
             StructuralKernel::Beam(b) => Ok(b.stiffness()),
@@ -225,7 +225,7 @@ impl StructuralKernel {
     }
 
     /// The consistent or lumped mass over every element degree of freedom.
-    pub fn mass(&self, density: f64, kind: MassKind) -> modelcraft_fem::Result<Matrix> {
+    pub fn mass(&self, density: f64, kind: MassKind) -> fieldcraft_fem::Result<Matrix> {
         Ok(match (self, kind) {
             (StructuralKernel::Shell(s), MassKind::Consistent) => s.mass(density)?,
             (StructuralKernel::Shell(s), MassKind::Lumped) => {
@@ -242,7 +242,7 @@ impl StructuralKernel {
     }
 
     /// Consistent nodal forces and moments of a uniform force per volume, six per node.
-    pub fn body_force(&self, b: [f64; 3]) -> modelcraft_fem::Result<Vec<f64>> {
+    pub fn body_force(&self, b: [f64; 3]) -> fieldcraft_fem::Result<Vec<f64>> {
         match self {
             StructuralKernel::Shell(s) => s.body_force(b),
             StructuralKernel::Beam(beam) => Ok(beam.body_force(b)),
@@ -405,8 +405,8 @@ impl Mesh {
                 )));
             }
             let set = resolved.sets.get(&section.set).ok_or_else(|| Error::Invalid(format!("set `{}` is not resolved", section.set)))?;
-            let bad = |e: modelcraft_fem::Error| match e {
-                modelcraft_fem::Error::NotSupported(m) => Error::NotSupported(format!("section `{name}`: {m}")),
+            let bad = |e: fieldcraft_fem::Error| match e {
+                fieldcraft_fem::Error::NotSupported(m) => Error::NotSupported(format!("section `{name}`: {m}")),
                 e => Error::Invalid(format!("section `{name}`, material `{}`: {e}", section.material)),
             };
             let shared = match &section.kind {
@@ -483,7 +483,7 @@ impl Mesh {
             layout.element(&e.2, e.7);
         }
         for e in &trusses {
-            layout.element(&e.2, modelcraft_fem::ElementDofs::new(translations));
+            layout.element(&e.2, fieldcraft_fem::ElementDofs::new(translations));
         }
         for e in &structural {
             layout.element(&e.2, ElementDofs::new(Structural::KINDS));
@@ -705,7 +705,7 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                     let xyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
                     let theory = e.theory.ok_or_else(|| Error::Internal("2D element without a theory".into()))?;
                     let forces = edge_pressure(&xyz, theory.extent(), *magnitude)
-                        .map_err(|err| Error::element(g.element, modelcraft_fem::Error::Invalid(err.to_string())))?;
+                        .map_err(|err| Error::element(g.element, fieldcraft_fem::Error::Invalid(err.to_string())))?;
                     for (i, v) in idx.iter().zip(forces) {
                         add(&mut f, &translations(mesh, *i)?, v);
                     }

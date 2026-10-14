@@ -2,11 +2,11 @@
 
 use std::borrow::Cow;
 
-use modelcraft_geometry::{FaceSurface, Shape, SurfaceMesh};
-use modelcraft_mesh::hex::{HexMesh, HexMethod, HexOptions, Surface, hex_mesh};
-use modelcraft_mesh::size::UniformSize;
-use modelcraft_mesh::surface::BoundarySurface;
-use modelcraft_model::{GeometryRef, Model};
+use fieldcraft_geometry::{FaceSurface, Shape, SurfaceMesh};
+use fieldcraft_mesh::hex::{HexMesh, HexMethod, HexOptions, Surface, hex_mesh};
+use fieldcraft_mesh::size::UniformSize;
+use fieldcraft_mesh::surface::BoundarySurface;
+use fieldcraft_model::{GeometryRef, Model};
 use serde_json::{Value, json};
 
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
@@ -175,7 +175,7 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
             .map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?;
         let chord = if b.surfaces.is_empty() { 0.0 } else { number(p, "tolerance")?.unwrap_or(DEFAULT_RELATIVE_TOLERANCE * b.diagonal) };
         let options =
-            HexOptions { method, quadratic, chordal_tolerance: chord, max_elements: modelcraft_model::MAX_ELEMENTS / 8, ..HexOptions::default() };
+            HexOptions { method, quadratic, chordal_tolerance: chord, max_elements: fieldcraft_model::MAX_ELEMENTS / 8, ..HexOptions::default() };
         let mesh = hex_mesh(&surface, &b.surfaces, &UniformSize(h), &options).map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?;
         meshes.push((b, mesh));
     }
@@ -242,7 +242,7 @@ fn tag_faces(model: &mut Model, b: &Input<'_>, m: &HexMesh, first_element: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use modelcraft_geometry::sample::Plate;
+    use fieldcraft_geometry::sample::Plate;
 
     fn opened() -> (crate::tests::TempDir, Session) {
         let (dir, path) = crate::tests::sample_design_file(&Plate::default());
@@ -261,7 +261,7 @@ mod tests {
         let n = body["elements"].as_u64().unwrap() as usize;
         assert!(n > 100, "{r}");
         assert!(body["quality"]["min_scaled_jacobian"].as_f64().unwrap() > 0.3, "{r}");
-        assert_eq!(s.model.element_counts(), vec![(modelcraft_model::ElementKind::Hex8, n)]);
+        assert_eq!(s.model.element_counts(), vec![(fieldcraft_model::ElementKind::Hex8, n)]);
         // Volume: the plate minus the hole, to the tessellation's accuracy.
         let v = 40.0 * 30.0 * 10.0 - std::f64::consts::PI * 25.0 * 10.0;
         assert!((body["volume"].as_f64().unwrap() - v).abs() < 0.01 * v, "{r}");
@@ -280,7 +280,7 @@ mod tests {
         // Hex20 with mid-edge nodes on the hole.
         let r2 = s.execute("mesh.hex.generate", &json!({"order": 2, "size": 2.5})).unwrap();
         assert_eq!(r2["bodies"][0]["kind"], "hex20");
-        assert_eq!(s.model.element_counts(), vec![(modelcraft_model::ElementKind::Hex20, n)]);
+        assert_eq!(s.model.element_counts(), vec![(fieldcraft_model::ElementKind::Hex20, n)]);
         let v2 = r2["bodies"][0]["volume"].as_f64().unwrap();
         assert!((v2 - v).abs() < (body["volume"].as_f64().unwrap() - v).abs() + 1e-6 * v, "hex20 {v2} vs hex8 {} vs {v}", body["volume"]);
         // The set still resolves after the remesh.
@@ -288,7 +288,7 @@ mod tests {
         assert!(set["faces"]["count"].as_u64().unwrap() > 0);
         // Undo returns the hex8 mesh.
         s.execute("edit.undo", &json!({})).unwrap();
-        assert_eq!(s.model.element_counts(), vec![(modelcraft_model::ElementKind::Hex8, n)]);
+        assert_eq!(s.model.element_counts(), vec![(fieldcraft_model::ElementKind::Hex8, n)]);
     }
 
     #[test]

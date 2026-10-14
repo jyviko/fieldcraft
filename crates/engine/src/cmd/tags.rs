@@ -1,7 +1,7 @@
 //! Geometry tags on the mesh: which body, face, edge or vertex each mesh entity lies on. Meshers
 //! write them; these commands set them by hand (for a mesh from elsewhere) and clear them.
 
-use modelcraft_model::{ElementFace, GeometryRef, MAX_ELEMENTS};
+use fieldcraft_model::{ElementFace, GeometryRef, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
 use super::{opt, req};

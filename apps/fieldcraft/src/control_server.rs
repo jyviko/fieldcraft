@@ -1,6 +1,6 @@
 //! Loopback JSON-lines control server: one request per line, one reply per line. Agents and
 //! tests drive the app through it; the UI thread answers each request between frames
-//! (`modelcraft_ui_egui::control`).
+//! (`fieldcraft_ui_egui::control`).
 //!
 //! Adapted from SolidCraft's `apps/solidcraft/src/control_server.rs` (MIT OR Apache-2.0), see
 //! ATTRIBUTION.md.
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
-use modelcraft_ui_egui::ControlRequest;
+use fieldcraft_ui_egui::ControlRequest;
 use serde_json::{Value, json};
 
 /// Longest request line (bytes).
@@ -31,11 +31,11 @@ pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("modelcraft: control server failed to bind 127.0.0.1:{port}: {e}");
+            eprintln!("fieldcraft: control server failed to bind 127.0.0.1:{port}: {e}");
             return rx;
         }
     };
-    eprintln!("modelcraft: control server listening on 127.0.0.1:{port}");
+    eprintln!("fieldcraft: control server listening on 127.0.0.1:{port}");
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             if OPEN.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {

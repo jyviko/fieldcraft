@@ -2,7 +2,7 @@
 //!
 //! A pressure p on a face gives node i the force fᵢ = −p ∫ Nᵢ n dA, where n dA =
 //! (∂x/∂ξ × ∂x/∂η) dξ dη on the face's own, possibly curved, geometry; faces are numbered so this
-//! normal points out of the element ([`modelcraft_model::ElementKind::faces`]), and a positive
+//! normal points out of the element ([`fieldcraft_model::ElementKind::faces`]), and a positive
 //! pressure pushes in. This is the consistent load vector of the virtual work of the surface load
 //! (Zienkiewicz, Taylor & Zhu 2013, §6.6), integrated with the model's face rules (exact for a
 //! uniform pressure on a flat face).
@@ -10,10 +10,10 @@
 use crate::{Error, Result};
 
 /// ∫ Nᵢ n dA for every node of a face (node coordinates in the face's node order): the model's
-/// face integration ([`modelcraft_model::nodal::face_normal_weights`]), so pressures and the
+/// face integration ([`fieldcraft_model::nodal::face_normal_weights`]), so pressures and the
 /// tractions the model distributes use the same rule.
 pub fn normal_weights(xyz: &[[f64; 3]]) -> Result<Vec<[f64; 3]>> {
-    modelcraft_model::nodal::face_normal_weights(xyz).map_err(|e| Error::Invalid(e.to_string()))
+    fieldcraft_model::nodal::face_normal_weights(xyz).map_err(|e| Error::Invalid(e.to_string()))
 }
 
 /// Consistent nodal forces of a uniform pressure (positive pushes into the element).

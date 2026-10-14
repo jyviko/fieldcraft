@@ -17,7 +17,7 @@
 //!
 //! Every mapping is checked by the sign of the element Jacobian in the tests.
 
-use modelcraft_model::{ElementKind, Formulation, Integration, SectionKind};
+use fieldcraft_model::{ElementKind, Formulation, Integration, SectionKind};
 
 /// How an element is written: its keyword and its node list in LS-DYNA order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

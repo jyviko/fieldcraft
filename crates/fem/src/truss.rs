@@ -24,7 +24,7 @@
 //! stiffness and mass of a straight member, and the usual full integration of a curved one.
 //! Material: the Young's modulus of an isotropic material; the truss knows no other constant.
 
-use modelcraft_model::{Elastic, ElementKind};
+use fieldcraft_model::{Elastic, ElementKind};
 
 use crate::basis::Basis;
 use crate::dense::Matrix;

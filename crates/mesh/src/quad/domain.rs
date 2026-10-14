@@ -39,7 +39,7 @@ pub(crate) fn bbox(pts: impl IntoIterator<Item = [f64; 2]>) -> ([f64; 2], [f64; 
 /// Admissible exact-predicate point from user coordinates (finite, within the model limit; tiny
 /// magnitudes rounded to zero).
 pub(crate) fn admissible(c: [f64; 2]) -> Result<[f64; 2]> {
-    modelcraft_model::check_coordinates(&c)?;
+    fieldcraft_model::check_coordinates(&c)?;
     Ok([snap_to_domain(c[0]), snap_to_domain(c[1])])
 }
 

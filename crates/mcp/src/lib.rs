@@ -1,4 +1,4 @@
-//! ModelCraft's MCP server (docs/mcp.md).
+//! FieldCraft's MCP server (docs/mcp.md).
 //!
 //! JSON-RPC 2.0 over stdio, one message per line, implementing the Model Context Protocol's
 //! lifecycle, tools and resources. Every tool runs engine commands (the same ones the UI,
@@ -10,7 +10,7 @@
 //! The server treats its input as hostile: a message line is capped at [`MAX_LINE`] bytes and
 //! answered with an error past it, a JSON-RPC batch at [`MAX_BATCH_MESSAGES`] messages, a
 //! `batch` tool call at [`tools::MAX_STEPS`] commands, and tool arguments are checked against
-//! the tool's schema before anything runs. Read and write roots ([`modelcraft_io::roots`])
+//! the tool's schema before anything runs. Read and write roots ([`fieldcraft_io::roots`])
 //! confine every file a tool touches.
 //!
 //! Adapted from SolidCraft's `crates/mcp` (MIT OR Apache-2.0), see ATTRIBUTION.md.
@@ -24,9 +24,9 @@ pub mod tools;
 pub use backend::{Backend, Headless, Picture, PictureRequest, Remote};
 pub use server::{MAX_BATCH_MESSAGES, MAX_LINE, PROTOCOL_VERSION, SUPPORTED_VERSIONS, Server};
 
-use modelcraft_io::roots::Roots;
+use fieldcraft_io::roots::Roots;
 
-/// How the server is started (`modelcraft-cli mcp`).
+/// How the server is started (`fieldcraft-cli mcp`).
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     /// The control channel of a running app (`127.0.0.1:7070`); `None` runs headless.
@@ -46,7 +46,7 @@ pub fn backend(options: Options) -> Result<(Box<dyn Backend>, Option<String>), S
         )),
         Some(addr) => match Remote::connect(&addr) {
             Ok(r) => Ok((Box::new(r), None)),
-            Err(e) => Ok((headless(options.roots), Some(format!("ModelCraft at {addr} cannot be reached ({e}); running headless")))),
+            Err(e) => Ok((headless(options.roots), Some(format!("FieldCraft at {addr} cannot be reached ({e}); running headless")))),
         },
         None => Ok((headless(options.roots), None)),
     }

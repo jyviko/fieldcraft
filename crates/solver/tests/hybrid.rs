@@ -6,8 +6,8 @@
 mod common;
 
 use common::*;
-use modelcraft_model::*;
-use modelcraft_solver::{Limits, solve_static};
+use fieldcraft_model::*;
+use fieldcraft_solver::{Limits, solve_static};
 
 const NU: f64 = 0.4999;
 

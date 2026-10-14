@@ -11,7 +11,7 @@
 //! - Hexahedron, wedge and quadrilateral shape: Knupp, *Algebraic mesh quality metrics*, SIAM J.
 //!   Sci. Comput. 23(1):193–218, 2001.
 //!
-//! Inputs are hostile: coordinates must be finite and within [`modelcraft_model::MAX_COORD`],
+//! Inputs are hostile: coordinates must be finite and within [`fieldcraft_model::MAX_COORD`],
 //! and every metric has a defined value on degenerate and inverted elements.
 //!
 //! Linear tetrahedra take their validity from the exact `orient3d` ([`crate::predicates`]); the
@@ -23,7 +23,7 @@ pub mod jacobian;
 mod report;
 pub(crate) mod shape;
 
-use modelcraft_model::{ElementKind, check_coordinates};
+use fieldcraft_model::{ElementKind, check_coordinates};
 
 pub use jacobian::{JacobianCheck, Validity};
 pub use report::{

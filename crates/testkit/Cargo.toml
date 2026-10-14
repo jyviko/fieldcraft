@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-testkit"
-description = "ModelCraft test tooling: the meshing test corpus (SolidCraft recipes and analytic shapes) and the verification oracle"
+name = "fieldcraft-testkit"
+description = "FieldCraft test tooling: the meshing test corpus (SolidCraft recipes and analytic shapes) and the verification oracle"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-modelcraft-geometry = { workspace = true, features = ["scripts"] }
-modelcraft-mesh = { workspace = true }
-modelcraft-engine = { workspace = true }
+fieldcraft-geometry = { workspace = true, features = ["scripts"] }
+fieldcraft-mesh = { workspace = true }
+fieldcraft-engine = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -18,7 +18,7 @@
 //! Every element is checked with the certified Jacobian test ([`crate::quality`]); a block
 //! whose corners are not in hex8 order or whose curves fold it is an error.
 
-use modelcraft_model::{ElementKind, MAX_COORD};
+use fieldcraft_model::{ElementKind, MAX_COORD};
 
 use crate::quad::{lattice_index, transfinite_faces, transfinite_grid_blended, transfinite_volume};
 use crate::quality::{Validity, element_validity, planar_quad_validity};

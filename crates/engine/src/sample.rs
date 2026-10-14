@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(info["nodes"], 9 * 5 * 3 + 4 * 4 * 4);
         // Tet volumes are positive and add up to the cube's.
         let mut volume = 0.0;
-        for e in s.model.elements().values().filter(|e| e.kind == modelcraft_model::ElementKind::Tet4) {
+        for e in s.model.elements().values().filter(|e| e.kind == fieldcraft_model::ElementKind::Tet4) {
             let p: Vec<[f64; 3]> = e.nodes.iter().map(|n| s.model.node(*n).unwrap().xyz).collect();
             let v = signed_volume(&p) / 6.0;
             assert!(v > 0.0);

@@ -54,7 +54,7 @@ use crate::size::SizeField;
 use crate::surface::BoundarySurface;
 use crate::vec3::{P, cross, dot, sub};
 use crate::{Error, Result};
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 /// Which structured method to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -323,7 +323,7 @@ fn finish(ctx: &Ctx, raw: Raw, method: HexMethod) -> Result<HexMesh> {
     if hexes.len() > ctx.opts.max_elements {
         return Err(Error::Limit(format!("the mesh has {} hexahedra; the limit is {}", hexes.len(), ctx.opts.max_elements)));
     }
-    modelcraft_model::check_coordinates(nodes.as_flattened())?;
+    fieldcraft_model::check_coordinates(nodes.as_flattened())?;
     let at = |nodes: &[P], i: u32| nodes.get(i as usize).copied().ok_or_else(|| Error::Failed(format!("node {i} out of range")));
     // Boundary faces: hex faces used once.
     let mut uses: HashMap<[u32; 4], u32> = HashMap::with_capacity(hexes.len() * 3);
@@ -548,6 +548,6 @@ fn mid_edge_nodes(ctx: &Ctx, nodes: &mut Vec<P>, hexes: &[[u32; 8]], boundary: &
         }
         out.push(m);
     }
-    modelcraft_model::check_coordinates(nodes.as_flattened())?;
+    fieldcraft_model::check_coordinates(nodes.as_flattened())?;
     Ok(out)
 }

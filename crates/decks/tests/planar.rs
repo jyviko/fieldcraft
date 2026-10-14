@@ -1,8 +1,8 @@
 //! 2D models (plane stress, plane strain, axisymmetric) in every deck format: element names,
 //! section data, edge surfaces and pressures, centrifugal loads, and what a format cannot write.
 
-use modelcraft_decks::{Error, abaqus, edge_pressure_loads, lsdyna, nastran};
-use modelcraft_model::{
+use fieldcraft_decks::{Error, abaqus, edge_pressure_loads, lsdyna, nastran};
+use fieldcraft_model::{
     BoundaryCondition, Elastic, ElementEdge, ElementKind, Formulation, Integration, Load, Material, Model, Procedure, Section, SectionKind, Set,
     Step, Target, UnitSystem,
 };

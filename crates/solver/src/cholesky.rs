@@ -34,7 +34,7 @@
 //! zero-stiffness direction); the factorization stops and names the column: the first such column
 //! in the postorder, whichever thread meets it.
 
-use modelcraft_parallel as parallel;
+use fieldcraft_parallel as parallel;
 
 use crate::{Error, Result};
 

@@ -170,7 +170,7 @@ pub fn resize_zones(ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use egui::{Event, Pos2, RawInput, ViewportId};
-    use modelcraft_engine::Session;
+    use fieldcraft_engine::Session;
 
     use super::*;
 

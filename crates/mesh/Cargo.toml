@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-mesh"
-description = "ModelCraft's meshing: robust predicates, surface preparation, tetrahedral and hexahedral meshing, quality metrics"
+name = "fieldcraft-mesh"
+description = "FieldCraft's meshing: robust predicates, surface preparation, tetrahedral and hexahedral meshing, quality metrics"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,11 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-modelcraft-model = { workspace = true }
+fieldcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-# Test oracles only (never linked into ModelCraft): exact rationals, and georust's port of
+# Test oracles only (never linked into FieldCraft): exact rationals, and georust's port of
 # Shewchuk's public-domain predicates.c as a differential reference.
 num-bigint = "0.4"
 num-rational = { version = "0.4", default-features = false, features = ["num-bigint", "std"] }

@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use modelcraft_engine::Session;
-use modelcraft_engine::view::{Palette, render_png};
-use modelcraft_io::roots::Roots;
-use modelcraft_render::StandardView;
+use fieldcraft_engine::Session;
+use fieldcraft_engine::view::{Palette, render_png};
+use fieldcraft_io::roots::Roots;
+use fieldcraft_render::StandardView;
 use serde_json::{Value, json};
 
 /// What a picture shows.
@@ -33,7 +33,7 @@ pub struct Picture {
     pub info: Value,
 }
 
-/// Something that runs ModelCraft commands and draws pictures.
+/// Something that runs FieldCraft commands and draws pictures.
 pub trait Backend {
     /// Run a command (`engine.execute`).
     fn execute(&mut self, command: &str, params: Value) -> Result<Value, String>;
@@ -93,7 +93,7 @@ impl Backend for Headless {
     }
 
     fn commands(&mut self) -> Result<Value, String> {
-        Ok(modelcraft_engine::commands().iter().map(|c| json!({"id": c.id, "label": c.label, "params": c.params})).collect())
+        Ok(fieldcraft_engine::commands().iter().map(|c| json!({"id": c.id, "label": c.label, "params": c.params})).collect())
     }
 
     fn picture(&mut self, r: &PictureRequest) -> Result<Picture, String> {
@@ -122,12 +122,12 @@ impl Backend for Headless {
     }
 
     fn describe(&self) -> String {
-        "a headless in-process ModelCraft session (no window; screenshots are CPU renders)".into()
+        "a headless in-process FieldCraft session (no window; screenshots are CPU renders)".into()
     }
 }
 
-/// A running ModelCraft app reached through its loopback control channel
-/// (`modelcraft --control PORT`).
+/// A running FieldCraft app reached through its loopback control channel
+/// (`fieldcraft --control PORT`).
 pub struct Remote {
     addr: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
@@ -198,7 +198,7 @@ impl Remote {
         let reply = match self.roundtrip(&line) {
             Ok(r) => r,
             // One retry on a fresh connection (the app may have restarted).
-            Err(_) => self.roundtrip(&line).map_err(|e| format!("ModelCraft at {}: {e}", self.addr))?,
+            Err(_) => self.roundtrip(&line).map_err(|e| format!("FieldCraft at {}: {e}", self.addr))?,
         };
         let v: Value = serde_json::from_str(&reply).map_err(|e| format!("bad reply from the app: {e}"))?;
         if v.get("ok").and_then(Value::as_bool) == Some(true) {
@@ -212,7 +212,7 @@ impl Remote {
 /// A temporary PNG path the app writes and the server reads back (both on this computer).
 fn temp_png() -> PathBuf {
     let n = SHOT.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("modelcraft-mcp-{}-{n}.png", std::process::id()))
+    std::env::temp_dir().join(format!("fieldcraft-mcp-{}-{n}.png", std::process::id()))
 }
 
 impl Backend for Remote {
@@ -262,6 +262,6 @@ impl Backend for Remote {
     }
 
     fn describe(&self) -> String {
-        format!("connected to the ModelCraft app at {} (the user watches its window)", self.addr)
+        format!("connected to the FieldCraft app at {} (the user watches its window)", self.addr)
     }
 }

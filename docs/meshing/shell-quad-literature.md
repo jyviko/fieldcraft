@@ -1,11 +1,11 @@
-# Shell meshing literature survey for ModelCraft: quad and quad-dominant meshes of curved B-rep faces
+# Shell meshing literature survey for FieldCraft: quad and quad-dominant meshes of curved B-rep faces
 
 Compiled 2026-10-13. Scope: all-quad and quad-dominant surface meshes of the curved faces (planes, cylinders,
 cones, spheres, tori, NURBS) of SolidCraft parts, meshed in each face's (u,v) parameter space with metric
 correction and conforming across shared B-rep edges, for shell analysis (MITC4-class shells now,
 continuum shells on swept hexes in M8). This extends `docs/meshing/literature.md` §B7, which compared
 paving, Q-Morph and Blossom-Quad for **planar** faces only and chose CDT → greedy recombination →
-Catmull–Clark split (`modelcraft-mesh::quad`).
+Catmull–Clark split (`fieldcraft-mesh::quad`).
 
 Same format as `docs/meshing/literature.md`: per paper, citation, DOI/URL, method, problem solved,
 robustness/limits, complexity, code + licence, verdict. Part P is the opinionated plan.
@@ -126,7 +126,7 @@ robustness/limits, complexity, code + licence, verdict. Part P is the opinionate
 **S2.2 Owen and Saigal 2000, Surface mesh sizing control.** **Verdict: build on (size field on faces).**
 - **Citation.** IJNME 47(1–3):497–511, 2000. DOI [10.1002/(SICI)1097-0207(20000110/30)47:1/3<497::AID-NME781>3.0.CO;2-H](https://doi.org/10.1002/(SICI)1097-0207(20000110/30)47:1/3%3C497::AID-NME781%3E3.0.CO;2-H). *Read:* metadata.
 - **Method.** Automatic sizing on CAD surfaces from curvature and proximity, stored on a background mesh.
-- **Use.** The curvature and proximity terms of ModelCraft's surface size field (P3.3).
+- **Use.** The curvature and proximity terms of FieldCraft's surface size field (P3.3).
 
 **S2.3 Lo 1989; Lau, Lo, Lee 1997; Lo and Lau 1998: quadrilaterals over curved surfaces.** **Verdict: reference.**
 - **Citations.**
@@ -193,7 +193,7 @@ robustness/limits, complexity, code + licence, verdict. Part P is the opinionate
 **S3.2 Borouchaki, George, Hecht, Laug, Saltel 1997, Delaunay mesh generation governed by metric specifications.** **Verdict: build on (only if non-conformal parametrizations need an anisotropic Delaunay kernel).**
 - **Citation.** Part I: FEAD 25(1–2):61–83, 1997, DOI [10.1016/S0168-874X(96)00057-1](https://doi.org/10.1016/S0168-874X(96)00057-1); Part II: FEAD 25:85–109, DOI [10.1016/S0168-874X(96)00065-0](https://doi.org/10.1016/S0168-874X(96)00065-0). *Read:* metadata.
 - **Method.** The Delaunay criterion evaluated in a local metric (anisotropic Bowyer–Watson cavity).
-- **Caveat for ModelCraft.** A metric in-circle test is not an exact predicate of the input coordinates; it
+- **Caveat for FieldCraft.** A metric in-circle test is not an exact predicate of the input coordinates; it
   may only decide *point placement* and *which flip to try*, never validity. Validity stays an exact `orient2d`
   sign in (u,v) (see P3.5).
 
@@ -315,7 +315,7 @@ robustness/limits, complexity, code + licence, verdict. Part P is the opinionate
 - **Complexity.** Same as frontal-Delaunay triangulation, O(n log n); "tens of thousands of elements a minute"
   (§1) in 2010-era hardware.
 - **Why it matters here.** It is a marching front, but one whose collisions cannot fail, and it is a small
-  change to machinery ModelCraft already has (Bowyer–Watson, constrained recovery, recombination).
+  change to machinery FieldCraft already has (Bowyer–Watson, constrained recovery, recombination).
 
 **S5.2 Georgiadis, Beaufort, Lambrechts, Remacle 2017, High quality mesh generation using cross and asterisk fields.** **Verdict: reference.**
 - **Citation.** arXiv <https://arxiv.org/abs/1706.02236>, 2017. *Read:* abstract.
@@ -346,7 +346,7 @@ robustness/limits, complexity, code + licence, verdict. Part P is the opinionate
   slow on faces over 100k vertices; acute corners (< 45°) need artificial singularities; size-map vs
   cross-field compatibility "still open".
 - **Why it matters here.** Strongest published evidence on CAD B-reps for any automatic all-quad method, and
-  it uses **the same tri → recombine → split guarantee ModelCraft already ships**, with better point placement
+  it uses **the same tri → recombine → split guarantee FieldCraft already ships**, with better point placement
   in front of it and cleanup behind it. It is the template for P.
 - **Data caveat.** Both datasets are excluded for our own tests (see `literature.md` Part C); we cite the numbers only.
 
@@ -372,7 +372,7 @@ robustness/limits, complexity, code + licence, verdict. Part P is the opinionate
 - **Citation.** IJNME 89(9):1102–1119, 2012. DOI [10.1002/nme.3279](https://doi.org/10.1002/nme.3279). *Read:* metadata.
 - **Note.** Reberol 2021 replaced Blossom with a greedy, alignment-weighted matching followed by the split, which
   removes the "perfect matching may not exist" failure and the cubic-time matching. That supports keeping
-  ModelCraft's greedy matching.
+  FieldCraft's greedy matching.
 
 **S6.3 Ramaswami, Ramos, Toussaint 1998, Converting triangulations to quadrangulations.** **Verdict: reference (theory).**
 - **Citation.** CGTA 9(4):257–276, 1998. DOI [10.1016/S0925-7721(97)00019-9](https://doi.org/10.1016/S0925-7721(97)00019-9).
@@ -619,14 +619,14 @@ cylinder displacement under the load 1.8248×10⁻⁵ (E = 3×10⁶, P = 1); pin
 
 ---
 
-## Part P: Recommended plan for ModelCraft shell meshing (opinionated)
+## Part P: Recommended plan for FieldCraft shell meshing (opinionated)
 
 ### P1. Position
 
 **I agree with a cross-field-guided advancing front in (u,v) with a metric and topological cleanup, with one
 change: the front advances *points over a Delaunay triangulation* (frontal-Delaunay in the cross-field L∞
 norm, Remacle 2013), not quads (paving) and not triangle-to-quad transformations (Q-Morph).** All-quad comes
-from the recombination + split ModelCraft already ships, and cleanup follows Reberol 2021.
+from the recombination + split FieldCraft already ships, and cleanup follows Reberol 2021.
 
 Reasons:
 1. **Closure cannot fail.** A frontal-Delaunay front always sits inside a valid constrained triangulation, so
@@ -668,13 +668,13 @@ For each B-rep face set to be shell-meshed (a sheet body, or chosen faces of a s
 
 ### P3. Components
 
-**P3.1 Chart abstraction** (`modelcraft-mesh::surface_mesh::chart` or a new `shell` module; trait in `mesh`,
+**P3.1 Chart abstraction** (`fieldcraft-mesh::surface_mesh::chart` or a new `shell` module; trait in `mesh`,
 implementation in `geometry`, wired in `engine`, so `mesh` does not depend on `geometry`):
 `eval(u,v) → [f64;3]`, `derivs(u,v) → (S_u, S_v)` (second derivatives for curvature sizing), `project(p,
 hint) → (u,v)`, the face's loops as 3D node chains with their (u,v), periodicity and singular points. Native
 charts come from SolidCraft's kernel surfaces (truck's parametric surfaces already have parameter search, used
 in 5 SolidCraft kernel files); this needs a new **public** face-surface API in `solidcraft-kernel`, exposed
-through `modelcraft-geometry` without leaking SolidCraft types. Handling:
+through `fieldcraft-geometry` without leaking SolidCraft types. Handling:
 - **Periodic faces** (cylinder, torus, revolved): the seam edge appears twice in the loop; give its nodes
   u = 0 on one side and u = period on the other (unwrap by continuity along the loop). The domain becomes simply
   connected; seam nodes are the same 3D nodes, so conformity across the seam holds.
@@ -772,7 +772,7 @@ ship.
 ### P6. Order of work
 
 1. **Chart API** in `solidcraft-kernel` (public face-surface evaluation and parameter search) and
-   `modelcraft-geometry` (trait implementation, seams, poles). Done when the P5.1 tests pass.
+   `fieldcraft-geometry` (trait implementation, seams, poles). Done when the P5.1 tests pass.
 2. **Port the shipped free mesher to (u,v) + metric**: half-resolution CDT and Ruppert refinement in the
    rescaled (u,v) with metric sizing, recombination, split, smoothing with 3D objective. This gives all-quad
    conforming meshes on curved faces early, and is the baseline.

@@ -1,6 +1,6 @@
 //! Running a fluid step: the time loop, output frames and force histories, in model units.
 
-use modelcraft_model::Model;
+use fieldcraft_model::Model;
 
 use crate::flow::Flow;
 use crate::setup::{Obstacle, Setup};

@@ -75,7 +75,7 @@ pub(crate) const CLEARANCE: f64 = 0.3;
 /// model's coordinate range.
 fn steiner_point(c: [f64; 2]) -> Option<Point2> {
     let c = [snap_to_domain(c[0]), snap_to_domain(c[1])];
-    if !(c[0].abs() <= modelcraft_model::MAX_COORD && c[1].abs() <= modelcraft_model::MAX_COORD) {
+    if !(c[0].abs() <= fieldcraft_model::MAX_COORD && c[1].abs() <= fieldcraft_model::MAX_COORD) {
         return None;
     }
     Point2::new(c[0], c[1]).ok()

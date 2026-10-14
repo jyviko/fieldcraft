@@ -6,8 +6,8 @@ mod common;
 use std::f64::consts::PI;
 
 use common::*;
-use modelcraft_model::{BoundaryCondition, ElementKind, Load, Procedure, Symmetry, Target};
-use modelcraft_solver::{FrequencyOptions, Limits, MassKind, StaticResult, solve_frequency, solve_static};
+use fieldcraft_model::{BoundaryCondition, ElementKind, Load, Procedure, Symmetry, Target};
+use fieldcraft_solver::{FrequencyOptions, Limits, MassKind, StaticResult, solve_frequency, solve_static};
 
 fn static_solve(g: &Grid) -> StaticResult {
     solve_static(&g.model, Some("Step"), &Limits::default()).unwrap()
@@ -50,7 +50,7 @@ fn patch_test_every_element() {
             let x = g.model.node(label).unwrap().xyz;
             let u = field(x);
             let set = format!("b{i}");
-            g.model.add_set(&set, modelcraft_model::Set { nodes: vec![label], ..Default::default() }).unwrap();
+            g.model.add_set(&set, fieldcraft_model::Set { nodes: vec![label], ..Default::default() }).unwrap();
             g.bc(
                 &set,
                 BoundaryCondition::Displacement { target: Target::Set(set.clone()), values: [Some(u[0]), Some(u[1]), Some(u[2]), None, None, None] },
@@ -132,7 +132,7 @@ fn gravity_and_body_force_totals() {
 /// Cantilever L × b × h, clamped at x = 0, a shear traction on the free end. Timoshenko
 /// deflection δ = P L³ / (3 E I) + P L / (κ G A), κ = 5/6, with ν = 0 so the clamp adds no
 /// lateral restraint.
-fn cantilever_tip(kind: ElementKind, formulation: modelcraft_model::Formulation, n: [usize; 3]) -> f64 {
+fn cantilever_tip(kind: ElementKind, formulation: fieldcraft_model::Formulation, n: [usize; 3]) -> f64 {
     let (l, b, h, young, p) = (10.0, 1.0, 1.0, 1000.0, 1.0);
     let mut g = grid(n, kind, |q| [l * q[0], b * q[1], h * q[2]]);
     g.define(iso(young, 0.0), None, formulation, Procedure::Static {});
@@ -377,7 +377,7 @@ fn plastic_materials_solve_elastically_with_a_warning() {
         g.define(iso(1000.0, 0.3), None, full(), Procedure::Static {});
         if plastic {
             let mut m = g.model.material("Mat").unwrap().clone();
-            m.plastic = Some(modelcraft_model::Plastic::Bilinear { yield_stress: 1.0, hardening_modulus: 0.0, hardening: Default::default() });
+            m.plastic = Some(fieldcraft_model::Plastic::Bilinear { yield_stress: 1.0, hardening_modulus: 0.0, hardening: Default::default() });
             g.model.replace_material("Mat", m).unwrap();
         }
         g.fixed("root", |q| near(q[0], 0.0));

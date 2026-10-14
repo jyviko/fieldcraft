@@ -1,5 +1,5 @@
 *KEYWORD long=y
-$ Written by ModelCraft: implicit linear analysis, long format (20-column fields).
+$ Written by FieldCraft: implicit linear analysis, long format (20-column fields).
 $ Units: mm-t-s-N-MPa (consistent; nothing is converted).
 *NODE
 $                nid                   x                   y                   z

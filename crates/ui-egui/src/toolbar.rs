@@ -1,5 +1,5 @@
 //! The ribbon: the workspace switcher, the workspace's tabs, and the current tab's panels, all
-//! from the capability catalogue (`modelcraft_engine::catalogue`).
+//! from the capability catalogue (`fieldcraft_engine::catalogue`).
 //!
 //! Each panel shows its ready entries as icon buttons (up to [`MAX_BUTTONS`]; a panel with none
 //! ready shows its first entry, greyed with its milestone) over its label with a caret. The label
@@ -13,7 +13,7 @@
 //! (MIT OR Apache-2.0), see ATTRIBUTION.md; the tabs are craft-ui `Tab`s.
 
 use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, Vec2, pos2, vec2};
-use modelcraft_engine::catalogue::{self, Capability, Tab, Workspace};
+use fieldcraft_engine::catalogue::{self, Capability, Tab, Workspace};
 use serde::Serialize;
 
 use crate::ModelApp;
@@ -115,7 +115,7 @@ fn badge(p: &egui::Painter, t: &Tokens, corner: egui::Pos2, m: &str) {
 pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
     let mut start: Option<&'static str> = None;
-    egui::Panel::top("mc_toolbar").exact_size(HEIGHT).show_separator_line(false).frame(egui::Frame::NONE.fill(t.toolbar)).show(ui, |ui| {
+    egui::Panel::top("fc_toolbar").exact_size(HEIGHT).show_separator_line(false).frame(egui::Frame::NONE.fill(t.toolbar)).show(ui, |ui| {
         let r = ui.max_rect();
         app.place("ribbon", r);
         app.toolbar_rects.clear();
@@ -129,7 +129,7 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
             let w = 12.0 + painter.layout_no_wrap(label.clone(), label_font(ui.ctx(), 12.0), t.text).size().x.max(28.0);
             let tr = Rect::from_min_size(pos2(x, r.top() + 2.0), vec2(w, 22.0));
             let active = app.ui.tab == tab;
-            let resp = craft_ui::tabs::Tab::new(egui::Id::new(("mc_tab", panel_key(tab, ""))), &label, active)
+            let resp = craft_ui::tabs::Tab::new(egui::Id::new(("fc_tab", panel_key(tab, ""))), &label, active)
                 .focus_stroke(Stroke::new(1.0, t.accent))
                 .show_at(ui, tr, |ui, resp| {
                     let p = ui.painter();
@@ -179,7 +179,7 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
             if collapsed {
                 // One button: the panel's first button's icon over a caret; it opens the drop-down.
                 let br = Rect::from_center_size(pos2(px + width / 2.0, top + 21.0), Vec2::splat(BUTTON));
-                let resp = ui.interact(br, ui.id().with(("mc_collapsed", &key)), Sense::click());
+                let resp = ui.interact(br, ui.id().with(("fc_collapsed", &key)), Sense::click());
                 if resp.hovered() {
                     painter.rect_filled(br, 4.0, t.hover);
                 }
@@ -232,7 +232,7 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
             } else {
                 Rect::from_center_size(pos2(px + width / 2.0, top + 51.0), vec2(width, lh))
             };
-            let lresp = ui.interact(lr, ui.id().with(("mc_panel", &key)), Sense::click());
+            let lresp = ui.interact(lr, ui.id().with(("fc_panel", &key)), Sense::click());
             let open = app.ui.menu.as_deref() == Some(key.as_str());
             if lresp.hovered() || open {
                 painter.rect_filled(lr, 3.0, t.hover);
@@ -253,7 +253,7 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
         }
         if !overflow.is_empty() {
             let mr = Rect::from_min_size(pos2(px.min(r.right() - MORE_WIDTH), top + 4.0), vec2(MORE_WIDTH - 2.0, 52.0));
-            let resp = ui.interact(mr, ui.id().with("mc_more"), Sense::click());
+            let resp = ui.interact(mr, ui.id().with("fc_more"), Sense::click());
             if resp.hovered() || app.ui.menu.as_deref() == Some("more") {
                 painter.rect_filled(mr, 4.0, t.hover);
             }
@@ -281,7 +281,7 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
 /// it opens the list of workspaces.
 fn workspace_switcher(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, r: Rect) {
     let ws = Rect::from_min_max(pos2(r.left() + 6.0, r.top() + 4.0), pos2(r.left() + 104.0, r.bottom() - 5.0));
-    let resp = ui.interact(ws, ui.id().with("mc_workspace"), Sense::click());
+    let resp = ui.interact(ws, ui.id().with("fc_workspace"), Sense::click());
     let open = app.ui.menu.as_deref() == Some("workspace");
     ui.painter().rect(ws, 4.0, if resp.hovered() || open { t.hover } else { t.field }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     let w = app.ui.workspace;
@@ -320,7 +320,7 @@ fn workspace_switcher(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, r: Rect
 /// One entry's button; returns the id to start when it was clicked.
 fn button(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, c: &'static Capability, br: Rect) -> Option<&'static str> {
     let enabled = c.command().is_some();
-    let resp = ui.interact(br, ui.id().with(("mc_button", c.id)), if enabled { Sense::click() } else { Sense::hover() });
+    let resp = ui.interact(br, ui.id().with(("fc_button", c.id)), if enabled { Sense::click() } else { Sense::hover() });
     app.toolbar_rects.push((c.id, br, Fit::Full));
     let running = app.dialog.as_ref().is_some_and(|d| c.command() == Some(d.command));
     if running {

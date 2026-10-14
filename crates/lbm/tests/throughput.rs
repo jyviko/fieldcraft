@@ -1,10 +1,10 @@
 //! Throughput of the solver (ignored; run with
-//! `cargo test --release -p modelcraft-lbm --test throughput -- --ignored --nocapture`).
+//! `cargo test --release -p fieldcraft-lbm --test throughput -- --ignored --nocapture`).
 
 mod common;
 
 use common::*;
-use modelcraft_model::{BoxFace, FaceCondition};
+use fieldcraft_model::{BoxFace, FaceCondition};
 
 #[test]
 #[ignore]
@@ -26,7 +26,7 @@ fn cell_updates_per_second() {
             1.0,
             1.0 / 6.0,
             d,
-            modelcraft_model::Procedure::Fluid {
+            fieldcraft_model::Procedure::Fluid {
                 domain: "Flow".into(),
                 end_time: None,
                 steps: Some(steps),

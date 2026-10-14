@@ -24,13 +24,13 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
         return;
     }
     let t = Tokens::get(app.ui.dark);
-    egui::Panel::right("mc_context")
+    egui::Panel::right("fc_context")
         .exact_size(WIDTH)
         .resizable(false)
         .frame(egui::Frame::NONE.fill(t.dialog_bg).inner_margin(egui::Margin::symmetric(8, 8)))
         .show(ui, |ui| {
             app.place("context", ui.max_rect());
-            egui::ScrollArea::vertical().id_salt("mc_context_scroll").auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("fc_context_scroll").auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_width(WIDTH - 16.0);
                 if app.dialog.is_some() {
                     form(app, ui, &t);
@@ -61,7 +61,7 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
 /// The open command's parameters as JSON, with the command's parameter documentation; OK runs it.
 fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     let Some(d) = app.dialog.as_mut() else { return };
-    let Some(spec) = modelcraft_engine::find_command(d.command) else {
+    let Some(spec) = fieldcraft_engine::find_command(d.command) else {
         app.dialog = None;
         return;
     };
@@ -134,7 +134,7 @@ fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name
         });
     });
     ui.add_space(4.0);
-    egui::Grid::new("mc_properties").num_columns(2).spacing(vec2(10.0, 3.0)).show(ui, |ui| {
+    egui::Grid::new("fc_properties").num_columns(2).spacing(vec2(10.0, 3.0)).show(ui, |ui| {
         for (k, text) in rows.iter() {
             ui.label(RichText::new(k).color(t.text_dim));
             ui.add(egui::Label::new(text).wrap());

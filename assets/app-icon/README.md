@@ -1,6 +1,6 @@
-# ModelCraft application icon
+# FieldCraft application icon
 
-ModelCraft's mark is an L-shaped bracket with a bolt hole, drawn in isometric view and covered
+FieldCraft's mark is an L-shaped bracket with a bolt hole, drawn in isometric view and covered
 by a structured hexahedral mesh with an O-grid around the hole. Its faces are separated by
 transparent gaps rather than painted edge lines, so the backdrop shows through them in every
 appearance. It is original artwork, attributed in `ATTRIBUTION.md`, and shares the Craft
@@ -17,11 +17,11 @@ hand. It runs on macOS (sips, iconutil, `xcrun actool`) with ImageMagick (`magic
 | `icon-small.vectorcraft`, `icon-small.svg`, `icon-small.png` | Small-size artwork used at 16–32 px: no mesh or floor grid, faces edge to edge |
 | `icon.iconset/`, `icon.icns` | macOS iconset (sips) and its iconutil compilation |
 | `icon.ico` | Windows icon, 16–256 px |
-| `ModelCraft.icon/` | Icon Composer document: floor grid (Default and Dark), part and mesh layers, each scaled to 90% |
+| `FieldCraft.icon/` | Icon Composer document: floor grid (Default and Dark), part and mesh layers, each scaled to 90% |
 | `layers/*.vectorcraft` | Editable sources of the Icon Composer layers |
-| `Assets.car` | `actool` compilation of `ModelCraft.icon` for macOS 26 and later (needs Xcode 26 or later; the task skips it with a note otherwise) |
+| `Assets.car` | `actool` compilation of `FieldCraft.icon` for macOS 26 and later (needs Xcode 26 or later; the task skips it with a note otherwise) |
 
 The desktop app embeds `icon.iconset/icon_128x128@2x.png` as its window and Dock icon
-(`apps/modelcraft/src/main.rs`). There is no macOS bundle yet; packaging will copy
-`Assets.car` and `icon.icns` into `Contents/Resources` and name `ModelCraft` in
+(`apps/fieldcraft/src/main.rs`). There is no macOS bundle yet; packaging will copy
+`Assets.car` and `icon.icns` into `Contents/Resources` and name `FieldCraft` in
 `CFBundleIconName` / `CFBundleIconFile`.

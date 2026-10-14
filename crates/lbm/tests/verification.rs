@@ -4,13 +4,13 @@
 //! of a periodic array of spheres (Hasimoto 1959), inlet/outlet channel flow, mass conservation
 //! to round-off, and the stability limits.
 //!
-//! Each test prints its errors and measured orders (`cargo test -p modelcraft-lbm -- --nocapture`).
+//! Each test prints its errors and measured orders (`cargo test -p fieldcraft-lbm -- --nocapture`).
 
 mod common;
 
 use common::*;
-use modelcraft_lbm::{Error, Limits, Setup, solve_fluid};
-use modelcraft_model::{FaceCondition, Profile};
+use fieldcraft_lbm::{Error, Limits, Setup, solve_fluid};
+use fieldcraft_model::{FaceCondition, Profile};
 
 const PERIODIC: FaceCondition = FaceCondition::Periodic {};
 
@@ -100,7 +100,7 @@ fn taylor_green(n: usize) -> (f64, f64) {
     let (nu, u0, l) = (0.1, 0.1, 2.0 * std::f64::consts::PI);
     let dx = l / n as f64;
     let mut d = domain([0.0; 3], [l, l, dx], dx);
-    for f in modelcraft_model::BoxFace::ALL {
+    for f in fieldcraft_model::BoxFace::ALL {
         *d.faces.get_mut(f) = PERIODIC;
     }
     // τ = 0.8: Δt = 0.3 Δx² / (3 ν).
@@ -222,7 +222,7 @@ fn sphere_drag(r: f64, l: usize, steps: u64) -> (f64, f64) {
     let (nu, a) = (5.0 / 6.0, 1e-6);
     let side = l as f64;
     let mut d = domain([0.0; 3], [side; 3], 1.0);
-    for f in modelcraft_model::BoxFace::ALL {
+    for f in fieldcraft_model::BoxFace::ALL {
         *d.faces.get_mut(f) = PERIODIC;
     }
     d.acceleration = [a, 0.0, 0.0];
@@ -232,7 +232,7 @@ fn sphere_drag(r: f64, l: usize, steps: u64) -> (f64, f64) {
         1.0,
         nu,
         d,
-        modelcraft_model::Procedure::Fluid {
+        fieldcraft_model::Procedure::Fluid {
             domain: "Flow".into(),
             end_time: None,
             steps: Some(steps),
@@ -287,7 +287,7 @@ fn channel_with_a_parabolic_inlet_and_a_pressure_outlet_develops_poiseuille_flow
     // τ = 0.6. The pressure drop changes the density along the channel by Δp / (ρ c_s²) in lattice
     // units (the weakly compressible error), here 0.07%; the automatic time step would give 1.6%.
     let dt = 0.1 / 3.0 * dx * dx / nu;
-    let procedure = modelcraft_model::Procedure::Fluid {
+    let procedure = fieldcraft_model::Procedure::Fluid {
         domain: "Flow".into(),
         end_time: Some(4.0 * h * h / nu),
         steps: None,
@@ -372,7 +372,7 @@ fn results_are_bit_for_bit_reproducible() {
         1.0,
         0.01,
         d,
-        modelcraft_model::Procedure::Fluid { domain: "Flow".into(), end_time: Some(1.0), steps: None, time_step: None, frames: 3, magic: None },
+        fieldcraft_model::Procedure::Fluid { domain: "Flow".into(), end_time: Some(1.0), steps: None, time_step: None, frames: 3, magic: None },
     );
     let a = solve_fluid(&m, None, std::slice::from_ref(&ball), &Limits::default()).unwrap();
     let b = solve_fluid(&m, None, std::slice::from_ref(&ball), &Limits::default()).unwrap();

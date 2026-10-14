@@ -286,7 +286,7 @@ pub fn lanczos(op: &impl Operator, shift: f64, wanted: Wanted, block: usize, max
         // W = Op Q_j.
         let mut w: Vec<Vec<f64>> = Vec::with_capacity(b);
         // The block's solves are independent: one task each.
-        for y in modelcraft_parallel::map(mcur.len(), |i| {
+        for y in fieldcraft_parallel::map(mcur.len(), |i| {
             let mut y = mcur.get(i).cloned().unwrap_or_default();
             op.solve(&mut y).map(|()| y)
         }) {

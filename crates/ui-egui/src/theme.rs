@@ -6,8 +6,8 @@
 //! ATTRIBUTION.md. Widget states are coloured with craft-ui's `WidgetPalette`.
 
 use egui::{Color32, Stroke};
-use modelcraft_model::ElementKind;
-use modelcraft_render::Rgb;
+use fieldcraft_model::ElementKind;
+use fieldcraft_render::Rgb;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {

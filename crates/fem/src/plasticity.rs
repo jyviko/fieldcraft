@@ -36,7 +36,7 @@
 //! Stress 6-vectors hold tensor components (xx, yy, zz, xy, xz, yz), strain increments
 //! engineering shears.
 
-use modelcraft_model::{Damage, Elastic, Hardening, Plastic};
+use fieldcraft_model::{Damage, Elastic, Hardening, Plastic};
 
 use crate::material::von_mises;
 use crate::{Error, Result};
@@ -328,7 +328,7 @@ impl J2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use modelcraft_model::HardeningPoint;
+    use fieldcraft_model::HardeningPoint;
 
     const E: f64 = 200_000.0;
     const NU: f64 = 0.3;

@@ -7,9 +7,9 @@
 //! journalled nor undone, and it does not change the session revision. A result kept from an
 //! earlier revision is still shown, marked stale ([`Session::latest_result`]).
 
-use modelcraft_explicit::{ExplicitResult, Frame};
-use modelcraft_model::Model;
-use modelcraft_solver::{FrequencyResult, HeatResult, StaticResult};
+use fieldcraft_explicit::{ExplicitResult, Frame};
+use fieldcraft_model::Model;
+use fieldcraft_solver::{FrequencyResult, HeatResult, StaticResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -21,16 +21,16 @@ pub enum Kind<'a> {
     Frequency(&'a FrequencyResult),
     Explicit(&'a ExplicitResult),
     /// Per cell, not per node: no nodal fields to display yet.
-    Fluid(&'a modelcraft_lbm::FluidResult),
+    Fluid(&'a fieldcraft_lbm::FluidResult),
     Heat(&'a HeatResult),
 }
 
 impl StepResult {
     pub fn kind(&self) -> Kind<'_> {
         match self {
-            StepResult::Implicit(modelcraft_solver::StepResult::Static(r)) => Kind::Static(r),
-            StepResult::Implicit(modelcraft_solver::StepResult::Frequency(r)) => Kind::Frequency(r),
-            StepResult::Implicit(modelcraft_solver::StepResult::Heat(r)) => Kind::Heat(r),
+            StepResult::Implicit(fieldcraft_solver::StepResult::Static(r)) => Kind::Static(r),
+            StepResult::Implicit(fieldcraft_solver::StepResult::Frequency(r)) => Kind::Frequency(r),
+            StepResult::Implicit(fieldcraft_solver::StepResult::Heat(r)) => Kind::Heat(r),
             StepResult::Explicit(r) => Kind::Explicit(r),
             StepResult::Fluid(r) => Kind::Fluid(r),
         }
@@ -306,7 +306,7 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
         }
     };
     let each = |f: &dyn Fn(&[f64; 6]) -> f64| -> Result<Vec<f64>> { Ok(stresses()?.iter().map(f).collect()) };
-    let principal = |k: usize| each(&|t| modelcraft_fem::principal(t).get(k).copied().unwrap_or(f64::NAN));
+    let principal = |k: usize| each(&|t| fieldcraft_fem::principal(t).get(k).copied().unwrap_or(f64::NAN));
     match field {
         Field::Displacement => component(|v| magnitude(*v)),
         Field::DisplacementX => component(|v| v[0]),
@@ -328,7 +328,7 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
             Kind::Heat(h) => Ok(h.flux.iter().map(|v| magnitude(*v)).collect()),
             _ => Err(unavailable()),
         },
-        Field::VonMises => each(&modelcraft_fem::von_mises),
+        Field::VonMises => each(&fieldcraft_fem::von_mises),
         Field::MaxPrincipal => principal(0),
         Field::MidPrincipal => principal(1),
         Field::MinPrincipal => principal(2),

@@ -1,13 +1,13 @@
 //! Benchmark suite: comparisons with published numerical reference values (not analytic; the
 //! analytic suite in `verification.rs` is the gate). Each case names its source. The cases are
 //! long, so they are ignored by default:
-//! `cargo test --release -p modelcraft-lbm --test benchmark -- --ignored --nocapture`.
+//! `cargo test --release -p fieldcraft-lbm --test benchmark -- --ignored --nocapture`.
 
 mod common;
 
 use common::*;
-use modelcraft_lbm::{Limits, solve_fluid};
-use modelcraft_model::{FaceCondition, Procedure, Profile};
+use fieldcraft_lbm::{Limits, solve_fluid};
+use fieldcraft_model::{FaceCondition, Procedure, Profile};
 
 /// Benchmark "2D-1" (steady flow around a cylinder at Re = 20): M. Schäfer, S. Turek, *Benchmark
 /// computations of laminar flow around a cylinder*, in: Flow Simulation with High-Performance

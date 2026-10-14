@@ -1,7 +1,7 @@
 //! Element-level checks: rigid-body modes, constant-strain reproduction (the single-element form
 //! of the patch test), mass and load totals, extrapolation.
 
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 use crate::dense::{Cholesky, Matrix};
 use crate::element::{Formulation, Solid};
@@ -203,7 +203,7 @@ fn bad_input_is_an_error() {
 
 #[test]
 fn section_formulations() {
-    use modelcraft_model::{Formulation as F, Integration};
+    use fieldcraft_model::{Formulation as F, Integration};
     let full = F::default();
     let reduced = F { integration: Integration::Reduced, ..F::default() };
     let im = F { incompatible_modes: true, ..F::default() };

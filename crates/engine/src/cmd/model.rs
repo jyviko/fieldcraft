@@ -1,4 +1,4 @@
-use modelcraft_model::{Severity, UnitSystem};
+use fieldcraft_model::{Severity, UnitSystem};
 use serde_json::{Value, json};
 
 use super::{listed, name};

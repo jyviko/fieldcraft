@@ -4,9 +4,9 @@
 
 use std::collections::BTreeMap;
 
-use modelcraft_lbm::{Flow, Limits, Obstacle, Setup};
-use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
-use modelcraft_model::{BoxFaces, Fluid, FluidDomain, Material, Model, Procedure, Step};
+use fieldcraft_lbm::{Flow, Limits, Obstacle, Setup};
+use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
+use fieldcraft_model::{BoxFaces, Fluid, FluidDomain, Material, Model, Procedure, Step};
 
 /// A domain over [min, max] with walls on every face.
 pub fn domain(min: [f64; 3], max: [f64; 3], spacing: f64) -> FluidDomain {

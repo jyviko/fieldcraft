@@ -1,4 +1,4 @@
-//! Display data for ModelCraft, with no GPU dependency: what a finite element model looks like
+//! Display data for FieldCraft, with no GPU dependency: what a finite element model looks like
 //! on screen ([`DisplayMesh`]: the visible faces, element edges, line elements and nodes), an
 //! orbit camera with perspective or orthographic projection, and a CPU rasterizer for headless
 //! snapshots. The desktop viewport draws the same [`Scene`] on the GPU.

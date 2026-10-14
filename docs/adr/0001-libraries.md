@@ -4,29 +4,29 @@ Status: accepted (2026-10-13)
 
 ## Context
 
-ModelCraft is MIT OR Apache-2.0. Everything it links must allow that, and the meshing and solver
+FieldCraft is MIT OR Apache-2.0. Everything it links must allow that, and the meshing and solver
 algorithms, where the obvious open-source implementations are GPL-family, must come from papers.
 
 ## Decision
 
 **Geometry: SolidCraft**, as git dependencies pinned by rev (`solidcraft-kernel`,
 `solidcraft-geom`, `solidcraft-doc`, `solidcraft-io`; MIT OR Apache-2.0, built on the Apache-2.0
-truck crates). SolidCraft is the primary geometry source: ModelCraft opens SolidCraft designs and
+truck crates). SolidCraft is the primary geometry source: FieldCraft opens SolidCraft designs and
 meshes from SolidCraft's tessellation, and reads face-tagged meshes SolidCraft exports. Other CAD
 exchange files (STEP, which SolidCraft's kernel already reads) can be added as secondary inputs
-through the same crate. Only `modelcraft-geometry` may depend on SolidCraft.
+through the same crate. Only `fieldcraft-geometry` may depend on SolidCraft.
 
 **Meshing: our own**, implemented from published papers (`docs/meshing/literature.md`).
 Robust predicates follow Shewchuk's adaptive-precision arithmetic (the paper; his reference
 `predicates.c` is public domain). A permissive crate may be adopted instead after review; record
-it here. *Decided 2026-10-13:* our own implementation, `modelcraft_mesh::predicates`, written from
+it here. *Decided 2026-10-13:* our own implementation, `fieldcraft_mesh::predicates`, written from
 Shewchuk 1997, Devillers–Teillaud 2011 and Attene 2020 (no `unsafe`, deterministic, wasm-safe, a
 validated coordinate domain instead of Shewchuk's overflow/underflow caveat, and indirect
 predicates that `robust` lacks). `robust` (georust, MIT OR Apache-2.0) and `num-bigint` /
 `num-rational` / `num-traits` (MIT OR Apache-2.0) are dev-dependencies only: differential test
-oracles, never linked into ModelCraft.
+oracles, never linked into FieldCraft.
 
-**Linear algebra: our own.** *Decided 2026-10-13 (implicit solver task):* `modelcraft-solver`
+**Linear algebra: our own.** *Decided 2026-10-13 (implicit solver task):* `fieldcraft-solver`
 has its own sparse symmetric storage, nested-dissection ordering (George 1973, by coordinate
 bisection), up-looking sparse Cholesky (Davis 2006, elimination trees per Liu 1990) and
 shift-invert block Lanczos with full reorthogonalization (Ericsson–Ruhe 1980, Grimes–Lewis–Simon
@@ -44,7 +44,7 @@ parallelism task):* the factorization is now our own supernodal left-looking Cho
 1994), multithreaded with a fixed operation order (below). Its rounding differs from the old
 up-looking factor in the last digits; every oracle fixture stays within its band.
 
-**Threads: rayon** (MIT OR Apache-2.0), in `modelcraft-parallel` only (an L0 crate with no
+**Threads: rayon** (MIT OR Apache-2.0), in `fieldcraft-parallel` only (an L0 crate with no
 workspace dependencies; *decided 2026-10-13*). The solvers keep the bit-for-bit rule on any
 number of threads by construction: work is cut into blocks whose sizes are constants of the
 algorithm, never derived from the thread count; each floating-point value is computed by one task
@@ -57,9 +57,9 @@ per time increment (10⁵–10⁷ increments), so a persistent pool is needed, a
 re-implement rayon's. rayon was already in the shipped dependency tree (THIRD-PARTY-LICENSES.txt
 unchanged). In the browser build (`wasm32`) the crate does not depend on rayon and runs the same
 blocks one after another, with the same results. The thread count is a session and `solve.*`
-parameter (`threads`, 1–256) whose default is `MODELCRAFT_THREADS` or the available cores. Cost if
+parameter (`threads`, 1–256) whose default is `FIELDCRAFT_THREADS` or the available cores. Cost if
 this is wrong: rayon's pool is a process-wide resource and nested pools add latency; replacing it
-touches only `modelcraft-parallel`.
+touches only `fieldcraft-parallel`.
 
 **Allowed:** MIT, BSD-2/3, Apache-2.0, ISC, Zlib, Unicode, MPL-2.0 (as an unmodified dependency),
 CC0 and public domain.
@@ -106,8 +106,8 @@ Thingi10K is not used either (owner decision 2026-10-13: authoring tools unrecor
 corpus is our own:** parts built with SolidCraft (scripts or designs authored in SolidCraft,
 committed as their recipes so the geometry is regenerated, not stored) and analytic shapes.
 Recipes are SolidCraft command scripts run through `solidcraft-engine` (same pinned rev), a
-dependency of `modelcraft-geometry` only behind its non-default `scripts` feature, which the test
-tooling (`modelcraft-testkit`) enables; the shipped library opens designs without it.
+dependency of `fieldcraft-geometry` only behind its non-default `scripts` feature, which the test
+tooling (`fieldcraft-testkit`) enables; the shipped library opens designs without it.
 
 **Commercial products** (Abaqus, Nastran, LS-DYNA, LS-PrePost, HyperMesh, ANSA, Femap, Patran,
 ANSYS) are never run or scripted, and their input files, text and figures are never copied. Deck
@@ -120,5 +120,5 @@ docs/verification.md).
 
 - The tet and hex meshers are significant original work; the literature survey decides the
   order and the methods.
-- SolidCraft and ModelCraft move together: bumping the pinned rev bumps the repeated
+- SolidCraft and FieldCraft move together: bumping the pinned rev bumps the repeated
   `[patch.crates-io]` entries in the same commit.

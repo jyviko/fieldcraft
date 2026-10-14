@@ -1,6 +1,6 @@
 //! Autosave storage and crash recovery.
 //!
-//! A running app keeps one entry in the recovery folder: `<id>.modelcraft` (the model as of the
+//! A running app keeps one entry in the recovery folder: `<id>.fieldcraft` (the model as of the
 //! last autosave), `<id>.json` (its [`Entry`]: the model's own file, when it has one, and when it
 //! was autosaved) and `<id>.lock`, which the app holds locked while it runs. An entry whose lock
 //! nobody holds belongs to an app that crashed or closed with unsaved changes: [`orphans`] lists
@@ -17,19 +17,19 @@ use serde::{Deserialize, Serialize};
 use crate::fs::{read_capped, write_atomic};
 use crate::{EXTENSION, Error, MAX_FILE_BYTES, Result};
 
-/// The recovery folder: `MODELCRAFT_RECOVERY_DIR`, else `ModelCraft/recovery` (`modelcraft/` on
+/// The recovery folder: `FIELDCRAFT_RECOVERY_DIR`, else `FieldCraft/recovery` (`fieldcraft/` on
 /// Linux) in the platform's per-user data folder.
 pub fn default_dir() -> Option<PathBuf> {
     let env = |k: &str| std::env::var_os(k).filter(|d| !d.is_empty()).map(PathBuf::from);
-    if let Some(d) = env("MODELCRAFT_RECOVERY_DIR") {
+    if let Some(d) = env("FIELDCRAFT_RECOVERY_DIR") {
         return Some(d);
     }
     let (root, name) = if cfg!(windows) {
-        (env("LOCALAPPDATA")?, "ModelCraft")
+        (env("LOCALAPPDATA")?, "FieldCraft")
     } else if cfg!(target_os = "macos") {
-        (env("HOME")?.join("Library/Application Support"), "ModelCraft")
+        (env("HOME")?.join("Library/Application Support"), "FieldCraft")
     } else {
-        (env("XDG_DATA_HOME").or_else(|| env("HOME").map(|h| h.join(".local/share")))?, "modelcraft")
+        (env("XDG_DATA_HOME").or_else(|| env("HOME").map(|h| h.join(".local/share")))?, "fieldcraft")
     };
     Some(root.join(name).join("recovery"))
 }
@@ -210,7 +210,7 @@ mod tests {
     use super::*;
 
     fn dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("modelcraft-recovery-{tag}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("fieldcraft-recovery-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         d
     }
@@ -219,7 +219,7 @@ mod tests {
     fn a_crashed_apps_autosave_is_offered_and_a_running_ones_is_not() {
         let d = dir("crash");
         let mut a = Slot::new(&d).unwrap();
-        a.write(b"model bytes", Some("/m/part.modelcraft"), 8, 1).unwrap();
+        a.write(b"model bytes", Some("/m/part.fieldcraft"), 8, 1).unwrap();
         assert!(orphans(&d).is_empty(), "held by a running app");
         assert!(remove(&d, a.id()).is_err(), "a running app's entry stays");
         let id = a.id().to_string();
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(found.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), [id.as_str()]);
         let (bytes, entry) = load(&d, &id).unwrap();
         assert_eq!(bytes, b"model bytes");
-        assert_eq!((entry.path.as_deref(), entry.nodes, entry.elements), (Some("/m/part.modelcraft"), 8, 1));
+        assert_eq!((entry.path.as_deref(), entry.nodes, entry.elements), (Some("/m/part.fieldcraft"), 8, 1));
         // A new app gets its own entry and still sees the crashed one.
         let b = Slot::new(&d).unwrap();
         assert_ne!(b.id(), id);
@@ -264,11 +264,11 @@ mod tests {
         }
         // An entry naming another id, junk JSON and a huge description are not listed.
         fs::write(d.join("1-1-1.json"), br#"{"id": "2-2-2", "path": null, "saved_at": 1, "nodes": 0, "elements": 0}"#).unwrap();
-        fs::write(d.join("1-1-1.modelcraft"), b"x").unwrap();
-        fs::write(d.join("2-2-2.modelcraft"), b"x").unwrap();
+        fs::write(d.join("1-1-1.fieldcraft"), b"x").unwrap();
+        fs::write(d.join("2-2-2.fieldcraft"), b"x").unwrap();
         fs::write(d.join("3-3-3.json"), b"{not json").unwrap();
         fs::write(d.join("4-4-4.json"), vec![b' '; (MAX_ENTRY_BYTES + 1) as usize]).unwrap();
-        fs::write(d.join("4-4-4.modelcraft"), b"x").unwrap();
+        fs::write(d.join("4-4-4.fieldcraft"), b"x").unwrap();
         assert!(orphans(&d).is_empty());
         assert!(load(&d, "1-1-1").is_err());
         let _ = fs::remove_dir_all(&d);

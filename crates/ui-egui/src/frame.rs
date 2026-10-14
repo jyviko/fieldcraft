@@ -93,7 +93,7 @@ fn popup<R>(
     if !open {
         return None;
     }
-    let id = egui::Id::new(("mc_menu", key));
+    let id = egui::Id::new(("fc_menu", key));
     let shown =
         egui::Popup::new(id, ui.ctx().clone(), anchor, ui.layer_id()).kind(egui::PopupKind::Menu).open_bool(&mut open).close_behavior(close).show(
             |ui| {

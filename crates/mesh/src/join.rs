@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use modelcraft_model::{ElementKind, Model};
+use fieldcraft_model::{ElementKind, Model};
 
 use crate::vec3::{P, dot, sub};
 use crate::{Error, Result};

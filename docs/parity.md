@@ -1,6 +1,6 @@
 # Capability checklist (reference: Abaqus/CAE)
 
-What an analyst does in a full CAE pre-processor, grouped by milestone, with ModelCraft's status.
+What an analyst does in a full CAE pre-processor, grouped by milestone, with FieldCraft's status.
 Scope comes from the public documentation of Abaqus/CAE and public analyst discussion,
 described in our own words; nothing was taken from the product itself (AGENTS.md: no commercial
 products are run, no documentation text is copied). Status: **done**, **started**, **planned**.
@@ -8,7 +8,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 
 ## Where we aim to be better
 
-| # | Opportunity | Why analysts want it | ModelCraft approach |
+| # | Opportunity | Why analysts want it | FieldCraft approach |
 |---|---|---|---|
 | 1 | Hex meshes without manual partitioning | Partitioning a part into sweepable cells by hand is the most cited chore | Sweep and mapped meshing with automatic decomposition that proposes SolidCraft splits (M5); octree all-hex for anything else (M6) |
 | 2 | Undo, redo, replay, crash recovery | No general undo; replay files are hard to reuse; corrupted model files | Every action is a journalled command with rollback, undo and redo; autosave with recovery after a crash |
@@ -16,7 +16,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | 4 | An API that is not a bundled scripting runtime | Version breakage, slow scripts, geometry picked by position | JSON commands over CLI, control channel and MCP |
 | 5 | Located diagnostics | Generic error messages | Errors name the element, face or keyword; `mesh.quality` lists failing elements |
 | 6 | Lossless deck round trip | Unsupported keywords dropped on import | Deck readers keep unknown keywords and write them back (M9) |
-| 7 | Safe, diffable model files | Binary model databases that corrupt or lock to a version | `.modelcraft`: text, line-diffable definition and journal, checksummed binary mesh, versioned format tag, atomic saves with backup, autosave (M3, done) |
+| 7 | Safe, diffable model files | Binary model databases that corrupt or lock to a version | `.fieldcraft`: text, line-diffable definition and journal, checksummed binary mesh, versioned format tag, atomic saves with backup, autosave (M3, done) |
 | 8 | Geometry checked before meshing | Slivers and tiny faces fail late | Surface preparation reports defects with their location (M1) |
 | 9 | No size caps, any solver | Node limits in learning editions; one solver per tool | Free, open source, three deck formats |
 | 10 | Clear step history | Loads and BCs propagate between steps implicitly | An explicit step × load/BC table (M3) |
@@ -33,7 +33,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Mesh | Size field: global, per face and edge seeds, bias, curvature and proximity refinement | M2 | yes | planned |
 | Mesh | Free tet meshing (tet4, tet10 with mid-side nodes on the geometry) | M2 | | started |
 | Mesh | Quality metrics, certified validity, verify per set | M1–M2 | yes | done (metrics, gate) |
-| Mesh | 2D quad meshing of faces | M5 | yes | started (`modelcraft_mesh::quad`; `mesh.planar`: 2D models of a polygon or a planar face, quad4/quad8/tri3/tri6, edges tagged by their neighbouring face) |
+| Mesh | 2D quad meshing of faces | M5 | yes | started (`fieldcraft_mesh::quad`; `mesh.planar`: 2D models of a polygon or a planar face, quad4/quad8/tri3/tri6, edges tagged by their neighbouring face) |
 | Mesh | Mapped hex of six-sided regions | M5 | yes | done (`mesh.hex.mapped`) |
 | Mesh | Sweep hex (extrusions, revolutions) | M5 | yes | done (`mesh.hex.sweep`: multi-level extrusions, revolutions, one-to-one sweeps) |
 | Mesh | Automatic decomposition into sweepable and mappable regions | M5 | yes | planned |
@@ -69,7 +69,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Results | Readers for public result formats (Nastran OP2, LS-DYNA d3plot, Abaqus `.fil`) | M9 | | planned |
 | Results | Mesh convergence studies | M9 | | planned |
 | App | Desktop viewport, model tree, commands, control channel | continuous | | done |
-| App | Undo/redo on the command journal, autosave, `.modelcraft` file | M3 | | done |
+| App | Undo/redo on the command journal, autosave, `.fieldcraft` file | M3 | | done |
 | App | MCP server, browser build | continuous | | planned |
 
 ## Deck notes for the writers
@@ -84,14 +84,14 @@ products are run, no documentation text is copied). Status: **done**, **started*
   `crates/decks/src/abaqus.rs`). The step table is bridged to Abaqus's propagation: zero-valued
   boundary conditions active in every step go to the initial state, and steps restate their
   boundary conditions and loads with `OP=NEW` when the active set changes.
-- Nastran (`modelcraft_decks::nastran`): entries with a real use large (16-column) fields, the rest
+- Nastran (`fieldcraft_decks::nastran`): entries with a real use large (16-column) fields, the rest
   small fields; a real is exact when its shortest round-trip form fits 16 columns, else rounded to
   at least ten significant digits. Linear solids map full integration to `PSOLID` `TWO`/`THREE` +
   `FULL`, hex20 reduced to `TWO` + `FULL`, hex8 incompatible modes to `BUBBLE`; one-point reduced
   linear solids, hybrid solids, reduced-integration or one-point shells, body forces, gravity on part
   of the model, orthotropic beams and rods, and orthotropic shells off planes of constant Z are
   reported as unsupported. Static and frequency steps need separate decks (`deck.write` `steps`).
-- LS-DYNA (`modelcraft_decks::lsdyna`, `deck.write {"format": "lsdyna"}`): long format (20-column
+- LS-DYNA (`fieldcraft_decks::lsdyna`, `deck.write {"format": "lsdyna"}`): long format (20-column
   fields; every value with up to 13 significant digits, and 17-digit values from 0.01 to 1e17, are
   written exactly; the rest is rounded to at least 13 digits and counted). The 10-node tetrahedron
   follows the manual's figure: mid-side nodes 8, 9, 10 on edges 2-4, 3-4, 1-4 (the model has them

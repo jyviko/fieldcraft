@@ -1,6 +1,6 @@
 # Architecture
 
-ModelCraft turns geometry into finite element models, writes them for the solvers engineers
+FieldCraft turns geometry into finite element models, writes them for the solvers engineers
 already use, and solves linear problems itself.
 
 ```
@@ -18,33 +18,33 @@ crates in strictly lower layers.
 
 | Layer | Crate | Role | Status |
 |---|---|---|---|
-| L0 | `modelcraft-model` | Solver-neutral FE model: nodes and elements by label, their geometry tags, sets, materials, sections, couplings, BCs, loads and steps, the model check and the resolved view the writers read. Knows no file format and no geometry type. | started |
-| L0 | `modelcraft-parallel` | Deterministic data parallelism for the solvers: fixed work partitions on a rayon pool, results in block order, the thread-count setting (`MODELCRAFT_THREADS`, `threads`); sequential in the browser. No workspace dependencies. | started |
-| L1 | `modelcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`; face-tagged 3MF files read into the same type without the kernel (docs/formats/tagged-mesh.md). No SolidCraft type in its API. | started |
-| L1 | `modelcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
-| L1 | `modelcraft-fem` | Element kernels shared by every structural solver: the element table (tet4, tet10, wedge6, hex8 full and incompatible modes, hex20 full and reduced), shape functions, quadrature, element stiffness, consistent and lumped mass, body and pressure loads, stresses and their extrapolation, isotropic and orthotropic elasticity, the uniform-strain (one-point) hex8 and tet4 kinematics, hourglass shape vectors and element frequency bounds of the explicit solver, objective stress rates and J2/Johnson–Cook return mapping. Pure functions, no solver loop. | started |
-| L1 | `modelcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. Text out, no file system; `deck.write` saves it. | started |
-| L1 | `modelcraft-render` | Display data without a GPU dependency: the visible faces, element edges and nodes of a model, the orbit camera, a CPU rasterizer for headless snapshots, geometry surfaces with their face boundaries, deformed shapes and banded contour plots of nodal results, picking. | started |
-| L2 | `modelcraft-solver` | Implicit solver: assembly from the resolved model, boundary conditions, sparse direct solution, linear static and modal analysis, stresses and reactions. | started |
-| L2 | `modelcraft-explicit` | Explicit dynamics: central-difference time integration with lumped mass, one-point hex8 with hourglass control, nodal-pressure tet4, bulk viscosity, rigid walls, large deformation with objective rates, plasticity, damage and erosion, energy account, histories and field frames. | started |
-| L2 | `modelcraft-lbm` | Lattice Boltzmann flow solver on the CPU: D3Q19 two-relaxation-time scheme, bounce-back and slip walls, Zou–He inlets and outlets, obstacles voxelised from the face-tagged surface with exact predicates, momentum-exchange forces per face. Uses `mesh` for the predicates and the boundary surface. | started |
-| L3 | `modelcraft-fsi` | Fluid–structure coupling between the L2 solvers (later). | planned |
-| L4 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
-| L5 | `modelcraft-io` | `.modelcraft` files (docs/formats/modelcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery; read and write roots that confine an automation client's file access (`roots`). Bytes in, bytes out; the file system only in `fs`, `recovery` and `roots`. Result files later. | started |
-| L6 | `modelcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts; every file a command names checked against the session's roots (`Session::file_access`); headless pictures of the session (`view`: model, geometry, deformed shape and contours on the CPU rasterizer). | started |
-| L7 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI in the Craft family's layout (title bar with quick actions, workspace ribbon from the catalogue, browser, viewport with navigation bar and orientation gizmo, context panel, command search and command line, journal timeline; native file pickers as host services, background opening and solving; results display with legend and probe; offscreen capture of the whole window) and control channel requests (docs/control-protocol.md); MCP server over stdio (docs/mcp.md): tools over engine commands, a headless session or the running app through its control channel, read and write roots. | ui, mcp started |
-| testkit | `modelcraft-testkit` | Test tooling, a dev-dependency only: the meshing test corpus (`tests/corpus/*/recipe.json`, analytic shapes) and its runner (`cargo xtask corpus`). | started |
-| apps | `modelcraft`, `modelcraft-cli`, `modelcraft-web` | Desktop, command line, browser. | desktop, cli started |
+| L0 | `fieldcraft-model` | Solver-neutral FE model: nodes and elements by label, their geometry tags, sets, materials, sections, couplings, BCs, loads and steps, the model check and the resolved view the writers read. Knows no file format and no geometry type. | started |
+| L0 | `fieldcraft-parallel` | Deterministic data parallelism for the solvers: fixed work partitions on a rayon pool, results in block order, the thread-count setting (`FIELDCRAFT_THREADS`, `threads`); sequential in the browser. No workspace dependencies. | started |
+| L1 | `fieldcraft-geometry` | The only door to SolidCraft: opens `.solidcraft` designs (rebuilt from their timeline, bodies with persistent face names), B-rep bodies, measures, tessellation into a face-tagged `SurfaceMesh`; face-tagged 3MF files read into the same type without the kernel (docs/formats/tagged-mesh.md). No SolidCraft type in its API. | started |
+| L1 | `fieldcraft-mesh` | Surface preparation (weld, watertightness, feature edges), robust predicates, Delaunay tetrahedralization and refinement, Voronoi-based optimization, hex meshing, quality metrics. | started |
+| L1 | `fieldcraft-fem` | Element kernels shared by every structural solver: the element table (tet4, tet10, wedge6, hex8 full and incompatible modes, hex20 full and reduced), shape functions, quadrature, element stiffness, consistent and lumped mass, body and pressure loads, stresses and their extrapolation, isotropic and orthotropic elasticity, the uniform-strain (one-point) hex8 and tet4 kinematics, hourglass shape vectors and element frequency bounds of the explicit solver, objective stress rates and J2/Johnson–Cook return mapping. Pure functions, no solver loop. | started |
+| L1 | `fieldcraft-decks` | Abaqus input, Nastran bulk data and LS-DYNA keyword readers and writers, to and from `model`. Text out, no file system; `deck.write` saves it. | started |
+| L1 | `fieldcraft-render` | Display data without a GPU dependency: the visible faces, element edges and nodes of a model, the orbit camera, a CPU rasterizer for headless snapshots, geometry surfaces with their face boundaries, deformed shapes and banded contour plots of nodal results, picking. | started |
+| L2 | `fieldcraft-solver` | Implicit solver: assembly from the resolved model, boundary conditions, sparse direct solution, linear static and modal analysis, stresses and reactions. | started |
+| L2 | `fieldcraft-explicit` | Explicit dynamics: central-difference time integration with lumped mass, one-point hex8 with hourglass control, nodal-pressure tet4, bulk viscosity, rigid walls, large deformation with objective rates, plasticity, damage and erosion, energy account, histories and field frames. | started |
+| L2 | `fieldcraft-lbm` | Lattice Boltzmann flow solver on the CPU: D3Q19 two-relaxation-time scheme, bounce-back and slip walls, Zou–He inlets and outlets, obstacles voxelised from the face-tagged surface with exact predicates, momentum-exchange forces per face. Uses `mesh` for the predicates and the boundary surface. | started |
+| L3 | `fieldcraft-fsi` | Fluid–structure coupling between the L2 solvers (later). | planned |
+| L4 | `fieldcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
+| L5 | `fieldcraft-io` | `.fieldcraft` files (docs/formats/fieldcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery; read and write roots that confine an automation client's file access (`roots`). Bytes in, bytes out; the file system only in `fs`, `recovery` and `roots`. Result files later. | started |
+| L6 | `fieldcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts; every file a command names checked against the session's roots (`Session::file_access`); headless pictures of the session (`view`: model, geometry, deformed shape and contours on the CPU rasterizer). | started |
+| L7 | `fieldcraft-ui-egui`, `fieldcraft-mcp` | Desktop UI in the Craft family's layout (title bar with quick actions, workspace ribbon from the catalogue, browser, viewport with navigation bar and orientation gizmo, context panel, command search and command line, journal timeline; native file pickers as host services, background opening and solving; results display with legend and probe; offscreen capture of the whole window) and control channel requests (docs/control-protocol.md); MCP server over stdio (docs/mcp.md): tools over engine commands, a headless session or the running app through its control channel, read and write roots. | ui, mcp started |
+| testkit | `fieldcraft-testkit` | Test tooling, a dev-dependency only: the meshing test corpus (`tests/corpus/*/recipe.json`, analytic shapes) and its runner (`cargo xtask corpus`). | started |
+| apps | `fieldcraft`, `fieldcraft-cli`, `fieldcraft-web` | Desktop, command line, browser. | desktop, cli started |
 
 Rules beyond the layer order:
 - Nothing below L7 uses egui, eframe, winit, wgpu or rfd.
-- Only `modelcraft-geometry` uses `solidcraft-*`, pinned by rev in the workspace `Cargo.toml`.
+- Only `fieldcraft-geometry` uses `solidcraft-*`, pinned by rev in the workspace `Cargo.toml`.
   SolidCraft's `[patch.crates-io]` (its fixed truck crates) does not reach dependents, so the
   workspace repeats it from the same rev; bump both together. The same goes for SolidCraft's
   patched `egui-wgpu` (MSAA clamped to what the device supports, 1x on OpenGL adapters, so the
   desktop app's 4x never fails pipeline validation at start).
 - Everything below the apps builds for `wasm32-unknown-unknown`.
-- `modelcraft-geometry`'s non-default `scripts` feature builds designs from SolidCraft command
+- `fieldcraft-geometry`'s non-default `scripts` feature builds designs from SolidCraft command
   scripts (`script_design`, through `solidcraft-engine`) for the test corpus; the library opens
   designs without it.
 
@@ -56,7 +56,7 @@ Rules beyond the layer order:
    them), so a load on a named face follows it when the design is edited and opened again.
    Bodies of components are placed in the world through their occurrences (one body per
    placement), as SolidCraft displays and exports them.
-2. **Surface preparation** (`modelcraft-mesh::surface`, `mesh.surface.check`). Weld the tessellation's per-face
+2. **Surface preparation** (`fieldcraft-mesh::surface`, `mesh.surface.check`). Weld the tessellation's per-face
    vertex copies (at twice SolidCraft's linear tolerance), check the surface is closed, manifold, consistently and
    outwardly oriented (voids inwards) and free of self-intersections (exact triangle–triangle tests), and find
    feature edges (face boundaries, sharp dihedral angles). Defects come back located by triangle, vertex and
@@ -64,7 +64,7 @@ Rules beyond the layer order:
 3. **Tetrahedral meshing.** Bowyer–Watson Delaunay on Shewchuk's adaptive predicates (symbolic
    perturbation for degeneracies), boundary recovery by the robust constrained Delaunay method of
    Diazzi et al. 2023 (implicit Steiner points on indirect predicates, gift-wrapping facet
-   recovery; `modelcraft-mesh::cdt`, command `mesh.tet.generate`), so every boundary triangle and
+   recovery; `fieldcraft-mesh::cdt`, command `mesh.tet.generate`), so every boundary triangle and
    its B-rep face tag survives. Then constrained Delaunay refinement to a
    size field, ODT smoothing interleaved as in Tournois et al. 2009, and the Klingner–Shewchuk 2007
    improvement schedule against slivers.
@@ -75,12 +75,12 @@ Rules beyond the layer order:
    frame-field/integer-grid-map methods stay research. Validity uses a certified trilinear Jacobian
    check (Marschner et al. 2020), not corner Jacobians alone.
 5. **Structured hex and face meshing.** Faces get all-quad meshes on shared, prescribed edge
-   nodes (`modelcraft-mesh::quad`): transfinite interpolation for four-sided faces (Gordon and
+   nodes (`fieldcraft-mesh::quad`): transfinite interpolation for four-sided faces (Gordon and
    Hall 1973), and for free faces a half-resolution constrained Delaunay triangulation,
    recombination (Lee and Lo 1994) and one uniform split that lands on the boundary nodes, then
    smoothing and untangling; every quad is checked with exact predicates. One `SizeField` trait
-   (`modelcraft-mesh::size`) sets interior sizes and edge divisions, with even counts per loop.
-   Mapped and swept hex build on these face meshes (`modelcraft-mesh::hex`, `mesh.hex.generate`):
+   (`fieldcraft-mesh::size`) sets interior sizes and edge divisions, with even counts per loop.
+   Mapped and swept hex build on these face meshes (`fieldcraft-mesh::hex`, `mesh.hex.generate`):
    the B-rep topology is recovered from the face-tagged surface; a body is extruded (straight
    multi-level sweep: the levels' outlines imprinted into one cross-section, cut at reflex corners,
    regions mapped, O-gridded or free-meshed, then stacked), revolved (the same in a rotating
@@ -91,7 +91,7 @@ Rules beyond the layer order:
    result passes the certified validity gate plus tiling and fidelity checks. A body no method
    fits gets each method's reason.
    Without geometry, `mesh.block`
-   (`modelcraft-mesh::block`) meshes one six-sided block from its eight corners and optional
+   (`fieldcraft-mesh::block`) meshes one six-sided block from its eight corners and optional
    circular or elliptical edges by the same edge-based transfinite interpolation, as hex8, hex20,
    tet4/tet10 (Kuhn's six tetrahedra per cell) or wedge6, with grading; blocks join where their
    nodes coincide, face to face (mismatched divisions or kinds are refused), and their named
@@ -102,7 +102,7 @@ Rules beyond the layer order:
 
 ## Model definition
 
-`modelcraft-model` holds the analysis model in no solver's vocabulary (the writers map it to
+`fieldcraft-model` holds the analysis model in no solver's vocabulary (the writers map it to
 element names, cards and keywords):
 
 - **Geometry tags.** Geometry is referred to by name only: a body and, inside it, the persistent
@@ -144,27 +144,27 @@ element names, cards and keywords):
 
 ## Implicit solver
 
-`modelcraft-solver` solves a model's linear static and frequency steps (`solve.static`,
+`fieldcraft-solver` solves a model's linear static and frequency steps (`solve.static`,
 `solve.frequency`; `solve.probe` reads the stored results). Methods and papers are cited in the
 module docs; ADR 0001 records why the linear algebra is our own.
 
 1. **System.** `Model::resolve()`; each solid section's elements take their material's
-   elasticity matrix and the section's formulation (`modelcraft_fem::element::ELEMENT_TYPES`, one
+   elasticity matrix and the section's formulation (`fieldcraft_fem::element::ELEMENT_TYPES`, one
    row per element kind: tet4, tet10, wedge6, hex8, hex20); 2D sections (plane stress, plane
-   strain, axisymmetric) take the 2D table (`modelcraft_fem::plane::PLANE_TYPES`: tri3, tri6,
+   strain, axisymmetric) take the 2D table (`fieldcraft_fem::plane::PLANE_TYPES`: tri3, tri6,
    quad4, quad8), chosen by the section kind, and the model then has two degrees of freedom per
    node: the 2D elements declare `ElementDofs::new(DofSet::PLANE)` (Ux, Uy) to the `DofLayout`. A 2D model
    lies in the XY plane (axisymmetric: x the radius, Y the axis; nodes on the axis are held
    radially), is loaded on element edges, and cannot mix with solids or couplings yet. Rod
-   sections' rod2 and rod3 elements are trusses (`modelcraft_fem::truss`). Point masses, rotary
+   sections' rod2 and rod3 elements are trusses (`fieldcraft_fem::truss`). Point masses, rotary
    inertia and springs (`Resolved::masses`, `springs`, expanded per node by the model) assemble on
    the unknowns their nodes are given (`discrete::needs`, `discrete::dof_of`); dashpots are
    ignored with a warning (no velocities in static and frequency steps). Every reference point a
    coupling or a discrete element uses gets six degrees of freedom (translations, rotations) after
    the mesh's. Shell sections make quad4 (MITC4) and tri3 (MITC3) flat shells with a drilling
-   rotation (`modelcraft_fem::shell`; quad8 and tri6 shells are "not supported yet"), beam
+   rotation (`fieldcraft_fem::shell`; quad8 and tri6 shells are "not supported yet"), beam
    sections two-node Timoshenko beams with the profile's section properties and the section's
-   orientation vector (`modelcraft_fem::beam`); both declare `ElementDofs::new(DofSet::STRUCTURAL)`
+   orientation vector (`fieldcraft_fem::beam`); both declare `ElementDofs::new(DofSet::STRUCTURAL)`
    (`system::Structural`), so their nodes carry translations and rotations and the solids and
    trusses sharing those nodes add into the translations. Shells and beams need isotropic
    materials until material orientations exist, and are 3D only. The step's boundary conditions
@@ -226,14 +226,14 @@ source, separate from the analytic gate): the Scordelis–Lo roof and the pinche
 
 ## Explicit solver
 
-`modelcraft-explicit` integrates a model's `explicit_dynamic` steps in time (`solve.explicit`;
+`fieldcraft-explicit` integrates a model's `explicit_dynamic` steps in time (`solve.explicit`;
 `solve.history` and `solve.probe` read the stored histories and frames). Methods and papers are
 cited in the module docs and in docs/solvers/literature.md (Parts H and J). Both structural solvers
-number their degrees of freedom with `modelcraft_fem::DofLayout` (docs/fem.md).
+number their degrees of freedom with `fieldcraft_fem::DofLayout` (docs/fem.md).
 
 1. **System.** `Model::resolve()`; hex8 sections with reduced integration become one-point
    uniform-strain hexahedra with Flanagan–Belytschko hourglass control, tet4 sections Bonet–Burton
-   average nodal pressure tetrahedra (`modelcraft_fem::uniform` holds their kinematics), rod2 and
+   average nodal pressure tetrahedra (`fieldcraft_fem::uniform` holds their kinematics), rod2 and
    rod3 trusses (`discrete`). Point masses add to the lumped mass; springs and dashpots (on the
    previous half increment's velocity) add internal and viscous forces and their own stable
    increment. Other element kinds and formulations, couplings, reference points, rotary inertia,
@@ -277,7 +277,7 @@ cantilever's free-vibration period against `solve.frequency`.
 
 ## Lattice Boltzmann solver
 
-`modelcraft-lbm` solves a model's fluid steps (`solve.fluid`; `solve.probe` reads velocity and
+`fieldcraft-lbm` solves a model's fluid steps (`solve.fluid`; `solve.probe` reads velocity and
 pressure at points and wall force histories). Papers are cited in the module docs and in
 `docs/solvers/literature.md` (Part I).
 
@@ -322,7 +322,7 @@ journal replays as a script. Each journalled command is also an undo step (the s
 `edit.redo` puts it back, so the journal always rebuilds the current model. History is bounded by
 step count and by an estimate of the memory the kept states hold (oldest steps go first).
 Commands of kind `Session` (`file.*`, `edit.*`) are never journalled. `file.save` and `file.open`
-write and read `.modelcraft` files; the desktop app autosaves unsaved work for `file.recover`.
+write and read `.fieldcraft` files; the desktop app autosaves unsaved work for `file.recover`.
 
 ## Test corpus
 
@@ -330,10 +330,10 @@ Meshers are measured on our own parts (`docs/adr/0001-libraries.md`, test geomet
 a SolidCraft command script in `tests/corpus/<name>/recipe.json` (the file `solidcraft-cli run`
 takes, plus a `corpus` object with its categories and, when it has one, its closed-form volume)
 with a one-line `README.md`; analytic shapes (sphere, torus, cylinder, thick-walled pipe, plate
-with a hole) are generated in code. `modelcraft-testkit` runs a recipe in SolidCraft's engine,
+with a hole) are generated in code. `fieldcraft-testkit` runs a recipe in SolidCraft's engine,
 saves the design and opens it through `open_design`, the path a person's design takes, so no
 geometry is stored. `cargo xtask corpus` (a release build of the testkit's `corpus` binary)
-builds every part, tessellates it and runs each stage of `modelcraft_testkit::runner`, writing
+builds every part, tessellates it and runs each stage of `fieldcraft_testkit::runner`, writing
 docs/meshing/corpus.md. A mesher joins by implementing `runner::Stage` (its columns, and a run
 over the part's tessellated surfaces) and adding itself to `runner::stages()`.
 
@@ -343,6 +343,6 @@ over the part's tessellated surfaces) and adding itself to `runner::stages()`.
 own model of each problem as a command recipe (`recipe.json`, optionally a SolidCraft
 `design.json`), its cited reference values with tolerances and reasons (`expected.json`), and our
 frozen results (`fixture.json`). `cargo xtask oracle` runs the testkit's `oracle` binary
-(`modelcraft_testkit::oracle`): one `Session` per case, quantities read by JSON pointer from step
+(`fieldcraft_testkit::oracle`): one `Session` per case, quantities read by JSON pointer from step
 outputs or commands such as `solve.probe {"at": [[x, y, z]]}`, compared with the reference and the
 fixture; it writes docs/oracle.md. CI runs it as its own job.

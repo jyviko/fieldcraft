@@ -1,6 +1,6 @@
-//! ModelCraft's lattice Boltzmann flow solver (CPU).
+//! FieldCraft's lattice Boltzmann flow solver (CPU).
 //!
-//! It solves a fluid step of the model ([`modelcraft_model::Procedure::Fluid`]) in its fluid
+//! It solves a fluid step of the model ([`fieldcraft_model::Procedure::Fluid`]) in its fluid
 //! domain: weakly compressible, isothermal, Newtonian flow on a uniform grid of cubic cells that
 //! fills the domain's box, less the cells inside the obstacle bodies.
 //!
@@ -33,14 +33,14 @@
 //! - P. Lallemand, L.-S. Luo, *Theory of the lattice Boltzmann method: dispersion, dissipation,
 //!   isotropy, Galilean invariance, and stability*, PRE 61:6546, 2000 (stability limits).
 //! - H. Edelsbrunner, E. P. Mücke, *Simulation of Simplicity*, ACM TOG 9(1):66–104, 1990;
-//!   J. R. Shewchuk 1997 (exact predicates, through `modelcraft_mesh::predicates`).
+//!   J. R. Shewchuk 1997 (exact predicates, through `fieldcraft_mesh::predicates`).
 //!
 //! No code of any lattice Boltzmann package was read; everything is written from these papers and
 //! the book.
 //!
 //! # Determinism
 //! Double precision and fixed loop orders. Collision and streaming run on threads by fixed blocks
-//! of cells ([`modelcraft_parallel`]), each cell's update independent of the others; the wall
+//! of cells ([`fieldcraft_parallel`]), each cell's update independent of the others; the wall
 //! forces and every other sum run in a fixed order on one thread. The same model gives the same
 //! result bit for bit on any number of threads and on every platform, wasm included.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -71,9 +71,9 @@ pub enum Error {
     #[error("unstable: {0}")]
     Unstable(String),
     #[error(transparent)]
-    Model(#[from] modelcraft_model::Error),
+    Model(#[from] fieldcraft_model::Error),
     #[error(transparent)]
-    Mesh(#[from] modelcraft_mesh::Error),
+    Mesh(#[from] fieldcraft_mesh::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

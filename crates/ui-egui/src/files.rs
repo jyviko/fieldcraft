@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use modelcraft_engine::Session;
+use fieldcraft_engine::Session;
 use serde_json::{Value, json};
 
 use crate::ModelApp;
@@ -44,18 +44,18 @@ pub struct Services {
     pub recent_path: Option<PathBuf>,
 }
 
-const MODEL: Filter = Filter { name: "ModelCraft model", extensions: &["modelcraft"] };
+const MODEL: Filter = Filter { name: "FieldCraft model", extensions: &["fieldcraft"] };
 const DESIGN: Filter = Filter { name: "SolidCraft design", extensions: &["solidcraft"] };
 const MESH: Filter = Filter { name: "Face-tagged mesh (3MF)", extensions: &["3mf", "3MF"] };
-const ANY: Filter = Filter { name: "Models, designs and tagged meshes", extensions: &["modelcraft", "solidcraft", "3mf", "3MF"] };
+const ANY: Filter = Filter { name: "Models, designs and tagged meshes", extensions: &["fieldcraft", "solidcraft", "3mf", "3MF"] };
 
-/// The Open picker's filters: everything ModelCraft opens, then each type.
+/// The Open picker's filters: everything FieldCraft opens, then each type.
 pub const OPEN_FILTERS: &[Filter] = &[ANY, MODEL, DESIGN, MESH];
 
 /// What opening a file does with it, from its extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// A `.modelcraft` model replaces the session (`file.open`).
+    /// A `.fieldcraft` model replaces the session (`file.open`).
     Model,
     /// A `.solidcraft` design becomes the geometry (`geometry.open`).
     Design,
@@ -64,11 +64,11 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// The kind of a file by its extension (any case); `None` for a file ModelCraft does not open.
+    /// The kind of a file by its extension (any case); `None` for a file FieldCraft does not open.
     pub fn of(path: &str) -> Option<Kind> {
         let ext = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
         match ext.as_str() {
-            "modelcraft" => Some(Kind::Model),
+            "fieldcraft" => Some(Kind::Model),
             "solidcraft" => Some(Kind::Design),
             "3mf" => Some(Kind::Mesh),
             _ => None,
@@ -162,9 +162,9 @@ impl Recent {
 
 /// A command running in the background on a copy of the session: a file opening, a solve.
 pub struct Loading {
-    /// What the window shows while it runs ("Opening beam.modelcraft").
+    /// What the window shows while it runs ("Opening beam.fieldcraft").
     pub title: String,
-    /// The status when it succeeded ("Opened beam.modelcraft").
+    /// The status when it succeeded ("Opened beam.fieldcraft").
     done: String,
     /// The file it opens, for the recent list.
     recent: Option<String>,
@@ -177,7 +177,7 @@ pub struct Loading {
 /// What waits for an answer about unsaved changes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Replace {
-    /// A `.modelcraft` file.
+    /// A `.fieldcraft` file.
     File(String),
     /// A sample (`file.sample`).
     Sample(&'static str),
@@ -187,7 +187,7 @@ impl Replace {
     fn name(&self) -> String {
         match self {
             Replace::File(p) => file_name(p),
-            Replace::Sample(n) => modelcraft_engine::sample::find(n).map_or_else(|| (*n).to_string(), |s| format!("the {} sample", s.label)),
+            Replace::Sample(n) => fieldcraft_engine::sample::find(n).map_or_else(|| (*n).to_string(), |s| format!("the {} sample", s.label)),
         }
     }
 }
@@ -239,7 +239,7 @@ fn off_thread(name: String, work: impl FnOnce() + Send + 'static) {
 /// Run `command` on `session` off the window thread.
 fn spawn(session: Session, command: &'static str, params: Value) -> Receiver<(Box<Session>, Result<Value, String>)> {
     let (tx, rx) = std::sync::mpsc::channel();
-    off_thread(format!("modelcraft {command}"), move || {
+    off_thread(format!("fieldcraft {command}"), move || {
         let mut s = session;
         let r = s.execute(command, &params).map_err(|e| e.to_string());
         let _ = tx.send((Box::new(s), r));
@@ -253,7 +253,7 @@ impl ModelApp {
         model_name(&self.session)
     }
 
-    /// What is running in the background ("Opening beam.modelcraft", "Solving"), if anything.
+    /// What is running in the background ("Opening beam.fieldcraft", "Solving"), if anything.
     pub fn busy(&self) -> Option<&str> {
         self.loading.as_ref().map(|l| l.title.as_str())
     }
@@ -302,7 +302,7 @@ impl ModelApp {
     /// replacing unsaved changes asks first.
     pub fn open_path(&mut self, path: &str) {
         let Some(kind) = Kind::of(path) else {
-            self.set_status(format!("{path}: ModelCraft opens .modelcraft models, .solidcraft designs and .3mf tagged meshes"), true);
+            self.set_status(format!("{path}: FieldCraft opens .fieldcraft models, .solidcraft designs and .3mf tagged meshes"), true);
             return;
         };
         if kind == Kind::Model && self.has_unsaved_work() {
@@ -326,7 +326,7 @@ impl ModelApp {
     /// Help › Samples (and the empty viewport): open a sample model, asking first when that
     /// would discard unsaved changes.
     pub fn open_sample(&mut self, name: &str) {
-        let Some(sample) = modelcraft_engine::sample::find(name) else {
+        let Some(sample) = fieldcraft_engine::sample::find(name) else {
             self.set_status(format!("no sample `{name}`"), true);
             return;
         };
@@ -338,7 +338,7 @@ impl ModelApp {
     }
 
     fn load_sample(&mut self, name: &str) {
-        let Some(sample) = modelcraft_engine::sample::find(name) else { return };
+        let Some(sample) = fieldcraft_engine::sample::find(name) else { return };
         if self.run("file.sample", json!({"name": sample.name})).is_ok() {
             self.model_changed();
             self.fit_view();
@@ -392,7 +392,7 @@ impl ModelApp {
             Some((session, Ok(reply))) => {
                 // The session it replaces may be large: it is freed off the window thread.
                 let old = std::mem::replace(&mut self.session, *session);
-                off_thread("modelcraft drop".into(), move || drop(old));
+                off_thread("fieldcraft drop".into(), move || drop(old));
                 self.model_changed();
                 if l.fit {
                     self.fit_view();
@@ -452,8 +452,8 @@ impl ModelApp {
             self.open_form("file.save_as", json!({}));
             return false;
         };
-        let Some(path) = pick(&format!("{}.modelcraft", self.model_name()), &[MODEL]) else { return false };
-        let path = with_extension(path, "modelcraft");
+        let Some(path) = pick(&format!("{}.fieldcraft", self.model_name()), &[MODEL]) else { return false };
+        let path = with_extension(path, "fieldcraft");
         let saved = self.run("file.save_as", json!({"path": path})).is_ok();
         self.saved_to_recent(saved)
     }
@@ -461,7 +461,7 @@ impl ModelApp {
     /// Write Deck: pick where to write the model as a `format` deck. Without a picker the
     /// command's form opens with the format filled in.
     pub fn write_deck(&mut self, format: &str) {
-        let Some(f) = modelcraft_decks::format(format) else {
+        let Some(f) = fieldcraft_decks::format(format) else {
             self.set_status(format!("no {format} deck writer yet"), true);
             return;
         };
@@ -564,10 +564,10 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
     if hovering || app.loading.is_some() {
         let text = match app.loading.as_ref() {
             Some(l) => format!("{}…", l.title),
-            None => "Drop to open: .modelcraft models, .solidcraft designs, .3mf tagged meshes".into(),
+            None => "Drop to open: .fieldcraft models, .solidcraft designs, .3mf tagged meshes".into(),
         };
         let mut cancel = false;
-        egui::Area::new(egui::Id::new("mc_loading")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(
+        egui::Area::new(egui::Id::new("fc_loading")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(
             ctx,
             |ui| {
                 egui::Frame::popup(ui.style()).fill(t.overlay).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
@@ -593,7 +593,7 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
     match app.prompt.clone() {
         Some(Prompt::Unsaved(next)) => {
             let mut answer = None;
-            crate::frame::window(ctx, "Unsaved changes", crate::frame::Width::Normal).id(egui::Id::new("mc_unsaved")).show(ctx, |ui| {
+            crate::frame::window(ctx, "Unsaved changes", crate::frame::Width::Normal).id(egui::Id::new("fc_unsaved")).show(ctx, |ui| {
                 ui.label(format!("Save the changes to {} before opening {}?", app.model_name(), next.name()));
                 ui.label(egui::RichText::new("Without saving, they are lost.").color(t.text_dim));
                 ui.add_space(6.0);
@@ -619,11 +619,11 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
         Some(Prompt::Recover) => {
             let entries = app.recover_list(ctx);
             let (mut recover, mut discard, mut close) = (None, None, false);
-            crate::frame::window(ctx, "Recover", crate::frame::Width::Wide).id(egui::Id::new("mc_recover")).show(ctx, |ui| {
+            crate::frame::window(ctx, "Recover", crate::frame::Width::Wide).id(egui::Id::new("fc_recover")).show(ctx, |ui| {
                 if entries.is_empty() {
                     ui.label(egui::RichText::new("No autosaved models to recover.").color(t.text_dim));
                 }
-                egui::Grid::new("mc_recover_grid").num_columns(3).spacing(egui::vec2(10.0, 4.0)).show(ui, |ui| {
+                egui::Grid::new("fc_recover_grid").num_columns(3).spacing(egui::vec2(10.0, 4.0)).show(ui, |ui| {
                     for e in &entries {
                         let id = e.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
                         let name = e.get("path").and_then(Value::as_str).map_or_else(|| "Untitled".to_string(), file_name);
@@ -648,15 +648,15 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                 app.recover(&id);
             } else if let Some(id) = discard {
                 let _ = app.run("file.recovery.discard", json!({"id": id}));
-                ctx.data_mut(|d| d.remove::<Vec<Value>>(egui::Id::new("mc_recover_entries")));
+                ctx.data_mut(|d| d.remove::<Vec<Value>>(egui::Id::new("fc_recover_entries")));
             } else if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 app.prompt = None;
-                ctx.data_mut(|d| d.remove::<Vec<Value>>(egui::Id::new("mc_recover_entries")));
+                ctx.data_mut(|d| d.remove::<Vec<Value>>(egui::Id::new("fc_recover_entries")));
             }
         }
         Some(Prompt::Samples) => {
             let (mut open, mut close) = (None, false);
-            crate::frame::window(ctx, "Samples", crate::frame::Width::Normal).id(egui::Id::new("mc_samples")).show(ctx, |ui| {
+            crate::frame::window(ctx, "Samples", crate::frame::Width::Normal).id(egui::Id::new("fc_samples")).show(ctx, |ui| {
                 sample_rows(ui, &t, &mut open);
                 ui.add_space(6.0);
                 close = ui.button("Close").clicked();
@@ -675,7 +675,7 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
 /// One row per sample: its name, what it shows and an Open button; `open` gets the one clicked.
 pub fn sample_rows(ui: &mut egui::Ui, t: &crate::theme::Tokens, open: &mut Option<&'static str>) {
     let width = ui.available_width().clamp(280.0, 420.0);
-    for sample in modelcraft_engine::sample::SAMPLES {
+    for sample in fieldcraft_engine::sample::SAMPLES {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(width - 70.0);
@@ -693,7 +693,7 @@ pub fn sample_rows(ui: &mut egui::Ui, t: &crate::theme::Tokens, open: &mut Optio
 impl ModelApp {
     /// The recover window's entries, read from disk once while it is open.
     fn recover_list(&mut self, ctx: &egui::Context) -> Vec<Value> {
-        let key = egui::Id::new("mc_recover_entries");
+        let key = egui::Id::new("fc_recover_entries");
         if let Some(v) = ctx.data(|d| d.get_temp::<Vec<Value>>(key)) {
             return v;
         }
@@ -739,7 +739,7 @@ pub fn file_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
     }
     ui.separator();
     crate::frame::menu_heading(ui, &t, "WRITE DECK");
-    for c in modelcraft_engine::catalogue::CATALOGUE.iter().filter(|c| c.panel == "Decks") {
+    for c in fieldcraft_engine::catalogue::CATALOGUE.iter().filter(|c| c.panel == "Decks") {
         let format = c.preset().get("format").and_then(Value::as_str).map(str::to_string);
         let soon = c.milestone().map(|m| format!("soon · {m}"));
         let enabled = format.is_some() && soon.is_none();
@@ -771,7 +771,7 @@ mod tests {
     use super::*;
 
     fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("modelcraft-files-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("fieldcraft-files-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -787,26 +787,26 @@ mod tests {
 
     #[test]
     fn file_types_dispatch_to_their_command() {
-        assert_eq!(Kind::of("a/b.modelcraft"), Some(Kind::Model));
+        assert_eq!(Kind::of("a/b.fieldcraft"), Some(Kind::Model));
         assert_eq!(Kind::of("B.SOLIDCRAFT"), Some(Kind::Design));
         assert_eq!(Kind::of("part.3MF").map(Kind::command), Some("geometry.import.mesh"));
         assert_eq!(Kind::of("part.step"), None);
         assert_eq!(Kind::of("noext"), None);
-        assert_eq!(with_extension("a/b".into(), "modelcraft"), "a/b.modelcraft");
-        assert_eq!(with_extension("a/b.MODELCRAFT".into(), "modelcraft"), "a/b.MODELCRAFT");
+        assert_eq!(with_extension("a/b".into(), "fieldcraft"), "a/b.fieldcraft");
+        assert_eq!(with_extension("a/b.FIELDCRAFT".into(), "fieldcraft"), "a/b.FIELDCRAFT");
     }
 
     /// Open (picker) → background open → the model, the recent list; Save As (picker) and Save.
     #[test]
     fn the_pickers_open_and_save_models() {
         let dir = temp("models");
-        let saved = dir.join("beam.modelcraft").to_string_lossy().to_string();
+        let saved = dir.join("beam.fieldcraft").to_string_lossy().to_string();
         let mut first = ModelApp::new(Session::default());
-        first.run_script(&modelcraft_engine::sample::script()).unwrap();
+        first.run_script(&fieldcraft_engine::sample::script()).unwrap();
         // Save As through the save picker: the extension is added, the file becomes the model's.
         let bare = dir.join("beam").to_string_lossy().to_string();
         first.services.pick_save = Some(Box::new(move |name: &str, f: &[Filter]| {
-            assert_eq!((name, f.first().map(|f| f.extensions)), ("Untitled.modelcraft", Some(&["modelcraft"][..])));
+            assert_eq!((name, f.first().map(|f| f.extensions)), ("Untitled.fieldcraft", Some(&["fieldcraft"][..])));
             Some(bare.clone())
         }));
         first.start("file.save_as").unwrap();
@@ -821,12 +821,12 @@ mod tests {
         app.start("file.open").unwrap();
         assert!(app.dialog.is_none(), "a picker, not the form");
         assert_eq!(offered.borrow()[0][0], MODEL, "Open Model offers models first");
-        assert_eq!(app.busy(), Some("Opening beam.modelcraft"));
+        assert_eq!(app.busy(), Some("Opening beam.fieldcraft"));
         app.wait_loaded();
         assert_eq!(app.session.model.elements().len(), first.session.model.elements().len());
         assert_eq!(app.session.path.as_deref(), Some(saved.as_str()));
         assert_eq!(app.recent.paths, vec![saved.clone()]);
-        assert_eq!(app.status.as_ref().map(|s| (s.text.as_str(), s.error)), Some(("Opened beam.modelcraft", false)));
+        assert_eq!(app.status.as_ref().map(|s| (s.text.as_str(), s.error)), Some(("Opened beam.fieldcraft", false)));
         // Save goes to the model's own file without asking.
         app.services.pick_save = Some(Box::new(|_: &str, _: &[Filter]| -> Option<String> { panic!("Save asked for a file") }));
         app.run("mesh.node.add", serde_json::json!({"label": 99999, "xyz": [0, 0, 0]})).unwrap();
@@ -861,7 +861,7 @@ mod tests {
     #[test]
     fn opening_a_model_over_unsaved_changes_asks_first() {
         let dir = temp("unsaved");
-        let path = dir.join("other.modelcraft").to_string_lossy().to_string();
+        let path = dir.join("other.fieldcraft").to_string_lossy().to_string();
         let mut other = ModelApp::new(Session::default());
         other.run("mesh.node.add", serde_json::json!({"label": 5, "xyz": [0, 0, 0]})).unwrap();
         other.run("file.save_as", serde_json::json!({"path": path})).unwrap();
@@ -884,7 +884,7 @@ mod tests {
         let dir = temp("decks");
         let target = dir.join("cantilever").to_string_lossy().to_string();
         let mut app = ModelApp::new(Session::default());
-        app.run_script(&modelcraft_engine::sample::cantilever()).unwrap();
+        app.run_script(&fieldcraft_engine::sample::cantilever()).unwrap();
         let t = target.clone();
         app.services.pick_save = Some(Box::new(move |name: &str, f: &[Filter]| {
             assert_eq!((name, f.first().map(|f| f.extensions)), ("Untitled.inp", Some(&["inp"][..])));
@@ -904,17 +904,17 @@ mod tests {
         let mut r = Recent::load(Some(file.clone()));
         assert!(r.paths.is_empty());
         for i in 0..12 {
-            r.add(&format!("/m/{i}.modelcraft"));
+            r.add(&format!("/m/{i}.fieldcraft"));
         }
-        r.add("/m/3.modelcraft");
+        r.add("/m/3.fieldcraft");
         let again = Recent::load(Some(file.clone()));
         assert_eq!(again.paths.len(), MAX_RECENT);
-        assert_eq!(again.paths.first().map(String::as_str), Some("/m/3.modelcraft"));
-        assert_eq!(again.paths.iter().filter(|p| *p == "/m/3.modelcraft").count(), 1);
+        assert_eq!(again.paths.first().map(String::as_str), Some("/m/3.fieldcraft"));
+        assert_eq!(again.paths.iter().filter(|p| *p == "/m/3.fieldcraft").count(), 1);
         std::fs::write(&file, b"{not json").unwrap();
         assert!(Recent::load(Some(file.clone())).paths.is_empty());
-        std::fs::write(&file, br#"["/x/a.modelcraft", "/x/b.exe", ""]"#).unwrap();
-        assert_eq!(Recent::load(Some(file)).paths, vec!["/x/a.modelcraft".to_string()]);
+        std::fs::write(&file, br#"["/x/a.fieldcraft", "/x/b.exe", ""]"#).unwrap();
+        assert_eq!(Recent::load(Some(file)).paths, vec!["/x/a.fieldcraft".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -934,7 +934,7 @@ mod tests {
         app.wait_loaded();
         assert_eq!(app.status.as_ref().map(|s| s.text.as_str()), Some("Solved 2 steps"));
         app.logic(&egui::Context::default());
-        assert_eq!(app.ui.tab, modelcraft_engine::catalogue::Tab::Results);
+        assert_eq!(app.ui.tab, fieldcraft_engine::catalogue::Tab::Results);
         assert!(app.plot().is_some());
         // Over unsaved changes, opening a sample asks first.
         app.run("mesh.node.add", serde_json::json!({"label": 900000, "xyz": [0, 0, 0]})).unwrap();

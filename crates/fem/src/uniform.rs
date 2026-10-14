@@ -28,7 +28,7 @@
 //! element frequency satisfies ω² ≤ k λ_max(Σ b bᵀ) / (V min m_I). The bound is exact for a
 //! cube (its dilatation mode) and conservative for distorted elements.
 
-use modelcraft_model::Elastic;
+use fieldcraft_model::Elastic;
 
 use crate::dense::inverse3;
 use crate::material::Elasticity;
@@ -58,7 +58,7 @@ fn degenerate(what: &str) -> Error {
 impl UniformStrain<8> {
     /// The uniform-strain hexahedron of corners `xyz` (the model's hex8 node order).
     pub fn hex8(xyz: &[[f64; 3]; 8]) -> Result<Hex8> {
-        modelcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
+        fieldcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
         let mut b = [[0.0; 3]; 8];
         let mut nodal_volume = [0.0; 8];
         let mut volume = 0.0;
@@ -171,7 +171,7 @@ impl UniformStrain<8> {
 impl UniformStrain<4> {
     /// The linear tetrahedron of corners `xyz` (the model's tet4 node order).
     pub fn tet4(xyz: &[[f64; 3]; 4]) -> Result<Tet4> {
-        modelcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
+        fieldcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
         let [x0, x1, x2, x3] = *xyz;
         let e = |x: [f64; 3]| [x[0] - x0[0], x[1] - x0[1], x[2] - x0[2]];
         // J[a][c] = ∂x_c/∂ξ_a: the edges from corner 1.
@@ -330,7 +330,7 @@ mod tests {
         }
         assert!((h.nodal_volume.iter().sum::<f64>() - h.volume).abs() < 1e-14);
         // The volume of the distorted hexahedron agrees with the fem element's.
-        let solid = crate::Solid::new(modelcraft_model::ElementKind::Hex8, &hex, crate::Formulation::Full).unwrap();
+        let solid = crate::Solid::new(fieldcraft_model::ElementKind::Hex8, &hex, crate::Formulation::Full).unwrap();
         assert!((solid.volume().unwrap() - h.volume).abs() < 1e-14);
         let mut inverted = hex;
         inverted.swap(0, 1);

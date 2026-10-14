@@ -2,13 +2,13 @@
 //! output (grids, elements, constraint sets, case control), node order checked against Nastran's
 //! own element conventions by Jacobian sign and mid-side positions, and what is unsupported.
 //!
-//! Golden files are rewritten with `MODELCRAFT_BLESS=1 cargo test -p modelcraft-decks`.
+//! Golden files are rewritten with `FIELDCRAFT_BLESS=1 cargo test -p fieldcraft-decks`.
 
 use std::collections::BTreeMap;
 
-use modelcraft_decks::nastran;
-use modelcraft_decks::{Error, with_steps};
-use modelcraft_model::{
+use fieldcraft_decks::nastran;
+use fieldcraft_decks::{Error, with_steps};
+use fieldcraft_model::{
     BeamProfile, BoundaryCondition, Coupling, CouplingKind, Distribution, Dofs, Elastic, ElementFace, ElementKind, Formulation, Integration, Load,
     Material, Model, Procedure, ReferencePoint, Section, SectionKind, Set, Step, Target, UnitSystem,
 };
@@ -266,12 +266,12 @@ fn modes() -> Model {
 
 fn golden(name: &str, deck: &str) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/nastran").join(format!("{name}.bdf"));
-    if std::env::var_os("MODELCRAFT_BLESS").is_some() {
+    if std::env::var_os("FIELDCRAFT_BLESS").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, deck).unwrap();
     }
-    let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (bless with MODELCRAFT_BLESS=1)", path.display()));
-    assert_eq!(deck, want, "{name}: the deck changed (bless with MODELCRAFT_BLESS=1 after checking it)");
+    let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (bless with FIELDCRAFT_BLESS=1)", path.display()));
+    assert_eq!(deck, want, "{name}: the deck changed (bless with FIELDCRAFT_BLESS=1 after checking it)");
 }
 
 fn unsupported(m: &Model) -> String {
@@ -640,7 +640,7 @@ fn steps_are_chosen_and_mixed_solutions_are_refused() {
     // A modes step holds the clamp but carries no loads.
     assert!(r.cards("FORCE").next().is_none());
     assert_eq!(read(&nastran::write(&with_steps(&m, &only(&["Bend"])).unwrap()).unwrap()).sol, 101);
-    let nastran = modelcraft_decks::format("nastran").unwrap();
+    let nastran = fieldcraft_decks::format("nastran").unwrap();
     assert_eq!(nastran.write_steps(&m, Some(&only(&["Bend"]))).unwrap().text, nastran::write(&with_steps(&m, &only(&["Bend"])).unwrap()).unwrap());
 
     for bad in [only(&[]), only(&["Nope"]), only(&[&"x".repeat(100_000)]), only(&["", "\u{0}"])] {
@@ -740,7 +740,7 @@ fn conflicting_values_and_ids_at_the_top_of_the_range() {
 /// damage and erosion are reported.
 #[test]
 fn plasticity_is_written_as_mats1() {
-    use modelcraft_model::{Erosion, Hardening, HardeningPoint, Plastic};
+    use fieldcraft_model::{Erosion, Hardening, HardeningPoint, Plastic};
     let with = |p: Plastic| {
         let mut m = cantilever();
         m.replace_material("Steel", Material { plastic: Some(p), ..steel() }).unwrap();

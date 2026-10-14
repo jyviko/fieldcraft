@@ -9,9 +9,9 @@
 
 use std::f64::consts::PI;
 
-use modelcraft_explicit::{ExplicitResult, Limits, solve_explicit};
-use modelcraft_fem::truss::axial;
-use modelcraft_model::*;
+use fieldcraft_explicit::{ExplicitResult, Limits, solve_explicit};
+use fieldcraft_fem::truss::axial;
+use fieldcraft_model::*;
 
 fn model(step: ExplicitDynamic) -> Model {
     let mut m = Model::default();

@@ -25,8 +25,8 @@
 //! While running, a lattice speed above [`MAX_LATTICE_SPEED`] or a non-finite or non-positive
 //! density stops the run with [`crate::Error::Unstable`].
 
-use modelcraft_mesh::surface::BoundarySurface;
-use modelcraft_model::{BoxFace, FaceCondition, FluidDomain, Model, Procedure, SurfaceCondition};
+use fieldcraft_mesh::surface::BoundarySurface;
+use fieldcraft_model::{BoxFace, FaceCondition, FluidDomain, Model, Procedure, SurfaceCondition};
 
 use crate::voxel::Grid;
 use crate::{Error, Limits, Result};
@@ -101,7 +101,7 @@ fn norm(v: [f64; 3]) -> f64 {
 }
 
 /// The fluid step named `step` (or the only fluid step when `step` is `None`) and its domain.
-pub fn fluid_step<'m>(model: &'m Model, step: Option<&str>) -> Result<(&'m modelcraft_model::Step, &'m FluidDomain)> {
+pub fn fluid_step<'m>(model: &'m Model, step: Option<&str>) -> Result<(&'m fieldcraft_model::Step, &'m FluidDomain)> {
     let s = model.select_step(step, |p| p.fluid_domain().is_some(), "fluid")?;
     let name = s.procedure.fluid_domain().unwrap_or_default();
     let domain = model.fluid_domain(name).ok_or_else(|| Error::NotFound(format!("fluid domain `{name}`")))?;
@@ -258,7 +258,7 @@ impl Setup {
             for sb in domain.surfaces.iter().filter(|sb| &sb.face.body == body) {
                 let mut hit = false;
                 for (tag, name) in names.iter().enumerate() {
-                    if sb.face.selects(&modelcraft_model::GeometryRef::face(body.as_str(), name.as_str())?) {
+                    if sb.face.selects(&fieldcraft_model::GeometryRef::face(body.as_str(), name.as_str())?) {
                         hit = true;
                         if let (Some(slot), SurfaceCondition::MovingWall { velocity }) = (velocities.get_mut(tag), sb.condition) {
                             *slot = velocity.map(|c| c * dt / h);

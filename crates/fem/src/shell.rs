@@ -57,7 +57,7 @@
 //!   the nodes (triangle, constant membrane and bending fields). Transverse shear stresses are
 //!   reported at the mid-surface as the peak of the parabolic distribution, 3/2 Q/t.
 
-use modelcraft_model::{Elastic, ElementKind};
+use fieldcraft_model::{Elastic, ElementKind};
 
 use crate::dense::Matrix;
 use crate::dof::{DofSet, ElementDofs};
@@ -213,7 +213,7 @@ impl Shell {
         if xyz.len() != nodes {
             return Err(Error::Invalid(format!("a {} element has {nodes} nodes, got {}", kind.name(), xyz.len())));
         }
-        modelcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
+        fieldcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
         let degenerate = || Error::Degenerate(format!("a {} shell element is degenerate (zero area, inverted or not convex)", kind.name()));
         let p = |i: usize| xyz.get(i).copied().unwrap_or_default();
         let (normal, along) = if nodes == 3 {

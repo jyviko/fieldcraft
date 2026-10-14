@@ -1,6 +1,6 @@
 //! Analytic tests: every expected value is closed-form.
 
-use modelcraft_model::{ElementKind, Model};
+use fieldcraft_model::{ElementKind, Model};
 
 use super::*;
 

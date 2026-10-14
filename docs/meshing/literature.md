@@ -1,4 +1,4 @@
-# Volume meshing literature survey for ModelCraft (tet → hex)
+# Volume meshing literature survey for FieldCraft (tet → hex)
 
 Compiled 2026-10-13. Scope: watertight triangulated B-rep tessellation in, then (1) tetrahedral mesh by
 Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant meshes.
@@ -110,7 +110,7 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 
 ---
 
-**A0.5 Boundary surface preparation (implemented in `modelcraft-mesh::surface`).** **Verdict: BUILD ON.**
+**A0.5 Boundary surface preparation (implemented in `fieldcraft-mesh::surface`).** **Verdict: BUILD ON.**
 - **Guigue and Devillers 2003.** P. Guigue, O. Devillers. *Fast and Robust Triangle–Triangle Overlap Test Using
   Orientation Predicates.* Journal of Graphics Tools 8(1):25–32, 2003. Triangle overlap decided from `orient3d` /
   `orient2d` signs alone, so it is exact on the A0.1 predicates. We use the equivalent edge–triangle reduction (two
@@ -151,7 +151,7 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
   - Hilbert index: J. Skilling, *Programming the Hilbert curve*, AIP Conf. Proc. 707:381–387, 2004, DOI
     [10.1063/1.1751381](https://doi.org/10.1063/1.1751381).
 - **Code.** For a permissive reference, see geogram `delaunay_3d.cpp` (BSD).
-- **Implemented** in `modelcraft-mesh::delaunay` (ghost vertex for the hull, Devillers–Teillaud perturbation for
+- **Implemented** in `fieldcraft-mesh::delaunay` (ghost vertex for the hull, Devillers–Teillaud perturbation for
   cospherical points, exact verifier).
 
 **A1.2 Marot, Pellerin, Remacle 2019, "One machine, one minute, three billion tetrahedra".** **Verdict: reference (later).**
@@ -238,7 +238,7 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 - **Complexity.** High: about 8–12k lines of Rust including the predicate generator. It is the single most valuable
   investment in the tet pipeline.
 - **Code.** `MarcoAttene/CDT` is **GPL, or LGPL by build option** (README): FORBIDDEN.
-- **Implemented** in `modelcraft-mesh::cdt` from the paper only, with these choices:
+- **Implemented** in `fieldcraft-mesh::cdt` from the paper only, with these choices:
   - Steiner points are LNC points (§4.3) on the original segment, `a + t (b − a)` with `t` a double; the in-sphere test
     on them is exact (interval filter, then exact dyadic integers) and perturbed with the same lexicographic lift as
     the Delaunay step, so Bowyer–Watson insertion of Steiner points stays consistent with it.
@@ -785,7 +785,7 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 - **HexaLab** (MIT, https://github.com/mlivesu/HexaLab, https://www.hexalab.net) is READ OK. It is a hex quality
   viewer whose metrics match the literature's.
 
-**B6.6 Element validity and quality metrics (implemented in `modelcraft-mesh::quality`).** **Verdict: BUILD ON.**
+**B6.6 Element validity and quality metrics (implemented in `fieldcraft-mesh::quality`).** **Verdict: BUILD ON.**
 - **Johnen, Remacle, Geuzaine 2013.** *Geometrical validity of curvilinear finite elements.* J. Comput. Phys.
   233:359–372, 2013. The Jacobian
   determinant in Bernstein form is bounded by its coefficients, equals them at the vertices and converges under
@@ -803,7 +803,7 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 
 > Shell (curved-face) quad meshing — advancing front in (u,v) with a cross field, recombination and cleanup — is surveyed separately in [shell-quad-literature.md](shell-quad-literature.md).
 
- (implemented in `modelcraft-mesh::quad`)
+ (implemented in `fieldcraft-mesh::quad`)
 
 The face meshers under mapped and swept hex meshing and shell meshing. All quads on prescribed
 boundary nodes, so faces sharing an edge share its nodes. DOIs below were checked through
@@ -878,7 +878,7 @@ input points), Steiner points kept half the local spacing from the boundary.
 
 ---
 
-### B8. Mapped and swept hexahedral meshing (implemented in `modelcraft-mesh::hex`)
+### B8. Mapped and swept hexahedral meshing (implemented in `fieldcraft-mesh::hex`)
 
 `mesh.hex.generate` (and `mesh.hex.sweep`, `mesh.hex.mapped`). Every method below is implemented from
 its paper; no code was read. DOIs marked "checked" were confirmed on 2026-10-13 through a repository
@@ -939,14 +939,14 @@ Collision Detection*, 2005, §5.1.5).
 
 ## Part C: Datasets and benchmarks
 
-| Dataset | Content | Licence | Usable for ModelCraft? |
+| Dataset | Content | Licence | Usable for FieldCraft? |
 |---|---|---|---|
 | **Thingi10K**: Zhou & Jacobson 2016, arXiv https://arxiv.org/abs/1605.04797; site https://ten-thousand-models.appspot.com; tooling https://github.com/Thingi10K/Thingi10K | 10,000 STL meshes. 45% self-intersecting, 50% non-solid. The 4,408 "valid" subset is the standard tet-meshing robustness benchmark (fTetWild, Diazzi 2023). | Tooling Apache-2.0. **Each model has its own licence** (10 licences, including CC-BY-NC and GPL). Filter by the `license` field. | **Conditionally.** Use CC-BY / CC0 / public-domain models for robustness testing. **Provenance risk:** Thingiverse records no authoring tool, and many uploads were modelled in commercial CAD. Under the "no test data produced with commercial CAD products" rule this is an **owner decision**. |
 | **HexMe**: DOI 10.5281/zenodo.6642020, https://hexme.algohex.eu | 189 tet meshes from 63 CAD models, with feature tags. | Dataset **CC-BY-4.0**. The source models come from the **ABC dataset (Onshape terms), GrabCAD (GrabCAD terms)**, MAMBO (Apache-2.0), and models made with **Gmsh and Siemens NX** (the paper's own statement). | **Only a filtered subset.** The ABC/Onshape, GrabCAD and Siemens NX models are produced with commercial CAD: exclude them. Gmsh-authored ones are acceptable as data. |
 | **MAMBO**: https://gitlab.com/franck.ledoux/mambo | STEP models: basic, simple, medium. Designed for hex block-meshing evaluation. | **Apache-2.0** | **Risky.** The STEP headers I sampled say `'Spatial InterOp 3D'` as originating system and authors `'Cubit 15.2'` / `'MGX'`. These are commercial or closed tools. Treat as commercial-CAD-produced unless the owner rules otherwise. |
 | **ABC**: Koch et al., CVPR 2019, DOI [10.1109/CVPR.2019.00983](https://doi.org/10.1109/CVPR.2019.00983), arXiv https://arxiv.org/abs/1812.06216, https://deep-geometry.github.io/abc-dataset/ | 1M CAD models (B-rep and meshes). | "Copyright of the CAD models is owned by their creators", under **Onshape Terms of Use**. The models come from Onshape. | **No.** Produced with a commercial CAD product, and the licence is not open. Skip. |
 
-**Recommendation for test data.** Build ModelCraft's own corpus:
+**Recommendation for test data.** Build FieldCraft's own corpus:
 - **Generated cases.** Parametric primitives plus booleans from our own kernel:
   - cubes and cylinders with holes;
   - fillets;

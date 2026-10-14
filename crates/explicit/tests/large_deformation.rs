@@ -13,10 +13,10 @@
 //!
 //! Run with `--nocapture` to see the errors.
 
-use modelcraft_explicit::elements::{Motion, State, Workspace, internal_forces};
-use modelcraft_explicit::system::System;
-use modelcraft_explicit::{ExplicitResult, Failure, Limits, solve_explicit};
-use modelcraft_model::*;
+use fieldcraft_explicit::elements::{Motion, State, Workspace, internal_forces};
+use fieldcraft_explicit::system::System;
+use fieldcraft_explicit::{ExplicitResult, Failure, Limits, solve_explicit};
+use fieldcraft_model::*;
 
 /// A block [0, size] of `n` cells: one hex8 per cell, or six tet4 (Kuhn's split).
 fn block(n: [usize; 3], size: [f64; 3], kind: ElementKind) -> Model {
@@ -179,7 +179,7 @@ impl Driver {
         self.try_go(to, dt).unwrap()
     }
 
-    fn try_go(&mut self, to: impl Fn([f64; 3]) -> [f64; 3], dt: f64) -> modelcraft_explicit::Result<[f64; 6]> {
+    fn try_go(&mut self, to: impl Fn([f64; 3]) -> [f64; 3], dt: f64) -> fieldcraft_explicit::Result<[f64; 6]> {
         let mut du = vec![0.0; self.u.len()];
         for (i, x0) in self.sys.xyz.iter().enumerate() {
             let x = to(*x0);

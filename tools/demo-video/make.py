@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate the README demo video: an I-beam cantilever analysed by an agent over MCP.
 
-Every analysis step goes through the MCP server (`modelcraft-cli mcp --connect`), bridged to
+Every analysis step goes through the MCP server (`fieldcraft-cli mcp --connect`), bridged to
 the desktop app, and every frame is the app window captured offscreen through the MCP
 `screenshot` tool (`source: window`). See README.md beside this file.
 
@@ -54,7 +54,7 @@ def target_dir():
 
 def build():
     cargo = os.environ.get("CARGO", "cargo")
-    for args in (["-p", "modelcraft", "-p", "modelcraft-cli"], ["-p", "modelcraft-testkit", "--bin", "corpus"]):
+    for args in (["-p", "fieldcraft", "-p", "fieldcraft-cli"], ["-p", "fieldcraft-testkit", "--bin", "corpus"]):
         subprocess.run([cargo, "build", "--release", *args], cwd=ROOT, check=True)
 
 
@@ -78,7 +78,7 @@ def wait_for_port(port, app, timeout=180.0):
 
 
 class Mcp:
-    """A JSON-RPC client of `modelcraft-cli mcp` over stdio."""
+    """A JSON-RPC client of `fieldcraft-cli mcp` over stdio."""
 
     def __init__(self, cli, port):
         self.proc = subprocess.Popen(
@@ -258,7 +258,7 @@ def main():
     if not args.no_build:
         build()
     bin_dir = target_dir() / "release"
-    work = Path(tempfile.mkdtemp(prefix="modelcraft-demo-"))
+    work = Path(tempfile.mkdtemp(prefix="fieldcraft-demo-"))
     frames_dir = args.frames.resolve() if args.frames else work / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
     design = work / "ibeam.solidcraft"
@@ -266,11 +266,11 @@ def main():
 
     port = free_port()
     app_log = open(work / "app.log", "w")
-    app = subprocess.Popen([str(bin_dir / "modelcraft"), "--control", str(port)], stdout=app_log, stderr=subprocess.STDOUT)
+    app = subprocess.Popen([str(bin_dir / "fieldcraft"), "--control", str(port)], stdout=app_log, stderr=subprocess.STDOUT)
     mcp = None
     try:
         wait_for_port(port, app)
-        mcp = Mcp(bin_dir / "modelcraft-cli", port)
+        mcp = Mcp(bin_dir / "fieldcraft-cli", port)
         film = Film(mcp, frames_dir)
         result = analyse(mcp, film, design)
         encode(film, frames_dir, args.out / "ibeam-analysis.mp4", args.out / "ibeam-analysis.gif")

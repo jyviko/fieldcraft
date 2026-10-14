@@ -1,6 +1,6 @@
-# ModelCraft — instructions for agents
+# FieldCraft — instructions for agents
 
-ModelCraft is a clean-room, open-source, pure-Rust CAE modeling application: it turns geometry
+FieldCraft is a clean-room, open-source, pure-Rust CAE modeling application: it turns geometry
 into analysis-ready finite element models (volume meshes, materials, sections, boundary
 conditions, loads and steps), writes them as Abaqus input, Nastran bulk data and LS-DYNA keyword
 decks, and solves linear static and modal problems with its own solver. It targets the
@@ -12,8 +12,8 @@ storytold Craft apps (`storytold/cadcraft`, `vectorcraft`, `photocraft`, …). C
 them (MIT OR Apache-2.0) is noted in ATTRIBUTION.md.
 
 ## Product name
-ModelCraft everywhere: crates `modelcraft-*`, binaries `modelcraft` and `modelcraft-cli`,
-`.modelcraft` models, `MODELCRAFT_*` environment variables, docs, CI and packaging.
+FieldCraft everywhere: crates `fieldcraft-*`, binaries `fieldcraft` and `fieldcraft-cli`,
+`.fieldcraft` models, `FIELDCRAFT_*` environment variables, docs, CI and packaging.
 
 ## Start every session here
 1. Read `ROADMAP.md` (milestones, what is next) and your task.
@@ -22,7 +22,7 @@ ModelCraft everywhere: crates `modelcraft-*`, binaries `modelcraft` and `modelcr
 4. Meshing work: `docs/meshing/literature.md` (the papers each algorithm comes from).
 
 ## Never crash
-People trust ModelCraft with their models; a crash loses their work. **This outranks feature work.**
+People trust FieldCraft with their models; a crash loses their work. **This outranks feature work.**
 - **No panics in non-test code:** no `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!`,
   `unimplemented!`; no `unsafe` (`unsafe_code = "forbid"`).
 - **Errors are `Result<T, E>`** through the crate's error type and `?`. An unfinished feature
@@ -32,7 +32,7 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
 - **Bound every iterative algorithm.** Mesh refinement, smoothing, untangling and solver
   iterations have explicit iteration and element-count caps and report when they stop early.
 - **SolidCraft calls are guarded:** everything that calls `solidcraft-kernel` goes through
-  `solidcraft_kernel::guard` inside `modelcraft-geometry`, which turns a panic into an error.
+  `solidcraft_kernel::guard` inside `fieldcraft-geometry`, which turns a panic into an error.
 - **Last-resort guard:** `Session::execute` runs every command under `catch_unwind`; an error or
   an escaped panic restores the model and reports `EngineError`.
 - **Prove it:** every crash fix lands with a regression test (see `hostile_params_never_panic`).
@@ -64,7 +64,7 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   Code_Aster, OpenRadioss, Elmer, deal.II, FreeFEM, Salome, OpenFOAM — don't even read their
   sources. Permissively licensed code (MIT, BSD, Apache-2.0, MPL-2.0) may be read for reference;
   anything adapted is noted in ATTRIBUTION.md with its licence.
-- **Assets — absolutely essential.** ModelCraft contains **no iconography, images, fonts or
+- **Assets — absolutely essential.** FieldCraft contains **no iconography, images, fonts or
   artwork from commercial CAE products — ever.** Icons are original artwork made with VectorCraft:
   commit the editable `.vectorcraft` source beside the exported SVG/PNG. Any file asset must be
   original or openly licensed and **must have a row in ATTRIBUTION.md** (`cargo xtask assets`
@@ -85,7 +85,7 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   `crates/geometry` may use `solidcraft-*`.**
 - **Determinism.** The same input gives the same mesh, deck and CPU solver result, bit for bit, on
   every platform: no hash-order iteration into output, no thread-count-dependent results (threads
-  go through `modelcraft-parallel`: fixed blocks, sums in a fixed order, docs/adr/0001). GPU
+  go through `fieldcraft-parallel`: fixed blocks, sums in a fixed order, docs/adr/0001). GPU
   solver backends (wgpu, f32) are the one exception: deterministic per device, and checked against
   the CPU reference within a stated tolerance.
 - **Robust geometry.** Meshing decisions (orientation, in-sphere, intersection) use exact or
@@ -104,7 +104,7 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   2. When the change is done: review it once with `/simplify`, then `cargo fmt --all` and
      `cargo clippy -p <crate> --all-targets -- -D warnings` for each crate you touched, once.
      Regenerate what your change affects: `docs/features.md` when commands change
-     (`cargo run -p modelcraft-cli -- features > docs/features.md`), `docs/oracle.md` when
+     (`cargo run -p fieldcraft-cli -- features > docs/features.md`), `docs/oracle.md` when
      oracle cases or solver numerics change (`cargo xtask oracle`).
   3. Fold every fix into the commit it fixes, never a separate "fmt", "clippy", "review fixes" or
      "regenerate features.md" commit: `git commit --fixup <sha>`, then
@@ -128,21 +128,21 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   demand (`gh workflow run CI --ref <branch>`). Hostile-input tests run commands on sessions with small
   work caps (`Session::limits`) so refusals are instant; never lower the production caps for a
   test.
-- **Publishing**: `origin` is github.com/jyviko/modelcraft. Changes land through pull requests
+- **Publishing**: `origin` is github.com/jyviko/fieldcraft. Changes land through pull requests
   as the workflow above describes; the coordinator reads every merged diff and sends findings
   back as fix-forward work. Never force-push `main`. Never commit `plan/`, `.agent-files/`,
   `worktrees/` or `target*/`; check `git ls-files` before pushing.
 
 ## Running
-- `cargo run -p modelcraft-cli -- commands` lists every command with its parameters.
-- `cargo run -p modelcraft-cli -- run script.json` runs a script (a JSON array of
+- `cargo run -p fieldcraft-cli -- commands` lists every command with its parameters.
+- `cargo run -p fieldcraft-cli -- run script.json` runs a script (a JSON array of
   `{"command", "params"}`) and prints the model summary.
-- `cargo run --release -p modelcraft -- --sample [cantilever|impact] --control PORT` opens the desktop app with a
+- `cargo run --release -p fieldcraft -- --sample [cantilever|impact] --control PORT` opens the desktop app with a
   sample model and a control channel on `127.0.0.1:PORT` (docs/control-protocol.md). For UI work,
   look at the result: `ui.capture {path}` (the whole window drawn offscreen; works with the
   screen locked), `ui.screenshot {path}` (a presented frame) or `ui.render {path}` (the model
   only), then read the PNG.
-- `cargo run -p modelcraft-cli -- mcp [--connect 127.0.0.1:PORT]` serves MCP on stdio (docs/mcp.md):
+- `cargo run -p fieldcraft-cli -- mcp [--connect 127.0.0.1:PORT]` serves MCP on stdio (docs/mcp.md):
   the same commands as tools, headless or bridged to the running app.
 - Build with `CARGO_TARGET_DIR=<repo>/target`. Parallel agents: separate target dirs, one
   worktree each.

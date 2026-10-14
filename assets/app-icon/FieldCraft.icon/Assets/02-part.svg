@@ -26,7 +26,7 @@
       <stop offset="1" stop-color="#04302c"/>
     </linearGradient>
   </defs>
-  <title>ModelCraft icon part</title>
+  <title>FieldCraft icon part</title>
   <g id="Part">
     <path id="wall_top" data-name="wall top" d="M512 141 L825.3 321.88 L730.48 376.62 L417.19 195.74 Z" fill="url(#linear-gradient-1)"/>
     <path id="base_top" data-name="base top" d="M401.19 457.26 L714.48 638.14 L512 755.04 L198.7 574.16 Z M521.64 643.71 C555.35 624.24 555.35 592.68 521.64 573.22 C487.92 553.75 433.26 553.75 399.55 573.22 C365.83 592.68 365.83 624.24 399.55 643.71 C433.26 663.17 487.92 663.17 521.64 643.71 Z" fill="url(#linear-gradient-2)"/>

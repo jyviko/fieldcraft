@@ -1,6 +1,6 @@
 //! Folders an automation client may read from and write to.
 //!
-//! An agent driving ModelCraft (the MCP server, docs/mcp.md) can be kept to the folders it was
+//! An agent driving FieldCraft (the MCP server, docs/mcp.md) can be kept to the folders it was
 //! given: every file a command reads must lie inside the read root, every file it writes inside
 //! the write root. [`Roots::check`] decides, before the file is touched:
 //!
@@ -153,7 +153,7 @@ mod tests {
     struct Dir(PathBuf);
     impl Dir {
         fn new(tag: &str) -> Dir {
-            let d = std::env::temp_dir().join(format!("modelcraft-roots-{tag}-{}", std::process::id()));
+            let d = std::env::temp_dir().join(format!("fieldcraft-roots-{tag}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&d);
             std::fs::create_dir_all(&d).unwrap();
             Dir(std::fs::canonicalize(&d).unwrap())

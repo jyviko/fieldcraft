@@ -4,7 +4,7 @@
 //! tagged 3MF) into one that every volume mesher can rely on, or fails with the list of
 //! [`Defect`]s, each located by input triangle or vertex index and a position:
 //!
-//! 1. **Coordinates and indices** are checked: finite, within [`modelcraft_model::MAX_COORD`],
+//! 1. **Coordinates and indices** are checked: finite, within [`fieldcraft_model::MAX_COORD`],
 //!    in range.
 //! 2. **Weld.** Vertices closer than a distance (relative to the bounding-box diagonal, or
 //!    absolute: [`SurfaceOptions`]) become one, in input order (the earliest vertex of a cluster
@@ -53,7 +53,7 @@ mod tests;
 
 use std::fmt;
 
-use modelcraft_model::{MAX_COORD, MAX_ELEMENTS, MAX_NODES};
+use fieldcraft_model::{MAX_COORD, MAX_ELEMENTS, MAX_NODES};
 
 use crate::predicates::Point3;
 use crate::vec3::{cross, norm, sub};
@@ -83,7 +83,7 @@ pub struct SurfaceOptions {
     pub weld_tolerance: f64,
     /// Absolute weld distance in model units, at least 0 (the combined distance may be at most
     /// [`MAX_RELATIVE_WELD`] of the bounding-box diagonal). A tessellation carries its own
-    /// (`modelcraft_geometry::SurfaceMesh::weld_distance`).
+    /// (`fieldcraft_geometry::SurfaceMesh::weld_distance`).
     pub weld_distance: f64,
     /// An edge inside one B-rep face is a feature when the normals of its two triangles differ
     /// by more than this angle, in degrees, in `(0, 180]` (180: face boundaries only).

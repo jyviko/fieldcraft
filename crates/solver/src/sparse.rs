@@ -7,7 +7,7 @@
 //! label, then the element's own node order), so assembled values are the same bit for bit on
 //! every run and platform.
 
-use modelcraft_fem::{DofLayout, DofSet};
+use fieldcraft_fem::{DofLayout, DofSet};
 
 use crate::{Error, Result};
 
@@ -34,7 +34,7 @@ impl Csr {
     /// Rows are computed in parallel blocks; each row's sum runs in column order.
     pub fn mul(&self, x: &[f64], y: &mut [f64]) {
         let n = self.n.min(y.len());
-        modelcraft_parallel::chunks_mut(y.get_mut(..n).unwrap_or_default(), ROWS, |b, block| {
+        fieldcraft_parallel::chunks_mut(y.get_mut(..n).unwrap_or_default(), ROWS, |b, block| {
             for (i, yr) in block.iter_mut().enumerate() {
                 let (cols, vals) = self.row(b * ROWS + i);
                 *yr = cols.iter().zip(vals).map(|(c, v)| v * x.get(*c).copied().unwrap_or(0.0)).sum();
@@ -130,7 +130,7 @@ impl NodeGraph {
     }
 }
 
-/// Most kinds a node carries ([`modelcraft_fem::DofKind::ALL`]).
+/// Most kinds a node carries ([`fieldcraft_fem::DofKind::ALL`]).
 const MAX_KINDS: usize = 8;
 
 /// Where node b's block lies in node a's rows of a matrix built by [`NodeGraph::zero_matrix`],

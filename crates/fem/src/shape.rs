@@ -1,6 +1,6 @@
 //! Shape functions and their derivatives in natural coordinates.
 //!
-//! Node order is the model's (Abaqus/VTK, [`modelcraft_model::ElementKind`]):
+//! Node order is the model's (Abaqus/VTK, [`fieldcraft_model::ElementKind`]):
 //! - tetrahedra on the reference element with corners (0,0,0), (1,0,0), (0,1,0), (0,0,1) and the
 //!   volume coordinates L₁ = 1 − ξ − η − ζ, L₂ = ξ, L₃ = η, L₄ = ζ; tet10 mid-side nodes on edges
 //!   1-2, 2-3, 3-1, 1-4, 2-4, 3-4 with N = 4 Lₐ L_b, corners N = L(2L − 1);
@@ -9,7 +9,7 @@
 //!   N = ⅛(1 + ξξᵢ)(1 + ηηᵢ)(1 + ζζᵢ)(ξξᵢ + ηηᵢ + ζζᵢ − 2), a mid-side node with ξᵢ = 0
 //!   N = ¼(1 − ξ²)(1 + ηηᵢ)(1 + ζζᵢ), and likewise), mid-side nodes 9–12 on the bottom edges,
 //!   13–16 on the top edges, 17–20 on the vertical edges (mid-side positions come from
-//!   [`modelcraft_model::ElementKind::edges`], the one place the node order is written down);
+//!   [`fieldcraft_model::ElementKind::edges`], the one place the node order is written down);
 //! - the six-node wedge (pentahedron) as the product of the linear triangle {ξ, η ≥ 0,
 //!   ξ + η ≤ 1} (area coordinates L₁ = 1 − ξ − η, L₂ = ξ, L₃ = η) and the linear interval
 //!   ζ ∈ [−1, 1]: nodes 1–3 at ζ = −1 counter-clockwise seen from above, nodes 4–6 above them,
@@ -19,7 +19,7 @@
 //! Element Method: Its Basis and Fundamentals*, 7th ed., Butterworth-Heinemann 2013, ch. 6;
 //! T. J. R. Hughes, *The Finite Element Method*, Dover 2000, ch. 3).
 
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 /// Most nodes an element family has (hex27, [`crate::basis::Basis::Hex27`]).
 pub const MAX_NODES: usize = 27;

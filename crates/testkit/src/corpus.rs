@@ -5,14 +5,14 @@
 //!   `solidcraft-cli run` takes) with a `corpus` object beside its `commands` giving the
 //!   categories it stresses and, when it has one, its closed-form volume; `README.md` beside it is
 //!   one line on what it stresses. The script runs in SolidCraft's engine, the design is saved and
-//!   opened again through [`modelcraft_geometry::open_design`], the path a person's design takes.
+//!   opened again through [`fieldcraft_geometry::open_design`], the path a person's design takes.
 //! - **Analytic shapes** ([`Analytic`]): sphere, torus, cylinder, thick-walled pipe and a plate
 //!   with a hole, built in code with their exact volume, the classic solver verification
 //!   geometries.
 
 use std::path::{Path, PathBuf};
 
-use modelcraft_geometry::{Design, open_design, sample, script_design};
+use fieldcraft_geometry::{Design, open_design, sample, script_design};
 use serde_json::{Value, json};
 
 #[derive(Debug, thiserror::Error)]
@@ -22,7 +22,7 @@ pub enum Error {
     #[error("{part}: {message}")]
     Part { part: String, message: String },
     #[error("{part}: {source}")]
-    Geometry { part: String, source: modelcraft_geometry::Error },
+    Geometry { part: String, source: fieldcraft_geometry::Error },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -107,7 +107,7 @@ impl Analytic {
     }
 
     /// The design as `.solidcraft` bytes.
-    pub fn design(&self) -> modelcraft_geometry::Result<Vec<u8>> {
+    pub fn design(&self) -> fieldcraft_geometry::Result<Vec<u8>> {
         let script = match *self {
             Analytic::Sphere { radius } => json!([{"command": "solid.sphere", "params": {"radius": radius, "body_name": "Sphere"}}]),
             Analytic::Torus { major, minor } => json!([{"command": "solid.torus", "params": {"major": major, "minor": minor, "body_name": "Torus"}}]),
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn hostile_recipes_are_an_error() {
-        let dir = std::env::temp_dir().join(format!("modelcraft-corpus-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("fieldcraft-corpus-test-{}", std::process::id()));
         let part = dir.join("bad");
         std::fs::create_dir_all(&part).unwrap();
         std::fs::write(part.join("README.md"), "A bad part.\n").unwrap();

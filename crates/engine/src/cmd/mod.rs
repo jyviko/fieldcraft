@@ -13,11 +13,11 @@ mod results;
 pub(crate) mod solve;
 mod tags;
 
-use modelcraft_model::MAX_LABEL;
+use fieldcraft_model::MAX_LABEL;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use modelcraft_io::roots::Access;
+use fieldcraft_io::roots::Access;
 
 use crate::{CommandSpec, EngineError, Result, Session};
 
@@ -120,7 +120,7 @@ pub(crate) fn label(p: &Value, key: &str) -> Result<u32> {
 
 /// The first node and element labels after the model's largest, for `nodes` new nodes and
 /// `elements` new elements, all within [`MAX_LABEL`].
-pub(crate) fn fresh_labels(model: &modelcraft_model::Model, nodes: usize, elements: usize) -> Result<(u32, u32)> {
+pub(crate) fn fresh_labels(model: &fieldcraft_model::Model, nodes: usize, elements: usize) -> Result<(u32, u32)> {
     let first = |last: Option<&u32>, count: usize| {
         let first = last.map_or(Some(1), |l| l.checked_add(1))?;
         (u64::from(first) + count as u64 <= u64::from(MAX_LABEL) + 1).then_some(first)
@@ -168,7 +168,7 @@ pub(crate) fn labels(p: &Value, key: &str, max_len: usize) -> Result<Vec<u32>> {
 fn path_param<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
     p.get(key)
         .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty() && s.len() <= modelcraft_io::MAX_PATH_LEN && !s.contains('\0'))
+        .filter(|s| !s.trim().is_empty() && s.len() <= fieldcraft_io::MAX_PATH_LEN && !s.contains('\0'))
         .ok_or_else(|| EngineError::Params(format!("`{key}` must be a file path")))
 }
 

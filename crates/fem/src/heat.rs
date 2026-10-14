@@ -14,7 +14,7 @@
 //! Faces are integrated on their own (possibly curved) geometry with the model's face rule
 //! (the one pressures use), exact for N Nᵀ on flat faces.
 
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 use crate::basis::Basis;
 use crate::dense::Matrix;
@@ -47,7 +47,7 @@ impl<'a> Conduction<'a> {
         if xyz.len() != ty.nodes {
             return Err(Error::Invalid(format!("a {} element has {} nodes, got {}", kind.name(), ty.nodes, xyz.len())));
         }
-        modelcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
+        fieldcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
         Ok(Conduction { ty, basis: Basis::of(kind), xyz })
     }
 
@@ -119,11 +119,11 @@ impl<'a> Conduction<'a> {
 }
 
 /// Visit the points of a face (node coordinates in the face's node order): shape values and
-/// the area weight, with the model's face rule ([`modelcraft_model::nodal::integrate_face`], the
+/// the area weight, with the model's face rule ([`fieldcraft_model::nodal::integrate_face`], the
 /// one pressures and tractions use).
 fn each_face_point(xyz: &[[f64; 3]], mut visit: impl FnMut(&[f64], f64)) -> Result<()> {
     let mut collapsed = false;
-    modelcraft_model::nodal::integrate_face(xyz, |n, nda| {
+    fieldcraft_model::nodal::integrate_face(xyz, |n, nda| {
         let area = (nda[0] * nda[0] + nda[1] * nda[1] + nda[2] * nda[2]).sqrt();
         collapsed |= !(area > 0.0 && area.is_finite());
         visit(n, area);

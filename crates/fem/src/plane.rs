@@ -39,7 +39,7 @@
 //! inside the element (r > 0) for every element with some node off the axis; the solver holds
 //! the radial displacement of nodes on the axis at zero, as symmetry requires.
 
-use modelcraft_model::{ElementKind, Extent, SectionKind};
+use fieldcraft_model::{ElementKind, Extent, SectionKind};
 
 use crate::basis::Basis;
 use crate::dense::{Cholesky, Matrix};
@@ -166,7 +166,7 @@ pub fn plane_type(kind: ElementKind) -> Result<&'static ElementType> {
 }
 
 /// The formulation a 2D section asks for, if this element type has it.
-pub fn formulation(kind: ElementKind, f: &modelcraft_model::Formulation) -> Result<Formulation> {
+pub fn formulation(kind: ElementKind, f: &fieldcraft_model::Formulation) -> Result<Formulation> {
     let ty = plane_type(kind)?;
     if f.hybrid {
         return Err(Error::NotSupported("hybrid (mixed displacement–pressure) 2D elements".into()));
@@ -179,9 +179,9 @@ pub fn formulation(kind: ElementKind, f: &modelcraft_model::Formulation) -> Resu
         };
     }
     match f.integration {
-        modelcraft_model::Integration::Full => Ok(Formulation::Full),
-        modelcraft_model::Integration::Reduced if ty.reduced.is_some() => Ok(Formulation::Reduced),
-        modelcraft_model::Integration::Reduced => Err(Error::NotSupported(format!(
+        fieldcraft_model::Integration::Full => Ok(Formulation::Full),
+        fieldcraft_model::Integration::Reduced if ty.reduced.is_some() => Ok(Formulation::Reduced),
+        fieldcraft_model::Integration::Reduced => Err(Error::NotSupported(format!(
             "reduced integration of 2D {} elements (quad4 needs hourglass control; use full integration or incompatible modes)",
             kind.name()
         ))),
@@ -254,7 +254,7 @@ impl<'a> Plane<'a> {
         if xyz.len() != ty.nodes {
             return Err(Error::Invalid(format!("a {} element has {} nodes, got {}", kind.name(), ty.nodes, xyz.len())));
         }
-        modelcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
+        fieldcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
         if xyz.iter().any(|p| p[2] != 0.0) {
             return Err(Error::Invalid(format!("a 2D {} element must lie in the XY plane (z = 0)", kind.name())));
         }
@@ -760,7 +760,7 @@ mod tests {
         let f = e.body_force_field(|x| [x[0], 0.0, 0.0]).unwrap();
         assert!((f.iter().map(|v| v[0]).sum::<f64>() - 2.0 * pi * 7.0 / 3.0).abs() < 1e-12);
         // Pressure on the outer edge (x = 2) of the ring pushes inward with p · 2π · 2 · 1.
-        let fp = modelcraft_model::nodal::edge_pressure(&[sq[1], sq[2]], Theory::Axisymmetric.extent(), 1.0).unwrap();
+        let fp = fieldcraft_model::nodal::edge_pressure(&[sq[1], sq[2]], Theory::Axisymmetric.extent(), 1.0).unwrap();
         assert!((fp.iter().map(|v| v[0]).sum::<f64>() + 4.0 * pi).abs() < 1e-12, "{fp:?}");
     }
 
@@ -783,6 +783,6 @@ mod tests {
         let on_axis = sq.map(|p| [p[0] - 1.0, p[1], 0.0]);
         let e = Plane::new(ElementKind::Quad4, &on_axis, Formulation::IncompatibleModes, Theory::Axisymmetric).unwrap();
         assert!(e.stiffness(&d).is_ok());
-        assert!(formulation(ElementKind::Quad4, &modelcraft_model::Formulation { hybrid: true, ..Default::default() }).is_err());
+        assert!(formulation(ElementKind::Quad4, &fieldcraft_model::Formulation { hybrid: true, ..Default::default() }).is_err());
     }
 }

@@ -1,7 +1,7 @@
 //! A whole model definition on a tagged mesh: sets by geometry name survive a remesh, the check
 //! names what is missing, and the model round-trips through JSON.
 
-use modelcraft_model::*;
+use fieldcraft_model::*;
 
 /// A bar of `n` unit hexahedra along X, labels starting after `offset`, tagged as body `Bar` with
 /// faces `left` (x = 0) and `right` (x = n), and the vertex `tip` at (n, 0, 0).

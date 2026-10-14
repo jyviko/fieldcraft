@@ -3,8 +3,8 @@
 //! panel (right), which run the `results.*` commands.
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Stroke, pos2, vec2};
-use modelcraft_engine::results::{Field, Kind};
-use modelcraft_explicit::{Energies, ExplicitResult};
+use fieldcraft_engine::results::{Field, Kind};
+use fieldcraft_explicit::{Energies, ExplicitResult};
 use serde_json::{Value, json};
 
 use crate::ModelApp;
@@ -76,7 +76,7 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
     for k in (0..l.bands.count).rev() {
         let row = (l.bands.count - 1 - k) as f32;
         let r = Rect::from_min_size(pos2(origin.x + 10.0, y + row * SWATCH.y), SWATCH);
-        let c = modelcraft_render::contour::band_color(&stops, k, l.bands.count);
+        let c = fieldcraft_render::contour::band_color(&stops, k, l.bands.count);
         painter.rect_filled(r, 0.0, Color32::from_rgb(c.0, c.1, c.2));
         if k + 1 == l.bands.count {
             painter.text(pos2(r.right() + 6.0, r.top()), Align2::LEFT_CENTER, number(l.bands.level(k + 1)), font.clone(), t.overlay_text);
@@ -111,9 +111,9 @@ fn probe(app: &ModelApp, plot: &Plot, painter: &egui::Painter, t: &Tokens) {
 pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) {
     let mut run: Vec<(&'static str, Value)> = Vec::new();
     let steps: Vec<(String, bool)> = app.session.result_steps().map(|(n, c)| (n.to_string(), c)).collect();
-    egui::Grid::new("mc_results_grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+    egui::Grid::new("fc_results_grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
         ui.label("Step");
-        egui::ComboBox::from_id_salt("mc_results_step").selected_text(&plot.view.step).width(COMBO_WIDTH).truncate().show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("fc_results_step").selected_text(&plot.view.step).width(COMBO_WIDTH).truncate().show_ui(ui, |ui| {
             for (name, current) in &steps {
                 let label = if *current { name.clone() } else { format!("{name} (stale)") };
                 if ui.selectable_label(*name == plot.view.step, label).clicked() && *name != plot.view.step {
@@ -124,7 +124,7 @@ pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) 
         ui.end_row();
         ui.label("Contours");
         let shown = plot.view.contour.map_or("None", Field::label);
-        egui::ComboBox::from_id_salt("mc_results_field").selected_text(shown).width(COMBO_WIDTH).truncate().show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("fc_results_field").selected_text(shown).width(COMBO_WIDTH).truncate().show_ui(ui, |ui| {
             if ui.selectable_label(plot.view.contour.is_none(), "None").clicked() {
                 run.push(("results.contour", json!({"field": "none"})));
             }
@@ -165,7 +165,7 @@ pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) 
     } else if let Kind::Frequency(f) = plot.result.kind() {
         ui.separator();
         ui.label(RichText::new("Modes").color(t.text_dim));
-        egui::ScrollArea::vertical().id_salt("mc_results_modes").max_height(150.0).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("fc_results_modes").max_height(150.0).show(ui, |ui| {
             for (i, m) in f.modes.iter().enumerate() {
                 let mode = i + 1;
                 if ui.selectable_label(plot.view.mode == mode, format!("{mode}   {} Hz", number(m.frequency))).clicked() {
@@ -236,7 +236,7 @@ fn explicit(ui: &mut egui::Ui, e: &ExplicitResult, plot: &Plot, t: &Tokens, run:
     painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, t.text_dim));
     let i = h.time.iter().enumerate().min_by(|a, b| (a.1 - now).abs().total_cmp(&(b.1 - now).abs())).map_or(0, |(i, _)| i);
     let Some(at_now) = h.energies.get(i) else { return };
-    egui::Grid::new("mc_results_energies").num_columns(2).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
+    egui::Grid::new("fc_results_energies").num_columns(2).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
         for (name, color, f) in &series {
             ui.label(RichText::new(*name).color(*color));
             ui.label(number(f(at_now)));
@@ -257,7 +257,7 @@ fn reactions_table(ui: &mut egui::Ui, r: &Value, t: &Tokens) {
         ui.label(f(2));
         ui.end_row();
     };
-    egui::Grid::new("mc_results_reactions").num_columns(4).spacing(vec2(6.0, 2.0)).show(ui, |ui| {
+    egui::Grid::new("fc_results_reactions").num_columns(4).spacing(vec2(6.0, 2.0)).show(ui, |ui| {
         for h in ["Set", "Fx", "Fy", "Fz"] {
             ui.label(RichText::new(h).small().color(t.text_dim));
         }

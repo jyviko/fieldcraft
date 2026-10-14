@@ -314,7 +314,7 @@ impl Model {
     }
 
     /// A copy with the unit system and every definition but no mesh: no nodes, elements or
-    /// geometry tags. A `.modelcraft` file stores this part as text and the mesh in binary.
+    /// geometry tags. A `.fieldcraft` file stores this part as text and the mesh in binary.
     pub fn without_mesh(&self) -> Model {
         Model {
             nodes: BTreeMap::new(),

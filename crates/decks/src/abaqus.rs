@@ -6,7 +6,7 @@
 //! # Layout
 //!
 //! The deck is *flat*: nodes, elements, sets, materials, sections and couplings sit at model level,
-//! with no parts, assembly or instances. ModelCraft has one mesh with model-wide labels and no
+//! with no parts, assembly or instances. FieldCraft has one mesh with model-wide labels and no
 //! instance transforms, so a part/assembly wrapper would only prefix every set name with an
 //! instance name (`Part-1-1.root`) and bring the 80-character limit on the joined name closer. When
 //! the model gains several parts or instances the writer switches to the part/assembly form.
@@ -53,7 +53,7 @@
 //!
 //! # Element types
 //!
-//! | ModelCraft | Solid section | Shell section | Beam | Rod |
+//! | FieldCraft | Solid section | Shell section | Beam | Rod |
 //! |---|---|---|---|---|
 //! | tet4 | C3D4 (H) | | | |
 //! | tet10 | C3D10 (H) | | | |
@@ -76,7 +76,7 @@
 //! differs by direction and a spring along a skew fixed vector are reported (they need a local
 //! orientation, not written yet).
 //!
-//! | ModelCraft | Plane stress | Plane strain | Axisymmetric |
+//! | FieldCraft | Plane stress | Plane strain | Axisymmetric |
 //! |---|---|---|---|
 //! | tri3 | CPS3 | CPE3 | CAX3 |
 //! | tri6 | CPS6 | CPE6 | CAX6 |
@@ -115,7 +115,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use modelcraft_model::{
+use fieldcraft_model::{
     BeamProfile, BoundaryCondition, CouplingKind, Elastic, Element, ElementKind, Hardening, Integration, Load, Model, OutputVariable, Plastic,
     Procedure, Resolved, Section, SectionKind, Step, Symmetry, Target,
 };
@@ -330,10 +330,10 @@ fn discrete_groups<'r>(model: &Model, r: &'r Resolved) -> Result<Vec<DiscreteGro
     let mut next = model.elements().keys().next_back().map_or(1, |l| l.saturating_add(1));
     let mut label = || -> Result<u32> {
         let l = next;
-        if l > modelcraft_model::MAX_LABEL {
+        if l > fieldcraft_model::MAX_LABEL {
             return Err(Error::Limit(format!(
                 "no element label left below {} for point masses, springs and dashpots",
-                modelcraft_model::MAX_LABEL as u64 + 1
+                fieldcraft_model::MAX_LABEL as u64 + 1
             )));
         }
         next += 1;
@@ -371,7 +371,7 @@ fn discrete_groups<'r>(model: &Model, r: &'r Resolved) -> Result<Vec<DiscreteGro
     }
     for s in &r.springs {
         let what = s.kind();
-        let line = matches!(s.direction, modelcraft_model::ResolvedDirection::Line(_));
+        let line = matches!(s.direction, fieldcraft_model::ResolvedDirection::Line(_));
         let (element_type, dofs, nodes) = match (s.second, crate::axis_dof(s.direction), line) {
             (Some(b), _, true) => (if s.dashpot { "DASHPOTA" } else { "SPRINGA" }, String::new(), vec![s.first, b]),
             (Some(b), Some(d), false) => (if s.dashpot { "DASHPOT2" } else { "SPRING2" }, format!("{d}, {d}"), vec![s.first, b]),
@@ -556,7 +556,7 @@ impl<'a> StepLoads<'a> {
     /// `everything` is every element and the section sets that hold them (gravity on the whole
     /// model).
     fn new(model: &'a Model, r: &'a Resolved, step: &'a Step, everything: &'a (Vec<&'a str>, Vec<u32>)) -> StepLoads<'a> {
-        let axisymmetric = r.extent() == Some(modelcraft_model::Extent::Revolved);
+        let axisymmetric = r.extent() == Some(fieldcraft_model::Extent::Revolved);
         let mut s = StepLoads { concentrated: crate::concentrated_loads(model, r, &step.loads), axisymmetric, ..StepLoads::default() };
         let (mut gravity, mut body) = (Vec::new(), Vec::new());
         for name in &step.loads {
@@ -637,8 +637,8 @@ impl Deck {
             None => "units not specified".to_string(),
         };
         self.line("*HEADING");
-        self.line(&format!("ModelCraft model, {units}"));
-        self.comment("Written by ModelCraft. The numbers are in one consistent unit system and are not converted.");
+        self.line(&format!("FieldCraft model, {units}"));
+        self.comment("Written by FieldCraft. The numbers are in one consistent unit system and are not converted.");
     }
 
     fn nodes(&mut self, model: &Model) -> Result<()> {

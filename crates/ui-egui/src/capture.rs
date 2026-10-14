@@ -292,7 +292,7 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
-    use modelcraft_engine::Session;
+    use fieldcraft_engine::Session;
 
     use super::*;
 
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn the_whole_window_is_captured_with_panels_and_viewport() {
         let mut app = ModelApp::new(Session::default());
-        app.run_script(&modelcraft_engine::sample::script()).unwrap();
+        app.run_script(&fieldcraft_engine::sample::script()).unwrap();
         let image = app.capture(size(900.0, 600.0)).unwrap();
         assert_eq!(image.size, [900, 600]);
         let t = Tokens::dark();

@@ -7,7 +7,7 @@
 //! `crates/ui-egui/src/palette.rs` (MIT OR Apache-2.0), see ATTRIBUTION.md.
 
 use egui::{Align2, FontId, Rect, RichText, Sense, Vec2, pos2, vec2};
-use modelcraft_engine::catalogue::{self, CATALOGUE};
+use fieldcraft_engine::catalogue::{self, CATALOGUE};
 use serde_json::Value;
 
 use crate::ModelApp;
@@ -80,7 +80,7 @@ pub fn submit(app: &mut ModelApp, line: &str) {
         Some(i) => (line.get(..i).unwrap_or(line), line.get(i..).unwrap_or("").trim()),
         None => (line, ""),
     };
-    if modelcraft_engine::find_command(id).is_some() || catalogue::find(id).is_some() {
+    if fieldcraft_engine::find_command(id).is_some() || catalogue::find(id).is_some() {
         if rest.is_empty() {
             let _ = app.start(id);
         } else {
@@ -104,7 +104,7 @@ pub fn submit(app: &mut ModelApp, line: &str) {
 /// The command line, the status and the model's size, above the timeline.
 pub fn command_line(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
-    egui::Panel::bottom("mc_command_line")
+    egui::Panel::bottom("fc_command_line")
         .exact_size(HEIGHT)
         .frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(8, 3)))
         .show(ui, |ui| {
@@ -113,7 +113,7 @@ pub fn command_line(app: &mut ModelApp, ui: &mut egui::Ui) {
                 ui.label(RichText::new("›").strong().color(t.accent));
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut app.command_line)
-                        .id(egui::Id::new("mc_command_line_text"))
+                        .id(egui::Id::new("fc_command_line_text"))
                         .hint_text(r#"Type a command, e.g. mesh.node.add {"label": 1, "xyz": [0, 0, 0]} — or press S to search"#)
                         .desired_width(440.0),
                 );
@@ -149,7 +149,7 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
     let mut open = true;
     let center = ctx.content_rect().center();
     let r = crate::frame::window(ctx, "Search commands", crate::frame::Width::Normal)
-        .id(egui::Id::new("mc_search"))
+        .id(egui::Id::new("fc_search"))
         .pivot(Align2::CENTER_TOP)
         .fixed_pos(pos2(center.x, 140.0))
         .fixed_size(vec2(440.0, 380.0))
@@ -157,7 +157,7 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut app.palette_text)
-                    .id(egui::Id::new("mc_search_text"))
+                    .id(egui::Id::new("fc_search_text"))
                     .hint_text("command name, id or what it does")
                     .desired_width(f32::INFINITY),
             );
@@ -221,7 +221,7 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use modelcraft_engine::Session;
+    use fieldcraft_engine::Session;
 
     use super::*;
 

@@ -1,22 +1,22 @@
-# ModelCraft and AI agents (MCP)
+# FieldCraft and AI agents (MCP)
 
-ModelCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio
+FieldCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio
 (JSON-RPC 2.0, one message per line; protocol revisions 2025-06-18, 2025-03-26 and 2024-11-05).
 An agent builds and solves models the way a person does: every tool runs engine commands, the
 same ones the UI, scripts, the command line and the control channel run, and never opens a
-dialog or a file picker. The server is `crates/mcp` (`modelcraft-mcp`); `modelcraft-cli mcp`
+dialog or a file picker. The server is `crates/mcp` (`fieldcraft-mcp`); `fieldcraft-cli mcp`
 runs it.
 
 ## Start it
 
 ```sh
 # Headless (the default): an in-process session, no window; screenshots are CPU renders.
-modelcraft-cli mcp
-modelcraft-cli mcp --headless
+fieldcraft-cli mcp
+fieldcraft-cli mcp --headless
 
 # Bridged to the running app, so you can watch the agent work:
-modelcraft --control 7070 &
-modelcraft-cli mcp --connect 127.0.0.1:7070
+fieldcraft --control 7070 &
+fieldcraft-cli mcp --connect 127.0.0.1:7070
 ```
 
 With `--connect`, an app that cannot be reached when the server starts gives a headless session
@@ -27,21 +27,21 @@ both must run on the same computer.
 ### Claude Code
 
 ```sh
-claude mcp add modelcraft -- /path/to/modelcraft-cli mcp
+claude mcp add fieldcraft -- /path/to/fieldcraft-cli mcp
 # bridged to a running app:
-claude mcp add modelcraft -- /path/to/modelcraft-cli mcp --connect 127.0.0.1:7070
+claude mcp add fieldcraft -- /path/to/fieldcraft-cli mcp --connect 127.0.0.1:7070
 # kept to one project folder:
-claude mcp add modelcraft -- /path/to/modelcraft-cli mcp --automation-read-root /work/bracket --automation-write-root /work/bracket/out
+claude mcp add fieldcraft -- /path/to/fieldcraft-cli mcp --automation-read-root /work/bracket --automation-write-root /work/bracket/out
 ```
 
-Build the binary first (`cargo build --release -p modelcraft-cli`; it is
-`target/release/modelcraft-cli`). The same setup as a project `.mcp.json`, or in another client's
+Build the binary first (`cargo build --release -p fieldcraft-cli`; it is
+`target/release/fieldcraft-cli`). The same setup as a project `.mcp.json`, or in another client's
 configuration (Claude Desktop's `claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
-    "modelcraft": { "command": "/path/to/modelcraft-cli", "args": ["mcp"] }
+    "fieldcraft": { "command": "/path/to/fieldcraft-cli", "args": ["mcp"] }
   }
 }
 ```
@@ -49,13 +49,13 @@ configuration (Claude Desktop's `claude_desktop_config.json`):
 ## Confining file access
 
 ```sh
-modelcraft-cli mcp --automation-read-root /work/bracket --automation-write-root /work/bracket/out
+fieldcraft-cli mcp --automation-read-root /work/bracket --automation-write-root /work/bracket/out
 ```
 
 The two flags keep the agent to the folders you give it:
 
 - Every file a command reads must lie inside the **read root**: `open`, `file.open`,
-  `geometry.open`, `geometry.import.mesh`, the design and meshes a `.modelcraft` file opens
+  `geometry.open`, `geometry.import.mesh`, the design and meshes a `.fieldcraft` file opens
   again, `file.recovery.list` and `file.recover` with a `dir`.
 - Every file a command writes must lie inside the **write root**: `save`, `file.save` and
   `file.save_as` (also a save to the model's own file), `write_deck` and `deck.write`,
@@ -96,7 +96,7 @@ software on the computer.
 | `batch` | `commands: [{command, params}]` | Run steps in order, stop at the first error; the reply has every result and the failing step (`failed.index`, `failed.command`, `failed.error`). Steps before it stay applied (`undo` takes them back). |
 | `inspect_model` | — | `model.info` (counts, units, definitions), `model.activity` (the step table) and `geometry.bodies` (bodies with measures and persistent face names, which sets name as `{body, face}`). |
 | `check_model` | — | `model.check`: errors and warnings, each naming its item. |
-| `open` | `path` | By extension: `.modelcraft` (`file.open`), `.solidcraft` (`geometry.open`), `.3mf` (`geometry.import.mesh`). |
+| `open` | `path` | By extension: `.fieldcraft` (`file.open`), `.solidcraft` (`geometry.open`), `.3mf` (`geometry.import.mesh`). |
 | `save` | `path?` | `file.save`: to `path` or the model's own file. |
 | `write_deck` | `format` (abaqus, nastran, lsdyna), `path`, `steps?` | `deck.write`. |
 | `mesh` | `method`, `params?` | Runs the mesher (`tet`: `mesh.tet.generate`; `planar`: `mesh.planar`; the hex and block meshers as they land) and replies with its result, `model.info` and `mesh.quality`. |
@@ -107,7 +107,7 @@ software on the computer.
 | `screenshot` | `view?`, `source?` (window, model), `width?`, `height?`, `path?` | A PNG image content block and what it shows. Headless: a CPU render framing the model, the geometry and the results display (deformed shape, contour bands). Bridged: the whole app window drawn offscreen (`ui.capture`, the default) or a model render with the app's camera (`ui.render`); `view` turns the app's camera first. |
 | `undo`, `redo` | — | `edit.undo`, `edit.redo`. |
 
-Resources: `modelcraft://model` (`model.info`) and `modelcraft://commands` (the command catalog).
+Resources: `fieldcraft://model` (`model.info`) and `fieldcraft://commands` (the command catalog).
 
 Errors: an unknown tool, or arguments that do not match the tool's schema (a missing or unknown
 argument, a wrong type, a value outside an enum), are JSON-RPC `-32602` errors; an engine failure

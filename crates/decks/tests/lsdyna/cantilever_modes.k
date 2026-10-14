@@ -1,5 +1,5 @@
 *KEYWORD long=y
-$ Written by ModelCraft: implicit linear analysis, long format (20-column fields).
+$ Written by FieldCraft: implicit linear analysis, long format (20-column fields).
 $ Units: mm-t-s-N-MPa (consistent; nothing is converted).
 $ 2 steps are written as *CASE analyses: run LS-DYNA with CASE on its command line.
 *NODE

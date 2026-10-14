@@ -75,13 +75,13 @@ fn main() -> ExitCode {
         Some("corpus") => {
             // A binary of the testkit, so xtask itself stays free of SolidCraft.
             let mut c = cargo();
-            c.args(["run", "--release", "-p", "modelcraft-testkit", "--bin", "corpus", "--"]).args(&rest);
+            c.args(["run", "--release", "-p", "fieldcraft-testkit", "--bin", "corpus", "--"]).args(&rest);
             run(c, "corpus")
         }
         Some("oracle") => {
             // A binary of the testkit, which has the engine and SolidCraft scripts for geometry.
             let mut c = cargo();
-            c.args(["run", "--release", "-p", "modelcraft-testkit", "--bin", "oracle", "--"]).args(&rest);
+            c.args(["run", "--release", "-p", "fieldcraft-testkit", "--bin", "oracle", "--"]).args(&rest);
             run(c, "oracle")
         }
         Some("wasm") => cmd_wasm(),

@@ -1,8 +1,8 @@
-$ Nastran bulk data written by ModelCraft
+$ Nastran bulk data written by FieldCraft
 $ units: mm-t-s-N-MPa
 SOL 101
 CEND
-TITLE = ModelCraft model
+TITLE = FieldCraft model
 ECHO = NONE
 SUBCASE 1
   SUBTITLE = Bend

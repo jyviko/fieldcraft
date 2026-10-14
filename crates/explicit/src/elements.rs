@@ -14,9 +14,9 @@
 //! strain and the stiffness-form hourglass forces) is rotated with the increment's rotation —
 //! the Cayley transform of the spin increment (Jaumann rate, Hughes & Winget 1980) or the
 //! increment of the polar rotation (Green–Naghdi rate, D. P. Flanagan, L. M. Taylor, CMAME
-//! 62(3):305–320, 1987), see [`modelcraft_fem::rotation`] — then the constitutive increment is
+//! 62(3):305–320, 1987), see [`fieldcraft_fem::rotation`] — then the constitutive increment is
 //! added: hypoelastic, or J2 radial return with Johnson–Cook damage
-//! ([`modelcraft_fem::plasticity`]). Orthotropic elasticity is updated in the polar frame (its
+//! ([`fieldcraft_fem::plasticity`]). Orthotropic elasticity is updated in the polar frame (its
 //! axes turn with the material) whichever rate the step names.
 //!
 //! **One-point hexahedron** (D. P. Flanagan, T. Belytschko, IJNME 17(5):679–706, 1981): the
@@ -44,7 +44,7 @@
 //! Δt = L / (Q + √(Q² + c²)), Q = C_l c + C_q L |ε̇ᵥ| (Wilkins 1980).
 //!
 //! **Critical increment.** Each element's stable length L = 2c/ω_max comes from the bound on its
-//! highest frequency in its current shape ([`modelcraft_fem::uniform`], with the element's lumped
+//! highest frequency in its current shape ([`fieldcraft_fem::uniform`], with the element's lumped
 //! masses, plus the hourglass stiffness when it is used), so without bulk viscosity its critical
 //! increment is 2/ω_max (Belytschko et al. 2014, §6.3). The elastic moduli bound the tangent
 //! moduli of plastic flow, so the bound holds for the inelastic materials too.
@@ -54,11 +54,11 @@
 //! reaches its material's erosion plastic strain is removed: it carries no stress from then on,
 //! its nodes keep their mass and momentum, and its internal energy at that moment is reported.
 
-use modelcraft_fem::material::stress;
-use modelcraft_fem::plasticity::{Increment, PointState};
-use modelcraft_fem::rotation::{self, IDENTITY, Mat3, Polar};
-use modelcraft_fem::uniform::{Hex8, Tet4, UniformStrain};
-use modelcraft_model::{BulkViscosity, HourglassKind, StressRate};
+use fieldcraft_fem::material::stress;
+use fieldcraft_fem::plasticity::{Increment, PointState};
+use fieldcraft_fem::rotation::{self, IDENTITY, Mat3, Polar};
+use fieldcraft_fem::uniform::{Hex8, Tet4, UniformStrain};
+use fieldcraft_model::{BulkViscosity, HourglassKind, StressRate};
 
 use crate::system::{Material, NODE_DOFS, System};
 use crate::{Error, Result};
@@ -330,7 +330,7 @@ fn current(mat: &Material, rest: f64, volume: f64) -> (f64, f64) {
 }
 
 /// The bound ω² ≤ k λ_max(Σ b bᵀ) / (V m_min) on an element's highest frequency
-/// ([`modelcraft_fem::uniform`]), with the lumped masses of the undeformed element and
+/// ([`fieldcraft_fem::uniform`]), with the lumped masses of the undeformed element and
 /// `gradient_norm` = λ_max(Σ b bᵀ).
 pub fn frequency_bound<const N: usize>(k: &UniformStrain<N>, gradient_norm: f64, modulus: f64, mass: &[f64; N]) -> f64 {
     let lightest = mass.iter().copied().fold(f64::INFINITY, f64::min);
@@ -353,7 +353,7 @@ pub fn hex_scales(
     mass: &[f64; 8],
     mat: &Material,
     density: f64,
-    hourglass: modelcraft_model::Hourglass,
+    hourglass: fieldcraft_model::Hourglass,
 ) -> HexScales {
     let norm = k.gradient_norm();
     // h: the edge of the cube with the element's volume and gradient norm.
@@ -439,7 +439,7 @@ fn run<T: Send>(
 ) -> Result<()> {
     let mut all = pieces::<T>(states, count, &index)?;
     for round in all.chunks_mut(ROUND) {
-        modelcraft_parallel::for_each_mut(round, |_, piece| {
+        fieldcraft_parallel::for_each_mut(round, |_, piece| {
             let Piece { items, base, states, out } = piece;
             *out = items
                 .clone()
@@ -476,7 +476,7 @@ fn hexahedron(sys: &System, h: &crate::system::Hex, m: &Motion, es: &mut Element
     if es.failed.is_some() {
         return Ok(Outcome::Skipped);
     }
-    let hourglass = modelcraft_model::Hourglass { kind: sys.hourglass, coefficient: sys.hourglass_coefficient };
+    let hourglass = fieldcraft_model::Hourglass { kind: sys.hourglass, coefficient: sys.hourglass_coefficient };
     let e = Nodal::gather(sys, &h.nodes, m);
     let x_now = e.positions(0.0);
     let (mid, now) = if sys.nonlinear {
@@ -607,7 +607,7 @@ pub fn internal_forces(sys: &System, m: &Motion, state: &mut State, ws: &mut Wor
         // Pass 1: each tetrahedron's increment, and each node's mean volumetric increment.
         let increments = {
             let st: &State = state;
-            modelcraft_parallel::map_grained(tets.len(), BLOCK, |k| match tets.get(k) {
+            fieldcraft_parallel::map_grained(tets.len(), BLOCK, |k| match tets.get(k) {
                 Some(t) => tetrahedron_increment(sys, t, m, st),
                 None => Ok(None),
             })

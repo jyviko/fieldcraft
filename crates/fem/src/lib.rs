@@ -1,7 +1,7 @@
-//! Finite element kernels shared by ModelCraft's structural solvers.
+//! Finite element kernels shared by FieldCraft's structural solvers.
 //!
 //! Pure functions over element geometry and material constants, with no solver loop and no
-//! global state, so the implicit solver (`modelcraft-solver`) and the explicit solver that follows
+//! global state, so the implicit solver (`fieldcraft-solver`) and the explicit solver that follows
 //! it use the same element technology:
 //! - [`dof`]: degree-of-freedom kinds, what elements declare, and the global numbering
 //!   ([`DofLayout`]) every solver assembles on;

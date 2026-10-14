@@ -5,7 +5,7 @@
 //! the model has no element faces; once it is meshed, as boundaries only, so the mesh is not
 //! hidden behind coincident faces.
 
-use modelcraft_render::{Aabb3, Camera, DisplayMesh, Scene, SceneLine, ScenePoint, SceneTri};
+use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, SceneLine, ScenePoint, SceneTri};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{Tokens, rgb};
@@ -99,7 +99,7 @@ pub fn radius(b: &Aabb3, cam: &Camera) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use modelcraft_model::{ElementKind, Model};
+    use fieldcraft_model::{ElementKind, Model};
 
     use super::*;
 

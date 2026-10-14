@@ -31,7 +31,7 @@
       <stop offset="1" stop-color="#04302c"/>
     </linearGradient>
   </defs>
-  <title>ModelCraft application icon, small sizes</title>
+  <title>FieldCraft application icon, small sizes</title>
   <g id="Backdrop">
     <g filter="url(#filter-1)">
       <path id="backdrop" d="M320 100 L704 100 C854 100 924 170 924 320 L924 704 C924 854 854 924 704 924 L320 924 C170 924 100 854 100 704 L100 320 C100 170 170 100 320 100 Z" fill="url(#linear-gradient-1)"/>

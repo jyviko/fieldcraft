@@ -22,7 +22,7 @@ pub(crate) fn mesh(loops: &[Vec<[f64; 2]>], size: &dyn SizeField, opts: &QuadOpt
         if l.len() % 2 == 1 {
             return Err(Error::Invalid(format!(
                 "loop {k} has an odd number ({}) of boundary points; an all-quadrilateral mesh needs an even number on every loop \
-                 (choose the edge divisions with modelcraft_mesh::size::loop_divisions or even_divisions)",
+                 (choose the edge divisions with fieldcraft_mesh::size::loop_divisions or even_divisions)",
                 l.len()
             )));
         }

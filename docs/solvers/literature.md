@@ -1,4 +1,4 @@
-# Solver literature survey for ModelCraft: explicit dynamics, equations of state, lattice Boltzmann, FSI
+# Solver literature survey for FieldCraft: explicit dynamics, equations of state, lattice Boltzmann, FSI
 
 Compiled 2026-10-13. Scope: three new solver families on top of the planned implicit linear solver (M6):
 (A) an explicit Lagrangian finite element solver of the LS-DYNA / Abaqus-Explicit class, (B) equations of state for
@@ -560,7 +560,7 @@ JCP 232(1):100–117, 2013, DOI [10.1016/j.jcp.2012.07.023](https://doi.org/10.1
 - **Method.** For each wall link, the fraction q ∈ (0, 1] of the link inside the fluid; linear or quadratic
   interpolation of the reflected population, second-order for curved walls.
 - **Needs from meshing.** q comes from ray–triangle intersection of the lattice link with the face-tagged boundary
-  surface — robust predicates (modelcraft-mesh) give the inside/outside decision; q itself is a constructed value.
+  surface — robust predicates (fieldcraft-mesh) give the inside/outside decision; q itself is a constructed value.
 - **Limits.** Not mass conservative; small q (< ~0.01) can destabilise: treat as q = 0 or use the Mei variant.
 - **Also.** R. Mei, L.-S. Luo, W. Shyy, JCP 155(2):307–330, 1999, DOI [10.1006/jcph.1999.6334](https://doi.org/10.1006/jcph.1999.6334) — the alternative curved-boundary scheme. **Reference.**
 
@@ -794,7 +794,7 @@ IB is simpler with a deforming FE surface; bounce-back is better for rigid or sl
 - S. W. Attaway, M. W. Heinstein, J. W. Swegle. *Coupling of smooth particle hydrodynamics with the finite element method.* Nucl. Eng. Des. 150:199–205, 1994. DOI [10.1016/0029-5493(94)90136-8](https://doi.org/10.1016/0029-5493(94)90136-8).
 - C. Antoci, M. Gallati, S. Sibilla. *Numerical simulation of fluid–structure interaction by SPH.* Comput. Struct. 85(11–14):879–890, 2007. DOI [10.1016/j.compstruc.2007.01.002](https://doi.org/10.1016/j.compstruc.2007.01.002).
 - **Assessment.** SPH shares the explicit solver's whole stack (time step, EOS, Johnson–Cook, artificial viscosity,
-  contact via the same penalty), so it slots *into* `modelcraft-explicit` as another discretisation — the natural
+  contact via the same penalty), so it slots *into* `fieldcraft-explicit` as another discretisation — the natural
   home for hypervelocity impact, fragmentation and blast with JWL, which LBM cannot do. As a general fluid solver it is
   noisy (pressure), needs many particles for accuracy and has the tensile instability; LBM beats it for viscous
   low-Mach flow. Code: SPHinXsys (Apache-2.0), SPlisHSPlasH (MIT), PySPH (BSD-3-style), Cabana (BSD-3): READ OK;
@@ -812,7 +812,7 @@ IB is simpler with a deforming FE surface; bounce-back is better for rigid or sl
   codes) but coordinates/displacements over long runs need f64 accumulation; that rules out a naive GPU port.
 - **Layering.** `xtask/src/layers.rs` lists `wgpu` in `UI_CRATES`: nothing below L5 may depend on it. A GPU backend
   therefore needs either an owner decision to allow `wgpu` in a dedicated compute crate below L5 (headless compute is
-  not UI), or a `modelcraft-gpu` crate at L5 that implements a backend trait the L1 solver crates define. I recommend
+  not UI), or a `fieldcraft-gpu` crate at L5 that implements a backend trait the L1 solver crates define. I recommend
   the second (no rule change): the solver crate defines a `LatticeBackend` trait and a CPU implementation; the GPU
   implementation lives at L5. **Owner decision either way.**
 - **Determinism.** The project requires bit-identical output on every platform. GPU f32 results differ from CPU and
@@ -859,25 +859,25 @@ Implicit and explicit share element kinematics (shape functions, quadrature, B-m
 
 | Layer | Crate | Contents |
 |---|---|---|
-| L0 | `modelcraft-model` | + materials, EOS, sections/formulations, explicit and fluid steps, contact, fluid domains, coupling interfaces (F3) |
-| L1 | `modelcraft-fem` (new) | element kernels (shape functions, quadrature, B/B-bar, one-point hex with FB hourglass and Belytschko–Bindeman stabilisation, Bonet–Burton tet, BLT shell), constitutive updates (hypoelastic, objective rates, J2 radial return, Johnson–Cook, damage), EOS evaluation. Pure functions over `model` types; no solver loop. |
-| L2 | `modelcraft-lbm` (new) | lattices, collision operators, BCs, voxelisation from the face-tagged surface and the octree from `mesh`\*, stepping on CPU, momentum-exchange forces, IB kernels; a backend trait for GPU |
-| L2 | `modelcraft-solver` (moved up from L1) | implicit linear static/modal (M6), later nonlinear implicit; uses `fem` |
-| L2 | `modelcraft-explicit` (new) | central-difference driver, time step, mass scaling, q, contact (search + penalty), erosion, energy accounting, output; uses `fem` (and later SPH) |
-| L3 | `modelcraft-fsi` (new) | IB coupling, interface mapping, Aitken/IQN-ILS, subcycling, coupled step driver; uses `explicit`, `solver`, `lbm` |
+| L0 | `fieldcraft-model` | + materials, EOS, sections/formulations, explicit and fluid steps, contact, fluid domains, coupling interfaces (F3) |
+| L1 | `fieldcraft-fem` (new) | element kernels (shape functions, quadrature, B/B-bar, one-point hex with FB hourglass and Belytschko–Bindeman stabilisation, Bonet–Burton tet, BLT shell), constitutive updates (hypoelastic, objective rates, J2 radial return, Johnson–Cook, damage), EOS evaluation. Pure functions over `model` types; no solver loop. |
+| L2 | `fieldcraft-lbm` (new) | lattices, collision operators, BCs, voxelisation from the face-tagged surface and the octree from `mesh`\*, stepping on CPU, momentum-exchange forces, IB kernels; a backend trait for GPU |
+| L2 | `fieldcraft-solver` (moved up from L1) | implicit linear static/modal (M6), later nonlinear implicit; uses `fem` |
+| L2 | `fieldcraft-explicit` (new) | central-difference driver, time step, mass scaling, q, contact (search + penalty), erosion, energy accounting, output; uses `fem` (and later SPH) |
+| L3 | `fieldcraft-fsi` (new) | IB coupling, interface mapping, Aitken/IQN-ILS, subcycling, coupled step driver; uses `explicit`, `solver`, `lbm` |
 | L4… | `doc`, `io`, `engine`, then L5+ shifts up by two | results (time histories, field frames) in `doc`/`io` |
-| L5+ | `modelcraft-gpu` (new, with the UI layer or an owner-approved compute layer) | wgpu implementations of the solver backend traits |
+| L5+ | `fieldcraft-gpu` (new, with the UI layer or an owner-approved compute layer) | wgpu implementations of the solver backend traits |
 
-\* `modelcraft-lbm` needs the octree and predicates from `modelcraft-mesh` (L1), so it sits at L2. **`lbm` at L2** next to `solver` and `explicit` (it may then use `mesh`'s octree and
+\* `fieldcraft-lbm` needs the octree and predicates from `fieldcraft-mesh` (L1), so it sits at L2. **`lbm` at L2** next to `solver` and `explicit` (it may then use `mesh`'s octree and
 predicates), and `fem` at L1. That is one coherent rule: L1 = geometry and math kernels, L2 = solvers, L3 = coupling.
 
 Cost of this being wrong: renumbering the layer table is a mechanical edit to `xtask/src/layers.rs` and
-`docs/architecture.md`; the risk is churn, not breakage. The alternative (one `modelcraft-solver` crate with
+`docs/architecture.md`; the risk is churn, not breakage. The alternative (one `fieldcraft-solver` crate with
 `implicit`/`explicit`/`lbm`/`fsi` modules) needs no layer change, but a 50k-line crate compiles slowly and lets the
 LBM depend on FE internals by accident. If the owner prefers no renumbering, take the single-crate option and enforce
 module boundaries with `pub(crate)` discipline. This layout change is an owner decision.
 
-### F3. Solver-neutral model extensions in `modelcraft-model`
+### F3. Solver-neutral model extensions in `fieldcraft-model`
 
 - **Materials** (named, unit-consistent, no product numbering): density; isotropic elastic; J2 plasticity with
   isotropic/kinematic hardening (bilinear, power law, table); Johnson–Cook strength (A, B, n, C, m, ε̇₀, T_room,
@@ -906,7 +906,7 @@ All of these must map to the LS-DYNA keyword and Abaqus input concepts M5 writes
 
 | # | Milestone | Needs from meshing | Verification (analytic first) |
 |---|---|---|---|
-| X0 | `modelcraft-fem` extraction with M6: hex8/tet4 kinematics, elastic and J2 updates, shared with the implicit solver | M2 tets, generated boxes | patch tests, J2 uniaxial curve, rigid rotation |
+| X0 | `fieldcraft-fem` extraction with M6: hex8/tet4 kinematics, elastic and J2 updates, shared with the implicit solver | M2 tets, generated boxes | patch tests, J2 uniaxial curve, rigid rotation |
 | X1 | Explicit core: central difference, lumped mass, element Δt (FB 1984), one-point hex8 + FB hourglass, Bonet–Burton tet4, artificial viscosity, energy accounting, prescribed BCs, initial velocity, history output | structured hex8 boxes generated in code (no M3 needed), M2 tets | bar wave (front position and amplitude), bar–rigid wall contact time 2L/c, energy balance, cantilever period vs M6 modal |
 | X2 | Large deformation materials: Hughes–Winget Jaumann, Flanagan–Taylor Green–Naghdi, J2 radial return, Johnson–Cook strength + damage, erosion | same | Dienes simple shear (both rates, closed form), Taylor bar (Taylor 1948 analytic estimate; experimental comparison only if the owner allows) |
 | X3 | Contact: BVH global search, node-to-segment penalty two-pass + friction, pinball for eroding surfaces, rigid walls | surface extraction of volume meshes (have it) | two bars colliding (momentum exchange, analytic), block sliding with friction on a slope (analytic), Hertz sphere-on-plane at low speed (analytic contact time and force) |
@@ -956,7 +956,7 @@ the better pairing — this is why FSI should support both structure solvers.
 
 ## Part G: Implicit solver (M4), as implemented
 
-The papers and books `modelcraft-fem` and `modelcraft-solver` are written from (cited again in
+The papers and books `fieldcraft-fem` and `fieldcraft-solver` are written from (cited again in
 the module docs):
 
 - Elements: O. C. Zienkiewicz, R. L. Taylor, J. Z. Zhu, *The Finite Element Method: Its Basis
@@ -1031,7 +1031,7 @@ the module docs):
 
 ## Part H: Explicit solver core (X1), as implemented
 
-The papers and books `modelcraft-explicit` and `modelcraft_fem::uniform` are written from (cited
+The papers and books `fieldcraft-explicit` and `fieldcraft_fem::uniform` are written from (cited
 again in the module docs):
 
 - Time integration, energy balance, element eigenvalue inequality: T. Belytschko, W. K. Liu,
@@ -1065,7 +1065,7 @@ again in the module docs):
 
 ## Part I: Lattice Boltzmann core (M12, plan L1), as implemented
 
-`modelcraft-lbm` is written from these papers and the book (cited again in its module docs). No
+`fieldcraft-lbm` is written from these papers and the book (cited again in its module docs). No
 lattice Boltzmann package's code was opened.
 
 - Lattice, equilibrium, units, stream–collide, bounce-back, forcing and boundary conditions:
@@ -1082,7 +1082,7 @@ lattice Boltzmann package's code was opened.
   lattice Boltzmann simulations*, J. Stat. Mech. 2010, P01018 (DOI not checked).
 - Stability limits (Mach ≤ 0.3, τ⁺ ≥ 0.505, runtime speed ≤ 0.5): Sterling & Chen 1996 and
   Lallemand & Luo 2000 (C1.5) for the shrinking stable region as τ → ½.
-- Voxelisation: Shewchuk's exact `orient2d`/`orient3d` (`modelcraft_mesh::predicates`) with a
+- Voxelisation: Shewchuk's exact `orient2d`/`orient3d` (`fieldcraft_mesh::predicates`) with a
   symbolic perturbation after H. Edelsbrunner, E. P. Mücke, *Simulation of Simplicity*, ACM TOG
   9(1):66–104, 1990; link faces by nearest triangle, C. Ericson, *Real-Time Collision Detection*,
   Morgan Kaufmann 2005, §5.1.5.
@@ -1095,7 +1095,7 @@ lattice Boltzmann package's code was opened.
 
 ## Part J: Large deformation and inelastic materials (X2), as implemented
 
-The papers and books `modelcraft_fem::{rotation, plasticity}` and `modelcraft-explicit`'s X2
+The papers and books `fieldcraft_fem::{rotation, plasticity}` and `fieldcraft-explicit`'s X2
 update are written from (cited again in the module docs):
 
 - Updated Lagrangian one-point elements, strain increments on the midpoint configuration:
@@ -1128,7 +1128,7 @@ update are written from (cited again in the module docs):
 - **Conduction.** Galerkin form of ρc Ṫ = ∇·(k∇T) + Q with surface flux and convection:
   O. C. Zienkiewicz, R. L. Taylor, J. Z. Zhu, *The Finite Element Method: Its Basis and
   Fundamentals*, 7th ed., Butterworth-Heinemann 2013, §3.2; T. J. R. Hughes, *The Finite Element
-  Method*, Dover 2000, ch. 1. Kernels in `modelcraft_fem::heat`, solver in `modelcraft_solver::heat`.
+  Method*, Dover 2000, ch. 1. Kernels in `fieldcraft_fem::heat`, solver in `fieldcraft_solver::heat`.
 - **Time integration.** The generalized trapezoidal (θ) family, unconditionally stable for
   θ ≥ ½ (Hughes 2000, §8.2): backward Euler (θ = 1, the default) and Crank–Nicolson (θ = ½).
 - **Thermal strain.** Initial-strain load ∫ Bᵀ D ε_th dV and stress D(ε − ε_th)

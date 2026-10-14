@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-model"
-description = "ModelCraft's solver-neutral finite element model: nodes, elements and their validation"
+name = "fieldcraft-model"
+description = "FieldCraft's solver-neutral finite element model: nodes, elements and their validation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,9 +1,9 @@
-//! ModelCraft's files.
+//! FieldCraft's files.
 //!
-//! A `.modelcraft` file ([`write`], [`read`]; docs/formats/modelcraft.md) is a ZIP package of four
+//! A `.fieldcraft` file ([`write`], [`read`]; docs/formats/fieldcraft.md) is a ZIP package of four
 //! parts, stored uncompressed so each can be read with any unzip tool:
 //!
-//! - `modelcraft.json`: the manifest. The format tag (`modelcraft/1`), the program that wrote
+//! - `fieldcraft.json`: the manifest. The format tag (`fieldcraft/1`), the program that wrote
 //!   it, the geometry the model is built on (the SolidCraft design and the imported 3MF meshes,
 //!   each a path and the SHA-256 of its content, opened again when the model is), and the size
 //!   and SHA-256 of every other part.
@@ -30,16 +30,16 @@ pub mod roots;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 
-use modelcraft_model::Model;
+use fieldcraft_model::Model;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// The format tag of the files this version writes and reads.
-pub const FORMAT: &str = "modelcraft/1";
+pub const FORMAT: &str = "fieldcraft/1";
 
 /// The file name extension.
-pub const EXTENSION: &str = "modelcraft";
+pub const EXTENSION: &str = "fieldcraft";
 
 /// Largest file read.
 pub const MAX_FILE_BYTES: u64 = 8 << 30;
@@ -57,17 +57,17 @@ pub const MAX_MESH_SOURCES: usize = 10_000;
 pub const MAX_PATH_LEN: usize = 4096;
 const MAX_COMMAND_LEN: usize = 256;
 
-const MANIFEST: &str = "modelcraft.json";
+const MANIFEST: &str = "fieldcraft.json";
 const MODEL: &str = "model.json";
 const MESH: &str = "mesh.bin";
 const JOURNAL: &str = "journal.json";
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
-    /// Not a `.modelcraft` file, or a damaged or invalid one.
+    /// Not a `.fieldcraft` file, or a damaged or invalid one.
     #[error("{0}")]
     Invalid(String),
-    /// A `.modelcraft` file of a format version this program does not read.
+    /// A `.fieldcraft` file of a format version this program does not read.
     #[error("{0}")]
     Version(String),
     #[error("limit reached: {0}")]
@@ -87,9 +87,9 @@ fn invalid<T>(message: impl Into<String>) -> Result<T> {
 }
 
 /// A model error met while reading `part`.
-pub(crate) fn model_error(part: &str, e: modelcraft_model::Error) -> Error {
+pub(crate) fn model_error(part: &str, e: fieldcraft_model::Error) -> Error {
     match e {
-        modelcraft_model::Error::Limit(m) => Error::Limit(format!("{part}: {m}")),
+        fieldcraft_model::Error::Limit(m) => Error::Limit(format!("{part}: {m}")),
         e => Error::Invalid(format!("{part}: {e}")),
     }
 }
@@ -101,7 +101,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// A file the model is built on: its path and the SHA-256 of the content that was opened.
 ///
-/// A relative path is relative to the folder of the `.modelcraft` file that refers to it.
+/// A relative path is relative to the folder of the `.fieldcraft` file that refers to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "SourceFileRepr", into = "SourceFileRepr")]
 pub struct SourceFile {
@@ -178,7 +178,7 @@ pub struct Geometry {
 /// One journal entry: a command id and its parameters.
 pub type JournalEntry = (String, Value);
 
-/// What a `.modelcraft` file holds.
+/// What a `.fieldcraft` file holds.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModelFile {
     pub model: Model,
@@ -233,7 +233,7 @@ fn journal_text(journal: &[JournalEntry]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// The bytes of a `.modelcraft` file holding `model`, built on `geometry` by the commands in
+/// The bytes of a `.fieldcraft` file holding `model`, built on `geometry` by the commands in
 /// `journal`. The same arguments always give the same bytes.
 pub fn write(model: &Model, geometry: &Geometry, journal: &[JournalEntry]) -> Result<Vec<u8>> {
     if geometry.meshes.len() > MAX_MESH_SOURCES {
@@ -246,7 +246,7 @@ pub fn write(model: &Model, geometry: &Geometry, journal: &[JournalEntry]) -> Re
     let parts = [(MODEL, model_json), (MESH, mesh), (JOURNAL, journal)];
     let manifest = Manifest {
         format: FORMAT.into(),
-        generator: format!("ModelCraft {}", env!("CARGO_PKG_VERSION")),
+        generator: format!("FieldCraft {}", env!("CARGO_PKG_VERSION")),
         geometry: geometry.clone(),
         parts: parts.iter().map(|(name, bytes)| (name.to_string(), Part { bytes: bytes.len() as u64, sha256: sha256_hex(bytes) })).collect(),
     };
@@ -285,15 +285,15 @@ fn read_part(zip: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str, cap: u64, fil
     Ok(buf)
 }
 
-/// Read a `.modelcraft` file.
+/// Read a `.fieldcraft` file.
 pub fn read(bytes: &[u8]) -> Result<ModelFile> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(Error::Limit(format!("the file is {} MB (at most {} MB)", bytes.len() >> 20, MAX_FILE_BYTES >> 20)));
     }
     if !bytes.starts_with(b"PK\x03\x04") {
-        return invalid("not a ModelCraft file (not a ZIP package)");
+        return invalid("not a FieldCraft file (not a ZIP package)");
     }
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Invalid(format!("not a ModelCraft file: {e}")))?;
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Invalid(format!("not a FieldCraft file: {e}")))?;
     let names = [MANIFEST, MODEL, MESH, JOURNAL];
     let mut seen = Vec::with_capacity(zip.len());
     for name in zip.file_names() {
@@ -310,13 +310,13 @@ pub fn read(bytes: &[u8]) -> Result<ModelFile> {
     let manifest: Value = serde_json::from_slice(&manifest_bytes).map_err(|e| json_error(MANIFEST, e))?;
     match manifest.get("format").and_then(Value::as_str) {
         Some(FORMAT) => {}
-        Some(f) if f.starts_with("modelcraft/") => {
+        Some(f) if f.starts_with("fieldcraft/") => {
             return Err(Error::Version(format!(
-                "the file is format `{}`; this version of ModelCraft reads `{FORMAT}`",
+                "the file is format `{}`; this version of FieldCraft reads `{FORMAT}`",
                 f.chars().take(40).collect::<String>()
             )));
         }
-        _ => return invalid(format!("not a ModelCraft file: `{MANIFEST}` has no `{FORMAT}` format tag")),
+        _ => return invalid(format!("not a FieldCraft file: `{MANIFEST}` has no `{FORMAT}` format tag")),
     }
     let manifest: Manifest = serde_json::from_value(manifest).map_err(|e| json_error(MANIFEST, e))?;
     if manifest.geometry.meshes.len() > MAX_MESH_SOURCES {

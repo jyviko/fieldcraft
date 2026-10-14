@@ -32,7 +32,7 @@
 //! discontinuous finite element functions using a least squares method*, IJNME 8(3):461–480,
 //! 1974); mid-side nodes take the mean of their edge's corners.
 
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 use crate::basis::Basis;
 use crate::dense::{Cholesky, Matrix, inverse3, positive_inverse};
@@ -163,10 +163,10 @@ impl Formulation {
     }
 
     /// The formulation a model section asks for, if this element type has it.
-    pub fn from_section(kind: ElementKind, f: &modelcraft_model::Formulation) -> Result<Formulation> {
+    pub fn from_section(kind: ElementKind, f: &fieldcraft_model::Formulation) -> Result<Formulation> {
         let ty = element_type(kind)?;
         if f.hybrid {
-            if f.incompatible_modes || f.integration == modelcraft_model::Integration::Reduced {
+            if f.incompatible_modes || f.integration == fieldcraft_model::Integration::Reduced {
                 return Err(Error::NotSupported("hybrid elements with incompatible modes or reduced integration".into()));
             }
             return crate::hybrid::pressures(kind).map(|pressures| Formulation::Hybrid { pressures }).ok_or_else(|| {
@@ -184,9 +184,9 @@ impl Formulation {
             };
         }
         match f.integration {
-            modelcraft_model::Integration::Full => Ok(Formulation::Full),
-            modelcraft_model::Integration::Reduced if ty.reduced.is_some() => Ok(Formulation::Reduced),
-            modelcraft_model::Integration::Reduced => Err(Error::NotSupported(format!(
+            fieldcraft_model::Integration::Full => Ok(Formulation::Full),
+            fieldcraft_model::Integration::Reduced if ty.reduced.is_some() => Ok(Formulation::Reduced),
+            fieldcraft_model::Integration::Reduced => Err(Error::NotSupported(format!(
                 "reduced integration of {} elements (hex8 needs hourglass control; use full integration or incompatible modes)",
                 kind.name()
             ))),
@@ -254,7 +254,7 @@ impl<'a> Solid<'a> {
         if xyz.len() != ty.nodes {
             return Err(Error::Invalid(format!("a {} element has {} nodes, got {}", kind.name(), ty.nodes, xyz.len())));
         }
-        modelcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
+        fieldcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
         let ok = match formulation {
             Formulation::Full => true,
             Formulation::Reduced => ty.reduced.is_some(),

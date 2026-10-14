@@ -1,15 +1,15 @@
 //! Linear static and frequency analysis of a model's step, and their results.
 
-use modelcraft_fem::ElementType;
-use modelcraft_fem::beam::BeamForces;
-use modelcraft_fem::element::{Extrapolation, extrapolation};
-use modelcraft_fem::quadrature::Rule;
-use modelcraft_fem::shell::ShellStress;
-use modelcraft_fem::{DofKind, DofLayout, PointStress, von_mises};
-use modelcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
+use fieldcraft_fem::ElementType;
+use fieldcraft_fem::beam::BeamForces;
+use fieldcraft_fem::element::{Extrapolation, extrapolation};
+use fieldcraft_fem::quadrature::Rule;
+use fieldcraft_fem::shell::ShellStress;
+use fieldcraft_fem::{DofKind, DofLayout, PointStress, von_mises};
+use fieldcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
 use serde::Serialize;
 
-use modelcraft_parallel as parallel;
+use fieldcraft_parallel as parallel;
 
 use crate::cholesky::{Factor, FactorError, UpperColumns};
 use crate::constraints::{Budget, Reduction, coupling_rows};

@@ -6,8 +6,8 @@
 //! the geometry are restored and an [`EngineError`] comes back.
 //!
 //! Commands that change the model are journalled and can be undone and redone
-//! (`edit.undo`, `edit.redo`; [`history`]). The session is saved to and opened from `.modelcraft`
-//! files (`file.save`, `file.open`; [`modelcraft_io`]) and autosaved for recovery after a crash
+//! (`edit.undo`, `edit.redo`; [`history`]). The session is saved to and opened from `.fieldcraft`
+//! files (`file.save`, `file.open`; [`fieldcraft_io`]) and autosaved for recovery after a crash
 //! ([`autosave`]).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
@@ -23,10 +23,10 @@ pub mod view;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use modelcraft_explicit::ExplicitResult;
-use modelcraft_geometry::Design;
-use modelcraft_geometry::tagged_mesh::TaggedSurface;
-use modelcraft_model::Model;
+use fieldcraft_explicit::ExplicitResult;
+use fieldcraft_geometry::Design;
+use fieldcraft_geometry::tagged_mesh::TaggedSurface;
+use fieldcraft_model::Model;
 use serde_json::Value;
 
 use crate::history::History;
@@ -38,21 +38,21 @@ pub enum EngineError {
     #[error("{0}")]
     Params(String),
     #[error(transparent)]
-    Model(#[from] modelcraft_model::Error),
+    Model(#[from] fieldcraft_model::Error),
     #[error(transparent)]
-    Geometry(#[from] modelcraft_geometry::Error),
+    Geometry(#[from] fieldcraft_geometry::Error),
     #[error(transparent)]
-    Mesh(#[from] modelcraft_mesh::Error),
+    Mesh(#[from] fieldcraft_mesh::Error),
     #[error(transparent)]
-    File(#[from] modelcraft_io::Error),
+    File(#[from] fieldcraft_io::Error),
     #[error(transparent)]
-    Deck(#[from] modelcraft_decks::Error),
+    Deck(#[from] fieldcraft_decks::Error),
     #[error(transparent)]
-    Solver(#[from] modelcraft_solver::Error),
+    Solver(#[from] fieldcraft_solver::Error),
     #[error(transparent)]
-    Explicit(#[from] modelcraft_explicit::Error),
+    Explicit(#[from] fieldcraft_explicit::Error),
     #[error(transparent)]
-    Fluid(#[from] modelcraft_lbm::Error),
+    Fluid(#[from] fieldcraft_lbm::Error),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
@@ -63,9 +63,9 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 /// The result of a solved step, from the implicit, the explicit or the lattice Boltzmann solver.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepResult {
-    Implicit(modelcraft_solver::StepResult),
+    Implicit(fieldcraft_solver::StepResult),
     Explicit(ExplicitResult),
-    Fluid(modelcraft_lbm::FluidResult),
+    Fluid(fieldcraft_lbm::FluidResult),
 }
 
 impl StepResult {
@@ -104,7 +104,7 @@ pub struct CommandSpec {
     /// Our own dotted, lower-case id: `<area>.<thing>[.<variant>]`, such as `mesh.node.add`.
     pub id: &'static str,
     pub label: &'static str,
-    /// The JSON parameters, documented for scripts, `modelcraft-cli commands` and agents.
+    /// The JSON parameters, documented for scripts, `fieldcraft-cli commands` and agents.
     pub params: &'static str,
     pub kind: CommandKind,
     pub run: fn(&mut Session, &Value) -> Result<Value>,
@@ -136,15 +136,15 @@ pub struct Limits {
     /// `mesh.tet.generate`'s `max_tets`.
     pub max_tets: usize,
     /// Threads the solvers use (the `solve.*` commands' `threads`): by default
-    /// `MODELCRAFT_THREADS` or the available cores, 1 to [`modelcraft_parallel::MAX_THREADS`].
+    /// `FIELDCRAFT_THREADS` or the available cores, 1 to [`fieldcraft_parallel::MAX_THREADS`].
     /// Results do not depend on it.
     pub threads: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        let cdt = modelcraft_mesh::cdt::CdtOptions::default();
-        Limits { max_steiner: cdt.max_steiner, max_tets: cdt.max_tets, threads: modelcraft_parallel::default_threads() }
+        let cdt = fieldcraft_mesh::cdt::CdtOptions::default();
+        Limits { max_steiner: cdt.max_steiner, max_tets: cdt.max_tets, threads: fieldcraft_parallel::default_threads() }
     }
 }
 
@@ -158,12 +158,12 @@ pub struct Session {
     /// Each is shared, so the per-command snapshot is cheap.
     pub surfaces: Vec<Arc<TaggedSurface>>,
     /// The files the design and the surfaces were read from, with the hash of what was read:
-    /// what a `.modelcraft` file records to open them again.
-    pub sources: modelcraft_io::Geometry,
+    /// what a `.fieldcraft` file records to open them again.
+    pub sources: fieldcraft_io::Geometry,
     /// Commands that changed the model, in order (a script that rebuilds it). Undo takes the
     /// last one off; redo puts it back.
     pub journal: Vec<(String, Value)>,
-    /// The `.modelcraft` file the session was opened from or last saved to.
+    /// The `.fieldcraft` file the session was opened from or last saved to.
     pub path: Option<String>,
     history: History,
     /// Identifies the current state: it changes with every edit, undo and redo, and comes back
@@ -181,7 +181,7 @@ pub struct Session {
     pub limits: Limits,
     /// The folders commands may read and write files in (an automation client's roots,
     /// docs/mcp.md); unconfined by default. A file replacing the session keeps them.
-    pub file_access: modelcraft_io::roots::Roots,
+    pub file_access: fieldcraft_io::roots::Roots,
 }
 
 impl Session {
@@ -265,7 +265,7 @@ impl Session {
     }
 
     /// The path to use for `access` to the file at `path`, checked against [`Session::file_access`].
-    pub fn checked_path(&self, path: &str, access: modelcraft_io::roots::Access) -> Result<String> {
+    pub fn checked_path(&self, path: &str, access: fieldcraft_io::roots::Access) -> Result<String> {
         let checked = self.file_access.check(std::path::Path::new(path), access)?;
         match checked.to_str() {
             Some(p) => Ok(p.to_string()),
@@ -283,7 +283,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use modelcraft_geometry::sample::{Plate, plate_design};
+    use fieldcraft_geometry::sample::{Plate, plate_design};
     use serde_json::json;
 
     #[test]
@@ -541,7 +541,7 @@ mod tests {
         fn new() -> Self {
             static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let dir = std::env::temp_dir().join(format!("modelcraft-engine-{}-{n}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("fieldcraft-engine-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             TempDir(dir)
         }

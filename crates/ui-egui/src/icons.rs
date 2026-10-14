@@ -132,7 +132,7 @@ pub fn paint_tinted(app: &mut crate::ModelApp, ui: &egui::Ui, id: &'static str, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use modelcraft_engine::catalogue::CATALOGUE;
+    use fieldcraft_engine::catalogue::CATALOGUE;
 
     #[test]
     fn every_catalogue_entry_has_an_icon_and_every_icon_an_entry() {

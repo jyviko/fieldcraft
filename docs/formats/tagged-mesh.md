@@ -1,8 +1,8 @@
 # Face-tagged meshes (3MF with B-rep face tags)
 
-Besides opening a `.solidcraft` design, geometry can enter ModelCraft as a triangulated boundary
+Besides opening a `.solidcraft` design, geometry can enter FieldCraft as a triangulated boundary
 surface written by another program, with each triangle tagged by the B-rep face it lies on.
-ModelCraft reads it into a `SurfaceMesh` (`modelcraft_geometry::tagged_mesh`, command
+FieldCraft reads it into a `SurfaceMesh` (`fieldcraft_geometry::tagged_mesh`, command
 `geometry.import.mesh`) without involving the kernel.
 
 ## The format is SolidCraft's
@@ -20,10 +20,10 @@ in the SolidCraft repository. In short:
 - Coordinates are written in shortest round-trip `f64` form, so they read back exactly.
 - Within an object, either every triangle is tagged or none is.
 
-ModelCraft follows that specification and does not extend it. Because the format is 3MF,
+FieldCraft follows that specification and does not extend it. Because the format is 3MF,
 untagged 3MF from any other program goes through the same reader, with one face per object.
 
-## What ModelCraft's reader does
+## What FieldCraft's reader does
 
 - **Surfaces.** Every build item becomes one `TaggedSurface`: a `SurfaceMesh` with its name and
   face count. Lengths are converted to millimetres from `unit`. The surface is named after its
@@ -42,7 +42,7 @@ untagged 3MF from any other program goes through the same reader, with one face 
   - Each part is at most 1 GB uncompressed, in at most 10 000 zip entries.
   - At most 20 million vertices and 20 million triangles, counted over every placement.
   - At most 10 000 build items, and XML nesting at most 256 deep.
-  - Coordinates must be finite and within ±10⁹ mm (`modelcraft_model::MAX_COORD`), both as read
+  - Coordinates must be finite and within ±10⁹ mm (`fieldcraft_model::MAX_COORD`), both as read
     and once placed.
   - Every vertex index must exist.
 - **Errors.** Any violation is an error that names the problem. Nothing panics.

@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use modelcraft_geometry::SurfaceMesh;
-use modelcraft_mesh::cdt::{CdtOptions, tetrahedralize};
-use modelcraft_mesh::delaunay::Triangulation;
-use modelcraft_mesh::quality::{self, QualityReport};
-use modelcraft_mesh::surface::{BoundarySurface, Defect, FeatureKind, SurfaceOptions};
-use modelcraft_model::{ElementKind, GeometryRef, MAX_ELEMENTS};
+use fieldcraft_geometry::SurfaceMesh;
+use fieldcraft_mesh::cdt::{CdtOptions, tetrahedralize};
+use fieldcraft_mesh::delaunay::Triangulation;
+use fieldcraft_mesh::quality::{self, QualityReport};
+use fieldcraft_mesh::surface::{BoundarySurface, Defect, FeatureKind, SurfaceOptions};
+use fieldcraft_model::{ElementKind, GeometryRef, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
 use super::{label, labels, listed, optional_number, points, xyz};
@@ -196,8 +196,8 @@ fn polygon(v: &Value, what: &str) -> Result<Vec<[f64; 2]>> {
 }
 
 fn planar(s: &mut Session, p: &Value) -> Result<Value> {
-    use modelcraft_mesh::planar::{Curve, face_boundary, mesh_region};
-    use modelcraft_model::Entity;
+    use fieldcraft_mesh::planar::{Curve, face_boundary, mesh_region};
+    use fieldcraft_model::Entity;
 
     let size = p
         .get("size")
@@ -212,7 +212,7 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|k| k.dimension() == 2)
             .ok_or_else(|| EngineError::Params("`kind` must be quad4, quad8, tri3 or tri6".into()))?,
     };
-    let opts = modelcraft_mesh::quad::QuadOptions {
+    let opts = fieldcraft_mesh::quad::QuadOptions {
         max_elements: optional_count(p, "max_elements", 1_000_000, 1..=PLANAR_MAX_ELEMENTS)?,
         ..Default::default()
     };
@@ -415,7 +415,7 @@ fn surface_check(s: &mut Session, p: &Value) -> Result<Value> {
     let options = surface_options(p, &mesh)?;
     let surface = match BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options) {
         Ok(surface) => surface,
-        Err(modelcraft_mesh::Error::Surface(d)) => {
+        Err(fieldcraft_mesh::Error::Surface(d)) => {
             return Ok(json!({"valid": false, "defects": {"count": d.total, "listed": d.listed.iter().map(defect_json).collect::<Vec<_>>()}}));
         }
         Err(e) => return Err(e.into()),
@@ -511,8 +511,8 @@ mod tests {
 
     #[test]
     fn a_tessellated_block_is_a_valid_boundary() {
-        use modelcraft_mesh::surface::{BoundarySurface, FeatureKind, SurfaceOptions};
-        let mesh = modelcraft_geometry::block([0.0; 3], [2.0, 3.0, 4.0]).unwrap().tessellate(0.01).unwrap();
+        use fieldcraft_mesh::surface::{BoundarySurface, FeatureKind, SurfaceOptions};
+        let mesh = fieldcraft_geometry::block([0.0; 3], [2.0, 3.0, 4.0]).unwrap().tessellate(0.01).unwrap();
         let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
         let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).unwrap();
         assert!(s.points().len() < mesh.positions.len(), "the tessellation is a soup that welding joins");
@@ -535,9 +535,9 @@ mod tests {
     fn surface_check_on_an_open_design_and_on_imported_surfaces() {
         use std::sync::Arc;
 
-        use modelcraft_geometry::sample::{Plate, plate_design};
-        use modelcraft_geometry::tagged_mesh::TaggedSurface;
-        use modelcraft_geometry::{SurfaceMesh, open_design};
+        use fieldcraft_geometry::sample::{Plate, plate_design};
+        use fieldcraft_geometry::tagged_mesh::TaggedSurface;
+        use fieldcraft_geometry::{SurfaceMesh, open_design};
 
         let plate = Plate::default();
         let mut s = Session { design: Some(Arc::new(open_design(&plate_design(&plate).unwrap()).unwrap())), ..Session::default() };
@@ -590,8 +590,8 @@ mod tests {
     fn tet_generate_meshes_a_body_with_tags_and_appends() {
         use std::sync::Arc;
 
-        use modelcraft_geometry::open_design;
-        use modelcraft_geometry::sample::{Plate, plate_design};
+        use fieldcraft_geometry::open_design;
+        use fieldcraft_geometry::sample::{Plate, plate_design};
 
         let plate = Plate::default();
         let mut s = Session { design: Some(Arc::new(open_design(&plate_design(&plate).unwrap()).unwrap())), ..Session::default() };
@@ -599,7 +599,7 @@ mod tests {
         let elements = r["elements"].as_u64().unwrap() as usize;
         assert!(elements > 0, "{r}");
         assert_eq!(s.model.elements().len(), elements);
-        assert!(s.model.elements().values().all(|e| e.kind == modelcraft_model::ElementKind::Tet4));
+        assert!(s.model.elements().values().all(|e| e.kind == fieldcraft_model::ElementKind::Tet4));
         let (volume, boundary) = (r["volume"].as_f64().unwrap(), r["boundary_volume"].as_f64().unwrap());
         assert!((volume - boundary).abs() <= 1e-9 * boundary, "{r}");
         // Every element is on the body; boundary faces carry the 8 face names.
@@ -641,8 +641,8 @@ mod tests {
     fn tet_generate_honours_the_session_caps() {
         use std::sync::Arc;
 
-        use modelcraft_geometry::open_design;
-        use modelcraft_geometry::sample::{Plate, plate_design};
+        use fieldcraft_geometry::open_design;
+        use fieldcraft_geometry::sample::{Plate, plate_design};
 
         use crate::{EngineError, Limits};
 
@@ -650,7 +650,7 @@ mod tests {
         let mut s = Session { design: Some(design), limits: Limits { max_tets: 10, ..Limits::default() }, ..Session::default() };
         let plate = json!({"body": "Body1", "tolerance": 0.5});
         let refused = s.execute("mesh.tet.generate", &plate).unwrap_err();
-        assert!(matches!(refused, EngineError::Mesh(modelcraft_mesh::Error::Limit(_))), "{refused}");
+        assert!(matches!(refused, EngineError::Mesh(fieldcraft_mesh::Error::Limit(_))), "{refused}");
         assert!(s.model.elements().is_empty());
         let r = s.execute("mesh.tet.generate", &json!({"body": "Body1", "tolerance": 0.5, "max_tets": 1_000_000})).unwrap();
         assert!(r["elements"].as_u64().unwrap() > 0, "{r}");
@@ -660,8 +660,8 @@ mod tests {
     fn tet_generate_on_an_imported_surface_and_an_open_one() {
         use std::sync::Arc;
 
-        use modelcraft_geometry::SurfaceMesh;
-        use modelcraft_geometry::tagged_mesh::TaggedSurface;
+        use fieldcraft_geometry::SurfaceMesh;
+        use fieldcraft_geometry::tagged_mesh::TaggedSurface;
 
         let p = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         let t = vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]];
@@ -692,7 +692,7 @@ mod tests {
         assert_eq!(r["kind"], "quad8");
         let elements = r["elements"].as_u64().unwrap() as usize;
         assert!(elements > 20, "{r}");
-        assert!(s.model.elements().values().all(|e| e.kind == modelcraft_model::ElementKind::Quad8));
+        assert!(s.model.elements().values().all(|e| e.kind == fieldcraft_model::ElementKind::Quad8));
         assert!(s.model.nodes().values().all(|n| n.xyz[2] == 0.0));
         // Sets on the tagged edges carry the boundary condition and the load.
         for (cmd, params) in [
@@ -736,8 +736,8 @@ mod tests {
     fn planar_meshes_a_flat_face_of_a_design_with_edges_named_by_their_neighbours() {
         use std::sync::Arc;
 
-        use modelcraft_geometry::open_design;
-        use modelcraft_geometry::sample::{Plate, plate_design};
+        use fieldcraft_geometry::open_design;
+        use fieldcraft_geometry::sample::{Plate, plate_design};
 
         let design = open_design(&plate_design(&Plate::default()).unwrap()).unwrap();
         let names: Vec<String> = design.bodies[0].faces().iter().map(|f| f.name.clone()).collect();

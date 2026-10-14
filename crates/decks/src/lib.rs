@@ -1,7 +1,7 @@
 //! Solver decks: the solver-neutral model written as Abaqus input, Nastran bulk data and LS-DYNA
 //! keyword files. Each format is its own module (`abaqus`, `nastran`, `lsdyna`), written from the
 //! vendor's public reference manual in our own words; examples and expected files are our own.
-//! Writers read [`modelcraft_model::Model`] and its `resolve()` result, never another format.
+//! Writers read [`fieldcraft_model::Model`] and its `resolve()` result, never another format.
 //!
 //! Writers produce text; saving it is the caller's business (the engine's `deck.write`), so the
 //! crate stays free of the file system. [`FORMATS`] lists every writer by the name `deck.write`
@@ -15,8 +15,8 @@ pub mod nastran;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use modelcraft_model::nodal::edge_pressure;
-use modelcraft_model::{Diagnostic, Load, Model, Resolved, ResolvedDirection};
+use fieldcraft_model::nodal::edge_pressure;
+use fieldcraft_model::{Diagnostic, Load, Model, Resolved, ResolvedDirection};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
@@ -25,7 +25,7 @@ pub enum Error {
     Unsupported { format: &'static str, what: String },
     /// The model is not ready to write (its check failed).
     #[error(transparent)]
-    Model(#[from] modelcraft_model::Error),
+    Model(#[from] fieldcraft_model::Error),
     #[error("limit reached: {0}")]
     Limit(String),
 }
@@ -70,11 +70,11 @@ impl Format {
 /// stay (the check warns about the ones no step uses).
 pub fn with_steps(model: &Model, names: &[String]) -> Result<Model> {
     if names.is_empty() {
-        return Err(Error::Model(modelcraft_model::Error::Invalid("choose at least one step to write".into())));
+        return Err(Error::Model(fieldcraft_model::Error::Invalid("choose at least one step to write".into())));
     }
     if let Some(n) = names.iter().find(|n| model.step(n).is_none()) {
-        let shown: String = n.chars().take(modelcraft_model::MAX_NAME_LEN).collect();
-        return Err(Error::Model(modelcraft_model::Error::NotFound(format!("step `{shown}`"))));
+        let shown: String = n.chars().take(fieldcraft_model::MAX_NAME_LEN).collect();
+        return Err(Error::Model(fieldcraft_model::Error::NotFound(format!("step `{shown}`"))));
     }
     let mut out = model.clone();
     let dropped: Vec<String> = model.steps().iter().map(|s| s.name.clone()).filter(|s| !names.contains(s)).collect();
@@ -84,7 +84,7 @@ pub fn with_steps(model: &Model, names: &[String]) -> Result<Model> {
     Ok(out)
 }
 
-/// A fluid step: solved by ModelCraft's lattice Boltzmann solver, never written to a deck.
+/// A fluid step: solved by FieldCraft's lattice Boltzmann solver, never written to a deck.
 pub(crate) fn fluid_step(format: &'static str, step: &str) -> Error {
     Error::Unsupported { format, what: format!("fluid step `{step}` (solve it with solve.fluid; write the structural steps only)") }
 }
@@ -155,7 +155,7 @@ pub fn concentrated_loads<'a>(model: &Model, r: &Resolved, active: impl IntoIter
 
 /// The consistent nodal forces (degrees of freedom 1 and 2) of the active pressures on a 2D
 /// model's element edges, for formats that write them as concentrated loads: the model's edge
-/// integration ([`modelcraft_model::nodal::edge_pressure`]), a positive pressure pushing
+/// integration ([`fieldcraft_model::nodal::edge_pressure`]), a positive pressure pushing
 /// into the element, summed per node and direction; zero sums are left out.
 pub fn edge_pressure_loads<'a>(model: &Model, r: &Resolved, active: impl IntoIterator<Item = &'a str>) -> Result<BTreeMap<(u32, u8), f64>> {
     let mut out: BTreeMap<(u32, u8), f64> = BTreeMap::new();

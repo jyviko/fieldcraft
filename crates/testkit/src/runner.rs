@@ -13,11 +13,11 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::corpus::{self, CATEGORIES, Part};
-use modelcraft_geometry::{Design, FaceSurface, Measure, SurfaceMesh};
-use modelcraft_mesh::cdt::{CdtOptions, tetrahedralize};
-use modelcraft_mesh::hex::{HexOptions, Surface, hex_mesh};
-use modelcraft_mesh::size::UniformSize;
-use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
+use fieldcraft_geometry::{Design, FaceSurface, Measure, SurfaceMesh};
+use fieldcraft_mesh::cdt::{CdtOptions, tetrahedralize};
+use fieldcraft_mesh::hex::{HexOptions, Surface, hex_mesh};
+use fieldcraft_mesh::size::UniformSize;
+use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 
 pub const FILE: &str = "docs/meshing/corpus.md";
 /// Chordal tolerance of the boundary surface, relative to the part's bounding-box diagonal.
@@ -64,7 +64,7 @@ impl Stage for SurfaceVolume {
     }
 }
 
-/// Boundary surface preparation (`modelcraft_mesh::surface`): welded, closed, manifold, outward
+/// Boundary surface preparation (`fieldcraft_mesh::surface`): welded, closed, manifold, outward
 /// and free of self-intersections, or the first defects found, which keep the part from being
 /// volume meshed.
 struct BoundaryCheck;
@@ -89,7 +89,7 @@ impl Stage for BoundaryCheck {
     }
 }
 
-/// The constrained Delaunay tetrahedralization (`modelcraft_mesh::cdt`) of each body's boundary:
+/// The constrained Delaunay tetrahedralization (`fieldcraft_mesh::cdt`) of each body's boundary:
 /// tetrahedra, Steiner points on boundary edges, cavities refilled by gift-wrapping, and the
 /// validity gate on the rounded mesh (every tetrahedron positive, volume equal to the boundary's).
 struct TetCdt;
@@ -121,7 +121,7 @@ const HEX_RELATIVE_SIZE: f64 = 1.0 / 25.0;
 /// Characters of a "not meshed" reason kept in the table.
 const REASON_CHARS: usize = 240;
 
-/// Structured all-hex meshing (`modelcraft_mesh::hex`): the method that meshed each body, the
+/// Structured all-hex meshing (`fieldcraft_mesh::hex`): the method that meshed each body, the
 /// element count and the smallest scaled Jacobian of the hex8 mesh and of the hex20 mesh (mid-edge
 /// nodes on the geometry), or why no structured method fits.
 struct StructuredHex;

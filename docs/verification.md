@@ -14,11 +14,11 @@ Rules:
   material, loads, boundary conditions). We never run a commercial product and never copy its
   input files, manual text or figures; only the published numbers are used, with a citation.
 - Each case lives in `tests/oracle/<case>/`:
-  - `recipe.json` — the model as ModelCraft commands (or a SolidCraft recipe for geometry);
+  - `recipe.json` — the model as FieldCraft commands (or a SolidCraft recipe for geometry);
   - `expected.json` — the reference values with `kind` (theory | experiment | benchmark),
     `source` (citation: document, table or figure, page), `quantity`, `value`, `tolerance` and
     the reason for that tolerance (mesh, measurement scatter, model differences);
-  - `fixture.json` — ModelCraft's accepted result, written by `cargo xtask oracle --bless <case>`
+  - `fixture.json` — FieldCraft's accepted result, written by `cargo xtask oracle --bless <case>`
     only after the case passes against `expected.json`.
 - `cargo xtask oracle` runs every case, compares with `expected.json` (pass/fail with error) and
   with `fixture.json` (any change beyond the fixture tolerance fails CI, even if the reference
@@ -30,7 +30,7 @@ Rules:
 
 ## The case format
 
-`cargo xtask oracle` builds `modelcraft-testkit`'s `oracle` binary (release) once and runs every
+`cargo xtask oracle` builds `fieldcraft-testkit`'s `oracle` binary (release) once and runs every
 case through the command engine; the results are in [oracle.md](oracle.md).
 
 ```
@@ -40,7 +40,7 @@ cargo xtask oracle --bless nafems-le1   # freeze a passing case's results (or --
 cargo xtask oracle --quick              # skip cases marked "slow"
 ```
 
-- `recipe.json` is a script `modelcraft-cli run` also accepts: a JSON array of
+- `recipe.json` is a script `fieldcraft-cli run` also accepts: a JSON array of
   `{"command", "params"}`; a step may carry an `"id"` so a quantity can read its output. Meshes
   come from `mesh.block` (mapped hex, tet or wedge blocks with arcs and elliptical edges, named
   faces, edges and vertices that sets select), `mesh.tet.generate`, or nodes and elements written
@@ -56,7 +56,7 @@ cargo xtask oracle --quick              # skip cases marked "slow"
    "quantities": [{"id": "syy_D", "quantity": "σ_yy at D (2, 0)",
      "measure": {"command": "solve.probe", "params": {"step": "Load", "at": [[2, 0, 0]]}, "pointer": "/nodes/0/stress/1"},
      "value": 92.7, "tolerance": {"relative": 0.01}, "reason": "why this tolerance",
-     "known_failure": "optional: why ModelCraft misses the reference today"}]}
+     "known_failure": "optional: why FieldCraft misses the reference today"}]}
   ```
   A measure reads a JSON pointer either from a recipe step's output (`"from": "<id>"`) or from a
   command run after the recipe (`"command"`, `"params"`); an optional `"scale"` multiplies it.

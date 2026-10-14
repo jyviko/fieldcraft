@@ -32,7 +32,7 @@ impl Class {
     }
 }
 
-/// The layering table. Names are package names without the `modelcraft-`
+/// The layering table. Names are package names without the `fieldcraft-`
 /// prefix.
 pub const TABLE: &[(&str, Class)] = &[
     // L0: the solver-neutral model.
@@ -58,7 +58,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("mcp", Class::Layer(7)),
     ("testkit", Class::Testkit),
     // apps and tooling
-    ("modelcraft", Class::Exempt),
+    ("fieldcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
     ("xtask", Class::Exempt),
@@ -92,7 +92,7 @@ pub const TESTKIT_LAYER: u8 = UI_MIN_LAYER + 1;
 const APPS_LAYER: u8 = TESTKIT_LAYER + 1;
 
 pub fn short_name(pkg: &str) -> &str {
-    pkg.strip_prefix("modelcraft-").unwrap_or(pkg)
+    pkg.strip_prefix("fieldcraft-").unwrap_or(pkg)
 }
 
 pub fn classify(pkg: &str) -> Option<Class> {
@@ -151,13 +151,13 @@ impl std::fmt::Display for Violation {
                 write!(f, "{krate}: standalone crate must not depend on workspace crate {dep}")
             }
             Violation::TestkitAsNormalDep { krate } => {
-                write!(f, "{krate}: modelcraft-testkit may only be a dev-dependency")
+                write!(f, "{krate}: fieldcraft-testkit may only be a dev-dependency")
             }
             Violation::UiBelowUiLayer { krate, dep, layer } => {
                 write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L{UI_MIN_LAYER}+")
             }
             Violation::SolidCraftOutsideGeometry { krate, dep } => {
-                write!(f, "{krate} depends on `{dep}`; only modelcraft-{SOLIDCRAFT_GATEWAY} may use SolidCraft")
+                write!(f, "{krate} depends on `{dep}`; only fieldcraft-{SOLIDCRAFT_GATEWAY} may use SolidCraft")
             }
         }
     }
@@ -263,92 +263,92 @@ mod tests {
     #[test]
     fn clean_downward_graph_passes() {
         let g = [
-            c("modelcraft-model", &[("serde", Normal, false)]),
-            c("modelcraft-doc", &[("modelcraft-model", Normal, true)]),
-            c("modelcraft-engine", &[("modelcraft-doc", Normal, true), ("modelcraft-testkit", Dev, true)]),
-            c("modelcraft-ui-egui", &[("modelcraft-engine", Normal, true), ("egui", Normal, false)]),
-            c("modelcraft-cli", &[("modelcraft-ui-egui", Normal, true)]),
+            c("fieldcraft-model", &[("serde", Normal, false)]),
+            c("fieldcraft-doc", &[("fieldcraft-model", Normal, true)]),
+            c("fieldcraft-engine", &[("fieldcraft-doc", Normal, true), ("fieldcraft-testkit", Dev, true)]),
+            c("fieldcraft-ui-egui", &[("fieldcraft-engine", Normal, true), ("egui", Normal, false)]),
+            c("fieldcraft-cli", &[("fieldcraft-ui-egui", Normal, true)]),
         ];
         assert!(check(&g).is_empty(), "{:?}", check(&g));
     }
 
     #[test]
     fn upward_dependency_flagged() {
-        let v = check(&[c("modelcraft-doc", &[("modelcraft-engine", Normal, true)])]);
+        let v = check(&[c("fieldcraft-doc", &[("fieldcraft-engine", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 4, to: 6, .. }]));
-        let v = check(&[c("modelcraft-fem", &[("modelcraft-solver", Normal, true)])]);
+        let v = check(&[c("fieldcraft-fem", &[("fieldcraft-solver", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 1, to: 2, .. }]));
     }
 
     #[test]
     fn sideways_dependency_flagged() {
-        let v = check(&[c("modelcraft-mesh", &[("modelcraft-fem", Normal, true)])]);
+        let v = check(&[c("fieldcraft-mesh", &[("fieldcraft-fem", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 1, to: 1, .. }]));
     }
 
     #[test]
     fn self_dev_dependency_ignored() {
-        assert!(check(&[c("modelcraft-doc", &[("modelcraft-doc", Dev, true)])]).is_empty());
+        assert!(check(&[c("fieldcraft-doc", &[("fieldcraft-doc", Dev, true)])]).is_empty());
     }
 
     #[test]
     fn upward_dev_dependency_flagged() {
-        let v = check(&[c("modelcraft-model", &[("modelcraft-doc", Dev, true)])]);
+        let v = check(&[c("fieldcraft-model", &[("fieldcraft-doc", Dev, true)])]);
         assert!(matches!(v[..], [Violation::Upward { kind: Dev, .. }]));
     }
 
     #[test]
     fn solvers_sit_above_the_kernels() {
         let g = [
-            c("modelcraft-fem", &[("modelcraft-model", Normal, true)]),
-            c("modelcraft-solver", &[("modelcraft-fem", Normal, true), ("modelcraft-mesh", Normal, true)]),
-            c("modelcraft-engine", &[("modelcraft-solver", Normal, true)]),
+            c("fieldcraft-fem", &[("fieldcraft-model", Normal, true)]),
+            c("fieldcraft-solver", &[("fieldcraft-fem", Normal, true), ("fieldcraft-mesh", Normal, true)]),
+            c("fieldcraft-engine", &[("fieldcraft-solver", Normal, true)]),
         ];
         assert!(check(&g).is_empty(), "{:?}", check(&g));
-        let v = check(&[c("modelcraft-solver", &[("modelcraft-engine", Normal, true)])]);
+        let v = check(&[c("fieldcraft-solver", &[("fieldcraft-engine", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 2, to: 6, .. }]));
-        let v = check(&[c("modelcraft-engine", &[("modelcraft-cli", Normal, true)])]);
+        let v = check(&[c("fieldcraft-engine", &[("fieldcraft-cli", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 6, to: APPS_LAYER, .. }]));
     }
 
     #[test]
     fn ui_crates_below_the_ui_layer_flagged() {
         for dep in ["egui", "eframe", "winit", "egui_kittest", "rfd", "bevy_ecs", "bevy"] {
-            let v = check(&[c("modelcraft-engine", &[(dep, Normal, false)])]);
+            let v = check(&[c("fieldcraft-engine", &[(dep, Normal, false)])]);
             assert!(matches!(v[..], [Violation::UiBelowUiLayer { layer: 6, .. }]), "{dep}");
-            let v = check(&[c("modelcraft-solver", &[(dep, Normal, false)])]);
+            let v = check(&[c("fieldcraft-solver", &[(dep, Normal, false)])]);
             assert!(matches!(v[..], [Violation::UiBelowUiLayer { layer: 2, .. }]), "{dep}");
         }
-        assert!(check(&[c("modelcraft-engine", &[("egui_extras_not", Normal, false)])]).is_empty());
-        assert!(check(&[c("modelcraft-ui-egui", &[("winit", Normal, false)])]).is_empty());
+        assert!(check(&[c("fieldcraft-engine", &[("egui_extras_not", Normal, false)])]).is_empty());
+        assert!(check(&[c("fieldcraft-ui-egui", &[("winit", Normal, false)])]).is_empty());
     }
 
     #[test]
     fn only_geometry_uses_solidcraft() {
-        assert!(check(&[c("modelcraft-geometry", &[("solidcraft-kernel", Normal, false)])]).is_empty());
-        let v = check(&[c("modelcraft-mesh", &[("solidcraft-geom", Normal, false)])]);
+        assert!(check(&[c("fieldcraft-geometry", &[("solidcraft-kernel", Normal, false)])]).is_empty());
+        let v = check(&[c("fieldcraft-mesh", &[("solidcraft-geom", Normal, false)])]);
         assert!(matches!(v[..], [Violation::SolidCraftOutsideGeometry { .. }]));
     }
 
     #[test]
     fn unregistered_crate_is_error() {
-        let v = check(&[c("modelcraft-mystery", &[])]);
-        assert!(matches!(&v[..], [Violation::Unregistered { krate }] if krate == "modelcraft-mystery"));
+        let v = check(&[c("fieldcraft-mystery", &[])]);
+        assert!(matches!(&v[..], [Violation::Unregistered { krate }] if krate == "fieldcraft-mystery"));
         assert!(v[0].to_string().contains("register"));
     }
 
     #[test]
     fn testkit_only_as_dev_dependency() {
-        let v = check(&[c("modelcraft-doc", &[("modelcraft-testkit", Normal, true)])]);
+        let v = check(&[c("fieldcraft-doc", &[("fieldcraft-testkit", Normal, true)])]);
         assert!(matches!(v[..], [Violation::TestkitAsNormalDep { .. }]));
-        assert!(check(&[c("modelcraft-doc", &[("modelcraft-testkit", Dev, true)])]).is_empty());
-        assert!(check(&[c("modelcraft-testkit", &[("modelcraft-engine", Normal, true)])]).is_empty());
+        assert!(check(&[c("fieldcraft-doc", &[("fieldcraft-testkit", Dev, true)])]).is_empty());
+        assert!(check(&[c("fieldcraft-testkit", &[("fieldcraft-engine", Normal, true)])]).is_empty());
     }
 
     #[test]
     fn apps_and_xtask_exempt() {
-        for app in ["modelcraft", "modelcraft-cli", "xtask"] {
-            assert!(check(&[c(app, &[("egui", Normal, false), ("modelcraft-ui-egui", Normal, true)])]).is_empty());
+        for app in ["fieldcraft", "fieldcraft-cli", "xtask"] {
+            assert!(check(&[c(app, &[("egui", Normal, false), ("fieldcraft-ui-egui", Normal, true)])]).is_empty());
         }
     }
 
@@ -356,17 +356,17 @@ mod tests {
     fn metadata_parsing() {
         let meta: Value = serde_json::from_str(
             r#"{"packages":[
-                {"name":"modelcraft-doc","dependencies":[
-                    {"name":"modelcraft-model","kind":null,"path":"/x/crates/model"},
+                {"name":"fieldcraft-doc","dependencies":[
+                    {"name":"fieldcraft-model","kind":null,"path":"/x/crates/model"},
                     {"name":"serde","kind":null},
                     {"name":"proptest","kind":"dev"}]},
-                {"name":"modelcraft-model","dependencies":[]}
+                {"name":"fieldcraft-model","dependencies":[]}
             ]}"#,
         )
         .unwrap();
         let g = from_metadata(&meta).unwrap();
         assert_eq!(g.len(), 2);
-        let doc = g.iter().find(|c| c.name == "modelcraft-doc").unwrap();
+        let doc = g.iter().find(|c| c.name == "fieldcraft-doc").unwrap();
         assert!(doc.deps[0].workspace && !doc.deps[1].workspace);
         assert_eq!(doc.deps[2].kind, Dev);
         assert!(check(&g).is_empty());

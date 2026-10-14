@@ -85,7 +85,7 @@ fn grid<const D: usize>(
     let count = (nu + 1).checked_mul(nv + 1).filter(|&c| c <= MAX_GRID_NODES);
     let count = count.ok_or_else(|| Error::Limit(format!("a {nu} × {nv} grid exceeds {MAX_GRID_NODES} nodes")))?;
     for side in [bottom, right, top, left] {
-        modelcraft_model::check_coordinates(side.as_flattened())?;
+        fieldcraft_model::check_coordinates(side.as_flattened())?;
     }
     let corner = |s: &[[f64; D]], last: bool| if last { s.last().copied() } else { s.first().copied() };
     let (p00, p10, p01, p11) = match (corner(bottom, false), corner(bottom, true), corner(top, false), corner(top, true)) {

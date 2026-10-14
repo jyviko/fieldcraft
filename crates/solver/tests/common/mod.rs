@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use modelcraft_model::{
+use fieldcraft_model::{
     BoundaryCondition, Coupling, CouplingKind, Dofs, Elastic, ElementFace, ElementKind, Formulation, Integration, Load, Material, Model, Procedure,
     ReferencePoint, Section, SectionKind, Set, Step, Symmetry, Target,
 };

@@ -54,7 +54,7 @@ mod tests;
 
 use std::collections::HashMap;
 
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 use crate::delaunay::Triangulation;
 use crate::predicates::{GenericPoint, Point3, Sign};

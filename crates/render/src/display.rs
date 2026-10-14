@@ -12,7 +12,7 @@
 //!
 //! The output is deterministic: elements come out in label order, edges sorted.
 
-use modelcraft_model::{ElementKind, Model};
+use fieldcraft_model::{ElementKind, Model};
 
 use crate::{Aabb3, Vec3};
 

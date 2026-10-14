@@ -1,4 +1,4 @@
-//! `cargo xtask app-icon`: draw ModelCraft's application icon family with VectorCraft.
+//! `cargo xtask app-icon`: draw FieldCraft's application icon family with VectorCraft.
 //!
 //! The mark is an L-shaped bracket with a bolt hole, drawn in isometric view and covered by a
 //! structured hexahedral mesh (an O-grid around the hole). The faces are separated by
@@ -12,9 +12,9 @@
 //! - `icon-small.vectorcraft`, `icon-small.svg`, `icon-small.png`: simplified artwork (no mesh,
 //!   no floor grid, faces meeting edge to edge so the tones alone separate them) for 16–32 px.
 //! - `icon.iconset/` (sips), `icon.icns` (iconutil) and `icon.ico` (ImageMagick).
-//! - `ModelCraft.icon/`: an Icon Composer document with separate floor-grid (Default and Dark),
+//! - `FieldCraft.icon/`: an Icon Composer document with separate floor-grid (Default and Dark),
 //!   part and mesh layers; their editable sources are `layers/*.vectorcraft`.
-//! - `Assets.car`: Apple's actool compilation of `ModelCraft.icon`, when Xcode 26 or later is
+//! - `Assets.car`: Apple's actool compilation of `FieldCraft.icon`, when Xcode 26 or later is
 //!   installed (otherwise the step is skipped with a note and the checked-in catalog stays).
 //!
 //! macOS only (sips, iconutil); ImageMagick (`magick`) writes the Windows icon.
@@ -498,10 +498,10 @@ fn composite(detail: Detail, appearance: Appearance) -> Result<Doc, String> {
         layers.push(mesh_layer()?);
     }
     let title = match (detail, appearance) {
-        (Detail::Full, Appearance::Light) => "ModelCraft application icon",
-        (Detail::Full, Appearance::Dark) => "ModelCraft application icon (dark preview)",
-        (Detail::Small, Appearance::Light) => "ModelCraft application icon, small sizes",
-        (Detail::Small, Appearance::Dark) => "ModelCraft application icon, small sizes (dark preview)",
+        (Detail::Full, Appearance::Light) => "FieldCraft application icon",
+        (Detail::Full, Appearance::Dark) => "FieldCraft application icon (dark preview)",
+        (Detail::Small, Appearance::Light) => "FieldCraft application icon, small sizes",
+        (Detail::Small, Appearance::Dark) => "FieldCraft application icon, small sizes (dark preview)",
     };
     Ok(Doc { title, layers })
 }
@@ -617,7 +617,7 @@ fn icon_json() -> Value {
 pub fn run(root: &Path) -> Result<(), String> {
     let dir = root.join("assets/app-icon");
     let layers = dir.join("layers");
-    let bundle = dir.join("ModelCraft.icon");
+    let bundle = dir.join("FieldCraft.icon");
     let assets = bundle.join("Assets");
     let iconset = dir.join("icon.iconset");
     let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
@@ -639,10 +639,10 @@ pub fn run(root: &Path) -> Result<(), String> {
     // Icon Composer layers: the system supplies the backdrop.
     let single = |title, layer| Doc { title, layers: vec![layer] };
     let layer_docs = [
-        ("01-floor", single("ModelCraft icon floor grid", floor_layer(Appearance::Light))),
-        ("01-floor-dark", single("ModelCraft icon floor grid (Dark)", floor_layer(Appearance::Dark))),
-        ("02-part", single("ModelCraft icon part", part_layer(Detail::Full)?)),
-        ("03-mesh", single("ModelCraft icon mesh", mesh_layer()?)),
+        ("01-floor", single("FieldCraft icon floor grid", floor_layer(Appearance::Light))),
+        ("01-floor-dark", single("FieldCraft icon floor grid (Dark)", floor_layer(Appearance::Dark))),
+        ("02-part", single("FieldCraft icon part", part_layer(Detail::Full)?)),
+        ("03-mesh", single("FieldCraft icon mesh", mesh_layer()?)),
     ];
     for (name, doc) in &layer_docs {
         vectorcraft(doc, &layers.join(format!("{name}.vectorcraft")), &[assets.join(format!("{name}.svg"))])?;
@@ -682,7 +682,7 @@ pub fn run(root: &Path) -> Result<(), String> {
             "--minimum-deployment-target",
             "11.0",
             "--app-icon",
-            "ModelCraft",
+            "FieldCraft",
             "--output-partial-info-plist",
             path_str(&partial)?,
             "--output-format",
@@ -692,9 +692,9 @@ pub fn run(root: &Path) -> Result<(), String> {
     match compiled {
         Ok(()) => {
             std::fs::copy(work.join("Assets.car"), dir.join("Assets.car")).map_err(|e| format!("Assets.car: {e}"))?;
-            println!("app-icon: compiled ModelCraft.icon into assets/app-icon/Assets.car");
+            println!("app-icon: compiled FieldCraft.icon into assets/app-icon/Assets.car");
         }
-        Err(e) => println!("app-icon: note: actool could not compile ModelCraft.icon, Assets.car left as it was ({e})"),
+        Err(e) => println!("app-icon: note: actool could not compile FieldCraft.icon, Assets.car left as it was ({e})"),
     }
     println!("app-icon: wrote assets/app-icon (dark previews in {})", work.display());
     Ok(())

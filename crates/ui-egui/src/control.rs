@@ -8,7 +8,7 @@
 
 use std::sync::mpsc::Sender;
 
-use modelcraft_render::StandardView;
+use fieldcraft_render::StandardView;
 use serde_json::{Value, json};
 
 use crate::capture::CaptureSize;
@@ -79,9 +79,9 @@ fn render_dim(p: &Value, key: &str, default: usize) -> Result<usize, String> {
         None | Some(Value::Null) => Ok(default),
         Some(v) => v
             .as_f64()
-            .filter(|x| x.fract() == 0.0 && (1.0..=modelcraft_render::MAX_DIM as f64).contains(x))
+            .filter(|x| x.fract() == 0.0 && (1.0..=fieldcraft_render::MAX_DIM as f64).contains(x))
             .map(|x| x as usize)
-            .ok_or_else(|| format!("`{key}` must be a whole number of pixels in 1..={}", modelcraft_render::MAX_DIM)),
+            .ok_or_else(|| format!("`{key}` must be a whole number of pixels in 1..={}", fieldcraft_render::MAX_DIM)),
     }
 }
 
@@ -102,7 +102,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             wrap(app.run_script(steps).map(|()| json!({"journal": app.session.journal.len()})))
         }
         "engine.commands" => {
-            ok(Value::Array(modelcraft_engine::commands().iter().map(|c| json!({"id": c.id, "label": c.label, "params": c.params})).collect()))
+            ok(Value::Array(fieldcraft_engine::commands().iter().map(|c| json!({"id": c.id, "label": c.label, "params": c.params})).collect()))
         }
         "ui.inspect" => ok(json!({
             "ui": app.ui,
@@ -303,7 +303,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 .take(1000)
                 .map(|v| {
                     let c = |i: usize| v.get(i).and_then(Value::as_f64).unwrap_or(f64::NAN);
-                    crate::viewport::to_screen(app, modelcraft_render::Vec3::new(c(0), c(1), c(2))).map_or(Value::Null, |q| json!([q.x, q.y]))
+                    crate::viewport::to_screen(app, fieldcraft_render::Vec3::new(c(0), c(1), c(2))).map_or(Value::Null, |q| json!([q.x, q.y]))
                 })
                 .collect();
             ok(json!(pts))
@@ -384,12 +384,12 @@ pub fn capture_to(app: &mut ModelApp, size: CaptureSize, path: Option<&str>) -> 
     }
 }
 
-/// Save a screenshot as PNG: at `path`, or `modelcraft-shot.png` in the temporary folder.
+/// Save a screenshot as PNG: at `path`, or `fieldcraft-shot.png` in the temporary folder.
 pub fn save_screenshot(image: &egui::ColorImage, path: Option<&str>) -> Value {
     let [w, h] = image.size;
     let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
-    let Some(png) = modelcraft_render::png(w, h, &rgba) else { return json!({"ok": false, "error": "could not encode the screenshot"}) };
-    let path = path.map(str::to_string).unwrap_or_else(|| std::env::temp_dir().join("modelcraft-shot.png").to_string_lossy().to_string());
+    let Some(png) = fieldcraft_render::png(w, h, &rgba) else { return json!({"ok": false, "error": "could not encode the screenshot"}) };
+    let path = path.map(str::to_string).unwrap_or_else(|| std::env::temp_dir().join("fieldcraft-shot.png").to_string_lossy().to_string());
     match std::fs::write(&path, &png) {
         Ok(()) => json!({"ok": true, "result": {"path": path, "width": w, "height": h}}),
         Err(e) => json!({"ok": false, "error": format!("{path}: {e}")}),
@@ -398,7 +398,7 @@ pub fn save_screenshot(image: &egui::ColorImage, path: Option<&str>) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use modelcraft_engine::Session;
+    use fieldcraft_engine::Session;
 
     use super::*;
 
@@ -413,12 +413,12 @@ mod tests {
     #[test]
     fn engine_view_and_settings_methods() {
         let mut app = ModelApp::new(Session::default());
-        let r = call(&mut app, "engine.script", json!({"commands": modelcraft_engine::sample::script()}));
+        let r = call(&mut app, "engine.script", json!({"commands": fieldcraft_engine::sample::script()}));
         assert_eq!(r["ok"], true, "{r}");
         let r = call(&mut app, "engine.execute", json!({"command": "model.info"}));
         assert_eq!(r["result"]["elements"]["hex8"], 64);
         assert_eq!(call(&mut app, "engine.execute", json!({"command": "no.such"}))["ok"], false);
-        assert!(call(&mut app, "engine.commands", json!({}))["result"].as_array().is_some_and(|a| a.len() == modelcraft_engine::commands().len()));
+        assert!(call(&mut app, "engine.commands", json!({}))["result"].as_array().is_some_and(|a| a.len() == fieldcraft_engine::commands().len()));
         let r = call(&mut app, "ui.set", json!({"style": "wireframe", "show_nodes": true}));
         assert_eq!(r["result"]["style"], "wireframe");
         assert_eq!(app.ui.style, crate::Style::Wireframe);
@@ -445,8 +445,8 @@ mod tests {
     #[test]
     fn ui_render_writes_a_png_of_the_model() {
         let mut app = ModelApp::new(Session::default());
-        app.run_script(&modelcraft_engine::sample::script()).unwrap();
-        let path = std::env::temp_dir().join(format!("modelcraft-render-{}.png", std::process::id()));
+        app.run_script(&fieldcraft_engine::sample::script()).unwrap();
+        let path = std::env::temp_dir().join(format!("fieldcraft-render-{}.png", std::process::id()));
         let r = call(&mut app, "ui.render", json!({"path": path.to_string_lossy(), "width": 120, "height": 80}));
         assert_eq!(r["ok"], true, "{r}");
         let bytes = std::fs::read(&path).unwrap();
@@ -458,8 +458,8 @@ mod tests {
     #[test]
     fn ui_render_refuses_hostile_sizes() {
         let mut app = ModelApp::new(Session::default());
-        app.run_script(&modelcraft_engine::sample::script()).unwrap();
-        let path = std::env::temp_dir().join(format!("modelcraft-render-hostile-{}.png", std::process::id()));
+        app.run_script(&fieldcraft_engine::sample::script()).unwrap();
+        let path = std::env::temp_dir().join(format!("fieldcraft-render-hostile-{}.png", std::process::id()));
         let path = path.to_string_lossy();
         for (w, h) in [
             (json!(100_000), json!(100_000)),
@@ -526,7 +526,7 @@ mod tests {
         let r = call(&mut app, "ui.toolbar", json!({}));
         assert_eq!(r["result"]["tab"], "mesh", "{r}");
         let entries = r["result"]["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), modelcraft_engine::catalogue::CATALOGUE.len());
+        assert_eq!(entries.len(), fieldcraft_engine::catalogue::CATALOGUE.len());
         let soon = entries.iter().find(|e| e["id"] == "mesh.order.quadratic").unwrap();
         assert_eq!((soon["coming_soon"].as_str(), soon["command"].is_null()), (Some("M2"), true));
         assert_eq!(call(&mut app, "ui.set", json!({"tab": "nope"}))["ok"], false);
@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn ui_capture_saves_the_whole_window() {
         let mut app = ModelApp::new(Session::default());
-        let path = std::env::temp_dir().join(format!("modelcraft-capture-{}.png", std::process::id()));
+        let path = std::env::temp_dir().join(format!("fieldcraft-capture-{}.png", std::process::id()));
         let r = call(&mut app, "ui.capture", json!({"path": path.to_string_lossy(), "width": 640, "height": 400, "scale": 1}));
         assert_eq!(
             (r["ok"].as_bool(), r["result"]["width"].as_u64(), r["result"]["offscreen"].as_bool()),
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn screenshots_are_saved_as_png() {
         let image = egui::ColorImage::filled([4, 3], egui::Color32::RED);
-        let path = std::env::temp_dir().join(format!("modelcraft-shot-{}.png", std::process::id()));
+        let path = std::env::temp_dir().join(format!("fieldcraft-shot-{}.png", std::process::id()));
         let r = save_screenshot(&image, Some(&path.to_string_lossy()));
         assert_eq!(r["ok"], true, "{r}");
         assert!(std::fs::read(&path).unwrap().starts_with(&[0x89, b'P', b'N', b'G']));

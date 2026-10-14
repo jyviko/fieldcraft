@@ -52,7 +52,7 @@ mod card;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use modelcraft_model::{
+use fieldcraft_model::{
     BeamProfile, Coupling, CouplingKind, Dofs, Elastic, ElementKind, Formulation, Hardening, Integration, Load, MAX_LABEL, Model, OutputVariable,
     Plastic, Procedure, Resolved, SectionKind, Step,
 };
@@ -688,9 +688,9 @@ impl<'m> Deck<'m> {
 
     fn emit(&self) -> Result<String> {
         let mut out = String::new();
-        out.push_str("$ Nastran bulk data written by ModelCraft\n");
+        out.push_str("$ Nastran bulk data written by FieldCraft\n");
         let _ = writeln!(out, "$ units: {}", self.model.units().label());
-        let _ = writeln!(out, "SOL {}\nCEND\nTITLE = ModelCraft model\nECHO = NONE", self.sol);
+        let _ = writeln!(out, "SOL {}\nCEND\nTITLE = FieldCraft model\nECHO = NONE", self.sol);
         for (i, sub) in self.subcases.iter().enumerate() {
             let _ = writeln!(out, "SUBCASE {}", i + 1);
             let title: String = format!("  SUBTITLE = {}", sub.step.name).chars().take(72).collect();
@@ -945,7 +945,7 @@ impl<'m> Deck<'m> {
     }
 
     /// A `PLOAD4` for one element face, positive pushing into the element.
-    fn pressure(&self, sid: u32, f: modelcraft_model::ElementFace, magnitude: f64) -> Option<Card> {
+    fn pressure(&self, sid: u32, f: fieldcraft_model::ElementFace, magnitude: f64) -> Option<Card> {
         let el = self.model.element(f.element)?;
         let card = Card::new("PLOAD4").int(sid).int(f.element);
         if el.kind.dimension() == 2 {
@@ -1010,7 +1010,7 @@ fn plasticity(out: &mut String, name: &str, mid: u32, young: f64, plastic: &Plas
             write_named(out, &format!("stress-strain curve of {name}"), tid, Card::new("TABLES1").int(tid).end_line().reals(curve).text("ENDT"))
         }
         (Plastic::Table { .. }, None) | (Plastic::JohnsonCook { .. }, _) => {
-            Err(Error::Model(modelcraft_model::Error::Invalid(format!("material `{name}`: its plasticity was not planned for MATS1"))))
+            Err(Error::Model(fieldcraft_model::Error::Invalid(format!("material `{name}`: its plasticity was not planned for MATS1"))))
         }
     }
 }

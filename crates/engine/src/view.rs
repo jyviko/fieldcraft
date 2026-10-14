@@ -1,5 +1,5 @@
 //! Headless pictures of a session: the model, its geometry and the results display drawn with
-//! the CPU rasterizer of [`modelcraft_render`], with no window or GPU (the MCP server's
+//! the CPU rasterizer of [`fieldcraft_render`], with no window or GPU (the MCP server's
 //! screenshots without an app, docs/mcp.md).
 //!
 //! The picture follows the desktop viewport's conventions: geometry draws as faces with their
@@ -8,9 +8,9 @@
 //! deformed shape (automatic or chosen scale) with its contour bands. Animation is not drawn: a
 //! picture shows the full deformation (a mode at its positive shape).
 
-use modelcraft_model::ElementKind;
-use modelcraft_render::contour::{Bands, band_color, split_triangle};
-use modelcraft_render::{Aabb3, Camera, DisplayMesh, Rgb, Scene, SceneLine, SceneTri, StandardView, Vec3};
+use fieldcraft_model::ElementKind;
+use fieldcraft_render::contour::{Bands, band_color, split_triangle};
+use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Rgb, Scene, SceneLine, SceneTri, StandardView, Vec3};
 
 use crate::results::{displacements, field_values, magnitude, range};
 use crate::{EngineError, Result, Session};
@@ -181,7 +181,7 @@ pub fn render_png(s: &Session, view: StandardView, w: usize, h: usize, p: &Palet
     cam.set_view(view);
     cam.fit(&bounds);
     scene.radius = if bounds.is_empty() { 1.0 } else { (cam.target.dist(bounds.center()) + bounds.diagonal() * 0.5).max(1e-3) };
-    let png = modelcraft_render::render_png(&scene, &cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;
+    let png = fieldcraft_render::render_png(&scene, &cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;
     Ok((png, shown))
 }
 

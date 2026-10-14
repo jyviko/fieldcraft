@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use modelcraft_io::roots::Access;
+use fieldcraft_io::roots::Access;
 use serde_json::{Map, Value, json};
 
 use crate::backend::{Backend, PictureRequest};
@@ -29,7 +29,7 @@ const ANALYSES: &[(&str, &str)] =
 const VIEWS: &[&str] = &["iso", "home", "fit", "front", "back", "top", "bottom", "left", "right"];
 
 fn available<T: Copy>(table: &'static [T], command: fn(T) -> &'static str) -> impl Iterator<Item = T> {
-    table.iter().copied().filter(move |t| modelcraft_engine::find_command(command(*t)).is_some())
+    table.iter().copied().filter(move |t| fieldcraft_engine::find_command(command(*t)).is_some())
 }
 
 fn obj(props: Value, required: &[&str]) -> Value {
@@ -137,17 +137,17 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "open",
             "Open a file",
-            "Open by extension: a .modelcraft model (file.open: replaces the model; its design and meshes open again), a \
+            "Open by extension: a .fieldcraft model (file.open: replaces the model; its design and meshes open again), a \
              SolidCraft design .solidcraft (geometry.open: its bodies become the geometry) or a face-tagged .3mf mesh \
              (geometry.import.mesh: added as a surface).",
-            obj(json!({"path": string("Path to a .modelcraft, .solidcraft or .3mf file")}), &["path"]),
+            obj(json!({"path": string("Path to a .fieldcraft, .solidcraft or .3mf file")}), &["path"]),
             false,
             true,
         ),
         tool(
             "save",
             "Save the model",
-            "Save the model as a .modelcraft file (file.save): to `path`, or to the file it came from.",
+            "Save the model as a .fieldcraft file (file.save): to `path`, or to the file it came from.",
             obj(json!({"path": string("Path to save to (default: the model's file)")}), &[]),
             false,
             false,
@@ -406,10 +406,10 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Map<String, Value>) -> Result<V
             let path = str_arg(a, "path").ok_or("`path` is required")?;
             let ext = Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
             let command = match ext.as_deref() {
-                Some("modelcraft") => "file.open",
+                Some("fieldcraft") => "file.open",
                 Some("solidcraft") => "geometry.open",
                 Some("3mf") => "geometry.import.mesh",
-                _ => return Err("open: a .modelcraft model, a .solidcraft design or a .3mf mesh".into()),
+                _ => return Err("open: a .fieldcraft model, a .solidcraft design or a .3mf mesh".into()),
             };
             let r = b.execute(command, json!({"path": path}))?;
             Ok(json!({"command": command, "result": r}))
@@ -534,7 +534,7 @@ fn capture(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<(Vec<u8>, Valu
     let picture = b.picture(&request)?;
     let mut info = picture.info;
     if let Some(path) = &keep {
-        modelcraft_io::fs::write_atomic(path, &picture.png, false).map_err(|e| e.to_string())?;
+        fieldcraft_io::fs::write_atomic(path, &picture.png, false).map_err(|e| e.to_string())?;
         info["path"] = json!(path.to_string_lossy());
     }
     info["bytes"] = json!(picture.png.len());

@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft"
-description = "ModelCraft desktop app"
+name = "fieldcraft"
+description = "FieldCraft desktop app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,9 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
-modelcraft-engine = { workspace = true }
-modelcraft-ui-egui = { workspace = true }
-modelcraft-io = { workspace = true }
+fieldcraft-engine = { workspace = true }
+fieldcraft-ui-egui = { workspace = true }
+fieldcraft-io = { workspace = true }
 rfd = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }

@@ -35,7 +35,7 @@ pub enum Error {
     #[error("invalid boundary surface: {0}")]
     Surface(surface::Defects),
     #[error(transparent)]
-    Model(#[from] modelcraft_model::Error),
+    Model(#[from] fieldcraft_model::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -7,7 +7,7 @@
 //! follow SolidCraft's `viewport.rs` (MIT OR Apache-2.0), see ATTRIBUTION.md.
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
-use modelcraft_render::{StandardView, Vec3};
+use fieldcraft_render::{StandardView, Vec3};
 
 use crate::gpu::{GpuScene, ViewportCallback};
 use crate::icons::{self, Look};
@@ -144,14 +144,14 @@ fn paint_gpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
 fn paint_cpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: Rect) {
     let ppp = ui.ctx().pixels_per_point();
     // A window larger than the renderer's limit is drawn smaller and scaled up.
-    let (w, h) = modelcraft_render::fit_size((rect.width() * ppp) as usize, (rect.height() * ppp) as usize);
+    let (w, h) = fieldcraft_render::fit_size((rect.width() * ppp) as usize, (rect.height() * ppp) as usize);
     let size = [w, h];
     let cam = app.cam;
     let key = app.scene().0;
     let fresh = app.viewport.cpu.as_ref().is_some_and(|(_, k, c, s)| *k == key && *c == cam && *s == size);
     // A scene the renderer refused is reported once and not retried until it changes.
     if !fresh && app.viewport.cpu_failed != Some(key) {
-        let c = match modelcraft_render::render(&app.scene.1, &cam, w, h) {
+        let c = match fieldcraft_render::render(&app.scene.1, &cam, w, h) {
             Ok(c) => c,
             Err(e) => {
                 app.viewport.cpu = None;
@@ -167,7 +167,7 @@ fn paint_cpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
                 tex.set(image, egui::TextureOptions::LINEAR);
                 tex
             }
-            None => ui.ctx().load_texture("mc_viewport_cpu", image, egui::TextureOptions::LINEAR),
+            None => ui.ctx().load_texture("fc_viewport_cpu", image, egui::TextureOptions::LINEAR),
         };
         app.viewport.cpu = Some((tex, key, cam, size));
     }
@@ -184,7 +184,7 @@ const AXIS_RADIUS: f32 = 11.0;
 fn view_along(d: Vec3) -> StandardView {
     let mut best = (StandardView::Front, f64::NEG_INFINITY);
     for v in StandardView::ALL.into_iter().filter(|v| *v != StandardView::Iso) {
-        let mut c = modelcraft_render::Camera::default();
+        let mut c = fieldcraft_render::Camera::default();
         c.set_view(v);
         let score = c.back().dot(d);
         if score > best.1 {
@@ -231,7 +231,7 @@ fn axis_view(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
         painter.circle_stroke(*at, AXIS_RADIUS, Stroke::new(if hot { 2.0 } else { 1.0 }, if hot { t.accent } else { ink }));
         painter.text(*at, egui::Align2::CENTER_CENTER, *name, egui::FontId::proportional(11.0), ink);
     }
-    let resp = ui.interact(area, ui.id().with("mc_axis_view"), Sense::click());
+    let resp = ui.interact(area, ui.id().with("fc_axis_view"), Sense::click());
     if let Some(i) = hovered
         && let Some((name, d, ..)) = tips.get(i)
     {
@@ -242,7 +242,7 @@ fn axis_view(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
         }
     }
     let home = Rect::from_center_size(pos2(c.x - 44.0, c.y - 44.0), Vec2::splat(18.0));
-    let hr = ui.interact(home, ui.id().with("mc_axis_home"), Sense::click());
+    let hr = ui.interact(home, ui.id().with("fc_axis_home"), Sense::click());
     if hr.hovered() {
         painter.rect_filled(home.expand(2.0), 3.0, t.hover);
     }
@@ -276,7 +276,7 @@ fn nav_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
     let mut style_button = None;
     for (i, (key, icon, tip)) in NAV.iter().enumerate() {
         let br = Rect::from_min_size(pos2(bar.left() + 5.0 + i as f32 * 30.0, bar.top() + 2.0), Vec2::splat(26.0));
-        let resp = ui.interact(br, ui.id().with(("mc_nav", *key)), Sense::click());
+        let resp = ui.interact(br, ui.id().with(("fc_nav", *key)), Sense::click());
         let active = match *key {
             "orbit" => app.nav == NavMode::Orbit,
             "pan" => app.nav == NavMode::Pan,

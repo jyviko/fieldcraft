@@ -7,7 +7,7 @@
 //! ATTRIBUTION.md.
 
 use egui::{Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2, pos2, vec2};
-use modelcraft_model::Model;
+use fieldcraft_model::Model;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -267,7 +267,7 @@ enum Act {
 pub fn browser(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
     let mut acts: Vec<Act> = Vec::new();
-    egui::Panel::left("mc_browser")
+    egui::Panel::left("fc_browser")
         .exact_size(WIDTH)
         .resizable(false)
         .show_separator_line(true)
@@ -276,7 +276,7 @@ pub fn browser(app: &mut ModelApp, ui: &mut egui::Ui) {
             app.place("browser", ui.max_rect());
             ui.label(RichText::new("BROWSER").font(crate::theme::label_font(ui.ctx(), 10.5)).color(t.text_dim));
             ui.add_space(4.0);
-            egui::ScrollArea::vertical().id_salt("mc_browser_scroll").auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("fc_browser_scroll").auto_shrink([false, false]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 rows(app, ui, &mut acts);
             });
@@ -313,7 +313,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     draw_row(
         app,
         ui,
-        egui::Id::new("mc_row_root"),
+        egui::Id::new("fc_row_root"),
         &Row { icon: Some("ui.views"), label: &name, note: dirty.then(|| "unsaved".into()), ..Default::default() },
     );
     // Geometry.
@@ -323,7 +323,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     let r = draw_row(
         app,
         ui,
-        egui::Id::new("mc_row_geometry"),
+        egui::Id::new("fc_row_geometry"),
         &Row {
             depth: 1,
             fold: Some(open(app, "geometry")),
@@ -345,14 +345,14 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
             draw_row(
                 app,
                 ui,
-                egui::Id::new("mc_row_design"),
+                egui::Id::new("fc_row_design"),
                 &Row { depth: 2, icon: Some("geometry.open"), label: &label, note: Some(format!("{bodies} bodies")), ..Default::default() },
             );
             for (i, b) in d.bodies.iter().enumerate() {
                 draw_row(
                     app,
                     ui,
-                    egui::Id::new(("mc_row_body", i)),
+                    egui::Id::new(("fc_row_body", i)),
                     &Row { depth: 3, icon: Some("geometry.bodies"), label: &b.name, ..Default::default() },
                 );
             }
@@ -361,7 +361,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
             draw_row(
                 app,
                 ui,
-                egui::Id::new(("mc_row_surface", i)),
+                egui::Id::new(("fc_row_surface", i)),
                 &Row { depth: 2, icon: Some("geometry.import.mesh"), label: s, ..Default::default() },
             );
         }
@@ -369,7 +369,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
             draw_row(
                 app,
                 ui,
-                egui::Id::new("mc_row_no_geometry"),
+                egui::Id::new("fc_row_no_geometry"),
                 &Row { depth: 2, label: "No geometry: Open Design", dim: true, ..Default::default() },
             );
         }
@@ -379,7 +379,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     let r = draw_row(
         app,
         ui,
-        egui::Id::new("mc_row_mesh"),
+        egui::Id::new("fc_row_mesh"),
         &Row {
             depth: 1,
             fold: Some(open(app, "mesh")),
@@ -399,7 +399,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         let r = draw_row(
             app,
             ui,
-            egui::Id::new("mc_row_nodes"),
+            egui::Id::new("fc_row_nodes"),
             &Row {
                 depth: 2,
                 eye: Some(app.ui.show_nodes),
@@ -420,7 +420,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
             draw_row(
                 app,
                 ui,
-                egui::Id::new(("mc_row_kind", kind.name())),
+                egui::Id::new(("fc_row_kind", kind.name())),
                 &Row { depth: 2, swatch: Some(t.element(kind)), label: kind.name(), note: Some(format!("{n}")), ..Default::default() },
             );
         }
@@ -441,7 +441,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         let r = draw_row(
             app,
             ui,
-            egui::Id::new(("mc_row_group", key)),
+            egui::Id::new(("fc_row_group", key)),
             &Row {
                 depth: 1,
                 fold: Some(open(app, key)),
@@ -461,7 +461,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
                 let r = draw_row(
                     app,
                     ui,
-                    egui::Id::new(("mc_row_def", kind.stem(), &name)),
+                    egui::Id::new(("fc_row_def", kind.stem(), &name)),
                     &Row { depth: 2, icon: Some(kind.icon()), label: &name, selected, ..Default::default() },
                 );
                 if r.double {
@@ -478,7 +478,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     let r = draw_row(
         app,
         ui,
-        egui::Id::new("mc_row_results"),
+        egui::Id::new("fc_row_results"),
         &Row {
             depth: 1,
             fold: Some(open(app, "results")),
@@ -499,7 +499,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
             let r = draw_row(
                 app,
                 ui,
-                egui::Id::new(("mc_row_result", &step)),
+                egui::Id::new(("fc_row_result", &step)),
                 &Row { depth: 2, icon: Some("results.deformed"), label: &label, selected, dim: !current, ..Default::default() },
             );
             if r.clicked {
@@ -511,14 +511,14 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
 
 #[cfg(test)]
 mod tests {
-    use modelcraft_engine::Session;
+    use fieldcraft_engine::Session;
 
     use super::*;
 
     #[test]
     fn definitions_read_back_as_their_parameters() {
         let mut app = ModelApp::new(Session::default());
-        app.run_script(&modelcraft_engine::sample::cantilever()).unwrap();
+        app.run_script(&fieldcraft_engine::sample::cantilever()).unwrap();
         let m = &app.session.model;
         assert_eq!(Def::Step.names(m), ["Load", "Modes"]);
         let steel = definition(m, Def::Material, "Steel").unwrap();
@@ -537,9 +537,9 @@ mod tests {
             Def::FluidDomain,
         ] {
             for verb in ["create", "edit", "delete"] {
-                assert!(modelcraft_engine::find_command(&kind.command(verb)).is_some(), "{kind:?} {verb}");
+                assert!(fieldcraft_engine::find_command(&kind.command(verb)).is_some(), "{kind:?} {verb}");
             }
-            assert!(modelcraft_engine::catalogue::find(kind.icon()).is_some());
+            assert!(fieldcraft_engine::catalogue::find(kind.icon()).is_some());
         }
     }
 }

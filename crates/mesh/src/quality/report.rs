@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use modelcraft_model::{Element, ElementKind, Model, check_coordinates};
+use fieldcraft_model::{Element, ElementKind, Model, check_coordinates};
 
 use super::{ElementQuality, JacobianCheck, Metric, Validity, element_quality, element_validity, is_measured};
 use crate::{Error, Result};
@@ -49,7 +49,7 @@ fn coordinates(model: &Model, label: u32, element: &Element) -> Result<Vec<[f64;
         .nodes
         .iter()
         .map(|n| {
-            model.node(*n).map(|node| node.xyz).ok_or_else(|| Error::Model(modelcraft_model::Error::NotFound(format!("element {label}: node {n}"))))
+            model.node(*n).map(|node| node.xyz).ok_or_else(|| Error::Model(fieldcraft_model::Error::NotFound(format!("element {label}: node {n}"))))
         })
         .collect()
 }
@@ -62,7 +62,7 @@ fn selection<'a>(model: &'a Model, labels: Option<&[u32]>) -> Result<Vec<(u32, &
             .iter()
             .collect::<BTreeSet<_>>()
             .into_iter()
-            .map(|l| model.element(*l).map(|e| (*l, e)).ok_or_else(|| Error::Model(modelcraft_model::Error::NotFound(format!("element {l}")))))
+            .map(|l| model.element(*l).map(|e| (*l, e)).ok_or_else(|| Error::Model(fieldcraft_model::Error::NotFound(format!("element {l}")))))
             .collect(),
     }
 }

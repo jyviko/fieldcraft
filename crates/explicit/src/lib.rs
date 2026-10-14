@@ -1,4 +1,4 @@
-//! ModelCraft's explicit dynamics solver: transient response of a model's explicit dynamic step
+//! FieldCraft's explicit dynamics solver: transient response of a model's explicit dynamic step
 //! by central-difference time integration.
 //!
 //! The method is the explicit central-difference scheme of T. Belytschko, W. K. Liu, B. Moran,
@@ -24,7 +24,7 @@
 //! docs/solvers/literature.md, Parts F and J). Without it the gradients stay those of the
 //! undeformed mesh (small displacements).
 //!
-//! Elements are updated on threads ([`modelcraft_parallel`]), each owning its state, and their
+//! Elements are updated on threads ([`fieldcraft_parallel`]), each owning its state, and their
 //! nodal forces are added in label order as a sequential loop adds them, with no parallel
 //! reductions, so the same model gives the same numbers bit for bit on any number of threads;
 //! sizes, increments and output are capped by [`Limits`].
@@ -46,14 +46,14 @@ pub use result::{ControllingElement, Energies, ErodedElement, ExplicitResult, Fr
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Model(#[from] modelcraft_model::Error),
+    Model(#[from] fieldcraft_model::Error),
     #[error("invalid input: {0}")]
     Invalid(String),
     #[error("not supported yet: {0}")]
     NotSupported(String),
     /// An element kernel failed (inverted geometry, …).
     #[error("element {label}: {source}")]
-    Element { label: u32, source: modelcraft_fem::Error },
+    Element { label: u32, source: fieldcraft_fem::Error },
     #[error("limit reached: {0}")]
     Limit(String),
     /// The solution stopped being finite.
@@ -68,7 +68,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     /// A kernel error, naming the element.
-    pub fn element(label: u32, source: modelcraft_fem::Error) -> Error {
+    pub fn element(label: u32, source: fieldcraft_fem::Error) -> Error {
         Error::Element { label, source }
     }
 }
@@ -86,7 +86,7 @@ pub struct Limits {
 
 impl Limits {
     pub const MAX_DOFS: usize = 6_000_000;
-    pub const MAX_INCREMENTS: u64 = modelcraft_model::steps::MAX_INCREMENTS;
+    pub const MAX_INCREMENTS: u64 = fieldcraft_model::steps::MAX_INCREMENTS;
     pub const MAX_OUTPUT_VALUES: usize = 50_000_000;
 }
 

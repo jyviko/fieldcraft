@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-decks"
-description = "ModelCraft's solver decks: Abaqus input, Nastran bulk data and LS-DYNA keyword writers (and later readers)"
+name = "fieldcraft-decks"
+description = "FieldCraft's solver decks: Abaqus input, Nastran bulk data and LS-DYNA keyword writers (and later readers)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-modelcraft-model = { workspace = true }
+fieldcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

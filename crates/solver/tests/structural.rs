@@ -9,11 +9,11 @@
 
 use std::collections::BTreeMap;
 
-use modelcraft_model::{
+use fieldcraft_model::{
     BeamProfile, BoundaryCondition, Distribution, Elastic, ElementFace, ElementKind, Formulation, Load, Material, Model, Procedure, Section,
     SectionKind, Set, Step, Target,
 };
-use modelcraft_solver::{FrequencyOptions, Limits, MassKind, StaticResult, solve_frequency, solve_static};
+use fieldcraft_solver::{FrequencyOptions, Limits, MassKind, StaticResult, solve_frequency, solve_static};
 
 /// A model under construction: nodes and elements numbered from 1, one material, one step.
 struct Build {
@@ -343,7 +343,7 @@ fn cantilever_beam_deflection_is_exact() {
     // A stocky I beam, so shear deformation matters: δ = P L³/(3 E I) + P L/(G A_s) in each plane.
     let profile = BeamProfile::I { height: 200.0, width: 100.0, web: 6.0, flange: 10.0 };
     let length: f64 = 1000.0;
-    let p = modelcraft_fem::beam::properties(&profile, 0.3);
+    let p = fieldcraft_fem::beam::properties(&profile, 0.3);
     let (e, g) = (210e3, 210e3 / 2.6);
     for n in [1, 4] {
         for (along_y, name) in [(true, "weak"), (false, "strong")] {
@@ -377,7 +377,7 @@ fn cantilever_beam_frequencies() {
     // Euler–Bernoulli ω_k = (β_k L)² √(E I / (ρ A L⁴)).
     let profile = BeamProfile::Pipe { radius: 10.0, thickness: 1.0 };
     let length: f64 = 10000.0;
-    let p = modelcraft_fem::beam::properties(&profile, 0.3);
+    let p = fieldcraft_fem::beam::properties(&profile, 0.3);
     let base = (210e3 * p.iy / (7.85e-9 * p.area * length.powi(4))).sqrt() / (2.0 * std::f64::consts::PI);
     let beta = [1.875_104_068_711_961, 4.694_091_132_974_175, 7.854_757_438_237_613];
     for mass in [MassKind::Consistent, MassKind::Lumped] {
@@ -443,7 +443,7 @@ fn portal_frame_matches_the_slope_deflection_solution() {
     b.force("push", vec![n as u32 + 1], [load, 0.0, 0.0]);
     let r = b.solve();
     let g = e / 2.6;
-    let (pc, pb) = (modelcraft_fem::beam::properties(&column, 0.3), modelcraft_fem::beam::properties(&girder, 0.3));
+    let (pc, pb) = (fieldcraft_fem::beam::properties(&column, 0.3), fieldcraft_fem::beam::properties(&girder, 0.3));
     let (phi_c, phi_b) = (12.0 * e * pc.iy / (g * pc.shear_z * h * h), 12.0 * e * pb.iy / (g * pb.shear_z * l * l));
     let (a, bb) = (e * pc.iy / (h * (1.0 + phi_c)), e * pb.iy / (l * (1.0 + phi_b)));
     let c = 6.0 * a / (h * (a * (4.0 + phi_c) + 6.0 * bb));
@@ -499,7 +499,7 @@ fn rods_continue_a_solid_column() {
     }
     let rods: Vec<_> = r.elements.iter().filter(|e| e.kind == ElementKind::Rod2).collect();
     assert_eq!(rods.len(), 4);
-    assert!(rods.iter().flat_map(|e| &e.nodal).all(|s| rel(modelcraft_fem::von_mises(s), 4.0) < 1e-12), "{rods:?}");
+    assert!(rods.iter().flat_map(|e| &e.nodal).all(|s| rel(fieldcraft_fem::von_mises(s), 4.0) < 1e-12), "{rods:?}");
     // Solid nodes have no rotations.
     assert!(r.rotation.iter().all(|x| *x == [0.0; 3]));
 }

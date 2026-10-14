@@ -23,9 +23,9 @@ const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
 const RESOURCE_NOT_FOUND: i64 = -32002;
 
-const INSTRUCTIONS: &str = "ModelCraft turns geometry into finite element models and solves them. The model is \
+const INSTRUCTIONS: &str = "FieldCraft turns geometry into finite element models and solves them. The model is \
 unit-consistent and never converts (SolidCraft geometry is in mm, so use mm-t-s-N-MPa: E in MPa, density in t/mm³, \
-forces in N); Z is up. A typical analysis: `open` a .solidcraft design (or a .modelcraft model, or a face-tagged \
+forces in N); Z is up. A typical analysis: `open` a .solidcraft design (or a .fieldcraft model, or a face-tagged \
 .3mf); `inspect_model` for its bodies and their persistent face names; `mesh` (method tet: {body, tolerance}); \
 then `execute` the model definition commands (model.set.create {name, geometry: [{body, face}]}, \
 model.material.create, model.section.create, model.boundary_condition.create, model.load.create, model.step.create \
@@ -182,7 +182,7 @@ impl Server {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false}},
-                    "serverInfo": {"name": "modelcraft", "title": "ModelCraft", "version": env!("CARGO_PKG_VERSION")},
+                    "serverInfo": {"name": "fieldcraft", "title": "FieldCraft", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe()),
                 }))
             }
@@ -198,16 +198,16 @@ impl Server {
                 Ok(call_tool(self.backend.as_mut(), name, &args))
             }
             "resources/list" => Ok(json!({"resources": [
-                {"uri": "modelcraft://model", "name": "Model", "description": "model.info: node and element counts, units, definitions", "mimeType": "application/json"},
-                {"uri": "modelcraft://commands", "name": "Command catalog", "description": "every command with its parameter docs", "mimeType": "application/json"},
+                {"uri": "fieldcraft://model", "name": "Model", "description": "model.info: node and element counts, units, definitions", "mimeType": "application/json"},
+                {"uri": "fieldcraft://commands", "name": "Command catalog", "description": "every command with its parameter docs", "mimeType": "application/json"},
             ]})),
             "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
             "prompts/list" => Ok(json!({"prompts": []})),
             "resources/read" => {
                 let uri = params.get("uri").and_then(Value::as_str).unwrap_or("");
                 let v = match uri {
-                    "modelcraft://model" => self.backend.execute("model.info", json!({})),
-                    "modelcraft://commands" => self.backend.commands(),
+                    "fieldcraft://model" => self.backend.execute("model.info", json!({})),
+                    "fieldcraft://commands" => self.backend.commands(),
                     _ => return Err((RESOURCE_NOT_FOUND, format!("unknown resource `{}`", uri.chars().take(200).collect::<String>()))),
                 }
                 .map_err(|e| (INTERNAL_ERROR, e))?;

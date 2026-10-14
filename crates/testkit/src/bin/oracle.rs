@@ -1,11 +1,11 @@
 //! `oracle [--case NAME]... [--bless NAME|all]... [--quick] [--no-write]`: see
-//! [`modelcraft_testkit::oracle`]; run it as `cargo xtask oracle`.
+//! [`fieldcraft_testkit::oracle`]; run it as `cargo xtask oracle`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 use std::process::ExitCode;
 
-use modelcraft_testkit::oracle::{Options, run};
+use fieldcraft_testkit::oracle::{Options, run};
 
 const USAGE: &str = "usage: oracle [--case NAME]... [--bless NAME|all]... [--quick] [--no-write]";
 
@@ -33,7 +33,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    match run(&modelcraft_testkit::corpus::workspace_root(), &options) {
+    match run(&fieldcraft_testkit::corpus::workspace_root(), &options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");

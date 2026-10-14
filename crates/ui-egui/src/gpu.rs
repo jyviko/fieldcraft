@@ -16,7 +16,7 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use egui_wgpu::wgpu;
-use modelcraft_render::{Rgb, Scene};
+use fieldcraft_render::{Rgb, Scene};
 
 /// Triangle vertex: position (3 × f32), normal (3 × f32), sRGB colour (4 × u8).
 pub const TRI_SIZE: usize = 28;
@@ -141,7 +141,7 @@ fn vs_tri(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: 
 }
 
 /// Two-sided lighting: a key light above the eye, a fill from the eye and a small highlight
-/// (modelcraft_render::shade computes the same on the CPU).
+/// (fieldcraft_render::shade computes the same on the CPU).
 @fragment
 fn fs_tri(i: TOut) -> @location(0) vec4<f32> {
     let v = normalize(u.back.xyz);
@@ -235,9 +235,9 @@ pub struct GpuTarget {
 impl Resources {
     fn new(device: &wgpu::Device, t: GpuTarget) -> Self {
         let module =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("mc_viewport"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+            device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("fc_viewport"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("mc_viewport"),
+            label: Some("fc_viewport"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -246,18 +246,18 @@ impl Resources {
             }],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mc_viewport"),
+            label: Some("fc_viewport"),
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mc_viewport_u"),
+            label: Some("fc_viewport_u"),
             size: UNIFORM_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mc_viewport"),
+            label: Some("fc_viewport"),
             layout: &bgl,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
         });
@@ -294,9 +294,9 @@ impl Resources {
             })
         };
         Resources {
-            tri: pipeline("mc_tris", "vs_tri", "fs_tri", tri_layout(), depth(wgpu::CompareFunction::Less, true), None),
+            tri: pipeline("fc_tris", "vs_tri", "fs_tri", tri_layout(), depth(wgpu::CompareFunction::Less, true), None),
             line: pipeline(
-                "mc_lines",
+                "fc_lines",
                 "vs_line",
                 "fs_line",
                 line_layout(),
@@ -321,8 +321,8 @@ impl Resources {
             self.tris.clear();
             self.lines.clear();
             let max = device.limits().max_buffer_size;
-            self.tris = upload(device, queue, "mc_tris", &sc.tris, TRI_SIZE, 3, max);
-            self.lines = upload(device, queue, "mc_lines", &sc.lines, LINE_SIZE, 1, max);
+            self.tris = upload(device, queue, "fc_tris", &sc.tris, TRI_SIZE, 3, max);
+            self.lines = upload(device, queue, "fc_lines", &sc.lines, LINE_SIZE, 1, max);
             self.key = Some(key);
         }
     }
@@ -433,7 +433,7 @@ fn uniform_bytes(cb: &ViewportCallback, linear: bool) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use egui_wgpu::wgpu::naga;
-    use modelcraft_render::{SceneLine, ScenePoint, SceneTri, Vec3};
+    use fieldcraft_render::{SceneLine, ScenePoint, SceneTri, Vec3};
 
     use super::*;
 

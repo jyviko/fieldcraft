@@ -1,9 +1,9 @@
-//! ModelCraft's implicit solver: linear static and frequency analysis of a model's steps.
+//! FieldCraft's implicit solver: linear static and frequency analysis of a model's steps.
 //!
-//! The pipeline, for one step of a [`modelcraft_model::Model`]:
+//! The pipeline, for one step of a [`fieldcraft_model::Model`]:
 //! 1. **System** ([`system`]): the model is resolved; every section's elements become solid
 //!    elements with their material's elasticity and the section's formulation
-//!    ([`modelcraft_fem`] kernels); the step's boundary conditions give the prescribed degrees of
+//!    ([`fieldcraft_fem`] kernels); the step's boundary conditions give the prescribed degrees of
 //!    freedom, its loads the load vector (forces and tractions as the model distributes them,
 //!    consistent pressure loads, gravity and body forces).
 //! 2. **Assembly** ([`sparse`]) on the node graph, elements in label order.
@@ -16,7 +16,7 @@
 //!    kind of factorization.
 //!
 //! Element matrices and stresses, the factorization's subtrees and dense tiles, the Lanczos
-//! block solves and matrix products run on threads ([`modelcraft_parallel`]), but every number
+//! block solves and matrix products run on threads ([`fieldcraft_parallel`]), but every number
 //! is computed by one task in an order fixed by the model alone and sums are taken in a fixed
 //! order, so the same model gives the same numbers bit for bit on any number of threads and on
 //! every platform; sizes and iterations are capped by [`Limits`].
@@ -44,14 +44,14 @@ pub use heat::{HeatResult, solve_heat};
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Model(#[from] modelcraft_model::Error),
+    Model(#[from] fieldcraft_model::Error),
     #[error("invalid input: {0}")]
     Invalid(String),
     #[error("not supported yet: {0}")]
     NotSupported(String),
     /// An element kernel failed (inverted geometry, a formulation it lacks, …).
     #[error("element {label}: {source}")]
-    Element { label: u32, source: modelcraft_fem::Error },
+    Element { label: u32, source: fieldcraft_fem::Error },
     /// The stiffness (or shifted matrix) is singular.
     #[error("{0}")]
     Singular(String),
@@ -68,7 +68,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     /// A kernel error, naming the element.
-    pub fn element(label: u32, source: modelcraft_fem::Error) -> Error {
+    pub fn element(label: u32, source: fieldcraft_fem::Error) -> Error {
         Error::Element { label, source }
     }
 }

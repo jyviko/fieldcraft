@@ -1,4 +1,4 @@
-//! Deterministic data parallelism for ModelCraft's CPU solvers.
+//! Deterministic data parallelism for FieldCraft's CPU solvers.
 //!
 //! The solvers promise the same result bit for bit on every run, platform and thread count
 //! (AGENTS.md, Determinism). Threads keep that promise when every floating-point value is
@@ -20,7 +20,7 @@
 //!
 //! **Thread count.** [`with_threads`] runs a closure on a pool of that many threads (pools are
 //! cached; at most [`MAX_THREADS`]). Outside it, the helpers use the default pool:
-//! [`ENV`] (`MODELCRAFT_THREADS`) when it holds a whole number from 1 to [`MAX_THREADS`], else
+//! [`ENV`] (`FIELDCRAFT_THREADS`) when it holds a whole number from 1 to [`MAX_THREADS`], else
 //! the available cores.
 //!
 //! Rayon (MIT OR Apache-2.0) provides the pool (docs/adr/0001-libraries.md).
@@ -31,7 +31,7 @@
 pub const MAX_THREADS: usize = 256;
 
 /// The environment variable that sets the default thread count.
-pub const ENV: &str = "MODELCRAFT_THREADS";
+pub const ENV: &str = "FIELDCRAFT_THREADS";
 
 /// A thread count from text: a whole number from 1 to [`MAX_THREADS`].
 pub fn parse_threads(text: &str) -> Option<usize> {
@@ -123,7 +123,7 @@ mod pool {
     static DEFAULT: OnceLock<Option<Arc<ThreadPool>>> = OnceLock::new();
 
     fn build(threads: usize) -> Option<Arc<ThreadPool>> {
-        ThreadPoolBuilder::new().num_threads(threads).stack_size(STACK).thread_name(|i| format!("modelcraft-worker-{i}")).build().ok().map(Arc::new)
+        ThreadPoolBuilder::new().num_threads(threads).stack_size(STACK).thread_name(|i| format!("fieldcraft-worker-{i}")).build().ok().map(Arc::new)
     }
 
     fn cached(threads: usize) -> Option<Arc<ThreadPool>> {

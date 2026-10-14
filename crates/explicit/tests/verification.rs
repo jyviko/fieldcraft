@@ -5,8 +5,8 @@
 //! The bar has Poisson's ratio 0, so a uniaxial stress wave travels at the rod speed c = √(E/ρ)
 //! without lateral inertia effects (d'Alembert's solution of the one-dimensional wave equation).
 
-use modelcraft_explicit::{ExplicitResult, Limits, solve_explicit};
-use modelcraft_model::*;
+use fieldcraft_explicit::{ExplicitResult, Limits, solve_explicit};
+use fieldcraft_model::*;
 
 const YOUNG: f64 = 1.0e4;
 const DENSITY: f64 = 1.0;

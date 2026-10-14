@@ -30,8 +30,8 @@
 //! lower triangle index, so the assignment is deterministic. This is a classification for
 //! reporting, not a meshing decision, so floating-point distances are adequate.
 
-use modelcraft_mesh::predicates::{Point2, Point3, Sign, orient2d, orient3d, snap_to_domain};
-use modelcraft_mesh::surface::BoundarySurface;
+use fieldcraft_mesh::predicates::{Point2, Point3, Sign, orient2d, orient3d, snap_to_domain};
+use fieldcraft_mesh::surface::BoundarySurface;
 
 use crate::{Error, Result};
 
@@ -373,7 +373,7 @@ impl TriangleTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use modelcraft_mesh::surface::SurfaceOptions;
+    use fieldcraft_mesh::surface::SurfaceOptions;
 
     /// The surface of the box [lo, hi], outward, two triangles per side, side k tagged k.
     pub(crate) fn cube(lo: [f64; 3], hi: [f64; 3]) -> BoundarySurface {

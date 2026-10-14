@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-fem"
-description = "ModelCraft's finite element kernels: shape functions, quadrature, strain-displacement matrices, element stiffness and mass, elastic constitutive matrices"
+name = "fieldcraft-fem"
+description = "FieldCraft's finite element kernels: shape functions, quadrature, strain-displacement matrices, element stiffness and mass, elastic constitutive matrices"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,5 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-modelcraft-model = { workspace = true }
+fieldcraft-model = { workspace = true }
 thiserror = { workspace = true }

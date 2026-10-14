@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use modelcraft_io::roots::Access;
+use fieldcraft_io::roots::Access;
 use serde_json::{Value, json};
 
 use super::req;
@@ -11,22 +11,22 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const WRITE: CommandSpec = CommandSpec {
     id: "deck.write",
     label: "Write Solver Deck",
-    params: r#"{"format": "abaqus|nastran|lsdyna", "path": "part.inp", "steps": ["Load"]} — writes the model as a solver deck (formats: modelcraft_decks::FORMATS); `steps` (optional) writes only those steps, as a Nastran run needs (static or frequency steps, not both); LS-DYNA writes several steps as *CASE analyses (run it with CASE); fails naming every error of the model check and everything the format cannot express"#,
+    params: r#"{"format": "abaqus|nastran|lsdyna", "path": "part.inp", "steps": ["Load"]} — writes the model as a solver deck (formats: fieldcraft_decks::FORMATS); `steps` (optional) writes only those steps, as a Nastran run needs (static or frequency steps, not both); LS-DYNA writes several steps as *CASE analyses (run it with CASE); fails naming every error of the model check and everything the format cannot express"#,
     kind: CommandKind::Session,
     run: write,
 };
 
 fn write(s: &mut Session, p: &Value) -> Result<Value> {
     let name: &str = req(p, "format")?;
-    let format = modelcraft_decks::format(name).ok_or_else(|| {
+    let format = fieldcraft_decks::format(name).ok_or_else(|| {
         let shown: String = name.chars().take(32).collect();
-        let known: Vec<&str> = modelcraft_decks::FORMATS.iter().map(|f| f.name).collect();
+        let known: Vec<&str> = fieldcraft_decks::FORMATS.iter().map(|f| f.name).collect();
         EngineError::Params(format!("unknown deck format `{shown}`; known: {}", known.join(", ")))
     })?;
     let path = super::file_param(s, p, "path", Access::Write)?;
     let steps: Option<Vec<String>> = super::opt(p, "steps")?;
     let deck = format.write_steps(&s.model, steps.as_deref())?;
-    modelcraft_io::fs::write_atomic(Path::new(&path), deck.text.as_bytes(), false)?;
+    fieldcraft_io::fs::write_atomic(Path::new(&path), deck.text.as_bytes(), false)?;
     Ok(json!({"format": format.name, "path": path, "bytes": deck.text.len(), "warnings": deck.warnings}))
 }
 
@@ -36,7 +36,7 @@ mod tests {
 
     #[test]
     fn writes_the_defined_model_and_refuses_what_it_cannot() {
-        let dir = std::env::temp_dir().join(format!("modelcraft-deck-write-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("fieldcraft-deck-write-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("bar.inp");
         let path_str = path.to_string_lossy().into_owned();
@@ -46,7 +46,7 @@ mod tests {
         let journal = s.journal.len();
         let out = s.execute("deck.write", &json!({"format": "abaqus", "path": path_str})).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(written, modelcraft_decks::abaqus::write(&s.model).unwrap());
+        assert_eq!(written, fieldcraft_decks::abaqus::write(&s.model).unwrap());
         assert_eq!(out["bytes"], written.len());
         assert_eq!(out["warnings"].as_array().map(Vec::len), Some(1), "`press` is in no step: {out}");
         assert!(written.contains("*ELEMENT, TYPE=C3D8I"), "{written}");
@@ -81,14 +81,14 @@ mod tests {
 
     #[test]
     fn writes_lsdyna_keyword_decks() {
-        let dir = std::env::temp_dir().join(format!("modelcraft-deck-lsdyna-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("fieldcraft-deck-lsdyna-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("bar.k");
         let mut s = Session::default();
         crate::cmd::define::tests::defined_bar(&mut s);
         let out = s.execute("deck.write", &json!({"format": "lsdyna", "path": path.to_string_lossy()})).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(written, modelcraft_decks::lsdyna::write(&s.model).unwrap().text);
+        assert_eq!(written, fieldcraft_decks::lsdyna::write(&s.model).unwrap().text);
         assert_eq!(out["format"], "lsdyna");
         assert!(written.starts_with("*KEYWORD long=y\n") && written.contains("*CASE_BEGIN_2"), "two steps, two cases");
         // One chosen step: a single analysis, no cases.

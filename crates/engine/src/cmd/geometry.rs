@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use modelcraft_geometry::tagged_mesh;
-use modelcraft_geometry::{MAX_DESIGN_BYTES, Shape, SurfaceMesh, open_design};
-use modelcraft_io::SourceFile;
-use modelcraft_io::roots::Access;
+use fieldcraft_geometry::tagged_mesh;
+use fieldcraft_geometry::{MAX_DESIGN_BYTES, Shape, SurfaceMesh, open_design};
+use fieldcraft_io::SourceFile;
+use fieldcraft_io::roots::Access;
 use serde_json::{Value, json};
 
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
@@ -42,7 +42,7 @@ pub const IMPORT_MESH: CommandSpec = CommandSpec {
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = super::file_param(s, p, "path", Access::Read)?;
-    let bytes = modelcraft_geometry::read_file(&path, MAX_DESIGN_BYTES)?;
+    let bytes = fieldcraft_geometry::read_file(&path, MAX_DESIGN_BYTES)?;
     let source = SourceFile::of(super::file::absolute(&path), &bytes)?;
     let design = open_design(&bytes)?;
     let out = json!({
@@ -98,10 +98,10 @@ fn tessellate(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn import_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let path = super::file_param(s, p, "path", Access::Read)?;
-    if s.sources.meshes.len() >= modelcraft_io::MAX_MESH_SOURCES {
-        return Err(EngineError::Params(format!("a model imports at most {} meshes", modelcraft_io::MAX_MESH_SOURCES)));
+    if s.sources.meshes.len() >= fieldcraft_io::MAX_MESH_SOURCES {
+        return Err(EngineError::Params(format!("a model imports at most {} meshes", fieldcraft_io::MAX_MESH_SOURCES)));
     }
-    let bytes = modelcraft_geometry::read_file(&path, tagged_mesh::MAX_FILE_BYTES)?;
+    let bytes = fieldcraft_geometry::read_file(&path, tagged_mesh::MAX_FILE_BYTES)?;
     let source = SourceFile::of(super::file::absolute(&path), &bytes)?;
     let surfaces = tagged_mesh::read_3mf(&bytes)?;
     let first = s.surfaces.len();
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn import_adds_tagged_surfaces_and_failures_change_nothing() {
-        let dir = std::env::temp_dir().join(format!("modelcraft-import-mesh-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("fieldcraft-import-mesh-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let model = format!(
             r#"<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:ft="{}"><resources>

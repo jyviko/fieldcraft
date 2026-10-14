@@ -10,7 +10,7 @@
 //! S₁₁ = 1/E₁, S₁₂ = −ν₁₂/E₁, S₁₃ = −ν₁₃/E₁, S₂₃ = −ν₂₃/E₂ (ν_ji/E_j = ν_ij/E_i), and
 //! 1/G on the shear diagonal.
 
-use modelcraft_model::Elastic;
+use fieldcraft_model::Elastic;
 
 use crate::dense::inverse3;
 use crate::{Error, Result};

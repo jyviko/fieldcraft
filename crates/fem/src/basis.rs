@@ -28,7 +28,7 @@
 //!
 //! Node orders are corners first, then mid-side nodes in the model's edge order (the model is the
 //! one place they are written down), then face and body nodes, the Abaqus/VTK convention of
-//! [`modelcraft_model::ElementKind`]. The functions are the textbook ones (O. C. Zienkiewicz,
+//! [`fieldcraft_model::ElementKind`]. The functions are the textbook ones (O. C. Zienkiewicz,
 //! R. L. Taylor, J. Z. Zhu, *The Finite Element Method: Its Basis and Fundamentals*, 7th ed.,
 //! 2013, ch. 6; T. J. R. Hughes, *The Finite Element Method*, Dover 2000, ch. 3).
 //!
@@ -49,7 +49,7 @@
 
 use std::sync::LazyLock;
 
-use modelcraft_model::ElementKind;
+use fieldcraft_model::ElementKind;
 
 use crate::dense::positive_inverse;
 use crate::jet::Jet;

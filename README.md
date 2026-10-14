@@ -1,4 +1,4 @@
-# ModelCraft
+# FieldCraft
 
 An open-source, clean-room CAE modeling application in pure Rust: geometry to analysis-ready
 finite element models, with robust tetrahedral and hexahedral meshing, solver decks for Abaqus,
@@ -21,9 +21,9 @@ deformed shape (tip deflection 0.176 mm; beam theory with shear 0.177 mm).
 ```sh
 cargo xtask ci                                  # fmt, assets, licences, layers, clippy, tests, wasm
 cargo xtask test --heavy                        # the heavy (ignored) tests and the doc tests
-cargo run -p modelcraft-cli -- commands         # every command and its parameters
-cargo run -p modelcraft-cli -- run script.json  # run a command script
-cargo run -p modelcraft-cli -- mcp              # MCP server on stdio for AI agents (docs/mcp.md)
+cargo run -p fieldcraft-cli -- commands         # every command and its parameters
+cargo run -p fieldcraft-cli -- run script.json  # run a command script
+cargo run -p fieldcraft-cli -- mcp              # MCP server on stdio for AI agents (docs/mcp.md)
 ```
 
 Rust 1.95 or later, with the `wasm32-unknown-unknown` target for `cargo xtask ci`.
@@ -32,7 +32,7 @@ Rust 1.95 or later, with the `wasm32-unknown-unknown` target for `cargo xtask ci
 
 - [Architecture](docs/architecture.md): crates, layers and the meshing pipeline
 - [Libraries and licences](docs/adr/0001-libraries.md)
-- [AI agents (MCP)](docs/mcp.md): `claude mcp add modelcraft -- /path/to/modelcraft-cli mcp`
+- [AI agents (MCP)](docs/mcp.md): `claude mcp add fieldcraft -- /path/to/fieldcraft-cli mcp`
 - [Control protocol](docs/control-protocol.md): driving the desktop app
 - [Contributing](CONTRIBUTING.md) and [agent instructions](AGENTS.md)
 
@@ -41,6 +41,6 @@ Rust 1.95 or later, with the `wasm32-unknown-unknown` target for `cargo xtask ci
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. Notices
 are in [NOTICE](NOTICE); third-party licences in [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt).
 
-ModelCraft is an independent project, not affiliated with, sponsored or endorsed by Dassault
+FieldCraft is an independent project, not affiliated with, sponsored or endorsed by Dassault
 Systèmes, MSC Software, Siemens or Ansys. Abaqus, Nastran, MSC Nastran, Simcenter Nastran and
 LS-DYNA are trademarks of their owners and are named only to describe file compatibility.

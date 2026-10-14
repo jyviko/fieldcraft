@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-lbm"
-description = "ModelCraft's lattice Boltzmann flow solver: D3Q19 two-relaxation-time collision, bounce-back walls, Zou–He inlets and outlets, exact voxelisation of face-tagged surfaces, momentum-exchange wall forces"
+name = "fieldcraft-lbm"
+description = "FieldCraft's lattice Boltzmann flow solver: D3Q19 two-relaxation-time collision, bounce-back walls, Zou–He inlets and outlets, exact voxelisation of face-tagged surfaces, momentum-exchange wall forces"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-modelcraft-model = { workspace = true }
-modelcraft-mesh = { workspace = true }
-modelcraft-parallel = { workspace = true }
+fieldcraft-model = { workspace = true }
+fieldcraft-mesh = { workspace = true }
+fieldcraft-parallel = { workspace = true }
 thiserror = { workspace = true }

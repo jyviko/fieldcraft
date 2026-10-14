@@ -1,6 +1,6 @@
 [package]
-name = "modelcraft-geometry"
-description = "ModelCraft's geometry boundary: CAD import, measures and tessellation, implemented with SolidCraft's B-rep kernel"
+name = "fieldcraft-geometry"
+description = "FieldCraft's geometry boundary: CAD import, measures and tessellation, implemented with SolidCraft's B-rep kernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-modelcraft-model = { workspace = true }
+fieldcraft-model = { workspace = true }
 solidcraft-geom = { workspace = true }
 solidcraft-kernel = { workspace = true }
 solidcraft-doc = { workspace = true }

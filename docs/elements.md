@@ -1,6 +1,6 @@
 # Element library
 
-ModelCraft's finite element library (`crates/fem`), family by family, with status. The scope is
+FieldCraft's finite element library (`crates/fem`), family by family, with status. The scope is
 modelled on what a full CAE code offers (Abaqus's element library is the reference for breadth);
 names, formulations and tests are our own, written from the published literature. Deck writers map
 each of our elements to each solver's name (see `crates/decks`). Simple elements first: 1D and 2D,
@@ -32,7 +32,7 @@ hex8/20/27 with first and second derivatives).
 |---|---|---|
 | Truss, 2-node (2D and 3D) | Axial members, cables (compression allowed) | done (rod2: implicit, in plane models with their two unknowns per node; explicit, corotational under nonlinear geometry; Abaqus T3D2 / T2D2, Nastran CROD, LS-DYNA truss beam (3D models)) |
 | Truss, 3-node (2D and 3D) | Curved axial members | done (rod3: implicit, plane models too; explicit with small displacements; Abaqus T3D3 / T2D3; no Nastran or LS-DYNA counterpart) |
-| Beam, 2-node Timoshenko, 3D | Frames, stiffeners; shear deformable | done (exact interdependent interpolation, profile properties, orientation vector; `modelcraft_fem::beam`) |
+| Beam, 2-node Timoshenko, 3D | Frames, stiffeners; shear deformable | done (exact interdependent interpolation, profile properties, orientation vector; `fieldcraft_fem::beam`) |
 | Beam, 2-node Euler–Bernoulli (cubic), 2D and 3D | Slender frames; exact for end-loaded prismatic members | planned (1D elements II) |
 | Beam, 3-node Timoshenko (quadratic), 2D and 3D | Curved and stocky beams | planned (1D elements II) |
 | Beam, 2D (planar frames) | In-plane frames with 3 DOFs per node | planned (1D elements II) |
@@ -57,7 +57,7 @@ hex8/20/27 with first and second derivatives).
 
 | Element | Use | Status |
 |---|---|---|
-| Shell quad4 (MITC4), triangle (locking-free) | Thin and thick shells | done (flat MITC4 and MITC3 with a Hughes–Brezzi drilling rotation; `modelcraft_fem::shell`) |
+| Shell quad4 (MITC4), triangle (locking-free) | Thin and thick shells | done (flat MITC4 and MITC3 with a Hughes–Brezzi drilling rotation; `fieldcraft_fem::shell`) |
 | Shell quad8 / tri6 | Curved thick shells | planned |
 | Continuum shells (8-node, on swept hex) | Thick-to-thin shells, composites through thickness | planned (M8) |
 | Membranes (tri3, quad4, quad8) | Fabrics, inflatables, skins without bending | planned |

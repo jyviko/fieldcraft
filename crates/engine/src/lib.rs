@@ -18,6 +18,7 @@ pub mod cmd;
 pub mod history;
 pub mod results;
 pub mod sample;
+pub mod view;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

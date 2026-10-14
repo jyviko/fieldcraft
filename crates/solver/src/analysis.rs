@@ -265,6 +265,12 @@ pub(crate) fn factor_error(e: FactorError, mesh: &Mesh, reduction: &Reduction) -
                 "the stiffness is singular at {at}: the model can move without straining (missing or insufficient boundary conditions, a part not connected to the rest, or a reference point direction nothing holds)"
             ))
         }
+        FactorError::Singular { column } => {
+            let at = reduction.eq_dof.get(column).map_or_else(|| "an unknown degree of freedom".to_string(), |d| mesh.describe_dof(*d));
+            Error::Singular(format!(
+                "the matrix is singular at {at}: no pivot of its supernode is more than round-off (a mechanism, or a shift or load at an eigenvalue)"
+            ))
+        }
     }
 }
 

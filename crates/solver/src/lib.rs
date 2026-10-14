@@ -13,7 +13,9 @@
 //! 4. **Solution** ([`cholesky`]): sparse Cholesky; reactions K u − f at the prescribed degrees
 //!    of freedom; stresses at the integration points, extrapolated and averaged at the nodes, and
 //!    von Mises. Frequency analysis ([`eigen`]) runs shift-invert block Lanczos on the same
-//!    kind of factorization.
+//!    kind of factorization. Indefinite matrices (tangents past a limit point, strained mixed
+//!    elements, shifted operators) are factored by the symmetric indefinite LDLᵀ ([`ldlt`]) on
+//!    the same symbolic factorization, which also counts their negative eigenvalues.
 //!
 //! Element matrices and stresses, the factorization's subtrees and dense tiles, the Lanczos
 //! block solves and matrix products run on threads ([`fieldcraft_parallel`]), but every number
@@ -31,6 +33,7 @@ pub mod constraints;
 pub mod discrete;
 pub mod eigen;
 pub mod heat;
+pub mod ldlt;
 pub mod nonlinear;
 pub mod ordering;
 pub mod sparse;

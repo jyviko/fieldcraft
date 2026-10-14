@@ -1228,3 +1228,21 @@ update are written from (cited again in the module docs):
 - Thermal strain by the multiplicative split F = F_m F_θ: V. A. Lubarda, *Constitutive
   theories based on the multiplicative decomposition of deformation gradient: thermoelasticity,
   elastoplasticity, and biomechanics*, Appl. Mech. Rev. 57(2):95–108, 2004.
+
+## Part P: Symmetric indefinite factorization, linear buckling and arc-length, as implemented
+
+- Symmetric indefinite pivoting: J. R. Bunch, L. Kaufman, *Some stable methods for calculating
+  inertia and solving symmetric linear systems*, Math. Comp. 31(137):163–179, 1977; the bounded
+  (rook) search, C. Ashcraft, R. G. Grimes, J. G. Lewis, *Accurate symmetric indefinite linear
+  equation solvers*, SIAM J. Matrix Anal. Appl. 20(2):513–561, 1998; the panel's partial
+  factorization of LAPACK's `dsytrf`, E. Anderson et al., *LAPACK Users' Guide*, 3rd ed., SIAM
+  1999.
+- Pivoting within supernodes on a static structure: O. Schenk, K. Gärtner, *On fast
+  factorization pivoting methods for sparse symmetric indefinite systems*, Electron. Trans.
+  Numer. Anal. 23:158–179, 2006. Delayed pivots (the multifrontal alternative, not used: it
+  changes the structure as it goes): I. S. Duff, J. K. Reid, *The multifrontal solution of
+  indefinite sparse symmetric linear equations*, ACM TOMS 9(3):302–325, 1983; J. W. H. Liu, *The
+  multifrontal method for sparse matrix solution: theory and practice*, SIAM Review
+  34(1):82–109, 1992.
+- Iterative refinement: N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed.,
+  SIAM 2002, §12.2.

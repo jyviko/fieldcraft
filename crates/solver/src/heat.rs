@@ -310,7 +310,7 @@ fn factor(a: &Csr, limits: &Limits, mesh: &HeatMesh, eqs: &Equations) -> Result<
         }
         FactorError::OutOfMemory { entries } => Error::Limit(format!("not enough memory for the factorization ({entries} entries)")),
         FactorError::Internal(what) => Error::Internal(what),
-        FactorError::NotPositiveDefinite { column } => {
+        FactorError::NotPositiveDefinite { column } | FactorError::Singular { column } => {
             let label = eqs.node.get(column).and_then(|n| mesh.labels.get(*n)).copied().unwrap_or(0);
             Error::Singular(format!(
                 "the temperature is undetermined at node {label}: no temperature boundary condition or convection reaches its part of the model"

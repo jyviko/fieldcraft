@@ -150,6 +150,29 @@ when confined. A continuous
 nodal pressure (`DofKind::P`, Taylor–Hood) needs a symmetric indefinite factorization and is
 planned.
 
+## Symmetric indefinite factorization (LDLᵀ)
+
+`fieldcraft_solver::ldlt` factors P A Pᵀ = L D Lᵀ (L unit lower triangular, D with 1 × 1 and
+2 × 2 pivots) on the Cholesky factor's symbolic factorization: the same nested dissection
+ordering, elimination tree, supernodes, fill, factor-size cap and parallel subtree tasks, so it
+is deterministic on any number of threads. Pivots are chosen by the bounded Bunch–Kaufman (rook)
+search of Ashcraft, Grimes & Lewis (1998) among the columns of the supernode being factored
+(Schenk & Gärtner's supernode Bunch–Kaufman, 2006): an interchange inside a supernode changes no
+row structure, so nothing is delayed and the static structure holds. Its limits, stated in the
+module: L's entries below the supernode are not bounded by the search (`solve_refined` adds
+iterative refinement), and a column whose supernode offers no pivot above round-off is a located
+`Singular` error (a matrix singular at that column, or a zero diagonal coupled only to later
+supernodes, which no FieldCraft system has: hybrid pressures are condensed per element).
+
+The factor reports its **inertia** (positive and negative eigenvalue counts, Sylvester's law):
+a 2 × 2 pivot of the search has a negative determinant (one of each). `Symmetric::new(a, cap,
+kind)` picks Cholesky (`Definite`, the default everywhere a matrix is positive definite, so
+linear results are bit for bit unchanged), LDLᵀ (`Indefinite`), or Cholesky with LDLᵀ when the
+matrix turns out not to be positive definite (`Auto`, one symbolic factorization for both).
+On a hex8 stiffness pattern of 140 000 equations (1.5 · 10⁸ entries) the LDLᵀ factor costs 1.1
+times the Cholesky factor, and 1.2 times on a shift with 10 600 negative eigenvalues and 7 700
+2 × 2 pivots (`ldlt::tests::speed_against_cholesky`).
+
 ## Nonlinear static analysis (finite strain)
 
 A step `{"type": "nonlinear_static", …}` (`Procedure::NonlinearStatic`, solved by

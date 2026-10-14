@@ -312,8 +312,9 @@ fn paint_gpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
 /// changes.
 fn paint_cpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: Rect) {
     let ppp = ui.ctx().pixels_per_point();
-    // A window larger than the renderer's limit is drawn smaller and scaled up.
-    let (w, h) = fieldcraft_render::fit_size((rect.width() * ppp) as usize, (rect.height() * ppp) as usize);
+    // A window larger than the renderer's limit, or than the largest texture the context takes,
+    // is drawn smaller and scaled up.
+    let (w, h) = cpu_size((rect.width() * ppp) as usize, (rect.height() * ppp) as usize, ui.ctx().input(|i| i.max_texture_side));
     let size = [w, h];
     let cam = app.cam;
     let (overlay_key, overlay) = app.overlay();
@@ -344,6 +345,19 @@ fn paint_cpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
     if let Some((tex, ..)) = &app.viewport.cpu {
         painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
+}
+
+/// The CPU viewport image's size for a viewport of `w` × `h` pixels: within the renderer's limits
+/// and no side above `max_side`, the aspect kept.
+fn cpu_size(w: usize, h: usize, max_side: usize) -> (usize, usize) {
+    let (w, h) = fieldcraft_render::fit_size(w, h);
+    let longest = w.max(h);
+    if max_side == 0 || longest <= max_side {
+        return (w, h);
+    }
+    let k = max_side as f64 / longest as f64;
+    let fit = |v: usize| ((v as f64 * k).floor() as usize).clamp(1, max_side);
+    (fit(w), fit(h))
 }
 
 /// The scene's labels (reference point names) beside their points, with the interface's font.
@@ -532,4 +546,21 @@ pub fn to_screen(app: &ModelApp, p: Vec3) -> Option<Pos2> {
     // The projection picking uses ([`ModelApp::projector`]).
     let (x, y, _) = app.cam.to_screen(p, f64::from(rect.width()), f64::from(rect.height()), app.scene.1.radius)?;
     Some(pos2(rect.left() + x as f32, rect.top() + y as f32))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cpu_size;
+
+    /// The CPU viewport never asks for a texture larger than the context takes (#237: a Retina
+    /// window 2300 pixels wide on a 2048 limit).
+    #[test]
+    fn the_cpu_image_fits_the_texture_limit() {
+        assert_eq!(cpu_size(2300, 1412, 2048), (2048, 1257));
+        assert_eq!(cpu_size(1412, 2300, 2048), (1257, 2048));
+        assert_eq!(cpu_size(800, 600, 2048), (800, 600));
+        assert_eq!(cpu_size(800, 600, 0), (800, 600));
+        let (w, h) = cpu_size(100_000, 3, 2048);
+        assert!(w <= 2048 && h >= 1);
+    }
 }

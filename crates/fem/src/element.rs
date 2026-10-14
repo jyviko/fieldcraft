@@ -204,7 +204,7 @@ pub struct ThermalStrain {
 }
 
 impl ThermalStrain {
-    fn check(&self, nodes: usize) -> Result<()> {
+    pub(crate) fn check(&self, nodes: usize) -> Result<()> {
         if self.delta.len() != nodes {
             return Err(Error::Invalid(format!("{} temperatures for a {nodes}-node element", self.delta.len())));
         }

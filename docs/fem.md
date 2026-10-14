@@ -114,7 +114,15 @@ faces. The solver (`modelcraft_solver::heat`) numbers the temperatures with
 Thermal strain ε_th = α (T − T_ref) along the material axes enters a solid as the load
 `Solid::thermal_load(d, &ThermalStrain { alpha, delta })` = ∫ Bᵀ D ε_th dV and its stress as
 `Solid::stresses_with(d, u, Some(&thermal))` = D (ε − ε_th); `delta` is the nodal T − T_ref.
-Other element families (2D, shells, beams) provide the same two functions for their strains.
+2D elements have the same pair (`Plane::thermal_load`, `Plane::stresses_with`): plane stress
+leaves εzz free (σzz = 0), plane strain holds it (σzz = −D₃·ε_th), axisymmetric elements strain
+the hoop direction too. Shells and beams will provide the same two functions for their strains.
+
+Explicit dynamics takes a step's temperature loads as a thermal strain rate per element,
+α ΔT / end time (the change reached linearly over the step, like a prescribed displacement, so
+there is no thermal shock), subtracted from each increment's strain increment before the
+constitutive update, so it feeds J2 and Johnson–Cook plasticity alike; isotropic expansion only
+(the rate is the same in any frame).
 
 Model side: `Material::thermal` (`conductivity`, `specific_heat`, `expansion`, each isotropic
 or per axis, and `reference_temperature`), `BoundaryCondition::Temperature`, loads

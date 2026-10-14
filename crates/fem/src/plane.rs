@@ -44,7 +44,7 @@ use modelcraft_model::{ElementKind, Extent, SectionKind};
 use crate::basis::Basis;
 use crate::dense::{Cholesky, Matrix};
 use crate::dof::{DofSet, ElementDofs, Internal};
-use crate::element::{ElementType, Family, Formulation, PointStress, extrapolation, lump, symmetrize};
+use crate::element::{ElementType, Family, Formulation, PointStress, ThermalStrain, extrapolation, lump, symmetrize};
 use crate::material::Elasticity;
 use crate::quadrature::{Point, Rule};
 use crate::shape::{MAX_NODES, Shape};
@@ -471,20 +471,98 @@ impl<'a> Plane<'a> {
         Ok(f)
     }
 
+    /// The thermal strain α ΔT at a point with shape values `n` (xx, yy, zz, xy; zz is the hoop
+    /// direction of an axisymmetric element).
+    fn thermal_strain(thermal: &ThermalStrain, n: &[f64]) -> [f64; 4] {
+        let dt: f64 = n.iter().zip(&thermal.delta).map(|(a, b)| a * b).sum();
+        [thermal.alpha[0] * dt, thermal.alpha[1] * dt, thermal.alpha[2] * dt, 0.0]
+    }
+
+    /// ∫ Bᵀ D ε_th dV on the nodes' (u, v) and on the incompatible modes.
+    fn thermal_forces(
+        d2: &Elasticity2,
+        thermal: &ThermalStrain,
+        points: &[(Point, At)],
+        modes: Option<&Vec<[Column; 2]>>,
+        nodes: usize,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let mut fu = vec![0.0; 2 * nodes];
+        let mut fa = vec![0.0; INCOMPATIBLE_DOFS];
+        for (i, (_, a)) in points.iter().enumerate() {
+            let eps = Self::thermal_strain(thermal, a.shape.values());
+            let s: [f64; 4] = std::array::from_fn(|r| (0..4).map(|c| d2[r][c] * eps[c]).sum());
+            // Bᵀ σ for one strain column g: u takes εxx, εzz and γxy; v takes εyy and γxy.
+            let add = |out: &mut [f64], k: usize, g: &Column| {
+                if let Some(x) = out.get_mut(2 * k) {
+                    *x += a.dv * (g[0] * s[0] + g[2] * s[2] + g[1] * s[3]);
+                }
+                if let Some(x) = out.get_mut(2 * k + 1) {
+                    *x += a.dv * (g[1] * s[1] + g[0] * s[3]);
+                }
+            };
+            for (k, g) in a.g.iter().take(nodes).enumerate() {
+                add(&mut fu, k, g);
+            }
+            if let Some(cols) = modes.and_then(|m| m.get(i)) {
+                for (k, g) in cols.iter().enumerate() {
+                    add(&mut fa, k, g);
+                }
+            }
+        }
+        (fu, fa)
+    }
+
+    /// The equivalent nodal forces (u, v) of a thermal strain, ∫ Bᵀ D ε_th dV with the
+    /// theory's elasticity (plane stress leaves εzz free, plane strain holds it, axisymmetric
+    /// strains the hoop direction too); incompatible modes are condensed as in the stiffness.
+    pub fn thermal_load(&self, d: &Elasticity, thermal: &ThermalStrain) -> Result<Vec<[f64; 2]>> {
+        thermal.check(self.ty.nodes)?;
+        let d2 = self.theory.elasticity(d)?;
+        let n = 2 * self.ty.nodes;
+        let mut fu = if self.formulation == Formulation::IncompatibleModes {
+            let (full, points, modes) = self.full_stiffness(&d2)?;
+            let (mut fu, mut fa) = Self::thermal_forces(&d2, thermal, &points, modes.as_ref(), self.ty.nodes);
+            Cholesky::new(&sub_block(&full, n, n, INCOMPATIBLE_DOFS))?.solve(&mut fa);
+            for (i, x) in fu.iter_mut().enumerate() {
+                *x -= (0..INCOMPATIBLE_DOFS).map(|a| full.get(i, n + a) * fa.get(a).copied().unwrap_or(0.0)).sum::<f64>();
+            }
+            fu
+        } else {
+            Self::thermal_forces(&d2, thermal, &self.points()?, None, self.ty.nodes).0
+        };
+        fu.resize(n, 0.0);
+        Ok(fu.chunks_exact(2).map(|c| [c.first().copied().unwrap_or(0.0), c.get(1).copied().unwrap_or(0.0)]).collect())
+    }
+
     /// Strain and stress at every integration point for the nodal displacements `u` (u, v).
     pub fn stresses(&self, d: &Elasticity, u: &[[f64; 2]]) -> Result<Vec<PointStress>> {
+        self.stresses_with(d, u, None)
+    }
+
+    /// Strain and stress at every integration point for the nodal displacements `u` (u, v) and,
+    /// if given, a thermal strain: the stress is D (ε − ε_th), the strain reported the total.
+    pub fn stresses_with(&self, d: &Elasticity, u: &[[f64; 2]], thermal: Option<&ThermalStrain>) -> Result<Vec<PointStress>> {
         if u.len() != self.ty.nodes {
             return Err(Error::Invalid(format!("{} displacements for a {}-node element", u.len(), self.ty.nodes)));
+        }
+        if let Some(t) = thermal {
+            t.check(self.ty.nodes)?;
         }
         let d2 = self.theory.elasticity(d)?;
         let (full, points, modes) =
             if self.formulation == Formulation::IncompatibleModes { self.full_stiffness(&d2)? } else { (Matrix::zeros(0), self.points()?, None) };
-        // Incompatible modes: α = −K_aa⁻¹ K_au u.
+        // Incompatible modes: K_aa α = f_a − K_au u (f_a the thermal load on the modes).
         let alpha = if modes.is_some() {
             let n = 2 * self.ty.nodes;
             let flat: Vec<f64> = u.iter().flatten().copied().collect();
             let mut rhs: Vec<f64> =
                 (0..INCOMPATIBLE_DOFS).map(|a| -flat.iter().enumerate().map(|(i, x)| full.get(n + a, i) * x).sum::<f64>()).collect();
+            if let Some(t) = thermal {
+                let (_, fa) = Self::thermal_forces(&d2, t, &points, modes.as_ref(), self.ty.nodes);
+                for (r, f) in rhs.iter_mut().zip(fa) {
+                    *r += f;
+                }
+            }
             Cholesky::new(&sub_block(&full, n, n, INCOMPATIBLE_DOFS))?.solve(&mut rhs);
             rhs
         } else {
@@ -507,11 +585,19 @@ impl<'a> Plane<'a> {
                     add(g, [alpha.get(2 * k).copied().unwrap_or(0.0), alpha.get(2 * k + 1).copied().unwrap_or(0.0)]);
                 }
             }
+            let eth = thermal.map(|t| Self::thermal_strain(t, a.shape.values()));
             if let Theory::PlaneStress { .. } = self.theory {
-                e[2] = -(d[2][0] * e[0] + d[2][1] * e[1] + d[2][3] * e[3]) / d[2][2];
+                e[2] = match eth {
+                    // σzz = 0 with the thermal strain: εzz = εth,zz − D₃·(ε − εth)/D₃₃ in plane.
+                    Some(t) => t[2] - (d[2][0] * (e[0] - t[0]) + d[2][1] * (e[1] - t[1]) + d[2][3] * e[3]) / d[2][2],
+                    None => -(d[2][0] * e[0] + d[2][1] * e[1] + d[2][3] * e[3]) / d[2][2],
+                };
             }
             // Plane stress: D̃ has no zz row or column, so the εzz just recovered adds nothing.
-            let s: [f64; 4] = std::array::from_fn(|r| (0..4).map(|c| d2[r][c] * e[c]).sum());
+            let s: [f64; 4] = match eth {
+                Some(t) => std::array::from_fn(|r| (0..4).map(|c| d2[r][c] * (e[c] - t[c])).sum()),
+                None => std::array::from_fn(|r| (0..4).map(|c| d2[r][c] * e[c]).sum()),
+            };
             out.push(PointStress { xyz: a.x, strain: [e[0], e[1], e[2], e[3], 0.0, 0.0], stress: [s[0], s[1], s[2], s[3], 0.0, 0.0] });
         }
         Ok(out)

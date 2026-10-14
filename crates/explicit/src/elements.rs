@@ -311,6 +311,17 @@ fn update(mat: &Material, es: &mut ElementState, q: &Mat3, d: &[f64; 6], vol: f6
     }
 }
 
+/// The mechanical part of a strain increment: less the thermal strain increment `thermal` in
+/// every normal direction (isotropic expansion, the same in any frame).
+fn mechanical(mut d: [f64; 6], thermal: f64) -> [f64; 6] {
+    if thermal != 0.0 {
+        for x in d.iter_mut().take(3) {
+            *x -= thermal;
+        }
+    }
+    d
+}
+
 /// The density and dilatational wave speed of an element of rest volume `rest`, now of volume
 /// `volume`.
 fn current(mat: &Material, rest: f64, volume: f64) -> (f64, f64) {
@@ -386,6 +397,7 @@ pub fn internal_forces(sys: &System, m: &Motion, state: &mut State, ws: &mut Wor
         let g = mid.gradient(&e.du);
         let q = rotation_of(sys, mat, es, &g, h.label, m.time)?;
         let (d, _) = rotation::split(&g);
+        let d = mechanical(d, h.thermal_rate * m.dt);
         let (rho, c) = current(mat, h.kinematics.volume, now.volume);
         update(mat, es, &q, &d, d[0] + d[1] + d[2], m.dt, rho, mid.volume);
         if let Some(failure) = es.failed {
@@ -466,8 +478,10 @@ pub fn internal_forces(sys: &System, m: &Motion, state: &mut State, ws: &mut Wor
             let averaged = t.nodes.iter().map(|n| ws.theta.get(*n).copied().unwrap_or(0.0)).sum::<f64>() / 4.0;
             let q = rotation_of(sys, mat, es, &inc.g, t.label, m.time)?;
             let (d, _) = rotation::split(&inc.g);
+            let thermal = t.thermal_rate * m.dt;
+            let d = mechanical(d, thermal);
             let (rho, c) = current(mat, t.kinematics.volume, inc.now.volume);
-            update(mat, es, &q, &d, averaged, m.dt, rho, inc.mid.volume);
+            update(mat, es, &q, &d, averaged - 3.0 * thermal, m.dt, rho, inc.mid.volume);
             if let Some(failure) = es.failed {
                 state.eroded.push((t.index, failure));
                 continue;

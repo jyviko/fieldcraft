@@ -39,6 +39,9 @@ pub struct Material {
     pub j2: Option<J2>,
     /// The equivalent plastic strain at which elements erode.
     pub erosion: Option<f64>,
+    /// The (isotropic) expansion coefficient and reference temperature, when the material
+    /// expands.
+    pub expansion: Option<(f64, f64)>,
 }
 
 /// A one-point hexahedron.
@@ -58,6 +61,8 @@ pub struct Hex {
     /// The element's stable length: its critical increment without bulk viscosity is
     /// `length / wave_speed`.
     pub length: f64,
+    /// The rate of its thermal strain, α ΔT / end time (every normal direction).
+    pub thermal_rate: f64,
 }
 
 /// A nodal-pressure tetrahedron.
@@ -72,6 +77,8 @@ pub struct Tet {
     /// The frequency bound ω² of the undeformed element.
     pub omega2: f64,
     pub length: f64,
+    /// The rate of its thermal strain, α ΔT / end time (every normal direction).
+    pub thermal_rate: f64,
 }
 
 /// A fixed, frictionless rigid plane.
@@ -145,8 +152,14 @@ fn material(model: &Model, name: &str) -> Result<Material> {
         }
         Elastic::EngineeringConstants { .. } => None,
     };
+    let expansion = match m.thermal.and_then(|t| t.expansion.map(|a| (a.axes(), t.reference_temperature))) {
+        None => None,
+        Some(([a, b, c], t_ref)) if a == b && b == c => Some((a, t_ref)),
+        Some(_) => return Err(Error::NotSupported(format!("orthotropic thermal expansion (material `{name}`) in explicit dynamics"))),
+    };
     Ok(Material {
         name: name.to_string(),
+        expansion,
         elasticity: d,
         density,
         wave_speed: (stiffest / density).sqrt(),
@@ -278,7 +291,7 @@ impl System {
                     let rest = hex_scales(&k, &gamma, &mass, mat, rho, settings.hourglass);
                     sys.lump(&nodes, &mass);
                     let length = 2.0 * c / rest.omega2.sqrt();
-                    sys.hexes.push(Hex { label, index, nodes, material: mi, kinematics: k, gamma, mass, rest, length });
+                    sys.hexes.push(Hex { label, index, nodes, material: mi, kinematics: k, gamma, mass, rest, length, thermal_rate: 0.0 });
                 }
                 ElementKind::Tet4 => {
                     let nodes: [usize; 4] = idx.try_into().map_err(|_| invalid(format!("element {label} does not have 4 nodes")))?;
@@ -287,7 +300,17 @@ impl System {
                     let mass = k.nodal_volume.map(|v| rho * v);
                     let omega2 = frequency_bound(&k, k.gradient_norm(), mat.modulus, &mass);
                     sys.lump(&nodes, &mass);
-                    sys.tets.push(Tet { label, index, nodes, material: mi, kinematics: k, mass, omega2, length: 2.0 * c / omega2.sqrt() });
+                    sys.tets.push(Tet {
+                        label,
+                        index,
+                        nodes,
+                        material: mi,
+                        kinematics: k,
+                        mass,
+                        omega2,
+                        length: 2.0 * c / omega2.sqrt(),
+                        thermal_rate: 0.0,
+                    });
                 }
                 ElementKind::Rod2 | ElementKind::Rod3 => {
                     let area = area.ok_or_else(|| Error::Internal("truss area".into()))?;
@@ -319,6 +342,7 @@ impl System {
         sys.discrete_increment = sys.discrete.critical_increment(&sys.dof_mass(), sys.nonlinear);
         sys.prescribe(model, resolved, step, settings.end_time)?;
         sys.load(model, resolved, step)?;
+        sys.temperatures(model, resolved, step, settings.end_time)?;
         sys.conditions(resolved, settings)?;
         Ok(sys)
     }
@@ -383,6 +407,47 @@ impl System {
         Ok(())
     }
 
+    /// The thermal strain rates of the step's temperature loads: each element's mean nodal
+    /// temperature change from its material's reference (nodes no load reaches stay at it) is
+    /// reached linearly over the step, like a prescribed displacement, so the thermal strain
+    /// α ΔT grows at the rate α ΔT / end time (no thermal shock at the start).
+    fn temperatures(&mut self, model: &Model, resolved: &Resolved, step: &Step, end_time: f64) -> Result<()> {
+        let mut field: Vec<Option<f64>> = vec![None; self.labels.len()];
+        let mut any = false;
+        for name in &step.loads {
+            let Some(Load::Temperature { target, value }) = model.load(name) else { continue };
+            any = true;
+            for &label in resolved.target_nodes(target) {
+                let Some(slot) = self.node(label).and_then(|n| field.get_mut(n)) else { continue };
+                match *slot {
+                    Some(old) if old != *value => {
+                        return Err(invalid(format!("node {label} is given both {old} and {value} (temperature load `{name}` and another)")));
+                    }
+                    _ => *slot = Some(*value),
+                }
+            }
+        }
+        if !any {
+            return Ok(());
+        }
+        let materials = &self.materials;
+        let rate = |nodes: &[usize], material: usize| -> f64 {
+            let Some((alpha, reference)) = materials.get(material).and_then(|m| m.expansion) else { return 0.0 };
+            let dt: f64 = nodes.iter().map(|n| field.get(*n).copied().flatten().map_or(0.0, |t| t - reference)).sum::<f64>() / nodes.len() as f64;
+            alpha * dt / end_time
+        };
+        for h in &mut self.hexes {
+            h.thermal_rate = rate(&h.nodes, h.material);
+        }
+        for t in &mut self.tets {
+            t.thermal_rate = rate(&t.nodes, t.material);
+        }
+        if self.hexes.iter().map(|h| h.thermal_rate).chain(self.tets.iter().map(|t| t.thermal_rate)).any(|r| !r.is_finite()) {
+            return Err(invalid("the thermal strain rate is not finite"));
+        }
+        Ok(())
+    }
+
     /// The constant load vector: forces and tractions as the model distributes them, consistent
     /// pressure loads, gravity and body forces with the lumped (row-sum) weights.
     fn load(&mut self, model: &Model, resolved: &Resolved, step: &Step) -> Result<()> {
@@ -397,9 +462,11 @@ impl System {
                 Load::Moment { .. } => {
                     return Err(Error::NotSupported(format!("moments (`{name}`): solid nodes have no rotations")));
                 }
-                Load::SurfaceFlux { .. } | Load::Convection { .. } | Load::HeatSource { .. } | Load::Temperature { .. } => {
+                Load::SurfaceFlux { .. } | Load::Convection { .. } | Load::HeatSource { .. } => {
                     return Err(Error::NotSupported(format!("{} loads (`{name}`) in explicit dynamics", load.kind())));
                 }
+                // Thermal strains, set by `temperatures`.
+                Load::Temperature { .. } => {}
                 Load::Force { .. } | Load::Traction { .. } => {
                     for (label, v) in resolved.nodal_loads.get(name).map(Vec::as_slice).unwrap_or_default() {
                         let node = self.node(*label).ok_or_else(|| off_mesh(*label))?;

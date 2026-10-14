@@ -567,3 +567,76 @@ fn two_dimensional_results_are_deterministic_and_errors_name_the_problem() {
     let e = solve_static(&g.model, None, &Limits::default()).unwrap_err().to_string();
     assert!(e.contains("singular") && e.contains("node"), "{e}");
 }
+
+/// Give the material an expansion coefficient and heat every node by `dt` above the reference.
+fn heat(g: &mut Grid, alpha: f64, dt: f64) {
+    let mut m = g.model.material("Mat").unwrap().clone();
+    m.thermal = Some(modelcraft_model::Thermal {
+        expansion: Some(modelcraft_model::Directional::Isotropic(alpha)),
+        reference_temperature: 20.0,
+        ..Default::default()
+    });
+    g.model.replace_material("Mat", m).unwrap();
+    let nodes: Vec<u32> = g.param.keys().copied().collect();
+    g.model.add_set("hot", Set { nodes, ..Set::default() }).unwrap();
+    g.load("heat", Load::Temperature { target: Target::Set("hot".into()), value: 20.0 + dt });
+}
+
+#[test]
+fn thermal_expansion_in_every_theory() {
+    // Uniform ΔT, held only by symmetry: plane stress and axisymmetric expand freely
+    // (u = αΔT x, no stress; εzz or the hoop strain αΔT), plane strain holds εzz = 0, so
+    // σzz = −EαΔT and the in-plane strain is (1 + ν)αΔT.
+    let (e, nu, alpha, dt) = (2e5, 0.3, 1.2e-5, 80.0);
+    for (kind, f, name) in variants() {
+        for section in [SectionKind::PlaneStress { thickness: 0.5 }, SectionKind::PlaneStrain { thickness: 0.5 }, SectionKind::Axisymmetric {}] {
+            let axisymmetric = matches!(section, SectionKind::Axisymmetric {});
+            let mut g = grid([2, 2], kind, |p| [0.5 + 2.0 * p[0] + 0.2 * p[1], p[1]]);
+            g.define(section.clone(), e, nu, None, f, Procedure::Static {});
+            heat(&mut g, alpha, dt);
+            g.symmetry("bottom", Symmetry::Y, |p| near(p[1], 0.0) && near(p[0], 0.0));
+            if !axisymmetric {
+                g.symmetry("left", Symmetry::X, |p| near(p[0], 0.0) && near(p[1], 0.0));
+                let corner = g.nodes_where(|p| near(p[0], 1.0) && near(p[1], 0.0));
+                g.model.add_set("roller", Set { nodes: corner, ..Set::default() }).unwrap();
+                g.bc("roller", BoundaryCondition::Symmetry { target: Target::Set("roller".into()), plane: Symmetry::Y });
+            }
+            let r = g.solve();
+            let plane_strain = matches!(section, SectionKind::PlaneStrain { .. });
+            let strain = if plane_strain { (1.0 + nu) * alpha * dt } else { alpha * dt };
+            for (l, i) in r.nodes.iter().zip(0..) {
+                let x = g.model.node(*l).unwrap().xyz;
+                let x0 = g.model.node(g.nodes_where(|p| near(p[0], 0.0) && near(p[1], 0.0))[0]).unwrap().xyz;
+                // Axisymmetric: the radial displacement is αΔT r (no rigid radial motion).
+                let ux = if axisymmetric { strain * x[0] } else { strain * (x[0] - x0[0]) };
+                assert!((r.displacement[i][0] - ux).abs() < 1e-9, "{name} {section:?} node {l}: {:?}", r.displacement[i]);
+                let uy = if axisymmetric { alpha * dt * x[1] } else { strain * x[1] };
+                assert!((r.displacement[i][1] - uy).abs() < 1e-9, "{name} {section:?} node {l}: {:?}", r.displacement[i]);
+            }
+            for s in &r.stress {
+                let zz = if plane_strain { -e * alpha * dt } else { 0.0 };
+                assert!((s[0].abs() + s[1].abs() + s[3].abs()) < 1e-6 && (s[2] - zz).abs() < 1e-6, "{name} {section:?}: {s:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_plate_held_on_every_edge_carries_the_biaxial_thermal_stress() {
+    // Plane stress, normal displacements held on all four edges: σxx = σyy = −EαΔT / (1 − ν).
+    let (e, nu, alpha, dt) = (2e5, 0.3, 1.2e-5, 50.0);
+    let want = -e * alpha * dt / (1.0 - nu);
+    for (kind, f, name) in variants() {
+        let mut g = grid([2, 2], kind, |p| [p[0], p[1]]);
+        g.define(SectionKind::PlaneStress { thickness: 1.0 }, e, nu, None, f, Procedure::Static {});
+        heat(&mut g, alpha, dt);
+        g.symmetry("x0", Symmetry::X, |p| near(p[0], 0.0));
+        g.symmetry("x1", Symmetry::X, |p| near(p[0], 1.0));
+        g.symmetry("y0", Symmetry::Y, |p| near(p[1], 0.0));
+        g.symmetry("y1", Symmetry::Y, |p| near(p[1], 1.0));
+        let r = g.solve();
+        for s in &r.stress {
+            assert!((s[0] - want).abs() < 1e-8 * want.abs() && (s[1] - want).abs() < 1e-8 * want.abs() && s[3].abs() < 1e-6, "{name}: {s:?}");
+        }
+    }
+}

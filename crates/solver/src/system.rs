@@ -94,20 +94,19 @@ impl Kernel<'_> {
     }
 
     /// Integration-point stresses for nodal displacements given as 3-vectors, with a thermal
-    /// strain when given (solids so far).
+    /// strain when given.
     pub fn stresses_with(&self, d: &Elasticity, u: &[[f64; 3]], thermal: Option<&ThermalStrain>) -> modelcraft_fem::Result<Vec<PointStress>> {
-        match (self, thermal) {
-            (Kernel::Solid(s), _) => s.stresses_with(d, u, thermal),
-            (Kernel::Plane(p), None) => p.stresses(d, &u.iter().map(|v| [v[0], v[1]]).collect::<Vec<_>>()),
-            (Kernel::Plane(_), Some(_)) => Err(modelcraft_fem::Error::NotSupported("thermal strain in 2D elements".into())),
+        match self {
+            Kernel::Solid(s) => s.stresses_with(d, u, thermal),
+            Kernel::Plane(p) => p.stresses_with(d, &u.iter().map(|v| [v[0], v[1]]).collect::<Vec<_>>(), thermal),
         }
     }
 
-    /// The equivalent nodal forces of a thermal strain, as 3-vectors (solids so far).
+    /// The equivalent nodal forces of a thermal strain, as 3-vectors (Z zero for 2D).
     pub fn thermal_load(&self, d: &Elasticity, thermal: &ThermalStrain) -> modelcraft_fem::Result<Vec<[f64; 3]>> {
         match self {
             Kernel::Solid(s) => s.thermal_load(d, thermal),
-            Kernel::Plane(_) => Err(modelcraft_fem::Error::NotSupported("thermal strain in 2D elements".into())),
+            Kernel::Plane(p) => Ok(p.thermal_load(d, thermal)?.into_iter().map(|v| [v[0], v[1], 0.0]).collect()),
         }
     }
 

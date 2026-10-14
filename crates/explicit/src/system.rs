@@ -68,6 +68,8 @@ pub struct Hex {
     pub length: f64,
     /// The rate of its thermal strain, α ΔT / end time (every normal direction).
     pub thermal_rate: f64,
+    /// Its density's factor from mass scaling (1 without).
+    pub mass_factor: f64,
 }
 
 /// A nodal-pressure tetrahedron.
@@ -84,6 +86,8 @@ pub struct Tet {
     pub length: f64,
     /// The rate of its thermal strain, α ΔT / end time (every normal direction).
     pub thermal_rate: f64,
+    /// Its density's factor from mass scaling (1 without).
+    pub mass_factor: f64,
 }
 
 /// A fixed rigid plane.
@@ -120,6 +124,9 @@ pub struct System {
     /// The springs' and dashpots' stable increment on the lumped mass, and a link that sets it,
     /// when there are any.
     pub discrete_increment: Option<(f64, String)>,
+    /// What mass scaling added: per node, and per section (in name order).
+    pub added_mass: Vec<f64>,
+    pub mass_scaling: Option<crate::result::MassScalingSummary>,
     /// Prescribed velocity per degree of freedom (`None` = free).
     pub prescribed: Vec<Option<f64>>,
     pub walls: Vec<Wall>,
@@ -277,6 +284,8 @@ impl System {
             tets: Vec::new(),
             rods: Vec::new(),
             mass: vec![0.0; n],
+            added_mass: Vec::new(),
+            mass_scaling: None,
             discrete: Discrete::default(),
             discrete_increment: None,
             prescribed: vec![None; dofs],
@@ -322,7 +331,19 @@ impl System {
                     let rest = hex_scales(&k, &gamma, &mass, mat, rho, settings.hourglass);
                     sys.lump(&nodes, &mass);
                     let length = 2.0 * c / rest.omega2.sqrt();
-                    sys.hexes.push(Hex { label, index, nodes, material: mi, kinematics: k, gamma, mass, rest, length, thermal_rate: 0.0 });
+                    sys.hexes.push(Hex {
+                        label,
+                        index,
+                        nodes,
+                        material: mi,
+                        kinematics: k,
+                        gamma,
+                        mass,
+                        rest,
+                        length,
+                        thermal_rate: 0.0,
+                        mass_factor: 1.0,
+                    });
                 }
                 ElementKind::Tet4 => {
                     let nodes: [usize; 4] = idx.try_into().map_err(|_| invalid(format!("element {label} does not have 4 nodes")))?;
@@ -341,6 +362,7 @@ impl System {
                         omega2,
                         length: 2.0 * c / omega2.sqrt(),
                         thermal_rate: 0.0,
+                        mass_factor: 1.0,
                     });
                 }
                 ElementKind::Rod2 | ElementKind::Rod3 => {
@@ -369,6 +391,9 @@ impl System {
                 other => return Err(Error::Internal(format!("{} element kind", other.name()))),
             }
         }
+        if let Some(scaling) = &settings.mass_scaling {
+            sys.scale_mass(model, resolved, scaling, settings)?;
+        }
         sys.discrete = Discrete::new(resolved, sys.dofs(), &sys.xyz, |l| sys.node(l))?;
         sys.discrete_increment = sys.discrete.critical_increment(&sys.dof_mass(), sys.nonlinear);
         sys.prescribe(model, resolved, step, settings.end_time)?;
@@ -377,6 +402,90 @@ impl System {
         sys.conditions(resolved, settings)?;
         sys.check_hyperelastic()?;
         Ok(sys)
+    }
+
+    /// Mass scaling to a target increment (see [`fieldcraft_model::MassScaling`]): each solid
+    /// element (of the set) whose stable increment times the step's scale is below the target
+    /// gets its density times (target / increment)², its lumped masses and frequency bound with
+    /// it; the added mass is kept per node and per section.
+    fn scale_mass(&mut self, model: &Model, resolved: &Resolved, scaling: &fieldcraft_model::MassScaling, settings: &ExplicitDynamic) -> Result<()> {
+        let chosen: Option<&[u32]> = match &scaling.set {
+            Some(s) => Some(resolved.sets.get(s).map(|r| r.elements.as_slice()).ok_or_else(|| invalid(format!("set `{s}` is not resolved")))?),
+            None => None,
+        };
+        let wanted = |label: u32| chosen.is_none_or(|l| l.binary_search(&label).is_ok());
+        let factor = |length: f64, material: usize, materials: &[Material]| -> f64 {
+            let c = materials.get(material).map_or(f64::INFINITY, |m| m.wave_speed);
+            let dt = settings.dt_scale * length / c;
+            if dt > 0.0 && dt < scaling.target_increment { (scaling.target_increment / dt).powi(2) } else { 1.0 }
+        };
+        let hourglass = fieldcraft_model::Hourglass { kind: settings.hourglass.kind, coefficient: settings.hourglass.coefficient };
+        let mut added = vec![0.0; self.labels.len()];
+        let mut by_element: Vec<(u32, f64)> = Vec::new();
+        for h in self.hexes.iter_mut().filter(|h| wanted(h.label)) {
+            let f = factor(h.length, h.material, &self.materials);
+            if f == 1.0 {
+                continue;
+            }
+            let extra = h.mass.map(|m| m * (f - 1.0));
+            for (n, x) in h.nodes.iter().zip(extra) {
+                if let Some(a) = added.get_mut(*n) {
+                    *a += x;
+                }
+            }
+            h.mass = h.mass.map(|m| m * f);
+            h.mass_factor = f;
+            if let Some(mat) = self.materials.get(h.material) {
+                h.rest = hex_scales(&h.kinematics, &h.gamma, &h.mass, mat, mat.density * f, hourglass);
+            }
+            by_element.push((h.label, extra.iter().sum()));
+        }
+        for t in self.tets.iter_mut().filter(|t| wanted(t.label)) {
+            let f = factor(t.length, t.material, &self.materials);
+            if f == 1.0 {
+                continue;
+            }
+            let extra = t.mass.map(|m| m * (f - 1.0));
+            for (n, x) in t.nodes.iter().zip(extra) {
+                if let Some(a) = added.get_mut(*n) {
+                    *a += x;
+                }
+            }
+            t.mass = t.mass.map(|m| m * f);
+            t.omega2 /= f;
+            t.mass_factor = f;
+            by_element.push((t.label, extra.iter().sum()));
+        }
+        for (m, a) in self.mass.iter_mut().zip(&added) {
+            *m += a;
+        }
+        let total_added: f64 = added.iter().sum();
+        let total: f64 = self.mass.iter().sum();
+        let mut sections: Vec<(String, f64)> = Vec::new();
+        for (name, section) in model.sections() {
+            let elements = resolved.sets.get(&section.set).map(|r| r.elements.as_slice()).unwrap_or_default();
+            let mass: f64 = by_element.iter().filter(|(l, _)| elements.binary_search(l).is_ok()).map(|(_, m)| m).sum();
+            if mass > 0.0 {
+                sections.push((name.clone(), mass));
+            }
+        }
+        if total_added > 0.0 {
+            self.warnings.push(format!(
+                "mass scaling to an increment of {:.3e} added {total_added:.4e} of mass ({:.2}% of the model's) to {} elements",
+                scaling.target_increment,
+                100.0 * total_added / total.max(f64::MIN_POSITIVE),
+                by_element.len()
+            ));
+        }
+        self.mass_scaling = Some(crate::result::MassScalingSummary {
+            target_increment: scaling.target_increment,
+            elements: by_element.len(),
+            added_mass: total_added,
+            fraction: total_added / total.max(f64::MIN_POSITIVE),
+            sections,
+        });
+        self.added_mass = added;
+        Ok(())
     }
 
     /// Refuse what hyperelastic elements cannot take yet: small-displacement steps (the

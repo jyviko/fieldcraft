@@ -425,6 +425,22 @@ pub struct ExplicitDynamic {
     /// The objective stress rate of large deformation.
     #[serde(default)]
     pub stress_rate: StressRate,
+    /// Opt-in mass scaling: the elements whose stable increment is below a target get the
+    /// density that brings them to it (the added mass is reported).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mass_scaling: Option<MassScaling>,
+}
+
+/// Mass scaling to a target time increment: every element (of `set`, or of the whole model) whose
+/// stable increment, times the step's scale, is below `target_increment` has its density raised
+/// by (target / increment)², which brings it to the target. It changes the dynamics: the added
+/// mass is reported, per section, with its share of the kinetic energy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MassScaling {
+    pub target_increment: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<String>,
 }
 
 fn yes() -> bool {
@@ -467,6 +483,7 @@ impl ExplicitDynamic {
             bulk_viscosity: BulkViscosity::default(),
             nonlinear_geometry: true,
             stress_rate: StressRate::default(),
+            mass_scaling: None,
         }
     }
 
@@ -487,6 +504,7 @@ impl ExplicitDynamic {
             .map(String::as_str)
             .chain(self.initial_velocities.iter().map(|v| v.set.as_str()))
             .chain(self.rigid_walls.iter().map(|w| w.set.as_str()))
+            .chain(self.mass_scaling.iter().filter_map(|m| m.set.as_deref()))
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -523,6 +541,12 @@ impl ExplicitDynamic {
                 return Err(Error::Invalid("a rigid wall's normal must not be zero".into()));
             }
             w.friction.validate().map_err(|e| Error::Invalid(format!("rigid wall on set `{}`: {e}", w.set)))?;
+        }
+        if let Some(m) = &self.mass_scaling {
+            positive("mass scaling target increment", m.target_increment)?;
+            if m.target_increment > end {
+                return Err(Error::Invalid(format!("the mass scaling target increment {} is longer than the step", m.target_increment)));
+            }
         }
         self.hourglass.validate()?;
         self.bulk_viscosity.validate()
@@ -1012,6 +1036,9 @@ mod tests {
             },
             ExplicitDynamic { hourglass: Hourglass { kind: HourglassKind::Viscous, coefficient: 2.0 }, ..base.clone() },
             ExplicitDynamic { bulk_viscosity: BulkViscosity { linear: -1.0, quadratic: 1.0 }, ..base.clone() },
+            ExplicitDynamic { mass_scaling: Some(MassScaling { target_increment: 0.0, set: None }), ..base.clone() },
+            ExplicitDynamic { mass_scaling: Some(MassScaling { target_increment: f64::NAN, set: None }), ..base.clone() },
+            ExplicitDynamic { mass_scaling: Some(MassScaling { target_increment: 2.0, set: None }), ..base.clone() },
         ];
         for b in bad {
             assert!(Procedure::ExplicitDynamic(b.clone()).validate().is_err(), "{b:?}");

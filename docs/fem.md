@@ -468,3 +468,15 @@ geometry and take no thermal strain yet (both refused by name). Verified by unia
 λ = 1.5 of all three laws on hex8 and tet4 against the material point (`crates/explicit/tests/hyperelastic.rs`)
 and by `tests/oracle/explicit-neo-hookean-implicit`, a quasi-static explicit pull against the
 implicit nonlinear solver.
+
+## Mass scaling (explicit dynamics)
+
+Opt-in per explicit step (`mass_scaling: {target_increment, set}`): every solid element (of the
+set, or of the model) whose stable increment times the step's scale is below the target has its
+density raised by (target / increment)², which brings its increment to the target (its lumped
+masses, frequency bound and hourglass and bulk-viscosity scales follow; adiabatic heating keeps
+the physical density). The run reports the elements scaled, the added mass in all and per
+section, its fraction of the model's mass, a warning, and the kinetic energy of the added mass
+(`energy.added_kinetic`, part of the kinetic energy, so the balance holds). Verified on a uniform
+bar scaled to twice its increment: added mass three times the bar's, the increment doubled, the
+added mass's share of the kinetic energy three quarters (`crates/explicit/tests/one_d.rs`).

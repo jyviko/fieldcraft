@@ -201,10 +201,14 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     let mut critical: Vec<ControllingElement> = sys
         .hexes
         .iter()
-        .map(|h| (h.label, h.length, h.material))
-        .chain(sys.tets.iter().map(|t| (t.label, t.length, t.material)))
-        .chain(sys.rods.iter().map(|r| (r.label, r.length, r.material)))
-        .map(|(label, length, m)| ControllingElement { label, increment: length / sys.materials.get(m).map_or(f64::INFINITY, |m| m.wave_speed) })
+        .map(|h| (h.label, h.length, h.material, h.mass_factor))
+        .chain(sys.tets.iter().map(|t| (t.label, t.length, t.material, t.mass_factor)))
+        .chain(sys.rods.iter().map(|r| (r.label, r.length, r.material, 1.0)))
+        .map(|(label, length, m, f)| ControllingElement {
+            label,
+            // Mass scaling slows the element's waves by √f.
+            increment: length * f.sqrt() / sys.materials.get(m).map_or(f64::INFINITY, |m| m.wave_speed),
+        })
         .collect();
     critical.sort_by(|a, b| a.increment.total_cmp(&b.increment).then(a.label.cmp(&b.label)));
     critical.truncate(CONTROLLING);
@@ -411,6 +415,10 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         energy.external += external;
         energy.constraint += dt_n * constraint;
         energy.kinetic = 0.5 * kinetic;
+        if !sys.added_mass.is_empty() {
+            let per_node = v_now.as_chunks::<NODE_DOFS>().0.iter().zip(&sys.added_mass);
+            energy.added_kinetic = 0.5 * per_node.map(|(v, m)| m * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2])).sum::<f64>();
+        }
         if !ws.contact_force.is_empty() {
             let work: f64 = du.iter().zip(ws.contact_force.iter().zip(&previous.contact_force)).map(|(d, (c, c0))| d * (c0 + c)).sum();
             energy.contact -= 0.5 * work;
@@ -483,6 +491,7 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         initial_kinetic,
         eroded,
         contacts: summaries,
+        mass_scaling: sys.mass_scaling.clone(),
         warnings,
     })
 }

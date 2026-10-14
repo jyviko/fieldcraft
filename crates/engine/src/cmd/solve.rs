@@ -355,6 +355,7 @@ fn explicit_summary(r: &ExplicitResult) -> Value {
         "history_samples": r.history.time.len(),
         "eroded": r.eroded,
         "contacts": r.contacts,
+        "mass_scaling": r.mass_scaling,
         "warnings": r.warnings,
     })
 }

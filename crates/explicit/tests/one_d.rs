@@ -305,3 +305,55 @@ fn whirling_mass_on_a_corotational_rod() {
     // A quarter turn: the mass ends near (0, L).
     assert!((l + end[0]).abs() < 1e-2 && (end[1] - l).abs() < 1e-2, "{end:?}");
 }
+
+/// Mass scaling to twice a uniform bar's stable increment quadruples its density: the added mass
+/// is three times the bar's, the stable increment doubles with the halved wave speed
+/// c = √(E/ρ), and the kinetic energy of the added mass is three quarters of the total.
+#[test]
+fn mass_scaling_slows_the_waves_as_the_added_density_says() {
+    use fieldcraft_explicit::{Limits, solve_explicit};
+    use fieldcraft_model::*;
+    let build = |scaled: Option<f64>| {
+        let mut m = Model::default();
+        let n = 40;
+        for i in 0..=n {
+            for (j, (y, z)) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].iter().enumerate() {
+                m.set_node((4 * i + j + 1) as u32, [i as f64, *y, *z]).unwrap();
+            }
+        }
+        for i in 0..n {
+            let a = |j: usize| (4 * i + j + 1) as u32;
+            let b = |j: usize| (4 * (i + 1) + j + 1) as u32;
+            m.set_element(i as u32 + 1, ElementKind::Hex8, vec![a(0), b(0), b(1), a(1), a(3), b(3), b(2), a(2)]).unwrap();
+        }
+        m.add_set("all", Set { elements: (1..=n as u32).collect(), ..Set::default() }).unwrap();
+        m.add_material("Mat", Material { elastic: Some(Elastic::Isotropic { young: 1.0, poisson: 0.0 }), density: Some(1.0), ..Material::default() })
+            .unwrap();
+        let formulation = Formulation { integration: Integration::Reduced, ..Formulation::default() };
+        m.add_section("bar", Section { set: "all".into(), material: "Mat".into(), kind: SectionKind::Solid {}, formulation }).unwrap();
+        let mut step = ExplicitDynamic::new(10.0);
+        step.initial_velocities = vec![InitialVelocity { set: "all".into(), velocity: [0.01, 0.0, 0.0] }];
+        step.mass_scaling = scaled.map(|t| MassScaling { target_increment: t, set: None });
+        m.add_step(Step::new("Run", Procedure::ExplicitDynamic(step)), None).unwrap();
+        solve_explicit(&m, None, &Limits::default()).unwrap()
+    };
+    let plain = build(None);
+    let scaled = build(Some(2.0 * plain.initial_increment));
+    let s = scaled.mass_scaling.as_ref().unwrap();
+    eprintln!(
+        "mass scaling: {s:?}; increments {} vs {}; Δt {:.4e} vs {:.4e}",
+        scaled.increments, plain.increments, scaled.initial_increment, plain.initial_increment
+    );
+    assert_eq!(s.elements, 40);
+    assert!((s.added_mass / plain.total_mass - 3.0).abs() < 1e-9 && (s.fraction - 0.75).abs() < 1e-9, "{s:?}");
+    assert_eq!(s.sections.len(), 1);
+    assert!((scaled.initial_increment / plain.initial_increment - 2.0).abs() < 1e-9);
+    assert!((scaled.total_mass / plain.total_mass - 4.0).abs() < 1e-9);
+    assert!((scaled.energy.added_kinetic / scaled.energy.kinetic - 0.75).abs() < 1e-9, "{:?}", scaled.energy);
+    assert!(scaled.warnings.iter().any(|w| w.contains("mass scaling")));
+    assert!(
+        scaled.controlling.first().is_some_and(|c| (0.9 * c.increment / scaled.initial_increment - 1.0).abs() < 1e-6),
+        "{:?}",
+        scaled.controlling
+    );
+}

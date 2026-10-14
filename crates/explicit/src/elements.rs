@@ -547,6 +547,8 @@ fn hexahedron(sys: &System, h: &crate::system::Hex, m: &Motion, es: &mut Element
     let (d, _) = rotation::split(&g);
     let d = mechanical(d, h.thermal_rate * m.dt);
     let (rho, c) = current(mat, h.kinematics.volume, now.volume);
+    // Mass scaling raises the density the dynamics see (not the one adiabatic heating uses).
+    let (rho_s, c_s) = (rho * h.mass_factor, c / h.mass_factor.sqrt());
     let stiffer = match &mat.hyperelastic {
         Some(model) => {
             let mut f = h.kinematics.gradient(&e.u);
@@ -568,7 +570,7 @@ fn hexahedron(sys: &System, h: &crate::system::Hex, m: &Motion, es: &mut Element
     // geometry).
     let (gamma, scales) = if sys.nonlinear {
         let gamma = now.hourglass_vectors(&x_now);
-        let scales = hex_scales(&now, &gamma, &h.mass, mat, rho, hourglass);
+        let scales = hex_scales(&now, &gamma, &h.mass, mat, rho_s, hourglass);
         (gamma, scales)
     } else {
         (h.gamma, h.rest)
@@ -593,7 +595,7 @@ fn hexahedron(sys: &System, h: &crate::system::Hex, m: &Motion, es: &mut Element
             }
         }
     }
-    let element = Element { now: &now, mid: &mid, density: rho, wave_speed: c, length: 2.0 * c / (stiffer * scales.omega2).sqrt() };
+    let element = Element { now: &now, mid: &mid, density: rho_s, wave_speed: c_s, length: 2.0 * c_s / (stiffer * scales.omega2).sqrt() };
     let mut forces = element.finish(&es.point.stress, &e.v, m.bulk);
     forces.hourglass = Some(f);
     Ok(Outcome::Forces(forces))
@@ -632,6 +634,7 @@ fn tetrahedron(
     let thermal = t.thermal_rate * m.dt;
     let d = mechanical(d, thermal);
     let (rho, c) = current(mat, t.kinematics.volume, inc.now.volume);
+    let (rho_s, c_s) = (rho * t.mass_factor, c / t.mass_factor.sqrt());
     let stiffer = match &mat.hyperelastic {
         // The average nodal pressure of a decoupled material (Bonet & Burton 1998, at finite
         // strain): each node's pressure U′(J_a) from its tetrahedra's volume ratio, the element's
@@ -660,7 +663,7 @@ fn tetrahedron(
         return Ok(Outcome::Eroded(failure));
     }
     let omega2 = stiffer * if sys.nonlinear { frequency_bound(&inc.now, inc.now.gradient_norm(), mat.modulus, &t.mass) } else { t.omega2 };
-    let element = Element { now: &inc.now, mid: &inc.mid, density: rho, wave_speed: c, length: 2.0 * c / omega2.sqrt() };
+    let element = Element { now: &inc.now, mid: &inc.mid, density: rho_s, wave_speed: c_s, length: 2.0 * c_s / omega2.sqrt() };
     Ok(Outcome::Forces(element.finish(&es.point.stress, &inc.v, m.bulk)))
 }
 

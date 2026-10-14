@@ -505,6 +505,11 @@ const PROCEDURE: Field = variants(
                 group("bulk_viscosity", "Bulk viscosity", &[positive("linear", "Linear", D::None), positive("quadratic", "Quadratic", D::None)]),
                 flag("nonlinear_geometry", "Nonlinear geometry").def("true"),
                 choice("stress_rate", "Stress rate", &[("jaumann", "Jaumann"), ("green_naghdi", "Green–Naghdi")]),
+                group(
+                    "mass_scaling",
+                    "Mass scaling",
+                    &[positive("target_increment", "Target increment", D::Time).req(), reference("set", "Set", C::Set)],
+                ),
             ],
         ),
         variant(

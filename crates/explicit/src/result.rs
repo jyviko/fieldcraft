@@ -25,6 +25,8 @@ pub struct Energies {
     /// Energy taken by contact: the work the model does against the contact forces (the penalty
     /// energy stored in the contact springs, plus what friction dissipates there).
     pub contact: f64,
+    /// The kinetic energy of the mass added by mass scaling (part of `kinetic`).
+    pub added_kinetic: f64,
     /// Friction dissipation, in contact and on rigid walls (part of `contact` and of
     /// `constraint`).
     pub friction: f64,
@@ -106,6 +108,19 @@ pub struct History {
     pub velocity: Vec<Vec<[f64; 3]>>,
 }
 
+/// What mass scaling added to a run.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct MassScalingSummary {
+    pub target_increment: f64,
+    /// Elements whose density was raised.
+    pub elements: usize,
+    pub added_mass: f64,
+    /// The added mass over the model's mass (with it).
+    pub fraction: f64,
+    /// The added mass per section, by name.
+    pub sections: Vec<(String, f64)>,
+}
+
 /// What a contact did over the run.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ContactSummary {
@@ -158,5 +173,7 @@ pub struct ExplicitResult {
     pub eroded: Vec<ErodedElement>,
     /// Per contact of the model, in name order.
     pub contacts: Vec<ContactSummary>,
+    /// What mass scaling added, when the step asks for it.
+    pub mass_scaling: Option<MassScalingSummary>,
     pub warnings: Vec<String>,
 }

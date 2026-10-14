@@ -46,7 +46,7 @@ pub mod system;
 
 pub use elements::Failure;
 pub use integrate::solve_explicit;
-pub use result::{ContactSummary, ControllingElement, Energies, ErodedElement, ExplicitResult, Frame, History};
+pub use result::{ContactSummary, ControllingElement, Energies, ErodedElement, ExplicitResult, Frame, History, MassScalingSummary};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {

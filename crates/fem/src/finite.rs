@@ -515,6 +515,21 @@ impl Plane<'_> {
     }
 }
 
+/// The kinematics of one point of a 2D element in a nonlinear step: F, det F_m, the volume share, the strain columns (current at finite strain), the small strain,
+/// the temperature and the reference position.
+struct PlaneKinematics {
+    f: Mat3,
+    /// det F_m (small strain: 1), and the dilatation the mixed element averages (small strain:
+    /// 1 + tr ε).
+    j: f64,
+    dilatation: f64,
+    dv: f64,
+    current: Vec<[f64; 3]>,
+    strain: [f64; 6],
+    heat: Heat,
+    x: [f64; 3],
+}
+
 /// One integration point of a 2D element in a nonlinear step: the total deformation gradient,
 /// det F_m, the reference position and the response.
 struct PlanePoint {
@@ -525,8 +540,14 @@ struct PlanePoint {
 }
 
 impl Plane<'_> {
-    fn check_nonlinear(&self, u: &[[f64; 2]], kin: Kinematics) -> Result<()> {
+    fn check_nonlinear(&self, m: &MaterialModel, u: &[[f64; 2]], kin: Kinematics) -> Result<()> {
         check_displacements(u, self.ty.nodes)?;
+        if matches!(self.formulation, Formulation::Hybrid { .. }) && !m.is_decoupled() {
+            return Err(Error::NotSupported(format!(
+                "hybrid elements of a {} material in nonlinear steps (the mixed formulation needs a volumetric–isochoric split of the strain energy; give the material the neo-Hookean option)",
+                m.name()
+            )));
+        }
         if let Theory::PlaneStress { .. } = self.theory {
             let why = match kin {
                 Kinematics::Finite => "the thickness change needs a local iteration",
@@ -558,7 +579,7 @@ impl Plane<'_> {
         updated: &mut [f64],
         tangent: bool,
     ) -> Result<(Finite, Vec<PlanePoint>)> {
-        self.check_nonlinear(u, kin)?;
+        self.check_nonlinear(m, u, kin)?;
         let n = self.ty.nodes;
         if let Some(t) = thermal {
             t.check(n)?;
@@ -570,8 +591,9 @@ impl Plane<'_> {
         let mut k = tangent.then(|| Matrix::zeros(ndof));
         let axisymmetric = self.theory == Theory::Axisymmetric;
         let small = kin == Kinematics::Small;
-        let mut out = Vec::with_capacity(rule.len());
-        for (i, p) in rule.iter().enumerate() {
+        // The kinematics of every point first: the mixed element's pressure needs them all.
+        let mut kinematics = Vec::with_capacity(rule.len());
+        for p in &rule {
             let at = self.at(p)?;
             let cols = at.g.get(..n).unwrap_or_default();
             let mut f = IDENTITY;
@@ -585,12 +607,11 @@ impl Plane<'_> {
                     f[2][2] += ua[0] * g[2];
                 }
             }
-            let updated_point = updated.get_mut(i * len..(i + 1) * len).unwrap_or_default();
             let heat = Heat::at(thermal, at.shape.values())?;
-            let (j, dv, current, r) = if small {
+            let point = if small {
                 let strain = heat.mechanical_strain(&small_strain(&f));
-                let r = m.small_strain(&strain, heat.temperature, point_history(committed, len, i), updated_point, true)?;
-                (1.0, at.dv, cols.to_vec(), r)
+                let volume = 1.0 + strain[0] + strain[1] + strain[2];
+                PlaneKinematics { f, j: 1.0, dilatation: volume, dv: at.dv, current: cols.to_vec(), strain, heat, x: at.x }
             } else {
                 let det2 = f[0][0] * f[1][1] - f[0][1] * f[1][0];
                 let j = det2 * f[2][2];
@@ -600,9 +621,29 @@ impl Plane<'_> {
                 let inv = [[f[1][1] / det2, -f[0][1] / det2], [-f[1][0] / det2, f[0][0] / det2]];
                 let current: Vec<[f64; 3]> =
                     cols.iter().map(|g| [g[0] * inv[0][0] + g[1] * inv[1][0], g[0] * inv[0][1] + g[1] * inv[1][1], g[2] / f[2][2]]).collect();
-                let r = m.response(&heat.mechanical(&f), heat.temperature, point_history(committed, len, i), updated_point)?;
-                (j / heat.volume(), at.dv * heat.volume(), current, r)
+                let j = j / heat.volume();
+                PlaneKinematics { f, j, dilatation: j, dv: at.dv * heat.volume(), current, strain: [0.0; 6], heat, x: at.x }
             };
+            kinematics.push(point);
+        }
+        let responses: Vec<Response> = if let Formulation::Hybrid { .. } = self.formulation {
+            self.mean_dilatation(m, &kinematics, small, committed, updated, k.as_mut())?
+        } else {
+            let mut out = Vec::with_capacity(kinematics.len());
+            for (i, p) in kinematics.iter().enumerate() {
+                let updated_point = updated.get_mut(i * len..(i + 1) * len).unwrap_or_default();
+                let history = point_history(committed, len, i);
+                out.push(if small {
+                    m.small_strain(&p.strain, p.heat.temperature, history, updated_point, true)?
+                } else {
+                    m.response(&p.heat.mechanical(&p.f), p.heat.temperature, history, updated_point)?
+                });
+            }
+            out
+        };
+        let mut out = Vec::with_capacity(rule.len());
+        for (p, r) in kinematics.into_iter().zip(responses) {
+            let (dv, current) = (p.dv, &p.current);
             let tau = [r.stress[0], r.stress[1], r.stress[2], r.stress[3]];
             for (a, g) in current.iter().enumerate() {
                 if let Some(x) = force.get_mut(2 * a) {
@@ -614,7 +655,7 @@ impl Plane<'_> {
             }
             if let Some(k) = k.as_mut() {
                 let c4: [[f64; 4]; 4] = std::array::from_fn(|a| std::array::from_fn(|b| r.tangent[a][b]));
-                crate::plane::accumulate(&mut k.data, &current, &c4, dv);
+                crate::plane::accumulate(&mut k.data, current, &c4, dv);
                 if !small {
                     for (a, ga) in current.iter().enumerate() {
                         for (b, gb) in current.iter().enumerate() {
@@ -625,9 +666,54 @@ impl Plane<'_> {
                     }
                 }
             }
-            out.push(PlanePoint { f, j, x: at.x, response: r });
+            out.push(PlanePoint { f: p.f, j: p.j, x: p.x, response: r });
         }
         Ok((Finite { force, tangent: k }, out))
+    }
+
+    /// The mean dilatation responses of a hybrid 2D element (one constant pressure): θ = ∫ J dV₀
+    /// / V₀ (hoop stretch included), p = U′(θ), τ = τ_iso + J p I (small strain: s + p I), and
+    /// the dilatation stiffness U″(θ) g gᵀ / V₀ added to `k`, g = ∫ J ∇ₓ·N dV₀ (small strain
+    /// ∫ ∇₀·N dV₀), the divergence taking the hoop column N/r too (the constant-pressure case of
+    /// the solids' three-field form, Simo, Taylor & Pister 1985).
+    fn mean_dilatation(
+        &self,
+        m: &MaterialModel,
+        points: &[PlaneKinematics],
+        small: bool,
+        committed: &[f64],
+        updated: &mut [f64],
+        k: Option<&mut Matrix>,
+    ) -> Result<Vec<Response>> {
+        let len = m.history_len();
+        let volume: f64 = points.iter().map(|p| p.dv).sum();
+        if !(volume > 0.0 && volume.is_finite()) {
+            return Err(inverted(&format!("2D {}", self.ty.kind.name()), volume));
+        }
+        let theta = points.iter().map(|p| p.dv * p.dilatation).sum::<f64>() / volume;
+        if !(theta > 0.0 && theta.is_finite()) {
+            return Err(inverted(&format!("2D {}", self.ty.kind.name()), theta));
+        }
+        let (pressure, stiffness) = m.volumetric(theta, small).ok_or_else(|| Error::Invalid("volumetric response".into()))?;
+        let mut out = Vec::with_capacity(points.len());
+        for (i, p) in points.iter().enumerate() {
+            let (c, u) = (point_history(committed, len, i), updated.get_mut(i * len..(i + 1) * len).unwrap_or_default());
+            out.push(if small {
+                let mut r = m.small_strain(&p.strain, p.heat.temperature, c, u, false)?;
+                r.stress.iter_mut().take(3).for_each(|s| *s += pressure);
+                r
+            } else {
+                add_pressure(&m.isochoric(&p.heat.mechanical(&p.f), p.heat.temperature, c, u)?, p.j, pressure, 0.0)
+            });
+        }
+        if let Some(k) = k {
+            let mut g = vec![0.0; k.n];
+            for p in points {
+                crate::plane::divergence(&mut g, &p.current, p.dv * p.j);
+            }
+            crate::plane::add_outer(k, &g, stiffness / volume);
+        }
+        Ok(out)
     }
 
     /// Internal forces (u, v per node) and (with `tangent`) the tangent stiffness at nodal
@@ -1014,6 +1100,63 @@ mod tests {
         }
         let stress = Plane::new(ElementKind::Quad4, &quad8[..4], Formulation::Full, Theory::PlaneStress { thickness: 1.0 }).unwrap();
         assert!(matches!(stress.finite_strain(&svk, &[[0.0; 2]; 4], &[], &mut [], true), Err(Error::NotSupported(_))));
+    }
+
+    #[test]
+    fn hybrid_2d_tangents_are_the_derivative_of_the_forces() {
+        let quad8 = [
+            [1.0, 0.0, 0.0],
+            [2.0, 0.1, 0.0],
+            [2.2, 1.0, 0.0],
+            [0.9, 1.1, 0.0],
+            [1.5, 0.0, 0.0],
+            [2.1, 0.55, 0.0],
+            [1.5, 1.1, 0.0],
+            [0.95, 0.5, 0.0],
+        ];
+        let (shear, bulk) = (300.0, 30000.0);
+        let neo = MaterialModel::NeoHookean { shear, bulk };
+        let mr = MaterialModel::Polynomial { name: "Mooney–Rivlin", c: [100.0, 50.0, 0.0, 0.0], bulk };
+        let hybrid = Formulation::Hybrid { pressures: 1 };
+        for theory in [Theory::PlaneStrain { thickness: 2.0 }, Theory::Axisymmetric] {
+            for (kind, x) in [(ElementKind::Quad8, &quad8[..]), (ElementKind::Quad4, &quad8[..4])] {
+                let plane = Plane::new(kind, x, hybrid, theory).unwrap();
+                for m in [&neo, &mr] {
+                    let u: Vec<[f64; 2]> = displacement(x.len(), 0.06).iter().map(|v| [v[0], v[1]]).collect();
+                    let k = plane.finite_strain(m, &u, &[], &mut [], true).unwrap().tangent.unwrap();
+                    let scale = k.data.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+                    let h = 1e-6;
+                    for j in 0..2 * x.len() {
+                        let shifted = |s: f64| {
+                            let mut v = u.clone();
+                            v[j / 2][j % 2] += s;
+                            plane.finite_strain(m, &v, &[], &mut [], false).unwrap().force
+                        };
+                        let (p, q) = (shifted(h), shifted(-h));
+                        for i in 0..2 * x.len() {
+                            let numeric = (p[i] - q[i]) / (2.0 * h);
+                            assert!((numeric - k.get(i, j)).abs() < 1e-6 * scale, "{theory:?} {kind:?} {i} {j}: {numeric} vs {}", k.get(i, j));
+                        }
+                    }
+                }
+                // At rest the tangent is the linear hybrid stiffness of the same moduli.
+                let young = 9.0 * bulk * shear / (3.0 * bulk + shear);
+                let poisson = (3.0 * bulk - 2.0 * shear) / (2.0 * (3.0 * bulk + shear));
+                let d = isotropic(young, poisson).unwrap();
+                let k = plane.finite_strain(&neo, &vec![[0.0; 2]; x.len()], &[], &mut [], true).unwrap().tangent.unwrap();
+                let linear = plane.stiffness(&d).unwrap();
+                let scale = linear.data.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+                for (a, b) in k.data.iter().zip(&linear.data) {
+                    assert!((a - b).abs() < 1e-9 * scale, "{a} {b}");
+                }
+            }
+        }
+        // The linear triangle and plane stress have none; St Venant–Kirchhoff has no split.
+        assert!(Plane::new(ElementKind::Tri3, &quad8[..3], hybrid, Theory::PlaneStrain { thickness: 1.0 }).is_err());
+        assert!(Plane::new(ElementKind::Quad4, &quad8[..4], hybrid, Theory::PlaneStress { thickness: 1.0 }).is_err());
+        let svk = MaterialModel::StVenantKirchhoff(Box::new(isotropic(1000.0, 0.3).unwrap()));
+        let plane = Plane::new(ElementKind::Quad4, &quad8[..4], hybrid, Theory::Axisymmetric).unwrap();
+        assert!(matches!(plane.finite_strain(&svk, &[[0.0; 2]; 4], &[], &mut [], true), Err(Error::NotSupported(_))));
     }
 
     /// uᵀ K_σ u = ∫ σ_xx (∂u_y/∂x)² dV = σ_xx V for u_y = x under a uniform σ_xx, in a distorted

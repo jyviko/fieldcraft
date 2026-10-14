@@ -278,8 +278,9 @@ impl Formulation {
         if !kind.is_continuum() && self.incompatible_modes {
             return Err(Error::Invalid(format!("incompatible modes are for solid and 2D sections, not {}", kind.name())));
         }
-        if kind.dimension() != 3 && self.hybrid {
-            return Err(Error::Invalid(format!("hybrid formulations are for solid sections, not {}", kind.name())));
+        let volume_constrained = kind.dimension() == 3 || matches!(kind, SectionKind::PlaneStrain { .. } | SectionKind::Axisymmetric {});
+        if self.hybrid && !volume_constrained {
+            return Err(Error::Invalid(format!("hybrid formulations are for solid, plane strain and axisymmetric sections, not {}", kind.name())));
         }
         Ok(())
     }
@@ -391,7 +392,10 @@ mod tests {
         let im = Formulation { incompatible_modes: true, ..Formulation::default() };
         im.validate_for(&stress).unwrap();
         im.validate_for(&axi).unwrap();
-        assert!(Formulation { hybrid: true, ..Formulation::default() }.validate_for(&strain).is_err());
+        let hybrid = Formulation { hybrid: true, ..Formulation::default() };
+        hybrid.validate_for(&strain).unwrap();
+        hybrid.validate_for(&axi).unwrap();
+        assert!(hybrid.validate_for(&stress).is_err());
         assert!(im.validate_for(&SectionKind::Shell { thickness: 1.0, offset: 0.0, points: 5 }).is_err());
     }
 }

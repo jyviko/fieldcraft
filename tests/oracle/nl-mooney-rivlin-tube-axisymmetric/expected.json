@@ -1,0 +1,53 @@
+{
+ "title": "Inflation of a stretched Mooney–Rivlin tube (axisymmetric hybrid quad4)",
+ "kind": "theory",
+ "source": "Finite inflation and extension of an incompressible Mooney–Rivlin tube (R. S. Rivlin, Large elastic deformations of isotropic materials VI, Phil. Trans. R. Soc. A 242:173–195, 1949; R. W. Ogden, Non-Linear Elastic Deformations, Dover 1997, §5.3): at axial stretch λ_z, r² = a² + (R² − A²)/λ_z, σ_θ − σ_r = 2 (λ_θ² − λ_r²)(C₁₀ + C₀₁ λ_z²) with λ_θ = r/R, λ_r = 1/(λ_θ λ_z), integrated through the wall: p = ∫ (σ_θ − σ_r) dr/r (Simpson, 2·10⁵ intervals)",
+ "quantities": [
+  {
+   "id": "ua",
+   "quantity": "radial displacement of the bore (10, 0, 0) at the pressure that inflates it to a = 15 at λ_z = 1.5",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Inflate",
+     "at": [
+      [
+       10.0,
+       0,
+       0.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 5.0,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "16 × 6 hybrid hex20 around the quarter; ν = 0.4995 stands in for incompressibility (a volume change of order p/κ ≈ 10⁻³ shifts the radii by about 0.1 %), and the tube is stretched axially by its ends, which a nearly incompressible solid takes with larger pressures than the plane-strain neo-Hookean tube"
+  },
+  {
+   "id": "ub",
+   "quantity": "radial displacement of the outer wall (20, 0, 0): b − B, a small difference of radii",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Inflate",
+     "at": [
+      [
+       20.0,
+       0,
+       0.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.6155281280883038,
+   "tolerance": {
+    "absolute": 0.04
+   },
+   "reason": "0.2 % of the outer radius b = 20.616: the same volume change of order 10⁻³ moves b by about 0.03, which is 4.5 % of b − B; the incompressible kinematics r² = a² + (R² − A²)/λ_z amplify it there"
+  }
+ ]
+}

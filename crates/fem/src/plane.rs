@@ -35,6 +35,15 @@
 //! leaves the plane case unchanged (its mean is zero) and makes the axisymmetric element pass the
 //! patch test.
 //!
+//! **Hybrid** (mixed displacement–pressure, plane strain and axisymmetric quad4, quad8 and tri6):
+//! one constant pressure per element, the mean dilatation method (J. C. Nagtegaal, D. M. Parks,
+//! J. R. Rice, *On numerically accurate finite element solutions in the fully plastic range*,
+//! CMAME 4(2):153–177, 1974; T. J. R. Hughes, *The Finite Element Method*, Dover 2000, §4.5 for
+//! the axisymmetric B-bar): the volumetric strain, hoop part included, is replaced by its volume
+//! mean, so K = ∫ Bᵀ D_dev B dV + κ g gᵀ / V with g = ∫ Bᵀ m dV, m = (1, 1, 1, 0). The linear
+//! triangle is refused (one pressure per element still locks it), plane stress too (σ_zz = 0
+//! leaves no volume constraint to relax). The finite-strain form is [`crate::finite`]'s.
+//!
 //! On the axis (r = 0) the hoop strain u/r is evaluated only at integration points, which lie
 //! inside the element (r > 0) for every element with some node off the axis; the solver holds
 //! the radial displacement of nodes on the axis at zero, as symmetry requires.
@@ -165,11 +174,24 @@ pub fn plane_type(kind: ElementKind) -> Result<&'static ElementType> {
         .ok_or_else(|| Error::NotSupported(format!("{} elements in a 2D section (2D sections take tri3, tri6, quad4 and quad8)", kind.name())))
 }
 
+/// The 2D element kinds with a hybrid (constant pressure) formulation.
+const HYBRID_PRESSURES: [ElementKind; 3] = [ElementKind::Quad4, ElementKind::Quad8, ElementKind::Tri6];
+
 /// The formulation a 2D section asks for, if this element type has it.
 pub fn formulation(kind: ElementKind, f: &fieldcraft_model::Formulation) -> Result<Formulation> {
     let ty = plane_type(kind)?;
     if f.hybrid {
-        return Err(Error::NotSupported("hybrid (mixed displacement–pressure) 2D elements".into()));
+        if f.incompatible_modes || f.integration == fieldcraft_model::Integration::Reduced {
+            return Err(Error::NotSupported("hybrid 2D elements with incompatible modes or reduced integration".into()));
+        }
+        return if HYBRID_PRESSURES.contains(&kind) {
+            Ok(Formulation::Hybrid { pressures: 1 })
+        } else {
+            Err(Error::NotSupported(format!(
+                "hybrid 2D {} elements (one pressure per element still locks the linear triangle; use quad4, quad8 or tri6)",
+                kind.name()
+            )))
+        };
     }
     if f.incompatible_modes {
         return if ty.incompatible_modes {
@@ -270,10 +292,13 @@ impl<'a> Plane<'a> {
             Formulation::Full => true,
             Formulation::Reduced => ty.reduced.is_some(),
             Formulation::IncompatibleModes => ty.incompatible_modes,
-            Formulation::Hybrid { .. } => false,
+            Formulation::Hybrid { pressures } => pressures == 1 && HYBRID_PRESSURES.contains(&kind),
         };
         if !ok {
             return Err(Error::NotSupported(format!("{formulation:?} formulation of 2D {} elements", kind.name())));
+        }
+        if matches!(formulation, Formulation::Hybrid { .. }) && matches!(theory, Theory::PlaneStress { .. }) {
+            return Err(Error::NotSupported("hybrid plane stress elements (σ_zz = 0 leaves no volume constraint; use full integration)".into()));
         }
         Ok(Plane { ty, xyz, formulation, theory })
     }
@@ -282,7 +307,8 @@ impl<'a> Plane<'a> {
     /// modes it condenses out.
     pub fn dofs(&self) -> ElementDofs {
         let incompatible_modes = if self.formulation == Formulation::IncompatibleModes { INCOMPATIBLE_DOFS } else { 0 };
-        ElementDofs { node: DofSet::PLANE, internal: Internal { incompatible_modes, pressure: 0 } }
+        let pressure = if let Formulation::Hybrid { pressures } = self.formulation { pressures } else { 0 };
+        ElementDofs { node: DofSet::PLANE, internal: Internal { incompatible_modes, pressure } }
     }
 
     /// The stiffness integration rule.
@@ -411,6 +437,13 @@ impl<'a> Plane<'a> {
 
     /// The stiffness matrix, 2n × 2n, degrees of freedom ordered node by node (u, v).
     pub fn stiffness(&self, d: &Elasticity) -> Result<Matrix> {
+        if let Some(dev) = self.deviatoric(d)? {
+            // K_dev + κ g gᵀ / V.
+            let (mut k, points, _) = self.full_stiffness(&dev)?;
+            let mixed = self.mixed(d, &points, None)?;
+            add_outer(&mut k, &mixed.g, mixed.bulk / mixed.volume);
+            return Ok(k);
+        }
         let d2 = self.theory.elasticity(d)?;
         let (full, _, modes) = self.full_stiffness(&d2)?;
         if modes.is_none() {
@@ -431,6 +464,34 @@ impl<'a> Plane<'a> {
         }
         symmetrize(&mut k);
         Ok(k)
+    }
+
+    /// A hybrid element's deviatoric elasticity in the theory's form; `None` for the other
+    /// formulations.
+    fn deviatoric(&self, d: &Elasticity) -> Result<Option<Elasticity2>> {
+        if !matches!(self.formulation, Formulation::Hybrid { .. }) {
+            return Ok(None);
+        }
+        Ok(Some(self.theory.elasticity(&crate::hybrid::split(d)?.0)?))
+    }
+
+    /// A hybrid element's parts over its stiffness `points`: the bulk modulus, g = ∫ Bᵀ m dV
+    /// (2n), the volume and, with a thermal strain, ∫ tr ε_th dV.
+    pub(crate) fn mixed(&self, d: &Elasticity, points: &[(Point, At)], thermal: Option<&ThermalStrain>) -> Result<Mixed2> {
+        let bulk = crate::hybrid::split(d)?.1;
+        let (mut g, mut volume, mut thermal_volume) = (vec![0.0; 2 * self.ty.nodes], 0.0, 0.0);
+        for (_, a) in points {
+            volume += a.dv;
+            divergence(&mut g, a.g.get(..self.ty.nodes).unwrap_or_default(), a.dv);
+            if let Some(t) = thermal {
+                let e = Self::thermal_strain(t, a.shape.values());
+                thermal_volume += a.dv * (e[0] + e[1] + e[2]);
+            }
+        }
+        if !(volume > 0.0) {
+            return Err(self.degenerate());
+        }
+        Ok(Mixed2 { bulk, g, volume, thermal_volume })
     }
 
     /// The consistent mass matrix per displacement component, n × n: m_ij = ∫ ρ Nᵢ Nⱼ dV.
@@ -518,8 +579,18 @@ impl<'a> Plane<'a> {
     /// strains the hoop direction too); incompatible modes are condensed as in the stiffness.
     pub fn thermal_load(&self, d: &Elasticity, thermal: &ThermalStrain) -> Result<Vec<[f64; 2]>> {
         thermal.check(self.ty.nodes)?;
-        let d2 = self.theory.elasticity(d)?;
         let n = 2 * self.ty.nodes;
+        if let Some(dev) = self.deviatoric(d)? {
+            // ∫ Bᵀ D_dev ε_th dV + κ g (∫ tr ε_th dV) / V.
+            let points = self.points()?;
+            let mixed = self.mixed(d, &points, Some(thermal))?;
+            let (mut fu, _) = Self::thermal_forces(&dev, thermal, &points, None, self.ty.nodes);
+            for (f, g) in fu.iter_mut().zip(&mixed.g) {
+                *f += mixed.bulk * g * mixed.thermal_volume / mixed.volume;
+            }
+            return Ok(fu.as_chunks::<2>().0.to_vec());
+        }
+        let d2 = self.theory.elasticity(d)?;
         let mut fu = if self.formulation == Formulation::IncompatibleModes {
             let (full, points, modes) = self.full_stiffness(&d2)?;
             let (mut fu, mut fa) = Self::thermal_forces(&d2, thermal, &points, modes.as_ref(), self.ty.nodes);
@@ -549,9 +620,21 @@ impl<'a> Plane<'a> {
         if let Some(t) = thermal {
             t.check(self.ty.nodes)?;
         }
-        let d2 = self.theory.elasticity(d)?;
+        let deviatoric = self.deviatoric(d)?;
+        let d2 = match deviatoric {
+            Some(dev) => dev,
+            None => self.theory.elasticity(d)?,
+        };
         let (full, points, modes) =
             if self.formulation == Formulation::IncompatibleModes { self.full_stiffness(&d2)? } else { (Matrix::zeros(0), self.points()?, None) };
+        // Hybrid: the element's pressure κ (gᵀ u − ∫ tr ε_th dV) / V.
+        let pressure = if deviatoric.is_some() {
+            let m = self.mixed(d, &points, thermal)?;
+            let gu: f64 = m.g.iter().zip(u.iter().flatten()).map(|(g, x)| g * x).sum();
+            m.bulk * (gu - m.thermal_volume) / m.volume
+        } else {
+            0.0
+        };
         // Incompatible modes: K_aa α = f_a − K_au u (f_a the thermal load on the modes).
         let alpha = if modes.is_some() {
             let n = 2 * self.ty.nodes;
@@ -595,10 +678,11 @@ impl<'a> Plane<'a> {
                 };
             }
             // Plane stress: D̃ has no zz row or column, so the εzz just recovered adds nothing.
-            let s: [f64; 4] = match eth {
+            let mut s: [f64; 4] = match eth {
                 Some(t) => std::array::from_fn(|r| (0..4).map(|c| d2[r][c] * (e[c] - t[c])).sum()),
                 None => std::array::from_fn(|r| (0..4).map(|c| d2[r][c] * e[c]).sum()),
             };
+            s.iter_mut().take(3).for_each(|v| *v += pressure);
             out.push(PointStress { xyz: a.x, strain: [e[0], e[1], e[2], e[3], 0.0, 0.0], stress: [s[0], s[1], s[2], s[3], 0.0, 0.0] });
         }
         Ok(out)
@@ -611,6 +695,32 @@ impl<'a> Plane<'a> {
             return Err(Error::Invalid(format!("{} values for {} integration points", values.len(), e.points)));
         }
         Ok(e.apply(values))
+    }
+}
+
+/// The parts of a hybrid 2D element ([`Plane::mixed`]).
+pub(crate) struct Mixed2 {
+    bulk: f64,
+    pub(crate) g: Vec<f64>,
+    volume: f64,
+    thermal_volume: f64,
+}
+
+/// g += w Bᵀ m over strain columns `cols` (u takes ∂N/∂x and the hoop N/r, v takes ∂N/∂y): the
+/// divergence of each nodal motion, which the hybrid elements' volume constraint acts on.
+pub(crate) fn divergence(g: &mut [f64], cols: &[Column], w: f64) {
+    for (pair, col) in g.as_chunks_mut::<2>().0.iter_mut().zip(cols) {
+        pair[0] += w * (col[0] + col[2]);
+        pair[1] += w * col[1];
+    }
+}
+
+/// k += c g gᵀ.
+pub(crate) fn add_outer(k: &mut Matrix, g: &[f64], c: f64) {
+    for (i, gi) in g.iter().enumerate() {
+        for (j, gj) in g.iter().enumerate() {
+            k.add(i, j, c * gi * gj);
+        }
     }
 }
 
@@ -660,6 +770,53 @@ mod tests {
     }
 
     const THEORIES: [Theory; 3] = [Theory::PlaneStress { thickness: 0.7 }, Theory::PlaneStrain { thickness: 1.0 }, Theory::Axisymmetric];
+
+    #[test]
+    fn hybrid_elements_reproduce_a_uniform_strain_and_do_not_lock() {
+        // u = a x, v = b y: a uniform strain (axisymmetric: the hoop strain a too), whose
+        // stress the mean dilatation reproduces exactly at every point.
+        let d = isotropic(1000.0, 0.4999).unwrap();
+        let (a, b) = (0.002, -0.003);
+        for theory in [Theory::PlaneStrain { thickness: 1.5 }, Theory::Axisymmetric] {
+            for kind in [ElementKind::Quad4, ElementKind::Quad8, ElementKind::Tri6] {
+                let x = element(kind);
+                let plane = Plane::new(kind, &x, Formulation::Hybrid { pressures: 1 }, theory).unwrap();
+                let u: Vec<[f64; 2]> = x.iter().map(|p| [a * p[0], b * p[1]]).collect();
+                let hoop = if theory == Theory::Axisymmetric { a } else { 0.0 };
+                let e = [a, b, hoop, 0.0, 0.0, 0.0];
+                let exact = crate::material::stress(&d, &e);
+                for p in plane.stresses(&d, &u).unwrap() {
+                    for c in 0..4 {
+                        assert!((p.stress[c] - exact[c]).abs() < 1e-9 * exact[0].abs().max(1.0), "{theory:?} {kind:?} {c}: {:?} {exact:?}", p.stress);
+                    }
+                }
+                // K u is the forces of that stress: the stiffness agrees with the stresses.
+                let k = plane.stiffness(&d).unwrap();
+                let flat: Vec<f64> = u.iter().flatten().copied().collect();
+                let full = Plane::new(kind, &x, Formulation::Full, theory).unwrap().stiffness(&d).unwrap();
+                let (ku, kf): (Vec<f64>, Vec<f64>) = (0..flat.len())
+                    .map(|i| (0..flat.len()).fold((0.0, 0.0), |(s, t), j| (s + k.get(i, j) * flat[j], t + full.get(i, j) * flat[j])))
+                    .unzip();
+                for (p, q) in ku.iter().zip(&kf) {
+                    assert!((p - q).abs() < 1e-8 * kf.iter().fold(0.0f64, |m, v| m.max(v.abs())), "{p} {q}");
+                }
+            }
+        }
+        // Nearly incompressible: the hybrid element's volume is one constraint, so a motion that
+        // keeps the element's volume (orthogonal to g) costs only shear, where the full element's
+        // four point constraints lock it.
+        let x = element(ElementKind::Quad4);
+        let hybrid = Plane::new(ElementKind::Quad4, &x, Formulation::Hybrid { pressures: 1 }, Theory::PlaneStrain { thickness: 1.0 }).unwrap();
+        let g = hybrid.mixed(&d, &hybrid.points().unwrap(), None).unwrap().g;
+        let raw: Vec<f64> = (0..8).map(|i| ((i * 7 % 5) as f64 - 2.0) * 0.01).collect();
+        let along = raw.iter().zip(&g).map(|(a, b)| a * b).sum::<f64>() / g.iter().map(|v| v * v).sum::<f64>();
+        let shear: Vec<f64> = raw.iter().zip(&g).map(|(a, b)| a - along * b).collect();
+        let energy = |f: Formulation| {
+            let k = Plane::new(ElementKind::Quad4, &x, f, Theory::PlaneStrain { thickness: 1.0 }).unwrap().stiffness(&d).unwrap();
+            (0..8).map(|i| (0..8).map(|j| shear[i] * k.get(i, j) * shear[j]).sum::<f64>()).sum::<f64>()
+        };
+        assert!(energy(Formulation::Hybrid { pressures: 1 }) < 0.01 * energy(Formulation::Full));
+    }
 
     #[test]
     fn rigid_motion_strains_nothing_and_matrices_are_symmetric() {
@@ -783,6 +940,9 @@ mod tests {
         let on_axis = sq.map(|p| [p[0] - 1.0, p[1], 0.0]);
         let e = Plane::new(ElementKind::Quad4, &on_axis, Formulation::IncompatibleModes, Theory::Axisymmetric).unwrap();
         assert!(e.stiffness(&d).is_ok());
-        assert!(formulation(ElementKind::Quad4, &fieldcraft_model::Formulation { hybrid: true, ..Default::default() }).is_err());
+        let hybrid = fieldcraft_model::Formulation { hybrid: true, ..Default::default() };
+        assert_eq!(formulation(ElementKind::Quad4, &hybrid).unwrap(), Formulation::Hybrid { pressures: 1 });
+        assert!(formulation(ElementKind::Tri3, &hybrid).is_err());
+        assert!(formulation(ElementKind::Quad4, &fieldcraft_model::Formulation { incompatible_modes: true, ..hybrid }).is_err());
     }
 }

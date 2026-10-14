@@ -146,7 +146,10 @@ pressure field. The choice of pressure space follows the inf-sup analysis (docs 
 checkerboard pressures; linear tetrahedra and wedges lock even so and are refused. A thermal
 strain splits the same way: ∫ Bᵀ D_dev ε_th on the nodes and, through the pressure,
 K G M⁻¹ ∫ N_p tr ε_th, so a heated nearly incompressible solid takes its bulk stress −3KαΔT
-when confined. A continuous
+when confined. Plane strain and axisymmetric quad4, quad8 and tri6 sections take one constant
+pressure (the mean dilatation, the hoop strain in the divergence): K_dev + κ g gᵀ / V with
+g = ∫ Bᵀ m dV (`crates/fem/src/plane.rs`); the linear triangle locks and plane stress has no
+volume constraint, so both are refused. A continuous
 nodal pressure (`DofKind::P`, Taylor–Hood) needs a symmetric indefinite factorization and is
 planned.
 
@@ -251,6 +254,7 @@ differences of its forces.
 | Element | Nonlinear steps |
 |---|---|
 | tet4, tet10, wedge6, hex8, hex20 (full), hex20 (reduced) | total Lagrangian |
+| hybrid quad4, quad8, tri6 (plane strain, axisymmetric) | mean dilatation: θ = ∫ J dV₀ / V₀ with the hoop stretch, p = U′(θ), stiffness U″ g gᵀ / V₀ |
 | hybrid hex8, hex20, tet10 | Simo–Taylor–Pister three-field form on the linear hybrid elements' pressure fields (θ the projection of J, p the projection of U′(θ)); needs the neo-Hookean option (St Venant–Kirchhoff has no volumetric split) |
 | hex8 and quad4 incompatible modes | refused: their finite-strain form (enhanced assumed strain, Simo–Armero 1992) needs the modes as unknowns carried between iterations and hourglasses in large compression; use full integration, hybrid or quadratic elements |
 | plane strain, axisymmetric (tri3, tri6, quad4, quad8) | total Lagrangian with F₃₃ = 1 or r/R (hoop column N/r, geometric term τ_θθ N_a N_b/r²) |

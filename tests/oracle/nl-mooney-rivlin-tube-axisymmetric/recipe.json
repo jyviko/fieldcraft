@@ -1,0 +1,14 @@
+[
+ {"command": "mesh.block", "params": {"body": "Pipe", "kind": "quad4", "corners": [[10.0, 0, 0], [20.0, 0, 0], [20.0, 1, 0], [10.0, 1, 0]], "divisions": [12, 2], "edges": [{"corners": [1, 4], "name": "bore"}, {"corners": [1, 2], "name": "bottom"}, {"corners": [3, 4], "name": "top"}]}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Pipe", "face": "area"}]}},
+ {"command": "model.set.create", "params": {"name": "bore", "geometry": [{"body": "Pipe", "edge": "bore"}]}},
+ {"command": "model.set.create", "params": {"name": "bottom", "geometry": [{"body": "Pipe", "edge": "bottom"}]}},
+ {"command": "model.set.create", "params": {"name": "top", "geometry": [{"body": "Pipe", "edge": "top"}]}},
+ {"command": "model.material.create", "params": {"name": "Rubber", "elastic": {"type": "isotropic", "young": 3.0, "poisson": 0.4995}, "hyperelastic": {"type": "mooney_rivlin", "c01": 0.2}}},
+ {"command": "model.section.create", "params": {"name": "pipe", "set": "all", "material": "Rubber", "kind": {"type": "axisymmetric"}, "formulation": {"hybrid": true}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sb", "type": "symmetry", "target": {"set": "bottom"}, "plane": "y"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "stretch", "type": "displacement", "target": {"set": "top"}, "values": [null, 0.5, null, null, null, null]}},
+ {"command": "model.load.create", "params": {"name": "p", "type": "pressure", "set": "bore", "magnitude": 0.5408503415684837}},
+ {"command": "model.step.create", "params": {"name": "Inflate", "procedure": {"type": "nonlinear_static"}, "boundary_conditions": ["sb", "stretch"], "loads": ["p"]}},
+ {"command": "solve.nonlinear", "params": {"step": "Inflate"}, "id": "solve"}
+]

@@ -75,6 +75,9 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         app.dialog = None;
         return;
     };
+    // The form's widgets are its own, keyed by this opening: the keyboard focus and typed text of
+    // the form it replaces (egui drops focus from a widget no longer drawn) never land here.
+    let form_id = egui::Id::new(("fc_form", spec.id, d.opening));
     let (mut run, mut cancel) = (false, false);
     heading(ui, t, Level::Title, |ui| {
         ui.label(RichText::new(spec.label.to_uppercase()).font(label_font(ui.ctx(), 12.0)));
@@ -125,7 +128,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     d.advanced = advanced;
     match (spec.form, object) {
         (Some(fields), Some(mut obj)) if !d.advanced => {
-            let cx = crate::form::Context { units, names: &|c| session.names(c), salt: spec.id };
+            let cx = crate::form::Context { units, names: &|c| session.names(c), salt: form_id };
             let out = crate::form::show(ui, t, &cx, fields, &mut obj);
             invalid = out.invalid;
             if out.changed {
@@ -134,7 +137,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         }
         _ => {
-            ui.add(egui::TextEdit::multiline(&mut d.text).code_editor().desired_rows(6).desired_width(f32::INFINITY));
+            ui.add(egui::TextEdit::multiline(&mut d.text).id(form_id.with("json")).code_editor().desired_rows(6).desired_width(f32::INFINITY));
         }
     }
     if let Some(e) = &d.error {

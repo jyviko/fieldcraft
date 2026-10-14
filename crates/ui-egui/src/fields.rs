@@ -67,7 +67,9 @@ struct Draft {
 }
 
 /// A number field: shows `value` (or the typed text), greys `hint` when empty, and reports a new
-/// value only when the text is a finite number (or empty). `integer` refuses fractions.
+/// value only when the text is a finite number (or empty). `integer` refuses fractions. `id` is the
+/// field's own (unique in the form, and differing between forms): it keys both the typed text and
+/// the widget, so focus and typing never move to another form's field at the same place.
 pub fn number(ui: &mut Ui, s: &Style, id: Id, value: Option<f64>, hint: &str, integer: bool, width: f32) -> NumberEdit {
     let shown = |v: Option<f64>| v.map(format_number).unwrap_or_default();
     let mut draft = ui.data(|d| d.get_temp::<Draft>(id)).filter(|d| d.over == value).unwrap_or_else(|| Draft { text: shown(value), over: value });
@@ -80,7 +82,7 @@ pub fn number(ui: &mut Ui, s: &Style, id: Id, value: Option<f64>, hint: &str, in
         (!integer || x.fract() == 0.0).then_some(Some(x))
     };
     let bad = parse(&draft.text).is_none();
-    let mut edit = egui::TextEdit::singleline(&mut draft.text).desired_width(width).hint_text(RichText::new(hint).italics().color(s.dim));
+    let mut edit = egui::TextEdit::singleline(&mut draft.text).id(id).desired_width(width).hint_text(RichText::new(hint).italics().color(s.dim));
     if bad {
         edit = edit.text_color(s.error);
     }
@@ -124,9 +126,9 @@ pub fn combo(ui: &mut Ui, id: Id, selected: &str, options: &[&str], width: f32) 
     picked
 }
 
-/// A one-line text field with a greyed hint; true when it changed.
-pub fn text(ui: &mut Ui, s: &Style, value: &mut String, hint: &str, width: f32) -> bool {
-    ui.add(egui::TextEdit::singleline(value).desired_width(width).hint_text(RichText::new(hint).italics().color(s.dim))).changed()
+/// A one-line text field with a greyed hint, keyed by `id` (see [`number`]); true when it changed.
+pub fn text(ui: &mut Ui, s: &Style, id: Id, value: &mut String, hint: &str, width: f32) -> bool {
+    ui.add(egui::TextEdit::singleline(value).id(id).desired_width(width).hint_text(RichText::new(hint).italics().color(s.dim))).changed()
 }
 
 /// A unit after a field.

@@ -159,6 +159,9 @@ pub struct ParamsDialog {
     pub error: Option<String>,
     /// The JSON text is shown instead of the typed fields.
     pub advanced: bool,
+    /// Which opening of a form this is (counts up): a form opened over another one, even of the
+    /// same command, gets fresh widget ids, so nothing typed into the one it replaces carries over.
+    pub opening: u64,
 }
 
 /// A status bar message.
@@ -263,6 +266,8 @@ pub struct ModelApp {
     pub cam: Camera,
     pub status: Option<Status>,
     pub dialog: Option<ParamsDialog>,
+    /// Forms opened so far (numbers each [`ParamsDialog::opening`]).
+    forms_opened: u64,
     pub viewport: Viewport,
     pub icons: icons::IconCache,
     /// The toolbar's buttons drawn last frame, by catalogue id (for the control channel).
@@ -355,6 +360,7 @@ impl ModelApp {
             cam: Camera::default(),
             status: None,
             dialog: None,
+            forms_opened: 0,
             viewport: Viewport::default(),
             icons: icons::IconCache::default(),
             toolbar_rects: Vec::new(),
@@ -528,7 +534,14 @@ impl ModelApp {
         if let Some(spec) = fieldcraft_engine::find_command(command) {
             // The schema's defaults are filled in, so the form starts as the command would run.
             let params = spec.form.map_or(params.clone(), |form| fieldcraft_engine::schema::prefill(form, &params));
-            self.dialog = Some(ParamsDialog { command: spec.id, text: params.to_string(), error: None, advanced: spec.form.is_none() });
+            self.forms_opened = self.forms_opened.wrapping_add(1);
+            self.dialog = Some(ParamsDialog {
+                command: spec.id,
+                text: params.to_string(),
+                error: None,
+                advanced: spec.form.is_none(),
+                opening: self.forms_opened,
+            });
         }
     }
 

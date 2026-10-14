@@ -24,8 +24,9 @@ pub struct Context<'a> {
     pub units: UnitSystem,
     /// The names of a collection's items.
     pub names: &'a dyn Fn(Collection) -> Vec<String>,
-    /// A salt for the widget ids (the command).
-    pub salt: &'a str,
+    /// A salt for the widget ids: the open form (its command and the opening), so no widget
+    /// state is shared with another form.
+    pub salt: Id,
 }
 
 /// What a frame of the form did.
@@ -147,7 +148,7 @@ impl Form<'_> {
             Kind::Integer { .. } => self.number(ui, id, value, f.hint, true, FIELD_W),
             Kind::Text | Kind::Path { .. } => {
                 let mut text = value.and_then(Value::as_str).unwrap_or_default().to_string();
-                fields::text(ui, &s, &mut text, f.hint, FIELD_W + 40.0)
+                fields::text(ui, &s, id, &mut text, f.hint, FIELD_W + 40.0)
                     .then(|| if text.is_empty() && !f.required { Value::Null } else { json!(text) })
             }
             Kind::Bool => {
@@ -273,7 +274,8 @@ impl Form<'_> {
         if names.is_empty() {
             let mut text = current.unwrap_or_default();
             let hint = format!("no {} yet", c.label());
-            return fields::text(ui, &self.style, &mut text, &hint, FIELD_W + 40.0).then(|| if text.is_empty() { Value::Null } else { json!(text) });
+            return fields::text(ui, &self.style, id, &mut text, &hint, FIELD_W + 40.0)
+                .then(|| if text.is_empty() { Value::Null } else { json!(text) });
         }
         let empty = if hint.is_empty() { "—" } else { hint };
         let selected = current.clone().unwrap_or_else(|| empty.to_string());
@@ -311,7 +313,7 @@ impl Form<'_> {
         let shown = value.map(Value::to_string).unwrap_or_default();
         let mut text = ui.data(|d| d.get_temp::<(String, String)>(id)).filter(|(_, over)| *over == shown).map_or_else(|| shown.clone(), |(t, _)| t);
         let bad = !text.trim().is_empty() && serde_json::from_str::<Value>(&text).is_err();
-        let mut edit = egui::TextEdit::singleline(&mut text).code_editor().desired_width(FIELD_W + 40.0);
+        let mut edit = egui::TextEdit::singleline(&mut text).id(id).code_editor().desired_width(FIELD_W + 40.0);
         if bad {
             edit = edit.text_color(self.style.error);
             self.out.invalid += 1;
@@ -436,7 +438,7 @@ mod tests {
                 let width = crate::context::WIDTH - 16.0;
                 let mut used = 0.0;
                 let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    let cx = Context { units: UnitSystem::MmTonneS, names: &names, salt: c.id };
+                    let cx = Context { units: UnitSystem::MmTonneS, names: &names, salt: Id::new(c.id) };
                     ui.vertical(|ui| {
                         ui.set_max_width(width);
                         outcome = show(ui, &Tokens::get(false), &cx, form, &mut params);

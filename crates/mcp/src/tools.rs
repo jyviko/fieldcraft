@@ -14,7 +14,7 @@ pub const MAX_STEPS: usize = 10_000;
 /// The meshers the `mesh` tool runs, by method; a method whose command this build lacks is
 /// left out.
 const MESHERS: &[(&str, &str, &str)] = &[
-    ("tet", "mesh.tet.generate", "constrained Delaunay tets of a body {body, tolerance} or an imported surface {surface}"),
+    ("tet", "mesh.tet.generate", "constrained Delaunay tets of every body of the open design, one {body}, or an imported surface {surface}"),
     ("hex", "mesh.hex.generate", "all-hex mesh of a body"),
     ("hex_sweep", "mesh.hex.sweep", "swept all-hex mesh"),
     ("hex_mapped", "mesh.hex.mapped", "mapped all-hex mesh"),

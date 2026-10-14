@@ -8,7 +8,7 @@ use fieldcraft_mesh::quality::{self, QualityReport};
 use fieldcraft_mesh::surface::{BoundarySurface, Defect, FeatureKind, SurfaceOptions};
 use fieldcraft_mesh::tet::geometry::AnalyticSurface;
 use fieldcraft_mesh::tet::improve::ImproveOptions;
-use fieldcraft_mesh::tet::{Order, QualityOptions, TetQuality, quality_mesh, raw_mesh};
+use fieldcraft_mesh::tet::{Order, QualityMesh, QualityOptions, TetQuality, quality_mesh, raw_mesh};
 use fieldcraft_model::{ElementKind, GeometryRef, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
@@ -86,7 +86,7 @@ pub const SURFACE_CHECK: CommandSpec = CommandSpec {
 pub const TET_GENERATE: CommandSpec = CommandSpec {
     id: "mesh.tet.generate",
     label: "Generate Tet Mesh",
-    params: r#"{"body": "Body1", "tolerance": 0.05} or {"surface": 0}, the boundary options of mesh.surface.check ("weld", "weld_distance", "feature_angle"), optional "size": mm (target edge length; default a twentieth of the bounding-box diagonal), "order": "linear" | "quadratic" (tet4 or tet10; quadratic mid-edge nodes lie on the B-rep faces), "quality": true (false: the raw constrained Delaunay tetrahedralization), "quality_target": 40 (degrees: tetrahedra whose smallest dihedral-angle sine is at least sin of this are left alone by improvement, 5..=60), "curvature_angle": 22.5 (degrees per element along curved boundary, 0 for none, at most 90), "grading": 0.3 (largest size change per unit length, 0.05..=2), "max_passes": 20 (improvement passes, 0..=200), "max_points": 1000000 (1..=20000000), "max_steiner": 50000 (0..=10000000), "max_tets": 5000000 (1..=50000000) — the constrained Delaunay tetrahedralization of the welded boundary (every boundary triangle a union of tet faces), refined to the size field with its boundary vertices on the B-rep faces, smoothed and improved (Delaunay refinement, ODT smoothing, Klingner–Shewchuk improvement), with a quality report. Adds the elements and their nodes (labels after the largest existing ones), tags the elements with the body and each boundary element face with its geometry face, and fails, changing nothing, if the surface is invalid or the mesh does not pass the validity gate"#,
+    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the body's bounding-box diagonal), the boundary options of mesh.surface.check ("weld", "weld_distance", "feature_angle"), optional "size": mm (target edge length; default a twentieth of the bounding-box diagonal), "order": "linear" | "quadratic" (tet4 or tet10; quadratic mid-edge nodes lie on the B-rep faces), "quality": true (false: the raw constrained Delaunay tetrahedralization), "quality_target": 40 (degrees: tetrahedra whose smallest dihedral-angle sine is at least sin of this are left alone by improvement, 5..=60), "curvature_angle": 22.5 (degrees per element along curved boundary, 0 for none, at most 90), "grading": 0.3 (largest size change per unit length, 0.05..=2), "max_passes": 20 (improvement passes, 0..=200), "max_points": 1000000 (1..=20000000), "max_steiner": 50000 (0..=10000000), "max_tets": 5000000 (1..=50000000) — the constrained Delaunay tetrahedralization of the welded boundary (every boundary triangle a union of tet faces), refined to the size field with its boundary vertices on the B-rep faces, smoothed and improved (Delaunay refinement, ODT smoothing, Klingner–Shewchuk improvement), with a quality report. Adds the elements and their nodes (labels after the largest existing ones), tags the elements with the body and each boundary element face with its geometry face, and fails, changing nothing, if a surface is invalid or a mesh does not pass the validity gate. Reports the totals and, under `bodies`, each body's counts, size and quality report"#,
     kind: CommandKind::Model,
     run: tet_generate,
 };
@@ -199,24 +199,113 @@ fn quality_json(q: &TetQuality) -> Value {
     })
 }
 
+/// One body's tetrahedra, ready to add, with what its report needs of the surface and the CDT.
+struct BodyTets {
+    name: String,
+    face_names: Vec<String>,
+    mesh: QualityMesh,
+    steiner: usize,
+    cavities: usize,
+    surface_volume: f64,
+}
+
+/// Mesh one body or imported surface; the model is not touched. With `several` bodies an error
+/// names the body.
+fn mesh_body(
+    s: &Session,
+    p: &Value,
+    input: super::hex::Input,
+    cdt: &CdtOptions,
+    options: &QualityOptions,
+    quality: bool,
+    several: bool,
+) -> Result<BodyTets> {
+    let mesh = || -> Result<BodyTets> {
+        // The exact faces of a design body; an imported surface keeps to its triangles.
+        let analytic = match p.get("surface") {
+            None => s.design.as_deref().and_then(|d| d.body(&input.name)).map(analytic_surfaces).unwrap_or_default(),
+            Some(_) => Vec::new(),
+        };
+        let surface = BoundarySurface::new(&input.mesh.positions, &input.mesh.triangles, &input.mesh.tri_face, &surface_options(p, &input.mesh)?)?;
+        let tets = tetrahedralize(&surface, cdt)?;
+        let mesh = if quality { quality_mesh(&surface, &tets, analytic, options)? } else { raw_mesh(&surface, &tets)? };
+        Ok(BodyTets {
+            name: input.name.clone(),
+            face_names: input.face_names.clone(),
+            mesh,
+            steiner: tets.steiner.len(),
+            cavities: tets.stats.cavities,
+            surface_volume: surface.volume(),
+        })
+    };
+    mesh().map_err(|e| if several { EngineError::Params(format!("body `{}`: {e}", input.name)) } else { e })
+}
+
 fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
     let (options, quality) = quality_options(p, s.limits.max_tets as u64)?;
     let cdt_options =
         CdtOptions { max_steiner: optional_count(p, "max_steiner", s.limits.max_steiner as u64, 0..=TET_MAX_STEINER)?, max_tets: options.max_tets };
-    let (surface, body, face_names, analytic) = {
-        let Input { mesh, body, faces } = surface_input(s, p)?;
-        let analytic = s.design.as_deref().and_then(|d| d.body(&body)).filter(|_| p.get("body").is_some()).map(analytic_surfaces).unwrap_or_default();
-        let options = surface_options(p, &mesh)?;
-        (BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options)?, body, faces, analytic)
-    };
-    let cdt = tetrahedralize(&surface, &cdt_options)?;
-    let mesh = if quality { quality_mesh(&surface, &cdt, analytic, &options)? } else { raw_mesh(&surface, &cdt)? };
+    // Every body is meshed before the model changes; with several, an error names its body.
+    let inputs = super::hex::inputs(s, p)?;
+    let several = inputs.len() > 1;
+    let mut meshed = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        meshed.push(mesh_body(s, p, input, &cdt_options, &options, quality, several)?);
+    }
 
+    let mut bodies = Vec::with_capacity(meshed.len());
+    for b in &meshed {
+        let (first_node, first_element) = add_tets(s, &b.name, &b.face_names, &b.mesh)?;
+        let r = &b.mesh.report;
+        bodies.push(json!({
+            "body": b.name,
+            "nodes": b.mesh.points.len(),
+            "elements": b.mesh.elements.len(),
+            "first_node": first_node,
+            "first_element": first_element,
+            "steiner": b.steiner,
+            "cavities": b.cavities,
+            "boundary_faces": b.mesh.boundary.len(),
+            "volume": r.volume,
+            "boundary_volume": r.boundary_volume,
+            "surface_volume": b.surface_volume,
+            "size": r.size,
+            "quality": {
+                "cdt": quality_json(&r.input),
+                "mesh": quality_json(&r.output),
+                "refined": r.refine.iter().map(|x| x.interior + x.boundary).sum::<usize>(),
+                "odt_moves": r.odt_moves,
+                "improvement": {"passes": r.improve.passes, "smoothed": r.improve.smoothed, "topological": r.improve.topological, "inserted": r.improve.inserted},
+                "straightened": r.straightened,
+                "stopped": r.stopped,
+            },
+        }));
+    }
+    let sum = |f: fn(&BodyTets) -> f64| meshed.iter().map(f).sum::<f64>();
+    let count = |f: fn(&BodyTets) -> usize| meshed.iter().map(f).sum::<usize>();
+    let first = bodies.first();
+    Ok(json!({
+        "kind": meshed.first().map(|b| b.mesh.kind.name()),
+        "nodes": count(|b| b.mesh.points.len()),
+        "elements": count(|b| b.mesh.elements.len()),
+        "first_node": first.map(|b| b["first_node"].clone()),
+        "first_element": first.map(|b| b["first_element"].clone()),
+        "boundary_faces": count(|b| b.mesh.boundary.len()),
+        "volume": sum(|b| b.mesh.report.volume),
+        "boundary_volume": sum(|b| b.mesh.report.boundary_volume),
+        "surface_volume": sum(|b| b.surface_volume),
+        "bodies": bodies,
+    }))
+}
+
+/// Add one body's elements after the model's largest labels, tagging them with the body and each
+/// boundary element face with its geometry face; returns the first node and element labels.
+fn add_tets(s: &mut Session, body: &str, face_names: &[String], mesh: &QualityMesh) -> Result<(u32, u32)> {
     let (first_node, first_element) = super::fresh_labels(&s.model, mesh.points.len(), mesh.elements.len())?;
     for (i, xyz) in mesh.points.iter().enumerate() {
         s.model.set_node(first_node + i as u32, *xyz)?;
     }
-    let body_tag = s.model.geometry_tag(&GeometryRef::body(body.clone())?)?;
+    let body_tag = s.model.geometry_tag(&GeometryRef::body(body)?)?;
     for (i, e) in mesh.elements.iter().enumerate() {
         let label = first_element + i as u32;
         s.model.set_element(label, mesh.kind, e.iter().map(|&v| first_node + v).collect())?;
@@ -229,7 +318,7 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
             Some(t) => t,
             None => {
                 let name = face_names.get(face).ok_or_else(|| EngineError::Params(format!("boundary face {} has no geometry face", b.face)))?;
-                let t = s.model.geometry_tag(&GeometryRef::face(body.clone(), name.clone())?)?;
+                let t = s.model.geometry_tag(&GeometryRef::face(body, name.clone())?)?;
                 if let Some(slot) = face_tags.get_mut(face) {
                     *slot = Some(t);
                 }
@@ -239,31 +328,7 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
         let number = b.element_face().ok_or_else(|| EngineError::Params(format!("boundary face {} has no element face number", b.opposite)))?;
         s.model.tag_element_face(first_element + b.tet, number, tag)?;
     }
-    let r = &mesh.report;
-    Ok(json!({
-        "body": body,
-        "kind": mesh.kind.name(),
-        "nodes": mesh.points.len(),
-        "elements": mesh.elements.len(),
-        "first_node": first_node,
-        "first_element": first_element,
-        "steiner": cdt.steiner.len(),
-        "cavities": cdt.stats.cavities,
-        "boundary_faces": mesh.boundary.len(),
-        "volume": r.volume,
-        "boundary_volume": r.boundary_volume,
-        "surface_volume": surface.volume(),
-        "size": r.size,
-        "quality": {
-            "cdt": quality_json(&r.input),
-            "mesh": quality_json(&r.output),
-            "refined": r.refine.iter().map(|x| x.interior + x.boundary).sum::<usize>(),
-            "odt_moves": r.odt_moves,
-            "improvement": {"passes": r.improve.passes, "smoothed": r.improve.smoothed, "topological": r.improve.topological, "inserted": r.improve.inserted},
-            "straightened": r.straightened,
-            "stopped": r.stopped,
-        },
-    }))
+    Ok((first_node, first_element))
 }
 
 pub const PLANAR: CommandSpec = CommandSpec {
@@ -475,21 +540,10 @@ fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// A boundary to mesh: the surface, with the body name and the geometry name of each face index
-/// for tagging.
-struct Input<'a> {
-    mesh: Cow<'a, SurfaceMesh>,
-    body: String,
-    faces: Vec<String>,
-}
-
 /// The surface named by `body` (tessellated at `tolerance`) or `surface` (an imported index).
-fn surface_input<'a>(s: &'a Session, p: &Value) -> Result<Input<'a>> {
+fn surface_input<'a>(s: &'a Session, p: &Value) -> Result<Cow<'a, SurfaceMesh>> {
     match (p.get("body"), p.get("surface")) {
-        (Some(_), None) => {
-            let (shape, mesh) = super::geometry::body_mesh(s, p)?;
-            Ok(Input { mesh: Cow::Owned(mesh), body: shape.name.clone(), faces: shape.faces().iter().map(|f| f.name.clone()).collect() })
-        }
+        (Some(_), None) => Ok(Cow::Owned(super::geometry::body_mesh(s, p)?.1)),
         (None, Some(i)) => {
             let n = s.surfaces.len();
             let t = i
@@ -497,7 +551,7 @@ fn surface_input<'a>(s: &'a Session, p: &Value) -> Result<Input<'a>> {
                 .and_then(|i| usize::try_from(i).ok())
                 .and_then(|i| s.surfaces.get(i))
                 .ok_or_else(|| EngineError::Params(format!("`surface` must be the index of an imported surface (there are {n})")))?;
-            Ok(Input { mesh: Cow::Borrowed(&t.mesh), body: t.name.clone(), faces: (0..t.faces).map(|f| f.to_string()).collect() })
+            Ok(Cow::Borrowed(&t.mesh))
         }
         _ => Err(EngineError::Params("give either `body` (with `tolerance`) or `surface`".into())),
     }
@@ -508,7 +562,7 @@ fn defect_json(d: &Defect) -> Value {
 }
 
 fn surface_check(s: &mut Session, p: &Value) -> Result<Value> {
-    let mesh = surface_input(s, p)?.mesh;
+    let mesh = surface_input(s, p)?;
     let options = surface_options(p, &mesh)?;
     let surface = match BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options) {
         Ok(surface) => surface,
@@ -723,14 +777,44 @@ mod tests {
             json!({"body": "Body1", "tolerance": 0.5, "max_tets": 0}),
             json!({"body": "Body1", "tolerance": 0.5, "max_tets": 10}),
             json!({"body": "Body1", "tolerance": 0.5, "max_tets": "many"}),
-            json!({"body": "Body1"}),
+            json!({"body": "Body1", "tolerance": -1}),
             json!({"body": "Nope", "tolerance": 0.5}),
+            json!({"body": "Body1", "surface": 0}),
             json!({"surface": 0}),
-            json!({}),
         ] {
             assert!(s.execute("mesh.tet.generate", &bad).is_err(), "{bad}");
         }
         assert_eq!((s.journal.len(), &s.model), (journal, &model), "failures change nothing");
+    }
+
+    /// Without parameters every body of the open design is meshed, each at a tolerance from its
+    /// size; an error says which body it is about.
+    #[test]
+    fn tet_generate_defaults_to_every_body() {
+        let commands = json!({"commands": [
+            {"command": "solid.box", "params": {"length": 20, "width": 10, "height": 10, "body_name": "Box"}},
+            {"command": "solid.split_body", "params": {"body": "Box", "plane": {"origin": [10, 0, 0], "normal": [1, 0, 0]}}},
+        ]});
+        let bytes = fieldcraft_geometry::script_design(&commands.to_string()).unwrap();
+        let (_dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        assert!(s.execute("mesh.tet.generate", &json!({})).unwrap_err().to_string().contains("open a design first"));
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        let r = s.execute("mesh.tet.generate", &json!({})).unwrap();
+        let bodies = r["bodies"].as_array().unwrap();
+        assert_eq!(bodies.len(), 2, "{r}");
+        assert_eq!(r["kind"], "tet4");
+        assert!((r["volume"].as_f64().unwrap() - 2000.0).abs() < 1e-6, "{r}");
+        assert_eq!(s.model.elements().len() as u64, r["elements"].as_u64().unwrap());
+        assert_eq!(s.model.classification().elements().len(), s.model.elements().len(), "every element is on its body");
+        // The second body's labels follow the first's.
+        assert_eq!(bodies[1]["first_element"].as_u64(), Some(bodies[0]["elements"].as_u64().unwrap() + 1));
+        assert_eq!(s.journal.len(), 2);
+        // A body named alone takes the same default tolerance.
+        let one = s.execute("mesh.tet.generate", &json!({"body": bodies[0]["body"]})).unwrap();
+        assert_eq!(one["elements"], bodies[0]["elements"]);
+        let e = s.execute("mesh.tet.generate", &json!({"max_tets": 1})).unwrap_err().to_string();
+        assert!(e.starts_with("body `Box"), "{e}");
     }
 
     /// The session's caps are the defaults of `max_steiner` and `max_tets`; a parameter overrides them.
@@ -766,7 +850,7 @@ mod tests {
         let design = Arc::new(open_design(&plate_design(&plate).unwrap()).unwrap());
         let mut s = Session { design: Some(design.clone()), ..Session::default() };
         let r = s.execute("mesh.tet.generate", &json!({"body": "Body1", "tolerance": 0.2, "size": 6})).unwrap();
-        let q = &r["quality"];
+        let q = &r["bodies"][0]["quality"];
         assert_eq!(q["mesh"]["inadmissible"], json!(0), "{r}");
         assert_eq!(q["mesh"]["slivers"], json!(0), "{r}");
         assert!(q["mesh"]["min_dihedral"].as_f64().unwrap() > 15.0, "{r}");

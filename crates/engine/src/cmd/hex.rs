@@ -33,7 +33,7 @@ pub(super) struct Input<'a> {
     pub(super) name: String,
     pub(super) mesh: Cow<'a, SurfaceMesh>,
     surfaces: Vec<Option<Surface>>,
-    face_names: Vec<String>,
+    pub(super) face_names: Vec<String>,
     pub(super) diagonal: f64,
 }
 

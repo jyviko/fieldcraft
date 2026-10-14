@@ -37,6 +37,8 @@
 
 use modelcraft_model::{BoxFace, FaceCondition, Profile};
 
+use modelcraft_parallel as parallel;
+
 use crate::lattice::{C, Q, W, c, equilibrium, moving_wall, opposite};
 use crate::setup::{MAX_LATTICE_SPEED, Obstacle, Setup};
 use crate::voxel::{Grid, TriangleTree, voxelise};
@@ -118,6 +120,24 @@ pub struct Flow {
 }
 
 const NONE: u32 = u32::MAX;
+
+/// Cells per parallel block of the collision and the streaming. The blocks are fixed, every
+/// cell's update reads and writes only its own populations (collision) or writes only its own
+/// (streaming), so the result does not depend on the number of threads.
+const CELLS: usize = 4096;
+
+/// The first `n` populations of each direction of an array with direction stride `stride`, cut
+/// into blocks of [`CELLS`] cells: block b holds the Q directions' slices of cells
+/// b·CELLS.. .
+fn cell_blocks(data: &mut [f64], stride: usize, n: usize) -> Vec<Vec<&mut [f64]>> {
+    let mut blocks: Vec<Vec<&mut [f64]>> = (0..n.div_ceil(CELLS)).map(|_| Vec::with_capacity(Q)).collect();
+    for direction in data.chunks_mut(stride.max(1)).take(Q) {
+        for (block, cells) in blocks.iter_mut().zip(direction.get_mut(..n).unwrap_or_default().chunks_mut(CELLS)) {
+            block.push(cells);
+        }
+    }
+    blocks
+}
 
 /// A vector allocated without aborting when memory runs out.
 fn filled<T: Clone>(len: usize, value: T, what: &str) -> Result<Vec<T>> {
@@ -423,102 +443,129 @@ impl Flow {
         Ok(())
     }
 
-    /// Two-relaxation-time collision with Guo forcing, in place. Returns the largest squared
-    /// lattice speed, or NaN when a density is not positive.
+    /// Two-relaxation-time collision with Guo forcing, in place, by blocks of [`CELLS`] cells
+    /// in parallel. Returns the largest squared lattice speed, or NaN when a density is not
+    /// positive.
     fn collide(&mut self) -> f64 {
         let n = self.n;
-        let s = self.stride;
         let (wp, wm) = (self.omega_plus, self.omega_minus);
         let (sp, sm) = (1.0 - 0.5 * wp, 1.0 - 0.5 * wm);
         let a = self.acceleration;
         let forced = a != [0.0; 3];
-        let mut max_u2: f64 = 0.0;
-        let mut fq = [0.0; Q];
-        for cell in 0..n {
-            if !self.fluid[cell] {
-                continue;
-            }
-            let (mut rho, mut j) = (0.0, [0.0; 3]);
-            for q in 0..Q {
-                let v = self.f[q * s + cell];
-                fq[q] = v;
-                let cq = C[q];
-                rho += v;
-                j[0] += v * f64::from(cq[0]);
-                j[1] += v * f64::from(cq[1]);
-                j[2] += v * f64::from(cq[2]);
-            }
-            if !(rho > 0.0 && rho.is_finite()) {
-                return f64::NAN;
-            }
-            let force = [rho * a[0], rho * a[1], rho * a[2]];
-            let u = [(j[0] + 0.5 * force[0]) / rho, (j[1] + 0.5 * force[1]) / rho, (j[2] + 0.5 * force[2]) / rho];
-            let uu = u[0] * u[0] + u[1] * u[1] + u[2] * u[2];
-            max_u2 = max_u2.max(uu);
-            let uf = u[0] * force[0] + u[1] * force[1] + u[2] * force[2];
-            // Rest population: symmetric only.
-            let eq0 = W[0] * rho * (1.0 - 1.5 * uu);
-            let mut out0 = fq[0] - wp * (fq[0] - eq0);
-            if forced {
-                out0 += sp * W[0] * (-3.0 * uf);
-            }
-            self.f[cell] = out0;
-            for q in (1..Q).step_by(2) {
-                let o = q + 1;
-                let cq = C[q];
-                let cv = [f64::from(cq[0]), f64::from(cq[1]), f64::from(cq[2])];
-                let cu = cv[0] * u[0] + cv[1] * u[1] + cv[2] * u[2];
-                let w = W[q];
-                let eq_plus = w * rho * (1.0 + 4.5 * cu * cu - 1.5 * uu);
-                let eq_minus = w * rho * 3.0 * cu;
-                let plus = 0.5 * (fq[q] + fq[o]);
-                let minus = 0.5 * (fq[q] - fq[o]);
-                let relax_plus = wp * (plus - eq_plus);
-                let relax_minus = wm * (minus - eq_minus);
-                let (mut s_plus, mut s_minus) = (0.0, 0.0);
-                if forced {
-                    let cf = cv[0] * force[0] + cv[1] * force[1] + cv[2] * force[2];
-                    s_plus = sp * w * (9.0 * cu * cf - 3.0 * uf);
-                    s_minus = sm * w * 3.0 * cf;
+        let fluid = &self.fluid;
+        let mut blocks = cell_blocks(&mut self.f, self.stride, n);
+        let mut maxima = vec![0.0f64; blocks.len()];
+        let mut work: Vec<(&mut Vec<&mut [f64]>, &mut f64)> = blocks.iter_mut().zip(maxima.iter_mut()).collect();
+        parallel::for_each_mut(&mut work, |b, (f, max_u2)| {
+            let mut fq = [0.0; Q];
+            let len = f.first().map_or(0, |d| d.len());
+            for i in 0..len {
+                if !fluid.get(b * CELLS + i).copied().unwrap_or(false) {
+                    continue;
                 }
-                self.f[q * s + cell] = fq[q] - relax_plus - relax_minus + s_plus + s_minus;
-                self.f[o * s + cell] = fq[o] - relax_plus + relax_minus + s_plus - s_minus;
+                let (mut rho, mut j) = (0.0, [0.0; 3]);
+                for q in 0..Q {
+                    let v = f.get(q).and_then(|d| d.get(i)).copied().unwrap_or(0.0);
+                    fq[q] = v;
+                    let cq = C[q];
+                    rho += v;
+                    j[0] += v * f64::from(cq[0]);
+                    j[1] += v * f64::from(cq[1]);
+                    j[2] += v * f64::from(cq[2]);
+                }
+                if !(rho > 0.0 && rho.is_finite()) {
+                    **max_u2 = f64::NAN;
+                    return;
+                }
+                let force = [rho * a[0], rho * a[1], rho * a[2]];
+                let u = [(j[0] + 0.5 * force[0]) / rho, (j[1] + 0.5 * force[1]) / rho, (j[2] + 0.5 * force[2]) / rho];
+                let uu = u[0] * u[0] + u[1] * u[1] + u[2] * u[2];
+                **max_u2 = max_u2.max(uu);
+                let uf = u[0] * force[0] + u[1] * force[1] + u[2] * force[2];
+                let mut put = |q: usize, v: f64| {
+                    if let Some(x) = f.get_mut(q).and_then(|d| d.get_mut(i)) {
+                        *x = v;
+                    }
+                };
+                // Rest population: symmetric only.
+                let eq0 = W[0] * rho * (1.0 - 1.5 * uu);
+                let mut out0 = fq[0] - wp * (fq[0] - eq0);
+                if forced {
+                    out0 += sp * W[0] * (-3.0 * uf);
+                }
+                put(0, out0);
+                for q in (1..Q).step_by(2) {
+                    let o = q + 1;
+                    let cq = C[q];
+                    let cv = [f64::from(cq[0]), f64::from(cq[1]), f64::from(cq[2])];
+                    let cu = cv[0] * u[0] + cv[1] * u[1] + cv[2] * u[2];
+                    let w = W[q];
+                    let eq_plus = w * rho * (1.0 + 4.5 * cu * cu - 1.5 * uu);
+                    let eq_minus = w * rho * 3.0 * cu;
+                    let plus = 0.5 * (fq[q] + fq[o]);
+                    let minus = 0.5 * (fq[q] - fq[o]);
+                    let relax_plus = wp * (plus - eq_plus);
+                    let relax_minus = wm * (minus - eq_minus);
+                    let (mut s_plus, mut s_minus) = (0.0, 0.0);
+                    if forced {
+                        let cf = cv[0] * force[0] + cv[1] * force[1] + cv[2] * force[2];
+                        s_plus = sp * w * (9.0 * cu * cf - 3.0 * uf);
+                        s_minus = sm * w * 3.0 * cf;
+                    }
+                    put(q, fq[q] - relax_plus - relax_minus + s_plus + s_minus);
+                    put(o, fq[o] - relax_plus + relax_minus + s_plus - s_minus);
+                }
             }
-        }
-        max_u2
+        });
+        // The largest speed of all blocks (a maximum does not depend on the order), or NaN.
+        if maxima.iter().any(|m| m.is_nan()) { f64::NAN } else { maxima.iter().fold(0.0, |m, x| m.max(*x)) }
     }
 
-    /// Pull streaming into `g`, with the wall rules and the momentum exchange.
+    /// Pull streaming into `g`, with the wall rules (blocks of [`CELLS`] destination cells in
+    /// parallel), then the momentum exchange (in link order).
     fn stream(&mut self) {
         let n = self.n;
         let s = self.stride;
-        // Every direction as one shifted copy: right for cells whose neighbours are all fluid
-        // cells in the box; the others are overwritten by their rules below.
-        for q in 0..Q {
-            let off = self.offset[q];
-            let (src, dst) = (&self.f[q * s..q * s + n], &mut self.g[q * s..q * s + n]);
-            if off >= 0 {
-                let o = off as usize;
-                if o < n {
-                    dst[o..].copy_from_slice(&src[..n - o]);
-                }
-            } else {
-                let o = off.unsigned_abs();
-                if o < n {
-                    dst[..n - o].copy_from_slice(&src[o..]);
+        let (f, links, offset) = (&self.f, &self.links, &self.offset);
+        let mut blocks = cell_blocks(&mut self.g, s, n);
+        parallel::for_each_mut(&mut blocks, |b, g| {
+            let start = b * CELLS;
+            // Every direction as one shifted copy: right for cells whose neighbours are all fluid
+            // cells in the box; the others are overwritten by their rules below.
+            for (q, dst) in g.iter_mut().enumerate() {
+                let off = offset.get(q).copied().unwrap_or(0);
+                let src = f.get(q * s..q * s + n).unwrap_or_default();
+                for (i, x) in dst.iter_mut().enumerate() {
+                    if let Some(from) = (start + i).checked_add_signed(-off)
+                        && let Some(v) = src.get(from)
+                    {
+                        *x = *v;
+                    }
                 }
             }
-        }
+            let first = links.partition_point(|l| (l.cell as usize) < start);
+            for link in links.get(first..).unwrap_or_default().iter().take_while(|l| (l.cell as usize) < start + CELLS) {
+                let (cell, q) = (link.cell as usize, link.q as usize);
+                let v = match link.rule {
+                    Rule::Pull { from } => f.get(q * s + from as usize).copied(),
+                    Rule::Bounce { du, .. } => f.get(opposite(q) * s + cell).map(|out| out + du),
+                    Rule::Reflect { from, q: q2, .. } => f.get(q2 as usize * s + from as usize).copied(),
+                    // A placeholder the open boundary replaces.
+                    Rule::Open => f.get(opposite(q) * s + cell).copied(),
+                };
+                if let (Some(v), Some(x)) = (v, g.get_mut(q).and_then(|d| d.get_mut(cell - start))) {
+                    *x = v;
+                }
+            }
+        });
         self.forces.fill([0.0; 3]);
         for link in &self.links {
             let (cell, q) = (link.cell as usize, link.q as usize);
             let cq = c(q);
             match link.rule {
-                Rule::Pull { from } => self.g[q * s + cell] = self.f[q * s + from as usize],
                 Rule::Bounce { group, du } => {
                     let out = self.f[opposite(q) * s + cell];
                     let back = out + du;
-                    self.g[q * s + cell] = back;
                     if let Some(force) = self.forces.get_mut(group as usize) {
                         // c_out f* − c_in f' with c_out = −c_q.
                         for a in 0..3 {
@@ -529,7 +576,6 @@ impl Flow {
                 Rule::Reflect { from, q: q2, group } => {
                     let q2 = q2 as usize;
                     let out = self.f[q2 * s + from as usize];
-                    self.g[q * s + cell] = out;
                     let c2 = c(q2);
                     if let Some(force) = self.forces.get_mut(group as usize) {
                         for a in 0..3 {
@@ -537,8 +583,7 @@ impl Flow {
                         }
                     }
                 }
-                // A placeholder the open boundary replaces.
-                Rule::Open => self.g[q * s + cell] = self.f[opposite(q) * s + cell],
+                Rule::Pull { .. } | Rule::Open => {}
             }
         }
     }

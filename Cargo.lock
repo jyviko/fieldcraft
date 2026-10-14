@@ -1963,6 +1963,7 @@ version = "0.1.0"
 dependencies = [
  "modelcraft-mesh",
  "modelcraft-model",
+ "modelcraft-parallel",
  "thiserror 2.0.21",
 ]
 

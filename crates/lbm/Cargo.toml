@@ -11,4 +11,5 @@ workspace = true
 [dependencies]
 modelcraft-model = { workspace = true }
 modelcraft-mesh = { workspace = true }
+modelcraft-parallel = { workspace = true }
 thiserror = { workspace = true }

@@ -12,6 +12,7 @@ Python standard library only; ffmpeg encodes the frames.
 import argparse
 import base64
 import json
+import math
 import os
 import shutil
 import socket
@@ -44,11 +45,19 @@ STEP = "Load"
 
 # Frames per second of the video; each stage holds its picture for a number of frames.
 FPS = 10
-HOLD = 14  # a workflow stage (1.4 s)
-HOLD_SHORT = 10  # one of the model definition steps
-HOLD_LONG = 20  # the stress result
-SWING = 12  # pictures from undeformed to the largest exaggeration
+HOLD = 25  # a workflow stage (2.5 s, long enough to read its caption and the browser)
+HOLD_SHORT = 20  # one of the model definition steps
+HOLD_LONG = 30  # the stress result
+SWING = 15  # pictures from undeformed to the largest exaggeration, eased
 MAX_SCALE = 150.0  # the largest displacement (0.18 mm) drawn about 26 mm on the 200 mm beam
+# The results camera: the iso orientation (yaw -45, pitch 35.26 degrees), drawn back from the
+# fitted distance (about 300 mm for this beam) so the contour legend over the viewport's corner
+# leaves the beam clear. The closing orbit turns it round the beam, one picture per frame.
+ISO = (-45.0, 35.26)
+RESULTS_DISTANCE_MM = 420.0
+ORBIT = 60
+ORBIT_YAW = (ISO[0], -165.0)
+ORBIT_PITCH = (ISO[1], 20.0)
 
 # The captured window, in points (the app's own pixels-per-point scale on top); the video's size.
 WINDOW = (1280, 800)
@@ -253,6 +262,11 @@ def against_beam_theory(result):
     return result
 
 
+def ease(i, n):
+    """Step i of n of a cosine ease, 0 to 1: slow out, slow in."""
+    return (1 - math.cos(math.pi * i / n)) / 2
+
+
 def batch(mcp, commands):
     reply = mcp.call("batch", {"commands": commands})
     if not reply.get("ok"):
@@ -311,25 +325,32 @@ def analyse(mcp, film, design, work):
     log(f"solve: {solve.get('equations')} equations")
     film.shoot(HOLD_SHORT)
 
-    # 5. Results: the tip deflection, then von Mises contours on the true (scale 1) shape.
+    # 5. Results: the tip deflection, then von Mises contours on the undeformed shape.
     disp = mcp.call("show_results", {"step": STEP, "field": "displacement"})
     tip = disp["contour"]["range"]["max"]["value"]
     root_stress = root_bending_stress(mcp, work)
     film.say("show_results", "von Mises")
-    vm = mcp.call("show_results", {"step": STEP, "field": "von_mises", "bands": 12, "deformed": True, "scale": 1})
+    vm = mcp.call("show_results", {"step": STEP, "field": "von_mises", "bands": 12, "deformed": True, "scale": 0})
     peak = vm["contour"]["range"]["max"]["value"]
     log(f"tip deflection {tip:.4f} mm, peak von Mises {peak:.1f} MPa")
-    film.shoot(HOLD_LONG, view="iso")
+    film.shoot(HOLD_LONG, camera={"yaw": ISO[0], "pitch": ISO[1], "distance": RESULTS_DISTANCE_MM})
 
-    # 6. The deformed shape, swung from the true shape to an exaggeration and back, in the iso
-    # view and then from the side, ending held at the exaggeration.
-    film.say("show_results", f"deformed, up to \u00d7{MAX_SCALE:g}")
-    ramp = [max(1.0, MAX_SCALE * i / SWING) for i in range(SWING + 1)]
-    for view, scales in (("iso", ramp[1:] + ramp[-2::-1]), ("front", ramp[1:])):
-        for i, scale in enumerate(scales):
-            mcp.call("show_results", {"step": STEP, "deformed": True, "scale": scale})
-            film.shoot(1, view=view if i == 0 else None)
-    film.shoot(HOLD_LONG)
+    # 6. The deformed shape, swung from undeformed to the exaggeration and back, then out again.
+    eased = [MAX_SCALE * ease(i, SWING) for i in range(1, SWING + 1)]
+    for scale in eased + eased[-2::-1] + [0.0] + eased:
+        film.say("show_results", f"deformed \u00d7{scale:.0f}")
+        mcp.call("show_results", {"step": STEP, "deformed": True, "scale": scale})
+        film.shoot(1)
+    film.hold(HOLD_SHORT)
+
+    # 7. A slow orbit round the deformed beam, one `screenshot` camera angle per frame.
+    film.say("screenshot", "camera orbit")
+    for i in range(1, ORBIT + 1):
+        t = ease(i, ORBIT)
+        yaw = ORBIT_YAW[0] + t * (ORBIT_YAW[1] - ORBIT_YAW[0])
+        pitch = ORBIT_PITCH[0] + t * (ORBIT_PITCH[1] - ORBIT_PITCH[0])
+        film.shoot(1, camera={"yaw": yaw, "pitch": pitch})
+    film.hold(HOLD)
     return against_beam_theory({"tip_deflection_mm": tip, "root_stress_mpa": root_stress, "peak_von_mises_mpa": peak, "elements": mesh["mesh"]["elements"], "nodes": mesh["mesh"]["nodes"]})
 
 

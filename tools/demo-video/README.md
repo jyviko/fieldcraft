@@ -25,10 +25,13 @@ What it does:
    speaks MCP (JSON-RPC over stdio) to it. Every step is an MCP tool call: `open` the design,
    `mesh` (`hex_sweep`, 4 mm), `batch` (steel, a solid section, the root clamp, a kinematic
    coupling of the free end at x = 200 mm to a reference point loaded with 1000 N down, −z), `check_model`, `solve`
-   (`static`), and `show_results` for the von Mises contours and the deformed shape, its `scale`
-   stepped from 1 to 150 and back. Every picture is the MCP `screenshot` tool with
-   `source: window` (the whole window drawn offscreen, `ui.capture`), turned to the `iso` or
-   `front` view by its `view` argument.
+   (`static`), and `show_results` for the von Mises contours on the undeformed shape
+   (`scale: 0`) and then the deformed shape, its `scale` swung (eased) from 0 to 150, back to 0
+   and out to 150 again. Every picture is the MCP `screenshot` tool with `source: window` (the
+   whole window drawn offscreen, `ui.capture`): the setup in the `iso` view, the results through
+   its `camera` argument (the iso orientation drawn back to 420 mm so the contour legend leaves
+   the beam clear), and to close, a slow orbit of 60 pictures, one `camera` angle each, from the
+   iso view half way round the beam. Each stage holds for 2 to 3 seconds.
 4. Captions each stage with the MCP tool it calls and what it does (`open · tests/corpus/…`,
    `mesh · hex sweep 4 mm`, `solve · static`, …) in a band under the window. `caption.py`
    draws the bars in the standard library: a minimal TrueType reader (`cmap` format 4, `loca`,

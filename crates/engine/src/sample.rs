@@ -61,6 +61,13 @@ pub const SAMPLES: &[Sample] = &[
         design: Some(UPRIGHT_BRACKET),
         script: |_| drop_test(),
     },
+    Sample {
+        name: "rubber-seal",
+        label: "Rubber Seal",
+        about: "A rubber gasket ring squeezed 25 % between bonded plates: nonlinear static, Mooney–Rivlin, large strain",
+        design: None,
+        script: |_| rubber_seal(),
+    },
 ];
 
 /// The sample called `name`.
@@ -288,6 +295,44 @@ pub fn drop_test() -> Value {
     ])
 }
 
+/// The rubber seal: inner and outer radius and height of the ring (mm), and how far it is squeezed.
+pub const SEAL: [f64; 3] = [20.0, 30.0, 10.0];
+pub const SEAL_SQUEEZE: f64 = 2.5;
+
+/// A rubber gasket ring ([`SEAL`]: 20 mm inside radius, 30 mm outside, 10 mm high) of hybrid hex8
+/// elements, four mapped quarter blocks with arc edges (body `Seal`, block faces `bottom` and
+/// `top`), squeezed by [`SEAL_SQUEEZE`] (25 %) between plates bonded to it: `bottom` fixed, `top`
+/// moved down with its in-plane motion held. Generic rubber: E = 6 MPa, ν = 0.49, Mooney–Rivlin
+/// with C01 = 0.2 MPa (C10 = μ/2 − C01 = 0.81 MPa). Step `Squeeze` (nonlinear static).
+pub fn rubber_seal() -> Value {
+    let [inner, outer, height] = SEAL;
+    let mut steps = vec![json!({"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}})];
+    for quarter in 0..4u8 {
+        let (a0, a1) = (f64::from(quarter) * std::f64::consts::FRAC_PI_2, f64::from(quarter + 1) * std::f64::consts::FRAC_PI_2);
+        let at = |r: f64, a: f64, z: f64| [r * a.cos(), r * a.sin(), z];
+        let corners =
+            [at(inner, a0, 0.0), at(outer, a0, 0.0), at(outer, a1, 0.0), at(inner, a1, 0.0), at(inner, a0, height), at(outer, a0, height), at(outer, a1, height), at(inner, a1, height)];
+        let arc = |a: u8, b: u8, z: f64| json!({"corners": [a, b], "arc": {"center": [0, 0, z]}});
+        steps.push(json!({"command": "mesh.block", "params": {
+            "body": "Seal", "kind": "hex8", "corners": corners, "divisions": [5, 10, 5],
+            "edges": [arc(1, 4, 0.0), arc(2, 3, 0.0), arc(5, 8, height), arc(6, 7, height)],
+            "faces": {"1": "bottom", "2": "top"}
+        }}));
+    }
+    steps.extend([
+        json!({"command": "model.set.create", "params": {"name": "seal", "geometry": [{"body": "Seal"}]}}),
+        json!({"command": "model.set.create", "params": {"name": "bottom", "geometry": [{"body": "Seal", "face": "bottom"}]}}),
+        json!({"command": "model.set.create", "params": {"name": "top", "geometry": [{"body": "Seal", "face": "top"}]}}),
+        json!({"command": "model.material.create", "params": {"name": "Rubber", "elastic": {"type": "isotropic", "young": 6, "poisson": 0.49}, "density": 1.1e-9,
+            "hyperelastic": {"type": "mooney_rivlin", "c01": 0.2}}}),
+        json!({"command": "model.section.create", "params": {"name": "Seal", "set": "seal", "material": "Rubber", "kind": {"type": "solid"}, "formulation": {"hybrid": true}}}),
+        json!({"command": "model.boundary_condition.create", "params": {"name": "Base", "type": "fixed", "target": {"set": "bottom"}}}),
+        json!({"command": "model.boundary_condition.create", "params": {"name": "Press", "type": "displacement", "target": {"set": "top"}, "values": [0, 0, -SEAL_SQUEEZE, null, null, null]}}),
+        json!({"command": "model.step.create", "params": {"name": "Squeeze", "procedure": {"type": "nonlinear_static", "initial_increment": 0.1}, "boundary_conditions": ["Base", "Press"]}}),
+    ]);
+    Value::Array(steps)
+}
+
 /// Six times the signed volume of the tetrahedron `p[0..4]` (positive when p3 lies on the side
 /// p0 → p1 → p2 turns counter-clockwise around).
 fn signed_volume(p: &[[f64; 3]]) -> f64 {
@@ -363,6 +408,44 @@ mod tests {
         let check = s.execute("model.check", &json!({})).unwrap();
         assert_eq!((check["ready"].as_bool(), check["errors"].as_u64(), check["warnings"].as_u64()), (Some(true), Some(0), Some(0)), "{check}");
         s
+    }
+
+    /// The squeeze force of the ring, against the closed form for an incompressible Mooney–Rivlin
+    /// solid in uniaxial compression, P = 2 (λ − λ⁻²)(C10 + C01/λ) per unit of original area: the
+    /// same ring between frictionless plates (each face held only along z, the rigid motions
+    /// held at three nodes on the symmetry planes) compresses evenly and matches it within 3 %
+    /// (ν = 0.49 is nearly incompressible); bonded, the bulge needs more force (shape factor
+    /// ¼ (b − a)/h = 0.5 by the loaded over the free area), within 2.5 times.
+    #[test]
+    fn the_rubber_seal_squeezes_as_mooney_rivlin_rubber() {
+        let [inner, outer, height] = SEAL;
+        let area = std::f64::consts::PI * (outer * outer - inner * inner);
+        let lambda: f64 = 1.0 - SEAL_SQUEEZE / height;
+        let (c01, c10) = (0.2, 6.0 / (2.0 * 1.49) / 2.0 - 0.2);
+        let closed = 2.0 * (lambda - lambda.powi(-2)) * (c10 + c01 / lambda) * area;
+        let squeeze = |s: &mut Session| -> f64 {
+            s.execute("solve.nonlinear", &json!({})).unwrap();
+            let r = s.execute("results.reactions", &json!({"step": "Squeeze", "sets": ["top"]})).unwrap();
+            r["sets"][0]["force"][2].as_f64().unwrap()
+        };
+        let mut s = open("rubber-seal");
+        let bonded = squeeze(&mut s);
+        let node = |s: &Session, xyz: [f64; 3]| -> u32 {
+            *s.model.nodes().iter().find(|(_, n)| (0..3).all(|k| (n.xyz[k] - xyz[k]).abs() < 1e-9)).unwrap().0
+        };
+        let held = [("hold_y", [inner, 0.0, 0.0], [None, Some(0.0), None]), ("hold_x", [0.0, inner, 0.0], [Some(0.0), None, None]), ("hold_y2", [-inner, 0.0, 0.0], [None, Some(0.0), None])];
+        for (name, at, [ux, uy, _]) in held {
+            let n = node(&s, at);
+            s.execute("model.set.create", &json!({"name": name, "nodes": [n]})).unwrap();
+            s.execute("model.boundary_condition.create", &json!({"name": name, "type": "displacement", "target": {"set": name}, "values": [ux, uy, null, null, null, null]})).unwrap();
+        }
+        s.execute("model.boundary_condition.edit", &json!({"name": "Base", "type": "displacement", "target": {"set": "bottom"}, "values": [null, null, 0, null, null, null]})).unwrap();
+        s.execute("model.boundary_condition.edit", &json!({"name": "Press", "type": "displacement", "target": {"set": "top"}, "values": [null, null, -SEAL_SQUEEZE, null, null, null]})).unwrap();
+        s.execute("model.step.edit", &json!({"name": "Squeeze", "boundary_conditions": ["Base", "Press", "hold_y", "hold_x", "hold_y2"]})).unwrap();
+        let free = squeeze(&mut s);
+        assert!((free - closed).abs() < 0.03 * closed.abs(), "frictionless {free} N against {closed} N");
+        let stiffer = bonded / free;
+        assert!(stiffer > 1.05 && stiffer < 2.5, "bonded {bonded} N, frictionless {free} N");
     }
 
     #[test]

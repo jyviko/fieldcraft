@@ -26,3 +26,23 @@ turning into vibration with a balance under 0.01 %.
 **Check:** the mass equals ρ V of the bracket (0.5 %); it meets the floor at √(2 g h) =
 6.26 m/s, with ½ m v² = 1 748 mJ of kinetic energy (1 %); energy is conserved (balance < 1 %);
 by 1 ms the floor has taken about half its downward momentum.
+
+## Rubber seal (`rubber-seal`)
+
+![The gasket ring squeezed 25 %, bulging outward, von Mises stress peaking at the bonded edges](media/examples/rubber-seal.png)
+
+A rubber gasket ring (20 mm inside radius, 30 mm outside, 10 mm high) squeezed 2.5 mm (25 %)
+between two plates bonded to it. Generic rubber, E = 6 MPa, ν = 0.49, Mooney–Rivlin with
+C01 = 0.2 MPa; 1 000 hybrid (u–p) hex8 elements in four mapped quarter blocks. Nonlinear static
+with large deformation: Newton–Raphson in nine increments, under a second.
+
+**Look at:** the deformed shape at scale 1 — the free inner and outer walls bulge out, and
+von Mises peaks (about 7 MPa) where the bulge meets the bonded plates. Results ▸ Increment steps
+through the converged increments.
+
+**Check:** the same ring between frictionless plates compresses evenly, and its force matches
+the closed form for an incompressible Mooney–Rivlin solid in uniaxial compression,
+P = 2 (λ − λ⁻²)(C10 + C01/λ) per original area: 3 430 N against 3 466 N (within 3 %). Bonded,
+the bulge makes it stiffer (shape factor 0.5): 6 518 N, held between 1.05 and 2.5 times the
+frictionless force. The groove and the plates are prescribed displacements today; with implicit
+contact (#161) the ring will be pressed by contact against a groove.

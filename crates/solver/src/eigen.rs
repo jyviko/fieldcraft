@@ -190,6 +190,17 @@ pub trait Operator: Sync {
     fn mass(&self, x: &[f64], y: &mut [f64]);
     /// x ← (K − σM)⁻¹ x.
     fn solve(&self, x: &mut [f64]) -> Result<()>;
+    /// The right-hand side the operator solves for, given a basis vector `x` and its M product
+    /// `mx`: M x for the spectral transformation (the default); another matrix's product for
+    /// other pencils (buckling, [`crate::buckle`]).
+    fn operand(&self, _x: &[f64], mx: &[f64]) -> Vec<f64> {
+        mx.to_vec()
+    }
+    /// The eigenvalue of a Ritz value θ of the operator: σ + 1/θ for the spectral
+    /// transformation.
+    fn eigenvalue(&self, shift: f64, theta: f64) -> f64 {
+        shift + 1.0 / theta
+    }
 }
 
 /// Converged eigenpairs: λ ascending, vectors M-orthonormal.
@@ -197,6 +208,9 @@ pub trait Operator: Sync {
 pub struct Eigenpairs {
     pub values: Vec<f64>,
     pub vectors: Vec<Vec<f64>>,
+    /// Converged eigenvalues of negative Ritz values θ (outside what the transformation looks
+    /// for: negative buckling load factors), largest |θ| first.
+    pub negative: Vec<f64>,
     /// Lanczos vectors used.
     pub basis: usize,
 }
@@ -287,7 +301,7 @@ pub fn lanczos(op: &impl Operator, shift: f64, wanted: Wanted, block: usize, max
         let mut w: Vec<Vec<f64>> = Vec::with_capacity(b);
         // The block's solves are independent: one task each.
         for y in fieldcraft_parallel::map(mcur.len(), |i| {
-            let mut y = mcur.get(i).cloned().unwrap_or_default();
+            let mut y = op.operand(cur.get(i).map(Vec::as_slice).unwrap_or_default(), mcur.get(i).map(Vec::as_slice).unwrap_or_default());
             op.solve(&mut y).map(|()| y)
         }) {
             w.push(y?);
@@ -359,7 +373,7 @@ pub fn lanczos(op: &impl Operator, shift: f64, wanted: Wanted, block: usize, max
                 if res2.sqrt() > tolerance * th {
                     break;
                 }
-                let lambda = shift + 1.0 / th;
+                let lambda = op.eigenvalue(shift, th);
                 if lambda > wanted.max {
                     done = true;
                     break;
@@ -384,10 +398,24 @@ pub fn lanczos(op: &impl Operator, shift: f64, wanted: Wanted, block: usize, max
                 }
             }
             if done {
+                // Negative Ritz values that have converged, largest magnitude first.
+                let mut negative = Vec::new();
+                for &i in idx.iter().rev() {
+                    let th = theta[i];
+                    if !(th < 0.0) {
+                        break;
+                    }
+                    let res2: f64 =
+                        if full { 0.0 } else { (0..b).map(|r| (0..b).map(|c| bnext[r][c] * s[(m - b + c) * m + i]).sum::<f64>().powi(2)).sum() };
+                    if res2.sqrt() > tolerance * th.abs() {
+                        break;
+                    }
+                    negative.push(op.eigenvalue(shift, th));
+                }
                 let mut values = Vec::new();
                 let mut vectors = Vec::new();
                 for &i in &accepted {
-                    values.push(shift + 1.0 / theta[i]);
+                    values.push(op.eigenvalue(shift, theta[i]));
                     let mut x = vec![0.0; n];
                     for (k, qk) in q.iter().enumerate() {
                         let c = s[k * m + i];
@@ -405,7 +433,7 @@ pub fn lanczos(op: &impl Operator, shift: f64, wanted: Wanted, block: usize, max
                     }
                     vectors.push(x);
                 }
-                return Ok(Eigenpairs { values, vectors, basis: m });
+                return Ok(Eigenpairs { values, vectors, negative, basis: m });
             }
         }
         if full {

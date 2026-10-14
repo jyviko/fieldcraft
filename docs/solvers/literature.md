@@ -1246,6 +1246,11 @@ update are written from (cited again in the module docs):
   34(1):82–109, 1992.
 - Iterative refinement: N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed.,
   SIAM 2002, §12.2.
+- Linear buckling and the initial-stress stiffness: K.-J. Bathe, *Finite Element Procedures*,
+  2nd ed., 2014, §6.8.2; the buckling spectral transformations in the K inner product: R. G.
+  Grimes, J. G. Lewis, H. D. Simon, SIAM J. Matrix Anal. Appl. 15(1):228–272, 1994, §3; Euler's
+  columns with Engesser's shear correction: S. P. Timoshenko, J. M. Gere, *Theory of Elastic
+  Stability*, 2nd ed., McGraw-Hill 1961, §2.1, §2.17.
 
 ## Part Q: Contact and friction (explicit), as implemented
 

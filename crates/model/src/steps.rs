@@ -55,6 +55,14 @@ pub enum Procedure {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_hz: Option<f64>,
     },
+    /// Linear buckling: the load factors λ at which the step's loads (and prescribed motions),
+    /// applied as a linear preload, make K + λ K_σ singular, and their mode shapes; the lowest
+    /// `modes` positive ones, or those nearest above `shift` when one is given.
+    Buckle {
+        modes: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shift: Option<f64>,
+    },
     /// Transient dynamics by explicit time integration up to `end_time`.
     ExplicitDynamic(ExplicitDynamic),
     /// Time-dependent incompressible flow in a fluid domain, from rest (or the domain's initial
@@ -546,6 +554,7 @@ impl Procedure {
         match self {
             Procedure::Static {} => "static",
             Procedure::Frequency { .. } => "frequency",
+            Procedure::Buckle { .. } => "buckle",
             Procedure::ExplicitDynamic(_) => "explicit_dynamic",
             Procedure::HeatTransfer { .. } => "heat_transfer",
             Procedure::CoupledTemperatureDisplacement {} => "coupled_temperature_displacement",
@@ -618,6 +627,14 @@ impl Procedure {
         if let Procedure::HeatTransfer { transient: Some(t) } = self {
             return t.validate();
         }
+        if let Procedure::Buckle { modes, shift } = *self {
+            if !(1..=MAX_MODES).contains(&modes) {
+                return Err(Error::Invalid(format!("a buckling step extracts 1 to {MAX_MODES} modes, got {modes}")));
+            }
+            if let Some(s) = shift {
+                finite("buckling shift", s)?;
+            }
+        }
         if let Procedure::Frequency { modes, min_hz, max_hz } = *self {
             if !(1..=MAX_MODES).contains(&modes) {
                 return Err(Error::Invalid(format!("a frequency step extracts 1 to {MAX_MODES} modes, got {modes}")));
@@ -640,7 +657,7 @@ impl Procedure {
     pub fn default_output(&self) -> BTreeSet<OutputVariable> {
         match self {
             Procedure::Static {} | Procedure::NonlinearStatic(_) => OutputVariable::ALL.into_iter().collect(),
-            Procedure::Frequency { .. } => [OutputVariable::Displacement].into_iter().collect(),
+            Procedure::Frequency { .. } | Procedure::Buckle { .. } => [OutputVariable::Displacement].into_iter().collect(),
             Procedure::ExplicitDynamic(_) => [OutputVariable::Displacement, OutputVariable::Stress].into_iter().collect(),
             // Velocity, pressure and wall forces, always.
             Procedure::Fluid { .. } => BTreeSet::new(),

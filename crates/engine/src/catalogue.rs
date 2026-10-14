@@ -470,8 +470,8 @@ pub static CATALOGUE: &[Capability] = &[
         "Static",
         Solve,
         "Implicit",
-        "Linear static (or coupled temperature–displacement) solve of a step with FieldCraft's own solver; nonlinear static and heat transfer in the drop-down",
-        &["solve.nonlinear", "solve.heat"],
+        "Linear static (or coupled temperature–displacement) solve of a step with FieldCraft's own solver; nonlinear static, buckling and heat transfer in the drop-down",
+        &["solve.nonlinear", "solve.buckle", "solve.heat"],
     ),
     ready("solve.frequency", "Frequency", Solve, "Implicit", "Natural frequencies and mode shapes of a frequency step"),
     ready(

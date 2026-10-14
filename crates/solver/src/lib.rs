@@ -28,6 +28,7 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod analysis;
+pub mod buckle;
 pub mod cholesky;
 pub mod constraints;
 pub mod discrete;
@@ -43,6 +44,7 @@ pub use analysis::{
     ElementStress, FrequencyOptions, FrequencyResult, Location, MassKind, Mode, PointResult, StaticResult, Stats, StepResult, solve_frequency,
     solve_static,
 };
+pub use buckle::{Buckling, solve_buckle};
 pub use heat::{HeatResult, solve_heat};
 pub use nonlinear::solve_nonlinear;
 

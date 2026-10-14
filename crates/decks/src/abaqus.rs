@@ -1216,6 +1216,34 @@ impl Deck {
                     base_bcs.clone_from(&step.boundary_conditions);
                     base_loads.clone_from(&step.loads);
                 }
+                Procedure::Buckle { modes, shift } => {
+                    // Abaqus's buckling base state is the end of the previous general step;
+                    // FieldCraft's steps all start from the undeformed, unloaded model.
+                    if !base_loads.is_empty()
+                        || steps
+                            .iter()
+                            .take_while(|s| !std::ptr::eq(*s, step))
+                            .any(|s| !matches!(s.procedure, Procedure::Frequency { .. } | Procedure::Buckle { .. }))
+                    {
+                        return Err(Error::Unsupported {
+                            format: FORMAT,
+                            what: format!(
+                                "step `{}`: a buckling step after a general step (Abaqus would buckle from that step's loaded state)",
+                                step.name
+                            ),
+                        });
+                    }
+                    if shift.is_some() {
+                        return Err(Error::Unsupported { format: FORMAT, what: format!("step `{}`: a buckling shift", step.name) });
+                    }
+                    self.line(&format!("*STEP, NAME={}", step.name));
+                    self.line("*BUCKLE, EIGENSOLVER=LANCZOS");
+                    self.line(&format!("{modes}"));
+                    self.step_boundaries(model, r, &base_bcs, &step.boundary_conditions)?;
+                    let loads = StepLoads::new(model, r, step, &everything);
+                    self.step_loads(&loads, written)?;
+                    written = loads.written();
+                }
                 Procedure::Frequency { modes, min_hz, max_hz } => {
                     self.line(&format!("*STEP, NAME={}", step.name));
                     self.line("*FREQUENCY, EIGENSOLVER=LANCZOS");

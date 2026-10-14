@@ -828,3 +828,20 @@ fn nonlinear_plastic_steps_and_what_is_refused() {
     m.add_step(step("Again", Procedure::NonlinearStatic(NonlinearStatic::default()), &["clamp"], &["end"]), None).unwrap();
     assert!(unsupported(&m).contains("plastic material `Steel` in a deck of 2 general steps"));
 }
+
+/// A buckling step is `*BUCKLE` with its loads as the perturbation loads; after a general step
+/// (Abaqus's base state would be that step's) and with a shift it is refused by name.
+#[test]
+fn buckling_steps() {
+    let mut m = cantilever_mesh();
+    m.add_load("end", Load::Force { target: Target::Set("tip".into()), vector: [-100.0, 0.0, 0.0], distribution: Distribution::Total }).unwrap();
+    m.add_step(step("Buckle", Procedure::Buckle { modes: 4, shift: None }, &["clamp"], &["end"]), None).unwrap();
+    let deck = abaqus::write(&m).unwrap();
+    assert!(deck.contains("*BUCKLE, EIGENSOLVER=LANCZOS\n4\n") && deck.contains("*CLOAD"), "{deck}");
+    let mut shifted = m.clone();
+    shifted.replace_step(step("Buckle", Procedure::Buckle { modes: 4, shift: Some(2.0) }, &["clamp"], &["end"])).unwrap();
+    assert!(abaqus::write(&shifted).unwrap_err().to_string().contains("shift"));
+    m.add_step(step("Bend", Procedure::Static {}, &["clamp"], &["end"]), Some("Buckle")).unwrap();
+    assert!(abaqus::write(&m).unwrap_err().to_string().contains("after a general step"));
+    assert!(fieldcraft_decks::lsdyna::write(&m).is_err() && fieldcraft_decks::nastran::write(&m).is_err());
+}

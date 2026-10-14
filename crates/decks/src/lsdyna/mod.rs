@@ -899,7 +899,7 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
                 d.card([Field::Blank, Field::Blank, Field::Blank, Field::Blank, Field::from(1)]);
             }
         }
-        Procedure::ExplicitDynamic(_) | Procedure::HeatTransfer { .. } | Procedure::CoupledTemperatureDisplacement {} => {
+        Procedure::ExplicitDynamic(_) | Procedure::HeatTransfer { .. } | Procedure::CoupledTemperatureDisplacement {} | Procedure::Buckle { .. } => {
             return Err(Error::Unsupported { format: FORMAT, what: format!("step `{}`: {} steps", step.name, step.procedure.name()) });
         }
     }

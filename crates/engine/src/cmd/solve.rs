@@ -7,8 +7,8 @@ use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 use fieldcraft_model::FluidDomain;
 use fieldcraft_parallel as parallel;
 use fieldcraft_solver::{
-    FrequencyOptions, Limits, Location, MassKind, StaticResult, StepResult as ImplicitResult, solve_frequency, solve_heat, solve_nonlinear,
-    solve_static,
+    FrequencyOptions, Limits, Location, MassKind, StaticResult, StepResult as ImplicitResult, solve_buckle, solve_frequency, solve_heat,
+    solve_nonlinear, solve_static,
 };
 use serde_json::{Value, json};
 
@@ -53,6 +53,14 @@ pub const FREQUENCY: CommandSpec = CommandSpec {
     params: r#"{"step": "Modes", "mass": "consistent|lumped", "shift": 0.0, "max_dofs": 6000000, "max_factor_entries": 400000000, "max_iterations": 3000, "threads": 8} — natural frequencies and mode shapes of a frequency step (its modes and range); `max_iterations` caps the Lanczos vectors; the result stays in the session; `threads` as for solve.static"#,
     kind: CommandKind::Model,
     run: run_frequency,
+};
+
+pub const BUCKLE: CommandSpec = CommandSpec {
+    id: "solve.buckle",
+    label: "Solve Buckling Step",
+    params: r#"{"step": "Buckle", "max_dofs": 6000000, "max_factor_entries": 400000000, "max_iterations": 3000, "threads": 8} — linear buckling of a buckling step (the only one when `step` is left out): the step's loads as a linear preload, then the lowest load factors λ with (K + λ K_σ) φ = 0 and their mode shapes (largest component 1), or those above the step's shift (whose LDLᵀ factor counts the load factors below it); negative load factors found are reported; the result stays in the session and its modes display like frequency modes; `threads` as for solve.static"#,
+    kind: CommandKind::Model,
+    run: run_buckle,
 };
 
 pub const EXPLICIT: CommandSpec = CommandSpec {
@@ -150,6 +158,7 @@ fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
                 Procedure::Static {} | Procedure::CoupledTemperatureDisplacement {} => run_static,
                 Procedure::HeatTransfer { .. } => run_heat,
                 Procedure::Frequency { .. } => run_frequency,
+                Procedure::Buckle { .. } => run_buckle,
                 Procedure::ExplicitDynamic(_) => run_explicit,
                 Procedure::Fluid { .. } => run_fluid,
                 Procedure::NonlinearStatic(_) => run_nonlinear,
@@ -277,6 +286,24 @@ fn run_frequency(s: &mut Session, p: &Value) -> Result<Value> {
             "eigenvalue": m.eigenvalue,
             "effective_mass": m.effective_mass,
         })).collect::<Vec<_>>(),
+        "warnings": r.warnings,
+    });
+    s.store_result(StepResult::Implicit(ImplicitResult::Frequency(r)));
+    Ok(summary)
+}
+
+fn run_buckle(s: &mut Session, p: &Value) -> Result<Value> {
+    let limits = limits(p)?;
+    let step = opt::<String>(p, "step")?;
+    let model = &s.model;
+    let r = parallel::with_threads(threads(s, p)?, || solve_buckle(model, step.as_deref(), &limits))?;
+    let summary = json!({
+        "step": r.step,
+        "dofs": r.stats.dofs,
+        "equations": r.stats.equations,
+        "lanczos_vectors": r.stats.lanczos_vectors,
+        "modes": r.modes.iter().enumerate().map(|(i, m)| json!({"mode": i + 1, "load_factor": m.eigenvalue})).collect::<Vec<_>>(),
+        "buckling": r.buckling,
         "warnings": r.warnings,
     });
     s.store_result(StepResult::Implicit(ImplicitResult::Frequency(r)));

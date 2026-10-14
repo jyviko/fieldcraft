@@ -147,6 +147,9 @@ pub struct FrequencyResult {
     pub total_mass: f64,
     pub stats: Stats,
     pub warnings: Vec<String>,
+    /// For a buckling step: its modes' eigenvalues are load factors (`frequency`, participation
+    /// and total mass are zero) and this says what else the eigenproblem found.
+    pub buckling: Option<crate::buckle::Buckling>,
 }
 
 /// Mass matrix choice for a frequency analysis.
@@ -168,8 +171,8 @@ pub struct FrequencyOptions {
 }
 
 /// The assembled matrices and the model's mass.
-struct Assembled {
-    k: Csr,
+pub(crate) struct Assembled {
+    pub(crate) k: Csr,
     m: Option<Csr>,
 }
 
@@ -180,7 +183,7 @@ pub(crate) const ROUND: usize = 4096;
 pub(crate) const GRAIN: usize = 16;
 
 /// Assemble the stiffness (and the mass when `mass` is set) on the mesh's node graph.
-fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<Assembled> {
+pub(crate) fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<Assembled> {
     let layout = &mesh.layout;
     let mut k = graph.zero_matrix(layout);
     let mut m = mass.map(|_| graph.zero_matrix(layout));
@@ -540,10 +543,17 @@ impl Operator for ShiftInvert<'_> {
 }
 
 /// Block size of the Lanczos iteration: enough for the six rigid-body modes of a free body.
-const BLOCK: usize = 6;
+pub(crate) const BLOCK: usize = 6;
+
+/// Most Lanczos vectors for `neq` equations: the basis (vectors and their mass products) costs
+/// 2 n × vectors, capped with the factor's entry limit.
+pub(crate) fn lanczos_basis(limits: &Limits, neq: usize) -> usize {
+    let by_memory = limits.max_factor_entries / (2 * neq).max(1);
+    limits.max_lanczos_vectors.min(by_memory).max(BLOCK.min(neq))
+}
 
 /// Relative residual of an accepted Ritz pair.
-const TOLERANCE: f64 = 1e-9;
+pub(crate) const TOLERANCE: f64 = 1e-9;
 
 /// Solve a frequency step (the step named `step`, or the model's only frequency step): the
 /// lowest natural modes within the step's frequency range.
@@ -613,10 +623,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
         min: min_hz.map_or(f64::NEG_INFINITY, |f| (two_pi * f).powi(2)),
         max: max_hz.map_or(f64::INFINITY, |f| (two_pi * f).powi(2)),
     };
-    // The basis (vectors and their mass products) costs 2 n × vectors; cap it with the factor's
-    // entry limit.
-    let by_memory = limits.max_factor_entries / (2 * neq).max(1);
-    let max_basis = limits.max_lanczos_vectors.min(by_memory).max(BLOCK.min(neq));
+    let max_basis = lanczos_basis(limits, neq);
     let op = ShiftInvert { m: &mff, factor: &chol };
     let pairs = lanczos(&op, shift, wanted, BLOCK, max_basis, TOLERANCE)?;
     // Participation: Γ_d = φᵀ M r_d with r_d the unit translation along d on the free equations
@@ -655,6 +662,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
         total_mass,
         stats: Stats { dofs: mesh.dofs(), equations: neq, factor_entries: chol.entries(), lanczos_vectors: pairs.basis },
         warnings,
+        buckling: None,
     })
 }
 

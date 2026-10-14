@@ -173,6 +173,26 @@ On a hex8 stiffness pattern of 140 000 equations (1.5 · 10⁸ entries) the LDL�
 times the Cholesky factor, and 1.2 times on a shift with 10 600 negative eigenvalues and 7 700
 2 × 2 pivots (`ldlt::tests::speed_against_cholesky`).
 
+## Linear buckling
+
+A step `{"type": "buckle", "modes": 4}` (`Procedure::Buckle`, solved by `solve.buckle`,
+`fieldcraft_solver::buckle`) solves its loads and prescribed motions as a linear static preload,
+forms the initial-stress stiffness K_σ = ∫ (∇N_a · σ ∇N_b) I dV of every solid and 2D element
+from the preload's stresses at the stiffness points (`Solid::geometric_stiffness`,
+`Plane::geometric_stiffness`, with the axisymmetric hoop term), and finds the load factors λ
+with (K + λ K_σ) φ = 0 by block Lanczos in the K inner product (Grimes, Lewis & Simon 1994):
+without a shift on K⁻¹(−K_σ) (θ = 1/λ, Cholesky of K), the lowest positive λ; with `"shift": σ`
+on the buckling transformation (K + σ K_σ)⁻¹ K (θ = λ/(λ − σ), LDLᵀ), the λ above σ, and the
+LDLᵀ inertia counts the load factors between 0 and σ, reported. Negative load factors (the
+reversed load buckles) are reported, not returned. Modes are scaled to a largest component of 1
+and display and probe like frequency modes (their value is λ; `FrequencyResult::buckling`).
+Boundary conditions hold their directions at zero in the eigenproblem; pressures are dead loads
+(no load stiffness); trusses, shells and beams are refused (no K_σ yet). Decks: Abaqus
+`*BUCKLE, EIGENSOLVER=LANCZOS` (refused after a general step, whose loaded state Abaqus would
+buckle from, and with a shift); Nastran SOL 105 and LS-DYNA refuse it by name. Verified by Euler
+columns of hex20 (pinned and clamped–free, 0.18 % from Engesser's shear-corrected load) and the
+shifted form against the plain one.
+
 ## Nonlinear static analysis (finite strain)
 
 A step `{"type": "nonlinear_static", …}` (`Procedure::NonlinearStatic`, solved by

@@ -155,6 +155,14 @@ impl Kernel<'_> {
         }
     }
 
+    /// The initial-stress stiffness of stresses at the stiffness points.
+    pub fn geometric_stiffness(&self, stress: &[[f64; 6]]) -> fieldcraft_fem::Result<fieldcraft_fem::dense::Matrix> {
+        match self {
+            Kernel::Solid(s) => s.geometric_stiffness(stress),
+            Kernel::Plane(p) => p.geometric_stiffness(stress),
+        }
+    }
+
     pub fn rule(&self) -> fieldcraft_fem::quadrature::Rule {
         match self {
             Kernel::Solid(s) => s.rule(),

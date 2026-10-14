@@ -35,8 +35,8 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
         (None, None) => "Deformed shape".into(),
     };
     let mut step = format!("Step {}", plot.view.step);
-    if let Some((mode, hz)) = plot.mode() {
-        step.push_str(&format!(", mode {mode}: {} Hz", number(hz)));
+    if let Some((mode, value)) = plot.mode() {
+        step.push_str(&format!(", mode {mode}: {value}"));
     }
     if let Some((k, time, n)) = plot.frame() {
         step.push_str(&format!(", frame {k} of {}: t = {}", n.saturating_sub(1), number(time)));
@@ -179,7 +179,13 @@ pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) 
         egui::ScrollArea::vertical().id_salt("fc_results_modes").max_height(150.0).show(ui, |ui| {
             for (i, m) in f.modes.iter().enumerate() {
                 let mode = i + 1;
-                if ui.selectable_label(plot.view.mode == mode, format!("{mode}   {} Hz", number(m.frequency))).clicked() {
+                if ui
+                    .selectable_label(
+                        plot.view.mode == mode,
+                        format!("{mode}   {}", crate::results::mode_value(f.buckling.is_some(), m.eigenvalue, m.frequency)),
+                    )
+                    .clicked()
+                {
                     run.push(("results.modes", json!({"mode": mode})));
                 }
             }

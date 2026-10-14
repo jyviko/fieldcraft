@@ -64,11 +64,18 @@ pub struct Prepared {
     pub contour: Option<Arc<Contour>>,
 }
 
+/// A mode's value as the results show it: its frequency, or a buckling mode's load factor.
+pub fn mode_value(buckling: bool, eigenvalue: f64, frequency: f64) -> String {
+    if buckling { format!("λ = {}", number(eigenvalue)) } else { format!("{} Hz", number(frequency)) }
+}
+
 impl Plot {
-    /// A frequency step's mode shown, and its frequency.
-    pub fn mode(&self) -> Option<(usize, f64)> {
+    /// A frequency or buckling step's mode shown, and its frequency (Hz) or load factor.
+    pub fn mode(&self) -> Option<(usize, String)> {
         match self.result.kind() {
-            Kind::Frequency(f) => f.modes.get(self.pick.mode.checked_sub(1)?).map(|m| (self.pick.mode, m.frequency)),
+            Kind::Frequency(f) => {
+                f.modes.get(self.pick.mode.checked_sub(1)?).map(|m| (self.pick.mode, mode_value(f.buckling.is_some(), m.eigenvalue, m.frequency)))
+            }
             Kind::Static(_) | Kind::Explicit(_) | Kind::Fluid(_) | Kind::Heat(_) => None,
         }
     }

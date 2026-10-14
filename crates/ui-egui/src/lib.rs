@@ -438,6 +438,8 @@ impl ModelApp {
         }
         match &r {
             Ok(v) if v.is_null() || changed || display => self.set_status(format!("{label} done"), false),
+            // A reply with a `summary` line shows it instead of its JSON.
+            Ok(v) if let Some(summary) = v.get("summary").and_then(Value::as_str) => self.set_status(format!("{label}: {summary}"), false),
             Ok(v) => self.set_status(format!("{label}: {v}"), false),
             Err(e) => self.set_status(format!("{label}: {e}"), true),
         }
@@ -1225,6 +1227,19 @@ mod tests {
         app.ui.select_tab(Tab::Properties);
         app.start("model.units").unwrap();
         assert_eq!(app.ui.tab, Tab::Properties);
+    }
+
+    /// Mesh Quality reads as a sentence in the status bar, not as its JSON report.
+    #[test]
+    fn mesh_quality_reports_in_a_line() {
+        let mut app = ModelApp::new(Session::default());
+        app.run("mesh.quality", json!({})).unwrap();
+        assert_eq!(app.status.as_ref().map(|s| s.text.as_str()), Some("Mesh Quality: no elements to measure"));
+        app.run_script(&fieldcraft_engine::sample::script()).unwrap();
+        app.run("mesh.quality", json!({})).unwrap();
+        let status = app.status.clone().unwrap();
+        assert!(status.text.starts_with("Mesh Quality: 226 elements, all valid; scaled Jacobian min "), "{}", status.text);
+        assert!(!status.error && !status.text.contains('{'));
     }
 
     #[test]

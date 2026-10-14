@@ -529,6 +529,7 @@ fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     Ok(json!({
+        "summary": quality_summary(&r),
         "measured": r.measured,
         "skipped": skipped,
         "valid": r.valid,
@@ -538,6 +539,29 @@ fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
         "area": r.area,
         "metrics": metrics,
     }))
+}
+
+/// A quality report in a line, for the status bar and the CLI: the elements measured, how many
+/// are invalid or undetermined, and the scaled Jacobian's minimum and mean.
+fn quality_summary(r: &QualityReport) -> String {
+    if r.measured == 0 {
+        return "no elements to measure".into();
+    }
+    let mut text = format!("{} elements", r.measured);
+    if r.invalid.is_empty() && r.undetermined.is_empty() {
+        text.push_str(", all valid");
+    }
+    if !r.invalid.is_empty() {
+        text.push_str(&format!(", {} invalid", r.invalid.len()));
+    }
+    if !r.undetermined.is_empty() {
+        text.push_str(&format!(", {} undetermined", r.undetermined.len()));
+    }
+    let jacobian = r.metrics.iter().find(|m| m.metric == quality::Metric::ScaledJacobian && m.count > 0);
+    if let Some((min, mean)) = jacobian.and_then(|m| m.mean.map(|mean| (m.min, mean))) {
+        text.push_str(&format!("; scaled Jacobian min {min:.3}, mean {mean:.3}"));
+    }
+    text
 }
 
 /// The surface named by `body` (tessellated at `tolerance`) or `surface` (an imported index).
@@ -763,6 +787,7 @@ mod tests {
         // The certified quality report agrees.
         let q = s.execute("mesh.quality", &json!({})).unwrap();
         assert_eq!(q["valid"].as_u64().unwrap() as usize, elements);
+        assert!(q["summary"].as_str().unwrap().starts_with(&format!("{elements} elements, all valid; scaled Jacobian min ")), "{q}");
         // A second run appends after the existing labels.
         let again = s.execute("mesh.tet.generate", &json!({"body": "Body1", "tolerance": 0.5})).unwrap();
         assert_eq!(again["first_element"].as_u64().unwrap() as usize, elements + 1);
@@ -815,6 +840,20 @@ mod tests {
         assert_eq!(one["elements"], bodies[0]["elements"]);
         let e = s.execute("mesh.tet.generate", &json!({"max_tets": 1})).unwrap_err().to_string();
         assert!(e.starts_with("body `Box"), "{e}");
+    }
+
+    /// The quality report's one-line summary counts the inverted elements.
+    #[test]
+    fn quality_summary_counts_invalid_elements() {
+        let mut s = Session::default();
+        assert_eq!(s.execute("mesh.quality", &json!({})).unwrap()["summary"], "no elements to measure");
+        for (label, xyz) in [(1, [0, 0, 0]), (2, [1, 0, 0]), (3, [0, 1, 0]), (4, [0, 0, 1])] {
+            s.execute("mesh.node.add", &json!({"label": label, "xyz": xyz})).unwrap();
+        }
+        s.execute("mesh.element.add", &json!({"label": 1, "kind": "tet4", "nodes": [1, 2, 3, 4]})).unwrap();
+        s.execute("mesh.element.add", &json!({"label": 2, "kind": "tet4", "nodes": [1, 3, 2, 4]})).unwrap();
+        let q = s.execute("mesh.quality", &json!({})).unwrap();
+        assert!(q["summary"].as_str().unwrap().starts_with("2 elements, 1 invalid; scaled Jacobian min -"), "{q}");
     }
 
     /// The session's caps are the defaults of `max_steiner` and `max_tets`; a parameter overrides them.

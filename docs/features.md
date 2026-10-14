@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-52 ready, 49 coming soon.
+54 ready, 49 coming soon.
 
 ## Geometry
 
@@ -116,6 +116,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
 | Panel | Capability | Status | Command |
 |---|---|---|---|
+| Run | Solve — Solve every step in order and show the results | ready | `solve.run` |
 | Check | Check Model — Name every missing or bad definition before writing or solving | ready | `model.check` |
 | Decks | Abaqus Input — Write an Abaqus input file (.inp) | ready | `deck.write {"format":"abaqus"}` |
 | Decks | Nastran Deck — Write Nastran bulk data (SOL 101, 103) | ready | `deck.write {"format":"nastran"}` |
@@ -153,6 +154,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 |---|---|---|---|
 | Model | Model Info — Node and element counts and the model summary | ready | `model.info` |
 | File | Open Model — Open a .modelcraft model | ready | `file.open` |
+| File | Samples — Open a sample model, ready to solve | ready | `file.sample` |
 | File | Save — Save the model to its .modelcraft file | ready | `file.save` |
 | File | Save As — Save the model to a new .modelcraft file | ready | `file.save_as` |
 | File | Recover — Open a model autosaved by an app that crashed or closed with unsaved changes | ready | `file.recover`, `file.recovery.list`, `file.recovery.discard` |

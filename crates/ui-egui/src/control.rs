@@ -313,6 +313,12 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w.clamp(320.0, 8192.0) as f32, h.clamp(240.0, 8192.0) as f32)));
             ok(Value::Null)
         }
+        "ui.fullscreen" => {
+            // Into or out of full screen (`on`, default true); the title bar follows next frame.
+            let on = p.get("on").and_then(Value::as_bool).unwrap_or(true);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
+            ok(json!({"fullscreen": on}))
+        }
         "ui.screenshot" => Outcome::Screenshot { path: s("path").map(str::to_string) },
         "ui.capture" => {
             let live = window_size(ctx);
@@ -504,6 +510,7 @@ mod tests {
             "ui.toolbar",
             "ui.prompt",
             "ui.select",
+            "ui.fullscreen",
         ] {
             for p in &hostile {
                 let _ = call(&mut app, method, p.clone());

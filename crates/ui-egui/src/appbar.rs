@@ -87,6 +87,57 @@ fn mark(p: &egui::Painter, c: egui::Pos2) {
     p.add(egui::Shape::convex_polygon(hole, Color32::from_rgb(0x08, 0x46, 0x3f), Stroke::NONE));
 }
 
+/// Where the title bar's parts go.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarLayout {
+    /// The mark's centre, and where the app's name starts (none when compact).
+    pub mark: egui::Pos2,
+    pub name: Option<egui::Pos2>,
+    /// File, Save, Undo, Redo: after the mark, at the left.
+    pub quick: [Rect; 4],
+    /// Solve, then Search, Theme and Help: at the right end, before the version.
+    pub solve: Rect,
+    pub tools: [Rect; 3],
+    /// The document tab's room, between the two groups.
+    pub tab_room: (f32, f32),
+    /// The version's right edge.
+    pub version_right: f32,
+    /// Too narrow for labels: no name, and Solve without its word.
+    pub compact: bool,
+}
+
+/// The title bar's layout in `bar`. `traffic_lights`: the macOS window buttons sit over its left
+/// end (an integrated title bar out of full screen, where there are none). `captions`: the width
+/// of the custom caption buttons at its right end; `version_w`: the version text's width.
+pub fn bar_layout(bar: Rect, traffic_lights: bool, captions: f32, version_w: f32) -> BarLayout {
+    let left = bar.left() + if traffic_lights { crate::titlebar::TRAFFIC_LIGHTS } else { 0.0 };
+    let compact = bar.right() - left < 760.0;
+    let cy = bar.center().y;
+    let button = |x: f32| Rect::from_center_size(pos2(x + BUTTON / 2.0, cy), Vec2::splat(BUTTON));
+    let x0 = left + if compact { 44.0 } else { 132.0 };
+    let quick = [0.0, 1.0, 2.0, 3.0].map(|i| button(x0 + i * STRIDE));
+    let version_right = bar.right() - 12.0 - captions;
+    let tools_end = version_right - version_w - 14.0;
+    let tools = [3.0, 2.0, 1.0].map(|i| button(tools_end - i * STRIDE));
+    let solve_w = if compact { 30.0 } else { 74.0 };
+    let solve = Rect::from_min_size(pos2(tools[0].left() - 10.0 - solve_w, cy - 12.0), vec2(solve_w, 24.0));
+    BarLayout {
+        mark: pos2(left + 20.0, cy),
+        name: (!compact).then(|| pos2(left + 36.0, cy)),
+        quick,
+        solve,
+        tools,
+        tab_room: (quick[3].right() + 16.0, solve.left() - 16.0),
+        version_right,
+        compact,
+    }
+}
+
+/// Whether the window is in full screen (no traffic lights to make room for).
+fn fullscreen(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.viewport().fullscreen.unwrap_or(false))
+}
+
 pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
     let style = button_style(&t);
@@ -97,13 +148,14 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
         if app.custom_titlebar || app.integrated_titlebar {
             crate::titlebar::drag_area(ui, r);
         }
-        let left = r.left() + if app.integrated_titlebar { crate::titlebar::TRAFFIC_LIGHTS } else { 0.0 };
-        let compact = r.right() - left < 760.0;
-        mark(ui.painter(), pos2(left + 20.0, r.center().y));
-        if !compact {
-            ui.painter().text(pos2(left + 36.0, r.center().y), Align2::LEFT_CENTER, "ModelCraft", FontId::proportional(14.0), t.app_bar_text);
+        let captions = if app.custom_titlebar { crate::titlebar::WIDTH } else { 0.0 };
+        let version = format!("v{}", crate::VERSION);
+        let version_w = ui.painter().layout_no_wrap(version.clone(), FontId::proportional(11.0), t.text_dim).size().x;
+        let lay = bar_layout(r, app.integrated_titlebar && !fullscreen(ui.ctx()), captions, version_w);
+        mark(ui.painter(), lay.mark);
+        if let Some(at) = lay.name {
+            ui.painter().text(at, Align2::LEFT_CENTER, "ModelCraft", FontId::proportional(14.0), t.app_bar_text);
         }
-        let mut x = left + if compact { 44.0 } else { 132.0 };
         let (undo, redo) = app.session.undo_depth();
         let busy = app.busy().is_some();
         let file_open = app.ui.menu.as_deref() == Some("file");
@@ -113,22 +165,26 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
             (Quick::Undo, "edit.undo", format!("Undo ({})", shortcut("Z")), undo > 0 && !busy, false),
             (Quick::Redo, "edit.redo", format!("Redo ({})", shortcut("Shift+Z")), redo > 0 && !busy, false),
         ];
+        let tools: [(Quick, &'static str, String, bool, bool); 3] = [
+            (Quick::Search, "ui.search", format!("Search commands (S or {})", shortcut("K")), true, app.ui.palette),
+            (
+                Quick::Theme,
+                if app.ui.dark { "ui.sun" } else { "ui.moon" },
+                if app.ui.dark { "Light theme".into() } else { "Dark theme".into() },
+                true,
+                false,
+            ),
+            (Quick::Help, "ui.help", "Help: samples, navigation, about".into(), true, app.ui.menu.as_deref() == Some("help")),
+        ];
         let mut clicked = None;
-        let mut button =
-            |app: &mut ModelApp, ui: &mut egui::Ui, x: f32, (q, icon, tip, enabled, selected): (Quick, &'static str, String, bool, bool)| {
-                let rect = Rect::from_center_size(pos2(x + BUTTON / 2.0, r.center().y), Vec2::splat(BUTTON));
-                if quick_button(app, ui, &style, q.region(), icon, rect, &tip, enabled, selected) {
-                    clicked = Some(q);
-                }
-                anchors.push((q, rect));
-            };
-        for a in actions {
-            button(app, ui, x, a);
-            x += STRIDE;
+        for ((q, icon, tip, enabled, selected), rect) in actions.into_iter().zip(lay.quick).chain(tools.into_iter().zip(lay.tools)) {
+            if quick_button(app, ui, &style, q.region(), icon, rect, &tip, enabled, selected) {
+                clicked = Some(q);
+            }
+            anchors.push((q, rect));
         }
         // Solve: the one prominent action, a filled button with its label.
-        x += 6.0;
-        let solve = Rect::from_min_size(pos2(x, r.center().y - 12.0), vec2(if compact { 30.0 } else { 74.0 }, 24.0));
+        let solve = lay.solve;
         let resp = ui.interact(solve, ui.id().with("mc_solve"), Sense::click());
         let can = !app.session.model.steps().is_empty() && !busy;
         let fill = if resp.hovered() && can {
@@ -146,7 +202,7 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
             Color32::WHITE,
             Stroke::NONE,
         ));
-        if !compact {
+        if !lay.compact {
             ui.painter().text(pos2(solve.left() + 28.0, solve.center().y), Align2::LEFT_CENTER, "Solve", FontId::proportional(13.0), Color32::WHITE);
         }
         let tip = if app.session.model.steps().is_empty() {
@@ -155,36 +211,16 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
             "Solve every step and show the results"
         };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Solve"));
-        let solve_clicked = resp.on_hover_text(tip).clicked();
-        x = solve.right() + 10.0;
-        let more: [(Quick, &'static str, String, bool, bool); 3] = [
-            (Quick::Search, "ui.search", format!("Search commands (S or {})", shortcut("K")), true, app.ui.palette),
-            (
-                Quick::Theme,
-                if app.ui.dark { "ui.sun" } else { "ui.moon" },
-                if app.ui.dark { "Light theme".into() } else { "Dark theme".into() },
-                true,
-                false,
-            ),
-            (Quick::Help, "ui.help", "Help: samples, navigation, about".into(), true, app.ui.menu.as_deref() == Some("help")),
-        ];
-        for a in more {
-            button(app, ui, x, a);
-            x += STRIDE;
-        }
-        anchors.push((Quick::Solve, solve));
-        if solve_clicked {
+        if resp.on_hover_text(tip).clicked() {
             clicked = Some(Quick::Solve);
         }
-        // The model's document tab, joined to the ribbon below it.
-        let captions = if app.custom_titlebar { crate::titlebar::WIDTH } else { 0.0 };
-        let version = format!("v{}", crate::VERSION);
-        let version_w = ui.painter().layout_no_wrap(version.clone(), FontId::proportional(11.0), t.text_dim).size().x;
-        let tabs_end = r.right() - captions - version_w - 24.0;
+        anchors.push((Quick::Solve, solve));
+        // The model's document tab, joined to the ribbon below it, centred in its room.
         let label = format!("{}{}", app.model_name(), if app.session.is_dirty() { " •" } else { "" });
         let text_w = ui.painter().layout_no_wrap(label.clone(), FontId::proportional(13.0), t.text).size().x;
-        let tab_x = (x + 16.0).max(r.center().x - (text_w + 40.0) / 2.0);
-        let tab_w = (text_w + 40.0).clamp(120.0, 260.0).min((tabs_end - tab_x).max(0.0));
+        let (room_l, room_r) = lay.tab_room;
+        let tab_w = (text_w + 40.0).clamp(120.0, 260.0).min((room_r - room_l).max(0.0));
+        let tab_x = (r.center().x - tab_w / 2.0).clamp(room_l, (room_r - tab_w).max(room_l));
         if tab_w > 40.0 {
             let tab = Rect::from_min_size(pos2(tab_x, r.top() + 5.0), vec2(tab_w, r.height() - 5.0));
             let path = app.session.path.clone();
@@ -203,7 +239,7 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
             app.place("document_tab", tab);
         }
         ui.painter().text(
-            pos2(r.right() - 12.0 - captions, r.center().y),
+            pos2(lay.version_right, r.center().y),
             Align2::RIGHT_CENTER,
             version,
             FontId::proportional(11.0),
@@ -288,5 +324,36 @@ fn help_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
     if let Some(n) = open {
         app.ui.menu = None;
         app.open_sample(n);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Solve and the tools sit at the right end; the left group starts after the traffic lights,
+    /// at the very left in full screen (where there are none).
+    #[test]
+    fn the_title_bar_keeps_solve_right_and_drops_the_traffic_light_inset_in_full_screen() {
+        let bar = Rect::from_min_size(egui::Pos2::ZERO, vec2(1400.0, HEIGHT));
+        let windowed = bar_layout(bar, true, 0.0, 30.0);
+        let full = bar_layout(bar, false, 0.0, 30.0);
+        assert_eq!(windowed.mark.x - full.mark.x, crate::titlebar::TRAFFIC_LIGHTS);
+        assert!(full.mark.x < 30.0 && full.quick[0].left() < 150.0, "{full:?}");
+        for l in [windowed, full] {
+            // Left to right: mark, quick actions, (tab), Solve, search, theme, help, version.
+            assert!(l.quick.windows(2).all(|w| w[0].right() <= w[1].left()));
+            assert!(l.quick[3].right() < l.tab_room.0 && l.tab_room.1 < l.solve.left());
+            assert!(l.solve.right() <= l.tools[0].left() && l.tools.windows(2).all(|w| w[0].right() <= w[1].left()));
+            assert!(l.tools[2].right() < l.version_right - 30.0 && l.version_right <= 1400.0);
+            assert!(l.solve.left() > 1100.0, "Solve is at the right end: {:?}", l.solve);
+        }
+        // The right group does not move with full screen; custom caption buttons push it left.
+        assert_eq!(windowed.solve, full.solve);
+        let captions = bar_layout(bar, false, crate::titlebar::WIDTH, 30.0);
+        assert!((full.tools[2].right() - captions.tools[2].right() - crate::titlebar::WIDTH).abs() < 0.01);
+        // Narrow: compact, still in order.
+        let narrow = bar_layout(Rect::from_min_size(egui::Pos2::ZERO, vec2(700.0, HEIGHT)), true, 0.0, 30.0);
+        assert!(narrow.compact && narrow.name.is_none() && narrow.quick[3].right() < narrow.solve.left());
     }
 }

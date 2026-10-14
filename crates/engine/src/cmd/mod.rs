@@ -40,6 +40,7 @@ pub static ALL: &[CommandSpec] = &[
     hex::HEX_GENERATE,
     hex::HEX_SWEEP,
     hex::HEX_MAPPED,
+    hex::HEX_BLOCKS,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

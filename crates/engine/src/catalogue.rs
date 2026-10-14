@@ -272,6 +272,13 @@ pub static CATALOGUE: &[Capability] = &[
         "Hex mesh swept along extrusions (several levels), around revolutions, or from a source face to a target",
         &["mesh.hex.generate"],
     ),
+    ready(
+        "mesh.hex.blocks",
+        "Block Hex",
+        Mesh,
+        "Structured Hex",
+        "One conforming hex mesh of a part split into six-sided blocks: shared faces meshed once",
+    ),
     soon("mesh.hex.decompose", "Decompose", Mesh, "Structured Hex", "M5", "Find sweepable and mappable regions and propose the splits"),
     soon("mesh.transition", "Transition", Mesh, "Structured Hex", "M5", "Conforming tet–hex interfaces with pyramids"),
     soon("mesh.hex.octree", "All-Hex", Mesh, "Automatic Hex", "M6", "Octree dual all-hex mesh of any part"),

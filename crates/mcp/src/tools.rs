@@ -18,6 +18,7 @@ const MESHERS: &[(&str, &str, &str)] = &[
     ("hex", "mesh.hex.generate", "all-hex mesh of a body"),
     ("hex_sweep", "mesh.hex.sweep", "swept all-hex mesh"),
     ("hex_mapped", "mesh.hex.mapped", "mapped all-hex mesh"),
+    ("hex_blocks", "mesh.hex.blocks", "one conforming all-hex mesh of a design split into six-sided blocks {bodies, size, order}"),
     ("block", "mesh.block", "structured hex block"),
     ("planar", "mesh.planar", "2D elements of a polygon or a planar face"),
 ];

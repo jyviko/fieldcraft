@@ -530,9 +530,14 @@ mod tests {
 
     /// A design file in a fresh temporary directory (removed when the guard drops).
     pub(crate) fn sample_design_file(plate: &Plate) -> (TempDir, String) {
+        design_file(&plate_design(plate).unwrap())
+    }
+
+    /// Design file bytes written to a temporary directory.
+    pub(crate) fn design_file(bytes: &[u8]) -> (TempDir, String) {
         let dir = TempDir::new();
-        let path = dir.0.join("plate.solidcraft");
-        std::fs::write(&path, plate_design(plate).unwrap()).unwrap();
+        let path = dir.0.join("design.solidcraft");
+        std::fs::write(&path, bytes).unwrap();
         (dir, path.to_string_lossy().into_owned())
     }
 

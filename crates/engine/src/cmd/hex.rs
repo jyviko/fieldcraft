@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use fieldcraft_geometry::{FaceSurface, Shape, SurfaceMesh};
-use fieldcraft_mesh::hex::{HexMesh, HexMethod, HexOptions, Surface, hex_mesh};
+use fieldcraft_mesh::hex::{Cell, HexMesh, HexMethod, HexOptions, MAX_CELLS, Surface, hex_mesh, hex_mesh_cells};
 use fieldcraft_mesh::size::UniformSize;
 use fieldcraft_mesh::surface::BoundarySurface;
 use fieldcraft_model::{GeometryRef, Model};
@@ -129,6 +129,134 @@ pub const HEX_MAPPED: CommandSpec = CommandSpec {
     run: hex_mapped,
 };
 
+pub const HEX_BLOCKS: CommandSpec = CommandSpec {
+    id: "mesh.hex.blocks",
+    label: "Block Hex Mesh",
+    params: r#"{"bodies": ["Cell1", "Cell2"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of that diagonal)} — replaces the mesh with one conforming all-hex mesh of a part partitioned into cells (bodies that meet face to face, such as the pieces of solid.split_body in SolidCraft): every cell a mapped block (six four-sided faces; faces that meet smoothly, such as the two halves of a hole, count as one), division counts assigned over all cells together, each shared face meshed once and its nodes merged, radial lines graded off holes and fillets. Elements are tagged with their cell's body and boundary faces with its B-rep faces (`weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate). Reports the cells, the shared faces, counts and quality; a cell that is not a block, or cells that touch without sharing whole faces, is an error that says which"#,
+    kind: CommandKind::Model,
+    run: hex_blocks,
+};
+
+fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
+    let size = number(p, "size")?;
+    let quadratic = order(p)?;
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let shapes: Vec<&Shape> = match p.get("bodies") {
+        None => design.bodies.iter().collect(),
+        Some(v) => {
+            let names = v.as_array().ok_or_else(|| EngineError::Params("`bodies` must be a list of body names".into()))?;
+            // Bounded before the duplicate check, which is quadratic in the list.
+            if names.len() > MAX_CELLS {
+                return Err(EngineError::Params(format!("`bodies` lists {} bodies; at most {MAX_CELLS} are meshed together", names.len())));
+            }
+            let mut out: Vec<&Shape> = Vec::with_capacity(names.len());
+            for n in names {
+                let name = n.as_str().ok_or_else(|| EngineError::Params("`bodies` must be a list of body names".into()))?;
+                let shape = design.body(name).ok_or_else(|| EngineError::Params(format!("no body `{name}`")))?;
+                if out.iter().any(|b| b.name == shape.name) {
+                    return Err(EngineError::Params(format!("body `{name}` is listed twice")));
+                }
+                out.push(shape);
+            }
+            out
+        }
+    };
+    if shapes.is_empty() || shapes.len() > MAX_CELLS {
+        return Err(EngineError::Params(format!("{} bodies; mesh.hex.blocks meshes 1 to {MAX_CELLS}", shapes.len())));
+    }
+    // One size and one tessellation tolerance for all cells, from their joint extent, so shared
+    // curves are divided alike.
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for b in &shapes {
+        let m = b.measure()?;
+        for k in 0..3 {
+            lo[k] = lo[k].min(m.bbox_min[k]);
+            hi[k] = hi[k].max(m.bbox_max[k]);
+        }
+    }
+    let diag = diagonal(lo, hi);
+    if !(diag > 0.0 && diag.is_finite()) {
+        return Err(EngineError::Params("the bodies have no extent".into()));
+    }
+    let tolerance = number(p, "tolerance")?.unwrap_or(DEFAULT_RELATIVE_TOLERANCE * diag);
+    if tolerance < MIN_RELATIVE_TOLERANCE * diag {
+        return Err(EngineError::Params(format!("`tolerance` must be at least {} mm", MIN_RELATIVE_TOLERANCE * diag)));
+    }
+    let h = size.unwrap_or(DEFAULT_RELATIVE_SIZE * diag);
+    if h < MIN_RELATIVE_SIZE * diag {
+        return Err(EngineError::Params(format!("`size` must be at least {} mm", MIN_RELATIVE_SIZE * diag)));
+    }
+    let inputs: Vec<Input> = shapes.iter().map(|b| shape_input(b, Some(tolerance))).collect::<Result<_>>()?;
+    let mut surfaces = Vec::with_capacity(inputs.len());
+    for b in &inputs {
+        let options = super::mesh::surface_options(p, &b.mesh)?;
+        surfaces.push(
+            BoundarySurface::new(&b.mesh.positions, &b.mesh.triangles, &b.mesh.tri_face, &options)
+                .map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?,
+        );
+    }
+    let cells: Vec<Cell> = surfaces.iter().zip(&inputs).map(|(surface, b)| Cell { name: &b.name, surface, faces: &b.surfaces }).collect();
+    let options = HexOptions {
+        method: HexMethod::Mapped,
+        quadratic,
+        chordal_tolerance: tolerance,
+        max_elements: fieldcraft_model::MAX_ELEMENTS / 8,
+        ..HexOptions::default()
+    };
+    let cm = hex_mesh_cells(&cells, &UniformSize(h), &options).map_err(|e| EngineError::Params(e.to_string()))?;
+    let m = &cm.mesh;
+    // Replace the mesh: definitions stay, nodes, elements and geometry tags are new.
+    let mut model = s.model.without_mesh();
+    for (i, xyz) in m.nodes.iter().enumerate() {
+        model.set_node(label(i)?, *xyz)?;
+    }
+    let mut body_tags = Vec::with_capacity(inputs.len());
+    for b in &inputs {
+        body_tags.push(model.geometry_tag(&GeometryRef::body(b.name.as_str())?)?);
+    }
+    for e in 0..m.element_count() {
+        let cell = cm.element_cell.get(e).map_or(0, |&c| c as usize);
+        let nodes: Vec<u32> = m.element(e).unwrap_or(&[]).iter().map(|&i| i + 1).collect();
+        model.set_element(label(e)?, m.kind, nodes)?;
+        model.tag_element(label(e)?, body_tags.get(cell).copied().ok_or_else(|| EngineError::Params("element without a cell".into()))?)?;
+    }
+    tag_faces(&mut model, &inputs, |e| cm.element_cell.get(e as usize).map_or(0, |&c| c as usize), m, 1)?;
+    s.model = model;
+    let blocks: Vec<Value> =
+        inputs.iter().zip(&cm.blocks).map(|(b, d)| json!({"body": b.name, "divisions": d, "elements": d.iter().product::<usize>()})).collect();
+    Ok(json!({
+        "cells": inputs.len(),
+        "interfaces": cm.interfaces,
+        "description": m.report.description,
+        "kind": m.kind.name(),
+        "elements": m.element_count(),
+        "nodes": m.nodes.len(),
+        "boundary_faces": m.boundary.len(),
+        "quality": {"min_scaled_jacobian": m.report.min_scaled_jacobian, "mean_scaled_jacobian": m.report.mean_scaled_jacobian},
+        "volume": m.report.volume,
+        "surface_volume": m.report.surface_volume,
+        "size": h,
+        "blocks": blocks,
+    }))
+}
+
+/// A 1-based model label for 0-based index `i`.
+fn label(i: usize) -> Result<u32> {
+    u32::try_from(i).ok().and_then(|x| x.checked_add(1)).ok_or_else(|| EngineError::Params("too many nodes or elements".into()))
+}
+
+/// The `order` parameter: false for hex8, true for hex20.
+fn order(p: &Value) -> Result<bool> {
+    match p.get("order") {
+        None => Ok(false),
+        Some(v) => match v.as_u64() {
+            Some(1) => Ok(false),
+            Some(2) => Ok(true),
+            _ => Err(EngineError::Params("`order` must be 1 (hex8) or 2 (hex20)".into())),
+        },
+    }
+}
+
 fn hex_generate(s: &mut Session, p: &Value) -> Result<Value> {
     let all = [HexMethod::Auto, HexMethod::Swept, HexMethod::Extrude, HexMethod::Sweep, HexMethod::Revolve, HexMethod::Mapped];
     generate(s, p, HexMethod::Auto, &all)
@@ -145,14 +273,7 @@ fn hex_mapped(s: &mut Session, p: &Value) -> Result<Value> {
 /// Mesh with `default` or the `method` parameter, which must be one of `allowed`.
 fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod]) -> Result<Value> {
     let size = number(p, "size")?;
-    let quadratic = match p.get("order") {
-        None => false,
-        Some(v) => match v.as_u64() {
-            Some(1) => false,
-            Some(2) => true,
-            _ => return Err(EngineError::Params("`order` must be 1 (hex8) or 2 (hex20)".into())),
-        },
-    };
+    let quadratic = order(p)?;
     let method = match p.get("method") {
         None => default,
         Some(v) => v.as_str().and_then(HexMethod::from_name).filter(|m| allowed.contains(m)).ok_or_else(|| {
@@ -197,7 +318,7 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
             model.tag_element(element_label, body_tag)?;
             element_label = element_label.checked_add(1).ok_or_else(|| EngineError::Params("too many elements".into()))?;
         }
-        tag_faces(&mut model, b, m, first_element)?;
+        tag_faces(&mut model, std::slice::from_ref(b), |_| 0, m, first_element)?;
         report.push(json!({
             "body": b.name,
             "method": m.report.method.name(),
@@ -215,22 +336,20 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
     Ok(json!({"bodies": report, "nodes": node_label - 1, "elements": element_label - 1}))
 }
 
-/// Tag every boundary element face with its B-rep face.
-fn tag_faces(model: &mut Model, b: &Input<'_>, m: &HexMesh, first_element: u32) -> Result<()> {
-    let mut tags: Vec<Option<u32>> = Vec::new();
+/// Tag every boundary element face with the B-rep face it lies on, of the body
+/// (`bodies[cell(element)]`) its element meshes.
+fn tag_faces(model: &mut Model, bodies: &[Input<'_>], cell: impl Fn(u32) -> usize, m: &HexMesh, first_element: u32) -> Result<()> {
+    let mut tags: std::collections::BTreeMap<(usize, u32), u32> = std::collections::BTreeMap::new();
     for f in &m.boundary {
-        let i = f.brep_face as usize;
-        if tags.len() <= i {
-            tags.resize(i + 1, None);
-        }
-        let tag = match tags.get(i).copied().flatten() {
-            Some(t) => t,
+        let c = cell(f.element);
+        let tag = match tags.get(&(c, f.brep_face)) {
+            Some(&t) => t,
             None => {
+                let b = bodies.get(c).ok_or_else(|| EngineError::Params("a boundary face without its body".into()))?;
+                let i = f.brep_face as usize;
                 let name = b.face_names.get(i).cloned().unwrap_or_else(|| i.to_string());
                 let t = model.geometry_tag(&GeometryRef::face(b.name.as_str(), name)?)?;
-                if let Some(slot) = tags.get_mut(i) {
-                    *slot = Some(t);
-                }
+                tags.insert((c, f.brep_face), t);
                 t
             }
         };
@@ -289,6 +408,89 @@ mod tests {
         // Undo returns the hex8 mesh.
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(s.model.element_counts(), vec![(fieldcraft_model::ElementKind::Hex8, n)]);
+    }
+
+    /// A 20 × 10 × 10 box split by SolidCraft into four cells (x = 10, then y = 5 on each half),
+    /// opened as a design; with `t_junction` the second half is not split, so the first half's
+    /// two cells meet it on one face.
+    fn split_box(t_junction: bool) -> (crate::tests::TempDir, Session) {
+        let mut commands = vec![
+            json!({"command": "solid.box", "params": {"length": 20, "width": 10, "height": 10, "body_name": "Box"}}),
+            json!({"command": "solid.split_body", "params": {"body": "Box", "plane": {"origin": [10, 0, 0], "normal": [1, 0, 0]}}}),
+            json!({"command": "solid.split_body", "params": {"body": "Box (1)", "plane": {"origin": [0, 5, 0], "normal": [0, 1, 0]}}}),
+        ];
+        if !t_junction {
+            commands.push(json!({"command": "solid.split_body", "params": {"body": "Box", "plane": {"origin": [0, 5, 0], "normal": [0, 1, 0]}}}));
+        }
+        let bytes = fieldcraft_geometry::script_design(&json!({"commands": commands}).to_string()).unwrap();
+        let (dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        (dir, s)
+    }
+
+    #[test]
+    fn split_cells_mesh_into_one_conforming_hex_mesh() {
+        let (_dir, mut s) = split_box(false);
+        let r = s.execute("mesh.hex.blocks", &json!({"size": 2.5})).unwrap();
+        assert_eq!(r["cells"], 4, "{r}");
+        assert_eq!(r["interfaces"], 4, "{r}");
+        assert_eq!(r["elements"], 8 * 4 * 4, "{r}");
+        // One 9 × 5 × 5 grid of nodes: the cells' nodes are merged on the interfaces.
+        assert_eq!(r["nodes"], 9 * 5 * 5, "{r}");
+        assert_eq!(s.model.element_counts(), vec![(fieldcraft_model::ElementKind::Hex8, 128)]);
+        assert!((r["volume"].as_f64().unwrap() - 2000.0).abs() < 1e-6, "{r}");
+        // Each cell's elements carry its body, and the outer faces their B-rep faces: a set of
+        // all four bodies skins the box with no internal faces.
+        let bodies = s.execute("geometry.bodies", &json!({})).unwrap();
+        let names: Vec<Value> = bodies.as_array().unwrap().iter().map(|b| json!({"body": b["name"]})).collect();
+        s.execute("model.set.create", &json!({"name": "all", "geometry": names})).unwrap();
+        let all = s.execute("model.set.resolve", &json!({"name": "all"})).unwrap();
+        assert_eq!(all["elements"]["count"], 128, "{all}");
+        assert_eq!(all["faces"]["count"], r["boundary_faces"], "{all}");
+        assert_eq!(r["boundary_faces"], 2 * (8 * 4 + 8 * 4 + 4 * 4), "{r}");
+        let first = bodies[0]["name"].as_str().unwrap();
+        s.execute("model.set.create", &json!({"name": "one", "geometry": [{"body": first}]})).unwrap();
+        assert_eq!(s.execute("model.set.resolve", &json!({"name": "one"})).unwrap()["elements"]["count"], 32);
+        // Hex20 shares mid-edge nodes across the interfaces as well.
+        let q = s.execute("mesh.hex.blocks", &json!({"size": 2.5, "order": 2})).unwrap();
+        assert_eq!(q["kind"], "hex20");
+        assert_eq!(q["nodes"], 9 * 5 * 5 + 8 * 5 * 5 + 9 * 4 * 5 + 9 * 5 * 4, "{q}");
+        // A list of bodies meshes those only.
+        let two = s.execute("mesh.hex.blocks", &json!({"bodies": [bodies[0]["name"], bodies[1]["name"]], "size": 2.5})).unwrap();
+        assert_eq!(two["cells"], 2);
+    }
+
+    #[test]
+    fn cells_that_do_not_conform_and_hostile_params_are_errors() {
+        let (_dir, mut s) = split_box(true);
+        let before = s.model.clone();
+        let e = s.execute("mesh.hex.blocks", &json!({"size": 2.5})).unwrap_err().to_string();
+        assert!(e.contains("do not conform") && e.contains("`Box`"), "{e}");
+        assert_eq!(s.model, before);
+        for p in [
+            json!({"size": 0}),
+            json!({"size": -1}),
+            json!({"size": "big"}),
+            json!({"size": 1e-300}),
+            json!({"order": 3}),
+            json!({"tolerance": -1}),
+            json!({"tolerance": 1e-300}),
+            json!({"bodies": "Box"}),
+            json!({"bodies": []}),
+            json!({"bodies": ["Nope"]}),
+            json!({"bodies": ["Box", "Box"]}),
+            json!({"bodies": [7]}),
+            json!({"size": 1e-3}),
+        ] {
+            assert!(s.execute("mesh.hex.blocks", &p).is_err(), "{p}");
+            assert_eq!(s.model, before, "{p}");
+        }
+        assert!(Session::default().execute("mesh.hex.blocks", &json!({})).is_err());
+        // One cell that is no block says which.
+        let (_dir, mut plate) = opened();
+        let e = plate.execute("mesh.hex.blocks", &json!({})).unwrap_err().to_string();
+        assert!(e.contains("`Body1`") && e.contains("not a logical cube"), "{e}");
     }
 
     #[test]

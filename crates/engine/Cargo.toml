@@ -27,3 +27,5 @@ log = { workspace = true }
 
 [dev-dependencies]
 zip = { workspace = true }
+# Multi-body designs from SolidCraft scripts in tests.
+fieldcraft-geometry = { workspace = true, features = ["scripts"] }

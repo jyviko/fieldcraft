@@ -32,6 +32,7 @@
 // Small fixed-size vector kernels read as the textbook formulas with index loops.
 #![allow(clippy::needless_range_loop)]
 
+pub mod discrete;
 pub mod elements;
 pub mod integrate;
 pub mod result;

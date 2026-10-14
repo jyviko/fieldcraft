@@ -477,6 +477,22 @@ pub fn internal_forces(sys: &System, m: &Motion, state: &mut State, ws: &mut Wor
             critical = critical.min(element.finish(ws, &es.point.stress, &inc.v, m.bulk));
         }
     }
+    for r in &sys.rods {
+        let (sigma, strain) = r.forces(&sys.xyz, m.u, sys.nonlinear, &mut ws.stress_force);
+        if let Some(es) = state.elements.get_mut(r.index) {
+            es.point.stress = sigma;
+            es.strain = strain;
+        }
+        if let Some(mat) = sys.materials.get(r.material) {
+            critical = critical.min(r.length / mat.wave_speed);
+        }
+    }
+    for l in &sys.discrete.links {
+        l.forces(&sys.xyz, m.u, m.v, sys.nonlinear, &mut ws.stress_force, &mut ws.viscous_force);
+    }
+    if let Some((dt, _)) = &sys.discrete_increment {
+        critical = critical.min(*dt);
+    }
     Ok(critical)
 }
 

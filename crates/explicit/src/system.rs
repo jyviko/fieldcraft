@@ -1,5 +1,6 @@
-//! From the resolved model to the explicit system: elements with their materials and stable
-//! lengths, lumped masses, prescribed velocities, rigid walls, initial velocities and the load
+//! From the resolved model to the explicit system: elements (solids and trusses) with their
+//! materials and stable lengths, lumped masses with the point masses, springs and dashpots
+//! ([`crate::discrete`]), prescribed velocities, rigid walls, initial velocities and the load
 //! vector of an explicit dynamic step.
 
 use modelcraft_fem::material::Elasticity;
@@ -10,6 +11,7 @@ use modelcraft_model::{
     Elastic, ElementKind, ExplicitDynamic, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step, StressRate, Target,
 };
 
+use crate::discrete::{Discrete, Rod};
 use crate::elements::{HexScales, add_at, frequency_bound, hex_scales};
 use crate::{Error, Result};
 
@@ -97,8 +99,14 @@ pub struct System {
     pub materials: Vec<Material>,
     pub hexes: Vec<Hex>,
     pub tets: Vec<Tet>,
+    pub rods: Vec<Rod>,
     /// Row-sum lumped mass per node.
     pub mass: Vec<f64>,
+    /// Point masses, springs and dashpots.
+    pub discrete: Discrete,
+    /// The springs' and dashpots' stable increment on the lumped mass, and a link that sets it,
+    /// when there are any.
+    pub discrete_increment: Option<(f64, String)>,
     /// Prescribed velocity per degree of freedom (`None` = free).
     pub prescribed: Vec<Option<f64>>,
     pub walls: Vec<Wall>,
@@ -162,6 +170,7 @@ fn check_formulation(kind: ElementKind, section_name: &str, f: &modelcraft_model
         ElementKind::Hex8 => Ok(()),
         ElementKind::Tet4 if f.integration == Integration::Reduced => refuse("reduced integration of tet4 elements"),
         ElementKind::Tet4 => Ok(()),
+        ElementKind::Rod2 | ElementKind::Rod3 => Ok(()),
         other => refuse(&format!("{} elements in explicit dynamics (it has one-point hex8 and nodal-pressure tet4 so far)", other.name())),
     }
 }
@@ -173,14 +182,18 @@ impl System {
         }
         // Elements by label, with their section's material.
         let mut materials: Vec<Material> = Vec::new();
-        let mut chosen: Vec<(u32, ElementKind, Vec<u32>, usize)> = Vec::new();
+        let mut chosen: Vec<(u32, ElementKind, Vec<u32>, usize, Option<f64>)> = Vec::new();
         for (name, section) in model.sections() {
-            if !matches!(section.kind, SectionKind::Solid {}) {
-                return Err(Error::NotSupported(format!(
-                    "{} sections (section `{name}`); explicit dynamics has solid elements so far",
-                    section.kind.name()
-                )));
-            }
+            let area = match section.kind {
+                SectionKind::Solid {} => None,
+                SectionKind::Rod { area } => Some(area),
+                _ => {
+                    return Err(Error::NotSupported(format!(
+                        "{} sections (section `{name}`); explicit dynamics has solid and truss elements so far",
+                        section.kind.name()
+                    )));
+                }
+            };
             let mi = match materials.iter().position(|m| m.name == section.material) {
                 Some(i) => i,
                 None => {
@@ -191,6 +204,13 @@ impl System {
             let set = resolved.sets.get(&section.set).ok_or_else(|| invalid(format!("set `{}` is not resolved", section.set)))?;
             for &label in &set.elements {
                 let el = model.element(label).ok_or_else(|| invalid(format!("element {label} is missing")))?;
+                if area.is_some() != matches!(el.kind, ElementKind::Rod2 | ElementKind::Rod3) {
+                    return Err(invalid(format!(
+                        "section `{name}`: a {} section cannot hold {} element {label}",
+                        section.kind.name(),
+                        el.kind.name()
+                    )));
+                }
                 check_formulation(el.kind, name, &section.formulation)?;
                 if el.kind == ElementKind::Tet4 && materials.get(mi).is_some_and(|m| m.j2.is_none()) {
                     return Err(Error::NotSupported(format!(
@@ -198,11 +218,13 @@ impl System {
                         section.material
                     )));
                 }
-                chosen.push((label, el.kind, el.nodes.clone(), mi));
+                chosen.push((label, el.kind, el.nodes.clone(), mi, area));
             }
         }
         chosen.sort_by_key(|e| e.0);
         let mut labels: Vec<u32> = chosen.iter().flat_map(|e| e.2.iter().copied()).collect();
+        // Mesh nodes only discrete elements use (reference points are refused by Discrete::new).
+        labels.extend(resolved.discrete_labels().filter(|l| model.node(*l).is_some()));
         labels.sort_unstable();
         labels.dedup();
         let layout = DofLayout::uniform(labels.iter().copied(), DofSet::TRANSLATIONS);
@@ -213,7 +235,7 @@ impl System {
             return Err(Error::Internal("explicit dynamics needs three translations per node".into()));
         }
         if labels.is_empty() {
-            return Err(invalid("the model has no elements to analyse"));
+            return Err(invalid("the model has no elements or point masses to analyse"));
         }
         let xyz: Vec<[f64; 3]> =
             labels.iter().map(|l| model.node(*l).map(|n| n.xyz).ok_or_else(|| invalid(format!("node {l} is missing")))).collect::<Result<_>>()?;
@@ -224,7 +246,10 @@ impl System {
             materials,
             hexes: Vec::new(),
             tets: Vec::new(),
+            rods: Vec::new(),
             mass: vec![0.0; n],
+            discrete: Discrete::default(),
+            discrete_increment: None,
             prescribed: vec![None; dofs],
             walls: Vec::new(),
             initial_velocity: vec![0.0; dofs],
@@ -238,7 +263,7 @@ impl System {
             labels,
             xyz,
         };
-        for (index, (label, kind, nodes, mi)) in chosen.into_iter().enumerate() {
+        for (index, (label, kind, nodes, mi, area)) in chosen.into_iter().enumerate() {
             let idx: Vec<usize> = nodes.iter().map(|l| sys.node(*l).ok_or_else(|| Error::Internal(format!("node {l}")))).collect::<Result<_>>()?;
             let mat = sys.materials.get(mi).ok_or_else(|| Error::Internal("material index".into()))?;
             let (rho, c) = (mat.density, mat.wave_speed);
@@ -264,9 +289,34 @@ impl System {
                     sys.lump(&nodes, &mass);
                     sys.tets.push(Tet { label, index, nodes, material: mi, kinematics: k, mass, omega2, length: 2.0 * c / omega2.sqrt() });
                 }
+                ElementKind::Rod2 | ElementKind::Rod3 => {
+                    let area = area.ok_or_else(|| Error::Internal("truss area".into()))?;
+                    let source = model.material(&mat.name).ok_or_else(|| Error::Internal("truss material".into()))?;
+                    if source.plastic.is_some() || source.damage.is_some() {
+                        return Err(Error::NotSupported(format!(
+                            "plastic or damaging materials on trusses (material `{}`, element {label}): explicit trusses are elastic so far",
+                            mat.name
+                        )));
+                    }
+                    if kind == ElementKind::Rod3 && settings.nonlinear_geometry {
+                        return Err(Error::NotSupported(format!(
+                            "three-node trusses with nonlinear geometry (element {label}); set the step's nonlinear_geometry to false"
+                        )));
+                    }
+                    let young =
+                        modelcraft_fem::truss::young_modulus(source.elastic.as_ref().ok_or_else(|| Error::Internal("truss material".into()))?)
+                            .map_err(|e| invalid(format!("material `{}` of element {label}: {e}", mat.name)))?;
+                    let x: Vec<[f64; 3]> = idx.iter().map(|i| sys.xyz.get(*i).copied().unwrap_or_default()).collect();
+                    let rod = Rod::new(label, index, kind, idx.clone(), &x, mi, crate::discrete::RodSection { young, density: rho, area })?;
+                    let mass: Vec<f64> = rod.nodal_volume.iter().map(|v| rho * v).collect();
+                    sys.lump(&idx, &mass);
+                    sys.rods.push(rod);
+                }
                 other => return Err(Error::Internal(format!("{} element kind", other.name()))),
             }
         }
+        sys.discrete = Discrete::new(resolved, sys.dofs(), &sys.xyz, |l| sys.node(l))?;
+        sys.discrete_increment = sys.discrete.critical_increment(&sys.dof_mass(), sys.nonlinear);
         sys.prescribe(model, resolved, step, settings.end_time)?;
         sys.load(model, resolved, step)?;
         sys.conditions(resolved, settings)?;
@@ -288,6 +338,13 @@ impl System {
 
     pub fn dofs(&self) -> usize {
         self.layout.dofs()
+    }
+
+    /// The lumped mass per degree of freedom: the elements' and the point masses'.
+    pub fn dof_mass(&self) -> Vec<f64> {
+        (0..self.dofs())
+            .map(|d| self.mass.get(crate::discrete::node_direction(d).0).copied().unwrap_or(0.0) + self.discrete.mass.get(d).copied().unwrap_or(0.0))
+            .collect()
     }
 
     /// Prescribed velocities from the step's boundary conditions: zero for held degrees of
@@ -363,6 +420,12 @@ impl System {
                             add_at(&mut f, *node, &acceleration.map(|a| rho * w * a));
                         }
                     });
+                    // Point masses take gravity on the whole model.
+                    if set.is_none() {
+                        for (d, (x, m)) in f.iter_mut().zip(&self.discrete.mass).enumerate() {
+                            *x += m * acceleration.get(crate::discrete::node_direction(d).1).copied().unwrap_or(0.0);
+                        }
+                    }
                 }
                 Load::BodyForce { set, vector } => {
                     let chosen = resolved.sets.get(set).map(|r| r.elements.as_slice()).unwrap_or_default();
@@ -398,6 +461,9 @@ impl System {
         }
         for t in self.tets.iter().filter(|t| wanted(t.label)) {
             visit(&t.nodes, &t.kinematics.nodal_volume, density(t.material));
+        }
+        for r in self.rods.iter().filter(|r| wanted(r.label)) {
+            visit(&r.nodes, &r.nodal_volume, density(r.material));
         }
     }
 

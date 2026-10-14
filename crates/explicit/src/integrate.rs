@@ -133,13 +133,31 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         .iter()
         .map(|h| (h.label, h.length, h.material))
         .chain(sys.tets.iter().map(|t| (t.label, t.length, t.material)))
+        .chain(sys.rods.iter().map(|r| (r.label, r.length, r.material)))
         .map(|(label, length, m)| ControllingElement { label, increment: length / sys.materials.get(m).map_or(f64::INFINITY, |m| m.wave_speed) })
         .collect();
     critical.sort_by(|a, b| a.increment.total_cmp(&b.increment).then(a.label.cmp(&b.label)));
     critical.truncate(CONTROLLING);
-    let smallest = critical
-        .first()
-        .map(|c| c.increment)
+    let n = sys.dofs();
+    let mass = sys.dof_mass();
+    if let Some(d) = mass.iter().position(|m| !(*m > 0.0 && m.is_finite())) {
+        let label = sys.labels.get(crate::discrete::node_direction(d).0).copied().unwrap_or(0);
+        return Err(Error::Invalid(format!(
+            "node {label} has no mass in direction {}; explicit dynamics needs a mass at every node (give the nodes only springs or dashpots use a point mass)",
+            crate::discrete::node_direction(d).1 + 1
+        )));
+    }
+    // Springs and dashpots have their own stable increment on the lumped mass.
+    let elements_smallest = critical.first().map(|c| c.increment);
+    if let Some((l, name)) = &sys.discrete_increment
+        && elements_smallest.is_none_or(|e| *l < e)
+    {
+        warnings.push(format!("spring or dashpot `{name}` limits the time increment to {l:.3e} (before the scale factor)"));
+    }
+    let smallest = elements_smallest
+        .into_iter()
+        .chain(sys.discrete_increment.as_ref().map(|l| l.0))
+        .reduce(f64::min)
         .filter(|d| *d > 0.0 && d.is_finite())
         .ok_or_else(|| Error::Invalid("no element has a finite, positive critical time increment (check the material constants)".into()))?;
     let estimate = end / (scale * smallest);
@@ -170,12 +188,8 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         )));
     }
 
-    let n = sys.dofs();
-    let mass: Vec<f64> = (0..n).map(|d| sys.mass.get(d / NODE_DOFS).copied().unwrap_or(0.0)).collect();
-    if mass.iter().any(|m| !(*m > 0.0 && m.is_finite())) {
-        return Err(Error::Internal("a node has no positive mass".into()));
-    }
-    let total_mass: f64 = sys.mass.iter().sum();
+    // Point masses count with their mean over the three directions.
+    let total_mass: f64 = sys.mass.iter().sum::<f64>() + sys.discrete.mass.iter().sum::<f64>() / 3.0;
     let mut ws = Workspace::new(&sys);
     let mut previous = Workspace::new(&sys);
     let mut state = State::new(&sys);
@@ -211,17 +225,17 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         history.time.push(t);
         history.increment.push(dt);
         history.energies.push(e);
-        let sum = |x: &[f64], weight: &dyn Fn(usize) -> f64| {
+        let sum = |x: &[f64], weight: &dyn Fn(usize, usize) -> f64| {
             let mut s = [0.0; 3];
             for (node, c) in x.as_chunks::<NODE_DOFS>().0.iter().enumerate() {
                 for k in 0..3 {
-                    s[k] += weight(node) * c[k];
+                    s[k] += weight(node, k) * c[k];
                 }
             }
             s
         };
-        history.momentum.push(sum(v, &|node| sys.mass.get(node).copied().unwrap_or(0.0)));
-        history.constraint_force.push(sum(r, &|_| 1.0));
+        history.momentum.push(sum(v, &|node, k| mass.get(crate::discrete::dof(node, k)).copied().unwrap_or(0.0)));
+        history.constraint_force.push(sum(r, &|_, _| 1.0));
         let pick = |x: &[f64]| sys.history_nodes.iter().map(|i| [0, 1, 2].map(|k| x.get(NODE_DOFS * i + k).copied().unwrap_or(0.0))).collect();
         history.displacement.push(pick(u));
         history.velocity.push(pick(v));

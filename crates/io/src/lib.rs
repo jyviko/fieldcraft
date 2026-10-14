@@ -17,14 +17,15 @@
 //! The same model always gives the same bytes. Reading treats the file as hostile: every size is
 //! capped before anything is allocated, every part's checksum is verified, and the model is
 //! rebuilt through the same checked methods commands use, so a file cannot hold what commands
-//! would refuse. Reading and writing work on bytes (they build for the browser); only [`fs`] and
-//! [`recovery`] touch the file system.
+//! would refuse. Reading and writing work on bytes (they build for the browser); only [`fs`],
+//! [`recovery`] and [`roots`] touch the file system.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 pub mod fs;
 pub mod mesh;
 pub mod recovery;
+pub mod roots;
 
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
@@ -74,6 +75,9 @@ pub enum Error {
     /// The file system refused.
     #[error("{0}")]
     Io(String),
+    /// The path lies outside the folders file access is confined to ([`roots::Roots`]).
+    #[error("{0}")]
+    Refused(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

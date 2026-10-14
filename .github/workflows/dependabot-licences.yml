@@ -1,0 +1,38 @@
+# Dependabot's Cargo updates change THIRD-PARTY-LICENSES.txt (`cargo xtask licences`), which
+# Dependabot cannot regenerate: this commits the regenerated file to its pull request. CI's own
+# run on the pull request regenerates it too, so its result covers everything else.
+name: Dependabot licences
+
+on:
+  pull_request:
+    branches: [develop]
+    paths: [Cargo.lock]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dependabot-licences-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  licences:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo xtask licences
+      - name: Commit the regenerated file
+        run: |
+          if git diff --quiet -- THIRD-PARTY-LICENSES.txt; then
+            echo "THIRD-PARTY-LICENSES.txt is up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "deps: regenerate THIRD-PARTY-LICENSES.txt" -- THIRD-PARTY-LICENSES.txt
+          git push origin "HEAD:${GITHUB_HEAD_REF}"

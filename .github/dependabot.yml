@@ -35,6 +35,12 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       # The shared Craft components follow VectorCraft's rev.
       - dependency-name: craft-ui
+      # The exact predicates' BigInt must be num-rational's (0.4 uses num-bigint 0.4): both move
+      # together, by hand.
+      - dependency-name: num-bigint
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: num-rational
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: github-actions
     directory: /

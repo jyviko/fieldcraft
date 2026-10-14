@@ -91,6 +91,9 @@ pub struct Quantity {
     pub tolerance: Tolerance,
     pub reason: String,
     pub known_failure: Option<String>,
+    /// The fixture band's relative part, when the quantity is more sensitive to rounding than
+    /// [`FIXTURE_RELATIVE`] allows (an ill-conditioned problem); `fixture_reason` says why.
+    pub fixture_relative: f64,
 }
 
 /// One case's `expected.json`.
@@ -150,7 +153,16 @@ impl Expected {
             if quantities.iter().any(|x: &Quantity| x.id == id) {
                 return Err(format!("quantity `{id}` is listed twice"));
             }
+            let fixture_relative = match q.get("fixture_relative") {
+                None => FIXTURE_RELATIVE,
+                Some(r) => {
+                    let r = r.as_f64().filter(|r| *r > 0.0 && *r <= 1e-3).ok_or_else(|| context("`fixture_relative` must be in (0, 1e-3]".into()))?;
+                    text(q, "fixture_reason").map_err(|_| context("`fixture_relative` needs a `fixture_reason`".into()))?;
+                    r
+                }
+            };
             quantities.push(Quantity {
+                fixture_relative,
                 description: text(q, "quantity").map_err(context)?,
                 known_failure: q.get("known_failure").and_then(Value::as_str).map(str::to_string),
                 id,
@@ -181,11 +193,11 @@ pub struct Frozen {
 /// The band a fixture value gets when it is blessed. A quantity whose reference is zero (a
 /// rigid-body frequency, an equilibrium residual, an invalid-element count) is rounding noise
 /// inside its tolerance: its band is that tolerance, as freezing noise would only flag rounding.
-pub fn fixture_band(value: f64, reference: f64, tolerance: Tolerance) -> f64 {
+pub fn fixture_band(value: f64, reference: f64, tolerance: Tolerance, relative: f64) -> f64 {
     if reference == 0.0 {
         return tolerance.absolute;
     }
-    FIXTURE_RELATIVE * value.abs().max(reference.abs()) + 1e-3 * tolerance.absolute
+    relative * value.abs().max(reference.abs()) + 1e-3 * tolerance.absolute
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -382,7 +394,10 @@ pub fn run(root: &Path, options: &Options) -> Result<(), String> {
                 let mut values = serde_json::Map::new();
                 for r in case_rows.iter_mut().filter(|r| r.verdict == Verdict::Pass) {
                     if let (Some(ours), Some(reference)) = (r.ours, r.quantity.reference) {
-                        values.insert(r.quantity.id.clone(), json!({"value": ours, "band": fixture_band(ours, reference, r.quantity.tolerance)}));
+                        values.insert(
+                            r.quantity.id.clone(),
+                            json!({"value": ours, "band": fixture_band(ours, reference, r.quantity.tolerance, r.quantity.fixture_relative)}),
+                        );
                         r.fixture = FixtureCheck::Blessed;
                     }
                 }
@@ -405,7 +420,9 @@ pub fn run(root: &Path, options: &Options) -> Result<(), String> {
                 _ => {}
             }
             match &r.fixture {
-                FixtureCheck::Moved { frozen } => problems.push(format!("{id}: moved from the fixture {} to {}", number(*frozen), show(r.ours))),
+                FixtureCheck::Moved { frozen } => {
+                    problems.push(format!("{id}: moved from the fixture {frozen:e} to {:e}", r.ours.unwrap_or(f64::NAN)))
+                }
                 FixtureCheck::Missing => problems.push(format!("{id}: no fixture; bless the case (`cargo xtask oracle --bless {case}`)")),
                 _ => {}
             }
@@ -640,6 +657,7 @@ mod tests {
             tolerance,
             reason: "r".into(),
             known_failure: known.map(str::to_string),
+            fixture_relative: FIXTURE_RELATIVE,
         }
     }
 
@@ -647,7 +665,7 @@ mod tests {
     fn verdicts_and_fixtures() {
         let t = Tolerance { relative: 0.01, absolute: 0.0 };
         let q = quantity(2.0, t, None);
-        let frozen = Frozen { value: 2.01, band: fixture_band(2.01, 2.0, t) };
+        let frozen = Frozen { value: 2.01, band: fixture_band(2.01, 2.0, t, FIXTURE_RELATIVE) };
         assert_eq!(judge(&q, &Ok(2.01), Some(&frozen)), (Verdict::Pass, FixtureCheck::Matches));
         assert_eq!(judge(&q, &Ok(2.011), Some(&frozen)), (Verdict::Pass, FixtureCheck::Moved { frozen: 2.01 }));
         assert_eq!(judge(&q, &Ok(2.01), None), (Verdict::Pass, FixtureCheck::Missing));
@@ -658,7 +676,7 @@ mod tests {
         // Zero references use the absolute tolerance, and the band keeps a floor from it.
         let a = Tolerance { relative: 0.0, absolute: 1e-9 };
         assert!(a.allows(0.0, 5e-10) && !a.allows(0.0, 2e-9));
-        assert_eq!(fixture_band(1e-16, 0.0, a), 1e-9, "a zero reference keeps its tolerance as the band");
+        assert_eq!(fixture_band(1e-16, 0.0, a, FIXTURE_RELATIVE), 1e-9, "a zero reference keeps its tolerance as the band");
     }
 
     #[test]

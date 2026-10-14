@@ -24,7 +24,9 @@
    "tolerance": {
     "relative": 0.02
    },
-   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14); MacNeal and Harder normalise by 0.3024 (the deep-shell value quoted in their [5] is 0.3086), and a solid model of R/t = 100 differs from shell theory by O(t/R)"
+   "reason": "MacNeal and Harder grade an element A within 2% of the theoretical value on this prescribed coarse mesh (p. 14); MacNeal and Harder normalise by 0.3024 (the deep-shell value quoted in their [5] is 0.3086), and a solid model of R/t = 100 differs from shell theory by O(t/R)",
+   "fixture_relative": 1e-7,
+   "fixture_reason": "a thin shell (R/t = 100) of one layer of solids is ill-conditioned: rounding moves u_z by about 1e-9 relative between equivalent orderings of the arithmetic (8e-10 when the solver's factorisation changed in #50, 1e-10 from the interpolation order in #52, more between platforms); 1e-7 still catches any real change"
   }
  ]
 }

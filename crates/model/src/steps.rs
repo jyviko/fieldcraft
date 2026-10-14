@@ -87,9 +87,9 @@ pub enum Procedure {
     /// together: every boundary condition and load of the step acts.
     CoupledTemperatureDisplacement {},
     /// Static equilibrium followed in load increments with Newton–Raphson iterations: large
-    /// displacements, rotations and strains (`nonlinear_geometry`), hyperelastic materials and
-    /// follower pressure. Loads and prescribed displacements grow in proportion to the step's
-    /// load factor, from 0 to 1.
+    /// displacements, rotations and strains (`nonlinear_geometry`), hyperelastic and plastic
+    /// materials and follower pressure. Loads and prescribed displacements are the step's load
+    /// factor times their values: a ramp from 0 to 1, or the step's load path.
     NonlinearStatic(NonlinearStatic),
 }
 
@@ -130,7 +130,17 @@ pub struct NonlinearStatic {
     /// A line search along each Newton correction (off by default: full Newton steps converge
     /// best for elastic large-rotation problems; a search helps where the material softens).
     pub line_search: bool,
+    /// The load factor against the step fraction: piecewise linear through these
+    /// `[fraction, factor]` points, from `[0, 0]` to fraction 1 (`None`: the linear ramp, the
+    /// factor equal to the fraction). Loads and prescribed displacements are the factor times
+    /// their values, so a path that comes down unloads and one that turns negative reverses
+    /// them (cyclic loading). Increments end at every point of the path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_path: Option<Vec<[f64; 2]>>,
 }
+
+/// Most points of a nonlinear step's load path.
+pub const MAX_LOAD_PATH_POINTS: usize = 1000;
 
 /// When an increment's Newton iterations have converged: all three hold.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -162,6 +172,7 @@ impl Default for NonlinearStatic {
             max_iterations: 16,
             tolerances: Tolerances::default(),
             line_search: false,
+            load_path: None,
         }
     }
 }
@@ -192,7 +203,40 @@ impl NonlinearStatic {
                 return Err(Error::Invalid(format!("the {what} tolerance is in (0, 1), got {v}")));
             }
         }
+        if let Some(path) = &self.load_path {
+            if !(2..=MAX_LOAD_PATH_POINTS).contains(&path.len()) {
+                return Err(Error::Invalid(format!("a load path has 2 to {MAX_LOAD_PATH_POINTS} points, got {}", path.len())));
+            }
+            if path.first() != Some(&[0.0, 0.0]) || path.last().map(|p| p[0]) != Some(1.0) {
+                return Err(Error::Invalid("a load path starts at [0, 0] (the unloaded start of the step) and ends at fraction 1".into()));
+            }
+            if path.iter().flatten().any(|v| !v.is_finite()) {
+                return Err(Error::Invalid("the points of a load path must be finite".into()));
+            }
+            if path.windows(2).any(|w| w.get(1).map(|b| b[0]) <= w.first().map(|a| a[0])) {
+                return Err(Error::Invalid("the fractions of a load path must increase".into()));
+            }
+        }
         Ok(())
+    }
+
+    /// The load factor at step fraction `t` (in [0, 1]).
+    pub fn load_factor(&self, t: f64) -> f64 {
+        let Some(path) = &self.load_path else { return t };
+        for w in path.windows(2) {
+            if let [[t0, f0], [t1, f1]] = *w
+                && t <= t1
+            {
+                return if t1 > t0 { f0 + (f1 - f0) * ((t - t0) / (t1 - t0)).clamp(0.0, 1.0) } else { f1 };
+            }
+        }
+        path.last().map_or(t, |p| p[1])
+    }
+
+    /// The first point of the load path after fraction `t` (1 without a path), where an
+    /// increment from `t` must end.
+    pub fn next_turn(&self, t: f64) -> f64 {
+        self.load_path.as_ref().and_then(|path| path.iter().map(|p| p[0]).find(|f| *f > t * (1.0 + 1e-12) + 1e-12)).unwrap_or(1.0)
     }
 }
 
@@ -900,6 +944,24 @@ mod tests {
             assert!(Procedure::NonlinearStatic(b.clone()).validate().is_err(), "{b:?}");
         }
         assert!(serde_json::from_value::<Procedure>(serde_json::json!({"type": "nonlinear_static", "nlgeom": true})).is_err());
+        // A load path: up, down through zero, back to zero.
+        let cyclic = NonlinearStatic { load_path: Some(vec![[0.0, 0.0], [0.25, 1.0], [0.75, -1.0], [1.0, 0.0]]), ..base.clone() };
+        assert!(Procedure::NonlinearStatic(cyclic.clone()).validate().is_ok());
+        for (t, f) in [(0.0, 0.0), (0.125, 0.5), (0.25, 1.0), (0.5, 0.0), (0.75, -1.0), (0.875, -0.5), (1.0, 0.0)] {
+            assert!((cyclic.load_factor(t) - f).abs() < 1e-15, "{t}: {}", cyclic.load_factor(t));
+        }
+        assert_eq!((cyclic.next_turn(0.0), cyclic.next_turn(0.25), cyclic.next_turn(0.3), cyclic.next_turn(0.75)), (0.25, 0.75, 0.75, 1.0));
+        assert_eq!((base.load_factor(0.3), base.next_turn(0.3)), (0.3, 1.0));
+        for path in [
+            vec![[0.0, 0.0]],
+            vec![[0.0, 0.5], [1.0, 1.0]],
+            vec![[0.0, 0.0], [0.9, 1.0]],
+            vec![[0.0, 0.0], [0.5, 1.0], [0.5, 2.0], [1.0, 0.0]],
+            vec![[0.0, 0.0], [0.5, f64::NAN], [1.0, 0.0]],
+            vec![[0.0, 0.0]; MAX_LOAD_PATH_POINTS + 1],
+        ] {
+            assert!(Procedure::NonlinearStatic(NonlinearStatic { load_path: Some(path.clone()), ..base.clone() }).validate().is_err(), "{path:?}");
+        }
     }
 
     #[test]

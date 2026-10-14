@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-55 ready, 49 coming soon.
+56 ready, 48 coming soon.
 
 ## Geometry
 
@@ -38,7 +38,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Structured Hex | Block Hex — One conforming hex mesh of a part split into six-sided blocks: shared faces meshed once | ready | `mesh.hex.blocks` |
 | Structured Hex | Decompose — Find sweepable and mappable regions and propose the splits | coming soon (M5) |  |
 | Structured Hex | Transition — Conforming tet–hex interfaces with pyramids | coming soon (M5) |  |
-| Automatic Hex | All-Hex — Octree dual all-hex mesh of any part | coming soon (M6) |  |
+| Automatic Hex | Octree Hex — Unstructured all-hex mesh of any part: adaptive grid, boundary layers on every sharp edge, untangled and proven valid | ready | `mesh.hex.octree` |
 | Automatic Hex | Hex-Dominant — Hex-dominant mesh by recombining tets | coming soon (M6) |  |
 | Automatic Hex | Polycube — Polycube hex mesh of blocky parts | coming soon (M6) |  |
 | Improve | Smooth — Smooth node positions, keeping every element valid | coming soon (M6) |  |

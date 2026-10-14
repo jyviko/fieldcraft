@@ -135,6 +135,8 @@ pub struct Limits {
     pub max_steiner: usize,
     /// `mesh.tet.generate`'s `max_tets`.
     pub max_tets: usize,
+    /// `mesh.hex.octree`'s `max_elements`.
+    pub max_hex_elements: usize,
     /// Threads the solvers use (the `solve.*` commands' `threads`): by default
     /// `FIELDCRAFT_THREADS` or the available cores, 1 to [`fieldcraft_parallel::MAX_THREADS`].
     /// Results do not depend on it.
@@ -144,7 +146,12 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         let cdt = fieldcraft_mesh::cdt::CdtOptions::default();
-        Limits { max_steiner: cdt.max_steiner, max_tets: cdt.max_tets, threads: fieldcraft_parallel::default_threads() }
+        Limits {
+            max_steiner: cdt.max_steiner,
+            max_tets: cdt.max_tets,
+            max_hex_elements: cmd::octree::DEFAULT_MAX_ELEMENTS,
+            threads: fieldcraft_parallel::default_threads(),
+        }
     }
 }
 
@@ -471,9 +478,11 @@ mod tests {
             json!({"geometry": {"body": "Bar", "vertex": "v"}, "nodes": [1], "edges": [{"element": 1, "edge": 0}]}),
         ];
         // Small work caps, so input that would mesh up to the production caps (needle triangles
-        // need Steiner points all along them) is refused at once. The caps themselves are what
+        // need Steiner points all along them, an octree hex mesh is fitted and untangled) is
+        // refused at once. The caps themselves are what
         // `tet_generate_honours_the_session_caps` checks.
-        let capped = || Session { limits: Limits { max_steiner: 64, max_tets: 100_000, ..Limits::default() }, ..Session::default() };
+        let capped =
+            || Session { limits: Limits { max_steiner: 64, max_tets: 100_000, max_hex_elements: 500, ..Limits::default() }, ..Session::default() };
         for spec in commands() {
             for p in &hostile {
                 let mut s = capped();

@@ -9,6 +9,7 @@ mod geometry;
 mod hex;
 pub(crate) mod mesh;
 mod model;
+pub(crate) mod octree;
 mod results;
 pub(crate) mod solve;
 mod tags;
@@ -36,6 +37,7 @@ pub static ALL: &[CommandSpec] = &[
     mesh::SURFACE_CHECK,
     mesh::PLANAR,
     mesh::TET_GENERATE,
+    octree::HEX_OCTREE,
     block::BLOCK,
     hex::HEX_GENERATE,
     hex::HEX_SWEEP,

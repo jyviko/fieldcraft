@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use fieldcraft_geometry::{FaceSurface, Shape, SurfaceMesh};
-use fieldcraft_mesh::hex::{Cell, HexMesh, HexMethod, HexOptions, MAX_CELLS, Surface, hex_mesh, hex_mesh_cells};
+use fieldcraft_mesh::hex::{BoundaryFace, Cell, HexMesh, HexMethod, HexOptions, MAX_CELLS, Surface, hex_mesh, hex_mesh_cells};
 use fieldcraft_mesh::size::UniformSize;
 use fieldcraft_mesh::surface::BoundarySurface;
 use fieldcraft_model::{GeometryRef, Model};
@@ -28,13 +28,13 @@ const MIN_RELATIVE_TOLERANCE: f64 = 1e-5;
 const DEFAULT_RELATIVE_SIZE: f64 = 1.0 / 25.0;
 const DEFAULT_RELATIVE_TOLERANCE: f64 = 1e-3;
 
-/// One body to mesh.
-struct Input<'a> {
-    name: String,
-    mesh: Cow<'a, SurfaceMesh>,
+/// One body to mesh (also the input of `mesh.hex.octree`).
+pub(super) struct Input<'a> {
+    pub(super) name: String,
+    pub(super) mesh: Cow<'a, SurfaceMesh>,
     surfaces: Vec<Option<Surface>>,
     face_names: Vec<String>,
-    diagonal: f64,
+    pub(super) diagonal: f64,
 }
 
 fn analytic(s: FaceSurface) -> Surface {
@@ -47,7 +47,7 @@ fn analytic(s: FaceSurface) -> Surface {
     }
 }
 
-fn number(p: &Value, key: &str) -> Result<Option<f64>> {
+pub(super) fn number(p: &Value, key: &str) -> Result<Option<f64>> {
     match p.get(key) {
         None => Ok(None),
         Some(v) => v
@@ -73,7 +73,7 @@ fn shape_input(shape: &Shape, tolerance: Option<f64>) -> Result<Input<'static>> 
     Ok(Input { name: shape.name.clone(), mesh: Cow::Owned(shape.tessellate(tol)?), surfaces, face_names, diagonal: diag })
 }
 
-fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
+pub(super) fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
     let tolerance = number(p, "tolerance")?;
     match (p.get("body"), p.get("surface")) {
         (Some(b), None) => {
@@ -220,7 +220,7 @@ fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
         model.set_element(label(e)?, m.kind, nodes)?;
         model.tag_element(label(e)?, body_tags.get(cell).copied().ok_or_else(|| EngineError::Params("element without a cell".into()))?)?;
     }
-    tag_faces(&mut model, &inputs, |e| cm.element_cell.get(e as usize).map_or(0, |&c| c as usize), m, 1)?;
+    tag_faces(&mut model, &inputs, |e| cm.element_cell.get(e as usize).map_or(0, |&c| c as usize), &m.boundary, 1)?;
     s.model = model;
     let blocks: Vec<Value> =
         inputs.iter().zip(&cm.blocks).map(|(b, d)| json!({"body": b.name, "divisions": d, "elements": d.iter().product::<usize>()})).collect();
@@ -318,7 +318,7 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
             model.tag_element(element_label, body_tag)?;
             element_label = element_label.checked_add(1).ok_or_else(|| EngineError::Params("too many elements".into()))?;
         }
-        tag_faces(&mut model, std::slice::from_ref(b), |_| 0, m, first_element)?;
+        tag_faces(&mut model, std::slice::from_ref(b), |_| 0, &m.boundary, first_element)?;
         report.push(json!({
             "body": b.name,
             "method": m.report.method.name(),
@@ -338,9 +338,15 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
 
 /// Tag every boundary element face with the B-rep face it lies on, of the body
 /// (`bodies[cell(element)]`) its element meshes.
-fn tag_faces(model: &mut Model, bodies: &[Input<'_>], cell: impl Fn(u32) -> usize, m: &HexMesh, first_element: u32) -> Result<()> {
+pub(super) fn tag_faces(
+    model: &mut Model,
+    bodies: &[Input<'_>],
+    cell: impl Fn(u32) -> usize,
+    boundary: &[BoundaryFace],
+    first_element: u32,
+) -> Result<()> {
     let mut tags: std::collections::BTreeMap<(usize, u32), u32> = std::collections::BTreeMap::new();
-    for f in &m.boundary {
+    for f in boundary {
         let c = cell(f.element);
         let tag = match tags.get(&(c, f.brep_face)) {
             Some(&t) => t,

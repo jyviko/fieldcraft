@@ -93,7 +93,7 @@ const TET_MAX_STEINER: u64 = 10_000_000;
 const TET_MAX_TETS: u64 = 50_000_000;
 
 /// An optional whole-number parameter in `range`.
-fn optional_count(p: &Value, key: &str, default: u64, range: std::ops::RangeInclusive<u64>) -> Result<usize> {
+pub(super) fn optional_count(p: &Value, key: &str, default: u64, range: std::ops::RangeInclusive<u64>) -> Result<usize> {
     let v = match p.get(key) {
         None => default,
         Some(v) => v

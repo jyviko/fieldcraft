@@ -22,13 +22,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# The analysis: the corpus I-beam (tests/corpus/i-beam, 40 x 40 mm, 3 mm flanges, 2 mm web,
-# 200 mm long along z) clamped at z = 0 with 1000 N down (-y) on its free end.
-PART = "i-beam"
+# The analysis: a cantilever I-beam lying along x (tests/corpus/cantilever-i-beam: 40 x 40 mm,
+# 3 mm flanges, 2 mm web upright, 200 mm long), clamped at x = 0 with 1000 N down (-z) on its free
+# end, so it bends downward on screen (z is up).
+PART = "cantilever-i-beam"
 BODY = "Beam"
 ROOT_FACE = "F2:start"
 TIP_FACE = "F2:top"
 LOAD_N = 1000.0
+LENGTH_MM = 200.0
+DEPTH_MM = 40.0  # overall; the flanges are 40 wide and 3 thick, the web 2 thick
+FLANGE_MM = 3.0
+WEB_MM = 2.0
+YOUNG_MPA = 210000.0
+POISSON = 0.3
 SIZE_MM = 4.0
 STEP = "Load"
 
@@ -159,13 +166,69 @@ class Film:
         return str(folder / "%05d.png"), n
 
 
+def hand_calculation():
+    """Beam theory for the cantilever: tip deflection in bending (P L^3 / 3 E I) plus shear
+    (P L / G A_web, the web carrying the shear) and the bending stress at the root (P L c / I)."""
+    b, h, tf, tw = 40.0, DEPTH_MM, FLANGE_MM, WEB_MM
+    inertia = (b * h**3 - (b - tw) * (h - 2 * tf) ** 3) / 12.0
+    shear_modulus = YOUNG_MPA / (2.0 * (1.0 + POISSON))
+    bending = LOAD_N * LENGTH_MM**3 / (3.0 * YOUNG_MPA * inertia)
+    shear = LOAD_N * LENGTH_MM / (shear_modulus * (h - tf) * tw)
+    return {"bending_mm": bending, "shear_mm": shear, "tip_mm": bending + shear, "root_stress_mpa": LOAD_N * LENGTH_MM * (h / 2) / inertia}
+
+
+def root_bending_stress(mcp, work):
+    """The bending stress at the root from the solution: stress_xx along the top flange's upper
+    face, averaged across it at each station, fitted by a line between one beam depth from either
+    end (where beam theory holds) and extrapolated to x = 0. At the root itself the clamp, which
+    stops the section's Poisson contraction, adds a local peak beam theory does not have.
+
+    The node coordinates come from the Abaqus deck (`write_deck`); the stresses from `probe`."""
+    deck = work / "ibeam.inp"
+    mcp.call("write_deck", {"format": "abaqus", "path": str(deck)})
+    stations = {}
+    in_nodes = False
+    for line in deck.read_text().splitlines():
+        if line.startswith("*"):
+            in_nodes = line.upper().split(",")[0].strip() == "*NODE"
+            continue
+        fields = [f.strip() for f in line.split(",")]
+        if in_nodes and len(fields) >= 4:
+            label, x, z = int(fields[0]), float(fields[1]), float(fields[3])
+            if abs(z - DEPTH_MM) < 1e-6 and DEPTH_MM <= x <= LENGTH_MM - DEPTH_MM:
+                stations.setdefault(x, []).append(label)
+    if len(stations) < 2:
+        raise SystemExit(f"root stress: {len(stations)} stations on the top flange in {deck}")
+    probed = mcp.call("probe", {"step": STEP, "nodes": [n for nodes in stations.values() for n in nodes]})
+    sxx = {r["node"]: r["stress"][0] for r in probed["nodes"]}
+    xs = sorted(stations)
+    ys = [sum(sxx[n] for n in stations[x]) / len(stations[x]) for x in xs]
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sum((x - mx) ** 2 for x in xs)
+    return my - slope * mx
+
+
+def against_beam_theory(result):
+    """The solution against beam theory: tip deflection within 3 %, root stress within 2 %."""
+    hand = hand_calculation()
+    result["hand_calculation"] = hand
+    for got, want, tol, what in (
+        (result["tip_deflection_mm"], hand["tip_mm"], 0.03, "tip deflection (mm)"),
+        (result["root_stress_mpa"], hand["root_stress_mpa"], 0.02, "root bending stress (MPa)"),
+    ):
+        log(f"{what}: {got:.4f}, beam theory {want:.4f} ({(got - want) / want:+.1%})")
+        if abs(got - want) > tol * want:
+            raise SystemExit(f"{what} {got:.4f} is more than {tol:.0%} from beam theory's {want:.4f}")
+    return result
+
+
 def batch(mcp, commands):
     reply = mcp.call("batch", {"commands": commands})
     if not reply.get("ok"):
         raise SystemExit(f"batch failed: {reply.get('failed')}")
 
 
-def analyse(mcp, film, design):
+def analyse(mcp, film, design, work):
     """The analysis, every step an MCP tool call, with the pictures a viewer follows."""
     # 1. Open the part.
     mcp.call("open", {"path": str(design)})
@@ -181,7 +244,7 @@ def analyse(mcp, film, design):
     batch(mcp, [
         {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
         {"command": "model.set.create", "params": {"name": "beam", "geometry": [{"body": BODY}]}},
-        {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}, "density": 7.85e-9}},
+        {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": YOUNG_MPA, "poisson": POISSON}, "density": 7.85e-9}},
         {"command": "model.section.create", "params": {"name": "solid", "set": "beam", "material": "Steel", "kind": {"type": "solid"}, "formulation": {"incompatible_modes": True}}},
     ])
     film.shoot(HOLD_SHORT)
@@ -194,9 +257,9 @@ def analyse(mcp, film, design):
         # The end section stays plane: a kinematic coupling to a point on the beam's axis carries
         # the load, so no load-introduction peak hides the root stress.
         {"command": "model.set.create", "params": {"name": "tip", "geometry": [{"body": BODY, "face": TIP_FACE}]}},
-        {"command": "model.reference_point.create", "params": {"name": "end", "xyz": [0, 20, 200]}},
+        {"command": "model.reference_point.create", "params": {"name": "end", "xyz": [LENGTH_MM, 0, DEPTH_MM / 2]}},
         {"command": "model.coupling.create", "params": {"name": "end_plate", "reference_point": "end", "set": "tip", "kind": "kinematic"}},
-        {"command": "model.load.create", "params": {"name": "tip_load", "type": "force", "target": {"reference_point": "end"}, "vector": [0, -LOAD_N, 0]}},
+        {"command": "model.load.create", "params": {"name": "tip_load", "type": "force", "target": {"reference_point": "end"}, "vector": [0, 0, -LOAD_N]}},
         {"command": "model.step.create", "params": {"name": STEP, "procedure": {"type": "static"}, "boundary_conditions": ["clamp"], "loads": ["tip_load"]}},
     ])
     check = mcp.call("check_model")
@@ -211,6 +274,7 @@ def analyse(mcp, film, design):
     # 5. Results: the tip deflection, then von Mises contours on the true (scale 1) shape.
     disp = mcp.call("show_results", {"step": STEP, "field": "displacement"})
     tip = disp["contour"]["range"]["max"]["value"]
+    root_stress = root_bending_stress(mcp, work)
     vm = mcp.call("show_results", {"step": STEP, "field": "von_mises", "bands": 12, "deformed": True, "scale": 1})
     peak = vm["contour"]["range"]["max"]["value"]
     log(f"tip deflection {tip:.4f} mm, peak von Mises {peak:.1f} MPa")
@@ -219,12 +283,12 @@ def analyse(mcp, film, design):
     # 6. The deformed shape, swung from the true shape to an exaggeration and back, in the iso
     # view and then from the side, ending held at the exaggeration.
     ramp = [max(1.0, MAX_SCALE * i / SWING) for i in range(SWING + 1)]
-    for view, scales in (("iso", ramp[1:] + ramp[-2::-1]), ("right", ramp[1:])):
+    for view, scales in (("iso", ramp[1:] + ramp[-2::-1]), ("front", ramp[1:])):
         for i, scale in enumerate(scales):
             mcp.call("show_results", {"step": STEP, "deformed": True, "scale": scale})
             film.shoot(1, view=view if i == 0 else None)
     film.shoot(HOLD_LONG)
-    return {"tip_deflection_mm": tip, "peak_von_mises_mpa": peak, "elements": mesh["mesh"]["elements"], "nodes": mesh["mesh"]["nodes"]}
+    return against_beam_theory({"tip_deflection_mm": tip, "root_stress_mpa": root_stress, "peak_von_mises_mpa": peak, "elements": mesh["mesh"]["elements"], "nodes": mesh["mesh"]["nodes"]})
 
 
 def encode(film, frames_dir, mp4, gif):
@@ -272,7 +336,7 @@ def main():
         wait_for_port(port, app)
         mcp = Mcp(bin_dir / "fieldcraft-cli", port)
         film = Film(mcp, frames_dir)
-        result = analyse(mcp, film, design)
+        result = analyse(mcp, film, design, work)
         encode(film, frames_dir, args.out / "ibeam-analysis.mp4", args.out / "ibeam-analysis.gif")
         print(json.dumps(result, indent=2))
     finally:

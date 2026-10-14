@@ -111,3 +111,28 @@ peaks at 295 MPa at the upright's hole.
 **Check:** the tip of the foot moves 0.509 mm down, within 1 % of a 48 016-element tet10
 solution of the unpartitioned part (0.5093 mm, `crates/testkit/tests/bracket_blocks.rs`), and the
 clamp carries the whole 1 kN.
+
+## Bicycle crank arm (`crank-arm`)
+
+![Von Mises stress on the all-hex crank arm, the arm root and the square bore carrying the most](media/examples/crank-arm.png)
+
+A 170 mm aluminium crank built in SolidCraft (`crates/engine/samples/crank-arm.json`): a 16 mm
+arm tapering from 38 to 24 mm, root arcs into a Ø46 × 22 spindle boss with a 12.7 mm square bore
+(R1.5 corners) and a Ø30 × 20 pedal boss with a Ø14 hole, and an 82 × 14 × 8 pocket in its back
+(R5 corners). It is a stack of extrusions along z, so `mesh.hex.generate` sweeps it all-hex:
+7 274 hex20 elements of 3 mm, all valid, scaled Jacobian min 0.17, mean 0.83. To keep it
+sweepable the hex variant leaves out the pocket's floor fillet and the bosses' 1.5 mm chamfers,
+and its root arcs meet the bosses about 20° off tangent (a tangent meeting leaves a zero-angle
+cusp on the arm's top face, where any hex is degenerate). 6061-T6 (E = 68 900 MPa, ν = 0.33); the
+square bore's faces fixed, 1500 N on the pedal hole in the crank's plane, across the arm (−y).
+Linear static: about 4 s to open and 7 s to solve.
+
+**Look at:** the swept mesh (Prepare ▸ Mesh), eight layers through the arm, and the von Mises
+contours: the bending stress grows along the arm toward the root; the peak, 129 MPa, sits at a
+square-bore corner where the rigid clamp meets the free face, a support singularity.
+
+**Check:** σxx on the arm's sides at x = 29 mm is ±62.4 MPa against the beam formula
+M/Z = 1500 · 141 / (16 · 35.6² / 6) = 62.6 MPa (0.3 %); a 41 815-element tet10 solution of the
+full part gives 62.3 MPa. The pedal bore moves 0.75 mm down (tet10: 0.70–0.75 mm; Euler–Bernoulli
+with a rigid clamp: 0.58 mm, without shear or the boss's compliance), and the spindle carries the
+whole 1500 N and 255 N·m.

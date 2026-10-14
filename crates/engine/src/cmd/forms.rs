@@ -820,6 +820,7 @@ pub const SAMPLE: &[Field] = &[choice(
         ("flow-past", "Flow past a bracket"),
         ("heated-bracket", "Heated bracket"),
         ("bracket-hex", "Hex-meshed bracket"),
+        ("crank-arm", "Bicycle crank arm"),
     ],
 )
 .req()

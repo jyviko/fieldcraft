@@ -102,8 +102,8 @@ against a closed form or a reference solution ([docs/examples.md](docs/examples.
 |---|---|---|
 | ![Drop test](docs/media/examples/drop-test.png) | ![Rubber seal](docs/media/examples/rubber-seal.png) | ![Heated bracket](docs/media/examples/heated-bracket.png) |
 | **Drop test** (`drop-test`): an aluminium bracket dropped 2 m onto a tilted floor; explicit dynamics, the strike's stress waves | **Rubber seal** (`rubber-seal`): a Mooney–Rivlin gasket ring squeezed 25 %; nonlinear static, large strain | **Heated bracket** (`heated-bracket`): a clamped steel bracket heated at one end; steady heat and thermal stress |
-| ![Hex-meshed bracket](docs/media/examples/bracket-hex.png) | *No picture yet: the viewport does not draw flow results (M12).* | |
-| **Hex-meshed bracket** (`bracket-hex`): the bracket split into 30 cells, meshed all-hex (hex20), von Mises | **Flow past a bracket** (`flow-past`): air past an L-bracket on the floor; lattice Boltzmann flow, the drag and the force on each face | |
+| ![Hex-meshed bracket](docs/media/examples/bracket-hex.png) | *No picture yet: the viewport does not draw flow results (M12).* | ![Bicycle crank arm](docs/media/examples/crank-arm.png) |
+| **Hex-meshed bracket** (`bracket-hex`): the bracket split into 30 cells, meshed all-hex (hex20), von Mises | **Flow past a bracket** (`flow-past`): air past an L-bracket on the floor; lattice Boltzmann flow, the drag and the force on each face | **Bicycle crank arm** (`crank-arm`): an aluminium crank swept all-hex (hex20), a rider's weight on the pedal; root bending within 0.3 % of M/Z |
 
 ## Build
 

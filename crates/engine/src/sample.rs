@@ -11,7 +11,7 @@
 //! explicit dynamic step.
 //!
 //! The examples gallery (docs/examples.md), each ready to solve with `solve.run`:
-//! [`drop_test`], [`rubber_seal`], [`flow_past`], [`heated_bracket`] and [`bracket_hex`]. Their
+//! [`drop_test`], [`rubber_seal`], [`flow_past`], [`heated_bracket`], [`bracket_hex`] and [`crank_arm`]. Their
 //! geometry is a SolidCraft script run when the sample opens ([`Sample::design`]): a corpus
 //! recipe (`tests/corpus`) or [`UPRIGHT_BRACKET`].
 
@@ -88,6 +88,13 @@ pub const SAMPLES: &[Sample] = &[
         about: "The filleted bracket split into 30 cells and meshed all-hex (hex20): clamped, loaded, von Mises",
         design: Some(PARTITIONED_BRACKET),
         script: bracket_hex,
+    },
+    Sample {
+        name: "crank-arm",
+        label: "Bicycle Crank Arm",
+        about: "An aluminium bicycle crank swept all-hex (hex20): square bore fixed, a rider's weight on the pedal, von Mises",
+        design: Some(CRANK_ARM),
+        script: crank_arm,
     },
 ];
 
@@ -458,6 +465,72 @@ pub fn bracket_hex(bodies: &[Shape]) -> Value {
     ])
 }
 
+/// The bicycle crank arm (`crates/engine/samples/crank-arm.json`): a 170 mm aluminium arm, 16 mm
+/// thick and tapering from 38 to 24 mm, joined by tangent root arcs to a Ø46 × 22 spindle boss
+/// with a 12.7 mm square bore (R1.5 corners) and a Ø30 × 20 pedal boss with a Ø14 hole, and an
+/// 82 × 14 × 8 pocket in its back (R5 corners). Made to be swept all-hex by `mesh.hex.generate`
+/// as a stack of extrusions along z: no pocket floor fillet or boss chamfers, and the root arcs
+/// meet the bosses about 20° off tangent (tangent to a circle 0.5 mm inside each boss), since a
+/// tangent meeting leaves a zero-angle cusp on the arm's top face.
+pub const CRANK_ARM: &str = include_str!("../samples/crank-arm.json");
+
+/// The crank arm's pedal load (N): a standing rider's weight on one pedal.
+pub const PEDAL_LOAD: f64 = 1500.0;
+
+/// [`CRANK_ARM`] swept all-hex (hex20 of 3 mm), in 6061-T6 aluminium: the square bore's faces
+/// and corner fillets (set `spindle`) fixed, [`PEDAL_LOAD`] on the pedal hole (set `pedal`), in
+/// the crank's plane and across the arm (−y). Step `Pedal` (linear static). The faces are picked
+/// by their surfaces, not their names: the square bore's are the vertical planes 6.35 mm from the
+/// spindle axis and the R1.5 cylinders beside it, the pedal hole is the Ø14 cylinder on the
+/// pedal axis.
+pub fn crank_arm(bodies: &[Shape]) -> Value {
+    let [spindle, pedal] = crank_faces(bodies);
+    json!([
+        {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
+        {"command": "mesh.hex.generate", "params": {"size": 3, "order": 2, "method": "extrude"}},
+        {"command": "model.set.create", "params": {"name": "crank", "geometry": bodies.iter().map(|b| json!({"body": b.name})).collect::<Vec<_>>()}},
+        {"command": "model.set.create", "params": {"name": "spindle", "geometry": spindle}},
+        {"command": "model.set.create", "params": {"name": "pedal", "geometry": pedal}},
+        {"command": "model.material.create", "params": {"name": "Al6061-T6", "elastic": {"type": "isotropic", "young": 68900, "poisson": 0.33}, "density": 2.7e-9}},
+        {"command": "model.section.create", "params": {"name": "Crank", "set": "crank", "material": "Al6061-T6", "kind": {"type": "solid"}}},
+        {"command": "model.boundary_condition.create", "params": {"name": "Spindle", "type": "fixed", "target": {"set": "spindle"}}},
+        {"command": "model.load.create", "params": {"name": "Rider", "type": "force", "target": {"set": "pedal"}, "vector": [0, -PEDAL_LOAD, 0]}},
+        {"command": "model.step.create", "params": {"name": "Pedal", "procedure": {"type": "static"}, "boundary_conditions": ["Spindle"], "loads": ["Rider"]}},
+    ])
+}
+
+/// The crank's square-bore faces and pedal-hole faces as set members, found by their surfaces.
+fn crank_faces(bodies: &[Shape]) -> [Vec<Value>; 2] {
+    use fieldcraft_geometry::FaceSurface;
+    let vertical = |axis: [f64; 3]| axis[2].abs() > 1.0 - 1e-6;
+    let (mut spindle, mut pedal) = (Vec::new(), Vec::new());
+    for body in bodies {
+        let surfaces = body.face_surfaces().unwrap_or_default();
+        for (face, surface) in body.faces().iter().zip(surfaces) {
+            let member = json!({"body": body.name, "face": face.name});
+            match surface {
+                Some(FaceSurface::Plane { normal, point })
+                    if normal[2].abs() < 1e-6 && ((normal[0] * point[0] + normal[1] * point[1]).abs() - 6.35).abs() < 1e-6 =>
+                {
+                    spindle.push(member)
+                }
+                Some(FaceSurface::Cylinder { origin, axis, radius })
+                    if vertical(axis) && (radius - 1.5).abs() < 1e-6 && origin[0].hypot(origin[1]) < 8.0 =>
+                {
+                    spindle.push(member)
+                }
+                Some(FaceSurface::Cylinder { origin, axis, radius })
+                    if vertical(axis) && (radius - 7.0).abs() < 1e-6 && (origin[0] - 170.0).hypot(origin[1]) < 1e-6 =>
+                {
+                    pedal.push(member)
+                }
+                _ => {}
+            }
+        }
+    }
+    [spindle, pedal]
+}
+
 /// Six times the signed volume of the tetrahedron `p[0..4]` (positive when p3 lies on the side
 /// p0 → p1 → p2 turns counter-clockwise around).
 fn signed_volume(p: &[[f64; 3]]) -> f64 {
@@ -662,6 +735,30 @@ mod tests {
         let reaction = s.execute("results.reactions", &json!({"step": "Load", "sets": ["top"]})).unwrap();
         assert!((reaction["sets"][0]["force"][1].as_f64().unwrap() - 1000.0).abs() < 1e-6, "{reaction}");
         assert!(r["max_von_mises"]["value"].as_f64().unwrap() > 200.0, "{r}");
+    }
+
+    /// The crank arm opens swept all-hex20 with every bore face found, and its root bends as a
+    /// beam: σxx on the arm's sides at x = 29 mm (35.6 mm wide, 16 thick, 141 mm from the pedal)
+    /// within 3 % of M/Z = 1500 · 141 / (16 · 35.6² / 6) = 62.6 MPa, the spindle carrying the
+    /// whole load.
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn the_crank_arm_root_bends_as_the_beam_formula_says() {
+        let mut s = open("crank-arm");
+        let elements = s.model.elements().values().filter(|e| e.kind == fieldcraft_model::ElementKind::Hex20).count();
+        assert_eq!(elements, s.model.elements().len());
+        let faces = |set: &str| s.model.sets().get(set).map_or(0, |x| x.geometry.len());
+        assert_eq!((faces("spindle"), faces("pedal")), (8, 2));
+        s.execute("solve.run", &json!({})).unwrap();
+        let half_width: f64 = 19.0 - 7.0 * 29.0 / 170.0;
+        let probe = s.execute("solve.probe", &json!({"step": "Pedal", "at": [[29.0, -half_width, 8.0], [29.0, half_width, 8.0]]})).unwrap();
+        let sxx = |i: usize| probe["nodes"][i]["stress"][0].as_f64().unwrap();
+        let hand = PEDAL_LOAD * (170.0 - 29.0) / (16.0 * (2.0 * half_width).powi(2) / 6.0);
+        for (i, sign) in [(0, -1.0), (1, 1.0)] {
+            assert!((sign * sxx(i) - hand).abs() < 0.03 * hand, "{} against {hand} MPa: {probe}", sxx(i));
+        }
+        let reaction = s.execute("results.reactions", &json!({"step": "Pedal", "sets": ["spindle"]})).unwrap();
+        assert!((reaction["sets"][0]["force"][1].as_f64().unwrap() - PEDAL_LOAD).abs() < 1e-6, "{reaction}");
     }
 
     #[test]

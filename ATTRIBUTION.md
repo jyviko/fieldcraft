@@ -22,6 +22,7 @@ is committed and listed here with its exports.
 | docs/media/examples/rubber-seal.png | FieldCraft contributors | Original: the FieldCraft window captured (`ui.capture`) with the solved rubber-seal sample (docs/examples.md) | MIT OR Apache-2.0 |
 | docs/media/examples/heated-bracket.png | FieldCraft contributors | Original: the FieldCraft window captured (`ui.capture`) with the solved heated-bracket sample (docs/examples.md) | MIT OR Apache-2.0 |
 | docs/media/examples/bracket-hex.png | FieldCraft contributors | Original: the FieldCraft window captured (`ui.capture`) with the solved bracket-hex sample (docs/examples.md) | MIT OR Apache-2.0 |
+| docs/media/examples/crank-arm.png | FieldCraft contributors | Original: the FieldCraft window captured (`ui.capture`) with the solved crank-arm sample (docs/examples.md) | MIT OR Apache-2.0 |
 | crates/decks/tests/golden/nastran/*.bdf | FieldCraft contributors | Written by our Nastran writer from our own test models (crates/decks/tests/nastran.rs) | MIT OR Apache-2.0 |
 | assets/icons/assembly.instance.svg, assets/icons/assembly.instance.vectorcraft | FieldCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/assembly.instance.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
 | assets/icons/deck.read.svg, assets/icons/deck.read.vectorcraft | FieldCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/deck.read.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |

@@ -82,6 +82,13 @@ pub const SAMPLES: &[Sample] = &[
         design: Some(FILLETED_BRACKET),
         script: |_| heated_bracket(),
     },
+    Sample {
+        name: "bracket-hex",
+        label: "Hex-Meshed Bracket",
+        about: "The filleted bracket split into 30 cells and meshed all-hex (hex20): clamped, loaded, von Mises",
+        design: Some(PARTITIONED_BRACKET),
+        script: bracket_hex,
+    },
 ];
 
 /// The sample called `name`.
@@ -324,8 +331,16 @@ pub fn rubber_seal() -> Value {
     for quarter in 0..4u8 {
         let (a0, a1) = (f64::from(quarter) * std::f64::consts::FRAC_PI_2, f64::from(quarter + 1) * std::f64::consts::FRAC_PI_2);
         let at = |r: f64, a: f64, z: f64| [r * a.cos(), r * a.sin(), z];
-        let corners =
-            [at(inner, a0, 0.0), at(outer, a0, 0.0), at(outer, a1, 0.0), at(inner, a1, 0.0), at(inner, a0, height), at(outer, a0, height), at(outer, a1, height), at(inner, a1, height)];
+        let corners = [
+            at(inner, a0, 0.0),
+            at(outer, a0, 0.0),
+            at(outer, a1, 0.0),
+            at(inner, a1, 0.0),
+            at(inner, a0, height),
+            at(outer, a0, height),
+            at(outer, a1, height),
+            at(inner, a1, height),
+        ];
         let arc = |a: u8, b: u8, z: f64| json!({"corners": [a, b], "arc": {"center": [0, 0, z]}});
         steps.push(json!({"command": "mesh.block", "params": {
             "body": "Seal", "kind": "hex8", "corners": corners, "divisions": [5, 10, 5],
@@ -393,10 +408,11 @@ pub const STEEL_EXPANSION: f64 = 1.2e-5;
 /// k in mW/(mm K), h in mW/(mm² K).
 pub fn heated_bracket() -> Value {
     let face = |f: &str| json!({"body": "Bracket", "face": f});
-    let skin: Vec<Value> = ["F2:start", "F2:top", "F2:side:l1", "F2:side:l2", "F2:side:l3", "F2:side:l4", "F2:side:l6", "F3:blend:F2:side:l3|F2:side:l4"]
-        .into_iter()
-        .map(face)
-        .collect();
+    let skin: Vec<Value> =
+        ["F2:start", "F2:top", "F2:side:l1", "F2:side:l2", "F2:side:l3", "F2:side:l4", "F2:side:l6", "F3:blend:F2:side:l3|F2:side:l4"]
+            .into_iter()
+            .map(face)
+            .collect();
     let holes: Vec<Value> = ["F4:bore:side:0", "F4:bore:side:1", "F5:bore:side:0", "F5:bore:side:1"].into_iter().map(face).collect();
     json!([
         {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
@@ -412,6 +428,33 @@ pub fn heated_bracket() -> Value {
         {"command": "model.boundary_condition.create", "params": {"name": "Heater", "type": "temperature", "target": {"set": "hot"}, "value": HEATER}},
         {"command": "model.load.create", "params": {"name": "Air", "type": "convection", "set": "skin", "film": 0.01, "sink": AMBIENT}},
         {"command": "model.step.create", "params": {"name": "Heat", "procedure": {"type": "coupled_temperature_displacement"}, "boundary_conditions": ["Clamp", "Heater"], "loads": ["Air"]}},
+    ])
+}
+
+/// The corpus filleted bracket split into 30 cells (`tests/corpus/filleted-bracket-blocks`),
+/// each a mapped block: the part `mesh.hex.blocks` meshes all-hex.
+pub const PARTITIONED_BRACKET: &str = include_str!("../../../tests/corpus/filleted-bracket-blocks/recipe.json");
+
+/// [`PARTITIONED_BRACKET`] meshed all-hex as one conforming mesh of hex20 elements of 3 mm, in
+/// steel: the upright's end (`F2:side:l5` in every cell that has it, set `top`) clamped, 1 kN down
+/// (−y) on the foot's end (`F2:side:l2`, set `tip`). Step `Load` (linear static). `bodies` are the
+/// design's cells.
+pub fn bracket_hex(bodies: &[Shape]) -> Value {
+    let faces = |name: &str| -> Vec<Value> {
+        bodies.iter().filter(|b| b.faces().iter().any(|f| f.name == name)).map(|b| json!({"body": b.name, "face": name})).collect()
+    };
+    let cells: Vec<Value> = bodies.iter().map(|b| json!({"body": b.name})).collect();
+    json!([
+        {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
+        {"command": "mesh.hex.blocks", "params": {"size": 3, "order": 2}},
+        {"command": "model.set.create", "params": {"name": "bracket", "geometry": cells}},
+        {"command": "model.set.create", "params": {"name": "top", "geometry": faces("F2:side:l5")}},
+        {"command": "model.set.create", "params": {"name": "tip", "geometry": faces("F2:side:l2")}},
+        {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}, "density": 7.85e-9}},
+        {"command": "model.section.create", "params": {"name": "Bracket", "set": "bracket", "material": "Steel", "kind": {"type": "solid"}}},
+        {"command": "model.boundary_condition.create", "params": {"name": "Clamp", "type": "fixed", "target": {"set": "top"}}},
+        {"command": "model.load.create", "params": {"name": "Push", "type": "force", "target": {"set": "tip"}, "vector": [0, -1000, 0]}},
+        {"command": "model.step.create", "params": {"name": "Load", "procedure": {"type": "static"}, "boundary_conditions": ["Clamp"], "loads": ["Push"]}},
     ])
 }
 
@@ -515,14 +558,30 @@ mod tests {
         let node = |s: &Session, xyz: [f64; 3]| -> u32 {
             *s.model.nodes().iter().find(|(_, n)| (0..3).all(|k| (n.xyz[k] - xyz[k]).abs() < 1e-9)).unwrap().0
         };
-        let held = [("hold_y", [inner, 0.0, 0.0], [None, Some(0.0), None]), ("hold_x", [0.0, inner, 0.0], [Some(0.0), None, None]), ("hold_y2", [-inner, 0.0, 0.0], [None, Some(0.0), None])];
+        let held = [
+            ("hold_y", [inner, 0.0, 0.0], [None, Some(0.0), None]),
+            ("hold_x", [0.0, inner, 0.0], [Some(0.0), None, None]),
+            ("hold_y2", [-inner, 0.0, 0.0], [None, Some(0.0), None]),
+        ];
         for (name, at, [ux, uy, _]) in held {
             let n = node(&s, at);
             s.execute("model.set.create", &json!({"name": name, "nodes": [n]})).unwrap();
-            s.execute("model.boundary_condition.create", &json!({"name": name, "type": "displacement", "target": {"set": name}, "values": [ux, uy, null, null, null, null]})).unwrap();
+            s.execute(
+                "model.boundary_condition.create",
+                &json!({"name": name, "type": "displacement", "target": {"set": name}, "values": [ux, uy, null, null, null, null]}),
+            )
+            .unwrap();
         }
-        s.execute("model.boundary_condition.edit", &json!({"name": "Base", "type": "displacement", "target": {"set": "bottom"}, "values": [null, null, 0, null, null, null]})).unwrap();
-        s.execute("model.boundary_condition.edit", &json!({"name": "Press", "type": "displacement", "target": {"set": "top"}, "values": [null, null, -SEAL_SQUEEZE, null, null, null]})).unwrap();
+        s.execute(
+            "model.boundary_condition.edit",
+            &json!({"name": "Base", "type": "displacement", "target": {"set": "bottom"}, "values": [null, null, 0, null, null, null]}),
+        )
+        .unwrap();
+        s.execute(
+            "model.boundary_condition.edit",
+            &json!({"name": "Press", "type": "displacement", "target": {"set": "top"}, "values": [null, null, -SEAL_SQUEEZE, null, null, null]}),
+        )
+        .unwrap();
         s.execute("model.step.edit", &json!({"name": "Squeeze", "boundary_conditions": ["Base", "Press", "hold_y", "hold_x", "hold_y2"]})).unwrap();
         let free = squeeze(&mut s);
         assert!((free - closed).abs() < 0.03 * closed.abs(), "frictionless {free} N against {closed} N");
@@ -584,6 +643,25 @@ mod tests {
             let (ux, expected) = (node["displacement"][0].as_f64().unwrap(), grow * (node["xyz"][0].as_f64().unwrap() - 40.0));
             assert!((ux - expected).abs() < tolerance * expected.abs(), "{node}: {ux} against {expected}");
         }
+    }
+
+    /// The hex20 bracket's tip deflection agrees with a fine tet10 solution of the unpartitioned
+    /// part (0.5093 mm, crates/testkit/tests/bracket_blocks.rs) within 1 %, its mesh conforms
+    /// across all 30 cells, and the load reaches the clamp.
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn the_hex_bracket_bends_like_the_fine_tet_solution() {
+        let mut s = open("bracket-hex");
+        let elements = s.model.elements().values().filter(|e| e.kind == fieldcraft_model::ElementKind::Hex20).count();
+        assert_eq!(elements, s.model.elements().len());
+        let r = s.execute("solve.run", &json!({})).unwrap();
+        let r = &r["steps"][0]["summary"];
+        let probe = s.execute("solve.probe", &json!({"step": "Load", "at": [[60.0, 4.0, 20.0]]})).unwrap();
+        let tip = probe["nodes"][0]["displacement"][1].as_f64().unwrap();
+        assert!((tip + 0.5093).abs() < 0.01 * 0.5093, "{tip}");
+        let reaction = s.execute("results.reactions", &json!({"step": "Load", "sets": ["top"]})).unwrap();
+        assert!((reaction["sets"][0]["force"][1].as_f64().unwrap() - 1000.0).abs() < 1e-6, "{reaction}");
+        assert!(r["max_von_mises"]["value"].as_f64().unwrap() > 200.0, "{r}");
     }
 
     #[test]

@@ -91,3 +91,23 @@ evenly by ΔT = 100 K, and clamps the foot's hole alone: the bracket then grows 
 and a point moves α ΔT times its distance from the hole's axis. The upright's top moves −0.0432
 mm along x (within 2 %); the foot's end, 16 mm from the clamped bore, which cannot grow, moves
 0.0228 mm against 0.024 mm (within 6 %).
+
+## Hex-meshed bracket (`bracket-hex`)
+
+![Von Mises stress on the all-hex bracket, O-grids round both holes, peaking at the upright's hole](media/examples/bracket-hex.png)
+
+The same filleted bracket split into 30 cells in SolidCraft
+(`tests/corpus/filleted-bracket-blocks`: planar cuts through the legs and diagonal cuts round
+the holes and the fillet, each cell a six-sided block), meshed by `mesh.hex.blocks` as one
+conforming all-hex mesh: 5 778 hex20 elements of 3 mm, O-grids round the holes, graded through
+the fillet, every shared face meshed once. Steel; the upright's end clamped, 1 kN down on the
+foot's end. Linear static: about 2 s to open (the cells are rebuilt from the script) and 3 s to
+solve.
+
+**Look at:** the mesh (Prepare ▸ Mesh) — mapped blocks meeting face to face with no pyramids or
+tets — and the von Mises contours on the deformed shape: the stress runs round the fillet and
+peaks at 295 MPa at the upright's hole.
+
+**Check:** the tip of the foot moves 0.509 mm down, within 1 % of a 48 016-element tet10
+solution of the unpartitioned part (0.5093 mm, `crates/testkit/tests/bracket_blocks.rs`), and the
+clamp carries the whole 1 kN.

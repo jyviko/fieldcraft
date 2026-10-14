@@ -808,8 +808,22 @@ pub const FILE_SAVE_AS: &[Field] = &[path("path", "File", true).req()];
 pub const RECOVERY_LIST: &[Field] = &[path("dir", "Folder", false).hint("the recovery folder")];
 pub const RECOVER: &[Field] = &[text("id", "Autosave").req(), path("dir", "Folder", false).hint("the recovery folder")];
 pub const RECOVERY_DISCARD: &[Field] = &[text("id", "Autosave"), flag("all", "All"), path("dir", "Folder", false).hint("the recovery folder")];
-pub const SAMPLE: &[Field] =
-    &[choice("name", "Sample", &[("cantilever", "Cantilever"), ("impact", "Impact"), ("parts", "Parts"), ("drop-test", "Drop test"), ("rubber-seal", "Rubber seal"), ("flow-past", "Flow past a bracket"), ("heated-bracket", "Heated bracket")]).req().def("\"cantilever\"")];
+pub const SAMPLE: &[Field] = &[choice(
+    "name",
+    "Sample",
+    &[
+        ("cantilever", "Cantilever"),
+        ("impact", "Impact"),
+        ("parts", "Parts"),
+        ("drop-test", "Drop test"),
+        ("rubber-seal", "Rubber seal"),
+        ("flow-past", "Flow past a bracket"),
+        ("heated-bracket", "Heated bracket"),
+        ("bracket-hex", "Hex-meshed bracket"),
+    ],
+)
+.req()
+.def("\"cantilever\"")];
 pub const COUNT: &[Field] = &[int("count", "Count", 1, 1_000_000).def("1")];
 
 pub const DECK: &[Field] = &[

@@ -1,7 +1,8 @@
 //! Joining new elements to the mesh already in a model: which new points coincide with existing
 //! nodes ([`weld`]), and whether the new elements then meet the mesh face to face
-//! ([`check_conforming`]). Mesh generators that add to a model (`mesh.block`) use both; node
-//! merging and orphan-mesh import will too.
+//! ([`check_conforming`]). Mesh generators that add to a model (`mesh.block`) use both. Nodes that
+//! coincide are merged by [`coincident_nodes`] and [`merge_coincident`] (`mesh.cells`,
+//! `mesh.mirror`); orphan-mesh import will use them too.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -89,6 +90,56 @@ pub fn weld(model: &Model, points: &[P], tol: f64) -> Result<Vec<Option<u32>>> {
             Ok(best)
         })
         .collect()
+}
+
+/// Most nodes [`coincident_nodes`] looks at.
+pub const MAX_MERGE_NODES: usize = 50_000_000;
+
+/// The nodes among `candidates` (every node when `None`) that lie within `tol` of a survivor,
+/// each mapped to it. Nodes are taken in ascending label order; one with no survivor within reach
+/// becomes a survivor (the nearest wins, the lowest label on a tie). Deterministic: the labels
+/// decide, never the order of a hash map.
+pub fn coincident_nodes(model: &Model, candidates: Option<&BTreeSet<u32>>, tol: f64) -> Result<BTreeMap<u32, u32>> {
+    if !(tol.is_finite() && tol > 0.0) {
+        return Err(Error::Invalid(format!("the merge distance must be a positive number, not {tol}")));
+    }
+    let nodes: Vec<(u32, P)> = match candidates {
+        Some(c) => c.iter().filter_map(|&l| model.node(l).map(|n| (l, n.xyz))).collect(),
+        None => model.nodes().iter().map(|(&l, n)| (l, n.xyz)).collect(),
+    };
+    if nodes.len() > MAX_MERGE_NODES {
+        return Err(Error::Invalid(format!("{} nodes to merge; at most {MAX_MERGE_NODES}", nodes.len())));
+    }
+    let mut grid: Grid<(u32, P)> = Grid::new(tol);
+    let mut map = BTreeMap::new();
+    for (label, p) in nodes {
+        // The survivor of the nearest earlier node within reach (the lowest label on a tie).
+        let near = grid
+            .near(p)
+            .map(|(l, q)| (dot(sub(q, p), sub(q, p)), l))
+            .filter(|(d2, _)| *d2 <= tol * tol)
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+            .map(|(_, l)| map.get(&l).copied().unwrap_or(l));
+        match near {
+            Some(survivor) => {
+                map.insert(label, survivor);
+            }
+            None => grid.insert(p, p, (label, p)),
+        }
+    }
+    Ok(map)
+}
+
+/// Merge the nodes among `candidates` (every node when `None`) that coincide within `tol`
+/// ([`coincident_nodes`]) into their survivors ([`Model::merge_nodes`]: elements, set node lists
+/// and vertex tags follow the survivor); refused, with nothing changed, when that would collapse
+/// an element. Returns the merged nodes and their survivors.
+pub fn merge_coincident(model: &mut Model, candidates: Option<&BTreeSet<u32>>, tol: f64) -> Result<BTreeMap<u32, u32>> {
+    let map = coincident_nodes(model, candidates, tol)?;
+    if !map.is_empty() {
+        model.merge_nodes(&map).map_err(|e| Error::Invalid(e.to_string()))?;
+    }
+    Ok(map)
 }
 
 /// A face or edge by its sorted node labels.
@@ -195,4 +246,48 @@ pub fn check_conforming(model: &Model, new: &[(ElementKind, Vec<u32>)], joined: 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two unit hex8 cubes side by side, each with its own nodes: the four on x = 1 coincide.
+    fn two_cubes(gap: f64) -> Model {
+        let mut m = Model::default();
+        let mut label = 0;
+        for (e, x0) in [(1u32, 0.0), (2, 1.0 + gap)] {
+            let first = label + 1;
+            // Hex8 order: the bottom face counter-clockwise, then the top.
+            for [x, y, z] in [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0., 0., 1.], [1., 0., 1.], [1., 1., 1.], [0., 1., 1.]] {
+                label += 1;
+                m.set_node(label, [x0 + x, y, z]).unwrap();
+            }
+            m.set_element(e, ElementKind::Hex8, (first..first + 8).collect()).unwrap();
+        }
+        m
+    }
+
+    #[test]
+    fn coincident_nodes_merge_into_the_lower_labels() {
+        let mut m = two_cubes(0.0);
+        let map = merge_coincident(&mut m, None, 1e-9).unwrap();
+        assert_eq!(map.len(), 4);
+        assert!(map.iter().all(|(from, to)| from > to && *from > 8 && *to <= 8));
+        assert_eq!(m.nodes().len(), 12);
+        // A gap wider than the distance merges nothing; candidates limit the merge.
+        let mut apart = two_cubes(1e-3);
+        assert!(merge_coincident(&mut apart, None, 1e-6).unwrap().is_empty());
+        let mut some = two_cubes(0.0);
+        let only: BTreeSet<u32> = [2, 10].into();
+        assert_eq!(merge_coincident(&mut some, Some(&only), 1e-9).unwrap().len(), 0, "2 and 10 are not the same corner");
+        // A distance that would put two corners of one element together is refused.
+        let mut whole = two_cubes(0.0);
+        let before = whole.clone();
+        assert!(merge_coincident(&mut whole, None, 1.5).is_err());
+        assert_eq!(whole, before);
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(coincident_nodes(&m, None, bad).is_err());
+        }
+    }
 }

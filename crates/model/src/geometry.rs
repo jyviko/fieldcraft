@@ -244,6 +244,11 @@ impl Classification {
         self.elements.remove(&label);
     }
 
+    /// Tag a node with a tag already interned (the caller checked both).
+    pub(crate) fn tag_node_unchecked(&mut self, label: u32, tag: u32) {
+        self.nodes.insert(label, tag);
+    }
+
     pub(crate) fn forget_node(&mut self, label: u32) {
         self.nodes.remove(&label);
     }

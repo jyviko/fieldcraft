@@ -341,6 +341,61 @@ impl Model {
         Ok(())
     }
 
+    /// Merge nodes: each node `from` in `map` is replaced by the node `map[from]` (its survivor)
+    /// in every element and in the node lists of sets, then removed. The survivor keeps its
+    /// coordinates; it takes the merged node's geometry vertex tag when it has none. Survivors
+    /// must exist and not be merged themselves. Refused, with nothing changed, when an element
+    /// would hold one node twice (the merge would collapse it).
+    pub fn merge_nodes(&mut self, map: &BTreeMap<u32, u32>) -> Result<()> {
+        for (&from, &to) in map {
+            if from == to {
+                return Err(Error::Invalid(format!("node {from} cannot be merged into itself")));
+            }
+            if !self.nodes.contains_key(&from) {
+                return Err(Error::NotFound(format!("node {from}")));
+            }
+            if !self.nodes.contains_key(&to) || map.contains_key(&to) {
+                return Err(Error::Invalid(format!("node {to}, the survivor of node {from}, must be a node that is not merged")));
+            }
+        }
+        let target = |n: u32| map.get(&n).copied().unwrap_or(n);
+        let mut renamed: Vec<(u32, Vec<u32>)> = Vec::new();
+        for (&label, e) in &self.elements {
+            if !e.nodes.iter().any(|n| map.contains_key(n)) {
+                continue;
+            }
+            let nodes: Vec<u32> = e.nodes.iter().map(|&n| target(n)).collect();
+            if let Some(n) = nodes.iter().enumerate().find_map(|(i, n)| nodes.get(..i).filter(|b| b.contains(n)).map(|_| n)) {
+                return Err(Error::Invalid(format!("merging would collapse element {label}: node {n} would appear twice")));
+            }
+            renamed.push((label, nodes));
+        }
+        for (label, nodes) in renamed {
+            // The node order is kept, so the element's face and edge tags still hold.
+            if let Some(e) = self.elements.get_mut(&label) {
+                e.nodes = nodes;
+            }
+        }
+        for set in self.sets.values_mut() {
+            if set.nodes.iter().any(|n| map.contains_key(n)) {
+                let mut nodes: Vec<u32> = set.nodes.iter().map(|&n| target(n)).collect();
+                nodes.sort_unstable();
+                nodes.dedup();
+                set.nodes = nodes;
+            }
+        }
+        for (&from, &to) in map {
+            if let Some(tag) = self.classification.nodes().get(&from).copied()
+                && !self.classification.nodes().contains_key(&to)
+            {
+                self.classification.tag_node_unchecked(to, tag);
+            }
+            self.classification.forget_node(from);
+            self.nodes.remove(&from);
+        }
+        Ok(())
+    }
+
     /// Element counts by kind, in [`ElementKind::ALL`] order, kinds with none left out.
     pub fn element_counts(&self) -> Vec<(ElementKind, usize)> {
         ElementKind::ALL.into_iter().map(|k| (k, self.elements.values().filter(|e| e.kind == k).count())).filter(|(_, n)| *n > 0).collect()
@@ -469,5 +524,46 @@ mod tests {
             assert_eq!(serde_json::to_value(k).unwrap(), serde_json::json!(k.name()));
         }
         assert_eq!(ElementKind::from_name("C3D8"), None);
+    }
+
+    #[test]
+    fn merging_nodes_rewrites_elements_sets_and_tags_and_refuses_a_collapse() {
+        use crate::{GeometryRef, Set};
+        let mut m = Model::default();
+        // Two tet4 sharing a face whose nodes are duplicated (4, 5, 6 copy 1, 2, 3).
+        for (l, p) in [
+            (1, [0., 0., 0.]),
+            (2, [1., 0., 0.]),
+            (3, [0., 1., 0.]),
+            (7, [0., 0., 1.]),
+            (4, [0., 0., 0.]),
+            (5, [1., 0., 0.]),
+            (6, [0., 1., 0.]),
+            (8, [0., 0., -1.]),
+        ] {
+            m.set_node(l, p).unwrap();
+        }
+        m.set_element(1, ElementKind::Tet4, vec![1, 2, 3, 7]).unwrap();
+        m.set_element(2, ElementKind::Tet4, vec![4, 6, 5, 8]).unwrap();
+        let face = m.geometry_tag(&GeometryRef::face("B", "bottom").unwrap()).unwrap();
+        m.tag_element_face(2, 1, face).unwrap();
+        let vertex = m.geometry_tag(&GeometryRef::new("B", crate::geometry::Entity::Vertex("v".into())).unwrap()).unwrap();
+        m.tag_node(4, vertex).unwrap();
+        m.add_set("pins", Set { nodes: vec![1, 4, 5], ..Set::default() }).unwrap();
+
+        let collapse: BTreeMap<u32, u32> = [(8, 7), (7, 1)].into();
+        assert!(m.merge_nodes(&collapse).is_err());
+        assert!(m.merge_nodes(&[(1, 2)].into()).is_err(), "collapses element 1");
+        assert!(m.merge_nodes(&[(9, 1)].into()).is_err());
+        let before = m.clone();
+        assert!(m.merge_nodes(&[(4, 1), (5, 2), (6, 6)].into()).is_err());
+        assert_eq!(m, before, "a refused merge changes nothing");
+
+        m.merge_nodes(&[(4, 1), (5, 2), (6, 3)].into()).unwrap();
+        assert_eq!(m.nodes().len(), 5);
+        assert_eq!(m.element(2).unwrap().nodes, vec![1, 3, 2, 8]);
+        assert_eq!(m.set("pins").unwrap().nodes, vec![1, 2]);
+        assert_eq!(m.classification().nodes().get(&1), Some(&vertex));
+        assert_eq!(m.classification().elements().get(&2).and_then(|t| t.faces.get(&1)), Some(&face));
     }
 }

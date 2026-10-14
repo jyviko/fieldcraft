@@ -313,6 +313,8 @@ pub struct ModelApp {
     pub queued: std::collections::VecDeque<String>,
     /// The question the window is asking (unsaved changes, recover).
     pub prompt: Option<files::Prompt>,
+    /// A design opened over a model of another part, waiting for [`files::Prompt::Design`]'s answer.
+    pub held: Option<files::Opened>,
     /// The window draws its own title bar and caption buttons (Windows, Linux).
     pub custom_titlebar: bool,
     /// The title bar runs under the macOS traffic lights.
@@ -382,6 +384,7 @@ impl ModelApp {
             loading: None,
             queued: std::collections::VecDeque::new(),
             prompt: None,
+            held: None,
             custom_titlebar: false,
             integrated_titlebar: false,
             palette_text: String::new(),

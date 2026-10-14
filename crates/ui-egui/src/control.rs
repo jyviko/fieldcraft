@@ -197,6 +197,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 }}),
                 crate::files::Prompt::Recover => json!("recover"),
                 crate::files::Prompt::Samples => json!("samples"),
+                crate::files::Prompt::Design(p) => json!({"design": p}),
             }),
             "recent": app.recent.paths,
             "version": crate::VERSION,
@@ -305,6 +306,15 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     app.answer_unsaved(answer);
                     ok(json!({"busy": app.busy()}))
                 }
+                (crate::files::Prompt::Design(_), Some(a @ ("new" | "keep" | "cancel"))) => {
+                    let answer = match a {
+                        "new" => crate::files::DesignAnswer::New,
+                        "keep" => crate::files::DesignAnswer::Keep,
+                        _ => crate::files::DesignAnswer::Cancel,
+                    };
+                    app.answer_design(answer);
+                    ok(json!({"busy": app.busy()}))
+                }
                 (crate::files::Prompt::Samples, Some("open")) => match s("name") {
                     Some(name) => {
                         app.prompt = None;
@@ -325,7 +335,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     None => err("missing `id` (from file.recovery.list)"),
                 },
                 (_, a) => err(format!(
-                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; recover: recover with id, close; samples: open with name, close)"
+                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; recover: recover with id, close; samples: open with name, close)"
                 )),
             }
         }

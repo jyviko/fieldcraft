@@ -186,6 +186,16 @@ pub struct Loading {
     shown: bool,
 }
 
+/// A finished background job whose session has not replaced the window's yet.
+pub struct Opened {
+    session: Box<Session>,
+    reply: Value,
+    done: String,
+    recent: Option<String>,
+    fit: bool,
+    form: Option<&'static str>,
+}
+
 /// What waits for an answer about unsaved changes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Replace {
@@ -213,6 +223,20 @@ pub enum Prompt {
     Recover,
     /// The samples to open (`file.sample`).
     Samples,
+    /// A design (its path) has none of the bodies the model's mesh and sets are on: start a new
+    /// model with it, or keep the model. The opened session waits in [`ModelApp::held`].
+    Design(String),
+}
+
+/// The answer to [`Prompt::Design`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesignAnswer {
+    /// Open the design into a new model (`geometry.open` with `"model": "new"`).
+    New,
+    /// Open the design and keep the model's mesh and definitions.
+    Keep,
+    /// Do not open the design.
+    Cancel,
 }
 
 /// The answer to [`Prompt::Unsaved`].
@@ -444,24 +468,19 @@ impl ModelApp {
         let Some(l) = self.loading.take() else { return false };
         match outcome {
             Some((session, Ok(reply))) => {
-                // The session it replaces may be large: it is freed off the window thread.
-                let old = std::mem::replace(&mut self.session, *session);
-                off_thread("fieldcraft drop".into(), move || drop(old));
-                self.model_changed();
-                if l.fit {
-                    self.fit_view();
-                }
-                if let Some(p) = &l.recent {
-                    self.recent.add(p);
-                }
-                if self.dialog.as_ref().is_some_and(|d| l.form == Some(d.command)) {
-                    self.dialog = None;
-                }
-                let warnings: Vec<&str> = reply.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
-                if warnings.is_empty() {
-                    self.set_status(l.done, false);
-                } else {
-                    self.set_status(format!("{} — {}", l.done, warnings.join("; ")), true);
+                let opened = Opened { session, reply, done: l.done, recent: l.recent, fit: l.fit, form: l.form };
+                // A design of another part over a meshed or defined model: ask what to do with
+                // the model before it changes (the job ran with the default, keep).
+                let unrelated = opened.reply.get("related").and_then(Value::as_bool) == Some(false)
+                    && opened.reply.get("model").and_then(Value::as_str) == Some("kept");
+                match opened.recent.clone() {
+                    Some(path) if unrelated && Kind::of(&path) == Some(Kind::Design) => {
+                        self.held = Some(opened);
+                        self.set_status(format!("{} has none of the bodies the model is on", file_name(&path)), false);
+                        self.prompt = Some(Prompt::Design(path));
+                        return false;
+                    }
+                    _ => self.take_opened(opened),
                 }
             }
             Some((_, Err(e))) => {
@@ -473,10 +492,68 @@ impl ModelApp {
             }
             None => self.set_status(format!("{}: stopped unexpectedly", l.title), true),
         }
+        self.open_queued();
+        self.loading.is_some()
+    }
+
+    /// Open the next dropped file waiting its turn.
+    fn open_queued(&mut self) {
         if let Some(next) = self.queued.pop_front() {
             self.open_path(&next);
         }
-        self.loading.is_some()
+    }
+
+    /// A finished job's session replaces the window's.
+    fn take_opened(&mut self, o: Opened) {
+        // The session it replaces may be large: it is freed off the window thread.
+        let old = std::mem::replace(&mut self.session, *o.session);
+        off_thread("fieldcraft drop".into(), move || drop(old));
+        self.model_changed();
+        if o.fit {
+            self.fit_view();
+        }
+        if let Some(p) = &o.recent {
+            self.recent.add(p);
+        }
+        if self.dialog.as_ref().is_some_and(|d| o.form == Some(d.command)) {
+            self.dialog = None;
+        }
+        let warnings: Vec<&str> = o.reply.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+        if warnings.is_empty() {
+            self.set_status(o.done, false);
+        } else {
+            self.set_status(format!("{} — {}", o.done, warnings.join("; ")), true);
+        }
+    }
+
+    /// Answer [`Prompt::Design`]: a new model with the design (opened again, in the background),
+    /// the design over the kept model, or neither.
+    pub fn answer_design(&mut self, answer: DesignAnswer) {
+        let Some(Prompt::Design(path)) = self.prompt.clone() else { return };
+        self.prompt = None;
+        let Some(opened) = self.held.take() else { return };
+        match answer {
+            DesignAnswer::Keep => {
+                let stale = opened.reply.get("stale").map(stale_note).unwrap_or_default();
+                let done = format!("{}{stale}", opened.done);
+                self.take_opened(Opened { done, ..opened });
+            }
+            DesignAnswer::New => {
+                let name = file_name(&path);
+                self.begin_job(
+                    "geometry.open",
+                    json!({"path": path, "model": "new"}),
+                    false,
+                    format!("Opening {name}"),
+                    format!("Opened {name} as a new model"),
+                    Some(path),
+                );
+            }
+            DesignAnswer::Cancel => self.set_status(format!("Did not open {}", file_name(&path)), false),
+        }
+        if self.loading.is_none() {
+            self.open_queued();
+        }
     }
 
     /// Block until the background open finishes (tests and the offscreen harness).
@@ -614,6 +691,18 @@ impl ModelApp {
     }
 }
 
+/// What a kept model has that the design does not (`geometry.open`'s `stale`), for the status:
+/// empty when everything resolves.
+fn stale_note(stale: &Value) -> String {
+    let names = |k: &str| stale.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", ");
+    let parts: Vec<String> = [("mesh of", names("mesh_bodies")), ("sets", names("sets"))]
+        .into_iter()
+        .filter(|(_, n)| !n.is_empty())
+        .map(|(what, n)| format!("{what} {n}"))
+        .collect();
+    if parts.is_empty() { String::new() } else { format!(" — not on this design: {}", parts.join("; ")) }
+}
+
 /// The last part of a path, for messages.
 pub fn file_name(path: &str) -> String {
     Path::new(path).file_name().and_then(|n| n.to_str()).map_or_else(|| path.to_string(), str::to_string)
@@ -679,6 +768,33 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
             }
             if let Some(a) = answer {
                 app.answer_unsaved(a);
+            }
+        }
+        Some(Prompt::Design(path)) => {
+            let mut answer = None;
+            crate::frame::window(ctx, "Open design", crate::frame::Width::Normal).id(egui::Id::new("fc_design")).show(ctx, |ui| {
+                ui.label(format!("{} has none of the bodies {}'s mesh and sets are on.", file_name(&path), app.model_name()));
+                ui.label(egui::RichText::new("A new model starts empty with this design; keeping the model keeps its mesh and definitions, which then refer to bodies the design does not have.").color(t.text_dim));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Start a new model with this design").clicked() {
+                        answer = Some(DesignAnswer::New);
+                    }
+                    if ui.button("Keep the current model").clicked() {
+                        answer = Some(DesignAnswer::Keep);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        answer = Some(DesignAnswer::Cancel);
+                    }
+                });
+            });
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                answer = Some(DesignAnswer::Cancel);
+            } else if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                answer = Some(DesignAnswer::New);
+            }
+            if let Some(a) = answer {
+                app.answer_design(a);
             }
         }
         Some(Prompt::Recover) => {
@@ -945,6 +1061,59 @@ mod tests {
         app.answer_unsaved(Answer::Discard);
         app.wait_loaded();
         assert!(app.session.model.node(5).is_some() && app.session.model.node(1).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A design of another part over a meshed model asks; each answer does what it says, and the
+    /// same design opens again without asking.
+    #[test]
+    fn opening_a_design_of_another_part_asks_what_to_do_with_the_model() {
+        let dir = temp("design");
+        let path = dir.join("plate.solidcraft").to_string_lossy().to_string();
+        std::fs::write(&path, fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap()).unwrap();
+        let cube = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
+        let meshed = || {
+            let mut app = ModelApp::new(Session::default());
+            app.run("mesh.block", serde_json::json!({"body": "Seal", "kind": "hex8", "corners": cube, "divisions": [1, 1, 1]})).unwrap();
+            app.run("model.set.create", serde_json::json!({"name": "seal", "geometry": [{"body": "Seal"}]})).unwrap();
+            app
+        };
+        let opened = |app: &mut ModelApp| {
+            app.open_path(&path);
+            app.wait_loaded();
+        };
+
+        // Cancel: nothing changes.
+        let mut app = meshed();
+        opened(&mut app);
+        assert_eq!(app.prompt, Some(Prompt::Design(path.clone())));
+        assert!(app.session.design.is_none(), "the model waits for the answer");
+        app.answer_design(DesignAnswer::Cancel);
+        assert!(app.prompt.is_none() && app.held.is_none() && app.session.design.is_none() && app.session.model.elements().len() == 1);
+
+        // Keep: the design over the model, and the status says what does not resolve.
+        let mut app = meshed();
+        opened(&mut app);
+        app.answer_design(DesignAnswer::Keep);
+        assert!(app.session.design.is_some() && app.session.model.elements().len() == 1);
+        assert!(app.status.as_ref().is_some_and(|s| s.text.contains("not on this design: mesh of Seal; sets seal")), "{:?}", app.status);
+        assert_eq!(app.recent.paths, vec![path.clone()]);
+
+        // New: an empty model with the design, one undo step from the old one.
+        let mut app = meshed();
+        opened(&mut app);
+        app.answer_design(DesignAnswer::New);
+        app.wait_loaded();
+        assert!(app.prompt.is_none() && app.session.design.is_some());
+        assert!(app.session.model.elements().is_empty() && app.session.model.sets().is_empty());
+        app.run("edit.undo", serde_json::json!({})).unwrap();
+        assert!(app.session.design.is_none() && app.session.model.elements().len() == 1);
+
+        // The same design again (its bodies are the model's): no question.
+        app.run("edit.redo", serde_json::json!({})).unwrap();
+        app.run("model.set.create", serde_json::json!({"name": "plate", "geometry": [{"body": "Body1"}]})).unwrap();
+        opened(&mut app);
+        assert!(app.prompt.is_none() && app.session.model.set("plate").is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

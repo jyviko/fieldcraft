@@ -414,6 +414,13 @@ pub(crate) fn temperatures(model: &Model, resolved: &Resolved, step: &Step, limi
     Ok((s.mesh.labels, t))
 }
 
+/// The steady temperatures of a step's thermal conditions at the nodes `labels` (sorted), `None`
+/// at the nodes conduction does not reach.
+pub(crate) fn temperatures_at(model: &Model, resolved: &Resolved, step: &Step, limits: &Limits, labels: &[u32]) -> Result<Vec<Option<f64>>> {
+    let (solved, t) = temperatures(model, resolved, step, limits)?;
+    Ok(labels.iter().map(|l| solved.binary_search(l).ok().and_then(|i| t.get(i)).copied()).collect())
+}
+
 /// Solve a heat transfer step: the step named `step`, or the model's only one.
 pub fn solve_heat(model: &Model, step: Option<&str>, limits: &Limits) -> Result<HeatResult> {
     let resolved = model.resolve()?;

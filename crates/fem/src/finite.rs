@@ -29,6 +29,17 @@
 //! elements of an elastic material are refused in nonlinear steps; J2 plasticity has it exactly
 //! (the return is deviatoric, the volume Hencky's K/2 (ln J)², [`crate::elastoplastic`]).
 //!
+//! **Thermal strain** ([`Temperature`]): at finite strain the multiplicative split F = F_m F_θ
+//! with the thermal stretches F_θ = diag(1 + αᵢ (T − T_ref)) at each point (T interpolated from
+//! the nodes; V. A. Lubarda, *Constitutive theories based on the multiplicative decomposition of
+//! deformation gradient: thermoelasticity, elastoplasticity, and biomechanics*, Appl. Mech. Rev.
+//! 57(2):95–108, 2004): the material sees
+//! F_m, the stress per reference volume is J_θ τ_m(F_m), and since F_θ is fixed over an
+//! iteration the spatial tangent is J_θ c_m, so the loops run unchanged on the thermally
+//! expanded volume J_θ dV₀ (the mixed elements project det F_m on it). The linear stretch
+//! 1 + α ΔT is the engineering definition of α, so a free body grows by exactly α ΔT. At small
+//! strain the split is additive, ε_m = ε − α ΔT. Reported strains are the total ones.
+//!
 //! **Small strain** ([`Kinematics::Small`], a step without nonlinear geometry with an inelastic
 //! material): the same loops on the linear kinematics, ε = sym ∇u with the reference gradients,
 //! f = ∫ Bᵀ σ dV₀ and K = ∫ Bᵀ 𝔻 B dV₀ with the material's consistent tangent 𝔻, and no
@@ -73,14 +84,76 @@ pub enum Kinematics {
     Small,
 }
 
+/// The temperatures of an element in a nonlinear step: the linear expansion coefficients along
+/// X, Y, Z (zero for a material that does not expand), the reference temperature at which the
+/// thermal strain is zero, and the temperature at each node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Temperature {
+    pub alpha: [f64; 3],
+    pub reference: f64,
+    pub nodal: Vec<f64>,
+}
+
+impl Temperature {
+    fn check(&self, nodes: usize) -> Result<()> {
+        if self.nodal.len() != nodes {
+            return Err(Error::Invalid(format!("{} temperatures for a {nodes}-node element", self.nodal.len())));
+        }
+        if self.alpha.iter().chain(&self.nodal).chain([&self.reference]).any(|v| !v.is_finite()) {
+            return Err(Error::Invalid("temperatures and expansion coefficients must be finite".into()));
+        }
+        Ok(())
+    }
+}
+
+/// The temperature at a point and its thermal stretches ϑᵢ = 1 + αᵢ (T − T_ref).
+#[derive(Debug, Clone, Copy)]
+struct Heat {
+    temperature: Option<f64>,
+    stretch: [f64; 3],
+}
+
+impl Heat {
+    /// At a point of shape function values `n`.
+    fn at(t: Option<&Temperature>, n: &[f64]) -> Result<Heat> {
+        let Some(t) = t else { return Ok(Heat { temperature: None, stretch: [1.0; 3] }) };
+        let temperature: f64 = t.nodal.iter().zip(n).map(|(a, b)| a * b).sum();
+        let stretch = t.alpha.map(|a| 1.0 + a * (temperature - t.reference));
+        if !stretch.iter().all(|v| *v > 0.0 && v.is_finite()) {
+            return Err(Error::Degenerate(format!("the thermal stretches {stretch:?} at T = {temperature} are not positive")));
+        }
+        Ok(Heat { temperature: Some(temperature), stretch })
+    }
+
+    /// J_θ = ϑ₁ ϑ₂ ϑ₃.
+    fn volume(&self) -> f64 {
+        self.stretch.iter().product()
+    }
+
+    /// The mechanical part F_m = F F_θ⁻¹ of a deformation gradient.
+    fn mechanical(&self, f: &Mat3) -> Mat3 {
+        std::array::from_fn(|i| std::array::from_fn(|j| f[i][j] / self.stretch[j]))
+    }
+
+    /// The mechanical part ε − α (T − T_ref) of a small strain.
+    fn mechanical_strain(&self, e: &[f64; 6]) -> [f64; 6] {
+        std::array::from_fn(|k| if k < 3 { e[k] - (self.stretch[k] - 1.0) } else { e[k] })
+    }
+}
+
 /// What one integration point gives the element.
 struct PointKinematics {
+    /// The point's share of the reference volume (of the thermally expanded volume J_θ dV₀ at
+    /// finite strain).
     weight: f64,
+    /// The deformation gradient, and its mechanical part F_m = F F_θ⁻¹ the material sees.
+    total: Mat3,
     f: Mat3,
-    /// det F, or the dilatation 1 + tr ε of small strain (what a mixed element projects).
+    /// det F_m, or the dilatation 1 + tr ε_m of small strain (what a mixed element projects).
     j: f64,
-    /// The small strain ε = sym ∇u (engineering shears); zero at finite strain.
+    /// The mechanical small strain ε − ε_th (engineering shears); zero at finite strain.
     strain: [f64; 6],
+    temperature: Option<f64>,
     /// ∇ₓN of every node (∇₀N at small strain).
     gradients: Vec<[f64; 3]>,
     /// Reference position.
@@ -100,8 +173,8 @@ fn small_strain(f: &Mat3) -> [f64; 6] {
 /// The response of one point's material with its history slices.
 fn point_response(m: &MaterialModel, kin: Kinematics, p: &PointKinematics, committed: &[f64], updated: &mut [f64]) -> Result<Response> {
     match kin {
-        Kinematics::Finite => m.response(&p.f, None, committed, updated),
-        Kinematics::Small => m.small_strain(&p.strain, None, committed, updated, true),
+        Kinematics::Finite => m.response(&p.f, p.temperature, committed, updated),
+        Kinematics::Small => m.small_strain(&p.strain, p.temperature, committed, updated, true),
     }
 }
 
@@ -182,43 +255,52 @@ impl Solid<'_> {
 
     /// F, J and the gradients at every stiffness point: the current ones at finite strain, the
     /// reference ones at small strain.
-    fn kinematics(&self, u: &[[f64; 3]], kin: Kinematics) -> Result<Vec<PointKinematics>> {
+    fn kinematics(&self, u: &[[f64; 3]], kin: Kinematics, thermal: Option<&Temperature>) -> Result<Vec<PointKinematics>> {
         let n = self.ty.nodes;
+        if let Some(t) = thermal {
+            t.check(n)?;
+        }
         let mut out = Vec::new();
         for p in self.rule().points() {
             let g = self.gradients(p.xi)?;
             let reference = g.dx.get(..n).unwrap_or_default();
-            let f = crate::constitutive::deformation_gradient(u, reference);
+            let total = crate::constitutive::deformation_gradient(u, reference);
             let (weight, x0) = (g.det * p.weight, self.position_of(g.shape.values()));
+            let heat = Heat::at(thermal, g.shape.values())?;
             if kin == Kinematics::Small {
-                let strain = small_strain(&f);
+                let strain = heat.mechanical_strain(&small_strain(&total));
                 let j = 1.0 + strain[0] + strain[1] + strain[2];
-                out.push(PointKinematics { weight, f, j, strain, gradients: reference.to_vec(), x0 });
+                let gradients = reference.to_vec();
+                out.push(PointKinematics { weight, total, f: total, j, strain, temperature: heat.temperature, gradients, x0 });
                 continue;
             }
-            let (inv, j) = inverse3(&f).ok_or_else(|| inverted(self.ty.kind.name(), 0.0))?;
-            if !(j > 0.0 && j.is_finite()) {
-                return Err(inverted(self.ty.kind.name(), j));
+            let (inv, det) = inverse3(&total).ok_or_else(|| inverted(self.ty.kind.name(), 0.0))?;
+            let j = det / heat.volume();
+            if !(det > 0.0 && j.is_finite()) {
+                return Err(inverted(self.ty.kind.name(), det));
             }
             let gradients = reference.iter().map(|d| std::array::from_fn(|i| (0..3).map(|jj| d[jj] * inv[jj][i]).sum())).collect();
-            out.push(PointKinematics { weight, f, j, strain: [0.0; 6], gradients, x0 });
+            let f = heat.mechanical(&total);
+            out.push(PointKinematics { weight: weight * heat.volume(), total, f, j, strain: [0.0; 6], temperature: heat.temperature, gradients, x0 });
         }
         Ok(out)
     }
 
     /// The effective response (Kirchhoff stress and tangent, or the stress of small strain) at
     /// every point, the forces, and the tangent when `tangent`.
+    #[allow(clippy::too_many_arguments)]
     fn nonlinear_points(
         &self,
         m: &MaterialModel,
         u: &[[f64; 3]],
         kin: Kinematics,
+        thermal: Option<&Temperature>,
         committed: &[f64],
         updated: &mut [f64],
         tangent: bool,
     ) -> Result<(Finite, Vec<(PointKinematics, Response)>)> {
         self.check_nonlinear(m, u, kin)?;
-        let points = self.kinematics(u, kin)?;
+        let points = self.kinematics(u, kin, thermal)?;
         let len = check_history(m, points.len(), committed, updated)?;
         let ndof = 3 * self.ty.nodes;
         let mut force = vec![0.0; ndof];
@@ -287,11 +369,11 @@ impl Solid<'_> {
             let pr: f64 = (0..np).map(|a| nb[a] * pressure[a]).sum();
             let (c, u) = (point_history(committed, len, i), updated.get_mut(i * len..(i + 1) * len).unwrap_or_default());
             out.push(if small {
-                let mut r = m.small_strain(&p.strain, None, c, u, false)?;
+                let mut r = m.small_strain(&p.strain, p.temperature, c, u, false)?;
                 r.stress.iter_mut().take(3).for_each(|s| *s += pr);
                 r
             } else {
-                add_pressure(&m.isochoric(&p.f, None, c, u)?, p.j, pr, 0.0)
+                add_pressure(&m.isochoric(&p.f, p.temperature, c, u)?, p.j, pr, 0.0)
             });
         }
         if let Some(k) = k {
@@ -331,48 +413,57 @@ impl Solid<'_> {
     /// with the material history `committed` at the start of the increment (points × the
     /// material's history length) written, updated, to `updated`.
     pub fn finite_strain(&self, m: &MaterialModel, u: &[[f64; 3]], committed: &[f64], updated: &mut [f64], tangent: bool) -> Result<Finite> {
-        Ok(self.nonlinear_points(m, u, Kinematics::Finite, committed, updated, tangent)?.0)
+        Ok(self.nonlinear_points(m, u, Kinematics::Finite, None, committed, updated, tangent)?.0)
     }
 
-    /// As [`Self::finite_strain`] with either kinematics; with small strain an inelastic
-    /// material on the linear kinematics, f = ∫ Bᵀ σ dV and K = ∫ Bᵀ 𝔻 B dV with the
-    /// material's consistent tangent 𝔻.
+    /// As [`Self::finite_strain`] with either kinematics and the element's temperatures when
+    /// it has some; with small strain an inelastic material on the linear kinematics,
+    /// f = ∫ Bᵀ σ dV and K = ∫ Bᵀ 𝔻 B dV with the material's consistent tangent 𝔻.
+    #[allow(clippy::too_many_arguments)]
     pub fn nonlinear(
         &self,
         m: &MaterialModel,
         u: &[[f64; 3]],
         kin: Kinematics,
+        thermal: Option<&Temperature>,
         committed: &[f64],
         updated: &mut [f64],
         tangent: bool,
     ) -> Result<Finite> {
-        Ok(self.nonlinear_points(m, u, kin, committed, updated, tangent)?.0)
+        Ok(self.nonlinear_points(m, u, kin, thermal, committed, updated, tangent)?.0)
     }
 
-    /// The Cauchy stress and the strain (logarithmic at finite strain, ε at small strain) at
-    /// every integration point (at its reference position).
-    pub fn nonlinear_stresses(&self, m: &MaterialModel, u: &[[f64; 3]], kin: Kinematics, committed: &[f64]) -> Result<Vec<PointStress>> {
+    /// The Cauchy stress and the total strain (logarithmic at finite strain, ε at small strain)
+    /// at every integration point (at its reference position).
+    pub fn nonlinear_stresses(
+        &self,
+        m: &MaterialModel,
+        u: &[[f64; 3]],
+        kin: Kinematics,
+        thermal: Option<&Temperature>,
+        committed: &[f64],
+    ) -> Result<Vec<PointStress>> {
         let mut scratch = committed.to_vec();
-        let (_, points) = self.nonlinear_points(m, u, kin, committed, &mut scratch, false)?;
+        let (_, points) = self.nonlinear_points(m, u, kin, thermal, committed, &mut scratch, false)?;
         points
             .iter()
             .map(|(p, r)| {
                 if kin == Kinematics::Small {
-                    return Ok(PointStress { xyz: p.x0, strain: p.strain, stress: r.stress });
+                    return Ok(PointStress { xyz: p.x0, strain: small_strain(&p.total), stress: r.stress });
                 }
-                let strain = logarithmic_strain(&p.f).ok_or_else(|| inverted(self.ty.kind.name(), p.j))?;
+                let strain = logarithmic_strain(&p.total).ok_or_else(|| inverted(self.ty.kind.name(), p.j))?;
                 Ok(PointStress { xyz: p.x0, strain, stress: r.stress.map(|v| v / p.j) })
             })
             .collect()
     }
 }
 
-/// One integration point of a 2D element in a nonlinear step.
+/// One integration point of a 2D element in a nonlinear step: the total deformation gradient,
+/// det F_m, the reference position and the response.
 struct PlanePoint {
     f: Mat3,
     j: f64,
     x: [f64; 3],
-    strain: [f64; 6],
     response: Response,
 }
 
@@ -399,17 +490,22 @@ impl Plane<'_> {
 
     /// Per point: F, J, the reference position, the small strain and the response; the forces
     /// and the tangent.
+    #[allow(clippy::too_many_arguments)]
     fn nonlinear_points(
         &self,
         m: &MaterialModel,
         u: &[[f64; 2]],
         kin: Kinematics,
+        thermal: Option<&Temperature>,
         committed: &[f64],
         updated: &mut [f64],
         tangent: bool,
     ) -> Result<(Finite, Vec<PlanePoint>)> {
         self.check_nonlinear(u, kin)?;
         let n = self.ty.nodes;
+        if let Some(t) = thermal {
+            t.check(n)?;
+        }
         let rule = self.rule().points();
         let len = check_history(m, rule.len(), committed, updated)?;
         let ndof = 2 * n;
@@ -433,10 +529,11 @@ impl Plane<'_> {
                 }
             }
             let updated_point = updated.get_mut(i * len..(i + 1) * len).unwrap_or_default();
-            let (j, strain, current, r) = if small {
-                let strain = small_strain(&f);
-                let r = m.small_strain(&strain, None, point_history(committed, len, i), updated_point, true)?;
-                (1.0 + strain[0] + strain[1] + strain[2], strain, cols.to_vec(), r)
+            let heat = Heat::at(thermal, at.shape.values())?;
+            let (j, dv, current, r) = if small {
+                let strain = heat.mechanical_strain(&small_strain(&f));
+                let r = m.small_strain(&strain, heat.temperature, point_history(committed, len, i), updated_point, true)?;
+                (1.0, at.dv, cols.to_vec(), r)
             } else {
                 let det2 = f[0][0] * f[1][1] - f[0][1] * f[1][0];
                 let j = det2 * f[2][2];
@@ -446,32 +543,32 @@ impl Plane<'_> {
                 let inv = [[f[1][1] / det2, -f[0][1] / det2], [-f[1][0] / det2, f[0][0] / det2]];
                 let current: Vec<[f64; 3]> =
                     cols.iter().map(|g| [g[0] * inv[0][0] + g[1] * inv[1][0], g[0] * inv[0][1] + g[1] * inv[1][1], g[2] / f[2][2]]).collect();
-                let r = m.response(&f, None, point_history(committed, len, i), updated_point)?;
-                (j, [0.0; 6], current, r)
+                let r = m.response(&heat.mechanical(&f), heat.temperature, point_history(committed, len, i), updated_point)?;
+                (j / heat.volume(), at.dv * heat.volume(), current, r)
             };
             let tau = [r.stress[0], r.stress[1], r.stress[2], r.stress[3]];
             for (a, g) in current.iter().enumerate() {
                 if let Some(x) = force.get_mut(2 * a) {
-                    *x += at.dv * (g[0] * tau[0] + g[2] * tau[2] + g[1] * tau[3]);
+                    *x += dv * (g[0] * tau[0] + g[2] * tau[2] + g[1] * tau[3]);
                 }
                 if let Some(x) = force.get_mut(2 * a + 1) {
-                    *x += at.dv * (g[1] * tau[1] + g[0] * tau[3]);
+                    *x += dv * (g[1] * tau[1] + g[0] * tau[3]);
                 }
             }
             if let Some(k) = k.as_mut() {
                 let c4: [[f64; 4]; 4] = std::array::from_fn(|a| std::array::from_fn(|b| r.tangent[a][b]));
-                crate::plane::accumulate(&mut k.data, &current, &c4, at.dv);
+                crate::plane::accumulate(&mut k.data, &current, &c4, dv);
                 if !small {
                     for (a, ga) in current.iter().enumerate() {
                         for (b, gb) in current.iter().enumerate() {
                             let s = ga[0] * gb[0] * tau[0] + ga[1] * gb[1] * tau[1] + (ga[0] * gb[1] + ga[1] * gb[0]) * tau[3];
-                            k.add(2 * a, 2 * b, at.dv * (s + tau[2] * ga[2] * gb[2]));
-                            k.add(2 * a + 1, 2 * b + 1, at.dv * s);
+                            k.add(2 * a, 2 * b, dv * (s + tau[2] * ga[2] * gb[2]));
+                            k.add(2 * a + 1, 2 * b + 1, dv * s);
                         }
                     }
                 }
             }
-            out.push(PlanePoint { f, j, x: at.x, strain, response: r });
+            out.push(PlanePoint { f, j, x: at.x, response: r });
         }
         Ok((Finite { force, tangent: k }, out))
     }
@@ -479,32 +576,41 @@ impl Plane<'_> {
     /// Internal forces (u, v per node) and (with `tangent`) the tangent stiffness at nodal
     /// displacements `u`, as for [`Solid::finite_strain`].
     pub fn finite_strain(&self, m: &MaterialModel, u: &[[f64; 2]], committed: &[f64], updated: &mut [f64], tangent: bool) -> Result<Finite> {
-        Ok(self.nonlinear_points(m, u, Kinematics::Finite, committed, updated, tangent)?.0)
+        Ok(self.nonlinear_points(m, u, Kinematics::Finite, None, committed, updated, tangent)?.0)
     }
 
     /// As [`Solid::nonlinear`], on the 2D element.
+    #[allow(clippy::too_many_arguments)]
     pub fn nonlinear(
         &self,
         m: &MaterialModel,
         u: &[[f64; 2]],
         kin: Kinematics,
+        thermal: Option<&Temperature>,
         committed: &[f64],
         updated: &mut [f64],
         tangent: bool,
     ) -> Result<Finite> {
-        Ok(self.nonlinear_points(m, u, kin, committed, updated, tangent)?.0)
+        Ok(self.nonlinear_points(m, u, kin, thermal, committed, updated, tangent)?.0)
     }
 
-    /// The Cauchy stress and the strain at every integration point, as the solid elements'
-    /// 6-vectors (axisymmetric: rr, axial, hoop, r-axial).
-    pub fn nonlinear_stresses(&self, m: &MaterialModel, u: &[[f64; 2]], kin: Kinematics, committed: &[f64]) -> Result<Vec<PointStress>> {
+    /// The Cauchy stress and the total strain at every integration point, as the solid
+    /// elements' 6-vectors (axisymmetric: rr, axial, hoop, r-axial).
+    pub fn nonlinear_stresses(
+        &self,
+        m: &MaterialModel,
+        u: &[[f64; 2]],
+        kin: Kinematics,
+        thermal: Option<&Temperature>,
+        committed: &[f64],
+    ) -> Result<Vec<PointStress>> {
         let mut scratch = committed.to_vec();
-        let (_, points) = self.nonlinear_points(m, u, kin, committed, &mut scratch, false)?;
+        let (_, points) = self.nonlinear_points(m, u, kin, thermal, committed, &mut scratch, false)?;
         points
             .iter()
             .map(|p| {
                 if kin == Kinematics::Small {
-                    return Ok(PointStress { xyz: p.x, strain: p.strain, stress: p.response.stress });
+                    return Ok(PointStress { xyz: p.x, strain: small_strain(&p.f), stress: p.response.stress });
                 }
                 let strain = logarithmic_strain(&p.f).ok_or_else(|| inverted(&format!("2D {}", self.ty.kind.name()), p.j))?;
                 Ok(PointStress { xyz: p.x, strain, stress: p.response.stress.map(|v| v / p.j) })
@@ -552,7 +658,7 @@ mod tests {
     /// The same from a committed history, with either kinematics.
     fn check_tangent_from(solid: &Solid, m: &MaterialModel, u: &[[f64; 3]], kin: Kinematics, committed: &[f64], tol: f64) {
         let mut scratch = committed.to_vec();
-        let k = solid.nonlinear_points(m, u, kin, committed, &mut scratch, true).unwrap().0.tangent.unwrap();
+        let k = solid.nonlinear_points(m, u, kin, None, committed, &mut scratch, true).unwrap().0.tangent.unwrap();
         let scale = k.data.iter().fold(0.0f64, |a, v| a.max(v.abs()));
         let n = 3 * u.len();
         let h = if kin == Kinematics::Small { 1e-9 } else { 1e-6 };
@@ -560,7 +666,7 @@ mod tests {
             let shifted = |s: f64| {
                 let mut v = u.to_vec();
                 v[j / 3][j % 3] += s;
-                solid.nonlinear_points(m, &v, kin, committed, &mut committed.to_vec(), false).unwrap().0.force
+                solid.nonlinear_points(m, &v, kin, None, committed, &mut committed.to_vec(), false).unwrap().0.force
             };
             let (p, q) = (shifted(h), shifted(-h));
             for i in 0..n {
@@ -658,7 +764,7 @@ mod tests {
                 // A first increment from the virgin state, committed, then a second from it.
                 let mut committed = vec![0.0; points * HISTORY];
                 let first = displacement(x.len(), 0.5 * scale);
-                solid.nonlinear_points(&m, &first, kin, &vec![0.0; points * HISTORY], &mut committed, false).unwrap();
+                solid.nonlinear_points(&m, &first, kin, None, &vec![0.0; points * HISTORY], &mut committed, false).unwrap();
                 assert!((0..points).all(|p| committed[p * HISTORY + PLASTIC_STRAIN] > 0.0), "{kind:?} {f:?} {kin:?} yields everywhere");
                 check_tangent_from(&solid, &m, &displacement(x.len(), scale), kin, &committed, 1e-6);
             }
@@ -666,7 +772,7 @@ mod tests {
         // Incompatible modes have no inelastic form.
         let im = Solid::new(ElementKind::Hex8, &x8, Formulation::IncompatibleModes).unwrap();
         assert!(matches!(
-            im.nonlinear(&m, &displacement(8, 0.0), Kinematics::Small, &[0.0; 8 * HISTORY], &mut [0.0; 8 * HISTORY], true),
+            im.nonlinear(&m, &displacement(8, 0.0), Kinematics::Small, None, &[0.0; 8 * HISTORY], &mut [0.0; 8 * HISTORY], true),
             Err(Error::NotSupported(_))
         ));
     }
@@ -699,17 +805,17 @@ mod tests {
                 for kin in [Kinematics::Finite, Kinematics::Small] {
                     let u = |scale: f64| -> Vec<[f64; 2]> { displacement(x.len(), scale).iter().map(|v| [v[0], v[1]]).collect() };
                     let mut committed = vec![0.0; points * HISTORY];
-                    plane.nonlinear_points(&m, &u(0.03), kin, &vec![0.0; points * HISTORY], &mut committed, false).unwrap();
+                    plane.nonlinear_points(&m, &u(0.03), kin, None, &vec![0.0; points * HISTORY], &mut committed, false).unwrap();
                     assert!((0..points).all(|p| committed[p * HISTORY + PLASTIC_STRAIN] > 0.0), "{theory:?} {kind:?} {kin:?}");
                     let at = u(0.06);
-                    let k = plane.nonlinear_points(&m, &at, kin, &committed, &mut committed.clone(), true).unwrap().0.tangent.unwrap();
+                    let k = plane.nonlinear_points(&m, &at, kin, None, &committed, &mut committed.clone(), true).unwrap().0.tangent.unwrap();
                     let scale = k.data.iter().fold(0.0f64, |a, v| a.max(v.abs()));
                     let h = 1e-8;
                     for j in 0..2 * x.len() {
                         let shifted = |s: f64| {
                             let mut v = at.clone();
                             v[j / 2][j % 2] += s;
-                            plane.nonlinear_points(&m, &v, kin, &committed, &mut committed.clone(), false).unwrap().0.force
+                            plane.nonlinear_points(&m, &v, kin, None, &committed, &mut committed.clone(), false).unwrap().0.force
                         };
                         let (p, q) = (shifted(h), shifted(-h));
                         for i in 0..2 * x.len() {
@@ -726,9 +832,65 @@ mod tests {
         }
         let stress = Plane::new(ElementKind::Quad4, &quad8[..4], Formulation::Full, Theory::PlaneStress { thickness: 1.0 }).unwrap();
         assert!(matches!(
-            stress.nonlinear(&m, &[[0.0; 2]; 4], Kinematics::Small, &[0.0; 4 * HISTORY], &mut [0.0; 4 * HISTORY], true),
+            stress.nonlinear(&m, &[[0.0; 2]; 4], Kinematics::Small, None, &[0.0; 4 * HISTORY], &mut [0.0; 4 * HISTORY], true),
             Err(Error::NotSupported(_))
         ));
+    }
+
+    /// A temperature field: the tangent is the derivative of the forces (finite and small strain,
+    /// full and hybrid, elastic and plastic), and a free expansion u = (F_θ − I) X of a uniform
+    /// temperature stresses nothing.
+    #[test]
+    fn thermal_tangents_and_free_expansion() {
+        use crate::elastoplastic::HISTORY;
+        use fieldcraft_model::{Elastic, Hardening, Plastic};
+        let j2 = crate::plasticity::J2::from_model(
+            &Elastic::Isotropic { young: 1000.0, poisson: 0.3 },
+            Some(&Plastic::Bilinear { yield_stress: 5.0, hardening_modulus: 50.0, hardening: Hardening::Isotropic }),
+            None,
+        )
+        .unwrap();
+        let plastic = MaterialModel::Plastic(std::sync::Arc::new(j2));
+        let neo = MaterialModel::NeoHookean { shear: 300.0, bulk: 3000.0 };
+        let x20 = hex20();
+        let field = |n: usize| Temperature {
+            alpha: [1e-3, 2e-3, 1.5e-3],
+            reference: 20.0,
+            nodal: (0..n).map(|i| 20.0 + 40.0 * (i as f64 * 0.37).sin()).collect(),
+        };
+        for f in [Formulation::Full, Formulation::Hybrid { pressures: 4 }] {
+            let solid = Solid::new(ElementKind::Hex20, &x20, f).unwrap();
+            let points = solid.rule().points().len();
+            let t = field(20);
+            for (m, kin, len) in [(&neo, Kinematics::Finite, 0), (&plastic, Kinematics::Finite, HISTORY), (&plastic, Kinematics::Small, HISTORY)] {
+                let u = displacement(20, 0.03);
+                let committed = vec![0.0; points * len];
+                let k = solid.nonlinear(m, &u, kin, Some(&t), &committed, &mut committed.clone(), true).unwrap().tangent.unwrap();
+                let scale = k.data.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+                let h = if kin == Kinematics::Small { 1e-9 } else { 1e-7 };
+                for j in 0..60 {
+                    let shifted = |s: f64| {
+                        let mut v = u.clone();
+                        v[j / 3][j % 3] += s;
+                        solid.nonlinear(m, &v, kin, Some(&t), &committed, &mut committed.clone(), false).unwrap().force
+                    };
+                    let (p, q) = (shifted(h), shifted(-h));
+                    for i in 0..60 {
+                        let numeric = (p[i] - q[i]) / (2.0 * h);
+                        assert!((numeric - k.get(i, j)).abs() < 1e-6 * scale, "{f:?} {} {kin:?} {i} {j}: {numeric} vs {}", m.name(), k.get(i, j));
+                    }
+                }
+            }
+            // Free expansion by a uniform 150 degrees: no force, no stress.
+            let uniform = Temperature { alpha: [1e-3, 2e-3, 1.5e-3], reference: 20.0, nodal: vec![170.0; 20] };
+            let stretch = uniform.alpha.map(|a| 1.0 + 150.0 * a);
+            let u: Vec<[f64; 3]> = x20.iter().map(|x| std::array::from_fn(|k| (stretch[k] - 1.0) * x[k])).collect();
+            let r = solid.nonlinear(&neo, &u, Kinematics::Finite, Some(&uniform), &[], &mut [], false).unwrap();
+            assert!(r.force.iter().all(|v| v.abs() < 1e-10 * 3000.0), "{f:?}: {:?}", r.force);
+            let s = solid.nonlinear_stresses(&neo, &u, Kinematics::Finite, Some(&uniform), &[]).unwrap();
+            assert!(s.iter().all(|p| p.stress.iter().all(|v| v.abs() < 1e-10 * 3000.0)), "{f:?}");
+            assert!((s[0].strain[1] - stretch[1].ln()).abs() < 1e-12, "total logarithmic strain: {:?}", s[0].strain);
+        }
     }
 
     #[test]
@@ -739,7 +901,7 @@ mod tests {
         let neo = MaterialModel::NeoHookean { shear: 300.0, bulk: 3000.0 };
         for f in [Formulation::Full, Formulation::Hybrid { pressures: 4 }] {
             let solid = Solid::new(ElementKind::Hex20, &x20, f).unwrap();
-            let s = solid.nonlinear_stresses(&neo, &u, Kinematics::Finite, &[]).unwrap();
+            let s = solid.nonlinear_stresses(&neo, &u, Kinematics::Finite, None, &[]).unwrap();
             assert!(s.iter().all(|p| p.stress.iter().chain(&p.strain).all(|v| v.abs() < 1e-12 * 3000.0)), "{f:?}: {:?}", s[0]);
             let r = solid.finite_strain(&neo, &u, &[], &mut [], false).unwrap();
             assert!(r.force.iter().all(|v| v.abs() < 1e-11 * 3000.0));

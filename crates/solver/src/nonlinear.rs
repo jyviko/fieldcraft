@@ -55,8 +55,18 @@
 //! ([`fieldcraft_fem::finite`]); without nonlinear geometry an element of a plastic material
 //! takes the same loops with small strain, and an elastic one its linear stiffness (K u).
 //! Springs act along their fixed directions. Trusses, shells and beams (large rotations), plane
-//! stress, incompatible modes (with nonlinear geometry, or with an inelastic material),
-//! temperature and centrifugal loads are refused by name.
+//! stress, incompatible modes (with nonlinear geometry, or with an inelastic material) and
+//! centrifugal loads are refused by name.
+//!
+//! **Thermal strain.** The step's temperatures are its temperature loads, or, when it has
+//! temperature boundary conditions or heat loads, their steady conduction solved first (one-way
+//! coupling, as the linear coupled temperature–displacement step). They ramp with the load
+//! factor from each material's reference temperature, ΔT(λ) = λ (T − T_ref). With nonlinear
+//! geometry the deformation gradient splits multiplicatively, F = F_m F_θ with
+//! F_θ = diag(1 + αᵢ ΔT), the material sees F_m and the stress is J_θ τ_m per reference volume
+//! (fem's `Temperature`); with small strain the split is additive, ε_m = ε − α ΔT; elements on
+//! their linear stiffness take the equivalent nodal forces, a dead load. A Johnson–Cook material
+//! softens at the point's temperature.
 //!
 //! **Plasticity** (`Material::plastic`, J2 with the radial return explicit dynamics uses,
 //! [`fieldcraft_fem::elastoplastic`]): Simo's exponential return map at finite strain, the
@@ -75,11 +85,11 @@
 use fieldcraft_fem::constitutive::MaterialModel;
 use fieldcraft_fem::dense::Matrix;
 use fieldcraft_fem::element::{Extrapolation, extrapolation};
-use fieldcraft_fem::finite::Kinematics;
+use fieldcraft_fem::finite::{Kinematics, Temperature};
 use fieldcraft_fem::plane::Theory;
 use fieldcraft_fem::quadrature::Rule;
 use fieldcraft_fem::{DofKind, DofSet, ElementType, PointStress, face, von_mises};
-use fieldcraft_model::{Extent, Hardening, Load, Model, NonlinearStatic, Plastic, Procedure, SectionKind, Step};
+use fieldcraft_model::{BoundaryCondition, Extent, Hardening, Load, Model, NonlinearStatic, Plastic, Procedure, SectionKind, Step};
 use fieldcraft_parallel as parallel;
 use serde::Serialize;
 
@@ -90,7 +100,7 @@ use crate::analysis::{
 use crate::cholesky::FactorError;
 use crate::constraints::Reduction;
 use crate::sparse::{Csr, add_block};
-use crate::system::{Mesh, loads, translations};
+use crate::system::{Mesh, add_element_thermal_loads, loads, temperature_loads, translations};
 use crate::{Error, Limits, Result};
 
 /// One Newton iteration of an increment.
@@ -194,6 +204,9 @@ struct Problem<'a> {
     element_kinds: Vec<DofSet>,
     /// Each element's material model.
     materials: Vec<MaterialModel>,
+    /// The step's temperature field at λ = 1, per mesh node (`None` where the field leaves a
+    /// node at its material's reference temperature); `None` without one.
+    field: Option<Vec<Option<f64>>>,
     /// The tangent's pattern, zero.
     pattern: Csr,
 }
@@ -257,9 +270,27 @@ impl Problem<'_> {
         if self.finite { Some(Kinematics::Finite) } else { self.materials.get(e).filter(|m| m.is_path_dependent()).map(|_| Kinematics::Small) }
     }
 
+    /// The temperatures of element `e` at load factor λ, which ramps them from the reference
+    /// temperature to the field's (J2 Johnson–Cook softening and thermal strain): the
+    /// material's expansion and reference temperature, or no expansion from the Johnson–Cook
+    /// room temperature; `None` without a field or for a material neither affects.
+    fn temperature(&self, e: usize, lambda: f64) -> Option<Temperature> {
+        let field = self.field.as_ref()?;
+        let el = self.mesh.elements.get(e)?;
+        let softens = el.plastic.as_ref().is_some_and(|j2| j2.is_temperature_dependent());
+        let (alpha, reference) = match el.expansion {
+            Some(x) => x,
+            None if softens => ([0.0; 3], el.plastic.as_ref().map_or(0.0, |j2| j2.initial_temperature())),
+            None => return None,
+        };
+        let nodal: Vec<f64> =
+            el.nodes.iter().map(|n| field.get(*n).copied().flatten().map_or(reference, |t| reference + lambda * (t - reference))).collect();
+        (softens || nodal.iter().any(|t| *t != reference)).then_some(Temperature { alpha, reference, nodal })
+    }
+
     /// Internal forces and the tangent of element `e` at displacements `u` (all degrees of
-    /// freedom).
-    fn element(&self, e: usize, u: &[f64], tangent: bool, committed: &[f64]) -> Result<(Vec<f64>, Option<Matrix>, Vec<f64>)> {
+    /// freedom) and load factor λ.
+    fn element(&self, e: usize, u: &[f64], lambda: f64, tangent: bool, committed: &[f64]) -> Result<(Vec<f64>, Option<Matrix>, Vec<f64>)> {
         let el = self.mesh.elements.get(e).ok_or_else(|| Error::Internal("element index".into()))?;
         let at = |err| Error::element(el.label, err);
         let ue = self.element_vector(e, u);
@@ -271,7 +302,7 @@ impl Problem<'_> {
         };
         let material = self.materials.get(e).ok_or_else(|| Error::Internal("element material".into()))?;
         let mut updated = committed.to_vec();
-        let r = kernel.nonlinear(material, &ue, kin, committed, &mut updated, tangent).map_err(at)?;
+        let r = kernel.nonlinear(material, &ue, kin, self.temperature(e, lambda).as_ref(), committed, &mut updated, tangent).map_err(at)?;
         Ok((r.force, r.tangent, updated))
     }
 
@@ -305,7 +336,7 @@ impl Problem<'_> {
         for round in parallel::blocks(self.mesh.elements.len(), ROUND) {
             let start = round.start;
             let computed = parallel::map_grained(round.len(), GRAIN, |i| {
-                self.element(start + i, u, tangent, committed.get(start + i).map(Vec::as_slice).unwrap_or_default())
+                self.element(start + i, u, lambda, tangent, committed.get(start + i).map(Vec::as_slice).unwrap_or_default())
             });
             for (i, c) in computed.into_iter().enumerate() {
                 let (f, ke, updated) = c?;
@@ -647,12 +678,8 @@ fn check_supported(model: &Model, mesh: &Mesh, step: &Step, settings: &Nonlinear
             return Err(at(format!("a hyperelastic material without nonlinear geometry (element {})", e.label)));
         }
     }
-    for name in &step.loads {
-        match model.load(name) {
-            Some(Load::Temperature { .. }) => return Err(at(format!("temperature loads (load `{name}`): thermal strain"))),
-            Some(Load::Centrifugal { .. }) => return Err(at(format!("centrifugal loads (load `{name}`), which depend on the deformed position"))),
-            _ => {}
-        }
+    if let Some(name) = step.loads.iter().find(|n| matches!(model.load(n), Some(Load::Centrifugal { .. }))) {
+        return Err(at(format!("centrifugal loads (load `{name}`), which depend on the deformed position")));
     }
     plasticity(model, step, settings, warnings)?;
     if settings.nonlinear_geometry
@@ -702,6 +729,23 @@ fn plasticity(model: &Model, step: &Step, settings: &NonlinearStatic, warnings: 
         }
     }
     Ok(())
+}
+
+/// The step's temperature field per mesh node: the steady heat solution of its temperature
+/// boundary conditions and heat loads when it has some (one-way coupling, as the coupled
+/// temperature–displacement step of the linear solver), or its temperature loads.
+fn temperatures(model: &Model, resolved: &fieldcraft_model::Resolved, mesh: &Mesh, step: &Step, limits: &Limits) -> Result<Option<Vec<Option<f64>>>> {
+    let conducts = step.boundary_conditions.iter().any(|b| model.boundary_conditions().get(b).is_some_and(BoundaryCondition::is_thermal))
+        || step.loads.iter().any(|l| model.load(l).is_some_and(Load::is_thermal));
+    let loads = temperature_loads(model, resolved, mesh, step)?;
+    match (conducts, loads) {
+        (true, Some(_)) => Err(Error::Invalid(format!(
+            "step `{}` gives temperatures both by temperature loads and by heat conditions (temperature boundary conditions, heat loads); use one",
+            step.name
+        ))),
+        (true, None) => Ok(Some(crate::heat::temperatures_at(model, resolved, step, limits, &mesh.labels)?)),
+        (false, field) => Ok(field),
+    }
 }
 
 /// The follower pressures of a step (with nonlinear geometry), and the step without them for
@@ -769,6 +813,7 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
     let (follower_loads, dead_step) =
         if settings.nonlinear_geometry { followers(model, &resolved, &mesh, step)? } else { (Vec::new(), step.clone()) };
     let dead = loads(model, &resolved, &mesh, &dead_step, &red.active)?;
+    let field = temperatures(model, &resolved, &mesh, step, limits)?;
     let springs = if mesh.discrete.springs.iter().any(|s| !s.dashpot) {
         let mut s = graph.zero_matrix(&mesh.layout);
         mesh.discrete.add_stiffness(&mut s)?;
@@ -785,7 +830,7 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
             mesh.layout.element_dofs(&e.nodes, *kinds).ok_or_else(|| Error::Internal(format!("element {} degrees of freedom", e.label)))
         })
         .collect::<Result<Vec<_>>>()?;
-    let problem = Problem {
+    let mut problem = Problem {
         mesh: &mesh,
         red: &red,
         dead,
@@ -802,8 +847,16 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
                 None => MaterialModel::from_elasticity(&e.d, e.hyperelastic.as_ref()),
             })
             .collect(),
+        field,
         pattern: graph.zero_matrix(&mesh.layout),
     };
+    // Elements on their linear stiffness take the thermal strain as the equivalent nodal
+    // forces, a dead load proportional to the load factor like the temperatures.
+    if let Some(field) = problem.field.take() {
+        let linear: Vec<bool> = (0..mesh.elements.len()).map(|i| problem.kinematics(i).is_none()).collect();
+        add_element_thermal_loads(&mut problem.dead, &mesh, &field, |i| linear.get(i).copied().unwrap_or(false))?;
+        problem.field = Some(field);
+    }
     let (lo, hi) = mesh.xyz.iter().fold(([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]), |(lo, hi), p| {
         (std::array::from_fn(|k| lo[k].min(p[k])), std::array::from_fn(|k| hi[k].max(p[k])))
     });
@@ -939,7 +992,7 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
             "follower pressure: the skew part of its load stiffness ({a:.1e} of it, over the free degrees of freedom) is left out of the tangent; the solution is exact, Newton may converge more slowly"
         ));
     }
-    finish(&mesh, step, &red, &problem, u, evaluation, &run.committed, history, run.factor_entries, warnings)
+    finish(&mesh, step, &red, &problem, u, lambda, evaluation, &run.committed, history, run.factor_entries, warnings)
 }
 
 /// The final state as a static result: displacements, reactions, Cauchy stresses and
@@ -951,6 +1004,7 @@ fn finish(
     red: &Reduction,
     problem: &Problem,
     u: Vec<f64>,
+    lambda: f64,
     e: Evaluation,
     committed: &[Vec<f64>],
     history: History,
@@ -984,10 +1038,14 @@ fn finish(
         let history = committed.get(i).map(Vec::as_slice).unwrap_or_default();
         let material = problem.materials.get(i).ok_or_else(|| Error::Internal("element material".into()))?;
         let points = match problem.kinematics(i) {
-            Some(kin) => kernel.nonlinear_stresses(material, &ue, kin, history),
+            Some(kin) => kernel.nonlinear_stresses(material, &ue, kin, problem.temperature(i, lambda).as_ref(), history),
             None => {
                 let per_node: Vec<[f64; 3]> = el.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
-                kernel.stresses_with(&el.d, &per_node, None)
+                let thermal = problem.field.as_deref().and_then(|f| el.thermal_strain(f)).map(|mut t| {
+                    t.delta.iter_mut().for_each(|d| *d *= lambda);
+                    t
+                });
+                kernel.stresses_with(&el.d, &per_node, thermal.as_ref())
             }
         }
         .map_err(at)?;

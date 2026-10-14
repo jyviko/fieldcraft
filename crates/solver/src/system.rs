@@ -11,7 +11,7 @@ use fieldcraft_fem::beam::{Beam, BeamSection};
 use fieldcraft_fem::constitutive::MaterialModel;
 use fieldcraft_fem::dense::Matrix;
 use fieldcraft_fem::element::{Formulation, Solid, ThermalStrain};
-use fieldcraft_fem::finite::Kinematics;
+use fieldcraft_fem::finite::{Kinematics, Temperature};
 use fieldcraft_fem::plane::{Plane, Theory};
 use fieldcraft_fem::plasticity::J2;
 use fieldcraft_fem::shell::{Shell, ShellSection};
@@ -122,27 +122,36 @@ impl Kernel<'_> {
     /// Nonlinear internal forces and tangent ([`fieldcraft_fem::finite`]) for the element's
     /// displacements `u` (its degrees of freedom in order: 3 per node, or 2 for 2D elements),
     /// total Lagrangian or with small strain.
+    #[allow(clippy::too_many_arguments)]
     pub fn nonlinear(
         &self,
         m: &MaterialModel,
         u: &[f64],
         kin: Kinematics,
+        thermal: Option<&Temperature>,
         committed: &[f64],
         updated: &mut [f64],
         tangent: bool,
     ) -> fieldcraft_fem::Result<fieldcraft_fem::finite::Finite> {
         match self {
-            Kernel::Solid(s) => s.nonlinear(m, u.as_chunks::<3>().0, kin, committed, updated, tangent),
-            Kernel::Plane(p) => p.nonlinear(m, u.as_chunks::<2>().0, kin, committed, updated, tangent),
+            Kernel::Solid(s) => s.nonlinear(m, u.as_chunks::<3>().0, kin, thermal, committed, updated, tangent),
+            Kernel::Plane(p) => p.nonlinear(m, u.as_chunks::<2>().0, kin, thermal, committed, updated, tangent),
         }
     }
 
     /// Cauchy stress and strain (logarithmic at finite strain) at the integration points, as
     /// [`Self::nonlinear`].
-    pub fn nonlinear_stresses(&self, m: &MaterialModel, u: &[f64], kin: Kinematics, committed: &[f64]) -> fieldcraft_fem::Result<Vec<PointStress>> {
+    pub fn nonlinear_stresses(
+        &self,
+        m: &MaterialModel,
+        u: &[f64],
+        kin: Kinematics,
+        thermal: Option<&Temperature>,
+        committed: &[f64],
+    ) -> fieldcraft_fem::Result<Vec<PointStress>> {
         match self {
-            Kernel::Solid(s) => s.nonlinear_stresses(m, u.as_chunks::<3>().0, kin, committed),
-            Kernel::Plane(p) => p.nonlinear_stresses(m, u.as_chunks::<2>().0, kin, committed),
+            Kernel::Solid(s) => s.nonlinear_stresses(m, u.as_chunks::<3>().0, kin, thermal, committed),
+            Kernel::Plane(p) => p.nonlinear_stresses(m, u.as_chunks::<2>().0, kin, thermal, committed),
         }
     }
 
@@ -936,17 +945,24 @@ pub(crate) fn hold(slot: Option<&mut Option<f64>>, value: f64, conflict: impl Fn
 
 /// Add the equivalent nodal forces of the thermal strains of a temperature field.
 pub fn add_thermal_loads(f: &mut [f64], mesh: &Mesh, field: &[Option<f64>]) -> Result<()> {
-    for e in &mesh.elements {
-        let Some(th) = e.thermal_strain(field) else { continue };
-        let forces = e.kernel()?.thermal_load(&e.d, &th).map_err(|err| Error::element(e.label, err))?;
-        for (node, v) in e.nodes.iter().zip(forces) {
-            add(f, &translations(mesh, *node)?, v);
-        }
-    }
+    add_element_thermal_loads(f, mesh, field, |_| true)?;
     for t in &mesh.trusses {
         let Some(th) = t.thermal_strain(field) else { continue };
         let forces = t.truss()?.thermal_load(t.young, t.area, &th).map_err(|err| Error::element(t.label, err))?;
         for (node, v) in t.nodes.iter().zip(forces) {
+            add(f, &translations(mesh, *node)?, v);
+        }
+    }
+    Ok(())
+}
+
+/// Add the equivalent nodal forces of the thermal strains of the solid and 2D elements whose
+/// index `keep` accepts.
+pub fn add_element_thermal_loads(f: &mut [f64], mesh: &Mesh, field: &[Option<f64>], keep: impl Fn(usize) -> bool) -> Result<()> {
+    for (_, e) in mesh.elements.iter().enumerate().filter(|(i, _)| keep(*i)) {
+        let Some(th) = e.thermal_strain(field) else { continue };
+        let forces = e.kernel()?.thermal_load(&e.d, &th).map_err(|err| Error::element(e.label, err))?;
+        for (node, v) in e.nodes.iter().zip(forces) {
             add(f, &translations(mesh, *node)?, v);
         }
     }

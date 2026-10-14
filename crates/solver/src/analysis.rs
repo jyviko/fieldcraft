@@ -353,9 +353,9 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     // loads.
     let (field, temperature) = match step.procedure {
         Procedure::CoupledTemperatureDisplacement {} => {
-            let (labels, t) = crate::heat::temperatures(model, &resolved, step, limits)?;
-            let at = |l: &u32| labels.binary_search(l).ok().and_then(|i| t.get(i)).copied();
-            (Some(mesh.labels.iter().map(at).collect::<Vec<_>>()), Some(mesh.labels.iter().map(|l| at(l).unwrap_or(0.0)).collect()))
+            let field = crate::heat::temperatures_at(model, &resolved, step, limits, &mesh.labels)?;
+            let temperature = field.iter().map(|t| t.unwrap_or(0.0)).collect();
+            (Some(field), Some(temperature))
         }
         _ => (temperature_loads(model, &resolved, &mesh, step)?, None),
     };

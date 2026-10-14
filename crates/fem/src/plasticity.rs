@@ -229,6 +229,11 @@ impl J2 {
         Ok(J2 { shear, bulk, flow, damage, heating })
     }
 
+    /// Whether the flow stress depends on the temperature (Johnson–Cook softening).
+    pub fn is_temperature_dependent(&self) -> bool {
+        matches!(self.flow, Some(Flow::JohnsonCook { .. }))
+    }
+
     /// The temperature a point starts at.
     pub fn initial_temperature(&self) -> f64 {
         match self.flow {

@@ -387,7 +387,7 @@ fn nonlinear_steps_fail_cleanly() {
         step.set_procedure(Procedure::NonlinearStatic(bad.clone()));
         assert!(capped.model.replace_step(step).is_err(), "{bad:?}");
     }
-    // Refused by name: incompatible modes, a hybrid St Venant–Kirchhoff element, temperature.
+    // Refused by name: incompatible modes, a hybrid St Venant–Kirchhoff element, centrifugal loads.
     let mut im = grid([2, 1, 1], ElementKind::Hex8, |q| q);
     im.define(iso(100.0, 0.3), None, incompatible(), nonlinear());
     im.fixed("root", |q| near(q[0], 0.0));
@@ -402,10 +402,13 @@ fn nonlinear_steps_fail_cleanly() {
     hy.load("p", Load::Pressure { set: "end".into(), magnitude: 1.0 });
     let err = solve_nonlinear(&hy.model, None, &Limits::default()).unwrap_err().to_string();
     assert!(err.contains("hybrid elements of a St Venant–Kirchhoff material"), "{err}");
-    hy.load("hot", Load::Temperature { target: Target::Set("root".into()), value: 50.0 });
+    hy.load("spin", Load::Centrifugal { angular_velocity: 10.0, point: [0.0; 3], axis: [0.0, 0.0, 1.0], set: None });
     neo_hookean(&mut hy, 100.0, 0.3);
+    let mut m = hy.model.material("Mat").unwrap().clone();
+    m.density = Some(1.0);
+    hy.model.replace_material("Mat", m).unwrap();
     let err = solve_nonlinear(&hy.model, None, &Limits::default()).unwrap_err().to_string();
-    assert!(err.contains("temperature loads"), "{err}");
+    assert!(err.contains("centrifugal loads"), "{err}");
     // A model that can move freely: the first tangent is singular, named like the linear solver.
     let mut free = grid([2, 1, 1], ElementKind::Hex8, |q| q);
     free.define(iso(100.0, 0.3), None, full(), nonlinear());

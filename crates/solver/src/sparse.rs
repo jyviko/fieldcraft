@@ -11,6 +11,9 @@ use modelcraft_fem::{DofLayout, DofSet};
 
 use crate::{Error, Result};
 
+/// Rows per parallel block of a product.
+const ROWS: usize = 4096;
+
 /// A square sparse matrix in compressed rows with sorted column indices.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Csr {
@@ -28,11 +31,15 @@ impl Csr {
     }
 
     /// y = A x.
+    /// Rows are computed in parallel blocks; each row's sum runs in column order.
     pub fn mul(&self, x: &[f64], y: &mut [f64]) {
-        for (r, yr) in y.iter_mut().enumerate().take(self.n) {
-            let (cols, vals) = self.row(r);
-            *yr = cols.iter().zip(vals).map(|(c, v)| v * x.get(*c).copied().unwrap_or(0.0)).sum();
-        }
+        let n = self.n.min(y.len());
+        modelcraft_parallel::chunks_mut(y.get_mut(..n).unwrap_or_default(), ROWS, |b, block| {
+            for (i, yr) in block.iter_mut().enumerate() {
+                let (cols, vals) = self.row(b * ROWS + i);
+                *yr = cols.iter().zip(vals).map(|(c, v)| v * x.get(*c).copied().unwrap_or(0.0)).sum();
+            }
+        });
     }
 
     pub fn diagonal(&self) -> Vec<f64> {

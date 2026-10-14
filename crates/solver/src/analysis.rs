@@ -9,6 +9,8 @@ use modelcraft_fem::{DofKind, DofLayout, PointStress, von_mises};
 use modelcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
 use serde::Serialize;
 
+use modelcraft_parallel as parallel;
+
 use crate::cholesky::{Factor, FactorError, UpperColumns};
 use crate::constraints::{Budget, Reduction, coupling_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
@@ -164,21 +166,46 @@ struct Assembled {
     m: Option<Csr>,
 }
 
+/// Elements whose matrices are computed together before they are added.
+const ROUND: usize = 4096;
+
+/// Elements per parallel task.
+const GRAIN: usize = 16;
+
 /// Assemble the stiffness (and the mass when `mass` is set) on the mesh's node graph.
 fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<Assembled> {
     let layout = &mesh.layout;
     let mut k = graph.zero_matrix(layout);
     let mut m = mass.map(|_| graph.zero_matrix(layout));
-    for e in &mesh.elements {
-        let kernel = e.kernel()?;
-        let kinds = kernel.dofs().node;
-        let at = |err| Error::element(e.label, err);
-        add_block(&mut k, layout, &e.nodes, kinds, &kernel.stiffness(&e.d).map_err(at)?.data)?;
-        if let (Some(mm), Some(kind)) = (m.as_mut(), mass) {
-            let rho = e.density.ok_or_else(|| Error::Invalid(format!("element {} has no density", e.label)))?;
-            match kind {
-                MassKind::Consistent => add_scalar(mm, layout, &e.nodes, kinds, &kernel.mass(rho).map_err(at)?.data)?,
-                MassKind::Lumped => add_diagonal(mm, layout, &e.nodes, kinds, &kernel.lumped_mass(rho).map_err(at)?)?,
+    // Element matrices are computed in parallel, a round at a time, and added in label order
+    // (the sums are those of a sequential loop).
+    for round in parallel::blocks(mesh.elements.len(), ROUND) {
+        let elements = mesh.elements.get(round).unwrap_or_default();
+        let matrices = parallel::map_grained(elements.len(), GRAIN, |i| -> Result<_> {
+            let Some(e) = elements.get(i) else { return Err(Error::Internal("element index".into())) };
+            let kernel = e.kernel()?;
+            let at = |err| Error::element(e.label, err);
+            let stiffness = kernel.stiffness(&e.d).map_err(at)?.data;
+            let element_mass = match mass {
+                None => None,
+                Some(kind) => {
+                    let rho = e.density.ok_or_else(|| Error::Invalid(format!("element {} has no density", e.label)))?;
+                    Some(match kind {
+                        MassKind::Consistent => kernel.mass(rho).map_err(at)?.data,
+                        MassKind::Lumped => kernel.lumped_mass(rho).map_err(at)?,
+                    })
+                }
+            };
+            Ok((kernel.dofs().node, stiffness, element_mass))
+        });
+        for (e, computed) in elements.iter().zip(matrices) {
+            let (kinds, stiffness, element_mass) = computed?;
+            add_block(&mut k, layout, &e.nodes, kinds, &stiffness)?;
+            if let (Some(mm), Some(kind), Some(data)) = (m.as_mut(), mass, element_mass) {
+                match kind {
+                    MassKind::Consistent => add_scalar(mm, layout, &e.nodes, kinds, &data)?,
+                    MassKind::Lumped => add_diagonal(mm, layout, &e.nodes, kinds, &data)?,
+                }
             }
         }
     }
@@ -372,14 +399,18 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     let mut elements = Vec::with_capacity(mesh.elements.len());
     let mut sum = vec![[0.0; 6]; mesh.labels.len()];
     let mut count = vec![0u32; mesh.labels.len()];
-    for e in &mesh.elements {
+    let all_points = parallel::map_grained(mesh.elements.len(), GRAIN, |i| -> Result<_> {
+        let Some(e) = mesh.elements.get(i) else { return Err(Error::Internal("element index".into())) };
         let kernel = e.kernel()?;
-        let at = |err| Error::element(e.label, err);
         let ue: Vec<[f64; 3]> = e.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
         let thermal = field.as_deref().and_then(|t| e.thermal_strain(t));
-        let points = kernel.stresses_with(&e.d, &ue, thermal.as_ref()).map_err(at)?;
+        let points = kernel.stresses_with(&e.d, &ue, thermal.as_ref()).map_err(|err| Error::element(e.label, err))?;
+        Ok((points, kernel.ty(), kernel.rule()))
+    });
+    for (e, computed) in mesh.elements.iter().zip(all_points) {
+        let (points, ty, rule) = computed?;
+        let at = |err| Error::element(e.label, err);
         let values: Vec<[f64; 6]> = points.iter().map(|p| p.stress).collect();
-        let (ty, rule) = (kernel.ty(), kernel.rule());
         let cached = extrapolations.iter().position(|(t, r, _)| std::ptr::eq(*t, ty) && *r == rule);
         let index = match cached {
             Some(i) => i,

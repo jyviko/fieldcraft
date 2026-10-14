@@ -184,7 +184,7 @@ pub struct Wanted {
 }
 
 /// The operators the Lanczos iteration needs.
-pub trait Operator {
+pub trait Operator: Sync {
     fn n(&self) -> usize;
     /// y = M x.
     fn mass(&self, x: &[f64], y: &mut [f64]);
@@ -285,10 +285,12 @@ pub fn lanczos(op: &impl Operator, shift: f64, wanted: Wanted, block: usize, max
         let j0 = q.len();
         // W = Op Q_j.
         let mut w: Vec<Vec<f64>> = Vec::with_capacity(b);
-        for mx in &mcur {
-            let mut y = mx.clone();
-            op.solve(&mut y)?;
-            w.push(y);
+        // The block's solves are independent: one task each.
+        for y in modelcraft_parallel::map(mcur.len(), |i| {
+            let mut y = mcur.get(i).cloned().unwrap_or_default();
+            op.solve(&mut y).map(|()| y)
+        }) {
+            w.push(y?);
         }
         // A_j = Q_jᵀ M W (symmetrized), W −= Q_j A_j (the earlier blocks go in the full
         // reorthogonalization below).

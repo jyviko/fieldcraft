@@ -78,6 +78,14 @@ pub fn map<T: Send>(count: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T
     pool::map(count, f)
 }
 
+/// `f(i)` for `i` in `0..count`, results in index order, run in parallel in blocks of `grain`
+/// consecutive indices (one task per block: for cheap `f`).
+pub fn map_grained<T: Send>(count: usize, grain: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
+    let ranges: Vec<std::ops::Range<usize>> = blocks(count, grain).collect();
+    let parts = map(ranges.len(), |k| ranges.get(k).cloned().unwrap_or(0..0).map(&f).collect::<Vec<T>>());
+    parts.into_iter().flatten().collect()
+}
+
 /// `f(i, item)` for every item, run in parallel; each task gets its own item mutably (use it to
 /// hand tasks disjoint parts of the output).
 pub fn for_each_mut<T: Send>(items: &mut [T], f: impl Fn(usize, &mut T) + Sync + Send) {
@@ -115,13 +123,7 @@ mod pool {
     static DEFAULT: OnceLock<Option<Arc<ThreadPool>>> = OnceLock::new();
 
     fn build(threads: usize) -> Option<Arc<ThreadPool>> {
-        ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .stack_size(STACK)
-            .thread_name(|i| format!("modelcraft-worker-{i}"))
-            .build()
-            .ok()
-            .map(Arc::new)
+        ThreadPoolBuilder::new().num_threads(threads).stack_size(STACK).thread_name(|i| format!("modelcraft-worker-{i}")).build().ok().map(Arc::new)
     }
 
     fn cached(threads: usize) -> Option<Arc<ThreadPool>> {
@@ -247,6 +249,7 @@ mod tests {
         assert!((1..=MAX_THREADS).contains(&default_threads()));
         // Nested use runs on the pool it is in.
         assert_eq!(with_threads(2, || map(3, |_| current_threads())), vec![2, 2, 2]);
+        assert_eq!(with_threads(3, || map_grained(10, 3, |i| i * i)), (0..10).map(|i| i * i).collect::<Vec<_>>());
         assert_eq!(blocks(10, 4).collect::<Vec<_>>(), vec![0..4, 4..8, 8..10]);
         assert_eq!(blocks(0, 4).count(), 0);
         assert_eq!(blocks(3, 0).count(), 3);

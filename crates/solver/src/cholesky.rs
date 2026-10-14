@@ -596,8 +596,7 @@ impl Factor {
         }
         let mut first = vec![0usize];
         for j in 1..n {
-            let joins =
-                parent.get(j - 1) == Some(&j) && children.get(j) == Some(&1) && counts.get(j - 1).copied() == counts.get(j).map(|c| c + 1);
+            let joins = parent.get(j - 1) == Some(&j) && children.get(j) == Some(&1) && counts.get(j - 1).copied() == counts.get(j).map(|c| c + 1);
             if !joins {
                 first.push(j);
             }
@@ -953,7 +952,11 @@ mod tests {
                                 pair(&mut rows, p + a, p + b, 0.25);
                             }
                         }
-                        let next = [(i + 1 < nx).then(|| point(i + 1, j, k)), (j + 1 < ny).then(|| point(i, j + 1, k)), (k + 1 < nz).then(|| point(i, j, k + 1))];
+                        let next = [
+                            (i + 1 < nx).then(|| point(i + 1, j, k)),
+                            (j + 1 < ny).then(|| point(i, j + 1, k)),
+                            (k + 1 < nz).then(|| point(i, j, k + 1)),
+                        ];
                         for q in next.into_iter().flatten() {
                             for a in 0..3 {
                                 pair(&mut rows, p + a, base + 3 * q + a, -1.0);
@@ -999,10 +1002,7 @@ mod tests {
         check_solve(&csr, &one, 1e-12);
         for threads in [2, 7] {
             let other = parallel::with_threads(threads, || Factor::new(&upper, usize::MAX)).unwrap();
-            assert!(
-                one.values.iter().flatten().zip(other.values.iter().flatten()).all(|(a, b)| a.to_bits() == b.to_bits()),
-                "{threads} threads"
-            );
+            assert!(one.values.iter().flatten().zip(other.values.iter().flatten()).all(|(a, b)| a.to_bits() == b.to_bits()), "{threads} threads");
         }
     }
 

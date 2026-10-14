@@ -8,6 +8,7 @@ desktop app shows each step.
 python3 tools/demo-video/make.py                  # build, run, encode into docs/media
 python3 tools/demo-video/make.py --no-build       # with the release binaries already built
 python3 tools/demo-video/make.py --frames /tmp/f  # also keep the captured pictures
+cd tools/demo-video && python3 -m unittest        # test the caption drawing
 ```
 
 Needs Python 3 (standard library only), a display for the app window (the pictures are drawn
@@ -28,8 +29,15 @@ What it does:
    stepped from 1 to 150 and back. Every picture is the MCP `screenshot` tool with
    `source: window` (the whole window drawn offscreen, `ui.capture`), turned to the `iso` or
    `front` view by its `view` argument.
-4. Encodes the pictures at 10 frames per second, each held for its stage, into the MP4 (H.264,
-   1280 px) and the GIF (960 px, its own palette), and prints the tip deflection and the peak
+4. Captions each stage with the MCP tool it calls and what it does (`open · tests/corpus/…`,
+   `mesh · hex sweep 4 mm`, `solve · static`, …) in a band under the window. `caption.py`
+   draws the bars in the standard library: a minimal TrueType reader (`cmap` format 4, `loca`,
+   simple and composite `glyf` outlines, `hmtx` advances), a scanline rasteriser (non-zero
+   winding, anti-aliased) and a PNG writer, with the interface's own font
+   (`crates/ui-egui/fonts/Inter-SemiBold.ttf`, SIL OFL 1.1). ffmpeg pads each window picture
+   with the band and lays the bar over it with its `overlay` filter.
+5. Encodes the pictures at 10 frames per second, each held for its stage, into the MP4 (H.264,
+   1280 x 848) and the GIF (960 px, its own palette), and prints the tip deflection and the peak
    von Mises stress.
 
 The theme is the app's default (dark).

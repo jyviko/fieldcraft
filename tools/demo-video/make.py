@@ -3,7 +3,8 @@
 
 Every analysis step goes through the MCP server (`fieldcraft-cli mcp --connect`), bridged to
 the desktop app, and every frame is the app window captured offscreen through the MCP
-`screenshot` tool (`source: window`). See README.md beside this file.
+`screenshot` tool (`source: window`). A caption bar names the tool behind each stage
+(caption.py draws it; ffmpeg's `overlay` filter composites it). See README.md beside this file.
 
 Python standard library only; ffmpeg encodes the frames.
 """
@@ -19,6 +20,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+import caption
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -47,8 +50,12 @@ HOLD_LONG = 20  # the stress result
 SWING = 12  # pictures from undeformed to the largest exaggeration
 MAX_SCALE = 150.0  # the largest displacement (0.18 mm) drawn about 26 mm on the 200 mm beam
 
-# The captured window, in points (the app's own pixels-per-point scale on top).
+# The captured window, in points (the app's own pixels-per-point scale on top); the video's size.
 WINDOW = (1280, 800)
+
+# The caption bar, a band under the window (so it never hides the model, the legend or a panel).
+CAPTION_FONT = ROOT / "crates" / "ui-egui" / "fonts" / "Inter-SemiBold.ttf"
+CAPTION_HEIGHT = 48
 
 
 def log(msg):
@@ -140,30 +147,54 @@ class Film:
     def __init__(self, mcp, frames_dir):
         self.mcp = mcp
         self.dir = frames_dir
-        self.shots = []  # (file, frames)
+        self.font = caption.Font.load(CAPTION_FONT)
+        self.captions = {}  # (tool, detail) -> its picture
+        self.caption = None
+        self.shots = []  # (file, frames, caption picture)
 
-    def shoot(self, frames, view=None):
+    def say(self, tool, detail):
+        """Caption the next pictures with the MCP tool being called and what it does."""
+        key = (tool, detail)
+        if key not in self.captions:
+            path = self.dir / f"caption{len(self.captions):03d}.png"
+            path.write_bytes(caption.caption_bar(self.font, (WINDOW[0], CAPTION_HEIGHT), tool, detail))
+            self.captions[key] = path
+        self.caption = self.captions[key]
+
+    def shoot(self, frames, view=None, camera=None):
+        if self.caption is None:
+            raise SystemExit("film: a picture without a caption")
         args = {"source": "window", "width": WINDOW[0], "height": WINDOW[1]}
         if view:
             args["view"] = view
+        if camera:
+            args["camera"] = camera
         content = self.mcp.tool("screenshot", args)
         png = next((c["data"] for c in content if c.get("type") == "image"), None)
         if png is None:
             raise SystemExit("screenshot: no image in the reply")
         path = self.dir / f"shot{len(self.shots):04d}.png"
         path.write_bytes(base64.b64decode(png))
-        self.shots.append((path, frames))
+        self.shots.append((path, frames, self.caption))
+
+    def hold(self, frames):
+        """Hold the last picture, under the current caption, when the window has not changed."""
+        if not self.shots:
+            raise SystemExit("film: nothing to hold")
+        self.shots.append((self.shots[-1][0], frames, self.caption))
 
     def sequence(self, folder):
-        """Lay the video out as numbered frames (links to the shots); return their pattern and count."""
+        """Lay the video out as numbered frames and their captions (links to the pictures);
+        return the two patterns and the frame count."""
         shutil.rmtree(folder, ignore_errors=True)
-        folder.mkdir(parents=True)
+        (folder / "captions").mkdir(parents=True)
         n = 0
-        for shot, frames in self.shots:
+        for shot, frames, bar in self.shots:
             for _ in range(frames):
                 os.link(shot, folder / f"{n:05d}.png")
+                os.link(bar, folder / "captions" / f"{n:05d}.png")
                 n += 1
-        return str(folder / "%05d.png"), n
+        return str(folder / "%05d.png"), str(folder / "captions" / "%05d.png"), n
 
 
 def hand_calculation():
@@ -231,16 +262,19 @@ def batch(mcp, commands):
 def analyse(mcp, film, design, work):
     """The analysis, every step an MCP tool call, with the pictures a viewer follows."""
     # 1. Open the part.
+    film.say("open", f"tests/corpus/{PART}")
     mcp.call("open", {"path": str(design)})
     film.shoot(HOLD, view="iso")
 
     # 2. Hex mesh: the extruded section sweeps into structured hexahedra.
+    film.say("mesh", f"hex sweep {SIZE_MM:g} mm")
     mesh = mcp.call("mesh", {"method": "hex_sweep", "params": {"body": BODY, "size": SIZE_MM}})
     log(f"mesh: {mesh['mesh']['elements']} elements, {mesh['mesh']['nodes']} nodes")
     film.shoot(HOLD)
 
     # 3. Material and section, then supports, then the load and the step: one picture each, so
     # the browser's counts grow as the model is defined.
+    film.say("batch", "steel, solid section")
     batch(mcp, [
         {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
         {"command": "model.set.create", "params": {"name": "beam", "geometry": [{"body": BODY}]}},
@@ -248,11 +282,13 @@ def analyse(mcp, film, design, work):
         {"command": "model.section.create", "params": {"name": "solid", "set": "beam", "material": "Steel", "kind": {"type": "solid"}, "formulation": {"incompatible_modes": True}}},
     ])
     film.shoot(HOLD_SHORT)
+    film.say("batch", "clamp at x = 0")
     batch(mcp, [
         {"command": "model.set.create", "params": {"name": "root", "geometry": [{"body": BODY, "face": ROOT_FACE}]}},
         {"command": "model.boundary_condition.create", "params": {"name": "clamp", "type": "fixed", "target": {"set": "root"}}},
     ])
     film.shoot(HOLD_SHORT)
+    film.say("batch", f"{LOAD_N:g} N tip load, static step")
     batch(mcp, [
         # The end section stays plane: a kinematic coupling to a point on the beam's axis carries
         # the load, so no load-introduction peak hides the root stress.
@@ -266,15 +302,20 @@ def analyse(mcp, film, design, work):
     if not check.get("ready"):
         raise SystemExit(f"the model is not ready: {check}")
     film.shoot(HOLD_SHORT)
+    film.say("check_model", "ready")
+    film.hold(HOLD_SHORT)
 
     # 4. Solve.
+    film.say("solve", "static")
     solve = mcp.call("solve", {"analysis": "static", "step": STEP})
     log(f"solve: {solve.get('equations')} equations")
+    film.shoot(HOLD_SHORT)
 
     # 5. Results: the tip deflection, then von Mises contours on the true (scale 1) shape.
     disp = mcp.call("show_results", {"step": STEP, "field": "displacement"})
     tip = disp["contour"]["range"]["max"]["value"]
     root_stress = root_bending_stress(mcp, work)
+    film.say("show_results", "von Mises")
     vm = mcp.call("show_results", {"step": STEP, "field": "von_mises", "bands": 12, "deformed": True, "scale": 1})
     peak = vm["contour"]["range"]["max"]["value"]
     log(f"tip deflection {tip:.4f} mm, peak von Mises {peak:.1f} MPa")
@@ -282,6 +323,7 @@ def analyse(mcp, film, design, work):
 
     # 6. The deformed shape, swung from the true shape to an exaggeration and back, in the iso
     # view and then from the side, ending held at the exaggeration.
+    film.say("show_results", f"deformed, up to \u00d7{MAX_SCALE:g}")
     ramp = [max(1.0, MAX_SCALE * i / SWING) for i in range(SWING + 1)]
     for view, scales in (("iso", ramp[1:] + ramp[-2::-1]), ("front", ramp[1:])):
         for i, scale in enumerate(scales):
@@ -293,21 +335,25 @@ def analyse(mcp, film, design, work):
 
 def encode(film, frames_dir, mp4, gif):
     ffmpeg = os.environ.get("FFMPEG", shutil.which("ffmpeg") or "ffmpeg")
-    pattern, count = film.sequence(frames_dir / "sequence")
+    pattern, captions, count = film.sequence(frames_dir / "sequence")
     log(f"encoding {len(film.shots)} pictures as {count} frames, {count / FPS:.1f} s")
-    src = ["-framerate", str(FPS), "-i", pattern]
+    # The window pictures scaled to the window's size in points, with their caption bars laid
+    # over a band added below.
+    src = ["-framerate", str(FPS), "-i", pattern, "-framerate", str(FPS), "-i", captions]
+    width, height = WINDOW
+    captioned = (f"[0:v]scale={width}:{height}:flags=lanczos,pad={width}:{height + CAPTION_HEIGHT}:0:0[w];"
+                 f"[w][1:v]overlay=0:{height}")
     common = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
     mp4.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [*common, *src, "-vf", "scale=1280:-2:flags=lanczos", "-c:v", "libx264", "-preset", "veryslow", "-crf", "26",
+        [*common, *src, "-filter_complex", captioned, "-c:v", "libx264", "-preset", "veryslow", "-crf", "26",
          "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(mp4)],
         check=True,
     )
-    palette = frames_dir / "palette.png"
-    subprocess.run([*common, *src, "-vf", "scale=960:-1:flags=lanczos,palettegen=stats_mode=diff", str(palette)], check=True)
     subprocess.run(
-        [*common, *src, "-i", str(palette), "-lavfi",
-         "scale=960:-1:flags=lanczos[v];[v][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle", str(gif)],
+        [*common, *src, "-filter_complex",
+         f"{captioned},scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];"
+         "[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle", str(gif)],
         check=True,
     )
 

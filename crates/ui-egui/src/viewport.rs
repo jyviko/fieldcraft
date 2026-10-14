@@ -248,8 +248,7 @@ fn axis_view(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
     }
     icons::paint(app, ui, "ui.home", home, Look::Normal);
     if hr.on_hover_text("Home view").clicked() {
-        app.set_view(StandardView::Iso);
-        app.fit_view();
+        app.home_view();
     }
 }
 
@@ -298,8 +297,7 @@ fn nav_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
                 "zoom" => app.nav = NavMode::Zoom,
                 "fit" => app.fit_view(),
                 "home" => {
-                    app.set_view(StandardView::Iso);
-                    app.fit_view();
+                    app.home_view();
                 }
                 "perspective" => app.ui.perspective = !app.ui.perspective,
                 _ => app.toggle_menu("view"),

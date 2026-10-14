@@ -101,9 +101,30 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
+/// The selected definition's fields as (name, short text), read again only when the model changes.
+fn property_rows(app: &mut ModelApp, kind: Def, name: &str) -> Option<std::sync::Arc<Vec<(String, String)>>> {
+    let key = (app.session.revision(), kind, name.to_string());
+    if let Some((k, rows)) = &app.properties
+        && *k == key
+    {
+        return Some(rows.clone());
+    }
+    let v = browser::definition(&app.session.model, kind, name)?;
+    let rows: Vec<(String, String)> = v
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(k, _)| k.as_str() != "name")
+        .map(|(k, field)| (k.replace('_', " "), value_text(field)))
+        .collect();
+    let rows = std::sync::Arc::new(rows);
+    app.properties = Some((key, rows.clone()));
+    Some(rows)
+}
+
 /// The selected definition's fields, with Edit (its form, filled in) and Delete.
 fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name: &str) {
-    let Some(v) = browser::definition(&app.session.model, kind, name) else { return };
+    let Some(rows) = property_rows(app, kind, name) else { return };
     let mut deselect = false;
     heading(ui, t, Level::Title, |ui| {
         ui.label(RichText::new(kind.label().to_uppercase()).strong().size(12.0));
@@ -114,9 +135,9 @@ fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name
     });
     ui.add_space(4.0);
     egui::Grid::new("mc_properties").num_columns(2).spacing(vec2(10.0, 3.0)).show(ui, |ui| {
-        for (k, field) in v.as_object().into_iter().flatten().filter(|(k, _)| k.as_str() != "name") {
-            ui.label(RichText::new(k.replace('_', " ")).color(t.text_dim));
-            ui.add(egui::Label::new(value_text(field)).wrap());
+        for (k, text) in rows.iter() {
+            ui.label(RichText::new(k).color(t.text_dim));
+            ui.add(egui::Label::new(text).wrap());
             ui.end_row();
         }
     });
@@ -128,20 +149,26 @@ fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name
     });
     if deselect {
         app.selected = None;
-    } else if edit {
+    } else if edit && let Some(v) = browser::definition(&app.session.model, kind, name) {
         app.open_form(&kind.command("edit"), v);
     } else if delete && app.run(&kind.command("delete"), json!({"name": name})).is_ok() {
         app.selected = None;
     }
 }
 
-/// A field's value as short text: numbers and strings as they are, lists and objects as compact
-/// JSON (long ones shortened).
+/// A field's value as short text: numbers and strings as they are, long lists as their length
+/// and first items, other lists and objects as compact JSON (long ones shortened).
 fn value_text(v: &Value) -> String {
     const MAX: usize = 160;
+    /// Lists longer than this show their length and first items.
+    const LIST: usize = 12;
     let s = match v {
         Value::String(s) => s.clone(),
         Value::Null => "—".into(),
+        Value::Array(a) if a.len() > LIST => {
+            let first: Vec<String> = a.iter().take(LIST).map(Value::to_string).collect();
+            format!("{} items: {}, …", a.len(), first.join(", "))
+        }
         other => other.to_string(),
     };
     if s.chars().count() > MAX { format!("{}…", s.chars().take(MAX).collect::<String>()) } else { s }
@@ -157,6 +184,8 @@ mod tests {
         assert_eq!(value_text(&json!([1, 2])), "[1,2]");
         assert_eq!(value_text(&Value::Null), "—");
         let long = json!((0..500).collect::<Vec<_>>());
-        assert!(value_text(&long).ends_with('…') && value_text(&long).chars().count() == 161);
+        assert!(value_text(&long).starts_with("500 items: 0, 1, 2"));
+        let text = json!({"a": "x".repeat(400)});
+        assert!(value_text(&text).ends_with('…') && value_text(&text).chars().count() == 161);
     }
 }

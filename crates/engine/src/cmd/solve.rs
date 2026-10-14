@@ -106,34 +106,28 @@ fn largest(values: impl Iterator<Item = (u32, f64)>) -> Value {
 
 fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
     use modelcraft_model::Procedure;
-    let steps: Vec<(String, &'static str)> = s
+    type Solve = fn(&mut Session, &Value) -> Result<Value>;
+    let steps: Vec<(String, &'static str, Solve)> = s
         .model
         .steps()
         .iter()
         .map(|st| {
-            let kind = match st.procedure {
-                Procedure::Static {} => "static",
-                Procedure::Frequency { .. } => "frequency",
-                Procedure::ExplicitDynamic(_) => "explicit",
-                Procedure::Fluid { .. } => "fluid",
+            let solve: Solve = match st.procedure {
+                Procedure::Static {} => run_static,
+                Procedure::Frequency { .. } => run_frequency,
+                Procedure::ExplicitDynamic(_) => run_explicit,
+                Procedure::Fluid { .. } => run_fluid,
             };
-            (st.name.clone(), kind)
+            (st.name.clone(), st.procedure.name(), solve)
         })
         .collect();
     if steps.is_empty() {
         return Err(EngineError::Params("the model has no steps to solve: add one (model.step.create)".into()));
     }
     let mut done = Vec::new();
-    for (name, kind) in steps {
-        let p = json!({"step": name});
-        let r = match kind {
-            "static" => run_static(s, &p),
-            "frequency" => run_frequency(s, &p),
-            "fluid" => run_fluid(s, &p),
-            _ => run_explicit(s, &p),
-        };
-        let summary = r.map_err(|e| EngineError::Params(format!("step `{name}`: {e}")))?;
-        done.push(json!({"step": name, "procedure": kind, "summary": summary}));
+    for (name, procedure, solve) in steps {
+        let summary = solve(s, &json!({"step": name})).map_err(|e| EngineError::Params(format!("step `{name}`: {e}")))?;
+        done.push(json!({"step": name, "procedure": procedure, "summary": summary}));
     }
     Ok(json!({"steps": done}))
 }

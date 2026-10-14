@@ -37,6 +37,21 @@ impl Item {
     }
 }
 
+/// The journal and the undone commands as runs of the same command, rebuilt only when the journal
+/// or the undo history changed.
+fn cached_items(app: &mut ModelApp) -> (std::sync::Arc<Vec<Item>>, usize) {
+    let key = (app.session.revision(), app.session.journal.len(), app.session.undo_depth());
+    match &app.timeline {
+        Some((k, list)) if *k == key => (list.clone(), key.1),
+        _ => {
+            let (list, done) = items(app);
+            let list = std::sync::Arc::new(list);
+            app.timeline = Some((key, list.clone()));
+            (list, done)
+        }
+    }
+}
+
 /// The journal and the undone commands as runs of the same command.
 pub fn items(app: &ModelApp) -> (Vec<Item>, usize) {
     let done = app.session.journal.len();
@@ -53,16 +68,16 @@ pub fn items(app: &ModelApp) -> (Vec<Item>, usize) {
 }
 
 impl ModelApp {
-    /// Undo or redo until the journal holds `target` commands (as far as the history reaches).
+    /// Undo or redo until the journal holds `target` commands (as far as the history reaches):
+    /// one `edit.undo` or `edit.redo` with a `count`.
     pub fn roll_to(&mut self, target: usize) {
         let (undo, redo) = self.session.undo_depth();
         let done = self.session.journal.len();
         let target = target.clamp(done.saturating_sub(undo), done + redo);
-        for _ in 0..done.abs_diff(target) {
-            let step = if target < self.session.journal.len() { "edit.undo" } else { "edit.redo" };
-            if self.run(step, json!({})).is_err() {
-                break;
-            }
+        let step = if target < done { "edit.undo" } else { "edit.redo" };
+        if target != done {
+            // An error shows in the status bar.
+            let _ = self.run(step, json!({"count": done.abs_diff(target)}));
         }
     }
 }
@@ -137,7 +152,7 @@ pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
             x += 24.0;
         }
         x += 14.0;
-        let (list, done) = items(app);
+        let (list, done) = cached_items(app);
         let strip = Rect::from_min_max(pos2(x, r.top()), r.right_bottom());
         if list.is_empty() {
             p.text(
@@ -155,10 +170,12 @@ pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
                 let width = list.len() as f32 * STRIDE + 12.0;
                 let (area, _) = ui.allocate_exact_size(vec2(width, r.height()), Sense::hover());
                 let p = ui.painter().clone();
+                let marker =
+                    |x: f32| p.rect_filled(Rect::from_min_size(pos2(x, r.top() + 5.0), vec2(5.0, r.height() - 10.0)), 2.0, t.timeline_marker);
                 let mut x = area.left();
                 for (k, item) in list.iter().enumerate() {
                     if k == marker_at {
-                        p.rect_filled(Rect::from_min_size(pos2(x, r.top() + 5.0), vec2(5.0, r.height() - 10.0)), 2.0, t.timeline_marker);
+                        marker(x);
                         x += 10.0;
                     }
                     let br = Rect::from_min_size(pos2(x, r.top() + 6.0), Vec2::splat(ITEM));
@@ -182,12 +199,18 @@ pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
                     }
                     let label = crate::command_label(&item.command);
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, reachable, label));
-                    if resp.on_hover_text(tip(item, reachable)).clicked() && reachable {
+                    if resp
+                        .on_hover_ui(|ui| {
+                            ui.label(tip(item, reachable));
+                        })
+                        .clicked()
+                        && reachable
+                    {
                         roll = Some(item.end);
                     }
                 }
                 if marker_at == list.len() {
-                    p.rect_filled(Rect::from_min_size(pos2(x, r.top() + 5.0), vec2(5.0, r.height() - 10.0)), 2.0, t.timeline_marker);
+                    marker(x);
                 }
             });
         });

@@ -35,6 +35,22 @@ impl Tab {
     pub const ALL: [Tab; 10] =
         [Tab::Geometry, Tab::Mesh, Tab::Properties, Tab::Assembly, Tab::Steps, Tab::Loads, Tab::Interactions, Tab::Solve, Tab::Results, Tab::Tools];
 
+    /// Its id in JSON (`loads`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Tab::Geometry => "geometry",
+            Tab::Mesh => "mesh",
+            Tab::Properties => "properties",
+            Tab::Assembly => "assembly",
+            Tab::Steps => "steps",
+            Tab::Loads => "loads",
+            Tab::Interactions => "interactions",
+            Tab::Solve => "solve",
+            Tab::Results => "results",
+            Tab::Tools => "tools",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Tab::Geometry => "Geometry",
@@ -527,6 +543,9 @@ mod tests {
             assert!(entry_of(c.id).is_some(), "{} has no catalogue entry", c.id);
         }
         assert_eq!(entry_of("model.material.edit").map(|c| c.id), Some("model.material.create"));
+        for tab in Tab::ALL {
+            assert_eq!(serde_json::to_value(tab).ok().and_then(|v| v.as_str().map(str::to_string)).as_deref(), Some(tab.id()));
+        }
     }
 
     #[test]

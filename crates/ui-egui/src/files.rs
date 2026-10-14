@@ -92,10 +92,11 @@ impl Kind {
         }
     }
 
-    fn verb(self) -> &'static str {
+    /// What the window says while it opens and once it has.
+    fn verbs(self) -> (&'static str, &'static str) {
         match self {
-            Kind::Model | Kind::Design => "Opening",
-            Kind::Mesh => "Importing",
+            Kind::Model | Kind::Design => ("Opening", "Opened"),
+            Kind::Mesh => ("Importing", "Imported"),
         }
     }
 }
@@ -145,11 +146,6 @@ impl Recent {
         self.save();
     }
 
-    pub fn clear(&mut self) {
-        self.paths.clear();
-        self.save();
-    }
-
     fn save(&self) {
         let Some(file) = &self.file else { return };
         let write = || -> std::io::Result<()> {
@@ -172,6 +168,8 @@ pub struct Loading {
     done: String,
     /// The file it opens, for the recent list.
     recent: Option<String>,
+    /// Whether it brings a different model or new geometry, which the view then frames.
+    fit: bool,
     /// The finished session copy and the command's reply.
     rx: Receiver<(Box<Session>, Result<Value, String>)>,
 }
@@ -224,21 +222,28 @@ fn with_extension(path: String, ext: &str) -> String {
     if has { path } else { format!("{path}.{ext}") }
 }
 
-/// Run `command` on `session` off the window thread (inline on the web, which has no threads).
+/// Run `work` off the window thread (inline on the web, which has no threads).
+fn off_thread(name: String, work: impl FnOnce() + Send + 'static) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Err(e) = std::thread::Builder::new().name(name.clone()).spawn(work) {
+        // The work went with the closure: a job then reports that it could not start.
+        log::warn!("{name}: no worker thread: {e}");
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = name;
+        work();
+    }
+}
+
+/// Run `command` on `session` off the window thread.
 fn spawn(session: Session, command: &'static str, params: Value) -> Receiver<(Box<Session>, Result<Value, String>)> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let work = move || {
+    off_thread(format!("modelcraft {command}"), move || {
         let mut s = session;
         let r = s.execute(command, &params).map_err(|e| e.to_string());
         let _ = tx.send((Box::new(s), r));
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = std::thread::Builder::new().name(format!("modelcraft {command}")).spawn(work) {
-        // The sender went with the closure: the job reports that it could not start.
-        log::warn!("{command}: no worker thread: {e}");
-    }
-    #[cfg(target_arch = "wasm32")]
-    work();
+    });
     rx
 }
 
@@ -253,17 +258,26 @@ impl ModelApp {
         self.loading.as_ref().map(|l| l.title.as_str())
     }
 
-    /// Run `command` in the background on a copy of the session; the copy replaces the session
-    /// when it succeeds. One at a time.
-    fn begin_job(&mut self, command: &'static str, params: Value, title: String, done: String, recent: Option<String>) -> bool {
-        if let Some(busy) = self.busy() {
-            let e = format!("{busy}: wait for it or cancel it");
-            self.set_status(e, true);
+    /// `Err` (and the status says so) while a background job runs: commands wait for it.
+    pub fn ensure_idle(&mut self) -> Result<(), String> {
+        let Some(busy) = self.busy() else { return Ok(()) };
+        let e = format!("{busy}: wait for it or cancel it");
+        self.set_status(e.clone(), true);
+        Err(e)
+    }
+
+    /// Run `command` in the background; the session it ran on replaces this one when it
+    /// succeeds. A command that brings a whole model (`fresh`: opening a model, recovering one)
+    /// starts from an empty session, the others from a copy of this one. One at a time.
+    fn begin_job(&mut self, command: &'static str, params: Value, fresh: bool, title: String, done: String, recent: Option<String>) -> bool {
+        if self.ensure_idle().is_err() {
             return false;
         }
-        let rx = spawn(self.session.clone(), command, params);
+        let base = if fresh { Session::default() } else { self.session.clone() };
+        let rx = spawn(base, command, params);
         self.set_status(format!("{title}…"), false);
-        self.loading = Some(Loading { title, done, recent, rx });
+        let fit = fresh || recent.is_some();
+        self.loading = Some(Loading { title, done, recent, fit, rx });
         true
     }
 
@@ -305,11 +319,8 @@ impl ModelApp {
             return;
         }
         let name = file_name(&path);
-        let done = match kind {
-            Kind::Mesh => format!("Imported {name}"),
-            Kind::Model | Kind::Design => format!("Opened {name}"),
-        };
-        self.begin_job(kind.command(), json!({"path": path}), format!("{} {name}", kind.verb()), done, Some(path));
+        let (doing, done) = kind.verbs();
+        self.begin_job(kind.command(), json!({"path": path}), kind == Kind::Model, format!("{doing} {name}"), format!("{done} {name}"), Some(path));
     }
 
     /// Help › Samples (and the empty viewport): open a sample model, asking first when that
@@ -344,13 +355,20 @@ impl ModelApp {
         }
         let n = self.session.model.steps().len();
         let done = format!("Solved {n} step{}", if n == 1 { "" } else { "s" });
-        self.begin_job("solve.run", json!({}), "Solving".into(), done, None);
+        self.begin_job("solve.run", json!({}), false, "Solving".into(), done, None);
     }
 
     /// Recover an autosaved model (`file.recover`) in the background.
     pub fn recover(&mut self, id: &str) {
         self.prompt = None;
-        self.begin_job("file.recover", json!({"id": id}), "Recovering the autosaved model".into(), "Recovered the autosaved model".into(), None);
+        self.begin_job(
+            "file.recover",
+            json!({"id": id}),
+            true,
+            "Recovering the autosaved model".into(),
+            "Recovered the autosaved model".into(),
+            None,
+        );
     }
 
     /// Stop waiting for the background job; the model stays as it was.
@@ -372,10 +390,11 @@ impl ModelApp {
         let Some(l) = self.loading.take() else { return false };
         match outcome {
             Some((session, Ok(reply))) => {
-                let replaced = l.recent.is_some() || l.title.starts_with("Recovering");
-                self.session = *session;
+                // The session it replaces may be large: it is freed off the window thread.
+                let old = std::mem::replace(&mut self.session, *session);
+                off_thread("modelcraft drop".into(), move || drop(old));
                 self.model_changed();
-                if replaced {
+                if l.fit {
                     self.fit_view();
                 }
                 if let Some(p) = &l.recent {
@@ -416,6 +435,11 @@ impl ModelApp {
             return self.save_as();
         }
         let saved = self.run("file.save", json!({})).is_ok();
+        self.saved_to_recent(saved)
+    }
+
+    /// After a save: the model's file goes first in the recent list.
+    fn saved_to_recent(&mut self, saved: bool) -> bool {
         if saved && let Some(p) = self.session.path.clone() {
             self.recent.add(&p);
         }
@@ -431,10 +455,7 @@ impl ModelApp {
         let Some(path) = pick(&format!("{}.modelcraft", self.model_name()), &[MODEL]) else { return false };
         let path = with_extension(path, "modelcraft");
         let saved = self.run("file.save_as", json!({"path": path})).is_ok();
-        if saved && let Some(p) = self.session.path.clone() {
-            self.recent.add(&p);
-        }
-        saved
+        self.saved_to_recent(saved)
     }
 
     /// Write Deck: pick where to write the model as a `format` deck. Without a picker the

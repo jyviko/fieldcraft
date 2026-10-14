@@ -85,6 +85,36 @@ impl Def {
         format!("model.{}.{verb}", self.stem())
     }
 
+    /// How many definitions of this kind the model has.
+    pub fn count(self, m: &Model) -> usize {
+        match self {
+            Def::Set => m.sets().len(),
+            Def::Material => m.materials().len(),
+            Def::Section => m.sections().len(),
+            Def::Step => m.steps().len(),
+            Def::BoundaryCondition => m.boundary_conditions().len(),
+            Def::Load => m.loads().len(),
+            Def::ReferencePoint => m.reference_points().len(),
+            Def::Coupling => m.couplings().len(),
+            Def::FluidDomain => m.fluid_domains().len(),
+        }
+    }
+
+    /// Whether the model has a definition of this kind called `name`.
+    pub fn exists(self, m: &Model, name: &str) -> bool {
+        match self {
+            Def::Set => m.sets().contains_key(name),
+            Def::Material => m.materials().contains_key(name),
+            Def::Section => m.sections().contains_key(name),
+            Def::Step => m.step(name).is_some(),
+            Def::BoundaryCondition => m.boundary_conditions().contains_key(name),
+            Def::Load => m.loads().contains_key(name),
+            Def::ReferencePoint => m.reference_points().contains_key(name),
+            Def::Coupling => m.couplings().contains_key(name),
+            Def::FluidDomain => m.fluid_domain(name).is_some(),
+        }
+    }
+
     /// The names of this kind's definitions, in the model's order.
     pub fn names(self, m: &Model) -> Vec<String> {
         match self {
@@ -382,7 +412,11 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         if r.eye {
             app.ui.show_nodes = !app.ui.show_nodes;
         }
-        for (kind, n) in app.session.model.element_counts() {
+        let revision = app.session.revision();
+        if app.element_counts.as_ref().is_none_or(|(r, _)| *r != revision) {
+            app.element_counts = Some((revision, app.session.model.element_counts()));
+        }
+        for (kind, n) in app.element_counts.as_ref().map(|(_, c)| c.clone()).unwrap_or_default() {
             draw_row(
                 app,
                 ui,

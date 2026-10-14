@@ -19,6 +19,35 @@ pub const HEIGHT: f32 = 34.0;
 const BUTTON: f32 = 26.0;
 const STRIDE: f32 = 30.0;
 
+/// The title bar's quick actions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Quick {
+    File,
+    Save,
+    Undo,
+    Redo,
+    Solve,
+    Search,
+    Theme,
+    Help,
+}
+
+impl Quick {
+    /// Its region in `ui.inspect`'s layout.
+    fn region(self) -> &'static str {
+        match self {
+            Quick::File => "app_bar:file",
+            Quick::Save => "app_bar:save",
+            Quick::Undo => "app_bar:undo",
+            Quick::Redo => "app_bar:redo",
+            Quick::Solve => "app_bar:solve",
+            Quick::Search => "app_bar:search",
+            Quick::Theme => "app_bar:theme",
+            Quick::Help => "app_bar:help",
+        }
+    }
+}
+
 /// The quick actions' look: flat on the dark bar, lighter under the pointer.
 fn button_style(t: &Tokens) -> IconButtonStyle {
     let normal = ButtonVisuals { fill: Color32::TRANSPARENT, stroke: Stroke::NONE, icon: t.app_bar_text };
@@ -61,7 +90,7 @@ fn mark(p: &egui::Painter, c: egui::Pos2) {
 pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
     let style = button_style(&t);
-    let mut anchors: Vec<(&'static str, Rect)> = Vec::new();
+    let mut anchors: Vec<(Quick, Rect)> = Vec::new();
     egui::Panel::top("mc_appbar").exact_size(HEIGHT).show_separator_line(false).frame(egui::Frame::NONE.fill(t.app_bar)).show(ui, |ui| {
         let r = ui.max_rect();
         app.place("app_bar", r);
@@ -77,19 +106,24 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
         let mut x = left + if compact { 44.0 } else { 132.0 };
         let (undo, redo) = app.session.undo_depth();
         let busy = app.busy().is_some();
-        let actions: [(&'static str, &'static str, String, bool); 4] = [
-            ("file", "file.open", "File: open, save, decks, samples".to_string(), true),
-            ("save", "file.save", format!("Save ({})", shortcut("S")), !busy),
-            ("undo", "edit.undo", format!("Undo ({})", shortcut("Z")), undo > 0 && !busy),
-            ("redo", "edit.redo", format!("Redo ({})", shortcut("Shift+Z")), redo > 0 && !busy),
+        let file_open = app.ui.menu.as_deref() == Some("file");
+        let actions: [(Quick, &'static str, String, bool, bool); 4] = [
+            (Quick::File, "file.open", "File: open, save, decks, samples".to_string(), true, file_open),
+            (Quick::Save, "file.save", format!("Save ({})", shortcut("S")), !busy, false),
+            (Quick::Undo, "edit.undo", format!("Undo ({})", shortcut("Z")), undo > 0 && !busy, false),
+            (Quick::Redo, "edit.redo", format!("Redo ({})", shortcut("Shift+Z")), redo > 0 && !busy, false),
         ];
         let mut clicked = None;
-        for (key, icon, tip, enabled) in actions {
-            let rect = Rect::from_center_size(pos2(x + BUTTON / 2.0, r.center().y), Vec2::splat(BUTTON));
-            if quick_button(app, ui, &style, key, icon, rect, &tip, enabled, app.ui.menu.as_deref() == Some(key)) {
-                clicked = Some(key);
-            }
-            anchors.push((key, rect));
+        let mut button =
+            |app: &mut ModelApp, ui: &mut egui::Ui, x: f32, (q, icon, tip, enabled, selected): (Quick, &'static str, String, bool, bool)| {
+                let rect = Rect::from_center_size(pos2(x + BUTTON / 2.0, r.center().y), Vec2::splat(BUTTON));
+                if quick_button(app, ui, &style, q.region(), icon, rect, &tip, enabled, selected) {
+                    clicked = Some(q);
+                }
+                anchors.push((q, rect));
+            };
+        for a in actions {
+            button(app, ui, x, a);
             x += STRIDE;
         }
         // Solve: the one prominent action, a filled button with its label.
@@ -121,24 +155,26 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
             "Solve every step and show the results"
         };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Solve"));
-        if resp.on_hover_text(tip).clicked() {
-            clicked = Some("solve");
-        }
-        anchors.push(("solve", solve));
+        let solve_clicked = resp.on_hover_text(tip).clicked();
         x = solve.right() + 10.0;
-        let more: [(&'static str, &'static str, String); 3] = [
-            ("search", "ui.search", format!("Search commands (S or {})", shortcut("K"))),
-            ("theme", if app.ui.dark { "ui.sun" } else { "ui.moon" }, if app.ui.dark { "Light theme".into() } else { "Dark theme".into() }),
-            ("help", "ui.help", "Help: samples, navigation, about".into()),
+        let more: [(Quick, &'static str, String, bool, bool); 3] = [
+            (Quick::Search, "ui.search", format!("Search commands (S or {})", shortcut("K")), true, app.ui.palette),
+            (
+                Quick::Theme,
+                if app.ui.dark { "ui.sun" } else { "ui.moon" },
+                if app.ui.dark { "Light theme".into() } else { "Dark theme".into() },
+                true,
+                false,
+            ),
+            (Quick::Help, "ui.help", "Help: samples, navigation, about".into(), true, app.ui.menu.as_deref() == Some("help")),
         ];
-        for (key, icon, tip) in more {
-            let rect = Rect::from_center_size(pos2(x + BUTTON / 2.0, r.center().y), Vec2::splat(BUTTON));
-            let selected = (key == "help" && app.ui.menu.as_deref() == Some("help")) || (key == "search" && app.ui.palette);
-            if quick_button(app, ui, &style, key, icon, rect, &tip, true, selected) {
-                clicked = Some(key);
-            }
-            anchors.push((key, rect));
+        for a in more {
+            button(app, ui, x, a);
             x += STRIDE;
+        }
+        anchors.push((Quick::Solve, solve));
+        if solve_clicked {
+            clicked = Some(Quick::Solve);
         }
         // The model's document tab, joined to the ribbon below it.
         let captions = if app.custom_titlebar { crate::titlebar::WIDTH } else { 0.0 };
@@ -177,43 +213,31 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
             crate::titlebar::caption_buttons(app, ui, r);
         }
         match clicked {
-            Some("file") => app.toggle_menu("file"),
-            Some("help") => app.toggle_menu("help"),
-            Some("save") => {
+            Some(Quick::File) => app.toggle_menu("file"),
+            Some(Quick::Help) => app.toggle_menu("help"),
+            Some(Quick::Save) => {
                 app.save();
             }
-            Some("undo") => {
+            Some(Quick::Undo) => {
                 let _ = app.run("edit.undo", json!({}));
             }
-            Some("redo") => {
+            Some(Quick::Redo) => {
                 let _ = app.run("edit.redo", json!({}));
             }
-            Some("solve") => app.solve_all(),
-            Some("search") => {
+            Some(Quick::Solve) => app.solve_all(),
+            Some(Quick::Search) => {
                 app.ui.palette = !app.ui.palette;
                 app.ui.menu = None;
             }
-            Some("theme") => app.ui.dark = !app.ui.dark,
-            _ => {}
+            Some(Quick::Theme) => app.ui.dark = !app.ui.dark,
+            None => {}
         }
-        for (key, rect) in &anchors {
-            app.place(
-                match *key {
-                    "file" => "app_bar:file",
-                    "save" => "app_bar:save",
-                    "undo" => "app_bar:undo",
-                    "redo" => "app_bar:redo",
-                    "solve" => "app_bar:solve",
-                    "search" => "app_bar:search",
-                    "theme" => "app_bar:theme",
-                    _ => "app_bar:help",
-                },
-                *rect,
-            );
+        for (q, rect) in &anchors {
+            app.place(q.region(), *rect);
         }
-        let anchor = |key: &str| anchors.iter().find(|(k, _)| *k == key).map_or(r, |(_, a)| *a);
-        crate::frame::menu(app, ui, "file", anchor("file"), crate::files::file_menu);
-        crate::frame::menu(app, ui, "help", anchor("help"), help_menu);
+        let anchor = |q: Quick| anchors.iter().find(|(k, _)| *k == q).map_or(r, |(_, a)| *a);
+        crate::frame::menu(app, ui, "file", anchor(Quick::File), crate::files::file_menu);
+        crate::frame::menu(app, ui, "help", anchor(Quick::Help), help_menu);
     });
 }
 

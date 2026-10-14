@@ -157,7 +157,14 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 }
             }
             match serde_json::from_value::<UiState>(cur) {
-                Ok(u) => {
+                Ok(mut u) => {
+                    // The workspace and its tab stay together: a tab brings its workspace, a
+                    // workspace alone its first tab.
+                    if p.get("tab").is_some() {
+                        u.select_tab(u.tab);
+                    } else if p.get("workspace").is_some() {
+                        u.select_workspace(u.workspace);
+                    }
                     app.ui = u;
                     ok(json!(app.ui))
                 }
@@ -168,8 +175,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             match s("view").unwrap_or("iso") {
                 "fit" => app.fit_view(),
                 "home" => {
-                    app.set_view(StandardView::Iso);
-                    app.fit_view();
+                    app.home_view();
                 }
                 v => match StandardView::parse(v) {
                     Some(sv) => app.set_view(sv),
@@ -517,6 +523,11 @@ mod tests {
         let soon = entries.iter().find(|e| e["id"] == "mesh.order.quadratic").unwrap();
         assert_eq!((soon["coming_soon"].as_str(), soon["command"].is_null()), (Some("M2"), true));
         assert_eq!(call(&mut app, "ui.set", json!({"tab": "nope"}))["ok"], false);
+        // A workspace brings its first tab; a tab brings its workspace.
+        let r = call(&mut app, "ui.set", json!({"workspace": "model"}));
+        assert_eq!((r["result"]["workspace"].as_str(), r["result"]["tab"].as_str()), (Some("model"), Some("properties")));
+        let r = call(&mut app, "ui.set", json!({"tab": "solve"}));
+        assert_eq!(r["result"]["workspace"], "analysis");
         let r = call(&mut app, "ui.start", json!({"command": "mesh.order.quadratic"}));
         assert_eq!((r["ok"].as_bool(), r["error"].as_str()), (Some(false), Some("Quadratic is coming soon (M2)")));
     }

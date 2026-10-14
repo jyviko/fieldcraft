@@ -163,7 +163,11 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
             );
             let entered = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             r.request_focus();
-            let list = matches(&app.palette_text);
+            // Searched again only when the query changes.
+            if app.search.as_ref().is_none_or(|(q, _)| *q != app.palette_text) {
+                app.search = Some((app.palette_text.clone(), std::sync::Arc::new(matches(&app.palette_text))));
+            }
+            let list = app.search.as_ref().map(|(_, l)| l.clone()).unwrap_or_default();
             if entered {
                 picked = list.iter().find(|h| h.soon.is_none()).map(|h| h.id);
             }
@@ -218,7 +222,6 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use modelcraft_engine::Session;
-    use serde_json::json;
 
     use super::*;
 
@@ -252,6 +255,5 @@ mod tests {
         assert!(app.status.as_ref().is_some_and(|s| s.error));
         submit(&mut app, "zzzz qqqq");
         assert!(app.status.as_ref().is_some_and(|s| s.error && s.text.contains("no command")));
-        let _ = json!({});
     }
 }

@@ -81,23 +81,24 @@ impl Look {
     }
 }
 
-/// Icon textures by (id, look) for one theme and pixel size; `None` when the icon is missing or
-/// does not rasterise, so it is not tried again every frame. A change of theme or size (zoom)
-/// drops the old textures.
+/// Icon textures by (id, look, pixel size) for one theme; `None` when the icon is missing or
+/// does not rasterise, so it is not tried again every frame. The window draws icons at several
+/// sizes at once (ribbon, browser, menus), so each size keeps its own texture; a change of theme
+/// drops them all.
 #[derive(Default)]
 pub struct IconCache {
-    theme_px: Option<(bool, u32)>,
-    textures: HashMap<(&'static str, Look), Option<TextureHandle>>,
+    dark: Option<bool>,
+    textures: HashMap<(&'static str, Look, u32), Option<TextureHandle>>,
 }
 
 impl IconCache {
     pub fn get(&mut self, ctx: &egui::Context, id: &'static str, dark: bool, look: Look, px: u32) -> Option<TextureHandle> {
-        if self.theme_px != Some((dark, px)) {
+        if self.dark != Some(dark) {
             self.textures.clear();
-            self.theme_px = Some((dark, px));
+            self.dark = Some(dark);
         }
         self.textures
-            .entry((id, look))
+            .entry((id, look, px))
             .or_insert_with(|| {
                 let svg = svg(id)?;
                 let image = rasterise(&recolour(svg, look.colours(dark)), px).map_err(|e| log::warn!("icon {id}: {e}")).ok()?;

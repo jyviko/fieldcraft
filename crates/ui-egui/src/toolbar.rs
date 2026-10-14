@@ -95,8 +95,7 @@ pub fn buttons(entries: &'static [Capability]) -> Vec<&'static Capability> {
 
 /// The key of a panel's drop-down in [`crate::UiState::menu`]: `<tab>/<panel>`.
 pub fn panel_key(tab: Tab, panel: &str) -> String {
-    let tab = serde_json::to_value(tab).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-    format!("{tab}/{panel}")
+    format!("{}/{panel}", tab.id())
 }
 
 /// A small drop-down caret.
@@ -304,8 +303,7 @@ fn workspace_switcher(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, r: Rect
             p.text(pos2(rect.left() + 40.0, rect.top() + 28.0), Align2::LEFT_CENTER, w.about(), FontId::proportional(11.0), t.text_dim);
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, w.label()));
             if resp.clicked() {
-                app.ui.workspace = w;
-                app.ui.tab = w.tabs().first().copied().unwrap_or(Tab::Tools);
+                app.ui.select_workspace(w);
                 app.ui.menu = None;
             }
         }
@@ -348,7 +346,6 @@ pub fn dropdown(app: &mut ModelApp, ui: &mut egui::Ui, entries: &'static [Capabi
     for c in entries {
         let enabled = c.command().is_some();
         let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_H), if enabled { Sense::click() } else { Sense::hover() });
-        app.toolbar_rects.retain(|(id, _, f)| !(*id == c.id && *f == Fit::Menu));
         app.toolbar_rects.push((c.id, rect, Fit::Menu));
         if resp.hovered() && enabled {
             ui.painter().rect_filled(rect, 3.0, t.hover);

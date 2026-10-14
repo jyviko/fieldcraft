@@ -105,6 +105,18 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Show `tab`, on the current workspace when it has it, else on the first that does.
+    pub fn select_tab(&mut self, tab: Tab) {
+        self.tab = tab;
+        self.workspace = Workspace::showing(tab, self.workspace);
+    }
+
+    /// Show workspace `w` on its first tab.
+    pub fn select_workspace(&mut self, w: Workspace) {
+        self.workspace = w;
+        self.tab = w.tabs().first().copied().unwrap_or(Tab::Tools);
+    }
+
     /// What the viewport shows.
     pub fn show(&self) -> scene::Show {
         scene::Show { geometry: self.show_geometry, mesh: self.show_mesh, nodes: self.show_nodes }
@@ -259,6 +271,14 @@ pub struct ModelApp {
     pub layout: std::collections::BTreeMap<&'static str, egui::Rect>,
     /// The toolbar's panel labels drawn last frame, by `<tab>/<panel>`.
     pub panel_rects: Vec<(String, egui::Rect)>,
+    /// The timeline's items and the journal state they were built for.
+    timeline: Option<((u64, usize, (usize, usize)), std::sync::Arc<Vec<timeline::Item>>)>,
+    /// The browser's element counts and the model revision they were counted at.
+    element_counts: Option<(u64, Vec<(modelcraft_model::ElementKind, usize)>)>,
+    /// The selected definition's property rows and what they were read for.
+    properties: Option<((u64, browser::Def, String), std::sync::Arc<Vec<(String, String)>>)>,
+    /// The search's query and its results.
+    search: Option<(String, std::sync::Arc<Vec<palette::Hit>>)>,
 }
 
 impl ModelApp {
@@ -305,6 +325,10 @@ impl ModelApp {
             nav: NavMode::default(),
             layout: std::collections::BTreeMap::new(),
             panel_rects: Vec::new(),
+            timeline: None,
+            element_counts: None,
+            search: None,
+            properties: None,
         };
         app.fit_view();
         app
@@ -335,11 +359,7 @@ impl ModelApp {
     /// Run a command with JSON parameters: what every panel, the control channel and scripts
     /// do. The result or the error goes to the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        if let Some(busy) = self.busy() {
-            let e = format!("{busy}: wait for it or cancel it");
-            self.set_status(e.clone(), true);
-            return Err(e);
-        }
+        self.ensure_idle()?;
         let revision = self.session.revision();
         let label = command_label(id);
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
@@ -607,6 +627,12 @@ impl ModelApp {
         self.cam.fit(&b);
     }
 
+    /// The home view: isometric, the whole model framed.
+    pub fn home_view(&mut self) {
+        self.set_view(StandardView::Iso);
+        self.fit_view();
+    }
+
     pub fn set_view(&mut self, v: StandardView) {
         self.cam.set_view(v);
     }
@@ -631,13 +657,11 @@ impl ModelApp {
         // Results coming up (a solve, a results command) bring the Results tab.
         let shown = self.session.results_view.is_some();
         if shown && !self.results_shown {
-            self.ui.tab = Tab::Results;
+            self.ui.select_tab(Tab::Results);
         }
         self.results_shown = shown;
-        // A tab set on its own (ui.set, the palette) brings its workspace.
-        self.ui.workspace = Workspace::showing(self.ui.tab, self.ui.workspace);
         // A selected definition that is gone (undo, delete) is no longer selected.
-        if self.selected.as_ref().is_some_and(|(kind, name)| browser::definition(&self.session.model, *kind, name).is_none()) {
+        if self.selected.as_ref().is_some_and(|(kind, name)| !kind.exists(&self.session.model, name)) {
             self.selected = None;
         }
         if self.session.results_view.as_ref().is_some_and(|v| v.animate) {
@@ -716,7 +740,6 @@ impl ModelApp {
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         self.show_gpu_errors();
-        self.ui.workspace = Workspace::showing(self.ui.tab, self.ui.workspace);
         self.layout.clear();
         appbar::app_bar(self, ui);
         toolbar::toolbar(self, ui);
@@ -1097,7 +1120,7 @@ mod tests {
         app.dialog = None;
         app.ui.palette = true;
         app.ui.menu = Some("mesh/Tet".into());
-        app.ui.tab = Tab::Mesh;
+        app.ui.select_tab(Tab::Mesh);
         frame(&mut app);
         assert!(app.layout.contains_key("palette") && app.layout.contains_key("toolbar_dropdown"), "{:?}", app.layout.keys());
         assert_eq!(app.ui.workspace, Workspace::Prepare);
@@ -1110,7 +1133,7 @@ mod tests {
         for width in [1400.0, 960.0] {
             for tab in Tab::ALL {
                 let mut app = ModelApp::new(Session::default());
-                app.ui.tab = tab;
+                app.ui.select_tab(tab);
                 let ctx = egui::Context::default();
                 let run = |app: &mut ModelApp| {
                     let raw = egui::RawInput {

@@ -168,7 +168,7 @@ impl Driver {
         let resolved = model.resolve().unwrap();
         let step = model.step("Dynamic").unwrap();
         let Procedure::ExplicitDynamic(settings) = &step.procedure else { panic!() };
-        let sys = System::new(model, &resolved, step, settings, 1000).unwrap();
+        let sys = System::new(model, &resolved, step, settings, &Limits { max_dofs: 1000, ..Limits::default() }).unwrap();
         let (state, ws) = (State::new(&sys), Workspace::new(&sys));
         let u = vec![0.0; sys.dofs()];
         Driver { sys, state, ws, u, time: 0.0 }

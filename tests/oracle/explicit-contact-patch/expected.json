@@ -1,0 +1,176 @@
+{
+ "title": "Contact patch test: two blocks with non-matching meshes in uniaxial compression (explicit contact)",
+ "kind": "theory",
+ "source": "The contact patch test: a contact discretisation must transmit a uniform pressure across a non-matching interface exactly; Taylor & Papadopoulos, On a patch test for contact problems in two dimensions, Nonlinear Computational Mechanics, Springer 1991, 690–702; Crisfield, Re-visiting the contact patch test, IJNME 48:435–449, 2000. Uniaxial stress between frictionless symmetry planes is uniform in both blocks",
+ "quantities": [
+  {
+   "id": "lower_corner",
+   "quantity": "σ_zz of the lower block's corner element under the interface (element 10) over that of the upper block's corner element over it (element 19)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Squeeze",
+     "elements": [
+      10
+     ]
+    },
+    "pointer": "/elements/0/stress/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Squeeze",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.005
+   },
+   "reason": "a uniform stress is an equilibrium of the discrete system (the integrated contact forces are the consistent nodal forces of a uniform pressure on both meshes); what is left is the ringing of the loading, a hundred wave transits slow"
+  },
+  {
+   "id": "lower_centre",
+   "quantity": "σ_zz of the lower block's centre element under the interface (element 14) over that of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Squeeze",
+     "elements": [
+      14
+     ]
+    },
+    "pointer": "/elements/0/stress/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Squeeze",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.005
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "lower_base",
+   "quantity": "σ_zz of the lower block's bottom corner element (element 1) over that of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Squeeze",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/stress/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Squeeze",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.005
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "upper_top",
+   "quantity": "σ_zz of the upper block's top far corner element (element 26) over that of element 19",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Squeeze",
+     "elements": [
+      26
+     ]
+    },
+    "pointer": "/elements/0/stress/2",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Squeeze",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/2"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.005
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "force",
+   "quantity": "the force across the interface over −σ_zz A (A = 1)",
+   "measure": {
+    "from": "solve",
+    "pointer": "/contacts/0/peak_force",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Squeeze",
+      "elements": [
+       19
+      ]
+     },
+     "pointer": "/elements/0/stress/2",
+     "scale": -1.0
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "the integrated contact pressure carries the whole load; the largest force of the run is the final one in a slow squeeze, up to the ringing"
+  },
+  {
+   "id": "lateral",
+   "quantity": "σ_xx of element 14 over its σ_zz (uniaxial stress: 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Squeeze",
+     "elements": [
+      14
+     ]
+    },
+    "pointer": "/elements/0/stress/0",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Squeeze",
+      "elements": [
+       14
+      ]
+     },
+     "pointer": "/elements/0/stress/2"
+    }
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 0.005
+   },
+   "reason": "frictionless symmetry planes and a frictionless interface leave the blocks free to expand sideways; the non-matching interface must not hold them"
+  }
+ ]
+}

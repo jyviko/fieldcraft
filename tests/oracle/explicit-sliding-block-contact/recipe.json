@@ -1,0 +1,17 @@
+[
+ {"command": "mesh.block", "params": {"body": "Block", "kind": "hex8", "corners": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 0.5], [1, 0, 0.5], [1, 1, 0.5], [0, 1, 0.5]], "divisions": [4, 4, 2], "faces": {"1": "bottom"}}},
+ {"command": "mesh.block", "params": {"body": "Plate", "kind": "hex8", "corners": [[-0.5, -0.5, -0.5], [4.0, -0.5, -0.5], [4.0, 1.5, -0.5], [-0.5, 1.5, -0.5], [-0.5, -0.5, 0], [4.0, -0.5, 0], [4.0, 1.5, 0], [-0.5, 1.5, 0]], "divisions": [9, 4, 1], "faces": {"1": "base", "2": "top"}, "merge": 0}},
+ {"command": "model.set.create", "params": {"name": "block", "geometry": [{"body": "Block"}]}},
+ {"command": "model.set.create", "params": {"name": "plate", "geometry": [{"body": "Plate"}]}},
+ {"command": "model.set.create", "params": {"name": "bottom", "geometry": [{"body": "Block", "face": "bottom"}]}},
+ {"command": "model.set.create", "params": {"name": "top", "geometry": [{"body": "Plate", "face": "top"}]}},
+ {"command": "model.set.create", "params": {"name": "base", "geometry": [{"body": "Plate", "face": "base"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 100000.0, "poisson": 0.3}, "density": 1.0}},
+ {"command": "model.section.create", "params": {"name": "block", "set": "block", "material": "Mat", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+ {"command": "model.section.create", "params": {"name": "plate", "set": "plate", "material": "Mat", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+ {"command": "interaction.contact.pair", "params": {"name": "slide", "main": "top", "secondary": "bottom", "friction": {"static": 0.5, "kinetic": 0.2, "decay": 1.5}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "hold", "type": "fixed", "target": {"set": "base"}}},
+ {"command": "model.load.create", "params": {"name": "weight", "type": "gravity", "acceleration": [0, 0, -10.0], "set": "block"}},
+ {"command": "model.step.create", "params": {"name": "Slide", "procedure": {"type": "explicit_dynamic", "end_time": 1.56, "initial_velocities": [{"set": "block", "velocity": [3.0, 0, 0]}]}, "boundary_conditions": ["hold"], "loads": ["weight"]}},
+ {"command": "solve.explicit", "params": {"step": "Slide"}, "id": "solve"}
+]

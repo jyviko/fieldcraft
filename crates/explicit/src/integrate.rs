@@ -6,13 +6,16 @@
 //! 1. u^n = u^{n−1} + Δt^{n−½} v^{n−½}; t^n = t^{n−1} + Δt^{n−½};
 //! 2. internal forces f^n from u^n (stresses, hourglass stiffness) and v^{n−½} (hourglass and
 //!    bulk viscosity), and the next increment Δt^{n+½} = scale · min_e Δt_e;
-//! 3. v^{n+½} = v^{n−½} + Δt^n M⁻¹(f_ext − f^n), then the constraints: rigid walls set the normal
-//!    velocity of a node that would cross its wall so it lands on it (a frictionless kinematic
-//!    contact condition: T. J. R. Hughes, R. L. Taylor, J. L. Sackman, A. Curnier, W.
-//!    Kanoknukulchai, *A finite element method for a class of contact-impact problems*, CMAME
-//!    8(3):249–276, 1976), and prescribed degrees of freedom take their velocity. The change a
-//!    constraint makes is the impulse of its reaction, r^n = M Δv / Δt^n;
-//! 4. energies: the works of the internal and external forces by the trapezoidal rule,
+//! 3. the contact forces c^n at u^n ([`crate::contact`], with the stable increment Δt^{n+½});
+//!    v^{n+½} = v^{n−½} + Δt^n M⁻¹(f_ext + c^n − f^n), then the constraints: rigid walls set the
+//!    normal velocity of a node that would cross its wall so it lands on it (a kinematic contact
+//!    condition: T. J. R. Hughes, R. L. Taylor, J. L. Sackman, A. Curnier, W. Kanoknukulchai,
+//!    *A finite element method for a class of contact-impact problems*, CMAME 8(3):249–276,
+//!    1976), with Coulomb friction as a tangential impulse at most μ times the normal one (the
+//!    tangential velocity stops, or loses μ Δv_n when it slides), and prescribed degrees of
+//!    freedom take their velocity. The change a constraint makes is the impulse of its reaction,
+//!    r^n = M Δv / Δt^n;
+//! 4. energies: the works of the internal, contact and external forces by the trapezoidal rule,
 //!    W += ½ Δu · (f^{n−1} + f^n) (exactly the strain energy for a linear elastic material),
 //!    the constraints' work Δt^n r^n · ½(v^{n−½} + v^{n+½}) (exactly the kinetic energy their
 //!    impulses add or remove), and the kinetic energy of v^n = v^{n−½} + ½Δt^{n−½} a^n.
@@ -22,8 +25,9 @@
 
 use fieldcraft_model::{ExplicitDynamic, Model, OutputVariable, Procedure, Step};
 
+use crate::contact::{Evaluation, Interface};
 use crate::elements::{Motion, State, Workspace, internal_forces};
-use crate::result::{ControllingElement, Energies, ErodedElement, ExplicitResult, Frame, History};
+use crate::result::{ContactSummary, ControllingElement, Energies, ErodedElement, ExplicitResult, Frame, History};
 use crate::system::{NODE_DOFS, System};
 use crate::{Error, Limits, Result};
 
@@ -70,8 +74,10 @@ struct Output {
 }
 
 /// Velocity constraints over an increment of length `dt` (rigid walls when dt > 0, then
-/// prescribed degrees of freedom).
-fn constrain(sys: &System, u: &[f64], v: &mut [f64], dt: f64) {
+/// prescribed degrees of freedom); returns the kinetic energy the walls' friction took (`mass`
+/// per degree of freedom).
+fn constrain(sys: &System, u: &[f64], v: &mut [f64], dt: f64, mass: &[f64]) -> f64 {
+    let mut dissipated = 0.0;
     if dt > 0.0 {
         for w in &sys.walls {
             for &node in &w.nodes {
@@ -86,6 +92,9 @@ fn constrain(sys: &System, u: &[f64], v: &mut [f64], dt: f64) {
                             *c += change * w.normal[k];
                         }
                     }
+                    if !w.friction.is_frictionless() {
+                        dissipated += wall_friction(v, node, w, change, mass.get(at(0)).copied().unwrap_or(0.0));
+                    }
                 }
             }
         }
@@ -95,14 +104,75 @@ fn constrain(sys: &System, u: &[f64], v: &mut [f64], dt: f64) {
             *c = *p;
         }
     }
+    dissipated
 }
 
-/// v_out = v_in + dt M⁻¹ (f_ext − f_int).
+/// Coulomb friction of a node the wall `w` stopped with a normal velocity change `change`: its
+/// tangential velocity changes by at most μ · change (stick when that stops it); returns the
+/// kinetic energy taken, ½ m (|v_t|² − |v_t′|²).
+fn wall_friction(v: &mut [f64], node: usize, w: &crate::system::Wall, change: f64, mass: f64) -> f64 {
+    let at = |k: usize| NODE_DOFS * node + k;
+    let vel = [0, 1, 2].map(|k| v.get(at(k)).copied().unwrap_or(0.0));
+    let vn: f64 = (0..3).map(|k| vel[k] * w.normal[k]).sum();
+    let tangential = [0, 1, 2].map(|k| vel[k] - vn * w.normal[k]);
+    let slide = tangential.iter().map(|c| c * c).sum::<f64>().sqrt();
+    if slide == 0.0 {
+        return 0.0;
+    }
+    let cap = w.friction.coefficient(slide) * change;
+    let keep = if slide <= cap { 0.0 } else { 1.0 - cap / slide };
+    for k in 0..3 {
+        if let Some(c) = v.get_mut(at(k)) {
+            *c = vn * w.normal[k] + keep * tangential[k];
+        }
+    }
+    0.5 * mass * slide * slide * (1.0 - keep * keep)
+}
+
+/// v_out = v_in + dt M⁻¹ (f_ext + f_contact − f_int).
 fn accelerate(sys: &System, ws: &Workspace, mass: &[f64], v_in: &[f64], dt: f64, v_out: &mut [f64]) {
     let internal = ws.stress_force.iter().zip(&ws.hourglass_force).zip(&ws.viscous_force);
     for ((((out, v), m), e), ((s, h), q)) in v_out.iter_mut().zip(v_in).zip(mass).zip(&sys.external).zip(internal) {
         *out = v + dt * ((e - (s + h + q)) / m);
     }
+    // Contact adds its forces (a separate pass, so a model without contact runs the same sums).
+    if !ws.contact_force.is_empty() {
+        for ((out, m), c) in v_out.iter_mut().zip(mass).zip(&ws.contact_force) {
+            *out += dt * (c / m);
+        }
+    }
+}
+
+/// The contacts' forces at `u` (with the increment `du` over `dt_prev` that led there, and the
+/// stable increment `dt`) into `ws.contact_force`, and what each found.
+#[allow(clippy::too_many_arguments)]
+fn contact_forces(
+    contacts: &mut [Interface],
+    sys: &System,
+    u: &[f64],
+    du: &[f64],
+    dt_prev: f64,
+    dt: f64,
+    mass: &[f64],
+    state: &State,
+    ws: &mut Workspace,
+) -> Vec<Evaluation> {
+    ws.contact_force.fill(0.0);
+    contacts.iter_mut().map(|c| c.forces(&sys.xyz, u, du, dt_prev, dt, mass, state, &mut ws.contact_force)).collect()
+}
+
+/// A contact's record over the run.
+fn track(summary: &mut ContactSummary, e: &Evaluation, t: f64) {
+    if e.active > 0 {
+        summary.first_contact.get_or_insert(t);
+        summary.last_contact = Some(t);
+    }
+    if e.normal_force > summary.peak_force {
+        summary.peak_force = e.normal_force;
+        summary.peak_time = t;
+    }
+    summary.max_penetration = summary.max_penetration.max(e.penetration);
+    summary.friction += e.dissipation;
 }
 
 /// The constraint reactions M (v_constrained − v_free) / Δt, into `r`.
@@ -120,7 +190,7 @@ fn per_node(x: &[f64]) -> Vec<[f64; 3]> {
 pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Result<ExplicitResult> {
     let resolved = model.resolve()?;
     let (step, settings) = select_step(model, step)?;
-    let sys = System::new(model, &resolved, step, settings, limits.max_dofs)?;
+    let mut sys = System::new(model, &resolved, step, settings, limits)?;
     let end = settings.end_time;
     let scale = settings.dt_scale;
     let bulk = settings.bulk_viscosity;
@@ -192,6 +262,9 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     let total_mass: f64 = sys.mass.iter().sum::<f64>() + sys.discrete.mass.iter().sum::<f64>() / 3.0;
     let mut ws = Workspace::new(&sys);
     let mut previous = Workspace::new(&sys);
+    let mut contacts = std::mem::take(&mut sys.contacts);
+    let mut summaries: Vec<ContactSummary> =
+        contacts.iter().map(|c| ContactSummary { name: c.name.clone(), adjusted: c.adjusted.clone(), ..ContactSummary::default() }).collect();
     let mut state = State::new(&sys);
     let mut eroded: Vec<ErodedElement> = Vec::new();
     let mut u = vec![0.0; n];
@@ -205,10 +278,14 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     let crit = internal_forces(&sys, &start, &mut state, &mut ws)?;
     let mut dt_half = (scale * crit).min(end);
     let initial_increment = dt_half;
+    let mut found = contact_forces(&mut contacts, &sys, &u, &du, 0.0, scale * crit, &mass, &state, &mut ws);
+    for (summary, e) in summaries.iter_mut().zip(&found) {
+        track(summary, e, 0.0);
+    }
     let mut v_half = vec![0.0; n];
     accelerate(&sys, &ws, &mass, &v0, 0.5 * dt_half, &mut v_half);
     let mut free = v_half.clone();
-    constrain(&sys, &u, &mut v_half, dt_half);
+    let wall_friction = constrain(&sys, &u, &mut v_half, dt_half, &mass);
     let mut reaction = vec![0.0; n];
     impulses(&mass, &free, &v_half, 0.5 * dt_half, &mut reaction);
     // The constraints' work is that of their impulses on the mean of the velocities before
@@ -217,12 +294,18 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     let impulse_work = |r: &[f64], before: &[f64], after: &[f64], dt: f64| -> f64 {
         dt * r.iter().zip(before.iter().zip(after)).map(|(r, (a, b))| r * 0.5 * (a + b)).sum::<f64>()
     };
-    let mut energy = Energies { kinetic: initial_kinetic, constraint: impulse_work(&reaction, &v0, &v_half, 0.5 * dt_half), ..Energies::default() };
+    let mut energy = Energies {
+        kinetic: initial_kinetic,
+        constraint: impulse_work(&reaction, &v0, &v_half, 0.5 * dt_half),
+        friction: wall_friction,
+        ..Energies::default()
+    };
 
     let mut history = History { nodes: sys.history_nodes.iter().filter_map(|i| sys.labels.get(*i).copied()).collect(), ..History::default() };
     let mut out_frames = Vec::new();
-    let sample = |history: &mut History, t: f64, dt: f64, e: Energies, u: &[f64], v: &[f64], r: &[f64]| {
+    let sample = |history: &mut History, t: f64, dt: f64, e: Energies, u: &[f64], v: &[f64], r: &[f64], found: &[Evaluation]| {
         history.time.push(t);
+        history.contact_force.push(found.iter().map(|e| e.normal_force).collect());
         history.increment.push(dt);
         history.energies.push(e);
         let sum = |x: &[f64], weight: &dyn Fn(usize, usize) -> f64| {
@@ -260,7 +343,7 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     let plastic = |state: &State| state.elements.iter().map(|e| e.plastic_work).sum::<f64>();
     let mut histories = Schedule { interval: settings.history_interval(), next: settings.history_interval() };
     let mut frames_due = Schedule { interval: settings.output_interval(), next: settings.output_interval() };
-    sample(&mut history, 0.0, dt_half, energy, &u, &v0, &reaction);
+    sample(&mut history, 0.0, dt_half, energy, &u, &v0, &reaction, &found);
     out_frames.push(frame(0.0, &u, &v0, &state));
 
     let mut t = 0.0;
@@ -294,9 +377,16 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         let last = remaining <= 1e-12 * end;
         let dt_next = if last { 0.0 } else { (scale * crit).min(remaining) };
         let dt_n = 0.5 * (dt_half + dt_next);
+        if !contacts.is_empty() {
+            found = contact_forces(&mut contacts, &sys, &u, &du, dt_half, scale * crit, &mass, &state, &mut ws);
+            for (summary, e) in summaries.iter_mut().zip(&found) {
+                track(summary, e, t);
+                energy.friction += e.dissipation;
+            }
+        }
         accelerate(&sys, &ws, &mass, &v_half, dt_n, &mut v_new);
         free.clone_from(&v_new);
-        constrain(&sys, &u, &mut v_new, dt_next);
+        energy.friction += constrain(&sys, &u, &mut v_new, dt_next, &mass);
         impulses(&mass, &free, &v_new, dt_n, &mut reaction);
         // One pass over the degrees of freedom: v^n = v^{n−½} + ½Δt^{n−½} a^n with the constrained
         // a^n = (v^{n+½} − v^{n−½}) / Δt^n, and the works (trapezoidal over the displacement for
@@ -321,15 +411,22 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         energy.external += external;
         energy.constraint += dt_n * constraint;
         energy.kinetic = 0.5 * kinetic;
+        if !ws.contact_force.is_empty() {
+            let work: f64 = du.iter().zip(ws.contact_force.iter().zip(&previous.contact_force)).map(|(d, (c, c0))| d * (c0 + c)).sum();
+            energy.contact -= 0.5 * work;
+        }
         peak_internal = peak_internal.max(energy.internal.abs());
-        energy.balance = energy.kinetic + energy.internal + energy.hourglass + energy.viscous - energy.external - energy.constraint - initial_kinetic;
+        energy.balance = energy.kinetic + energy.internal + energy.hourglass + energy.viscous + energy.contact
+            - energy.external
+            - energy.constraint
+            - initial_kinetic;
         // Every element eroded leaves an infinite critical increment: the nodes fly freely.
         if !(energy.balance.is_finite() && !crit.is_nan()) {
             return Err(Error::Unstable(format!("the solution is not finite at time {t:.6e} (increment {increments})")));
         }
         if histories.due(t) || last {
             energy.plastic = plastic(&state);
-            sample(&mut history, t, dt_half, energy, &u, &v_now, &reaction);
+            sample(&mut history, t, dt_half, energy, &u, &v_now, &reaction, &found);
         }
         if frames_due.due(t) || last {
             out_frames.push(frame(t, &u, &v_now, &state));
@@ -342,7 +439,7 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     }
     if !completed {
         if history.time.last() != Some(&t) {
-            sample(&mut history, t, dt_half, energy, &u, &v_now, &reaction);
+            sample(&mut history, t, dt_half, energy, &u, &v_now, &reaction, &found);
         }
         if out_frames.last().map(|f| f.time) != Some(t) {
             out_frames.push(frame(t, &u, &v_now, &state));
@@ -385,6 +482,7 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
         energy,
         initial_kinetic,
         eroded,
+        contacts: summaries,
         warnings,
     })
 }

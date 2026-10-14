@@ -59,7 +59,9 @@ cargo xtask oracle --quick              # skip cases marked "slow"
      "known_failure": "optional: why FieldCraft misses the reference today"}]}
   ```
   A measure reads a JSON pointer either from a recipe step's output (`"from": "<id>"`) or from a
-  command run after the recipe (`"command"`, `"params"`); an optional `"scale"` multiplies it.
+  command run after the recipe (`"command"`, `"params"`); an optional `"scale"` multiplies it, and
+  an optional `"over"` (a measure of its own) divides it by another number of the same run, for
+  ratios such as the stress in one element over the stress in another.
   A tolerance is `relative` (of the reference), `absolute`, both, or `"exact": true`. A pending
   case cites its reference values (or `null` until transcribed) and has no recipe yet.
 - `fixture.json` holds each passing quantity's accepted `value` and its `band`

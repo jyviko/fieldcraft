@@ -255,7 +255,7 @@ number their degrees of freedom with `fieldcraft_fem::DofLayout` (docs/fem.md).
    increment. Other element kinds and formulations, couplings, reference points, rotary inertia,
    rotational springs and moments return "not supported yet". Masses are row-sum lumped. A zero-valued boundary condition holds a degree of freedom; a
    displacement value is reached at constant velocity over the step. Loads act in full from the
-   start. The step lists initial velocities and fixed frictionless rigid planes by set.
+   start. The step lists initial velocities and fixed rigid planes (with friction) by set.
 2. **Time step.** Each element's highest frequency is bounded in closed form (exact for a cube);
    the increment is the step's scale (0.9 by default) times the smallest element increment with
    Wilkins' bulk-viscosity correction, recomputed every increment. The ten controlling elements
@@ -280,6 +280,15 @@ number their degrees of freedom with `fieldcraft_fem::DofLayout` (docs/fem.md).
    `fem::plasticity`. Elements whose damage reaches 1 or whose plastic strain reaches the
    material's erosion strain are eroded (reported with their energy; their nodes keep mass and
    momentum). The energy account adds the plastic work and the eroded energy.
+7. **Contact (X3).** The model's contacts (`interaction.contact.*`) become interfaces before the
+   elements are built (nodes that start inside a surface are moved onto it or refused):
+   segment-to-segment penalty contact both ways (projection, polygon clipping and quadrature over
+   each pair of facing faces), a bucket-grid search every increment in parallel by faces, a
+   penalty per area from the masses and the stable increment that never shortens it, and Coulomb
+   friction by a return map at the secondary nodes; rigid walls take Coulomb impulses. The contact
+   forces join the equations of motion beside the external ones, their work and the friction
+   dissipation join the energy account, and each contact's peak force, first and last contact,
+   deepest penetration and friction are reported (docs/fem.md).
 
 Verification (`crates/explicit/tests/verification.rs` and `large_deformation.rs`, analytic
 only): stress waves in hex8 and tet4 bars (front at c·t, σ = ρ c v, work input), a bar striking a
@@ -288,7 +297,10 @@ bit-for-bit repeatability; Dienes' simple shear for both rates, a stressed eleme
 by 90°, the J2 uniaxial curve and unloading at large strain, damage failure at the fracture
 strain, and the Taylor bar against Taylor's 1948 estimate; `crates/explicit/tests/one_d.rs`:
 spring–mass period, damped decay rate and period, a dashpot alone, two masses on a line spring,
-waves in rod2 and rod3 bars; in the engine (`solve.rs`), a
+waves in rod2 and rod3 bars; `crates/explicit/tests/contact.rs`: colliding bars, sliding
+blocks under constant and decaying friction on a rigid wall and on a plate, the contact patch
+test, Hertz's sphere impact, a free body untouched by general contact, initial penetrations and
+thread-count independence; in the engine (`solve.rs`), a
 cantilever's free-vibration period against `solve.frequency`.
 
 ## Lattice Boltzmann solver

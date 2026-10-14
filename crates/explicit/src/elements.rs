@@ -70,6 +70,8 @@ pub struct Workspace {
     pub stress_force: Vec<f64>,
     pub hourglass_force: Vec<f64>,
     pub viscous_force: Vec<f64>,
+    /// Contact forces on the model per degree of freedom (empty without contact).
+    pub contact_force: Vec<f64>,
     /// Per node: the volume-weighted volumetric strain increments of its tetrahedra, and their
     /// volume.
     theta: Vec<f64>,
@@ -86,6 +88,7 @@ impl Workspace {
             stress_force: vec![0.0; dofs],
             hourglass_force: vec![0.0; dofs],
             viscous_force: vec![0.0; dofs],
+            contact_force: if sys.contacts.is_empty() { Vec::new() } else { vec![0.0; dofs] },
             theta: vec![0.0; n],
             tet_volume: vec![0.0; n],
             tet_increment: vec![None; sys.tets.len()],

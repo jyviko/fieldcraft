@@ -1,0 +1,107 @@
+{
+ "title": "Two identical elastic bars colliding (explicit contact)",
+ "kind": "theory",
+ "source": "One-dimensional elastic impact of equal bars: contact for 2L/c, interface force ρcAv₀/2, exchange of velocities, no loss of energy; Graff, Wave Motion in Elastic Solids, Dover 1991, §2.1–2.3; Johnson, Impact Strength of Materials, Arnold 1972, §1.6",
+ "quantities": [
+  {
+   "id": "duration",
+   "quantity": "time of the last contact (the bars touch from t = 0) against 2L/c = 0.2",
+   "measure": {
+    "from": "solve",
+    "pointer": "/contacts/0/last_contact"
+   },
+   "value": 0.2,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "the penalty springs at the interface delay the release by a few element transit times (about 1% of 2L/c with 200 elements per bar)"
+  },
+  {
+   "id": "force",
+   "quantity": "the largest force across the interface against ρcAv₀/2 = 0.05",
+   "measure": {
+    "from": "solve",
+    "pointer": "/contacts/0/peak_force"
+   },
+   "value": 0.05,
+   "tolerance": {
+    "relative": 0.04
+   },
+   "reason": "the plateau is ρcAv₀/2 to 0.01%; the peak is the plateau plus the ringing behind the discrete wave front, a few percent"
+  },
+  {
+   "id": "v_a",
+   "quantity": "velocity of the struck bar's far end after the impact (0: the striker stops)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Impact",
+     "at": [
+      [
+       0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/velocity/0"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 0.005
+   },
+   "reason": "the striker stops on average (its kinetic energy is under 0.01% of the start's, see ke); its far end node keeps the ringing of the discrete release front, a few percent of v₀"
+  },
+  {
+   "id": "v_b",
+   "quantity": "velocity of the struck bar's far end after the impact (v₀ = 0.1)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Impact",
+     "at": [
+      [
+       20.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/velocity/0"
+   },
+   "value": 0.1,
+   "tolerance": {
+    "relative": 0.05
+   },
+   "reason": "the struck bar leaves at v₀ on average; its far end node keeps the ringing of the discrete wave fronts, a few percent"
+  },
+  {
+   "id": "ke",
+   "quantity": "kinetic energy after the impact over ½mv₀² (frictionless elastic impact)",
+   "measure": {
+    "from": "solve",
+    "pointer": "/energy/kinetic",
+    "scale": 2000.0
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "an elastic impact keeps the kinetic energy; the quadratic bulk viscosity at the compression fronts and the vibration left in the bars take a fraction of a percent"
+  },
+  {
+   "id": "contact_energy",
+   "quantity": "energy left in the contact after the separation, over ½mv₀² (its drift)",
+   "measure": {
+    "from": "solve",
+    "pointer": "/energy/contact",
+    "scale": 2000.0
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 0.001
+   },
+   "reason": "the penalty springs give back what they took; the trapezoidal work of a spring that engages between increments drifts by far less than 0.1%"
+  }
+ ]
+}

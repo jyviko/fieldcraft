@@ -263,7 +263,8 @@ pub fn run_case(dir: &Path, expected: &Expected) -> Result<Vec<Result<f64, Strin
 }
 
 /// Read one number: from a recipe step's output (`"from": id`) or a command run now
-/// (`"command"`, `"params"`), at a JSON pointer.
+/// (`"command"`, `"params"`), at a JSON pointer, times `scale`; with `"over"` (a measure of its
+/// own), divided by that measure's number.
 fn measure(session: &mut Session, outputs: &BTreeMap<String, Value>, m: &Value) -> Result<f64, String> {
     let pointer = m.get("pointer").and_then(Value::as_str).ok_or("no `pointer`")?;
     let fresh;
@@ -278,7 +279,15 @@ fn measure(session: &mut Session, outputs: &BTreeMap<String, Value>, m: &Value) 
     };
     let v = out.pointer(pointer).ok_or_else(|| format!("nothing at `{pointer}`"))?;
     let x = v.as_f64().ok_or_else(|| format!("`{pointer}` is {v}, not a number"))?;
-    let x = x * m.get("scale").and_then(Value::as_f64).unwrap_or(1.0);
+    let mut x = x * m.get("scale").and_then(Value::as_f64).unwrap_or(1.0);
+    // A ratio: this value over another measure's (both from the same run).
+    if let Some(over) = m.get("over") {
+        let y = measure(session, outputs, over)?;
+        if y == 0.0 {
+            return Err(format!("`{pointer}` is measured over a zero"));
+        }
+        x /= y;
+    }
     if x.is_finite() { Ok(x) } else { Err(format!("`{pointer}` is not finite")) }
 }
 
@@ -728,6 +737,18 @@ mod tests {
         let a = Tolerance { relative: 0.0, absolute: 1e-9 };
         assert!(a.allows(0.0, 5e-10) && !a.allows(0.0, 2e-9));
         assert_eq!(fixture_band(1e-16, 0.0, a, FIXTURE_RELATIVE), 1e-9, "a zero reference keeps its tolerance as the band");
+    }
+
+    #[test]
+    fn measures_read_pointers_scale_and_divide() {
+        let mut session = Session::default();
+        let outputs: BTreeMap<String, Value> = [("s".to_string(), json!({"a": 6.0, "b": -2.0, "z": 0.0}))].into_iter().collect();
+        let m = |v: Value| measure(&mut Session::default(), &outputs, &v);
+        assert_eq!(m(json!({"from": "s", "pointer": "/a", "scale": 0.5})), Ok(3.0));
+        assert_eq!(m(json!({"from": "s", "pointer": "/a", "over": {"from": "s", "pointer": "/b", "scale": -1.0}})), Ok(3.0));
+        assert!(m(json!({"from": "s", "pointer": "/a", "over": {"from": "s", "pointer": "/z"}})).is_err());
+        assert!(m(json!({"from": "s", "pointer": "/a", "over": {"from": "s", "pointer": "/nope"}})).is_err());
+        assert!(measure(&mut session, &outputs, &json!({"from": "t", "pointer": "/a"})).is_err());
     }
 
     #[test]

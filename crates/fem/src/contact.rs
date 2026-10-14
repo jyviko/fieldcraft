@@ -311,6 +311,32 @@ impl Grid {
         }
     }
 
+    /// The boxes that may overlap box `b`: those listed in the cells it overlaps, in box order
+    /// without repeats (into `out`, cleared first).
+    pub fn candidates_in(&self, b: &Aabb, out: &mut Vec<u32>) {
+        out.clear();
+        if self.items.is_empty() || b.iter().flatten().any(|c| !c.is_finite()) {
+            return;
+        }
+        let top = [0, 1, 2].map(|k| self.lowest[k] + self.cell * self.dims[k] as f64);
+        if (0..3).any(|k| b[1][k] < self.lowest[k] || b[0][k] > top[k]) {
+            return;
+        }
+        let (lo, hi) = (self.coordinates(b[0]), self.coordinates(b[1]));
+        for k in lo[2]..=hi[2] {
+            for j in lo[1]..=hi[1] {
+                for i in lo[0]..=hi[0] {
+                    let c = self.index([i, j, k]);
+                    if let (Some(a), Some(e)) = (self.start.get(c), self.start.get(c + 1)) {
+                        out.extend_from_slice(self.items.get(*a..*e).unwrap_or_default());
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+
     /// The number of entries (box × cell overlaps).
     pub fn entries(&self) -> usize {
         self.items.len()
@@ -394,5 +420,12 @@ mod tests {
             assert!(g.entries() <= MAX_GRID_ITEMS);
         }
         assert_eq!(Grid::new(&[], 10).candidates([0.0; 3]), &[] as &[u32]);
+        // Box queries: every box that overlaps, once, in order.
+        let mut found = Vec::new();
+        grid.candidates_in(&[[10.2, 0.2, 0.2], [12.1, 0.4, 0.4]], &mut found);
+        let expected: Vec<u32> = (0..50).filter(|i| boxes[*i as usize][0][0] <= 12.1 && boxes[*i as usize][1][0] >= 10.2).collect();
+        assert!(expected.iter().all(|e| found.contains(e)) && found.windows(2).all(|w| w[0] < w[1]), "{found:?} {expected:?}");
+        grid.candidates_in(&[[-9.0, 0.0, 0.0], [-8.0, 1.0, 1.0]], &mut found);
+        assert!(found.is_empty());
     }
 }

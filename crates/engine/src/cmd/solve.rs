@@ -58,7 +58,7 @@ pub const FREQUENCY: CommandSpec = CommandSpec {
 pub const EXPLICIT: CommandSpec = CommandSpec {
     id: "solve.explicit",
     label: "Solve Explicit Dynamic Step",
-    params: r#"{"step": "Impact", "max_dofs": 6000000, "max_increments": 1000000000, "max_output_values": 50000000, "threads": 8} — transient response of an explicit dynamic step (the only one when `step` is left out) by central differences; keeps its histories and field frames in the session; the caps may only be lowered (the step's own increment cap applies too); `threads` as for solve.static"#,
+    params: r#"{"step": "Impact", "max_dofs": 6000000, "max_increments": 1000000000, "max_output_values": 50000000, "max_contact_faces": 10000000, "threads": 8} — transient response of an explicit dynamic step (the only one when `step` is left out) by central differences, with the model's contacts (interaction.contact.*) and the step's rigid walls; keeps its histories and field frames in the session and reports each contact's peak force, first and last contact, deepest penetration, friction dissipated and the nodes adjusted at the start; the caps may only be lowered (the step's own increment cap applies too); `threads` as for solve.static"#,
     kind: CommandKind::Model,
     run: run_explicit,
 };
@@ -66,7 +66,7 @@ pub const EXPLICIT: CommandSpec = CommandSpec {
 pub const HISTORY: CommandSpec = CommandSpec {
     id: "solve.history",
     label: "Result Histories",
-    params: r#"{"step": "Impact", "every": 1} — the time histories of a solved explicit step: time, increment, energies, momentum, constraint force and the history nodes' displacement and velocity; `every` keeps one sample in so many (by default enough to return at most 10000)"#,
+    params: r#"{"step": "Impact", "every": 1} — the time histories of a solved explicit step: time, increment, energies, momentum, constraint force, the normal force across each contact (in `contacts` order) and the history nodes' displacement and velocity; `every` keeps one sample in so many (by default enough to return at most 10000)"#,
     kind: CommandKind::Model,
     run: history,
 };
@@ -289,6 +289,7 @@ fn run_explicit(s: &mut Session, p: &Value) -> Result<Value> {
         max_dofs: cap(p, "max_dofs", ExplicitLimits::MAX_DOFS)?,
         max_increments: cap(p, "max_increments", ExplicitLimits::MAX_INCREMENTS)?,
         max_output_values: cap(p, "max_output_values", ExplicitLimits::MAX_OUTPUT_VALUES)?,
+        max_contact_faces: cap(p, "max_contact_faces", ExplicitLimits::MAX_CONTACT_FACES)?,
     };
     let step = opt::<String>(p, "step")?;
     let model = &s.model;
@@ -314,6 +315,7 @@ fn explicit_summary(r: &ExplicitResult) -> Value {
         "frames": r.frames.len(),
         "history_samples": r.history.time.len(),
         "eroded": r.eroded,
+        "contacts": r.contacts,
         "warnings": r.warnings,
     })
 }
@@ -355,6 +357,8 @@ fn history(s: &mut Session, p: &Value) -> Result<Value> {
         "energies": pick(&|i| json!(h.energies.get(i))),
         "momentum": pick(&|i| json!(h.momentum.get(i))),
         "constraint_force": pick(&|i| json!(h.constraint_force.get(i))),
+        "contact_force": pick(&|i| json!(h.contact_force.get(i))),
+        "contacts": r.contacts.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
         "nodes": nodes,
     }))
 }

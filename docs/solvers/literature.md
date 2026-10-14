@@ -1246,3 +1246,43 @@ update are written from (cited again in the module docs):
   34(1):82–109, 1992.
 - Iterative refinement: N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed.,
   SIAM 2002, §12.2.
+
+## Part Q: Contact and friction (explicit), as implemented
+
+The papers and books `fieldcraft_fem::contact` and `fieldcraft_explicit::contact` are written
+from (cited again in the module docs); docs/fem.md describes the formulation.
+
+- Closest point on a triangle by its Voronoi regions: C. Ericson, *Real-Time Collision
+  Detection*, Morgan Kaufmann 2005, §5.1.5; on a bilinear quadrilateral by Newton's method on the
+  stationarity conditions, projected on the parameter square: the local search of node-to-segment
+  contact, J. O. Hallquist, G. L. Goudreau, D. J. Benson, CMAME 51:107–137, 1985 (A5.1), and P.
+  Wriggers, *Computational Contact Mechanics*, 2nd ed., Springer 2006, §4.1.
+- Global search by bucket sorting into a uniform grid: D. J. Benson, J. O. Hallquist, CMAME
+  78:141–163, 1990 (A5.2). We chose a grid over the BVH of A5.4: one pass per increment, memory
+  bounded by caps whatever the mesh, candidates in face order (determinism); the cell grows when a
+  few huge faces would blow the entry cap.
+- Segment-to-segment integration (projection on the secondary face's plane, clipping,
+  sub-triangle quadrature): M. A. Puso, T. A. Laursen, *A mortar segment-to-segment contact
+  method for large deformation solid mechanics*, CMAME 193:601–629, 2004; with the penalty applied
+  at the integration points, K. A. Fischer, P. Wriggers, Comput. Mech. 36:226–244, 2005; polygon
+  clipping, I. E. Sutherland, G. W. Hodgman, Commun. ACM 17(1):32–42, 1974. Chosen over
+  node-to-segment because the latter fails the contact patch test on non-matching meshes (R. L.
+  Taylor, P. Papadopoulos, in *Nonlinear Computational Mechanics*, Springer 1991, 690–702; M. A.
+  Crisfield, IJNME 48:435–449, 2000), which our first node-to-segment version showed too (12%
+  spread of σ_zz in the patch test, 0.1% now).
+- Penalty from the masses and the stable increment (the "soft constraint" idea: J. O. Hallquist,
+  *LS-DYNA Theory Manual*, LSTC 2006, the contact chapter's soft-constraint option; the bound is ours: Gershgorin's row sums of the
+  integrated contact stiffness with the node's directional area, added to the element
+  frequencies by Weyl's inequality).
+- Friction by a regularised (penalty) return map: P. Wriggers, *Computational Contact
+  Mechanics*, §5.2 and §10.3; J. C. Simo, T. A. Laursen, Comput. Struct. 42(1):97–116, 1992;
+  rate-dependent coefficients reviewed by J. T. Oden, J. A. C. Martins, CMAME 52:527–634, 1985.
+  The exponential decay μ = μ_k + (μ_s − μ_k) e^{−d γ̇} is the form the LS-DYNA and Abaqus
+  manuals document, so the decks carry it unchanged.
+- Kinematic rigid walls with Coulomb impulses: T. J. R. Hughes et al., CMAME 8(3):249–276, 1976
+  (A5.5), the tangential impulse capped at μ times the normal one.
+- Verification: the impact of equal bars, K. F. Graff, *Wave Motion in Elastic Solids*, Dover
+  1991, §2.1–2.3, and W. Johnson, *Impact Strength of Materials*, Arnold 1972, §1.6; Hertz's
+  impact of spheres, H. Hertz, J. reine angew. Math. 92:156–171, 1882, and K. L. Johnson,
+  *Contact Mechanics*, Cambridge 1985, §11.4; the sliding block, any dynamics text (J. L. Meriam,
+  L. G. Kraige, *Engineering Mechanics: Dynamics*, §3/5).

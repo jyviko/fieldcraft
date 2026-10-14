@@ -1,0 +1,14 @@
+[
+ {"command": "mesh.block", "params": {"body": "BarA", "kind": "hex8", "corners": [[0, 0, 0], [10.0, 0, 0], [10.0, 0.1, 0], [0, 0.1, 0], [0, 0, 0.1], [10.0, 0, 0.1], [10.0, 0.1, 0.1], [0, 0.1, 0.1]], "divisions": [200, 1, 1], "faces": {"4": "end"}}},
+ {"command": "mesh.block", "params": {"body": "BarB", "kind": "hex8", "corners": [[10.0, 0, 0], [20.0, 0, 0], [20.0, 0.1, 0], [10.0, 0.1, 0], [10.0, 0, 0.1], [20.0, 0, 0.1], [20.0, 0.1, 0.1], [10.0, 0.1, 0.1]], "divisions": [200, 1, 1], "faces": {"6": "start"}, "merge": 0}},
+ {"command": "model.set.create", "params": {"name": "A", "geometry": [{"body": "BarA"}]}},
+ {"command": "model.set.create", "params": {"name": "B", "geometry": [{"body": "BarB"}]}},
+ {"command": "model.set.create", "params": {"name": "a_end", "geometry": [{"body": "BarA", "face": "end"}]}},
+ {"command": "model.set.create", "params": {"name": "b_start", "geometry": [{"body": "BarB", "face": "start"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 10000.0, "poisson": 0.0}, "density": 1.0}},
+ {"command": "model.section.create", "params": {"name": "A", "set": "A", "material": "Mat", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+ {"command": "model.section.create", "params": {"name": "B", "set": "B", "material": "Mat", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+ {"command": "interaction.contact.pair", "params": {"name": "impact", "main": "b_start", "secondary": "a_end"}},
+ {"command": "model.step.create", "params": {"name": "Impact", "procedure": {"type": "explicit_dynamic", "end_time": 0.3, "initial_velocities": [{"set": "A", "velocity": [0.1, 0, 0]}], "bulk_viscosity": {"linear": 0.0, "quadratic": 1.5}}, "boundary_conditions": [], "loads": []}},
+ {"command": "solve.explicit", "params": {"step": "Impact"}, "id": "solve"}
+]

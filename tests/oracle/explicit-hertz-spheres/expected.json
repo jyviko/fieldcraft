@@ -1,0 +1,11 @@
+{
+ "title": "Two elastic spheres in a head-on collision: Hertz's force and contact duration (explicit contact)",
+ "kind": "theory",
+ "source": "Hertz's quasi-static impact: with R* = R/2, m* = m/2, E* = E/(2(1 − ν²)), the approach reaches δ = (15 m* v²/(16 E* √R*))^(2/5), the force (4/3) E* √R* δ^(3/2), and the contact lasts 2.9432 δ/v; Hertz, J. reine angew. Math. 92:156–171, 1882; K. L. Johnson, Contact Mechanics, Cambridge 1985, §11.4",
+ "status": "pending",
+ "requires": "a graded sphere mesh from commands (a cubed-sphere hex mesher, or tet refinement towards a point); until then the explicit crate's tests `spheres_collide_as_hertz_says` (a graded cubed-sphere quarter of each sphere, 27 648 hex8: peak force +2.3%, duration −0.4%) and its coarse twin in the main gate check this case on a mesh generated in code",
+ "quantities": [
+  {"id": "force", "quantity": "the largest contact force, two steel spheres R = 10 mm (E = 210 GPa, ν = 0.3, ρ = 7.85 t/m³) meeting at 1 m/s (N)", "value": 1005.38},
+  {"id": "duration", "quantity": "the contact duration (s)", "value": 6.0163e-5}
+ ]
+}

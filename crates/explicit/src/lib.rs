@@ -14,8 +14,12 @@
 //!   hourglass control (viscous or stiffness), the Bonet–Burton average nodal pressure
 //!   tetrahedron, von Neumann–Richtmyer/Wilkins bulk viscosity, and the element critical time
 //!   increments.
-//! - **Integration** ([`integrate`]): the time loop, kinematic constraints, energy accounting
-//!   with a balance check, history samples and field frames ([`result`]).
+//! - **Contact** ([`contact`]): penalty contact between element faces (pairs both ways, single
+//!   surface and general contact) with Coulomb friction by a regularised return map, a bucket
+//!   grid search, and the stiffness from the masses and the stable increment.
+//! - **Integration** ([`integrate`]): the time loop, kinematic constraints (rigid walls with
+//!   friction), energy accounting with a balance check, history samples and field frames
+//!   ([`result`]).
 //!
 //! With nonlinear geometry (the default) the elements are updated Lagrangian and the material
 //! state is integrated in rate form with an objective stress rate (Jaumann by Hughes–Winget,
@@ -33,6 +37,7 @@
 // Small fixed-size vector kernels read as the textbook formulas with index loops.
 #![allow(clippy::needless_range_loop)]
 
+pub mod contact;
 pub mod discrete;
 pub mod elements;
 pub mod integrate;
@@ -41,7 +46,7 @@ pub mod system;
 
 pub use elements::Failure;
 pub use integrate::solve_explicit;
-pub use result::{ControllingElement, Energies, ErodedElement, ExplicitResult, Frame, History};
+pub use result::{ContactSummary, ControllingElement, Energies, ErodedElement, ExplicitResult, Frame, History};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
@@ -82,16 +87,24 @@ pub struct Limits {
     pub max_increments: u64,
     /// Numbers kept in field frames and histories together (8 bytes each).
     pub max_output_values: usize,
+    /// Element faces of every contact surface together.
+    pub max_contact_faces: usize,
 }
 
 impl Limits {
     pub const MAX_DOFS: usize = 6_000_000;
     pub const MAX_INCREMENTS: u64 = fieldcraft_model::steps::MAX_INCREMENTS;
     pub const MAX_OUTPUT_VALUES: usize = 50_000_000;
+    pub const MAX_CONTACT_FACES: usize = 10_000_000;
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { max_dofs: Limits::MAX_DOFS, max_increments: Limits::MAX_INCREMENTS, max_output_values: Limits::MAX_OUTPUT_VALUES }
+        Limits {
+            max_dofs: Limits::MAX_DOFS,
+            max_increments: Limits::MAX_INCREMENTS,
+            max_output_values: Limits::MAX_OUTPUT_VALUES,
+            max_contact_faces: Limits::MAX_CONTACT_FACES,
+        }
     }
 }

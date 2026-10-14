@@ -8,12 +8,13 @@ use fieldcraft_fem::plasticity::J2;
 use fieldcraft_fem::uniform::{Hex8, Tet4, modulus_bound};
 use fieldcraft_fem::{DofKind, DofLayout, DofSet, face};
 use fieldcraft_model::{
-    Elastic, ElementKind, ExplicitDynamic, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step, StressRate, Target,
+    Elastic, ElementKind, ExplicitDynamic, Friction, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step, StressRate, Target,
 };
 
+use crate::contact::Interface;
 use crate::discrete::{Discrete, Rod};
 use crate::elements::{HexScales, add_at, frequency_bound, hex_scales};
-use crate::{Error, Result};
+use crate::{Error, Limits, Result};
 
 /// Degrees of freedom per node: the three translations, node-major (see [`System`]).
 pub const NODE_DOFS: usize = 3;
@@ -81,13 +82,14 @@ pub struct Tet {
     pub thermal_rate: f64,
 }
 
-/// A fixed, frictionless rigid plane.
+/// A fixed rigid plane.
 #[derive(Debug, Clone)]
 pub struct Wall {
     pub point: [f64; 3],
     /// Unit normal, towards the side the nodes stay on.
     pub normal: [f64; 3],
     pub nodes: Vec<usize>,
+    pub friction: Friction,
 }
 
 /// The discrete system of an explicit dynamic step.
@@ -117,6 +119,8 @@ pub struct System {
     /// Prescribed velocity per degree of freedom (`None` = free).
     pub prescribed: Vec<Option<f64>>,
     pub walls: Vec<Wall>,
+    /// The model's contacts ([`crate::contact`]).
+    pub contacts: Vec<Interface>,
     /// Velocity per degree of freedom at the start (prescribed velocities included).
     pub initial_velocity: Vec<f64>,
     /// Constant external force per degree of freedom.
@@ -192,16 +196,12 @@ fn check_formulation(kind: ElementKind, section_name: &str, f: &fieldcraft_model
 }
 
 impl System {
-    pub fn new(model: &Model, resolved: &Resolved, step: &Step, settings: &ExplicitDynamic, max_dofs: usize) -> Result<System> {
+    pub fn new(model: &Model, resolved: &Resolved, step: &Step, settings: &ExplicitDynamic, limits: &Limits) -> Result<System> {
+        let max_dofs = limits.max_dofs;
         if let Some(name) = model.couplings().keys().next() {
             return Err(Error::NotSupported(format!("couplings (coupling `{name}`) in explicit dynamics")));
         }
-        if let Some(name) = model.contacts().keys().next() {
-            return Err(Error::NotSupported(format!("contact (`{name}`) in explicit dynamics")));
-        }
-        if let Some(w) = settings.rigid_walls.iter().find(|w| !w.friction.is_frictionless()) {
-            return Err(Error::NotSupported(format!("friction on rigid walls (the wall on set `{}`)", w.set)));
-        }
+
         // Elements by label, with their section's material.
         let mut materials: Vec<Material> = Vec::new();
         let mut chosen: Vec<(u32, ElementKind, Vec<u32>, usize, Option<f64>)> = Vec::new();
@@ -274,6 +274,7 @@ impl System {
             discrete_increment: None,
             prescribed: vec![None; dofs],
             walls: Vec::new(),
+            contacts: Vec::new(),
             initial_velocity: vec![0.0; dofs],
             external: vec![0.0; dofs],
             history_nodes: Vec::new(),
@@ -285,6 +286,20 @@ impl System {
             labels,
             xyz,
         };
+        // Contact first: nodes that start inside a surface are moved before the elements are
+        // built on the coordinates.
+        sys.contacts = crate::contact::interfaces(model, resolved, &mut sys.xyz, &sys.labels, &sys.elements, limits.max_contact_faces)?;
+        for c in &sys.contacts {
+            if let Some(deepest) = c.adjusted.iter().max_by(|a, b| a.depth.total_cmp(&b.depth)) {
+                sys.warnings.push(format!(
+                    "contact `{}`: {} nodes started inside the other surface and were moved onto it (the deepest, node {}, by {:.3e})",
+                    c.name,
+                    c.adjusted.len(),
+                    deepest.node,
+                    deepest.depth
+                ));
+            }
+        }
         for (index, (label, kind, nodes, mi, area)) in chosen.into_iter().enumerate() {
             let idx: Vec<usize> = nodes.iter().map(|l| sys.node(*l).ok_or_else(|| Error::Internal(format!("node {l}")))).collect::<Result<_>>()?;
             let mat = sys.materials.get(mi).ok_or_else(|| Error::Internal("material index".into()))?;
@@ -590,7 +605,7 @@ impl System {
                     return Err(invalid(format!("node {label} of set `{}` starts behind its rigid wall (gap {gap:e})", w.set)));
                 }
             }
-            self.walls.push(Wall { point: w.point, normal, nodes });
+            self.walls.push(Wall { point: w.point, normal, nodes, friction: w.friction });
         }
         if let Some(set) = &settings.history_nodes {
             let nodes = self.nodes_of(resolved, set);

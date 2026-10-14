@@ -1,0 +1,15 @@
+{
+ "title": "Block sliding to a stop on a deformable plate, friction decaying with the slip rate (explicit contact)",
+ "kind": "theory",
+ "source": "A rigid block launched at v₀ with friction μ(v) = μk + (μs − μk) e^(−d v) decelerates at g μ(v); it travels ∫₀^v₀ v dv / (g μ(v)) (Simpson's rule, 200 000 intervals) and stops after [v₀ + ln((μk + (μs − μk) e^(−d v₀))/μs)/d]/(g μk) = 1.2001; Meriam & Kraige, Engineering Mechanics: Dynamics, §3/5; the exponential decay law as in Oden & Martins, CMAME 52:527–634, 1985",
+ "quantities": [
+  {"id": "distance", "quantity": "distance travelled (top centre node) against ∫ v dv / (g μ(v)) = 2.01524",
+   "measure": {"command": "solve.probe", "params": {"step": "Slide", "at": [[0.5, 0.5, 0.5]]}, "pointer": "/nodes/0/displacement/0"},
+   "value": 2.015240387808855, "tolerance": {"relative": 0.01},
+   "reason": "the block bounces on the penalty springs and the plate under it shears elastically, so the normal force and the slip rate it feels vary by a little around their rigid-body values"},
+  {"id": "velocity", "quantity": "velocity of the top centre node after the stop",
+   "measure": {"command": "solve.probe", "params": {"step": "Slide", "at": [[0.5, 0.5, 0.5]]}, "pointer": "/nodes/0/velocity/0"},
+   "value": 0.0, "tolerance": {"absolute": 0.03},
+   "reason": "the block sticks; what is left is its elastic vibration, under 1% of v₀"}
+ ]
+}

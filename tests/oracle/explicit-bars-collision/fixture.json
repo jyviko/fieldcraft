@@ -1,0 +1,29 @@
+{
+  "note": "FieldCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "contact_energy": {
+      "band": 0.001,
+      "value": -0.00007743495029686868
+    },
+    "duration": {
+      "band": 2.0242265804764194e-10,
+      "value": 0.20242265804764192
+    },
+    "force": {
+      "band": 5.1469625943477736e-11,
+      "value": 0.05146962594347773
+    },
+    "ke": {
+      "band": 1e-9,
+      "value": 0.9999532471694228
+    },
+    "v_a": {
+      "band": 0.005,
+      "value": -0.0033987044489733886
+    },
+    "v_b": {
+      "band": 1.0339870444897614e-10,
+      "value": 0.10339870444897613
+    }
+  }
+}

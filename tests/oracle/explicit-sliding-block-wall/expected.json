@@ -1,0 +1,19 @@
+{
+ "title": "Block sliding to a stop on a rigid wall with Coulomb friction (explicit)",
+ "kind": "theory",
+ "source": "A rigid block launched at v₀ on a horizontal plane with Coulomb friction μ decelerates at μg and stops after v₀/(μg) at v₀²/(2μg), its kinetic energy all dissipated by friction; Meriam & Kraige, Engineering Mechanics: Dynamics, §3/5 (work and energy)",
+ "quantities": [
+  {"id": "distance", "quantity": "distance travelled (top centre node) against v₀²/(2μg) = 1.5",
+   "measure": {"command": "solve.probe", "params": {"step": "Slide", "at": [[0.5, 0.5, 0.5]]}, "pointer": "/nodes/0/displacement/0"},
+   "value": 1.5, "tolerance": {"relative": 0.01},
+   "reason": "the wall's friction impulses are exact Coulomb impulses; the block's elastic vibration from the sudden gravity and the friction moment move the node by a fraction of a percent"},
+  {"id": "velocity", "quantity": "velocity of the top centre node after the stop",
+   "measure": {"command": "solve.probe", "params": {"step": "Slide", "at": [[0.5, 0.5, 0.5]]}, "pointer": "/nodes/0/velocity/0"},
+   "value": 0.0, "tolerance": {"absolute": 0.03},
+   "reason": "the block sticks; what is left is its elastic vibration, under 1% of v₀"},
+  {"id": "dissipated", "quantity": "friction dissipation over ½mv₀² = 2.25",
+   "measure": {"from": "solve", "pointer": "/energy/friction", "scale": 0.4444444444444444},
+   "value": 1.0, "tolerance": {"relative": 0.01},
+   "reason": "the kinetic energy goes into friction; the vibration and the work of gravity as the block settles add or take a fraction of a percent"}
+ ]
+}

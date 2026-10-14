@@ -347,3 +347,59 @@ form (exact), and a tube inflated by a follower pressure while stretched axially
 block at a thermal stretch of 1.2 (exact, full and hybrid), a bar held at its ends heated past
 yield (exact), the linear limit against the linear and coupled solvers, and tangents with a
 temperature field.
+
+crushing stops at the minimum increment, naming it; the caps; what is refused).
+
+## Contact and friction (explicit dynamics)
+
+**Model** (`fieldcraft_model::contact`): a contact names its surfaces as sets of element faces —
+a **pair** (`main`, `secondary`) or **general** contact on one surface (self contact) or on every
+exterior face of the solids — with Coulomb **friction** μ = μ_k + (μ_s − μ_k) e^{−d γ̇} (static,
+kinetic, decay per slip rate), a **penalty scale** s ≤ 1 and what happens to nodes that start
+inside the other surface (**adjust**: moved onto it strain-free and reported; **refuse**: the
+analysis stops naming the node, the face and the depth). Planar rigid walls take the same friction.
+Commands `interaction.contact.pair|general|edit|delete|find`; Abaqus writes `*SURFACE
+INTERACTION` with `*FRICTION` (exponential decay), `*CONTACT PAIR` and general `*CONTACT`, LS-DYNA
+`*CONTACT_AUTOMATIC_SURFACE_TO_SURFACE` and `_SINGLE_SURFACE` (`fs`, `fd`, `dc`, `sfsa`,
+`sfsb`); Nastran and the implicit solver refuse contact by name (implicit contact is M7).
+
+**Geometry** (`fieldcraft_fem::contact`, shared with the implicit solver to come): the closest
+point of a triangle (exact region tests) or of a bilinear quadrilateral (projected Newton with the
+exact Hessian) to a point, with the signed gap along the face's normal and the lateral offset;
+a bucket grid of face boxes whose cell is twice the mean box, grown until the grid and its entries
+fit their caps, queried by point or by box with the candidates in face order.
+
+**Kinematics** (`fieldcraft_explicit::contact`): segment to segment. Each secondary face and
+each main face facing it (normals within 84° of opposite) are projected onto the secondary face's
+plane, split into triangles and clipped against each other; on each overlap triangle a
+three-point rule takes the gap g = (x_s − x_m)·n_m between the faces' closest points. Where
+g < 0 (no deeper than half the main face's element), a penalty pressure p = ε(−g) acts on the
+secondary face's nodes with weights N_i^s along n_m and on the main face's nodes with −N_j^m. For
+a uniform pressure across flat faces both meshes receive exactly the consistent nodal forces,
+so the contact patch test passes on non-matching meshes. Every contact runs both ways (a pair
+with each surface as the secondary, single-surface contact with every face against every other
+face that shares no node with it) at half the penalty each.
+
+**Penalty**: ε = s γ min_i(m_i/A_i)/Δt² over the contact's nodes (m_i lumped mass, A_i the node's
+area facing one way, Δt the stable increment, γ = 0.3). By Gershgorin's and Weyl's inequalities
+the contact adds at most 2 s γ/Δt² to the square of any frequency, which the default increment
+scale 0.9 leaves room for: contact never shortens the increment.
+
+**Friction**: at the secondary nodes, by a regularised return map against the main face that
+pressed each node most: the elastic predictor t* = P t_n − k_t Δu_T (k_t = ε A_i/2), stick when
+|t*| ≤ μ f_n, otherwise slip back to the cone, dissipating μ f_n (|t*| − μ f_n)/k_t. On rigid
+walls, a node's tangential velocity changes by at most μ times its normal velocity change.
+
+**Energy**: the contact forces' work (penalty energy plus friction dissipated) is integrated with
+the trapezoidal rule and enters the balance; friction dissipation (contact and walls) is
+reported apart. **Search** every increment, in parallel by faces, forces added in face order: the
+results are the same on any number of threads.
+
+**Verification** (`crates/explicit/tests/contact.rs`, `tests/oracle/explicit-*`): two bars
+colliding (contact for 2L/c, interface force ρcAv₀/2, velocities exchanged, kinetic energy kept to
+0.01%, the contact energy back to 10⁻⁴ of it), a block sliding to a stop under constant and
+decaying friction on a rigid wall and on a deformable plate (distance and time to 0.1–0.5%), the
+contact patch test on non-matching meshes (σ_zz uniform to 0.1%), two spheres colliding against
+Hertz (peak force +2.3%, duration −0.4% on a graded quarter-sphere mesh), a free body untouched
+by general contact on all its faces, initial penetrations adjusted or refused, the face cap, and
+bit-for-bit results on one and four threads.

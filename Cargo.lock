@@ -1019,7 +1019,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.36.2"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1170,7 +1170,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1864,6 +1864,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2101,7 +2103,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "matext4cgmath"
 version = "0.1.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "cgmath",
  "katexit",
@@ -3204,7 +3206,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3489,8 +3491,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-doc"
-version = "0.8.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+version = "0.11.0"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "log",
  "serde",
@@ -3498,6 +3500,7 @@ dependencies = [
  "sha2 0.10.9",
  "solidcraft-geom",
  "solidcraft-kernel",
+ "solidcraft-render",
  "solidcraft-sketch",
  "thiserror 2.0.21",
  "web-time",
@@ -3505,8 +3508,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-engine"
-version = "0.8.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+version = "0.11.0"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "log",
  "serde",
@@ -3522,8 +3525,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-geom"
-version = "0.8.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+version = "0.11.0"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -3531,8 +3534,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-io"
-version = "0.8.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+version = "0.11.0"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "quick-xml",
  "serde",
@@ -3547,13 +3550,15 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-kernel"
-version = "0.8.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+version = "0.11.0"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "log",
+ "rayon",
  "serde",
  "serde_json",
  "solidcraft-geom",
+ "spade",
  "thiserror 2.0.21",
  "truck-meshalgo",
  "truck-modeling",
@@ -3564,8 +3569,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-render"
-version = "0.8.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+version = "0.11.0"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "image",
  "serde",
@@ -3574,8 +3579,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-sketch"
-version = "0.8.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+version = "0.11.0"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "serde",
  "solidcraft-geom",
@@ -3671,7 +3676,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3907,7 +3912,7 @@ dependencies = [
 [[package]]
 name = "truck-meshalgo"
 version = "0.4.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "array-macro",
  "derive_more",
@@ -3957,7 +3962,7 @@ dependencies = [
 [[package]]
 name = "truck-shapeops"
 version = "0.4.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "derive_more",
  "itertools 0.13.0",
@@ -3972,7 +3977,7 @@ dependencies = [
 [[package]]
 name = "truck-stepio"
 version = "0.3.0"
-source = "git+https://github.com/bherbruck/solidcraft?rev=de1479029dd6821cffd28b70688a58e7f61f0cfd#de1479029dd6821cffd28b70688a58e7f61f0cfd"
+source = "git+https://github.com/bherbruck/solidcraft?rev=a629236650c44ee73edf36fab0dcd2385103a610#a629236650c44ee73edf36fab0dcd2385103a610"
 dependencies = [
  "chrono",
  "truck-geometry",
@@ -4026,7 +4031,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4567,7 +4572,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4912,7 +4917,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

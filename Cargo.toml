@@ -58,13 +58,13 @@ rfd = "0.17"
 
 # Geometry: SolidCraft's B-rep kernel (MIT OR Apache-2.0), pinned. Only crates/geometry uses it
 # (plan/adr/0001-libraries.md).
-solidcraft-geom = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
-solidcraft-kernel = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
-solidcraft-doc = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
-solidcraft-io = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
+solidcraft-geom = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }
+solidcraft-kernel = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }
+solidcraft-doc = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }
+solidcraft-io = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }
 # Runs SolidCraft command scripts (the test corpus recipes); only behind fieldcraft-geometry's
 # `scripts` feature.
-solidcraft-engine = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
+solidcraft-engine = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -128,10 +128,10 @@ debug = "line-tables-only"
 # reach a dependent workspace, so FieldCraft applies the same ones from the same pinned commit;
 # keep this list and the rev in step with SolidCraft's [patch.crates-io].
 [patch.crates-io]
-truck-shapeops = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
-truck-stepio = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
-truck-meshalgo = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
-matext4cgmath = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
+truck-shapeops = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }
+truck-stepio = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }
+truck-meshalgo = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }
+matext4cgmath = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }
 # egui-wgpu with SolidCraft's fixes (vendor/egui-wgpu there): MSAA clamped to what the device
 # supports and 1x on OpenGL adapters, so the requested 4x never fails pipeline validation at start.
-egui-wgpu = { git = "https://github.com/bherbruck/solidcraft", rev = "de1479029dd6821cffd28b70688a58e7f61f0cfd" }
+egui-wgpu = { git = "https://github.com/bherbruck/solidcraft", rev = "a629236650c44ee73edf36fab0dcd2385103a610" }

@@ -50,6 +50,7 @@ fn extrude(sketch: u64, distance: &str, operation: Operation) -> FeatureKind {
         },
         operation,
         targets: vec![],
+        thin: None,
     }
 }
 

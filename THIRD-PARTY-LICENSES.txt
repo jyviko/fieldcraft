@@ -312,13 +312,13 @@ smithay-client-toolkit 0.19.2  (MIT)
 smithay-client-toolkit 0.20.0  (MIT)
 smithay-clipboard 0.7.3  (MIT)
 smol_str 0.2.2  (MIT OR Apache-2.0)
-solidcraft-doc 0.8.0  (MIT OR Apache-2.0)
-solidcraft-engine 0.8.0  (MIT OR Apache-2.0)
-solidcraft-geom 0.8.0  (MIT OR Apache-2.0)
-solidcraft-io 0.8.0  (MIT OR Apache-2.0)
-solidcraft-kernel 0.8.0  (MIT OR Apache-2.0)
-solidcraft-render 0.8.0  (MIT OR Apache-2.0)
-solidcraft-sketch 0.8.0  (MIT OR Apache-2.0)
+solidcraft-doc 0.11.0  (MIT OR Apache-2.0)
+solidcraft-engine 0.11.0  (MIT OR Apache-2.0)
+solidcraft-geom 0.11.0  (MIT OR Apache-2.0)
+solidcraft-io 0.11.0  (MIT OR Apache-2.0)
+solidcraft-kernel 0.11.0  (MIT OR Apache-2.0)
+solidcraft-render 0.11.0  (MIT OR Apache-2.0)
+solidcraft-sketch 0.11.0  (MIT OR Apache-2.0)
 spade 2.15.1  (MIT OR Apache-2.0)
 spirv 0.4.0+sdk-1.4.341.0  (Apache-2.0)
 static_assertions 1.1.0  (MIT OR Apache-2.0)
@@ -13308,13 +13308,13 @@ objc2-user-notifications 0.2.2: MIT (https://github.com/madsmtm/objc2)
 profiling 1.0.18: MIT OR Apache-2.0 (https://github.com/aclysma/profiling)
 r-efi 5.3.0: MIT OR Apache-2.0 OR LGPL-2.1-or-later (https://github.com/r-efi/r-efi)
 r-efi 6.0.0: MIT OR Apache-2.0 OR LGPL-2.1-or-later (https://github.com/r-efi/r-efi)
-solidcraft-doc 0.8.0: MIT OR Apache-2.0
-solidcraft-engine 0.8.0: MIT OR Apache-2.0
-solidcraft-geom 0.8.0: MIT OR Apache-2.0
-solidcraft-io 0.8.0: MIT OR Apache-2.0
-solidcraft-kernel 0.8.0: MIT OR Apache-2.0
-solidcraft-render 0.8.0: MIT OR Apache-2.0
-solidcraft-sketch 0.8.0: MIT OR Apache-2.0
+solidcraft-doc 0.11.0: MIT OR Apache-2.0
+solidcraft-engine 0.11.0: MIT OR Apache-2.0
+solidcraft-geom 0.11.0: MIT OR Apache-2.0
+solidcraft-io 0.11.0: MIT OR Apache-2.0
+solidcraft-kernel 0.11.0: MIT OR Apache-2.0
+solidcraft-render 0.11.0: MIT OR Apache-2.0
+solidcraft-sketch 0.11.0: MIT OR Apache-2.0
 spirv 0.4.0+sdk-1.4.341.0: Apache-2.0 (https://github.com/gfx-rs/rspirv)
 truck-base 0.5.0: Apache-2.0 (https://github.com/ricosjp/truck)
 truck-derivers 0.1.0: Apache-2.0 (https://github.com/ricosjp/truck)

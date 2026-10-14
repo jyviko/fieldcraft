@@ -880,6 +880,9 @@ pub const CONTOUR: &[Field] = &[
             ("stress_xy", "Stress XY"),
             ("stress_xz", "Stress XZ"),
             ("stress_yz", "Stress YZ"),
+            ("contact_pressure", "Contact pressure"),
+            ("contact_gap", "Contact gap"),
+            ("contact_status", "Contact status"),
             ("none", "None"),
         ],
     )

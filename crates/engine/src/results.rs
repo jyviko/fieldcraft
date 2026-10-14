@@ -87,10 +87,17 @@ pub enum Field {
     Temperature,
     /// Heat flux magnitude (heat transfer steps, at the end of the step).
     HeatFlux,
+    /// Contact pressure (nonlinear static steps with contact: 0 off the contacts' secondary
+    /// surfaces).
+    ContactPressure,
+    /// The normalised contact gap of the secondary surfaces' nodes (negative: penetration).
+    ContactGap,
+    /// Contact status of the secondary surfaces' nodes: 0 open, 1 closed.
+    ContactStatus,
 }
 
 impl Field {
-    pub const ALL: [Field; 17] = [
+    pub const ALL: [Field; 20] = [
         Field::Displacement,
         Field::DisplacementX,
         Field::DisplacementY,
@@ -108,6 +115,9 @@ impl Field {
         Field::StressYz,
         Field::Temperature,
         Field::HeatFlux,
+        Field::ContactPressure,
+        Field::ContactGap,
+        Field::ContactStatus,
     ];
 
     /// The id commands take (`von_mises`…).
@@ -130,6 +140,9 @@ impl Field {
             Field::StressYz => "stress_yz",
             Field::Temperature => "temperature",
             Field::HeatFlux => "heat_flux",
+            Field::ContactPressure => "contact_pressure",
+            Field::ContactGap => "contact_gap",
+            Field::ContactStatus => "contact_status",
         }
     }
 
@@ -152,6 +165,9 @@ impl Field {
             Field::StressYz => "Stress YZ",
             Field::Temperature => "Temperature",
             Field::HeatFlux => "Heat flux magnitude",
+            Field::ContactPressure => "Contact pressure",
+            Field::ContactGap => "Contact gap",
+            Field::ContactStatus => "Contact status (0 open, 1 closed)",
         }
     }
 
@@ -170,7 +186,12 @@ impl Field {
                 | Field::Velocity
                 | Field::Temperature
                 | Field::HeatFlux
-        )
+        ) && !self.is_contact()
+    }
+
+    /// Whether it is a contact quantity.
+    pub fn is_contact(self) -> bool {
+        matches!(self, Field::ContactPressure | Field::ContactGap | Field::ContactStatus)
     }
 
     /// Whether it is a heat transfer quantity.
@@ -181,6 +202,7 @@ impl Field {
     /// The fields a result has: displacements everywhere, stresses for static steps and explicit
     /// frames that kept them (mode shapes have no stress scale), velocity for explicit frames.
     pub fn available(r: &StepResult) -> impl Iterator<Item = Field> + '_ {
+        let contact = matches!(r.kind(), Kind::Static(s) if !s.contacts.is_empty());
         let (stress, velocity, temperature, flux) = match r.kind() {
             Kind::Static(s) => (true, false, s.temperature.is_some(), false),
             Kind::Frequency(_) => (false, false, false, false),
@@ -197,6 +219,7 @@ impl Field {
                 Field::Velocity => velocity,
                 Field::Temperature => temperature,
                 Field::HeatFlux => flux,
+                f if f.is_contact() => contact,
                 f => stress || !f.is_stress(),
             })
             .collect::<Vec<_>>()
@@ -333,6 +356,10 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
             Kind::Heat(h) => Ok(h.flux.iter().map(|v| magnitude(*v)).collect()),
             _ => Err(unavailable()),
         },
+        Field::ContactPressure | Field::ContactGap | Field::ContactStatus => match r.kind() {
+            Kind::Static(s) if !s.contacts.is_empty() => Ok(contact_values(s, field)),
+            _ => Err(unavailable()),
+        },
         Field::VonMises => each(&fieldcraft_fem::von_mises),
         Field::MaxPrincipal => principal(0),
         Field::MidPrincipal => principal(1),
@@ -344,6 +371,32 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
         Field::StressXz => each(&|t| t[4]),
         Field::StressYz => each(&|t| t[5]),
     }
+}
+
+/// A contact field at every node of a static result: the largest pressure, the smallest gap or
+/// the closed status over the contacts a node is a secondary node of; off them 0 pressure and no
+/// gap or status (NaN).
+fn contact_values(s: &StaticResult, field: Field) -> Vec<f64> {
+    let mut out = vec![if field == Field::ContactPressure { 0.0 } else { f64::NAN }; s.nodes.len()];
+    for c in &s.contacts {
+        for (k, label) in c.nodes.iter().enumerate() {
+            let Some(v) = s.nodes.binary_search(label).ok().and_then(|i| out.get_mut(i)) else { continue };
+            match field {
+                Field::ContactPressure => *v = v.max(c.pressure.get(k).copied().unwrap_or(0.0)),
+                Field::ContactGap => {
+                    if let Some(Some(g)) = c.gap.get(k) {
+                        *v = if v.is_nan() { *g } else { v.min(*g) };
+                    }
+                }
+                Field::ContactStatus => {
+                    let closed = c.status.get(k).is_some_and(|s| *s == fieldcraft_solver::contact::Status::Closed);
+                    *v = if closed || (!v.is_nan() && *v > 0.0) { 1.0 } else { 0.0 };
+                }
+                _ => {}
+            }
+        }
+    }
+    out
 }
 
 /// Element values (in `elements` order) averaged at the nodes (in `nodes` order) of the
@@ -472,7 +525,7 @@ mod tests {
         }
         let (modes, _) = s.latest_result("Modes").unwrap();
         assert_eq!(Field::available(modes).count(), 4);
-        assert_eq!(Field::available(bend).count(), Field::ALL.len() - 3, "all but velocity and the thermal fields");
+        assert_eq!(Field::available(bend).count(), Field::ALL.len() - 6, "all but velocity, the thermal and the contact fields");
         assert!(field_values(&s.model, modes, Field::VonMises, Pick { mode: 1, frame: None }).is_err());
         assert!(field_values(&s.model, modes, Field::Displacement, Pick { mode: 9, frame: None }).is_err());
         assert_eq!(field_values(&s.model, modes, Field::Displacement, Pick { mode: 2, frame: None }).unwrap().len(), modes.nodes().len());

@@ -1,7 +1,8 @@
 //! Contact: which surfaces may touch, and the friction between them.
 //!
-//! A contact is a model definition, active in every step that can take it (explicit dynamics;
-//! the implicit solver refuses contact by name for now). Its surfaces are sets with element
+//! A contact is a model definition, active in every step that can take it (explicit dynamics,
+//! and nonlinear static steps for pairs; the linear analyses refuse contact by name). Its
+//! surfaces are sets with element
 //! faces, so they survive remeshing like a pressure load does:
 //! - a **pair**: the faces of `main` against those of `secondary`, both ways (each surface's
 //!   nodes are kept out of the other's faces, so neither surface is privileged);
@@ -17,10 +18,13 @@
 //!
 //! **Penalty.** Explicit contact pushes penetrating nodes back with a penalty spring whose
 //! stiffness the solver chooses from the masses and the stable time increment, the stiffest
-//! that leaves the increment alone; `penalty_scale` (at most 1) softens it.
+//! that leaves the increment alone; `penalty_scale` (at most 1) softens it. Nonlinear static
+//! steps enforce a pair's mortar pressure by an augmented Lagrangian whose penalty the solver
+//! chooses from the elements under the secondary surface; `penalty_scale` scales it too.
 //!
 //! **Initial penetration.** Nodes of a surface that start inside the other surface are either
-//! moved onto it before the analysis, strain-free (`adjust`, the default, each one reported), or
+//! moved onto it before the analysis, strain-free (`adjust`, the default, each one reported;
+//! nonlinear static steps take the overlap out of their gap instead), or
 //! the analysis is refused naming the first node, its depth and the face it is behind
 //! (`refuse`).
 

@@ -36,7 +36,7 @@ pub const STATIC: CommandSpec = CommandSpec {
 pub const NONLINEAR: CommandSpec = CommandSpec {
     id: "solve.nonlinear",
     label: "Solve Nonlinear Static Step",
-    params: r#"{"step": "Inflate", "max_dofs": 6000000, "max_factor_entries": 400000000, "max_newton_iterations": 100000, "threads": 8} — solves a nonlinear static step (the only one when `step` is left out) in load increments with Newton–Raphson iterations and keeps the result in the session: the final displacements, reactions, Cauchy stresses and logarithmic strains (small strains without nonlinear geometry), the equivalent plastic strain of plastic materials (the largest in the summary), every increment's load factor, iterations and residuals (force, displacement and energy, relative to their tolerances' scales), and a displacement frame per converged increment; the caps may only be lowered (`max_newton_iterations` over the whole step); `threads` as for solve.static"#,
+    params: r#"{"step": "Inflate", "max_dofs": 6000000, "max_factor_entries": 400000000, "max_newton_iterations": 100000, "threads": 8} — solves a nonlinear static step (the only one when `step` is left out) in load increments with Newton–Raphson iterations and keeps the result in the session: the final displacements, reactions, Cauchy stresses and logarithmic strains (small strains without nonlinear geometry), the equivalent plastic strain of plastic materials (the largest in the summary), every increment's load factor, iterations and residuals (force, displacement and energy, relative to their tolerances' scales), and a displacement frame per converged increment, and with contact pairs (interaction.contact.pair: mortar contact by augmented Lagrangian, frictionless) each contact's normal force, largest pressure, closed nodes, deepest penetration and augmentations (solve.probe gives each secondary node's pressure, gap and status); the caps may only be lowered (`max_newton_iterations` over the whole step); `threads` as for solve.static"#,
     form: Some(super::forms::SOLVE_NONLINEAR),
     kind: CommandKind::Model,
     run: run_nonlinear,
@@ -239,6 +239,15 @@ fn run_nonlinear(s: &mut Session, p: &Value) -> Result<Value> {
         "frames": history.map(|h| h.load_factors()),
         "load_factor": history.and_then(|h| h.frames.last()).map(|f| f.load_factor),
         "critical_points": history.map(|h| &h.critical_points),
+        "contacts": r.contacts.iter().map(|c| json!({
+            "name": c.name,
+            "normal_force": c.normal_force,
+            "force": c.force,
+            "max_pressure": largest(c.nodes.iter().copied().zip(c.pressure.iter().copied())),
+            "closed_nodes": c.closed(),
+            "penetration": c.penetration,
+            "augmentations": c.augmentations,
+        })).collect::<Vec<_>>(),
         "max_displacement": largest(r.nodes.iter().zip(&r.displacement).map(|(l, u)| (*l, crate::results::magnitude(*u)))),
         "max_von_mises": largest(r.nodes.iter().zip(&r.von_mises).map(|(l, v)| (*l, *v))),
         "max_plastic_strain": largest(r.elements.iter().flat_map(|e| e.plastic_strain.iter().map(|v| (e.label, *v)))),
@@ -609,16 +618,31 @@ fn probe_implicit(result: &ImplicitResult, step: &str, nodes: &[u32], p: &Value)
                         let p = r.reference_points.get(k);
                         json!({"node": l, "reference_point": p.map(|p| &p.name), "displacement": p.map(|p| p.displacement), "reaction": p.map(|p| p.reaction)})
                     }
-                    Location::Node(i) => json!({
-                        "node": l,
-                        "displacement": r.displacement.get(i),
-                        "rotation": r.rotation.get(i),
-                        "reaction": r.reaction.get(i),
-                        "reaction_moment": r.reaction_moment.get(i),
-                        "stress": r.stress.get(i),
-                        "von_mises": r.von_mises.get(i),
-                        "temperature": r.temperature.as_ref().and_then(|t| t.get(i)),
-                    }),
+                    Location::Node(i) => {
+                        let mut v = json!({
+                            "node": l,
+                            "displacement": r.displacement.get(i),
+                            "rotation": r.rotation.get(i),
+                            "reaction": r.reaction.get(i),
+                            "reaction_moment": r.reaction_moment.get(i),
+                            "stress": r.stress.get(i),
+                            "von_mises": r.von_mises.get(i),
+                            "temperature": r.temperature.as_ref().and_then(|t| t.get(i)),
+                        });
+                        // The contacts the node is a secondary node of: pressure, gap, status.
+                        let contact: Vec<Value> = r
+                            .contacts
+                            .iter()
+                            .filter_map(|c| {
+                                let k = c.nodes.binary_search(&l).ok()?;
+                                Some(json!({"contact": c.name, "pressure": c.pressure.get(k), "gap": c.gap.get(k), "status": c.status.get(k)}))
+                            })
+                            .collect();
+                        if !contact.is_empty() {
+                            v["contact"] = Value::Array(contact);
+                        }
+                        v
+                    }
                 })
             })
             .collect::<Result<_>>()?,
@@ -1508,5 +1532,60 @@ pub(crate) mod tests {
         assert!(s.execute("solve.nonlinear", &json!({"step": "Bend"})).is_err(), "a linear step");
         let all = s.execute("solve.run", &json!({})).unwrap();
         assert_eq!(all["steps"].as_array().map(Vec::len), Some(3), "{all}");
+    }
+
+    /// Two blocks pressed together across a contact pair, as commands.
+    fn pressed_blocks(s: &mut Session) {
+        let script = json!([
+            {"command": "mesh.block", "params": {"body": "Lower", "kind": "hex8", "corners": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], "divisions": [2, 2, 1], "faces": {"1": "bottom", "2": "top"}}},
+            {"command": "mesh.block", "params": {"body": "Upper", "kind": "hex8", "corners": [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1], [0, 0, 2], [1, 0, 2], [1, 1, 2], [0, 1, 2]], "divisions": [3, 3, 1], "faces": {"1": "bottom", "2": "top"}, "merge": 0}},
+            {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Lower"}, {"body": "Upper"}]}},
+            {"command": "model.set.create", "params": {"name": "lower_top", "geometry": [{"body": "Lower", "face": "top"}]}},
+            {"command": "model.set.create", "params": {"name": "upper_bottom", "geometry": [{"body": "Upper", "face": "bottom"}]}},
+            {"command": "model.set.create", "params": {"name": "base", "geometry": [{"body": "Lower", "face": "bottom"}]}},
+            {"command": "model.set.create", "params": {"name": "top", "geometry": [{"body": "Upper", "face": "top"}]}},
+            {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.0}}},
+            {"command": "model.section.create", "params": {"name": "all", "set": "all", "material": "Mat", "kind": {"type": "solid"}}},
+            {"command": "interaction.contact.pair", "params": {"name": "interface", "main": "lower_top", "secondary": "upper_bottom"}},
+            {"command": "model.boundary_condition.create", "params": {"name": "base", "type": "fixed", "target": {"set": "base"}}},
+            {"command": "model.boundary_condition.create", "params": {"name": "push", "type": "displacement", "target": {"set": "top"}, "values": [0, 0, -0.02, null, null, null]}},
+            {"command": "model.step.create", "params": {"name": "Squeeze", "procedure": {"type": "nonlinear_static", "nonlinear_geometry": false}, "boundary_conditions": ["base", "push"], "loads": []}}
+        ]);
+        s.run_script(&script).unwrap();
+    }
+
+    #[test]
+    fn solve_and_probe_a_contact() {
+        let mut s = Session::default();
+        pressed_blocks(&mut s);
+        let r = s.execute("solve.nonlinear", &json!({"step": "Squeeze"})).unwrap();
+        let c = &r["contacts"][0];
+        assert_eq!(c["name"], "interface");
+        // ν = 0 and held ends: uniaxial strain 1% of E = 1000, over the unit area.
+        let force = c["normal_force"].as_f64().unwrap();
+        assert!((force - 10.0).abs() < 2e-3, "{r}");
+        assert_eq!(c["closed_nodes"], 16, "{r}");
+        // A secondary node gives its contact pressure, gap and status; a main one gives none.
+        let third = 1.0 / 3.0;
+        let probe = s.execute("solve.probe", &json!({"step": "Squeeze", "at": [[third, third, 1.0], [0.5, 0.5, 1.0]]})).unwrap();
+        let contact = &probe["nodes"][0]["contact"][0];
+        assert_eq!(contact["status"], "closed", "{probe}");
+        assert!((contact["pressure"].as_f64().unwrap() - 10.0).abs() < 2e-3, "{probe}");
+        assert!(contact["gap"].as_f64().unwrap() < 0.0, "{probe}");
+        assert!(probe["nodes"][1].get("contact").is_none(), "{probe}");
+        // The contact fields on the results display.
+        let v = s.execute("results.contour", &json!({"step": "Squeeze", "field": "contact_pressure"})).unwrap();
+        let range = &v["contour"]["range"];
+        assert!((range["max"]["value"].as_f64().unwrap() - 10.0).abs() < 2e-3 && range["min"]["value"] == 0.0, "{v}");
+        let status = s.execute("results.contour", &json!({"step": "Squeeze", "field": "contact_status"})).unwrap();
+        assert_eq!(status["contour"]["range"]["max"]["value"], 1.0, "{status}");
+        // The linear analyses refuse the contact by name.
+        s.execute(
+            "model.step.create",
+            &json!({"name": "Linear", "procedure": {"type": "static"}, "boundary_conditions": ["base", "push"], "loads": []}),
+        )
+        .unwrap();
+        let e = s.execute("solve.static", &json!({"step": "Linear"})).unwrap_err().to_string();
+        assert!(e.contains("interface"), "{e}");
     }
 }

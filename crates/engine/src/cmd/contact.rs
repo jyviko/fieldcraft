@@ -40,8 +40,8 @@ pub const PAIR: CommandSpec = CommandSpec {
     label: "Contact Pair",
     params: concat!(
         r#"{"name": "impact", "main": "plate" (a set of element faces), "secondary": "ball" (another), "#,
-        r#""friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb, μ = μk + (μs − μk) e^(−decay × slip rate); default frictionless), "penalty_scale": 1 (0 < scale ≤ 1: a factor on the stiffest penalty that leaves the time increment alone), "initial_penetration": "adjust" (move nodes that start inside onto the surface, strain-free, and report them) | "refuse" (refuse the analysis, naming the first)"#,
-        r#"} — contact between two surfaces, each one's nodes kept out of the other's faces (explicit dynamics; fails if the name is taken)"#
+        r#""friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb, μ = μk + (μs − μk) e^(−decay × slip rate); default frictionless), "penalty_scale": 1 (0 < scale ≤ 1: a factor on the penalty: explicit, the stiffest that leaves the time increment alone; nonlinear static, the augmented Lagrangian's), "initial_penetration": "adjust" (nodes that start inside: explicit moves them onto the surface, strain-free; nonlinear static takes the overlap out of their gap; both report them) | "refuse" (refuse the analysis, naming the first)"#,
+        r#"} — contact between two surfaces: in explicit dynamics each one's nodes are kept out of the other's faces; in nonlinear static steps `secondary` is the mortar (non-mortar) side whose pressure field is enforced against `main` by an augmented Lagrangian, frictionless so far (fails if the name is taken)"#
     ),
     form: Some(super::forms::CONTACT_PAIR),
     kind: CommandKind::Model,
@@ -58,8 +58,8 @@ pub const GENERAL: CommandSpec = CommandSpec {
     label: "General Contact",
     params: concat!(
         r#"{"name": "all", "surface": "skin" (optional: a set of element faces, each in contact with every other: self contact; default every exterior face of the solids), "#,
-        r#""friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb, μ = μk + (μs − μk) e^(−decay × slip rate); default frictionless), "penalty_scale": 1 (0 < scale ≤ 1: a factor on the stiffest penalty that leaves the time increment alone), "initial_penetration": "adjust" (move nodes that start inside onto the surface, strain-free, and report them) | "refuse" (refuse the analysis, naming the first)"#,
-        r#"} — single-surface contact of everything that may touch (explicit dynamics; fails if the name is taken)"#
+        r#""friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb, μ = μk + (μs − μk) e^(−decay × slip rate); default frictionless), "penalty_scale": 1 (0 < scale ≤ 1: a factor on the penalty: explicit, the stiffest that leaves the time increment alone; nonlinear static, the augmented Lagrangian's), "initial_penetration": "adjust" (nodes that start inside: explicit moves them onto the surface, strain-free; nonlinear static takes the overlap out of their gap; both report them) | "refuse" (refuse the analysis, naming the first)"#,
+        r#"} — single-surface contact of everything that may touch (explicit dynamics; nonlinear static steps refuse it: use pairs; fails if the name is taken)"#
     ),
     form: Some(super::forms::CONTACT_GENERAL),
     kind: CommandKind::Model,

@@ -104,7 +104,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Constraints | Coupling — Kinematic or distributing coupling of a set to a reference point | ready | `model.coupling.create`, `model.coupling.edit`, `model.coupling.delete` |
 | Constraints | Tie — Tie non-matching meshes together | coming soon (M7) |  |
 | Contact | General Contact — Contact between everything that may touch, or self contact of a surface, with friction (explicit dynamics) | ready | `interaction.contact.general`, `interaction.contact.edit`, `interaction.contact.delete` |
-| Contact | Contact Pair — Contact between two surfaces, with friction (explicit dynamics) | ready | `interaction.contact.pair`, `interaction.contact.edit`, `interaction.contact.delete` |
+| Contact | Contact Pair — Contact between two surfaces: with friction in explicit dynamics, frictionless mortar contact in nonlinear static steps | ready | `interaction.contact.pair`, `interaction.contact.edit`, `interaction.contact.delete` |
 | Contact | Find Contacts — Find the parts of the mesh that touch, and make contact pairs of them | ready | `interaction.contact.find` |
 | Contact | Rigid Wall — Rigid walls for explicit dynamics | coming soon (M10) |  |
 | Connectors | Bolt Load — Bolt pretension | coming soon (M7) |  |

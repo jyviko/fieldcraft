@@ -5,6 +5,7 @@ use fieldcraft_model::{ElementFace, GeometryRef, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
 use super::{opt, req};
+use crate::requirement::Requirement;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const TAG: CommandSpec = CommandSpec {
@@ -13,11 +14,19 @@ pub const TAG: CommandSpec = CommandSpec {
     params: r#"{"geometry": {"body": "Body1"} | {"body", "face"} | {"body", "edge"} | {"body", "vertex"}, "elements": [labels] (filling a body, face or edge), "faces": [{"element": 1, "face": 3}] (on a face), "edges": [{"element": 1, "edge": 2}] (on an edge), "nodes": [labels] (on a vertex)} — records where the mesh lies on the geometry, so sets named by geometry resolve"#,
     form: Some(super::forms::TAG),
     kind: CommandKind::Model,
+    requires: &[Requirement::Mesh],
     run: tag,
 };
 
-pub const TAG_CLEAR: CommandSpec =
-    CommandSpec { id: "mesh.tag.clear", label: "Clear Geometry Tags", params: "{}", form: Some(&[]), kind: CommandKind::Model, run: tag_clear };
+pub const TAG_CLEAR: CommandSpec = CommandSpec {
+    id: "mesh.tag.clear",
+    label: "Clear Geometry Tags",
+    params: "{}",
+    form: Some(&[]),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Mesh],
+    run: tag_clear,
+};
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]

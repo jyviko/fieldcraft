@@ -19,6 +19,7 @@ use fieldcraft_model::{Contact, ContactSurfaces, ElementFace, Friction, InitialP
 use serde_json::{Value, json};
 
 use super::{name, opt};
+use crate::requirement::Requirement;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 /// The options every contact takes, from the parameters.
@@ -46,6 +47,7 @@ pub const PAIR: CommandSpec = CommandSpec {
     ),
     form: Some(super::forms::CONTACT_PAIR),
     kind: CommandKind::Model,
+    requires: &[Requirement::Set],
     run: |s: &mut Session, p: &Value| {
         let n = name(p)?;
         let surfaces = ContactSurfaces::Pair { main: text(p, "main")?.to_string(), secondary: text(p, "secondary")?.to_string() };
@@ -64,6 +66,7 @@ pub const GENERAL: CommandSpec = CommandSpec {
     ),
     form: Some(super::forms::CONTACT_GENERAL),
     kind: CommandKind::Model,
+    requires: &[],
     run: |s: &mut Session, p: &Value| {
         let n = name(p)?;
         let surface = match p.get("surface") {
@@ -81,6 +84,7 @@ pub const EDIT: CommandSpec = CommandSpec {
     params: r#"{"name": "impact", "surfaces": {"type": "pair", "main": "plate", "secondary": "ball"} | {"type": "general", "surface": "skin" (optional)}, "friction": {…}, "penalty_scale": 1, "initial_penetration": "adjust|refuse"} — replaces the contact of that name (the model's form; see interaction.contact.pair)"#,
     form: Some(super::forms::CONTACT_EDIT),
     kind: CommandKind::Model,
+    requires: &[Requirement::Contact],
     run: |s: &mut Session, p: &Value| {
         let n = name(p)?;
         let mut obj = p.as_object().cloned().ok_or_else(|| EngineError::Params("the parameters of a contact are a JSON object".into()))?;
@@ -97,6 +101,7 @@ pub const DELETE: CommandSpec = CommandSpec {
     params: r#"{"name": "impact"}"#,
     form: Some(super::forms::CONTACT_DELETE),
     kind: CommandKind::Model,
+    requires: &[Requirement::Contact],
     run: |s: &mut Session, p: &Value| {
         s.model.remove_contact(name(p)?)?;
         Ok(Value::Null)
@@ -118,6 +123,7 @@ pub const TIE: CommandSpec = CommandSpec {
     params: r#"{"name": "glue", "main": "plate" (a set of element faces), "secondary": "rib" (another), "position_tolerance": 0.1 (optional: how far a secondary node may lie from the main surface and still be tied; default half the main element's thickness)} — bonds the secondary surface to the main one across non-matching meshes: each secondary node follows the main surface under it (dual mortar constraints in the implicit analyses; a constant stress crosses the tie exactly); fails if the name is taken"#,
     form: Some(super::forms::TIE),
     kind: CommandKind::Model,
+    requires: &[Requirement::Set],
     run: |s: &mut Session, p: &Value| {
         let n = name(p)?;
         s.model.add_tie(n, tie(p)?)?;
@@ -131,6 +137,7 @@ pub const TIE_EDIT: CommandSpec = CommandSpec {
     params: r#"{"name": "glue", "main": "plate", "secondary": "rib", "position_tolerance": 0.1} — replaces the tie of that name (see interaction.tie)"#,
     form: Some(super::forms::TIE_EDIT),
     kind: CommandKind::Model,
+    requires: &[Requirement::Tie],
     run: |s: &mut Session, p: &Value| {
         let n = name(p)?;
         s.model.replace_tie(n, tie(p)?)?;
@@ -144,6 +151,7 @@ pub const TIE_DELETE: CommandSpec = CommandSpec {
     params: r#"{"name": "glue"}"#,
     form: Some(super::forms::TIE_DELETE),
     kind: CommandKind::Model,
+    requires: &[Requirement::Tie],
     run: |s: &mut Session, p: &Value| {
         s.model.remove_tie(name(p)?)?;
         Ok(Value::Null)
@@ -159,6 +167,7 @@ pub const FIND: CommandSpec = CommandSpec {
     ),
     form: Some(super::forms::CONTACT_FIND),
     kind: CommandKind::Model,
+    requires: &[Requirement::Mesh],
     run: find,
 };
 

@@ -25,6 +25,7 @@ pub const OPEN: CommandSpec = CommandSpec {
     params: r#"{"path": "bracket.fieldcraft"} — opens the model, its mesh and its journal, and opens its design and imported meshes again from their files (one that is missing or changed is listed in `warnings`; the model still opens); unsaved changes of the current model are discarded and the undo history starts empty"#,
     form: Some(super::forms::FILE_OPEN),
     kind: CommandKind::Session,
+    requires: &[],
     run: open,
 };
 
@@ -34,6 +35,7 @@ pub const SAVE: CommandSpec = CommandSpec {
     params: r#"{"path"?: "bracket.fieldcraft"} — saves to `path`, else to the file the model was opened from or last saved to; written atomically, the previous version kept as `<file>.bak`"#,
     form: Some(super::forms::FILE_SAVE),
     kind: CommandKind::Session,
+    requires: &[],
     run: save,
 };
 
@@ -43,6 +45,7 @@ pub const SAVE_AS: CommandSpec = CommandSpec {
     params: r#"{"path": "bracket.fieldcraft"} — saves to a new file, which becomes the model's file"#,
     form: Some(super::forms::FILE_SAVE_AS),
     kind: CommandKind::Session,
+    requires: &[],
     run: save_as,
 };
 
@@ -52,6 +55,7 @@ pub const RECOVERY_LIST: CommandSpec = CommandSpec {
     params: r#"{"dir"?: "…"} — models autosaved by apps that crashed or closed with unsaved changes, newest first (default folder: FIELDCRAFT_RECOVERY_DIR or the per-user data folder)"#,
     form: Some(super::forms::RECOVERY_LIST),
     kind: CommandKind::Session,
+    requires: &[],
     run: recovery_list,
 };
 
@@ -61,6 +65,7 @@ pub const RECOVER: CommandSpec = CommandSpec {
     params: r#"{"id": "…", "dir"?: "…"} — opens an autosaved model (an id from file.recovery.list) with its original file path, as unsaved changes; the autosave stays until file.recovery.discard"#,
     form: Some(super::forms::RECOVER),
     kind: CommandKind::Session,
+    requires: &[],
     run: recover,
 };
 
@@ -70,6 +75,7 @@ pub const RECOVERY_DISCARD: CommandSpec = CommandSpec {
     params: r#"{"id": "…"} or {"all": true}; "dir"?: "…" — deletes autosaves of apps that are no longer running"#,
     form: Some(super::forms::RECOVERY_DISCARD),
     kind: CommandKind::Session,
+    requires: &[],
     run: recovery_discard,
 };
 
@@ -79,6 +85,7 @@ pub const SAMPLE: CommandSpec = CommandSpec {
     params: r#"{"name": "cantilever"} — opens a sample model (fieldcraft_engine::sample; the list is in docs/examples.md) in place of the current one, unsaved changes discarded; every sample but `parts` is ready to solve (solve.run)"#,
     form: Some(super::forms::SAMPLE),
     kind: CommandKind::Session,
+    requires: &[],
     run: open_sample,
 };
 
@@ -405,6 +412,9 @@ mod tests {
         refused(s.execute("file.recovery.discard", &json!({"all": true, "dir": input})));
         s.execute("geometry.open", &json!({"path": input.join("plate.solidcraft")})).unwrap();
         defined(&mut s);
+        // A section, so deck.write has all it needs and reaches its path.
+        s.execute("model.set.create", &json!({"name": "all", "elements": [1]})).unwrap();
+        s.execute("model.section.create", &json!({"name": "solid", "set": "all", "material": "Steel", "kind": {"type": "solid"}})).unwrap();
         // Writes go to the write root only: not the read root, not elsewhere.
         refused(s.execute("file.save_as", &json!({"path": input.join("m.fieldcraft")})));
         refused(s.execute("file.save_as", &json!({"path": outside.join("m.fieldcraft")})));

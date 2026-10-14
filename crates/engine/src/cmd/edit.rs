@@ -38,6 +38,7 @@ pub const UNDO: CommandSpec = CommandSpec {
     params: r#"{"count"?: 1} — takes back the last command that changed the model (it leaves the journal and can be redone); `count` takes back that many, as far as the history reaches"#,
     form: Some(super::forms::COUNT),
     kind: CommandKind::Session,
+    requires: &[],
     run: |s, p| repeat(s, p, Session::undo),
 };
 
@@ -47,6 +48,7 @@ pub const REDO: CommandSpec = CommandSpec {
     params: r#"{"count"?: 1} — runs the last undone command's change again; `count` redoes that many, as far as there are undone commands"#,
     form: Some(super::forms::COUNT),
     kind: CommandKind::Session,
+    requires: &[],
     run: |s, p| repeat(s, p, Session::redo),
 };
 

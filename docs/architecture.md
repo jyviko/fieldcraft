@@ -352,6 +352,14 @@ step count and by an estimate of the memory the kept states hold (oldest steps g
 Commands of kind `Session` (`file.*`, `edit.*`) are never journalled. `file.save` and `file.open`
 write and read `.fieldcraft` files; the desktop app autosaves unsaved work for `file.recover`.
 
+Each command lists what it cannot run without (`requires`: an open design, geometry, a mesh, a
+material, a step, a result, …; `crates/engine/src/requirement.rs`), next to its id. A requirement
+is a real prerequisite, never a workflow order. `Session::execute` checks them first and fails
+without doing anything, naming each missing piece and the toolbar entry that provides it ("Needs
+a material — Properties › Material"). The desktop UI reads the same check
+(`Session::availability`, a few counts, evaluated every frame) to grey ribbon buttons, command
+search results and Solve, with the same text as their tooltip.
+
 ## Test corpus
 
 Meshers are measured on our own parts (`docs/adr/0001-libraries.md`, test geometry). Each part is

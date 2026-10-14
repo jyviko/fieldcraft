@@ -91,8 +91,8 @@ software on the computer.
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `list_commands` | `filter?` | Every command with its label, parameter documentation and `schema` (its parameters as JSON Schema: types, units as `x-dimension`, defaults, required fields, one-of variants); `filter` matches id and label. |
-| `execute` | `command`, `params?` | Run any command (`list_commands`). A failure leaves the model unchanged and names what to fix. |
+| `list_commands` | `filter?` | Every command with its label, parameter documentation and `schema` (its parameters as JSON Schema: types, units as `x-dimension`, defaults, required fields, one-of variants) and `requires` (what the session must hold first: `design`, `geometry`, `mesh`, `material`, `step`, `result`, …); `filter` matches id and label. |
+| `execute` | `command`, `params?` | Run any command (`list_commands`). A failure leaves the model unchanged and names what to fix; a command whose `requires` are not met fails before doing anything, naming each missing piece and the command that provides it. |
 | `batch` | `commands: [{command, params}]` | Run steps in order, stop at the first error; the reply has every result and the failing step (`failed.index`, `failed.command`, `failed.error`). Steps before it stay applied (`undo` takes them back). |
 | `inspect_model` | — | `model.info` (counts, units, definitions), `model.activity` (the step table) and `geometry.bodies` (bodies with measures and persistent face names, which sets name as `{body, face}`). |
 | `check_model` | — | `model.check`: errors and warnings, each naming its item. |

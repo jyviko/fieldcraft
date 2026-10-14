@@ -1256,8 +1256,8 @@ mod tests {
     #[test]
     fn mesh_quality_reports_in_a_line() {
         let mut app = ModelApp::new(Session::default());
-        app.run("mesh.quality", json!({})).unwrap();
-        assert_eq!(app.status.as_ref().map(|s| s.text.as_str()), Some("Mesh Quality: no elements to measure"));
+        // Nothing to measure: the command needs a mesh and says so.
+        assert!(app.run("mesh.quality", json!({})).is_err());
         app.run_script(&fieldcraft_engine::sample::script()).unwrap();
         app.run("mesh.quality", json!({})).unwrap();
         let status = app.status.clone().unwrap();

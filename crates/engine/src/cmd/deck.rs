@@ -6,6 +6,7 @@ use fieldcraft_io::roots::Access;
 use serde_json::{Value, json};
 
 use super::req;
+use crate::requirement::Requirement;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const WRITE: CommandSpec = CommandSpec {
@@ -14,6 +15,7 @@ pub const WRITE: CommandSpec = CommandSpec {
     params: r#"{"format": "abaqus|nastran|lsdyna", "path": "part.inp", "steps": ["Load"]} — writes the model as a solver deck (formats: fieldcraft_decks::FORMATS); `steps` (optional) writes only those steps, as a Nastran run needs (static or frequency steps, not both); LS-DYNA writes several steps as *CASE analyses (run it with CASE); fails naming every error of the model check and everything the format cannot express"#,
     form: Some(super::forms::DECK),
     kind: CommandKind::Session,
+    requires: &[Requirement::Analysable, Requirement::ElementMaterial, Requirement::ElementSection],
     run: write,
 };
 
@@ -60,7 +62,7 @@ mod tests {
         assert!(s.execute("deck.write", &json!({"path": other})).is_err());
         assert!(s.execute("deck.write", &json!({"format": "abaqus"})).is_err());
         let mut empty = Session::default();
-        assert!(matches!(empty.execute("deck.write", &json!({"format": "abaqus", "path": other})), Err(EngineError::Deck(_))));
+        assert!(matches!(empty.execute("deck.write", &json!({"format": "abaqus", "path": other})), Err(EngineError::Unavailable(_))));
         assert!(!dir.join("other.inp").exists());
         assert!(matches!(s.execute("deck.write", &json!({"format": "abaqus", "path": dir.to_string_lossy()})), Err(EngineError::File(_))));
 

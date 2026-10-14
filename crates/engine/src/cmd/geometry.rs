@@ -9,6 +9,7 @@ use fieldcraft_model::Model;
 use fieldcraft_model::geometry::{Entity, GeometryRef};
 use serde_json::{Value, json};
 
+use crate::requirement::Requirement;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const OPEN: CommandSpec = CommandSpec {
@@ -17,6 +18,7 @@ pub const OPEN: CommandSpec = CommandSpec {
     params: r#"{"path": "part.solidcraft", "model"?: "keep"} — rebuilds the SolidCraft design and makes its bodies the geometry. `model`: "keep" (default) keeps the mesh and every definition, so opening the same design again after an edit picks up the change and sets follow their persistent face names; "new" starts a new model with the design (no mesh, sets, materials, sections, BCs, loads or steps; the unit system stays; the model is untitled until saved, and undo restores the previous file). The reply's `related` is false when the model (before the open) refers to bodies (mesh tags, set geometry) and the design has none of them, and `stale` lists what no longer resolves: `mesh_bodies` (bodies the mesh is tagged with that the design lacks) and `sets` (sets naming a body or face it lacks). One undo step"#,
     form: Some(super::forms::OPEN_DESIGN),
     kind: CommandKind::Model,
+    requires: &[],
     run: open,
 };
 
@@ -26,6 +28,7 @@ pub const BODIES: CommandSpec = CommandSpec {
     params: "{} — the open design's bodies: measures and persistent face names (by face index)",
     form: Some(&[]),
     kind: CommandKind::Model,
+    requires: &[], // No design is an answer too: no bodies.
     run: bodies,
 };
 
@@ -35,6 +38,7 @@ pub const TESSELLATE: CommandSpec = CommandSpec {
     params: r#"{"body": "Body1", "tolerance": 0.05} — triangulates the body's boundary within the chordal tolerance (mm); reports triangles per face"#,
     form: Some(super::forms::TESSELLATE),
     kind: CommandKind::Model,
+    requires: &[Requirement::Design],
     run: tessellate,
 };
 
@@ -44,6 +48,7 @@ pub const IMPORT_MESH: CommandSpec = CommandSpec {
     params: r#"{"path": "part.3mf"} — adds each build item of a 3MF package as a surface; triangles keep their B-rep face tags (docs/formats/tagged-mesh.md)"#,
     form: Some(super::forms::IMPORT_MESH),
     kind: CommandKind::Model,
+    requires: &[],
     run: import_mesh,
 };
 

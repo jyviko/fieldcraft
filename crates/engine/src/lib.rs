@@ -18,6 +18,7 @@ pub mod cmd;
 
 pub use cmd::analytic_surfaces;
 pub mod history;
+pub mod requirement;
 pub mod results;
 pub mod sample;
 pub mod schema;
@@ -56,6 +57,9 @@ pub enum EngineError {
     Explicit(#[from] fieldcraft_explicit::Error),
     #[error(transparent)]
     Fluid(#[from] fieldcraft_lbm::Error),
+    /// The session lacks what the command needs ([`requirement`]); nothing was done.
+    #[error("{0}")]
+    Unavailable(requirement::Unavailable),
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
@@ -113,6 +117,9 @@ pub struct CommandSpec {
     /// (the form is then the JSON text alone).
     pub form: Option<&'static [schema::Field]>,
     pub kind: CommandKind,
+    /// What the session must hold before the command can run ([`requirement`]): checked by
+    /// [`Session::execute`], and by the UI to grey the command with the missing pieces named.
+    pub requires: &'static [requirement::Requirement],
     pub run: fn(&mut Session, &Value) -> Result<Value>,
 }
 
@@ -124,9 +131,9 @@ pub fn commands() -> &'static [CommandSpec] {
 impl CommandSpec {
     /// The command as JSON for listings (`fieldcraft-cli commands --json`, the control channel's
     /// `engine.commands`, MCP `list_commands`): id, label, the parameter doc and, when described,
-    /// the parameters as JSON Schema.
+    /// the parameters as JSON Schema, and what it requires.
     pub fn listing(&self) -> Value {
-        let mut v = serde_json::json!({"id": self.id, "label": self.label, "params": self.params});
+        let mut v = serde_json::json!({"id": self.id, "label": self.label, "params": self.params, "requires": self.requires});
         if let Some(form) = self.form {
             v["schema"] = schema::json_schema(form);
         }
@@ -216,6 +223,7 @@ impl Session {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         // An id from hostile input is not echoed in full.
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.chars().take(100).collect()))?;
+        self.availability(spec).map_err(EngineError::Unavailable)?;
         // Session commands (open, save, undo, redo) change the session only in their last step,
         // after everything that can fail, so they need no copy of the model to restore.
         let before = (spec.kind == CommandKind::Model).then(|| (self.snapshot(), self.document()));

@@ -9,6 +9,7 @@ use fieldcraft_mesh::surface::BoundarySurface;
 use fieldcraft_model::{GeometryRef, Model};
 use serde_json::{Value, json};
 
+use crate::requirement::Requirement;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const HEX_GENERATE: CommandSpec = CommandSpec {
@@ -17,6 +18,7 @@ pub const HEX_GENERATE: CommandSpec = CommandSpec {
     params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "swept" (any sweep) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the mesh with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name; `weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate), so sets by geometry resolve. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
     form: Some(super::forms::HEX_GENERATE),
     kind: CommandKind::Model,
+    requires: &[Requirement::Geometry],
     run: hex_generate,
 };
 
@@ -120,6 +122,7 @@ pub const HEX_SWEEP: CommandSpec = CommandSpec {
     params: r#"the parameters of mesh.hex.generate, with "method": "swept" (default: extrude, sweep or revolve, whichever fits first) | "extrude" | "sweep" | "revolve" — mesh.hex.generate limited to the sweeping methods"#,
     form: Some(super::forms::HEX_SWEEP),
     kind: CommandKind::Model,
+    requires: &[Requirement::Geometry],
     run: hex_sweep,
 };
 
@@ -129,6 +132,7 @@ pub const HEX_MAPPED: CommandSpec = CommandSpec {
     params: r#"the parameters of mesh.hex.generate without "method" — mesh.hex.generate with the mapped method: a six-sided block (six faces of four edges, three edges at each of eight corners)"#,
     form: Some(super::forms::HEX_MAPPED),
     kind: CommandKind::Model,
+    requires: &[Requirement::Geometry],
     run: hex_mapped,
 };
 
@@ -138,6 +142,7 @@ pub const HEX_BLOCKS: CommandSpec = CommandSpec {
     params: r#"{"bodies": ["Cell1", "Cell2"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of that diagonal)} — replaces the mesh with one conforming all-hex mesh of a part partitioned into cells (bodies that meet face to face, such as the pieces of solid.split_body in SolidCraft): every cell a mapped block (six four-sided faces; faces that meet smoothly, such as the two halves of a hole, count as one), division counts assigned over all cells together, each shared face meshed once and its nodes merged, radial lines graded off holes and fillets. Elements are tagged with their cell's body and boundary faces with its B-rep faces (`weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate). Reports the cells, the shared faces, counts and quality; a cell that is not a block, or cells that touch without sharing whole faces, is an error that says which"#,
     form: Some(super::forms::HEX_BLOCKS),
     kind: CommandKind::Model,
+    requires: &[Requirement::Design],
     run: hex_blocks,
 };
 

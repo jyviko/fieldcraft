@@ -13,6 +13,7 @@ use fieldcraft_model::{ElementKind, GeometryRef, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
 use super::{label, labels, listed, optional_number, points, xyz};
+use crate::requirement::Requirement;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const NODE_ADD: CommandSpec = CommandSpec {
@@ -21,6 +22,7 @@ pub const NODE_ADD: CommandSpec = CommandSpec {
     params: r#"{"label": 1, "xyz": [x, y, z]} — adds the node, or moves it if the label exists"#,
     form: Some(super::forms::NODE_ADD),
     kind: CommandKind::Model,
+    requires: &[],
     run: node_add,
 };
 
@@ -30,6 +32,7 @@ pub const NODE_REMOVE: CommandSpec = CommandSpec {
     params: r#"{"label": 1} — only a node no element uses"#,
     form: Some(super::forms::LABEL),
     kind: CommandKind::Model,
+    requires: &[Requirement::Nodes],
     run: node_remove,
 };
 
@@ -39,6 +42,7 @@ pub const ELEMENT_ADD: CommandSpec = CommandSpec {
     params: r#"{"label": 1, "kind": "rod2|beam2|tri3|tri6|quad4|quad8|tet4|tet10|wedge6|hex8|hex20", "nodes": [labels]} — adds or replaces"#,
     form: Some(super::forms::ELEMENT_ADD),
     kind: CommandKind::Model,
+    requires: &[Requirement::Nodes],
     run: element_add,
 };
 
@@ -48,6 +52,7 @@ pub const ELEMENT_REMOVE: CommandSpec = CommandSpec {
     params: r#"{"label": 1}"#,
     form: Some(super::forms::LABEL),
     kind: CommandKind::Model,
+    requires: &[Requirement::Mesh],
     run: element_remove,
 };
 
@@ -57,6 +62,7 @@ pub const QUALITY: CommandSpec = CommandSpec {
     params: r#"{"elements": [labels] (optional, default all), "bins": 10 (1..=1000)} — certified validity (det J > 0 everywhere), volume, and min/max/mean/worst/histogram per metric (angles in degrees; histograms over each metric's fixed range, out-of-range values in the end bins)"#,
     form: Some(super::forms::QUALITY),
     kind: CommandKind::Model,
+    requires: &[Requirement::Mesh],
     run: quality_report,
 };
 
@@ -66,6 +72,7 @@ pub const DELAUNAY_POINTS: CommandSpec = CommandSpec {
     params: r#"{"points": [[x, y, z], ...] (at most 20000)} — the exact Delaunay tetrahedralization (a debugging report; the model is not changed): {"dimension", "vertices", "duplicates": [[point, kept point], ...], "tets": [[i, j, k, l], ...]} with 0-based point indices in tet4 order; collinear or coplanar points give no tets"#,
     form: Some(super::forms::DELAUNAY_POINTS),
     kind: CommandKind::Model,
+    requires: &[],
     run: delaunay_points,
 };
 
@@ -92,6 +99,7 @@ pub const SURFACE_CHECK: CommandSpec = CommandSpec {
     params: r#"{"body": "Body1", "tolerance": 0.05} or {"surface": 0}, optional "weld": 1e-9 (0 or 1e-15..=1e-3 of the bounding-box diagonal), "weld_distance": mm (default: the surface's own, twice SolidCraft's linear tolerance for a tessellated body, 0 for an imported mesh), "feature_angle": 45 (degrees, (0, 180]) — welds the tessellated body or imported surface and checks it can bound a volume mesh: closed, manifold, outward, no self-intersections; reports shells, genus, volume and feature edges, or the located defects"#,
     form: Some(super::forms::SURFACE_CHECK),
     kind: CommandKind::Model,
+    requires: &[Requirement::Geometry],
     run: surface_check,
 };
 
@@ -101,6 +109,7 @@ pub const TET_GENERATE: CommandSpec = CommandSpec {
     params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the body's bounding-box diagonal), the boundary options of mesh.surface.check ("weld", "weld_distance", "feature_angle"), optional "size": mm (target edge length; default a twentieth of the bounding-box diagonal), "order": "linear" | "quadratic" (tet4 or tet10; quadratic mid-edge nodes lie on the B-rep faces), "quality": true (false: the raw constrained Delaunay tetrahedralization), "quality_target": 40 (degrees: tetrahedra whose smallest dihedral-angle sine is at least sin of this are left alone by improvement, 5..=60), "curvature_angle": 22.5 (degrees per element along curved boundary, 0 for none, at most 90), "grading": 0.3 (largest size change per unit length, 0.05..=2), "max_passes": 20 (improvement passes, 0..=200), "max_points": 1000000 (1..=20000000), "max_steiner": 50000 (0..=10000000), "max_tets": 5000000 (1..=50000000) — the constrained Delaunay tetrahedralization of the welded boundary (every boundary triangle a union of tet faces), refined to the size field with its boundary vertices on the B-rep faces, smoothed and improved (Delaunay refinement, ODT smoothing, Klingner–Shewchuk improvement), with a quality report. Adds the elements and their nodes (labels after the largest existing ones), tags the elements with the body and each boundary element face with its geometry face, and fails, changing nothing, if a surface is invalid or a mesh does not pass the validity gate. Reports the totals and, under `bodies`, each body's counts, size and quality report"#,
     form: Some(super::forms::TET),
     kind: CommandKind::Model,
+    requires: &[Requirement::Geometry],
     run: tet_generate,
 };
 
@@ -350,6 +359,7 @@ pub const PLANAR: CommandSpec = CommandSpec {
     params: r#"{"size": 1.0, "kind": "quad4|quad8|tri3|tri6" (default quad4), and either "polygon": [[x, y], ...] with optional "holes": [[[x, y], ...], ...] and "name": "Plane" (the body name its tags use), or "body": "Body1", "face": "F2:top", "tolerance": 0.05 (a planar face of an open design, parallel to XY); optional "max_elements": 1000000 (1..=4000000)} — meshes the planar region with 2D elements in the XY plane (a face at z = c is meshed at z = 0) for plane stress, plane strain or axisymmetric sections (x the radius, Y the axis): free quadrilaterals (or constrained Delaunay triangles) of about `size`, mid-side nodes on the boundary for quadratic kinds. Adds nodes and elements after the largest existing labels and tags them: the elements with the face (polygon: face `area` of body `name`), the boundary element edges with edges named after the neighbouring face of the body (polygon: `e1`, `e2`, … side by side, the outer loop then each hole, and vertices `v1`, … at the corners), so sets on those edges carry loads and boundary conditions"#,
     form: Some(super::forms::PLANAR),
     kind: CommandKind::Model,
+    requires: &[],
     run: planar,
 };
 
@@ -837,7 +847,7 @@ mod tests {
         let bytes = fieldcraft_geometry::script_design(&commands.to_string()).unwrap();
         let (_dir, path) = crate::tests::design_file(&bytes);
         let mut s = Session::default();
-        assert!(s.execute("mesh.tet.generate", &json!({})).unwrap_err().to_string().contains("open a design first"));
+        assert!(s.execute("mesh.tet.generate", &json!({})).unwrap_err().to_string().contains("Needs geometry"));
         s.execute("geometry.open", &json!({"path": path})).unwrap();
         let r = s.execute("mesh.tet.generate", &json!({})).unwrap();
         let bodies = r["bodies"].as_array().unwrap();
@@ -860,7 +870,7 @@ mod tests {
     #[test]
     fn quality_summary_counts_invalid_elements() {
         let mut s = Session::default();
-        assert_eq!(s.execute("mesh.quality", &json!({})).unwrap()["summary"], "no elements to measure");
+        assert!(matches!(s.execute("mesh.quality", &json!({})), Err(crate::EngineError::Unavailable(_))), "no elements to measure");
         for (label, xyz) in [(1, [0, 0, 0]), (2, [1, 0, 0]), (3, [0, 1, 0]), (4, [0, 0, 1])] {
             s.execute("mesh.node.add", &json!({"label": label, "xyz": xyz})).unwrap();
         }

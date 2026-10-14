@@ -5,6 +5,7 @@
 use serde_json::{Value, json};
 
 use super::{opt, xyz};
+use crate::requirement::Requirement;
 use crate::results::{Field, Kind, MAX_BANDS, MIN_BANDS, ResultsView};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
@@ -14,6 +15,7 @@ pub const DEFORMED: CommandSpec = CommandSpec {
     params: r#"{"step": "Load", "show": true, "scale": "auto"} — shows a solved step's deformed shape (`show: false` the undeformed mesh); `scale` is a factor (0 draws the undeformed shape, so a sequence from 0 swings it out) or "auto" (the largest displacement drawn a tenth of the model's size); `step` defaults to the step shown or the first solved one"#,
     form: Some(super::forms::DEFORMED),
     kind: CommandKind::Session,
+    requires: &[Requirement::Result],
     run: deformed,
 };
 
@@ -23,6 +25,7 @@ pub const CONTOUR: CommandSpec = CommandSpec {
     params: r#"{"step": "Load", "field": "von_mises", "bands": 12} — contours of a nodal field: displacement, displacement_x/y/z, von_mises, max/mid/min_principal, stress_xx/yy/zz/xy/xz/yz (stresses for static steps), contact_pressure, contact_gap, contact_status (0 open, 1 closed or stick, 2 slip), contact_shear, contact_slip (friction; nonlinear static steps with contact, at the contacts' secondary surfaces); "none" turns them off; 2 to 24 bands"#,
     form: Some(super::forms::CONTOUR),
     kind: CommandKind::Session,
+    requires: &[Requirement::Result],
     run: contour,
 };
 
@@ -32,6 +35,7 @@ pub const MODES: CommandSpec = CommandSpec {
     params: r#"{"step": "Modes", "mode": 1} — shows a mode shape of a solved frequency step (from 1) and lists every mode's frequency"#,
     form: Some(super::forms::MODES),
     kind: CommandKind::Session,
+    requires: &[Requirement::Result],
     run: modes,
 };
 
@@ -41,6 +45,7 @@ pub const ANIMATE: CommandSpec = CommandSpec {
     params: r#"{"on": true} — animates the deformed shape: a mode swings through its positive and negative shape, a static step grows from undeformed to deformed"#,
     form: Some(super::forms::ANIMATE),
     kind: CommandKind::Session,
+    requires: &[Requirement::Result],
     run: animate,
 };
 
@@ -50,6 +55,7 @@ pub const FRAME: CommandSpec = CommandSpec {
     params: r#"{"step": "Impact", "frame": 3, "time": 0.002} — shows a field frame of a solved explicit step, by index from 0 or the frame nearest a time (neither: the last), or of a nonlinear static step (one per converged increment, `time` its load factor; the deformed shape follows it, its contours show the final state); the deformed shape and contours follow it"#,
     form: Some(super::forms::FRAME),
     kind: CommandKind::Session,
+    requires: &[Requirement::Result],
     run: frame,
 };
 
@@ -59,6 +65,7 @@ pub const REACTIONS: CommandSpec = CommandSpec {
     params: r#"{"step": "Load", "sets": ["root"], "about": [0, 0, 0]} — reaction force and moment (about the point) summed over each node set, and over the whole model; `sets` defaults to the sets the step's boundary conditions hold"#,
     form: Some(super::forms::REACTIONS),
     kind: CommandKind::Session,
+    requires: &[Requirement::Result],
     run: reactions,
 };
 
@@ -68,6 +75,7 @@ pub const CLEAR: CommandSpec = CommandSpec {
     params: "{} — back to the model: hides the deformed shape, contours and modes",
     form: Some(&[]),
     kind: CommandKind::Session,
+    requires: &[Requirement::ResultsShown],
     run: clear,
 };
 

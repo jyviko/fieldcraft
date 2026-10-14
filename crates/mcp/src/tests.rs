@@ -275,6 +275,8 @@ fn file_access_stays_inside_the_roots() {
     refused(&mut s, "save", json!({"path": outside.join("m.fieldcraft")}));
     refused(&mut s, "save", json!({"path": input.join("m.fieldcraft")}));
     refused(&mut s, "execute", json!({"command": "file.save_as", "params": {"path": outside.join("m.fieldcraft")}}));
+    // A model with all a deck needs, so write_deck reaches its path.
+    ok(&mut s, "execute", json!({"command": "file.sample", "params": {"name": "cantilever"}}));
     refused(&mut s, "write_deck", json!({"format": "abaqus", "path": outside.join("m.inp")}));
     refused(&mut s, "screenshot", json!({"path": outside.join("x.png")}));
     refused(&mut s, "screenshot", json!({"path": input.join("x.png")}));

@@ -28,6 +28,8 @@
 //! - [`beam`]: two-node Timoshenko beams with profile section properties;
 //! - [`frame`]: local axes of shells and beams and the rotation of their matrices;
 //! - [`face`]: consistent nodal forces of pressure on element faces;
+//! - [`contact`]: contact geometry: the closest point of an element face to a point and the
+//!   bucket grid of the global search;
 //! - [`heat`]: heat conduction (conductivity, capacity, sources, surface flux and convection,
 //!   heat flux); thermal strain loads and stresses are in [`element`];
 //! - [`uniform`]: uniform-strain (one-point) hexahedron and tetrahedron kinematics, hourglass
@@ -54,6 +56,7 @@
 pub mod basis;
 pub mod beam;
 pub mod constitutive;
+pub mod contact;
 pub mod dense;
 pub mod dof;
 pub mod elastoplastic;

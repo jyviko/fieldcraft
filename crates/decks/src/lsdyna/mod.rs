@@ -22,6 +22,12 @@
 //! - couplings: kinematic as `*CONSTRAINED_NODAL_RIGID_BODY` (the reference point first in its
 //!   node set), distributing as `*CONSTRAINED_INTERPOLATION` (the reference point dependent on
 //!   the set's translations, equal weights);
+//! - contact: a pair as `*CONTACT_AUTOMATIC_SURFACE_TO_SURFACE` between segment sets (the
+//!   secondary surface first), general contact as `*CONTACT_AUTOMATIC_SINGLE_SURFACE` on a segment
+//!   set or on every part (`surfatyp` 5); the static and kinetic coefficients and the decay
+//!   coefficient (`fs`, `fd`, `dc`: the same exponential decay law) and the penalty scale on both
+//!   sides (`sfsa`, `sfsb`, a factor on LS-DYNA's own default stiffness). LS-DYNA moves nodes
+//!   that start inside the other surface out, as `adjust` does; a refusal is noted in a comment;
 //! - per step: `*CONTROL_IMPLICIT_GENERAL`, `*CONTROL_IMPLICIT_SOLUTION` (linear) or
 //!   `*CONTROL_IMPLICIT_EIGENVALUE`, `*CONTROL_TERMINATION` (a static step is one implicit step
 //!   from time 0 to 1 with every load ramped by one curve, `*DEFINE_CURVE`); a nonlinear static
@@ -69,8 +75,8 @@ mod elements;
 use std::collections::{BTreeMap, BTreeSet};
 
 use fieldcraft_model::{
-    BoundaryCondition, CouplingKind, Diagnostic, Dofs, Elastic, Element, ElementKind, Hardening, Load, Material, Model, OutputVariable, Plastic,
-    Procedure, Resolved, ResolvedDirection, Section, SectionKind, Step, Target,
+    BoundaryCondition, ContactSurfaces, CouplingKind, Diagnostic, Dofs, Elastic, Element, ElementKind, Hardening, InitialPenetration, Load, Material,
+    Model, OutputVariable, Plastic, Procedure, Resolved, ResolvedDirection, Section, SectionKind, Step, Target,
 };
 
 use crate::{Error, Result};
@@ -177,6 +183,7 @@ fn write_with(model: &Model, r: &Resolved) -> Result<Written> {
     element_cards(&mut d, &plan)?;
     sets(&mut d, model, r, &plan)?;
     couplings(&mut d, model, r, &plan)?;
+    contacts(&mut d, model, &plan)?;
     discrete(&mut d, model, r, &plan)?;
     if let Some(parts) = &plan.gravity_parts {
         d.line("*SET_PART_LIST");
@@ -268,6 +275,10 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
         if c.kind == CouplingKind::Distributing {
             node_sets.insert(c.set.as_str());
         }
+    }
+    // Contact surfaces are segment sets.
+    for c in model.contacts().values() {
+        segment_sets.extend(c.surfaces.sets());
     }
     let mut gravity_sets: BTreeSet<Option<&str>> = BTreeSet::new();
     for step in model.steps() {
@@ -685,6 +696,42 @@ fn couplings(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan) -> Result<(
                 next_interpolation += 1;
             }
         }
+    }
+    Ok(())
+}
+
+/// Contacts (see the module docs): a pair as an automatic surface-to-surface contact between the
+/// segment sets, general contact as an automatic single-surface contact.
+fn contacts(d: &mut Deck, model: &Model, plan: &Plan) -> Result<()> {
+    for (name, c) in model.contacts() {
+        let sid = |set: &str| plan.sets.get(set).copied().ok_or_else(|| broken(format!("contact `{name}`: set `{set}`")));
+        d.comment(&format!("contact `{name}`"));
+        if c.initial_penetration == InitialPenetration::Refuse {
+            d.comment("FieldCraft refuses nodes that start inside the other surface; LS-DYNA moves them out (as `adjust` does)");
+        }
+        match &c.surfaces {
+            ContactSurfaces::Pair { main, secondary } => {
+                d.line("*CONTACT_AUTOMATIC_SURFACE_TO_SURFACE");
+                d.header(&["surfa", "surfb", "surfatyp", "surfbtyp"]);
+                d.card([Field::from(sid(secondary)?), Field::from(sid(main)?), Field::from(0), Field::from(0)]);
+            }
+            ContactSurfaces::General { surface: Some(s) } => {
+                d.line("*CONTACT_AUTOMATIC_SINGLE_SURFACE");
+                d.header(&["surfa", "surfb", "surfatyp"]);
+                d.card([Field::from(sid(s)?), Field::Blank, Field::from(0)]);
+            }
+            ContactSurfaces::General { surface: None } => {
+                // SURFATYP 5: every part.
+                d.line("*CONTACT_AUTOMATIC_SINGLE_SURFACE");
+                d.header(&["surfa", "surfb", "surfatyp"]);
+                d.card([Field::from(0), Field::Blank, Field::from(5)]);
+            }
+        }
+        let f = c.friction;
+        d.header(&["fs", "fd", "dc"]);
+        d.card([Field::from(f.static_coefficient), Field::from(f.kinetic_coefficient()), Field::from(f.decay)]);
+        d.header(&["sfsa", "sfsb"]);
+        d.card([Field::from(c.penalty_scale), Field::from(c.penalty_scale)]);
     }
     Ok(())
 }

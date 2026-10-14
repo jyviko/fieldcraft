@@ -331,6 +331,9 @@ impl<'m> Deck<'m> {
         self.plan_constraints()?;
         self.plan_loads()?;
         self.problems.extend(crate::thermal_items(self.model));
+        for name in self.model.contacts().keys() {
+            self.problems.insert(format!("contact `{name}` (Nastran's linear solutions SOL 101 and 103 have no contact)"));
+        }
         for sub in &mut self.subcases {
             if matches!(sub.step.procedure, Procedure::Frequency { .. }) {
                 sub.method = Some(next_id(&mut self.next_sid)?);

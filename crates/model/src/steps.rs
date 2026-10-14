@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Model, Result, check_name, context, finite, positive, require};
+use crate::{Error, Friction, Model, Result, check_name, context, finite, positive, require};
 
 /// Most steps in a model.
 pub const MAX_STEPS: usize = 1000;
@@ -317,7 +317,7 @@ pub struct ExplicitDynamic {
     /// the last one listed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub initial_velocities: Vec<InitialVelocity>,
-    /// Fixed, frictionless rigid planes the nodes of sets cannot pass through.
+    /// Fixed rigid planes the nodes of sets cannot pass through, with Coulomb friction.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rigid_walls: Vec<RigidWall>,
     /// Hourglass control of one-point hexahedra.
@@ -431,6 +431,7 @@ impl ExplicitDynamic {
             if !(w.normal.iter().map(|c| c * c).sum::<f64>() > 0.0) {
                 return Err(Error::Invalid("a rigid wall's normal must not be zero".into()));
             }
+            w.friction.validate().map_err(|e| Error::Invalid(format!("rigid wall on set `{}`: {e}", w.set)))?;
         }
         self.hourglass.validate()?;
         self.bulk_viscosity.validate()
@@ -445,14 +446,16 @@ pub struct InitialVelocity {
     pub velocity: [f64; 3],
 }
 
-/// A fixed, frictionless rigid plane through `point`. Its `normal` points to the side the nodes
-/// of `set` stay on.
+/// A fixed rigid plane through `point`. Its `normal` points to the side the nodes of `set` stay
+/// on; nodes sliding on it feel `friction` (frictionless by default).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RigidWall {
     pub set: String,
     pub point: [f64; 3],
     pub normal: [f64; 3],
+    #[serde(default, skip_serializing_if = "Friction::is_frictionless")]
+    pub friction: Friction,
 }
 
 /// How one-point hexahedra resist their hourglass (zero-energy) modes.
@@ -870,7 +873,7 @@ mod tests {
         let json = serde_json::json!({
             "type": "explicit_dynamic", "end_time": 1e-3, "history_nodes": "front",
             "initial_velocities": [{"set": "front", "velocity": [-10, 0, 0]}],
-            "rigid_walls": [{"set": "front", "point": [0, 0, 0], "normal": [1, 0, 0]}],
+            "rigid_walls": [{"set": "front", "point": [0, 0, 0], "normal": [1, 0, 0], "friction": {"static": 0.2}}],
             "hourglass": {"type": "stiffness"}
         });
         let p: Procedure = serde_json::from_value(json).unwrap();
@@ -895,7 +898,14 @@ mod tests {
             ExplicitDynamic { max_increments: 0, ..base.clone() },
             ExplicitDynamic { output_interval: Some(1e-9), ..base.clone() },
             ExplicitDynamic { history_interval: Some(-1.0), ..base.clone() },
-            ExplicitDynamic { rigid_walls: vec![RigidWall { set: "front".into(), point: [0.0; 3], normal: [0.0; 3] }], ..base.clone() },
+            ExplicitDynamic {
+                rigid_walls: vec![RigidWall { set: "front".into(), point: [0.0; 3], normal: [0.0; 3], friction: Friction::NONE }],
+                ..base.clone()
+            },
+            ExplicitDynamic {
+                rigid_walls: vec![RigidWall { set: "front".into(), point: [0.0; 3], normal: [1.0, 0.0, 0.0], friction: Friction::coulomb(f64::NAN) }],
+                ..base.clone()
+            },
             ExplicitDynamic {
                 initial_velocities: vec![InitialVelocity { set: "front".into(), velocity: [f64::INFINITY, 0.0, 0.0] }],
                 ..base.clone()

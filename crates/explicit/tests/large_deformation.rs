@@ -318,7 +318,7 @@ fn taylor_bar_recovers_its_yield_stress() {
     step.output_interval = Some(end / 4.0);
     step.history_interval = Some(end / 400.0);
     step.initial_velocities = vec![InitialVelocity { set: "nodes".into(), velocity: [0.0, 0.0, -speed] }];
-    step.rigid_walls = vec![RigidWall { set: "nodes".into(), point: [0.0; 3], normal: [0.0, 0.0, 1.0] }];
+    step.rigid_walls = vec![RigidWall { set: "nodes".into(), point: [0.0; 3], normal: [0.0, 0.0, 1.0], friction: Friction::NONE }];
     step.hourglass = Hourglass { kind: HourglassKind::Stiffness, coefficient: 0.1 };
     let mut m = block([4, 4, 30], [width, width, length], ElementKind::Hex8);
     node_set(&mut m, "nodes", |_| true);
@@ -359,7 +359,7 @@ fn taylor_with(material: Material) -> (Model, ExplicitResult) {
     let mut step = ExplicitDynamic::new(end);
     step.output_interval = Some(end / 2.0);
     step.initial_velocities = vec![InitialVelocity { set: "nodes".into(), velocity: [0.0, 0.0, -300_000.0] }];
-    step.rigid_walls = vec![RigidWall { set: "nodes".into(), point: [0.0; 3], normal: [0.0, 0.0, 1.0] }];
+    step.rigid_walls = vec![RigidWall { set: "nodes".into(), point: [0.0; 3], normal: [0.0, 0.0, 1.0], friction: Friction::NONE }];
     step.hourglass = Hourglass { kind: HourglassKind::Stiffness, coefficient: 0.1 };
     let mut m = block([2, 2, 12], [7.6, 7.6, 25.4], ElementKind::Hex8);
     node_set(&mut m, "nodes", |_| true);

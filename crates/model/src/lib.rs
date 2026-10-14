@@ -34,6 +34,7 @@
 pub mod bcs;
 pub mod check;
 pub mod constraints;
+pub mod contact;
 pub mod discrete;
 pub mod fluids;
 pub mod geometry;
@@ -53,6 +54,7 @@ use serde::{Deserialize, Serialize};
 pub use bcs::{BoundaryCondition, Dofs, Symmetry, TEMPERATURE_DOF, Target};
 pub use check::{Diagnostic, Resolved, ResolvedSet, Severity};
 pub use constraints::{Coupling, CouplingKind, ReferencePoint};
+pub use contact::{Contact, ContactSurfaces, Friction, InitialPenetration};
 pub use discrete::{Direction, Mass, PointMass, ResolvedDirection, ResolvedMass, ResolvedSpring, Spring};
 pub use fluids::{BoxFace, BoxFaces, FaceCondition, FluidBoundary, FluidDomain, Profile, SurfaceBoundary, SurfaceCondition};
 pub use geometry::{Classification, Entity, GeometryRef};
@@ -123,6 +125,8 @@ pub struct Model {
     reference_points: BTreeMap<String, ReferencePoint>,
     couplings: BTreeMap<String, Coupling>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    contacts: BTreeMap<String, Contact>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     masses: BTreeMap<String, PointMass>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     springs: BTreeMap<String, Spring>,
@@ -156,6 +160,8 @@ struct ModelData {
     reference_points: BTreeMap<String, ReferencePoint>,
     #[serde(default)]
     couplings: BTreeMap<String, Coupling>,
+    #[serde(default)]
+    contacts: BTreeMap<String, Contact>,
     #[serde(default)]
     masses: BTreeMap<String, PointMass>,
     #[serde(default)]
@@ -214,6 +220,9 @@ impl TryFrom<ModelData> for Model {
         }
         for (n, v) in d.couplings {
             m.add_coupling(&n, v)?;
+        }
+        for (n, v) in d.contacts {
+            m.add_contact(&n, v)?;
         }
         for (n, v) in d.masses {
             m.add_mass(&n, v)?;
@@ -330,6 +339,7 @@ impl Model {
             sections: self.sections.clone(),
             reference_points: self.reference_points.clone(),
             couplings: self.couplings.clone(),
+            contacts: self.contacts.clone(),
             masses: self.masses.clone(),
             springs: self.springs.clone(),
             boundary_conditions: self.boundary_conditions.clone(),
@@ -340,13 +350,14 @@ impl Model {
     }
 
     /// Counts of each kind of definition, for summaries.
-    pub fn definition_counts(&self) -> [(&'static str, usize); 11] {
+    pub fn definition_counts(&self) -> [(&'static str, usize); 12] {
         [
             ("sets", self.sets.len()),
             ("materials", self.materials.len()),
             ("sections", self.sections.len()),
             ("reference_points", self.reference_points.len()),
             ("couplings", self.couplings.len()),
+            ("contacts", self.contacts.len()),
             ("masses", self.masses.len()),
             ("springs", self.springs.len()),
             ("boundary_conditions", self.boundary_conditions.len()),

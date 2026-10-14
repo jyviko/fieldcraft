@@ -235,7 +235,7 @@ fn bar_rebounds_from_a_rigid_wall() {
         step.history_interval = Some(end / 3000.0);
         step.output_interval = Some(end);
         step.initial_velocities = vec![InitialVelocity { set: "all_nodes".into(), velocity: [-v0, 0.0, 0.0] }];
-        step.rigid_walls = vec![RigidWall { set: "start".into(), point: [0.0; 3], normal: [1.0, 0.0, 0.0] }];
+        step.rigid_walls = vec![RigidWall { set: "start".into(), point: [0.0; 3], normal: [1.0, 0.0, 0.0], friction: Friction::NONE }];
         step.bulk_viscosity.linear = linear;
         let mut bar = Bar::new(kind, 200, ExplicitDynamic::new(end));
         let nodes: Vec<u32> = bar.model.nodes().keys().copied().collect();
@@ -347,7 +347,7 @@ fn caps_and_unsupported_models_are_errors() {
     assert!(solve_explicit(&light.model, None, &Limits::default()).is_err());
     // A node behind its wall at the start.
     let mut behind = ExplicitDynamic::new(end);
-    behind.rigid_walls = vec![RigidWall { set: "end".into(), point: [LENGTH + 1.0, 0.0, 0.0], normal: [-1.0, 0.0, 0.0] }];
+    behind.rigid_walls = vec![RigidWall { set: "end".into(), point: [LENGTH + 1.0, 0.0, 0.0], normal: [-1.0, 0.0, 0.0], friction: Friction::NONE }];
     let mut wall = Bar::new(ElementKind::Hex8, 4, ExplicitDynamic::new(end));
     wall.model.replace_step(Step::new("Dynamic", Procedure::ExplicitDynamic(behind.clone()))).unwrap();
     assert!(solve_explicit(&wall.model, None, &Limits::default()).is_ok(), "the wall is beyond the end node, which is on its allowed side");

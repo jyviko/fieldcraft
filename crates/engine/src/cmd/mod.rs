@@ -1,6 +1,7 @@
 //! The command registry. Each area has its own module; [`ALL`] lists every command.
 
 mod block;
+mod contact;
 pub(crate) mod deck;
 pub(crate) mod define;
 mod edit;
@@ -67,6 +68,11 @@ pub static ALL: &[CommandSpec] = &[
     define::COUPLING_CREATE,
     define::COUPLING_EDIT,
     define::COUPLING_DELETE,
+    contact::PAIR,
+    contact::GENERAL,
+    contact::EDIT,
+    contact::DELETE,
+    contact::FIND,
     define::MASS_CREATE,
     define::MASS_EDIT,
     define::MASS_DELETE,

@@ -477,6 +477,18 @@ mod tests {
             json!({"name": "A", "procedure": {"type": "heat_transfer", "transient": {"end_time": -1, "increment": 0}}}),
             json!({"name": "A", "procedure": {"type": "coupled_temperature_displacement", "extra": 1}}),
             json!({"step": "Heat", "frame": u64::MAX, "nodes": [1]}),
+            // Contact.
+            json!({"name": "C", "main": 7, "secondary": null}),
+            json!({"name": "C", "main": "end", "secondary": "root", "friction": {"static": 1e308, "kinetic": -1, "decay": -1e308}}),
+            json!({"name": "C", "main": "end", "secondary": "end"}),
+            json!({"name": "C", "main": "x".repeat(10_000), "secondary": "root", "penalty_scale": 1e308}),
+            json!({"name": "C", "surface": "root", "penalty_scale": 0, "initial_penetration": "ignore"}),
+            json!({"name": "C", "surface": 3}),
+            json!({"name": "C", "surfaces": {"type": "pair", "main": "end"}}),
+            json!({"name": "C", "surfaces": {"type": "general", "surface": "nope"}, "friction": "sticky"}),
+            json!({"tolerance": 1e300, "create": true, "friction": {"static": 0.1}}),
+            json!({"tolerance": -0.0, "create": true}),
+            json!({"tolerance": 1e-300, "create": 1}),
             json!({"geometry": {"body": "Bar"}, "elements": [1, 99], "faces": [{"element": 1, "face": 200}]}),
             json!({"geometry": {"body": "Bar", "vertex": "v"}, "nodes": [1], "edges": [{"element": 1, "edge": 0}]}),
         ];

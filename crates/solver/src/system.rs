@@ -418,6 +418,11 @@ impl Mesh {
 
     /// Build it from the model and its resolved view, refusing what the solver cannot represent.
     pub fn new(model: &Model, resolved: &Resolved, max_dofs: usize) -> Result<Mesh> {
+        if let Some(name) = model.contacts().keys().next() {
+            return Err(Error::NotSupported(format!(
+                "contact (`{name}`) in implicit analyses (it comes with M7): a model's contacts apply to all its steps, so solve its explicit dynamic steps, or remove the contacts to solve the implicit ones"
+            )));
+        }
         let mut elements = Vec::new();
         let mut trusses = Vec::new();
         let mut structural = Vec::new();

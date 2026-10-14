@@ -874,12 +874,12 @@ mod tests {
 
     #[test]
     fn rigid_walls_back_their_set_and_initial_velocities_leave_it() {
-        use fieldcraft_model::{ExplicitDynamic, InitialVelocity, Procedure, RigidWall, Step};
+        use fieldcraft_model::{ExplicitDynamic, Friction, InitialVelocity, Procedure, RigidWall, Step};
         let mut m = bar(4);
         m.add_set("all", Set { nodes: m.nodes().keys().copied().collect(), ..Set::default() }).unwrap();
         let e = ExplicitDynamic {
             initial_velocities: vec![InitialVelocity { set: "all".into(), velocity: [-10.0, 0.0, 0.0] }],
-            rigid_walls: vec![RigidWall { set: "root".into(), point: [0.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0] }],
+            rigid_walls: vec![RigidWall { set: "root".into(), point: [0.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0], friction: Friction::NONE }],
             ..ExplicitDynamic::new(1.0)
         };
         m.add_step(Step::new("Impact", Procedure::ExplicitDynamic(e)), None).unwrap();

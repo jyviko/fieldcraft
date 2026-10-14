@@ -33,6 +33,7 @@ pub enum Def {
     Load,
     ReferencePoint,
     Coupling,
+    Contact,
     FluidDomain,
 }
 
@@ -48,6 +49,7 @@ impl Def {
             Def::Load => "load",
             Def::ReferencePoint => "reference_point",
             Def::Coupling => "coupling",
+            Def::Contact => "contact",
             Def::FluidDomain => "fluid_domain",
         }
     }
@@ -62,6 +64,7 @@ impl Def {
             Def::Load => "Load",
             Def::ReferencePoint => "Reference Point",
             Def::Coupling => "Coupling",
+            Def::Contact => "Contact",
             Def::FluidDomain => "Fluid Domain",
         }
     }
@@ -77,13 +80,19 @@ impl Def {
             Def::Load => "model.load.create",
             Def::ReferencePoint => "model.reference_point.create",
             Def::Coupling => "model.coupling.create",
+            Def::Contact => "interaction.contact.pair",
             Def::FluidDomain => "model.fluid_domain.create",
         }
     }
 
-    /// The command of this kind with `verb` (`edit`, `delete`).
+    /// The command of this kind with `verb` (`create`, `edit`, `delete`); contacts are
+    /// interactions, created as pairs or general contact.
     pub fn command(self, verb: &str) -> String {
-        format!("model.{}.{verb}", self.stem())
+        match (self, verb) {
+            (Def::Contact, "create") => "interaction.contact.pair".into(),
+            (Def::Contact, _) => format!("interaction.contact.{verb}"),
+            _ => format!("model.{}.{verb}", self.stem()),
+        }
     }
 
     /// How many definitions of this kind the model has.
@@ -97,6 +106,7 @@ impl Def {
             Def::Load => m.loads().len(),
             Def::ReferencePoint => m.reference_points().len(),
             Def::Coupling => m.couplings().len(),
+            Def::Contact => m.contacts().len(),
             Def::FluidDomain => m.fluid_domains().len(),
         }
     }
@@ -112,6 +122,7 @@ impl Def {
             Def::Load => m.loads().contains_key(name),
             Def::ReferencePoint => m.reference_points().contains_key(name),
             Def::Coupling => m.couplings().contains_key(name),
+            Def::Contact => m.contacts().contains_key(name),
             Def::FluidDomain => m.fluid_domain(name).is_some(),
         }
     }
@@ -127,6 +138,7 @@ impl Def {
             Def::Load => m.loads().keys().cloned().collect(),
             Def::ReferencePoint => m.reference_points().keys().cloned().collect(),
             Def::Coupling => m.couplings().keys().cloned().collect(),
+            Def::Contact => m.contacts().keys().cloned().collect(),
             Def::FluidDomain => m.fluid_domains().keys().cloned().collect(),
         }
     }
@@ -143,6 +155,7 @@ pub fn definition(m: &Model, kind: Def, name: &str) -> Option<Value> {
         Def::Load => serde_json::to_value(m.loads().get(name)?),
         Def::ReferencePoint => serde_json::to_value(m.reference_points().get(name)?),
         Def::Coupling => serde_json::to_value(m.couplings().get(name)?),
+        Def::Contact => serde_json::to_value(m.contacts().get(name)?),
         Def::FluidDomain => serde_json::to_value(m.fluid_domain(name)?),
     }
     .ok()?;
@@ -442,7 +455,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         ("sections", "Sections", &[Def::Section]),
         ("steps", "Steps", &[Def::Step]),
         ("loads", "Loads & BCs", &[Def::BoundaryCondition, Def::Load]),
-        ("interactions", "Interactions", &[Def::ReferencePoint, Def::Coupling]),
+        ("interactions", "Interactions", &[Def::ReferencePoint, Def::Coupling, Def::Contact]),
         ("fluids", "Fluid Domains", &[Def::FluidDomain]),
     ];
     for (key, label, kinds) in groups {
@@ -550,6 +563,7 @@ mod tests {
             Def::Load,
             Def::ReferencePoint,
             Def::Coupling,
+            Def::Contact,
             Def::FluidDomain,
         ] {
             for verb in ["create", "edit", "delete"] {

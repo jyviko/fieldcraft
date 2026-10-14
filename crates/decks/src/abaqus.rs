@@ -13,8 +13,20 @@
 //!
 //! In order: heading, nodes (mesh nodes, then reference points), elements grouped by element type,
 //! sets (a node set, an element set and an element-face surface per model set, each written when
-//! the set resolves to some), materials, sections, couplings, the initial state's boundary
-//! conditions, then the steps.
+//! the set resolves to some), materials, sections, couplings, contact, the initial state's
+//! boundary conditions, then the steps.
+//!
+//! # Contact
+//!
+//! Each contact is a `*SURFACE INTERACTION` with its friction (`*FRICTION`, or
+//! `*FRICTION, EXPONENTIAL DECAY` with the static and kinetic coefficients and the decay
+//! coefficient, the same law). A pair is `*CONTACT PAIR, TYPE=SURFACE TO SURFACE` with the
+//! secondary surface first, and `ADJUST=0.0` when initially overclosed nodes are adjusted. General
+//! contact is the model's one `*CONTACT` definition: `*CONTACT INCLUSIONS, ALL EXTERIOR` for every
+//! exterior face, a surface with a blank partner for self contact, and a
+//! `*CONTACT PROPERTY ASSIGNMENT` line per contact. FieldCraft's penalty scale and its refusal of
+//! initial overclosure have no Abaqus counterpart and are noted in comments (Abaqus chooses its
+//! own penalty and resolves overclosure in the first increment).
 //!
 //! # Steps and the activity table
 //!
@@ -130,8 +142,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use fieldcraft_model::{
-    BeamProfile, BoundaryCondition, CouplingKind, Elastic, Element, ElementKind, Hardening, Hyperelastic, Integration, Load, Model, OutputVariable,
-    Plastic, Procedure, Resolved, Section, SectionKind, Step, Symmetry, Target,
+    BeamProfile, BoundaryCondition, ContactSurfaces, CouplingKind, Elastic, Element, ElementKind, Hardening, Hyperelastic, InitialPenetration,
+    Integration, Load, Model, OutputVariable, Plastic, Procedure, Resolved, Section, SectionKind, Step, Symmetry, Target,
 };
 
 use crate::{Error, Result, unsupported};
@@ -174,6 +186,7 @@ pub fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
     d.sections(model)?;
     d.discrete_properties(&discrete)?;
     d.couplings(model, r);
+    d.contacts(model, r)?;
     d.steps(model, r)?;
     Ok(d.out)
 }
@@ -955,6 +968,78 @@ impl Deck {
                 self.line(&format!("{a}, {b}"));
             }
         }
+    }
+
+    /// One surface interaction (the friction) per contact, then its pair, and every general
+    /// contact in the model's one `*CONTACT` definition.
+    fn contacts(&mut self, model: &Model, r: &Resolved) -> Result<()> {
+        if model.contacts().is_empty() {
+            return Ok(());
+        }
+        let mut taken: BTreeSet<String> = model.sets().keys().map(|n| n.to_ascii_uppercase()).collect();
+        taken.extend(coupling_surfaces(model, r).into_values().map(|n| n.to_ascii_uppercase()));
+        self.comment("Contact: a surface interaction (Coulomb friction) per contact, contact pairs, general contact");
+        let mut general = Vec::new();
+        for (name, c) in model.contacts() {
+            let interaction = crate::unique_name(&format!("{name}-interaction"), &mut taken);
+            self.line(&format!("*SURFACE INTERACTION, NAME={interaction}"));
+            let f = c.friction;
+            if f.decay > 0.0 {
+                self.line("*FRICTION, EXPONENTIAL DECAY");
+                self.numbers_line("", &[f.static_coefficient, f.kinetic_coefficient(), f.decay])?;
+            } else {
+                self.line("*FRICTION");
+                self.numbers_line("", &[f.static_coefficient])?;
+            }
+            if c.penalty_scale != 1.0 {
+                self.comment(&format!(
+                    "contact `{name}`: penalty scale {} of FieldCraft's explicit penalty stiffness; Abaqus chooses its own",
+                    c.penalty_scale
+                ));
+            }
+            match &c.surfaces {
+                ContactSurfaces::Pair { main, secondary } => {
+                    // ADJUST=0.0 moves the secondary nodes that start inside the main surface
+                    // onto it, strain-free; Abaqus has no refusal of initial overclosure.
+                    let adjust = match c.initial_penetration {
+                        InitialPenetration::Adjust => ", ADJUST=0.0",
+                        InitialPenetration::Refuse => {
+                            self.comment(&format!(
+                                "contact `{name}`: FieldCraft refuses initially overclosed nodes; Abaqus resolves them in the first increment"
+                            ));
+                            ""
+                        }
+                    };
+                    self.line(&format!("*CONTACT PAIR, INTERACTION={interaction}, TYPE=SURFACE TO SURFACE{adjust}"));
+                    self.line(&format!("{secondary}, {main}"));
+                }
+                ContactSurfaces::General { surface } => general.push((surface.clone(), interaction)),
+            }
+        }
+        if general.is_empty() {
+            return Ok(());
+        }
+        // General contact: every surface against itself (a blank second surface), or every
+        // exterior face; each with its interaction.
+        self.line("*CONTACT");
+        if general.iter().any(|(s, _)| s.is_none()) {
+            self.line("*CONTACT INCLUSIONS, ALL EXTERIOR");
+        }
+        let named: Vec<&str> = general.iter().filter_map(|(s, _)| s.as_deref()).collect();
+        if !named.is_empty() {
+            self.line("*CONTACT INCLUSIONS");
+            for s in &named {
+                self.line(&format!("{s},"));
+            }
+        }
+        self.line("*CONTACT PROPERTY ASSIGNMENT");
+        for (surface, interaction) in &general {
+            match surface {
+                Some(s) => self.line(&format!("{s}, {s}, {interaction}")),
+                None => self.line(&format!(", , {interaction}")),
+            }
+        }
+        Ok(())
     }
 
     fn boundary_lines<'n>(&mut self, model: &Model, r: &Resolved, names: impl IntoIterator<Item = &'n String>) -> Result<()> {

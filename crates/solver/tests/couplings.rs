@@ -390,3 +390,14 @@ fn oversized_reductions_are_refused_before_allocating() {
     assert!(e.contains("reduced matrices need more than"), "{e}");
     assert!(solve_static(&g.model, Some("Step"), &Limits::default()).is_ok());
 }
+
+/// Contact belongs to explicit dynamics so far: the implicit solves refuse it by name.
+#[test]
+fn implicit_solves_refuse_contact_by_name() {
+    let mut g = grid([1, 1, 1], ElementKind::Hex8, |x| x);
+    g.define(iso(1000.0, 0.3), Some(1.0), full(), Procedure::Static {});
+    g.face_set("top", |x| near(x[2], 1.0));
+    g.model.add_contact("touch", fieldcraft_model::Contact::new(fieldcraft_model::ContactSurfaces::General { surface: Some("top".into()) })).unwrap();
+    let e = solve_static(&g.model, Some("Step"), &Limits::default()).unwrap_err().to_string();
+    assert!(e.contains("contact (`touch`)") && e.contains("not supported"), "{e}");
+}

@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-56 ready, 48 coming soon.
+59 ready, 45 coming soon.
 
 ## Geometry
 
@@ -103,9 +103,9 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Constraints | Reference Point — A reference point for couplings, loads and boundary conditions | ready | `model.reference_point.create`, `model.reference_point.edit`, `model.reference_point.delete` |
 | Constraints | Coupling — Kinematic or distributing coupling of a set to a reference point | ready | `model.coupling.create`, `model.coupling.edit`, `model.coupling.delete` |
 | Constraints | Tie — Tie non-matching meshes together | coming soon (M7) |  |
-| Contact | General Contact — Contact between everything that touches, with friction | coming soon (M7) |  |
-| Contact | Contact Pair — Contact between two surfaces | coming soon (M7) |  |
-| Contact | Find Contacts — Detect contact pairs automatically | coming soon (M7) |  |
+| Contact | General Contact — Contact between everything that may touch, or self contact of a surface, with friction (explicit dynamics) | ready | `interaction.contact.general`, `interaction.contact.edit`, `interaction.contact.delete` |
+| Contact | Contact Pair — Contact between two surfaces, with friction (explicit dynamics) | ready | `interaction.contact.pair`, `interaction.contact.edit`, `interaction.contact.delete` |
+| Contact | Find Contacts — Find the parts of the mesh that touch, and make contact pairs of them | ready | `interaction.contact.find` |
 | Contact | Rigid Wall — Rigid walls for explicit dynamics | coming soon (M10) |  |
 | Connectors | Bolt Load — Bolt pretension | coming soon (M7) |  |
 | Connectors | Spring — Spring or dashpot to the ground or between two points, along a direction or their line | ready | `model.spring.create`, `model.spring.edit`, `model.spring.delete` |

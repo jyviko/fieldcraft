@@ -196,6 +196,12 @@ impl System {
         if let Some(name) = model.couplings().keys().next() {
             return Err(Error::NotSupported(format!("couplings (coupling `{name}`) in explicit dynamics")));
         }
+        if let Some(name) = model.contacts().keys().next() {
+            return Err(Error::NotSupported(format!("contact (`{name}`) in explicit dynamics")));
+        }
+        if let Some(w) = settings.rigid_walls.iter().find(|w| !w.friction.is_frictionless()) {
+            return Err(Error::NotSupported(format!("friction on rigid walls (the wall on set `{}`)", w.set)));
+        }
         // Elements by label, with their section's material.
         let mut materials: Vec<Material> = Vec::new();
         let mut chosen: Vec<(u32, ElementKind, Vec<u32>, usize, Option<f64>)> = Vec::new();

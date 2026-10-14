@@ -1,0 +1,53 @@
+{
+ "title": "Nearly incompressible hybrid block under prescribed stretch",
+ "kind": "theory",
+ "source": "Uniaxial stress of the decoupled compressible neo-Hookean energy W = μ/2 (Ī₁ − 3) + κ/2 (J − 1)² (P. J. Flory, Trans. Faraday Soc. 57:829–838, 1961): σ = μ J^(−5/3) (λ² − I₁/3) + κ (J − 1) with the lateral stretch found so σ_yy = 0 (bisection; E = 3, ν = 0.4999: μ = 1.0000667, κ = 5000)",
+ "quantities": [
+  {
+   "id": "sigma",
+   "quantity": "axial Cauchy stress, stretch λ = 2, ν = 0.4999",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Uniaxial",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 3.498756466061613,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation every hybrid hex8 represents exactly; the 27-element mesh makes the global mixed tangent indefinite in the first iterations (LDLᵀ): the tolerance admits the Newton tolerance and rounding"
+  },
+  {
+   "id": "lateral",
+   "quantity": "lateral displacement at (1, 1, 1): l − 1",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Uniaxial",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/1"
+   },
+   "value": -0.29281075714096483,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation every hybrid hex8 represents exactly; the 27-element mesh makes the global mixed tangent indefinite in the first iterations (LDLᵀ): the tolerance admits the Newton tolerance and rounding"
+  }
+ ]
+}

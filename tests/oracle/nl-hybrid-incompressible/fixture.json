@@ -1,0 +1,13 @@
+{
+  "note": "FieldCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "lateral": {
+      "band": 2.9281075714096485e-10,
+      "value": -0.29281075714062965
+    },
+    "sigma": {
+      "band": 3.4987564707960495e-9,
+      "value": 3.4987564707960495
+    }
+  }
+}

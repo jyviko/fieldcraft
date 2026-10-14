@@ -5,6 +5,7 @@
 //! Adapted from SolidCraft's `crates/render/src/raster.rs` (MIT OR Apache-2.0), see
 //! ATTRIBUTION.md.
 
+use crate::pick::Projector;
 use crate::{Camera, Vec3, font};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,10 +180,22 @@ impl Canvas {
 /// 1..=[`MAX_DIM`] per side or over [`MAX_PIXELS`], and scenes over [`MAX_PRIMITIVES`], are
 /// refused ([`fit_size`] gives an accepted size).
 pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Canvas, RenderError> {
+    render_layers(scene, None, cam, w, h)
+}
+
+/// Depth (of the 0…1 range) an overlay face may lie behind the scene's and still be drawn: it
+/// covers the faces it repeats.
+const OVERLAY_DEPTH: f32 = 2e-4;
+
+/// [`render`] with an overlay drawn over the scene: its faces over the scene's faces they
+/// coincide with (a highlight repeats the faces it marks), then its lines and points. The
+/// overlay's background and radius are not used.
+pub fn render_layers(scene: &Scene, overlay: Option<&Scene>, cam: &Camera, w: usize, h: usize) -> Result<Canvas, RenderError> {
     if !size_ok(w, h) {
         return Err(RenderError::Size { w, h });
     }
-    let primitives = scene.tris.len().saturating_add(scene.lines.len()).saturating_add(scene.points.len()).saturating_add(scene.labels.len());
+    let count = |s: &Scene| s.tris.len().saturating_add(s.lines.len()).saturating_add(s.points.len()).saturating_add(s.labels.len());
+    let primitives = count(scene).saturating_add(overlay.map_or(0, count));
     if primitives > MAX_PRIMITIVES {
         return Err(RenderError::SceneTooLarge { primitives });
     }
@@ -197,48 +210,23 @@ pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Canvas,
             c.put(x, y, col, 1.0);
         }
     }
-    let vp = cam.view_proj(sw as f64 / sh as f64, scene.radius.max(1e-3));
-    let project = |p: Vec3| -> Option<[f64; 3]> {
-        let q = vp.apply(p);
-        if q[3] <= 1e-9 {
-            return None;
-        }
-        Some([(q[0] / q[3] + 1.0) * 0.5 * sw as f64, (1.0 - q[1] / q[3]) * 0.5 * sh as f64, q[2] / q[3]])
-    };
+    let proj = Projector::new(cam, sw as f64, sh as f64, scene.radius);
+    let project = |p: Vec3| proj.screen(p);
     let view_dir = cam.back();
-    for t in &scene.tris {
+    for (t, allowance) in scene.tris.iter().map(|t| (t, 0.0)).chain(overlay.into_iter().flat_map(|o| &o.tris).map(|t| (t, OVERLAY_DEPTH))) {
         let (Some(a), Some(b), Some(cc)) = (project(t.p[0]), project(t.p[1]), project(t.p[2])) else { continue };
         let col = shade(t.normal, view_dir, t.color.f());
-        let (x0, x1) = (a[0].min(b[0]).min(cc[0]).floor().max(0.0), a[0].max(b[0]).max(cc[0]).ceil().min(sw as f64 - 1.0));
-        let (y0, y1) = (a[1].min(b[1]).min(cc[1]).floor().max(0.0), a[1].max(b[1]).max(cc[1]).ceil().min(sh as f64 - 1.0));
-        if !(x0 <= x1 && y0 <= y1) {
-            continue;
-        }
-        let area = (b[0] - a[0]) * (cc[1] - a[1]) - (b[1] - a[1]) * (cc[0] - a[0]);
-        if !(area.abs() >= 1e-12) {
-            continue;
-        }
-        for y in y0 as usize..=y1 as usize {
-            for x in x0 as usize..=x1 as usize {
-                let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
-                let w0 = ((b[0] - px) * (cc[1] - py) - (b[1] - py) * (cc[0] - px)) / area;
-                let w1 = ((cc[0] - px) * (a[1] - py) - (cc[1] - py) * (a[0] - px)) / area;
-                let w2 = 1.0 - w0 - w1;
-                if w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9 {
-                    continue;
-                }
-                let z = (w0 * a[2] + w1 * b[2] + w2 * cc[2]) as f32;
-                let i = y * sw + x;
-                if let Some(d) = c.depth.get_mut(i)
-                    && z < *d
-                {
-                    *d = z;
-                    c.put(x, y, col, 1.0);
-                }
+        raster_tri(a, b, cc, sw, sh, |x, y, z| {
+            if let Some(d) = c.depth.get_mut(y * sw + x)
+                && z < *d + allowance
+            {
+                *d = d.min(z);
+                c.put(x, y, col, 1.0);
             }
-        }
+        });
     }
-    for l in &scene.lines {
+    let layers = || std::iter::once(scene).chain(overlay);
+    for l in layers().flat_map(|s| &s.lines) {
         let (Some(a), Some(b)) = (project(l.a), project(l.b)) else { continue };
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
         let steps = if len.is_finite() { (len.ceil() as usize).clamp(1, MAX_LINE_STEPS) } else { continue };
@@ -249,7 +237,7 @@ pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Canvas,
             dot(&mut c, p, l.width * SS as f64, col, true);
         }
     }
-    for p in &scene.points {
+    for p in layers().flat_map(|s| &s.points) {
         if let Some(q) = project(p.p) {
             dot(&mut c, q, p.size * SS as f64, p.color.f(), false);
         }
@@ -260,6 +248,34 @@ pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Canvas,
         }
     }
     downsample(&c, w, h)
+}
+
+/// Cover a triangle with screen corners `a`, `b`, `c` (x, y, depth) on a `w × h` pixel grid:
+/// `pixel(x, y, depth)` for every pixel whose centre is inside it (its edges included), the depth
+/// interpolated. Degenerate and off-grid triangles cover nothing. The renderer and the picking
+/// depth map ([`crate::pick::DepthMap`]) share it, so a box selects what is drawn.
+pub(crate) fn raster_tri(a: [f64; 3], b: [f64; 3], c: [f64; 3], w: usize, h: usize, mut pixel: impl FnMut(usize, usize, f32)) {
+    let (x0, x1) = (a[0].min(b[0]).min(c[0]).floor().max(0.0), a[0].max(b[0]).max(c[0]).ceil().min(w as f64 - 1.0));
+    let (y0, y1) = (a[1].min(b[1]).min(c[1]).floor().max(0.0), a[1].max(b[1]).max(c[1]).ceil().min(h as f64 - 1.0));
+    if !(x0 <= x1 && y0 <= y1) {
+        return;
+    }
+    let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    if !(area.abs() >= 1e-12) {
+        return;
+    }
+    for y in y0 as usize..=y1 as usize {
+        for x in x0 as usize..=x1 as usize {
+            let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+            let w0 = ((b[0] - px) * (c[1] - py) - (b[1] - py) * (c[0] - px)) / area;
+            let w1 = ((c[0] - px) * (a[1] - py) - (c[1] - py) * (a[0] - px)) / area;
+            let w2 = 1.0 - w0 - w1;
+            if w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9 {
+                continue;
+            }
+            pixel(x, y, (w0 * a[2] + w1 * b[2] + w2 * c[2]) as f32);
+        }
+    }
 }
 
 /// Text above and right of screen point `p`, over everything, with a halo of the opposite
@@ -350,7 +366,12 @@ fn downsample(c: &Canvas, w: usize, h: usize) -> Result<Canvas, RenderError> {
 
 /// Render to PNG bytes.
 pub fn render_png(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Vec<u8>, RenderError> {
-    let c = render(scene, cam, w, h)?;
+    render_layers_png(scene, None, cam, w, h)
+}
+
+/// [`render_layers`] as PNG bytes.
+pub fn render_layers_png(scene: &Scene, overlay: Option<&Scene>, cam: &Camera, w: usize, h: usize) -> Result<Vec<u8>, RenderError> {
+    let c = render_layers(scene, overlay, cam, w, h)?;
     png(c.w, c.h, &c.rgba).ok_or(RenderError::Encode)
 }
 
@@ -405,6 +426,25 @@ mod tests {
         let (x, y, _) = cam.to_screen(Vec3::new(0.0, 0.0, 5.0), 64.0, 64.0, 20.0).unwrap();
         let p = px(&c, x as usize, y as usize);
         assert!(p[2] > 200 && p[0] < 60, "{p:?}");
+    }
+
+    /// An overlay face repeating a scene face covers it; one behind another face does not show.
+    #[test]
+    fn an_overlay_covers_the_faces_it_repeats() {
+        let scene = red_triangle();
+        let mut cam = Camera { distance: 50.0, ..Default::default() };
+        cam.set_view(StandardView::Front);
+        let px = |c: &Canvas| c.rgba[(32 * c.w + 32) * 4..(32 * c.w + 32) * 4 + 3].to_vec();
+        let green = |s: &Scene| Scene { tris: s.tris.iter().map(|t| SceneTri { color: Rgb(0, 255, 0), ..*t }).collect(), ..Scene::default() };
+        let over = render_layers(&scene, Some(&green(&scene)), &cam, 64, 64).unwrap();
+        assert!(px(&over)[1] > px(&over)[0] + 50, "{:?}", px(&over));
+        // The same face moved behind the red one (front view looks along +y) stays hidden.
+        let mut behind = green(&scene);
+        for t in &mut behind.tris {
+            t.p = t.p.map(|p| p + Vec3::Y * 5.0);
+        }
+        let hidden = render_layers(&scene, Some(&behind), &cam, 64, 64).unwrap();
+        assert_eq!(px(&hidden), px(&render(&scene, &cam, 64, 64).unwrap()));
     }
 
     #[test]

@@ -14,6 +14,7 @@
 
 use fieldcraft_model::{ElementKind, Model};
 
+use crate::pick::{Hit, first_hit};
 use crate::{Aabb3, Vec3};
 
 /// One drawn triangle of an element face.
@@ -25,6 +26,18 @@ pub struct DisplayTri {
     /// The face's unit normal, pointing out of its element (a shell's own orientation).
     pub normal: Vec3,
     pub kind: ElementKind,
+    /// The element it is a face of, and the face's number (from 1, as
+    /// [`ElementKind::faces`] numbers them; a shell's is 1, its top side).
+    pub element: u32,
+    pub face: u8,
+}
+
+impl DisplayTri {
+    /// The element face seen looking along `dir`: a shell's top side (1) from in front and its
+    /// bottom side (2) from behind; a solid's face as it is.
+    pub fn seen_face(&self, dir: Vec3) -> u8 {
+        if self.kind.dimension() == 2 && self.normal.dot(dir) > 0.0 { 2 } else { self.face }
+    }
 }
 
 /// An element edge.
@@ -41,6 +54,7 @@ pub struct DisplayLine {
     pub b: Vec3,
     pub nodes: [u32; 2],
     pub kind: ElementKind,
+    pub element: u32,
 }
 
 /// A node.
@@ -57,6 +71,8 @@ pub struct SurfaceTri {
     pub normal: Vec3,
     /// Which surface (body) it belongs to: the order [`DisplayMesh::add_surface`] got them in.
     pub body: u32,
+    /// The face of that surface it lies on (its `tri_face` tag; `u32::MAX` when it has none).
+    pub face: u32,
 }
 
 /// Display data for a model and its geometry.
@@ -80,7 +96,9 @@ pub struct DisplayMesh {
 }
 
 /// The faces of an element as corner indices (0-based into its node list), each wound
-/// counter-clockwise seen from outside for a positively oriented element.
+/// counter-clockwise seen from outside for a positively oriented element. A solid's faces come in
+/// the order [`ElementKind::faces`] numbers them (with the same corners); a shell draws its top
+/// side, face 1.
 fn faces(kind: ElementKind) -> &'static [&'static [usize]] {
     match kind {
         ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => &[],
@@ -142,7 +160,7 @@ impl DisplayMesh {
         inner.dedup();
         drop(keys);
         let mut edges: Vec<(u32, u32)> = Vec::new();
-        for e in model.elements().values() {
+        for (&label, e) in model.elements() {
             // Corners: one past the highest face index (line elements: their two ends).
             let corners = faces(e.kind).iter().flat_map(|f| f.iter()).max().map_or(2, |m| m + 1).min(MAX_CORNERS);
             let mut at = [Vec3::ZERO; MAX_CORNERS];
@@ -159,13 +177,14 @@ impl DisplayMesh {
             let at = at.get(..corners).unwrap_or(&[]);
             if e.kind.dimension() == 1 {
                 if let (Some(&a), Some(&b), Some(&na), Some(&nb)) = (at.first(), at.get(1), e.nodes.first(), e.nodes.get(1)) {
-                    out.lines.push(DisplayLine { a, b, nodes: [na, nb], kind: e.kind });
+                    out.lines.push(DisplayLine { a, b, nodes: [na, nb], kind: e.kind, element: label });
                 }
                 continue;
             }
             let solid = e.kind.dimension() == 3;
             let element_centre = centre(at);
-            for f in faces(e.kind) {
+            for (number, f) in faces(e.kind).iter().enumerate() {
+                let face = u8::try_from(number + 1).unwrap_or(u8::MAX);
                 if solid && face_key(&e.nodes, f).is_some_and(|k| inner.binary_search(&k).is_ok()) {
                     continue;
                 }
@@ -179,7 +198,7 @@ impl DisplayMesh {
                     if let (Some(&a), Some(&b), Some(&c), Some(&la), Some(&lb), Some(&lc)) =
                         (p.first(), p.get(k), p.get(k + 1), labels.first(), labels.get(k), labels.get(k + 1))
                     {
-                        out.tris.push(DisplayTri { p: [a, b, c], nodes: [la, lb, lc], normal, kind: e.kind });
+                        out.tris.push(DisplayTri { p: [a, b, c], nodes: [la, lb, lc], normal, kind: e.kind, element: label, face });
                     }
                 }
                 for (j, &i) in f.iter().enumerate() {
@@ -229,8 +248,8 @@ impl DisplayMesh {
             for p in [a, b, c] {
                 self.bounds.add(p);
             }
-            self.surface_tris.push(SurfaceTri { p: [a, b, c], normal, body: self.bodies });
             let face = tri_face.get(t).copied().unwrap_or(u32::MAX);
+            self.surface_tris.push(SurfaceTri { p: [a, b, c], normal, body: self.bodies, face });
             let [v0, v1, v2] = [vertex(i0), vertex(i1), vertex(i2)];
             for (u, v) in [(v0, v1), (v1, v2), (v2, v0)] {
                 sides.push((u.min(v), u.max(v), face));
@@ -263,30 +282,24 @@ impl DisplayMesh {
         self.nodes.binary_search_by_key(&label, |n| n.label).ok().and_then(|i| self.nodes.get(i)).map(|n| n.p)
     }
 
+    /// The element face triangle ([`DisplayMesh::tris`]) a ray (`origin`, `dir`) hits first
+    /// ([`pick::first_hit`]).
+    pub fn hit_element_face(&self, origin: Vec3, dir: Vec3) -> Option<Hit> {
+        first_hit(origin, dir, self.tris.iter().map(|t| t.p))
+    }
+
+    /// The geometry surface triangle ([`DisplayMesh::surface_tris`]) a ray hits first.
+    pub fn hit_surface(&self, origin: Vec3, dir: Vec3) -> Option<Hit> {
+        first_hit(origin, dir, self.surface_tris.iter().map(|t| t.p))
+    }
+
     /// The node nearest to where a ray (`origin`, `dir`) first hits an element face ahead of
     /// its origin: the hit face's closest corner, and the hit point. Line elements and geometry
     /// are not hit.
     pub fn pick(&self, origin: Vec3, dir: Vec3) -> Option<(u32, Vec3)> {
-        let mut best: Option<(f64, &DisplayTri)> = None;
-        for t in &self.tris {
-            // Möller–Trumbore, both sides.
-            let (e1, e2) = (t.p[1] - t.p[0], t.p[2] - t.p[0]);
-            let h = dir.cross(e2);
-            let det = e1.dot(h);
-            if !(det.abs() > 1e-300) {
-                continue;
-            }
-            let s = origin - t.p[0];
-            let u = s.dot(h) / det;
-            let q = s.cross(e1);
-            let v = dir.dot(q) / det;
-            let d = e2.dot(q) / det;
-            if u >= 0.0 && v >= 0.0 && u + v <= 1.0 && d >= 0.0 && d.is_finite() && best.is_none_or(|(b, _)| d < b) {
-                best = Some((d, t));
-            }
-        }
-        let (d, t) = best?;
-        let hit = origin + dir * d;
+        let h = self.hit_element_face(origin, dir)?;
+        let t = self.tris.get(h.index)?;
+        let hit = origin + dir * h.t;
         let (i, _) = t.p.iter().enumerate().min_by(|a, b| a.1.dist(hit).total_cmp(&b.1.dist(hit)))?;
         Some((*t.nodes.get(i)?, hit))
     }
@@ -459,6 +472,33 @@ mod tests {
         assert_eq!(m.node(label).unwrap().xyz, [0.0, 0.0, 0.0]);
         assert_eq!(d.pick(Vec3::new(5.0, 5.0, 10.0), Vec3::new(0.0, 0.0, -1.0)), None);
         assert_eq!(d.pick(Vec3::new(f64::NAN, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0)), None);
+    }
+
+    /// A solid's drawn faces are numbered as the model numbers them, so a picked triangle names
+    /// the element face a set or load refers to.
+    #[test]
+    fn drawn_faces_carry_the_models_face_numbers() {
+        for kind in [ElementKind::Tet4, ElementKind::Tet10, ElementKind::Wedge6, ElementKind::Hex8, ElementKind::Hex20] {
+            let drawn = faces(kind);
+            assert_eq!(drawn.len(), kind.faces().len(), "{kind:?}");
+            for (d, m) in drawn.iter().zip(kind.faces()) {
+                let corners = d.len();
+                let (mut a, mut b) = (d.to_vec(), m.get(..corners).unwrap().to_vec());
+                a.sort_unstable();
+                b.sort_unstable();
+                assert_eq!(a, b, "{kind:?}");
+            }
+        }
+        let m = block(2, 1, 1);
+        let d = DisplayMesh::from_model(&m);
+        for t in &d.tris {
+            let face = m.face_nodes(fieldcraft_model::ElementFace { element: t.element, face: t.face }).unwrap();
+            assert!(t.nodes.iter().all(|n| face.contains(n)), "{t:?} {face:?}");
+        }
+        // The ray from +x hits element 2's face 4 (corners 1, 2, 6, 5: x = 2).
+        let h = d.hit_element_face(Vec3::new(10.0, 0.3, 0.6), Vec3::new(-1.0, 0.0, 0.0)).unwrap();
+        let t = d.tris[h.index];
+        assert_eq!((t.element, t.face, h.t), (2, 4, 8.0));
     }
 
     #[test]

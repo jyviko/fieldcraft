@@ -1,7 +1,8 @@
 //! Display data for FieldCraft, with no GPU dependency: what a finite element model looks like
 //! on screen ([`DisplayMesh`]: the visible faces, element edges, line elements and nodes), an
-//! orbit camera with perspective or orthographic projection, and a CPU rasterizer for headless
-//! snapshots. The desktop viewport draws the same [`Scene`] on the GPU.
+//! orbit camera with perspective or orthographic projection, picking ([`pick`]: what a ray through
+//! a pixel hits), and a CPU rasterizer for headless snapshots. The desktop viewport draws the
+//! same [`Scene`] on the GPU.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -10,6 +11,7 @@ pub mod contour;
 mod display;
 mod font;
 pub mod glyphs;
+pub mod pick;
 mod raster;
 mod vec;
 
@@ -17,6 +19,6 @@ pub use camera::{Camera, Mat4, Orientation, StandardView};
 pub use display::{DisplayEdge, DisplayLine, DisplayMesh, DisplayNode, DisplayTri, SurfaceTri};
 pub use raster::{
     Canvas, LABEL_OFFSET, MAX_DIM, MAX_PIXELS, MAX_PRIMITIVES, RenderError, Rgb, Scene, SceneLabel, SceneLine, ScenePoint, SceneTri, fit_size, png,
-    render, render_png, shade,
+    render, render_layers, render_layers_png, render_png, shade,
 };
 pub use vec::{Aabb3, Vec3};

@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::pick::Projector;
 use crate::{Aabb3, Vec3};
 
 /// Column-major 4×4 matrix.
@@ -206,13 +207,9 @@ impl Camera {
         self.proj(aspect, n, f).mul(&self.view())
     }
     /// World point → pixel coordinates (x right, y down) and depth (0 near … 1 far).
+    /// For many points, a [`Projector`] computes the projection once.
     pub fn to_screen(&self, p: Vec3, w: f64, h: f64, radius: f64) -> Option<(f64, f64, f64)> {
-        let c = self.view_proj(w / h.max(1.0), radius).apply(p);
-        if c[3].abs() < 1e-12 {
-            return None;
-        }
-        let (x, y, z) = (c[0] / c[3], c[1] / c[3], c[2] / c[3]);
-        (c[3] > 0.0).then_some(((x + 1.0) * 0.5 * w, (1.0 - y) * 0.5 * h, z))
+        Projector::new(self, w, h, radius).screen(p).map(|[x, y, z]| (x, y, z))
     }
     /// Picking ray through pixel (x, y): origin and unit direction.
     pub fn ray(&self, x: f64, y: f64, w: f64, h: f64) -> (Vec3, Vec3) {

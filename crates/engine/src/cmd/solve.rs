@@ -237,6 +237,8 @@ fn run_nonlinear(s: &mut Session, p: &Value) -> Result<Value> {
         "increments": history.map(|h| &h.increments),
         "iterations": history.map(|h| h.iterations),
         "frames": history.map(|h| h.load_factors()),
+        "load_factor": history.and_then(|h| h.frames.last()).map(|f| f.load_factor),
+        "critical_points": history.map(|h| &h.critical_points),
         "max_displacement": largest(r.nodes.iter().zip(&r.displacement).map(|(l, u)| (*l, crate::results::magnitude(*u)))),
         "max_von_mises": largest(r.nodes.iter().zip(&r.von_mises).map(|(l, v)| (*l, *v))),
         "max_plastic_strain": largest(r.elements.iter().flat_map(|e| e.plastic_strain.iter().map(|v| (e.label, *v)))),

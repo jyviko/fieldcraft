@@ -1202,8 +1202,27 @@ impl Deck {
                         }
                         let nlgeom = if n.nonlinear_geometry { "YES" } else { "NO" };
                         self.line(&format!("*STEP, NAME={}, NLGEOM={nlgeom}, INC={}", step.name, n.max_increments));
-                        self.line("*STATIC");
-                        self.numbers_line("", &[n.initial_increment, 1.0, n.min_increment, n.max_increment])?;
+                        if let Some(arc) = &n.arc_length {
+                            // Riks: initial arc, period, minimum and maximum arcs, the load
+                            // proportionality factor and the displacement that end the step.
+                            if arc.constraint != fieldcraft_model::ArcConstraint::Cylindrical {
+                                return Err(Error::Unsupported {
+                                    format: FORMAT,
+                                    what: format!("step `{}`: a spherical arc-length constraint", step.name),
+                                });
+                            }
+                            self.line("*STATIC, RIKS");
+                            self.numbers_line("", &[n.initial_increment, 1.0, n.min_increment, n.max_increment, arc.max_load_factor])?;
+                            if let Some(l) = &arc.displacement_limit {
+                                self.out.pop();
+                                let _ = write!(self.out, ", {}, {}, ", l.node, l.direction);
+                                push_number(&mut self.out, l.displacement)?;
+                                self.out.push('\n');
+                            }
+                        } else {
+                            self.line("*STATIC");
+                            self.numbers_line("", &[n.initial_increment, 1.0, n.min_increment, n.max_increment])?;
+                        }
                         if n.line_search {
                             self.line("*CONTROLS, PARAMETERS=LINE SEARCH");
                             self.line("5,");

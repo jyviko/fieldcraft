@@ -1244,6 +1244,14 @@ update are written from (cited again in the module docs):
   indefinite sparse symmetric linear equations*, ACM TOMS 9(3):302–325, 1983; J. W. H. Liu, *The
   multifrontal method for sparse matrix solution: theory and practice*, SIAM Review
   34(1):82–109, 1992.
+- Arc-length: E. Riks, *An incremental approach to the solution of snapping and buckling
+  problems*, Int. J. Solids Struct. 15(7):529–551, 1979; M. A. Crisfield, *A fast
+  incremental/iterative solution procedure that handles "snap-through"*, Computers & Structures
+  13:55–62, 1981; E. Ramm, *Strategies for tracing the nonlinear response near limit points*, in
+  *Nonlinear Finite Element Analysis in Structural Mechanics*, Springer 1981, 63–89; the
+  predictor's sign, M. Feng, D. Perić, D. R. J. Owen, Computers & Structures 58(3):479–485, 1996.
+  Snap-through of a shallow sinusoidal arch: Y. C. Fung, A. Kaplan, NACA TN 2840, 1952;
+  Timoshenko & Gere 1961, §7.6.
 - Iterative refinement: N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed.,
   SIAM 2002, §12.2.
 - Linear buckling and the initial-stress stiffness: K.-J. Bathe, *Finite Element Procedures*,

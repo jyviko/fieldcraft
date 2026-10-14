@@ -448,6 +448,15 @@ const PROCEDURE: Field = variants(
                         num("scale", "Largest component", D::Length).req(),
                     ],
                 ),
+                group(
+                    "arc_length",
+                    "Arc length",
+                    &[
+                        choice("constraint", "Constraint", &[("cylindrical", "Cylindrical"), ("spherical", "Spherical")]).def("\"cylindrical\""),
+                        positive("max_load_factor", "Max load factor", D::None).def("1"),
+                        json("displacement_limit", "Displacement limit").hint("{\"node\": 1, \"direction\": 3, \"displacement\": -10}"),
+                    ],
+                ),
             ],
         ),
         variant("buckle", "Buckling", &[int("modes", "Modes", 1, 100_000).req().def("4"), num("shift", "Shift", D::None)]),

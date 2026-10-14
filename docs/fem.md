@@ -313,6 +313,26 @@ displacement (at ν = 0.4999 every increment used to be cut back to the cap). On
 tangent of a model that can move freely is an error. The tangent predictor of path-dependent
 materials keeps Cholesky and is skipped when the tangent is indefinite.
 
+**Arc length.** `"arc_length": {"constraint": "cylindrical"|"spherical", "max_load_factor": 1,
+"displacement_limit": {"node", "direction", "displacement"}}` makes the load factor an unknown
+(Riks 1979, Crisfield 1981): each increment keeps ‖Δq‖² + w Δλ² = Δl² (w = 0 cylindrical, w the
+first tangent displacement's ‖q_f‖² for the spherical arc), predicts along the tangent with the
+sign of its angle to the last increment (Feng, Perić & Owen 1996), and corrects with
+δq = δq_r + δλ δq_g, δλ the root of the constraint's quadratic whose increment turns least
+(Crisfield's angle criterion). The first increment's load factor change is `initial_increment`,
+which sets the arc; arcs grow, shrink and cut back as increments do, within the minimum and
+maximum increments' arcs. Prescribed motions scale with λ (∂r/∂λ includes −K T_p u_p) and
+follower pressures with their current faces. The tangent at every converged state is factored
+for the next predictor (LDLᵀ when indefinite); its negative eigenvalues are recorded per
+increment (`negative_pivots`), and where their count changes the step reports a **critical
+point**: a limit point where the load factor turns, a bifurcation otherwise
+(`History::critical_points`, in the `solve.nonlinear` summary). The step ends at the maximum load
+factor, at the displacement limit, or at its increment cap (a warning). Refused: a load path,
+temperatures. Decks: Abaqus `*STATIC, RIKS` (cylindrical only); LS-DYNA refuses arc-length steps
+by name. Verified by the snap-through of a shallow sinusoidal arch of hex20 solids
+(`crates/solver/tests/arc_length.rs`, `tests/oracle/arc-shallow-arch`): the path within 1.9 % of
+the one-mode closed form, both limit points, and the inertia 0 → 1 → 0 exactly between them.
+
 **Results**: the final displacements and reactions, the **Cauchy stress** and the
 **logarithmic strain** (ln V, engineering shears; the small strain without nonlinear geometry) at
 the integration points and averaged at the nodes, the **equivalent plastic strain** at the

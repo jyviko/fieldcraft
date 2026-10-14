@@ -845,3 +845,25 @@ fn buckling_steps() {
     assert!(abaqus::write(&m).unwrap_err().to_string().contains("after a general step"));
     assert!(fieldcraft_decks::lsdyna::write(&m).is_err() && fieldcraft_decks::nastran::write(&m).is_err());
 }
+
+/// An arc-length step is `*STATIC, RIKS` with the arcs, the maximum load factor and the
+/// displacement that end it; a spherical constraint is refused, and LS-DYNA refuses the step.
+#[test]
+fn arc_length_steps() {
+    use fieldcraft_model::{ArcConstraint, ArcLength, DisplacementLimit, NonlinearStatic};
+    let mut m = cantilever_mesh();
+    m.add_load("end", Load::Force { target: Target::Set("tip".into()), vector: [0.0, 0.0, -100.0], distribution: Distribution::Total }).unwrap();
+    let arc = ArcLength {
+        max_load_factor: 3.0,
+        displacement_limit: Some(DisplacementLimit { node: 2, direction: 3, displacement: -5.0 }),
+        ..ArcLength::default()
+    };
+    let settings = NonlinearStatic { arc_length: Some(arc.clone()), ..NonlinearStatic::default() };
+    m.add_step(step("Snap", Procedure::NonlinearStatic(settings), &["clamp"], &["end"]), None).unwrap();
+    let deck = abaqus::write(&m).unwrap();
+    assert!(deck.contains("*STATIC, RIKS\n0.1, 1.0, 1.0E-5, 1.0, 3.0, 2, 3, -5.0\n"), "{deck}");
+    assert!(fieldcraft_decks::lsdyna::write(&m).is_err());
+    let spherical = NonlinearStatic { arc_length: Some(ArcLength { constraint: ArcConstraint::Spherical, ..arc }), ..NonlinearStatic::default() };
+    m.replace_step(step("Snap", Procedure::NonlinearStatic(spherical), &["clamp"], &["end"])).unwrap();
+    assert!(abaqus::write(&m).is_err());
+}

@@ -98,7 +98,9 @@ use fieldcraft_fem::finite::{Kinematics, Temperature};
 use fieldcraft_fem::plane::Theory;
 use fieldcraft_fem::quadrature::Rule;
 use fieldcraft_fem::{DofKind, DofSet, ElementType, PointStress, face, von_mises};
-use fieldcraft_model::{BoundaryCondition, Extent, Hardening, Imperfection, Load, Model, NonlinearStatic, Plastic, Procedure, SectionKind, Step};
+use fieldcraft_model::{
+    ArcConstraint, ArcLength, BoundaryCondition, Extent, Hardening, Imperfection, Load, Model, NonlinearStatic, Plastic, Procedure, SectionKind, Step,
+};
 use fieldcraft_parallel as parallel;
 use serde::Serialize;
 
@@ -149,6 +151,35 @@ pub struct Increment {
     /// Why it was cut back.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutback: Option<String>,
+    /// Negative eigenvalues of the tangent at the converged state (arc-length steps, which
+    /// factor it for the next predictor).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub negative_pivots: usize,
+}
+
+/// Where the tangent's inertia changes along an arc-length path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CriticalKind {
+    /// The load factor turns (snap-through).
+    Limit,
+    /// The load factor goes on: another branch crosses this one.
+    Bifurcation,
+}
+
+/// A critical point of an arc-length path: the tangent's count of negative eigenvalues changes
+/// between two converged states.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct CriticalPoint {
+    pub kind: CriticalKind,
+    /// The increment whose converged state has the new count.
+    pub increment: usize,
+    /// For a limit point the extreme load factor of the converged states around it, for a
+    /// bifurcation the last one before it.
+    pub load_factor: f64,
+    /// Negative eigenvalues before and after.
+    pub negative_before: usize,
+    pub negative_after: usize,
 }
 
 /// The displacements at the end of a converged increment.
@@ -168,6 +199,8 @@ pub struct History {
     pub frames: Vec<Frame>,
     /// Newton iterations over the step.
     pub iterations: usize,
+    /// Arc-length steps: where the tangent's inertia changes along the path.
+    pub critical_points: Vec<CriticalPoint>,
 }
 
 impl History {
@@ -269,6 +302,14 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 /// ½(K + sign Kᵀ) of a row-major m × m matrix: its symmetric (sign 1) or skew (−1) part.
 fn half(k: &[f64], m: usize, sign: f64) -> Vec<f64> {
     (0..m * m).map(|i| 0.5 * (k.get(i).copied().unwrap_or(0.0) + sign * k.get((i % m) * m + i / m).copied().unwrap_or(0.0))).collect()
+}
+
+/// T_fᵀ K T_p (s u_p): the free equations' forces of the prescribed motions scaled by `s`.
+fn prescribed_force(red: &Reduction, k: &Csr, s: f64) -> Vec<f64> {
+    let jump = red.expand_scaled(&vec![0.0; red.neq()], s);
+    let mut kj = vec![0.0; jump.len()];
+    k.mul(&jump, &mut kj);
+    red.restrict(&kj)
 }
 
 /// The out-of-balance forces over the free equations, T_fᵀ (f_ext − f_int).
@@ -402,6 +443,21 @@ impl Problem<'_> {
         Ok(Evaluation { internal, external, tangent: k, history })
     }
 
+    /// The loads at load factor 1 at displacements `u` (dead loads and follower pressures on
+    /// the current faces): ∂f_ext/∂λ.
+    fn reference_load(&self, u: &[f64]) -> Result<Vec<f64>> {
+        let mut external = self.dead.clone();
+        for f in &self.followers {
+            let (force, _) = self.follower(f, u, 1.0)?;
+            for (d, v) in f.dofs.iter().zip(&force) {
+                if let Some(x) = external.get_mut(*d) {
+                    *x += v;
+                }
+            }
+        }
+        Ok(external)
+    }
+
     /// The size of the follower load stiffness's skew part relative to the whole, over the free
     /// degrees of freedom (Frobenius norms), at `u` and λ; `None` without followers.
     fn follower_asymmetry(&self, u: &[f64], lambda: f64) -> Result<Option<f64>> {
@@ -471,6 +527,15 @@ impl Run<'_> {
         free_residual(self.problem.red, e)
     }
 
+    /// The round-off floor of the force scale, from the first tangent's mean diagonal.
+    fn seed_force_floor(&mut self, kff: &Csr) {
+        if self.force_floor.is_none() {
+            let diagonal = kff.diagonal();
+            let mean = diagonal.iter().map(|d| d.abs()).sum::<f64>() / diagonal.len().max(1) as f64;
+            self.force_floor = Some(1e-8 * mean * self.length);
+        }
+    }
+
     fn scale(&self) -> f64 {
         self.force_scale.max(self.force_floor.unwrap_or(0.0)).max(f64::MIN_POSITIVE)
     }
@@ -537,10 +602,7 @@ impl Run<'_> {
         let red = self.problem.red;
         let mut e = self.problem.evaluate(&red.expand_scaled(q0, from), to, true, &self.committed)?;
         let k = e.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
-        let jump = red.expand_scaled(&vec![0.0; red.neq()], to - from);
-        let mut kj = vec![0.0; jump.len()];
-        k.mul(&jump, &mut kj);
-        let rf: Vec<f64> = free_residual(red, &e).iter().zip(red.restrict(&kj)).map(|(a, b)| a - b).collect();
+        let rf: Vec<f64> = free_residual(red, &e).iter().zip(prescribed_force(red, &k, to - from)).map(|(a, b)| a - b).collect();
         let mut dq = rf.clone();
         let [kff] = red.reduce([&k])?;
         drop(k);
@@ -598,9 +660,7 @@ impl Run<'_> {
             // The first tangent of the step: a singular one is a modelling error, not a cutback.
             let first = self.force_floor.is_none();
             if first {
-                let diagonal = kff.diagonal();
-                let mean = diagonal.iter().map(|d| d.abs()).sum::<f64>() / diagonal.len().max(1) as f64;
-                self.force_floor = Some(1e-8 * mean * self.length);
+                self.seed_force_floor(&kff);
             }
             drop(k);
             let factor = self.factor(&kff, first)?;
@@ -980,84 +1040,101 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
         history.frames.push(Frame { load_factor: lambda, displacement: split(u, &mesh).0 });
     };
     keep_frame(&mut history, 0.0, &vec![0.0; mesh.dofs()], &mut warnings);
-    let mut q = vec![0.0; red.neq()];
-    // The step fraction t and the load factor λ(t) of the step's load path (λ = t without one).
-    let (mut t, mut lambda) = (0.0f64, 0.0f64);
-    let mut size = settings.initial_increment;
-    let mut fast = 0usize;
-    let mut last: Option<Evaluation> = None;
-    // The last converged increment's free motion and the change of the load factor over it.
-    let mut previous: Option<(Vec<f64>, f64)> = None;
-    let max_increments = usize::try_from(settings.max_increments).unwrap_or(usize::MAX);
-    while t < 1.0 {
-        if history.increments.len() >= max_increments {
-            return Err(Error::Limit(format!(
-                "step `{}`: {} increments reached the step's cap at load factor {lambda:.6} (raise max_increments)",
-                step.name, settings.max_increments
-            )));
+    let (q, lambda, last) = if let Some(arc) = &settings.arc_length {
+        if problem.field.is_some() {
+            return Err(Error::NotSupported(format!("temperatures in arc-length steps (step `{}`)", step.name)));
         }
-        // An increment ends at the next point of the load path at the latest.
-        let turn = settings.next_turn(t);
-        let remaining = turn - t;
-        let (target, this) = if size >= remaining * (1.0 - 1e-9) { (turn, remaining) } else { (t + size, size) };
-        let target_lambda = settings.load_factor(target);
-        let change = if settings.load_path.is_some() { target_lambda - lambda } else { this };
-        let mut iterations = Vec::new();
-        let number = history.increments.len() + 1;
-        // Linear extrapolation of the last converged increment's free motion, in proportion to
-        // the change of the load factor (so it turns with the load path).
-        let mut predictor: Option<Vec<f64>> = previous
-            .as_ref()
-            .filter(|(_, prev)| *prev != 0.0)
-            .map(|(dq, prev): &(Vec<f64>, f64)| q.iter().zip(dq).map(|(a, d)| a + change / prev * d).collect());
-        // Path-dependent materials start without one from the tangent predictor.
-        let mut predicted_energy = None;
-        if predictor.is_none() && path_dependent {
-            match run.tangent_predictor(&q, lambda, target_lambda) {
-                Ok(Some((p, energy))) => (predictor, predicted_energy) = (Some(p), Some(energy)),
-                Ok(None) | Err(Failure::Cutback(_)) => {}
+        arc_length(&mut run, arc, step, &mut history, &mut warnings, &mut keep_frame)?
+    } else {
+        let mut q = vec![0.0; red.neq()];
+        // The step fraction t and the load factor λ(t) of the step's load path (λ = t without one).
+        let (mut t, mut lambda) = (0.0f64, 0.0f64);
+        let mut size = settings.initial_increment;
+        let mut fast = 0usize;
+        let mut last: Option<Evaluation> = None;
+        // The last converged increment's free motion and the change of the load factor over it.
+        let mut previous: Option<(Vec<f64>, f64)> = None;
+        let max_increments = usize::try_from(settings.max_increments).unwrap_or(usize::MAX);
+        while t < 1.0 {
+            if history.increments.len() >= max_increments {
+                return Err(Error::Limit(format!(
+                    "step `{}`: {} increments reached the step's cap at load factor {lambda:.6} (raise max_increments)",
+                    step.name, settings.max_increments
+                )));
+            }
+            // An increment ends at the next point of the load path at the latest.
+            let turn = settings.next_turn(t);
+            let remaining = turn - t;
+            let (target, this) = if size >= remaining * (1.0 - 1e-9) { (turn, remaining) } else { (t + size, size) };
+            let target_lambda = settings.load_factor(target);
+            let change = if settings.load_path.is_some() { target_lambda - lambda } else { this };
+            let mut iterations = Vec::new();
+            let number = history.increments.len() + 1;
+            // Linear extrapolation of the last converged increment's free motion, in proportion to
+            // the change of the load factor (so it turns with the load path).
+            let mut predictor: Option<Vec<f64>> = previous
+                .as_ref()
+                .filter(|(_, prev)| *prev != 0.0)
+                .map(|(dq, prev): &(Vec<f64>, f64)| q.iter().zip(dq).map(|(a, d)| a + change / prev * d).collect());
+            // Path-dependent materials start without one from the tangent predictor.
+            let mut predicted_energy = None;
+            if predictor.is_none() && path_dependent {
+                match run.tangent_predictor(&q, lambda, target_lambda) {
+                    Ok(Some((p, energy))) => (predictor, predicted_energy) = (Some(p), Some(energy)),
+                    Ok(None) | Err(Failure::Cutback(_)) => {}
+                    Err(Failure::Fatal(e)) => return Err(e),
+                }
+            }
+            match run.increment(&q, predictor.as_deref(), predicted_energy, target_lambda, change.abs(), &mut iterations) {
+                Ok(c) => {
+                    previous = Some((c.q.iter().zip(&q).map(|(a, b)| a - b).collect(), change));
+                    let count = iterations.len();
+                    history.increments.push(Increment {
+                        number,
+                        load_factor: target_lambda,
+                        size: this,
+                        iterations,
+                        converged: true,
+                        cutback: None,
+                        negative_pivots: 0,
+                    });
+                    (t, lambda) = (target, target_lambda);
+                    q = c.q;
+                    keep_frame(&mut history, lambda, &red.expand_scaled(&q, lambda), &mut warnings);
+                    run.committed.clone_from(&c.evaluation.history);
+                    last = Some(c.evaluation);
+                    fast = if count <= FAST_ITERATIONS { fast + 1 } else { 0 };
+                    if fast >= 2 {
+                        size *= GROWTH;
+                    } else if count > SLOW_ITERATIONS {
+                        size *= SHRINK;
+                    }
+                    size = size.clamp(settings.min_increment, settings.max_increment);
+                }
                 Err(Failure::Fatal(e)) => return Err(e),
-            }
-        }
-        match run.increment(&q, predictor.as_deref(), predicted_energy, target_lambda, change.abs(), &mut iterations) {
-            Ok(c) => {
-                previous = Some((c.q.iter().zip(&q).map(|(a, b)| a - b).collect(), change));
-                let count = iterations.len();
-                history.increments.push(Increment { number, load_factor: target_lambda, size: this, iterations, converged: true, cutback: None });
-                (t, lambda) = (target, target_lambda);
-                q = c.q;
-                keep_frame(&mut history, lambda, &red.expand_scaled(&q, lambda), &mut warnings);
-                run.committed.clone_from(&c.evaluation.history);
-                last = Some(c.evaluation);
-                fast = if count <= FAST_ITERATIONS { fast + 1 } else { 0 };
-                if fast >= 2 {
-                    size *= GROWTH;
-                } else if count > SLOW_ITERATIONS {
-                    size *= SHRINK;
-                }
-                size = size.clamp(settings.min_increment, settings.max_increment);
-            }
-            Err(Failure::Fatal(e)) => return Err(e),
-            Err(Failure::Cutback(reason)) => {
-                history.increments.push(Increment {
-                    number,
-                    load_factor: target_lambda,
-                    size: this,
-                    iterations,
-                    converged: false,
-                    cutback: Some(reason.clone()),
-                });
-                fast = 0;
-                size = this * CUTBACK;
-                if size < settings.min_increment * (1.0 - 1e-9) {
-                    return Err(Error::NotConverged(format!(
-                        "step `{}` stopped at load factor {lambda:.6} (step fraction {t:.6}): the increment to {target_lambda:.6} failed ({reason}) and a smaller one would be below the minimum increment {}",
-                        step.name, settings.min_increment
-                    )));
+                Err(Failure::Cutback(reason)) => {
+                    history.increments.push(Increment {
+                        number,
+                        load_factor: target_lambda,
+                        size: this,
+                        iterations,
+                        converged: false,
+                        cutback: Some(reason.clone()),
+                        negative_pivots: 0,
+                    });
+                    fast = 0;
+                    size = this * CUTBACK;
+                    if size < settings.min_increment * (1.0 - 1e-9) {
+                        return Err(Error::NotConverged(format!(
+                            "step `{}` stopped at load factor {lambda:.6} (step fraction {t:.6}): the increment to {target_lambda:.6} failed ({reason}) and a smaller one would be below the minimum increment {}",
+                            step.name, settings.min_increment
+                        )));
+                    }
                 }
             }
         }
-    }
+        (q, lambda, last)
+    };
     history.iterations = run.iterations;
     let u = red.expand_scaled(&q, lambda);
     let evaluation = match last {
@@ -1067,6 +1144,7 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
     if let Some((at, negative)) = history
         .increments
         .iter()
+        .filter(|_| settings.arc_length.is_none())
         .filter(|i| i.converged)
         .filter_map(|i| i.iterations.last().map(|it| (i.load_factor, it.negative_pivots)))
         .find(|(_, n)| *n > 0)
@@ -1196,4 +1274,286 @@ fn finish(
         temperature: None,
         nonlinear: Some(history),
     })
+}
+
+/// What one arc-length increment starts from: the tangent at the converged state, factored, and
+/// the tangent displacement of the unit load.
+struct ArcStart {
+    factor: Symmetric,
+    load_displacement: Vec<f64>,
+}
+
+impl Run<'_> {
+    /// The tangent at (q, λ) factored (Cholesky, or LDLᵀ past a critical point), the unit load
+    /// ∂r/∂λ at that state over the free equations (the loads at factor 1, less K T_p u_p for
+    /// prescribed motions), and the evaluation's residual.
+    fn arc_tangent(&mut self, e: &mut Evaluation, u: &[f64], first: bool) -> std::result::Result<(Symmetric, Vec<f64>), Failure> {
+        let red = self.problem.red;
+        let k = e.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
+        let mut g = red.restrict(&self.problem.reference_load(u)?);
+        if red.largest_prescribed() > 0.0 {
+            g.iter_mut().zip(prescribed_force(red, &k, 1.0)).for_each(|(a, b)| *a -= b);
+        }
+        let [kff] = red.reduce([&k])?;
+        drop(k);
+        if first {
+            self.seed_force_floor(&kff);
+        }
+        let factor = self.factor(&kff, first)?;
+        self.factor_entries = factor.entries();
+        Ok((factor, g))
+    }
+
+    /// The converged state's tangent (from its evaluation `e`, which keeps its forces) and the
+    /// unit load's tangent displacement.
+    fn arc_start(&mut self, e: &mut Evaluation, q: &[f64], lambda: f64, first: bool) -> std::result::Result<ArcStart, Failure> {
+        let (factor, mut g) = self.arc_tangent(e, &self.problem.red.expand_scaled(q, lambda), first)?;
+        factor.solve(&mut g)?;
+        if g.iter().any(|v| !v.is_finite()) || norm_inf(&g) == 0.0 {
+            return Err(Failure::Fatal(Error::Invalid("the step's loads do not move the model, so an arc length cannot be measured".into())));
+        }
+        Ok(ArcStart { factor, load_displacement: g })
+    }
+
+    /// One arc-length increment from the converged (q0, λ0) (M. A. Crisfield, *A fast
+    /// incremental/iterative solution procedure that handles "snap-through"*, Computers &
+    /// Structures 13:55–62, 1981): the constraint Δqᵀ Δq + w Δλ² = Δl² (w = 0 cylindrical, w =
+    /// ‖q_f‖² spherical) with the load factor an unknown. Predictor along the tangent, its sign
+    /// by the angle with the last increment (M. Feng, D. Perić, D. R. J. Owen, *A new criterion for
+    /// determination of initial loading parameter in arc-length methods*, Computers & Structures
+    /// 58(3):479–485, 1996); each correction δq = δq_r + δλ δq_g solves the quadratic for δλ and
+    /// takes the root whose increment is closest in direction to the previous iterate's (the
+    /// angle criterion, Crisfield 1981).
+    #[allow(clippy::too_many_arguments)]
+    fn arc_increment(
+        &mut self,
+        q0: &[f64],
+        lambda0: f64,
+        start: &ArcStart,
+        arc: f64,
+        weight: f64,
+        previous: Option<&(Vec<f64>, f64)>,
+        iterations: &mut Vec<Iteration>,
+    ) -> std::result::Result<(Vec<f64>, f64, Evaluation), Failure> {
+        let tol = self.settings.tolerances;
+        let qg = &start.load_displacement;
+        let sign = match previous {
+            Some((dq, dl)) if dot(dq, qg) + weight * dl < 0.0 => -1.0,
+            _ => 1.0,
+        };
+        let mut dlam = sign * arc / (dot(qg, qg) + weight).sqrt();
+        let mut dq: Vec<f64> = qg.iter().map(|g| dlam * g).collect();
+        let mut correction = f64::INFINITY;
+        let mut first_energy: Option<f64> = None;
+        let max_iterations = usize::try_from(self.settings.max_iterations).unwrap_or(usize::MAX);
+        let at = |dq: &[f64]| -> Vec<f64> { q0.iter().zip(dq).map(|(a, b)| a + b).collect() };
+        for it in 0..=max_iterations {
+            let q = at(&dq);
+            let mut e = self.state(&q, lambda0 + dlam, true)?;
+            let r = self.residual(&e);
+            let force = norm_inf(&r) / self.scale();
+            if !force.is_finite() {
+                return Err(Failure::Cutback("the residual is not finite".into()));
+            }
+            if it > 0 && ((force <= tol.force && correction <= tol.displacement) || force <= ROUND_OFF * tol.force) {
+                return Ok((q, lambda0 + dlam, e));
+            }
+            if it == max_iterations {
+                break;
+            }
+            if self.iterations >= self.limits.max_newton_iterations {
+                return Err(Failure::Fatal(Error::Limit(format!(
+                    "the step took {} Newton iterations, the limit (raise max_newton_iterations or loosen the tolerances)",
+                    self.iterations
+                ))));
+            }
+            self.iterations += 1;
+            let u = self.problem.red.expand_scaled(&q, lambda0 + dlam);
+            let (factor, mut dqg) = self.arc_tangent(&mut e, &u, false)?;
+            let mut dqr = r.clone();
+            factor.solve(&mut dqr)?;
+            factor.solve(&mut dqg)?;
+            // (Δq + δq_r + δλ δq_g)² + w (Δλ + δλ)² = Δl².
+            let base: Vec<f64> = dq.iter().zip(&dqr).map(|(a, b)| a + b).collect();
+            let a = dot(&dqg, &dqg) + weight;
+            let b = 2.0 * (dot(&dqg, &base) + weight * dlam);
+            let c = dot(&base, &base) + weight * dlam * dlam - arc * arc;
+            let disc = b * b - 4.0 * a * c;
+            if !(disc >= 0.0) || !(a > 0.0) {
+                return Err(Failure::Cutback("the arc-length constraint has no real root (the arc is too long here)".into()));
+            }
+            let root = disc.sqrt();
+            // Stable roots of a x² + b x + c (no cancellation).
+            let qr = -0.5 * (b + b.signum() * root);
+            let roots = if qr == 0.0 { [0.0, 0.0] } else { [qr / a, c / qr] };
+            let cosine = |dl: f64| dot(&dq, &base) + dl * dot(&dq, &dqg) + weight * dlam * (dlam + dl);
+            let dl = if cosine(roots[0]) >= cosine(roots[1]) { roots[0] } else { roots[1] };
+            let step: Vec<f64> = dqr.iter().zip(&dqg).map(|(r, g)| r + dl * g).collect();
+            if step.iter().any(|v| !v.is_finite()) {
+                return Err(Failure::Cutback("the arc-length correction is not finite".into()));
+            }
+            dq.iter_mut().zip(&step).for_each(|(a, s)| *a += s);
+            dlam += dl;
+            correction = norm_inf(&step) / norm_inf(&dq).max(1e-12 * self.length);
+            let energy = dot(&step, &r).abs();
+            let first = *first_energy.get_or_insert(energy);
+            iterations.push(Iteration {
+                force,
+                displacement: correction,
+                energy: if first > 0.0 { energy / first } else { 0.0 },
+                line_search: 1.0,
+                negative_pivots: factor.inertia().negative,
+            });
+        }
+        Err(Failure::Cutback(format!("no convergence in {} iterations", self.settings.max_iterations)))
+    }
+}
+
+/// Follow a step's equilibrium path by arc length (Riks 1979, Crisfield 1981): the load factor
+/// is an unknown, so the path goes through limit points. The first increment's load factor
+/// change is the step's initial increment, which sets the arc length; increments grow and
+/// shrink as under load control (the arc length in proportion, within the minimum and maximum
+/// increments' arcs). The tangent at every converged state is factored for the next predictor
+/// (Cholesky, LDLᵀ when indefinite); its negative eigenvalues are recorded per increment, and
+/// where their count changes a critical point is reported: a limit point when the load factor
+/// turns there, a bifurcation otherwise. The step ends at the maximum load factor, at the
+/// displacement limit, or at its increment cap (with a warning).
+#[allow(clippy::type_complexity)]
+fn arc_length(
+    run: &mut Run,
+    arc: &ArcLength,
+    step: &Step,
+    history: &mut History,
+    warnings: &mut Vec<String>,
+    keep_frame: &mut dyn FnMut(&mut History, f64, &[f64], &mut Vec<String>),
+) -> Result<(Vec<f64>, f64, Option<Evaluation>)> {
+    let settings = run.settings;
+    let red = run.problem.red;
+    let mesh = run.problem.mesh;
+    let limit = match &arc.displacement_limit {
+        Some(l) => {
+            let slot =
+                mesh.node(l.node).ok_or_else(|| Error::Invalid(format!("the displacement limit's node {} has no degrees of freedom", l.node)))?;
+            let dofs = translations(mesh, slot)?;
+            let dof = dofs
+                .get(usize::from(l.direction).saturating_sub(1))
+                .copied()
+                .ok_or_else(|| Error::Invalid(format!("the displacement limit's node {} has no direction {}", l.node, l.direction)))?;
+            Some((dof, l.displacement.abs()))
+        }
+        None => None,
+    };
+    let fatal = |f: Failure| match f {
+        Failure::Fatal(e) => e,
+        Failure::Cutback(m) => Error::NotConverged(format!("step `{}`: {m}", step.name)),
+    };
+    let mut q = vec![0.0; red.neq()];
+    let mut lambda = 0.0f64;
+    let mut initial = run.state(&q, lambda, true).map_err(fatal)?;
+    let mut start = run.arc_start(&mut initial, &q, lambda, true).map_err(fatal)?;
+    // States: load factor and negative eigenvalues, from the undeformed one.
+    let mut states: Vec<(usize, f64, usize)> = vec![(0, 0.0, start.factor.inertia().negative)];
+    let scale = (dot(&start.load_displacement, &start.load_displacement)).sqrt();
+    let weight = if arc.constraint == ArcConstraint::Spherical { scale * scale } else { 0.0 };
+    let unit = (scale * scale + weight).sqrt();
+    let mut size = settings.initial_increment * unit;
+    let (smallest, largest) = (settings.min_increment * unit, settings.max_increment * unit);
+    let mut previous: Option<(Vec<f64>, f64)> = None;
+    let mut fast = 0usize;
+    let mut last: Option<Evaluation> = None;
+    let max_increments = usize::try_from(settings.max_increments).unwrap_or(usize::MAX);
+    loop {
+        if history.increments.len() >= max_increments {
+            warnings.push(format!(
+                "the arc-length step `{}` ended at its cap of {} increments, at load factor {lambda:.6}",
+                step.name, settings.max_increments
+            ));
+            break;
+        }
+        let number = history.increments.len() + 1;
+        let mut iterations = Vec::new();
+        match run.arc_increment(&q, lambda, &start, size, weight, previous.as_ref(), &mut iterations) {
+            Ok((q1, lambda1, mut evaluation)) => {
+                let change = lambda1 - lambda;
+                previous = Some((q1.iter().zip(&q).map(|(a, b)| a - b).collect(), change));
+                let count = iterations.len();
+                (q, lambda) = (q1, lambda1);
+                run.committed.clone_from(&evaluation.history);
+                let u = red.expand_scaled(&q, lambda);
+                keep_frame(history, lambda, &u, warnings);
+                start = run.arc_start(&mut evaluation, &q, lambda, false).map_err(fatal)?;
+                let negative = start.factor.inertia().negative;
+                history.increments.push(Increment {
+                    number,
+                    load_factor: lambda,
+                    size: change,
+                    iterations,
+                    converged: true,
+                    cutback: None,
+                    negative_pivots: negative,
+                });
+                states.push((number, lambda, negative));
+                last = Some(evaluation);
+                fast = if count <= FAST_ITERATIONS { fast + 1 } else { 0 };
+                if fast >= 2 {
+                    size *= GROWTH;
+                } else if count > SLOW_ITERATIONS {
+                    size *= SHRINK;
+                }
+                size = size.clamp(smallest, largest);
+                let reached = limit.is_some_and(|(dof, value)| u.get(dof).is_some_and(|x| x.abs() >= value));
+                if lambda >= arc.max_load_factor || reached {
+                    break;
+                }
+            }
+            Err(Failure::Fatal(e)) => return Err(e),
+            Err(Failure::Cutback(reason)) => {
+                history.increments.push(Increment {
+                    number,
+                    load_factor: lambda,
+                    size: 0.0,
+                    iterations,
+                    converged: false,
+                    cutback: Some(reason.clone()),
+                    negative_pivots: 0,
+                });
+                fast = 0;
+                size *= CUTBACK;
+                if size < smallest * (1.0 - 1e-9) {
+                    return Err(Error::NotConverged(format!(
+                        "arc-length step `{}` stopped at load factor {lambda:.6}: an increment failed ({reason}) and a shorter arc would be below the minimum increment",
+                        step.name
+                    )));
+                }
+            }
+        }
+    }
+    history.critical_points = critical_points(&states);
+    Ok((q, lambda, last))
+}
+
+/// Critical points from the converged states' (increment, load factor, negative eigenvalues):
+/// where the count changes, a limit point if the load factor turns within a state of it, a
+/// bifurcation otherwise.
+fn critical_points(states: &[(usize, f64, usize)]) -> Vec<CriticalPoint> {
+    let mut out = Vec::new();
+    for k in 1..states.len() {
+        let (Some(&(_, l0, n0)), Some(&(increment, _, n1))) = (states.get(k - 1), states.get(k)) else { continue };
+        if n0 == n1 {
+            continue;
+        }
+        let around: Vec<f64> = states.get(k.saturating_sub(2)..(k + 2).min(states.len())).unwrap_or_default().iter().map(|s| s.1).collect();
+        let turns = around.windows(3).any(|w| (w[1] - w[0]) * (w[2] - w[1]) < 0.0);
+        let (kind, load_factor) = if turns {
+            // The extreme load factor next to the change.
+            let rising = around.windows(2).next().is_some_and(|w| w[1] >= w[0]);
+            let extreme =
+                if rising { around.iter().copied().fold(f64::NEG_INFINITY, f64::max) } else { around.iter().copied().fold(f64::INFINITY, f64::min) };
+            (CriticalKind::Limit, extreme)
+        } else {
+            (CriticalKind::Bifurcation, l0)
+        };
+        out.push(CriticalPoint { kind, increment, load_factor, negative_before: n0, negative_after: n1 });
+    }
+    out
 }

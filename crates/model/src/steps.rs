@@ -149,6 +149,51 @@ pub struct NonlinearStatic {
     /// coordinates before this step is solved (the step and its results are on that geometry).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imperfection: Option<Imperfection>,
+    /// Arc-length (Riks–Crisfield) control: the load factor becomes an unknown, so the step can
+    /// follow its equilibrium path through limit points (snap-through, snap-back). The first
+    /// increment's load factor change is `initial_increment`; the increment sizes become arc
+    /// lengths in proportion. `None`: load control.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arc_length: Option<ArcLength>,
+}
+
+/// The constraint of an arc-length step.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArcConstraint {
+    /// ‖Δu‖ = Δl (Crisfield's cylindrical arc).
+    #[default]
+    Cylindrical,
+    /// ‖Δu‖² + Δλ² ‖u_f‖² = Δl², u_f the first increment's tangent displacement of the unit
+    /// load (the spherical arc, scaled to displacement units).
+    Spherical,
+}
+
+/// When an arc-length step ends: at `max_load_factor` (default 1), when the displacement of
+/// `node` along `direction` (1, 2, 3) reaches `displacement` in magnitude, or at the step's
+/// increment cap, whichever comes first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ArcLength {
+    pub constraint: ArcConstraint,
+    pub max_load_factor: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub displacement_limit: Option<DisplacementLimit>,
+}
+
+impl Default for ArcLength {
+    fn default() -> ArcLength {
+        ArcLength { constraint: ArcConstraint::Cylindrical, max_load_factor: 1.0, displacement_limit: None }
+    }
+}
+
+/// A displacement that ends an arc-length step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisplacementLimit {
+    pub node: u32,
+    pub direction: u8,
+    pub displacement: f64,
 }
 
 /// Mode `mode` (from 1) of buckling step `step`, scaled so its largest component is `scale`
@@ -196,6 +241,7 @@ impl Default for NonlinearStatic {
             line_search: false,
             load_path: None,
             imperfection: None,
+            arc_length: None,
         }
     }
 }
@@ -205,6 +251,22 @@ impl NonlinearStatic {
         let fraction = |what: &str, v: f64| {
             if v > 0.0 && v <= 1.0 { Ok(v) } else { Err(Error::Invalid(format!("the {what} is a fraction of the step in (0, 1], got {v}"))) }
         };
+        if let Some(arc) = &self.arc_length {
+            if !(arc.max_load_factor.is_finite() && arc.max_load_factor > 0.0) {
+                return Err(Error::Invalid(format!("an arc-length step's maximum load factor is a positive number, got {}", arc.max_load_factor)));
+            }
+            if let Some(l) = &arc.displacement_limit {
+                if !(1..=3).contains(&l.direction) {
+                    return Err(Error::Invalid(format!("a displacement limit's direction is 1, 2 or 3, got {}", l.direction)));
+                }
+                if !(l.displacement.is_finite() && l.displacement != 0.0) {
+                    return Err(Error::Invalid(format!("a displacement limit is a nonzero number, got {}", l.displacement)));
+                }
+            }
+            if self.load_path.is_some() {
+                return Err(Error::Invalid("an arc-length step finds its own load factor; it takes no load path".into()));
+            }
+        }
         if let Some(imp) = &self.imperfection {
             if !(1..=MAX_MODES).contains(&imp.mode) {
                 return Err(Error::Invalid(format!("an imperfection takes mode 1 to {MAX_MODES}, got {}", imp.mode)));

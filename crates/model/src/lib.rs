@@ -67,8 +67,9 @@ pub use mesh::{
 pub use sections::{BeamProfile, Extent, Formulation, Integration, Section, SectionKind};
 pub use sets::Set;
 pub use steps::{
-    BulkViscosity, ExplicitDynamic, Hourglass, HourglassKind, Imperfection, InitialVelocity, MAX_LOAD_PATH_POINTS, MAX_NONLINEAR_INCREMENTS,
-    MAX_NONLINEAR_ITERATIONS, NonlinearStatic, OutputVariable, Procedure, RigidWall, Step, StressRate, Tolerances, Transient,
+    ArcConstraint, ArcLength, BulkViscosity, DisplacementLimit, ExplicitDynamic, Hourglass, HourglassKind, Imperfection, InitialVelocity,
+    MAX_LOAD_PATH_POINTS, MAX_NONLINEAR_INCREMENTS, MAX_NONLINEAR_ITERATIONS, NonlinearStatic, OutputVariable, Procedure, RigidWall, Step,
+    StressRate, Tolerances, Transient,
 };
 pub use units::UnitSystem;
 

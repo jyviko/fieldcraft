@@ -874,6 +874,9 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
             d.card([Field::from(1)]);
         }
         Procedure::NonlinearStatic(n) => {
+            if n.arc_length.is_some() {
+                return Err(Error::Unsupported { format: FORMAT, what: format!("step `{}`: arc-length control", step.name) });
+            }
             if n.imperfection.is_some() {
                 return Err(Error::Unsupported {
                     format: FORMAT,

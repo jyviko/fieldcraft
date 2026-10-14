@@ -427,7 +427,7 @@ pub static CATALOGUE: &[Capability] = &[
         "General Contact",
         Interactions,
         "Contact",
-        "Contact between everything that may touch, or self contact of a surface, with friction (explicit dynamics)",
+        "Contact between everything that may touch, or self contact of a surface, with friction (explicit dynamics and nonlinear static steps)",
         &["interaction.contact.edit", "interaction.contact.delete"],
     ),
     ready_more(

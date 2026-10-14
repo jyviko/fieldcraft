@@ -103,7 +103,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Constraints | Reference Point — A reference point for couplings, loads and boundary conditions | ready | `model.reference_point.create`, `model.reference_point.edit`, `model.reference_point.delete` |
 | Constraints | Coupling — Kinematic or distributing coupling of a set to a reference point | ready | `model.coupling.create`, `model.coupling.edit`, `model.coupling.delete` |
 | Constraints | Tie — Tie non-matching meshes together (dual mortar constraints) | ready | `interaction.tie`, `interaction.tie.edit`, `interaction.tie.delete` |
-| Contact | General Contact — Contact between everything that may touch, or self contact of a surface, with friction (explicit dynamics) | ready | `interaction.contact.general`, `interaction.contact.edit`, `interaction.contact.delete` |
+| Contact | General Contact — Contact between everything that may touch, or self contact of a surface, with friction (explicit dynamics and nonlinear static steps) | ready | `interaction.contact.general`, `interaction.contact.edit`, `interaction.contact.delete` |
 | Contact | Contact Pair — Contact between two surfaces: with friction in explicit dynamics, mortar contact with friction in nonlinear static steps | ready | `interaction.contact.pair`, `interaction.contact.edit`, `interaction.contact.delete` |
 | Contact | Find Contacts — Find the parts of the mesh that touch, and make contact pairs of them | ready | `interaction.contact.find` |
 | Contact | Rigid Wall — Rigid walls for explicit dynamics | coming soon (M10) |  |

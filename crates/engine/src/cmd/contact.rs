@@ -59,7 +59,7 @@ pub const GENERAL: CommandSpec = CommandSpec {
     params: concat!(
         r#"{"name": "all", "surface": "skin" (optional: a set of element faces, each in contact with every other: self contact; default every exterior face of the solids), "#,
         r#""friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb, μ = μk + (μs − μk) e^(−decay × slip rate); default frictionless), "penalty_scale": 1 (0 < scale ≤ 1: a factor on the penalty: explicit, the stiffest that leaves the time increment alone; nonlinear static, the augmented Lagrangian's), "initial_penetration": "adjust" (nodes that start inside: explicit moves them onto the surface, strain-free; nonlinear static takes the overlap out of their gap; both report them) | "refuse" (refuse the analysis, naming the first)"#,
-        r#"} — single-surface contact of everything that may touch (explicit dynamics; nonlinear static steps refuse it: use pairs; fails if the name is taken)"#
+        r#"} — single-surface contact of everything that may touch (explicit dynamics, and mortar self-contact in nonlinear static steps; fails if the name is taken)"#
     ),
     form: Some(super::forms::CONTACT_GENERAL),
     kind: CommandKind::Model,

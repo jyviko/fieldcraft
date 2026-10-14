@@ -1,7 +1,7 @@
 //! Contact: which surfaces may touch, and the friction between them.
 //!
 //! A contact is a model definition, active in every step that can take it (explicit dynamics,
-//! and nonlinear static steps for pairs; the linear analyses refuse contact by name). Its
+//! and nonlinear static steps; the linear analyses refuse contact by name). Its
 //! surfaces are sets with element
 //! faces, so they survive remeshing like a pressure load does:
 //! - a **pair**: the faces of `main` against those of `secondary`, both ways (each surface's

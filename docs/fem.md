@@ -460,8 +460,12 @@ weighted gap g̃_A = Σ ∫ Φ_A (x_m − x_s)·n dA over the overlaps of its fa
 facing them, Φ_A the secondary face's own shape functions; ĝ_A = g̃_A / A_A with A_A = ∫ Φ_A over
 the node's faces. The pressure field is interpolated like the displacements, so a uniform
 pressure crosses a non-matching interface as the consistent nodal forces of both meshes: the
-contact patch test. Linear faces (tri3, quad4: tet4, wedge6, hex8); general contact, quadratic
-faces, 2D models and arc-length steps are refused by name.
+contact patch test. General (single-surface) contact uses one face list, a set's or every
+exterior face of the solids, as both sides: each face against every other one facing it that
+shares no node with its element (its neighbours) and that it does not reach through more than
+half an element (the far side of a thin wall), paired both ways, so the folds of one body press
+on each other symmetrically. Linear faces (tri3, quad4: tet4, wedge6, hex8); quadratic faces, 2D
+models and arc-length steps are refused by name.
 
 **Segmentation** (`fieldcraft_fem::mortar`): both faces are projected along the secondary
 face's unit normal onto its plane, the main polygon is clipped by the secondary one

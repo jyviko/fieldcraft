@@ -54,6 +54,13 @@ pub const SAMPLES: &[Sample] = &[
         design: None,
         script: |_| impact(),
     },
+    Sample {
+        name: "drop-test",
+        label: "Drop Test",
+        about: "An aluminium L-bracket dropped 2 m onto a tilted rigid floor: explicit dynamics, the strike and its stress waves",
+        design: Some(UPRIGHT_BRACKET),
+        script: |_| drop_test(),
+    },
 ];
 
 /// The sample called `name`.
@@ -228,6 +235,59 @@ pub fn impact() -> Value {
     Value::Array(steps)
 }
 
+/// An L-bracket standing on its foot, Z up, as a SolidCraft script: a 60 × 40 mm foot and a 50 mm
+/// upright, both 8 mm thick, with an R6 fillet inside the bend (the corpus `filleted-bracket`'s
+/// profile without its holes, sketched on XZ so it sweeps along y). Body `Bracket`; its faces
+/// `F2:side:l1` (the foot's underside, z = 0), `l2` (the foot's end, x = 60), `l3` (the foot's top),
+/// `l4` (the upright's inside, x = 8), `l5` (the upright's top, z = 50) and `l6` (its back, x = 0).
+pub const UPRIGHT_BRACKET: &str = r#"{"commands": [
+    {"command": "sketch.create", "params": {"plane": "XZ", "name": "Profile"}},
+    {"command": "sketch.line", "params": {"points": [[0, 0], [60, 0], [60, -8], [8, -8], [8, -50], [0, -50]], "closed": true}},
+    {"command": "sketch.finish", "params": {}},
+    {"command": "solid.extrude", "params": {"distance": 40, "body_name": "Bracket"}},
+    {"command": "solid.fillet", "params": {"edges": [[8, 20, 8]], "radius": 6}}
+]}"#;
+
+/// Aluminium (E = 70 GPa, ν = 0.33, ρ = 2.7 t/m³, yield 240 MPa with 700 MPa linear hardening),
+/// in mm, t, s, N, MPa.
+fn aluminium(name: &str) -> Value {
+    json!({"command": "model.material.create", "params": {"name": name, "elastic": {"type": "isotropic", "young": 70000, "poisson": 0.33}, "density": 2.7e-9,
+        "plastic": {"type": "bilinear", "yield_stress": 240, "hardening_modulus": 700, "hardening": "isotropic"}}})
+}
+
+/// Standard gravity, mm/s².
+pub const GRAVITY: f64 = 9810.0;
+/// The drop test's height of fall, mm: the bracket meets the floor at √(2 g h) = 6.26 m/s.
+pub const DROP_HEIGHT: f64 = 2000.0;
+/// The drop test's floor tilt about y, degrees: the foot's end strikes first.
+const DROP_TILT: f64 = 15.0;
+
+/// [`UPRIGHT_BRACKET`] in aluminium, hex8 elements swept 3 mm (one-point, stiffness hourglass
+/// control), falling at √(2 g h) onto a rigid floor tilted 15° so the foot's end lands first,
+/// 0.1 mm below that corner; gravity on. Step `Drop` (explicit dynamics, 1 ms: the strike, the
+/// stress waves through the bend and the bracket pivoting onto its foot; 20 field frames, the
+/// upright's top (set `top`) in the histories).
+pub fn drop_test() -> Value {
+    let speed = (2.0 * GRAVITY * DROP_HEIGHT).sqrt();
+    let tilt = DROP_TILT.to_radians();
+    let step = json!({
+        "type": "explicit_dynamic", "end_time": 1e-3, "output_interval": 5e-5, "history_interval": 5e-6, "history_nodes": "top",
+        "initial_velocities": [{"set": "bracket", "velocity": [0, 0, -speed]}],
+        "rigid_walls": [{"set": "bracket", "point": [60, 0, -0.1], "normal": [-tilt.sin(), 0, tilt.cos()]}],
+        "hourglass": {"type": "stiffness", "coefficient": 0.05}
+    });
+    json!([
+        {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
+        {"command": "mesh.hex.generate", "params": {"body": "Bracket", "size": 3, "method": "extrude"}},
+        {"command": "model.set.create", "params": {"name": "bracket", "geometry": [{"body": "Bracket"}]}},
+        {"command": "model.set.create", "params": {"name": "top", "geometry": [{"body": "Bracket", "face": "F2:side:l5"}]}},
+        aluminium("Aluminium"),
+        {"command": "model.section.create", "params": {"name": "Bracket", "set": "bracket", "material": "Aluminium", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+        {"command": "model.load.create", "params": {"name": "Gravity", "type": "gravity", "acceleration": [0, 0, -GRAVITY]}},
+        {"command": "model.step.create", "params": {"name": "Drop", "procedure": step, "loads": ["Gravity"]}},
+    ])
+}
+
 /// Six times the signed volume of the tetrahedron `p[0..4]` (positive when p3 lies on the side
 /// p0 → p1 → p2 turns counter-clockwise around).
 fn signed_volume(p: &[[f64; 3]]) -> f64 {
@@ -294,5 +354,46 @@ mod tests {
         let r = s.execute("solve.explicit", &json!({})).unwrap();
         assert_eq!((r["completed"].as_bool(), r["frames"].as_u64()), (Some(true), Some(11)), "{r}");
         assert!(r["energy_balance"].as_f64().unwrap() < 0.05, "{r}");
+    }
+
+    /// `file.sample NAME`, checked clean: ready, no errors or warnings.
+    fn open(name: &str) -> Session {
+        let mut s = Session::default();
+        s.execute("file.sample", &json!({"name": name})).unwrap();
+        let check = s.execute("model.check", &json!({})).unwrap();
+        assert_eq!((check["ready"].as_bool(), check["errors"].as_u64(), check["warnings"].as_u64()), (Some(true), Some(0), Some(0)), "{check}");
+        s
+    }
+
+    #[test]
+    fn the_drop_test_opens_ready_to_solve() {
+        let s = open("drop-test");
+        assert!(s.model.elements().len() > 1000);
+    }
+
+    /// The bracket's mass is ρ V (V: foot, upright and the fillet's corner, 36 − 9π mm² by 40 mm),
+    /// it meets the floor at √(2 g h) with ½ m v² of kinetic energy and conserves energy; by the
+    /// end the floor has taken half its downward momentum and turned kinetic energy into
+    /// vibration.
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn the_drop_test_lands_at_the_free_fall_speed_and_bounces() {
+        let mut s = open("drop-test");
+        let r = s.execute("solve.run", &json!({})).unwrap();
+        let r = &r["steps"][0]["summary"];
+        let volume = 60.0 * 8.0 * 40.0 + 8.0 * 42.0 * 40.0 + (36.0 - 9.0 * std::f64::consts::PI) * 40.0;
+        let mass = 2.7e-9 * volume;
+        let close = |a: f64, b: f64, rel: f64| (a - b).abs() <= rel * b.abs();
+        assert!(close(r["total_mass"].as_f64().unwrap(), mass, 0.005), "{r}");
+        assert!(r["completed"].as_bool() == Some(true) && r["energy_balance"].as_f64().unwrap() < 0.01, "{r}");
+        let h = s.execute("solve.history", &json!({"step": "Drop"})).unwrap();
+        let speed = (2.0 * GRAVITY * DROP_HEIGHT).sqrt();
+        let pz = |i: usize| h["momentum"][i][2].as_f64().unwrap();
+        let kinetic = |i: usize| h["energies"][i]["kinetic"].as_f64().unwrap();
+        assert!(close(pz(0), -mass * speed, 0.005), "{}", pz(0));
+        assert!(close(kinetic(0), 0.5 * mass * speed * speed, 0.01), "{}", kinetic(0));
+        let last = h["time"].as_array().unwrap().len() - 1;
+        let kept = pz(last) / pz(0);
+        assert!(kept > 0.4 && kept < 0.6 && kinetic(last) < kinetic(0), "{} {}", pz(last), kinetic(last));
     }
 }

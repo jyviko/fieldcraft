@@ -10,7 +10,8 @@
 
 use fieldcraft_model::ElementKind;
 use fieldcraft_render::contour::{Bands, band_color, split_triangle};
-use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Rgb, Scene, SceneLine, SceneTri, StandardView, Vec3};
+use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Orientation, Rgb, Scene, SceneLine, SceneTri, Vec3};
+use serde_json::Value;
 
 use crate::results::{displacements, field_values, magnitude, range};
 use crate::{EngineError, Result, Session};
@@ -174,12 +175,31 @@ pub fn scene(s: &Session, p: &Palette) -> (Scene, Aabb3, Shown) {
     (scene, bounds, shown)
 }
 
-/// A PNG of the session seen from `view`, framing everything drawn, `w` × `h` pixels.
-pub fn render_png(s: &Session, view: StandardView, w: usize, h: usize, p: &Palette) -> Result<(Vec<u8>, Shown)> {
+/// A camera orientation from JSON, `{"yaw": …, "pitch": …, "distance"?: …}`: degrees, and the
+/// distance from the target in model units (the control channel's `ui.camera`, the MCP
+/// `screenshot` tool's `camera`). Hostile input is refused or clamped
+/// ([`Orientation::checked`]).
+pub fn orientation(p: &Value) -> Result<Orientation> {
+    let bad = |m: &str| EngineError::Params(format!("camera: {m}"));
+    let o = p.as_object().ok_or_else(|| bad("an object {yaw, pitch, distance?} in degrees"))?;
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "yaw" | "pitch" | "distance")) {
+        return Err(bad(&format!("unknown field `{}` (yaw, pitch, distance)", k.chars().take(40).collect::<String>())));
+    }
+    let number = |k: &str| o.get(k).filter(|v| !v.is_null()).map(|v| v.as_f64().ok_or_else(|| bad(&format!("`{k}` must be a number"))));
+    let yaw = number("yaw").ok_or_else(|| bad("`yaw` (degrees) is required"))??;
+    let pitch = number("pitch").ok_or_else(|| bad("`pitch` (degrees) is required"))??;
+    let distance = number("distance").transpose()?;
+    Orientation::checked(yaw, pitch, distance).ok_or_else(|| bad("`yaw` and `pitch` must be finite and `distance` finite and above 0"))
+}
+
+/// A PNG of the session seen from `at`, `w` × `h` pixels: framing everything drawn, or from
+/// `at`'s distance when it has one.
+pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette) -> Result<(Vec<u8>, Shown)> {
     let (mut scene, bounds, shown) = scene(s, p);
     let mut cam = Camera::default();
-    cam.set_view(view);
+    cam.orient(&Orientation { distance: None, ..*at });
     cam.fit(&bounds);
+    cam.orient(at);
     scene.radius = if bounds.is_empty() { 1.0 } else { (cam.target.dist(bounds.center()) + bounds.diagonal() * 0.5).max(1e-3) };
     let png = fieldcraft_render::render_png(&scene, &cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;
     Ok((png, shown))
@@ -187,25 +207,56 @@ pub fn render_png(s: &Session, view: StandardView, w: usize, h: usize, p: &Palet
 
 #[cfg(test)]
 mod tests {
+    use fieldcraft_render::StandardView;
     use serde_json::json;
 
     use super::*;
 
     #[test]
     fn renders_the_model_and_its_results() {
+        let iso = Orientation::of(StandardView::Iso);
         let mut s = Session::default();
-        let empty = render_png(&s, StandardView::Iso, 32, 24, &Palette::LIGHT).unwrap();
+        let empty = render_png(&s, &iso, 32, 24, &Palette::LIGHT).unwrap();
         assert!(empty.0.starts_with(&[0x89, b'P', b'N', b'G']));
         s.run_script(&crate::sample::cantilever()).unwrap();
-        let (model, shown) = render_png(&s, StandardView::Iso, 64, 48, &Palette::LIGHT).unwrap();
+        let (model, shown) = render_png(&s, &iso, 64, 48, &Palette::LIGHT).unwrap();
         assert_eq!(shown, Shown::default());
         s.execute("solve.static", &json!({})).unwrap();
-        let (plot, shown) = render_png(&s, StandardView::Iso, 64, 48, &Palette::LIGHT).unwrap();
+        let (plot, shown) = render_png(&s, &iso, 64, 48, &Palette::LIGHT).unwrap();
         assert_ne!(model, plot);
         assert!(shown.scale > 0.0 && shown.step.is_some(), "{shown:?}");
         let (field, min, max) = shown.contour.unwrap();
         assert_eq!(field, "von_mises");
         assert!(max.1 > min.1);
-        assert!(render_png(&s, StandardView::Top, 0, 48, &Palette::LIGHT).is_err());
+        assert!(render_png(&s, &Orientation::of(StandardView::Top), 0, 48, &Palette::LIGHT).is_err());
+    }
+
+    #[test]
+    fn camera_orientation_is_checked() {
+        let o = orientation(&json!({"yaw": -45, "pitch": 30})).unwrap();
+        assert_eq!((o.yaw, o.pitch, o.distance), (-45.0, 30.0, None));
+        let o = orientation(&json!({"yaw": 400, "pitch": -400, "distance": 1e300})).unwrap();
+        assert_eq!((o.yaw, o.pitch, o.distance), (40.0, -90.0, Some(Orientation::DISTANCE.1)));
+        for hostile in [
+            json!(null),
+            json!([1, 2]),
+            json!({}),
+            json!({"yaw": 0}),
+            json!({"pitch": 0}),
+            json!({"yaw": "left", "pitch": 0}),
+            json!({"yaw": 0, "pitch": 0, "distance": 0}),
+            json!({"yaw": 0, "pitch": 0, "distance": -5}),
+            json!({"yaw": 0, "pitch": 0, "distance": "far"}),
+            json!({"yaw": 0, "pitch": 0, "roll": 3}),
+            json!({"yaw": f64::INFINITY, "pitch": 0}),
+        ] {
+            assert!(orientation(&hostile).is_err(), "{hostile}");
+        }
+        // A picture from a chosen orientation and distance differs from the framed iso one.
+        let mut s = Session::default();
+        s.run_script(&crate::sample::cantilever()).unwrap();
+        let iso = render_png(&s, &Orientation::of(StandardView::Iso), 64, 48, &Palette::LIGHT).unwrap().0;
+        let side = render_png(&s, &orientation(&json!({"yaw": -80, "pitch": 10, "distance": 2000})).unwrap(), 64, 48, &Palette::LIGHT).unwrap().0;
+        assert_ne!(iso, side);
     }
 }

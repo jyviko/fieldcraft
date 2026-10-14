@@ -1,6 +1,6 @@
 //! Where tool calls end up: an in-process headless session, or a running app's control channel
-//! (docs/control-protocol.md: `engine.execute`, `engine.commands`, `ui.view`, `ui.render`,
-//! `ui.capture`).
+//! (docs/control-protocol.md: `engine.execute`, `engine.commands`, `ui.view`, `ui.camera`,
+//! `ui.render`, `ui.capture`).
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -11,7 +11,7 @@ use std::time::Duration;
 use fieldcraft_engine::Session;
 use fieldcraft_engine::view::{Palette, render_png};
 use fieldcraft_io::roots::Roots;
-use fieldcraft_render::StandardView;
+use fieldcraft_render::{Orientation, StandardView};
 use serde_json::{Value, json};
 
 /// What a picture shows.
@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 pub struct PictureRequest {
     /// A standard view to turn to first (`iso`, `front`…; `home` and `fit` frame the model).
     pub view: Option<String>,
+    /// A camera orientation to turn to first (degrees; `view` and `camera` are not given together).
+    pub camera: Option<Orientation>,
     /// The whole app window (`true`) or the model only.
     pub window: bool,
     /// Image size in pixels (a window capture: points); `None` keeps the default.
@@ -67,8 +69,9 @@ fn standard_view(v: &str) -> Result<StandardView, String> {
 /// An in-process headless session; pictures come from the CPU rasterizer.
 pub struct Headless {
     pub session: Session,
-    /// The orientation of pictures; each one frames everything drawn.
-    pub view: StandardView,
+    /// The orientation of pictures; each one frames everything drawn, unless the orientation
+    /// has a distance.
+    pub view: Orientation,
     roots: Roots,
 }
 
@@ -83,7 +86,7 @@ impl Headless {
     pub fn new(roots: Roots) -> Self {
         let mut session = Session::default();
         session.file_access = roots.clone();
-        Headless { session, view: StandardView::Iso, roots }
+        Headless { session, view: Orientation::of(StandardView::Iso), roots }
     }
 }
 
@@ -98,11 +101,14 @@ impl Backend for Headless {
 
     fn picture(&mut self, r: &PictureRequest) -> Result<Picture, String> {
         if let Some(v) = &r.view {
-            self.view = standard_view(v)?;
+            self.view = Orientation::of(standard_view(v)?);
+        }
+        if let Some(o) = r.camera {
+            self.view = o;
         }
         let w = r.width.unwrap_or(DEFAULT_SIZE.0).clamp(16, MAX_SIDE);
         let h = r.height.unwrap_or(DEFAULT_SIZE.1).clamp(16, MAX_SIDE);
-        let (png, shown) = render_png(&self.session, self.view, w as usize, h as usize, &Palette::LIGHT).map_err(|e| e.to_string())?;
+        let (png, shown) = render_png(&self.session, &self.view, w as usize, h as usize, &Palette::LIGHT).map_err(|e| e.to_string())?;
         let contour = shown
             .contour
             .map(|(field, min, max)| json!({"field": field, "min": {"node": min.0, "value": min.1}, "max": {"node": max.0, "value": max.1}}));
@@ -228,6 +234,9 @@ impl Backend for Remote {
         if let Some(v) = &r.view {
             standard_view(v)?;
             self.call("ui.view", json!({"view": v}))?;
+        }
+        if let Some(o) = r.camera {
+            self.call("ui.camera", json!(o))?;
         }
         let path = temp_png();
         let shown = path.to_string_lossy().into_owned();

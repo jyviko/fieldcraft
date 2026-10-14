@@ -184,6 +184,13 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             }
             ok(json!(app.cam))
         }
+        "ui.camera" => match fieldcraft_engine::view::orientation(p) {
+            Ok(o) => {
+                app.cam.orient(&o);
+                ok(json!(app.cam))
+            }
+            Err(e) => err(e),
+        },
         "ui.start" => {
             let Some(id) = s("command") else { return err("missing `command`") };
             match app.start_programmatic(id) {
@@ -427,6 +434,21 @@ mod tests {
         assert_eq!(call(&mut app, "ui.view", json!({"view": "top"}))["ok"], true);
         assert!((app.cam.pitch - std::f64::consts::FRAC_PI_2).abs() < 1e-3);
         assert_eq!(call(&mut app, "ui.view", json!({"view": "sideways"}))["ok"], false);
+        // Any orientation in degrees; hostile numbers are refused or clamped and leave a valid camera.
+        let r = call(&mut app, "ui.camera", json!({"yaw": 90, "pitch": 30, "distance": 250}));
+        assert!((app.cam.yaw - std::f64::consts::FRAC_PI_2).abs() < 1e-9 && (app.cam.pitch - 30f64.to_radians()).abs() < 1e-9, "{r}");
+        assert_eq!(r["result"]["distance"], 250.0);
+        for hostile in [
+            json!({"yaw": 1}),
+            json!({"yaw": "x", "pitch": 0}),
+            json!({"yaw": 0, "pitch": 0, "distance": 0}),
+            json!({"yaw": 0, "pitch": 0, "spin": 1}),
+        ] {
+            assert_eq!(call(&mut app, "ui.camera", hostile.clone())["ok"], false, "{hostile}");
+        }
+        assert_eq!(app.cam.distance, 250.0);
+        assert_eq!(call(&mut app, "ui.camera", json!({"yaw": -1e12, "pitch": 1e300, "distance": 1e300}))["ok"], true);
+        assert!(app.cam.is_valid() && app.cam.pitch < std::f64::consts::FRAC_PI_2);
         assert_eq!(call(&mut app, "ui.inspect", json!({}))["result"]["model"]["elements"], 64 + 162);
         assert_eq!(call(&mut app, "ui.screenshot", json!({})), json!({"screenshot": true}));
         assert_eq!(call(&mut app, "no.method", json!({}))["ok"], false);
@@ -495,6 +517,7 @@ mod tests {
             "engine.script",
             "ui.set",
             "ui.view",
+            "ui.camera",
             "ui.start",
             "ui.dialog",
             "ui.move",

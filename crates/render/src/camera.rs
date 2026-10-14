@@ -99,6 +99,40 @@ impl StandardView {
     }
 }
 
+/// Where a camera looks from, in degrees as people and agents give it: `yaw` turns about Z (0
+/// looks along +Y, the front view; −45 is the iso view's), `pitch` is the elevation above the XY
+/// plane and `distance`, when given, the distance from the target (a zoom in orthographic views).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Orientation {
+    pub yaw: f64,
+    pub pitch: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance: Option<f64>,
+}
+
+impl Orientation {
+    /// Closest and farthest camera distance.
+    pub const DISTANCE: (f64, f64) = (1e-3, 1e9);
+
+    /// The orientation of a standard view.
+    pub fn of(view: StandardView) -> Self {
+        let (yaw, pitch) = view.angles();
+        Orientation { yaw: yaw.to_degrees(), pitch: pitch.to_degrees(), distance: None }
+    }
+
+    /// A checked orientation: `None` when an angle or the distance is not finite or the distance
+    /// is not above 0. The yaw is wrapped into [−180, 180), the pitch clamped to ±90 and the
+    /// distance to [`Orientation::DISTANCE`].
+    pub fn checked(yaw: f64, pitch: f64, distance: Option<f64>) -> Option<Self> {
+        if !(yaw.is_finite() && pitch.is_finite()) || distance.is_some_and(|d| !(d.is_finite() && d > 0.0)) {
+            return None;
+        }
+        let yaw = (yaw + 180.0).rem_euclid(360.0) - 180.0;
+        let (near, far) = Self::DISTANCE;
+        Some(Orientation { yaw, pitch: pitch.clamp(-90.0, 90.0), distance: distance.map(|d| d.clamp(near, far)) })
+    }
+}
+
 /// Orbit camera around `target`, Z up.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
@@ -241,6 +275,18 @@ impl Camera {
         self.yaw = y;
         self.pitch = p.clamp(-lim, lim);
     }
+    /// Turn to `o` (and move to its distance, when it has one); the pitch stays just short of the
+    /// poles, as an orbit's does.
+    pub fn orient(&mut self, o: &Orientation) {
+        let lim = std::f64::consts::FRAC_PI_2 - 1e-6;
+        if o.yaw.is_finite() && o.pitch.is_finite() {
+            self.yaw = o.yaw.to_radians();
+            self.pitch = o.pitch.to_radians().clamp(-lim, lim);
+        }
+        if let Some(d) = o.distance.filter(|d| d.is_finite() && *d > 0.0) {
+            self.distance = d.clamp(Orientation::DISTANCE.0, Orientation::DISTANCE.1);
+        }
+    }
     /// Frame a bounding box.
     pub fn fit(&mut self, b: &Aabb3) {
         if b.is_empty() {
@@ -323,5 +369,32 @@ mod tests {
         for v in StandardView::ALL {
             assert_eq!(StandardView::parse(v.label()), Some(v));
         }
+    }
+
+    #[test]
+    fn orientation_in_degrees() {
+        // The iso view's angles, given in degrees, turn the camera as the iso view does.
+        let (mut a, mut b) = (Camera::default(), Camera::default());
+        a.set_view(StandardView::Front);
+        a.orient(&Orientation::of(StandardView::Iso));
+        b.set_view(StandardView::Iso);
+        assert!((a.yaw - b.yaw).abs() < 1e-12 && (a.pitch - b.pitch).abs() < 1e-12);
+        let o = Orientation::checked(-45.0, 35.264, Some(300.0)).unwrap();
+        a.orient(&o);
+        assert_eq!(a.distance, 300.0);
+        // Wrapped, clamped, refused.
+        let o = Orientation::checked(540.0, 1e6, Some(1e300)).unwrap();
+        assert_eq!((o.yaw, o.pitch, o.distance), (-180.0, 90.0, Some(Orientation::DISTANCE.1)));
+        a.orient(&o);
+        assert!(a.is_valid() && a.pitch < std::f64::consts::FRAC_PI_2, "{a:?}");
+        for (y, p, d) in
+            [(f64::NAN, 0.0, None), (0.0, f64::INFINITY, None), (0.0, 0.0, Some(0.0)), (0.0, 0.0, Some(-1.0)), (0.0, 0.0, Some(f64::NAN))]
+        {
+            assert_eq!(Orientation::checked(y, p, d), None);
+        }
+        // A hostile orientation built by hand leaves the camera as it was.
+        let before = a;
+        a.orient(&Orientation { yaw: f64::NAN, pitch: 0.0, distance: Some(f64::INFINITY) });
+        assert_eq!(a, before);
     }
 }

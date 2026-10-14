@@ -173,6 +173,12 @@ fn hostile_tool_arguments_are_tool_errors() {
         ("probe", json!({"nodes": [1, 2, 3]})),
         ("reactions", json!({"sets": ["nope"], "about": [1e308, 0, 0]})),
         ("screenshot", json!({"view": "iso", "path": "/no/such/dir/x.png"})),
+        ("screenshot", json!({"camera": {"yaw": "left", "pitch": 0}})),
+        ("screenshot", json!({"camera": {"yaw": 0}})),
+        ("screenshot", json!({"camera": {"yaw": 0, "pitch": 0, "distance": -1}})),
+        ("screenshot", json!({"camera": {"yaw": 0, "pitch": 0, "distance": 0}})),
+        ("screenshot", json!({"camera": {"yaw": 0, "pitch": 0, "zoom": 2}})),
+        ("screenshot", json!({"camera": {"yaw": 0, "pitch": 0}, "view": "top"})),
         ("batch", json!({"commands": [{"command": "model.info"}, {"params": {}}, {"command": "model.info"}]})),
         ("batch", json!({"commands": vec![json!({"command": "model.info"}); crate::tools::MAX_STEPS + 1]})),
         ("undo", json!({})),
@@ -190,6 +196,26 @@ fn hostile_tool_arguments_are_tool_errors() {
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "screenshot", "arguments": {"width": u64::MAX, "height": 16, "source": "model"}}}),
     );
     assert_eq!(r["result"]["content"][0]["type"], "image", "{r}");
+}
+
+/// `screenshot {camera}` turns a headless picture to any orientation: hostile angles are clamped,
+/// and the orientation is kept for the next picture.
+#[test]
+fn screenshot_takes_a_camera_orientation() {
+    let mut s = server();
+    ok(&mut s, "execute", json!({"command": "file.sample", "params": {"name": "cantilever"}}));
+    let picture = |s: &mut Server, args: Value| {
+        let r = send(s, json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "screenshot", "arguments": args}}));
+        let content = r["result"]["content"].as_array().cloned().unwrap_or_default();
+        let info: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+        (content[0]["data"].as_str().unwrap().to_string(), info)
+    };
+    let (iso, _) = picture(&mut s, json!({"view": "iso", "width": 64, "height": 48}));
+    let (turned, info) = picture(&mut s, json!({"camera": {"yaw": 30, "pitch": 1e9, "distance": 1e300}, "width": 64, "height": 48}));
+    assert_ne!(iso, turned);
+    assert_eq!(info["view"], json!({"yaw": 30.0, "pitch": 90.0, "distance": 1e9}), "{info}");
+    let (again, _) = picture(&mut s, json!({"width": 64, "height": 48}));
+    assert_eq!(again, turned);
 }
 
 #[test]

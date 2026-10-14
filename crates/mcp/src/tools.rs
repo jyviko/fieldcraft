@@ -272,10 +272,13 @@ pub fn tool_definitions() -> Vec<Value> {
             "Look at the model",
             "A PNG of the model and the results display. Headless: a CPU render framing everything drawn. Connected to \
              the app: the whole window drawn offscreen (source \"window\", the default; ui.capture) or the model with the \
-             app's camera (source \"model\"; ui.render). `view` turns the camera to a standard view first.",
+             app's camera (source \"model\"; ui.render). `view` turns the camera to a standard view first, or `camera` to \
+             any orientation: {yaw, pitch, distance?} in degrees (yaw 0 looks along +Y, -45 is the iso view's; pitch is \
+             the elevation, clamped to ±90) and model units; a sequence of them orbits smoothly.",
             obj(
                 json!({
                     "view": {"type": "string", "enum": VIEWS, "description": "Standard view (default: keep the current one; headless starts at iso)"},
+                    "camera": {"type": "object", "description": "Camera orientation {yaw, pitch, distance?}: degrees, and the distance from the target in model units (default: framed headless, kept in the app)"},
                     "source": {"type": "string", "enum": ["window", "model"], "description": "window = the app's window, model = a model render"},
                     "width": integer("Width in pixels (window: points), 16 to 4096"),
                     "height": integer("Height in pixels (window: points), 16 to 4096"),
@@ -525,8 +528,13 @@ fn capture(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<(Vec<u8>, Valu
         None => None,
     };
     let size = |k: &str| a.get(k).and_then(Value::as_u64).map(|v| u32::try_from(v).unwrap_or(u32::MAX));
+    let camera = a.get("camera").filter(|v| !v.is_null()).map(fieldcraft_engine::view::orientation).transpose().map_err(|e| e.to_string())?;
+    if camera.is_some() && a.get("view").is_some_and(|v| !v.is_null()) {
+        return Err("screenshot: give `view` or `camera`, not both".into());
+    }
     let request = PictureRequest {
         view: str_arg(a, "view").map(str::to_string),
+        camera,
         window: str_arg(a, "source") != Some("model"),
         width: size("width"),
         height: size("height"),

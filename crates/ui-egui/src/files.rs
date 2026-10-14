@@ -421,8 +421,8 @@ impl ModelApp {
 
     /// Solve every step (`solve.run`) in the background; the results come up when it is done.
     pub fn solve_all(&mut self) {
-        if self.session.model.steps().is_empty() {
-            self.set_status("Nothing to solve: the model has no steps (Steps › Step, or open a sample from Help › Samples)", true);
+        if let Some(u) = self.unavailable("solve.run") {
+            self.set_status(u.to_string(), true);
             return;
         }
         let n = self.session.model.steps().len();
@@ -1232,6 +1232,8 @@ mod tests {
         app.services.pick_save = Some(Box::new(|_: &str, _: &[Filter]| -> Option<String> { panic!("a picker opened") }));
         app.start_programmatic("file.open").unwrap();
         assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("file.open"));
+        // A deck needs a model to write.
+        app.run("file.sample", json!({"name": "cantilever"})).unwrap();
         app.start_programmatic("deck.write.abaqus").unwrap();
         assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("deck.write"));
         // In-window choices are not pickers: they behave as a click.

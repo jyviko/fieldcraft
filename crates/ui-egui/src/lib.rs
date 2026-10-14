@@ -515,6 +515,12 @@ impl ModelApp {
             None => (id, json!({})),
         };
         let spec = fieldcraft_engine::find_command(command).ok_or_else(|| format!("unknown command `{command}`"))?;
+        // A command missing what it needs opens no form: the status names what is missing.
+        if let Err(u) = self.session.availability(spec) {
+            let e = u.to_string();
+            self.set_status(e.clone(), true);
+            return Err(e);
+        }
         if self.file_action(spec.id, &preset, interactive) {
             self.dialog = None;
             return Ok(());
@@ -1204,6 +1210,17 @@ const SHOT_TIMEOUT: f64 = 8.0;
 /// Vertical field of view of the perspective camera (radians).
 const PERSPECTIVE_FOV: f64 = 0.6;
 
+impl ModelApp {
+    /// Why a toolbar entry or a command cannot start now: what its command needs that the
+    /// session lacks (`fieldcraft_engine::requirement`). `None` when it can start, and for
+    /// coming-soon entries and unknown ids (which say so themselves).
+    pub fn unavailable(&self, id: &str) -> Option<fieldcraft_engine::requirement::Unavailable> {
+        let command = catalogue::find(id).map_or(Some(id), |c| c.command())?;
+        let spec = fieldcraft_engine::find_command(command)?;
+        self.session.availability(spec).err()
+    }
+}
+
 /// A command's name as people see it (its label).
 pub fn command_label(id: &str) -> &str {
     fieldcraft_engine::find_command(id).map_or(id, |c| c.label)
@@ -1294,10 +1311,37 @@ mod tests {
         assert!(app.dialog.is_none());
         assert_eq!(app.session.journal.len(), journal);
         assert_eq!(app.status.as_ref().map(|s| s.error), Some(false));
-        // A deck entry opens deck.write's form with its format filled in.
+        // An entry whose command misses what it needs opens nothing and says what is missing.
+        let err = app.start("deck.write.abaqus").unwrap_err();
+        assert_eq!(err, "deck.write cannot run yet. Needs a mesh — Mesh › Tet Mesh");
+        assert!(app.dialog.is_none());
+        assert_eq!(app.status.as_ref().map(|s| (s.error, s.text.as_str())), Some((true, err.as_str())));
+        // With a model, a deck entry opens deck.write's form with its format filled in.
+        app.run("file.sample", json!({"name": "cantilever"})).unwrap();
         app.start("deck.write.abaqus").unwrap();
         let d = app.dialog.as_ref().unwrap();
         assert_eq!((d.command, d.text.as_str()), ("deck.write", r#"{"format":"abaqus"}"#));
+    }
+
+    /// The ribbon, the command search and Solve grey what the model cannot run yet, and say why.
+    #[test]
+    fn entries_missing_what_they_need_are_greyed_with_the_reason() {
+        let mut app = ModelApp::new(Session::default());
+        let entry =
+            |app: &ModelApp, id: &str| crate::toolbar::describe(app)["entries"].as_array().unwrap().iter().find(|e| e["id"] == id).unwrap().clone();
+        let plasticity = entry(&app, "model.material.plasticity");
+        assert_eq!(plasticity["enabled"], false);
+        assert_eq!(plasticity["unavailable"]["reason"], "Needs a material — Properties › Material");
+        assert_eq!(plasticity["unavailable"]["missing"][0]["provider"], "model.material.create");
+        assert_eq!(entry(&app, "model.material.create")["enabled"], true);
+        assert_eq!(entry(&app, "mesh.order.quadratic")["enabled"], false, "coming soon");
+        let solve = app.unavailable("solve.run").unwrap();
+        assert_eq!(solve.lines(), "Needs a mesh — Mesh › Tet Mesh\nNeeds a step — Steps › Step");
+
+        app.run("file.sample", json!({"name": "cantilever"})).unwrap();
+        assert_eq!(entry(&app, "model.material.plasticity")["enabled"], true);
+        assert!(app.unavailable("solve.run").is_none());
+        assert_eq!(entry(&app, "results.contour")["unavailable"]["reason"], "Needs a solved step — Solve › Solve");
     }
 
     #[test]

@@ -14,6 +14,7 @@
 
 use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use fieldcraft_engine::catalogue::{self, Capability, Tab, Workspace};
+use fieldcraft_engine::requirement::Unavailable;
 use serde::Serialize;
 
 use crate::ModelApp;
@@ -189,7 +190,7 @@ pub fn toolbar(app: &mut ModelApp, ui: &mut egui::Ui) {
                         ui,
                         c.id,
                         Rect::from_center_size(br.center() - vec2(0.0, 3.0), Vec2::splat(26.0)),
-                        Look::of(c.command().is_some()),
+                        Look::of(c.command().is_some() && app.unavailable(c.id).is_none()),
                     );
                 }
                 caret(&painter, pos2(br.center().x, br.bottom() - 3.0), t.text_dim);
@@ -319,7 +320,8 @@ fn workspace_switcher(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, r: Rect
 
 /// One entry's button; returns the id to start when it was clicked.
 fn button(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, c: &'static Capability, br: Rect) -> Option<&'static str> {
-    let enabled = c.command().is_some();
+    let missing = app.unavailable(c.id);
+    let enabled = c.command().is_some() && missing.is_none();
     let resp = ui.interact(br, ui.id().with(("fc_button", c.id)), if enabled { Sense::click() } else { Sense::hover() });
     app.toolbar_rects.push((c.id, br, Fit::Full));
     let running = app.dialog.as_ref().is_some_and(|d| c.command() == Some(d.command));
@@ -333,7 +335,7 @@ fn button(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, c: &'static Capabil
         badge(ui.painter(), t, br.right_top() + vec2(4.0, -2.0), m);
     }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, c.label));
-    let resp = resp.on_hover_text(c.tooltip());
+    let resp = resp.on_hover_text(Unavailable::tip(&c.tooltip(), missing.as_ref()));
     resp.clicked().then_some(c.id)
 }
 
@@ -351,7 +353,8 @@ pub fn dropdown(app: &mut ModelApp, ui: &mut egui::Ui, entries: &'static [Capabi
         + 96.0;
     let mut start = None;
     for c in entries {
-        let enabled = c.command().is_some();
+        let missing = app.unavailable(c.id);
+        let enabled = c.command().is_some() && missing.is_none();
         let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_H), if enabled { Sense::click() } else { Sense::hover() });
         app.toolbar_rects.push((c.id, rect, Fit::Menu));
         if resp.hovered() && enabled {
@@ -364,21 +367,30 @@ pub fn dropdown(app: &mut ModelApp, ui: &mut egui::Ui, entries: &'static [Capabi
             p.text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, format!("soon · {m}"), FontId::proportional(11.0), t.text_dim);
         }
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, c.label));
-        if resp.on_hover_text(c.tooltip()).clicked() && enabled {
+        if resp.on_hover_text(Unavailable::tip(&c.tooltip(), missing.as_ref())).clicked() && enabled {
             start = Some(c.id);
         }
         for id in c.more {
-            let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_H - 2.0), Sense::click());
-            if resp.hovered() {
+            let missing = app.unavailable(id);
+            let enabled = missing.is_none();
+            let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_H - 2.0), if enabled { Sense::click() } else { Sense::hover() });
+            if resp.hovered() && enabled {
                 ui.painter().rect_filled(rect, 3.0, t.hover);
             }
             let label = crate::command_label(id);
             let p = ui.painter();
-            p.text(pos2(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, label, FontId::proportional(12.5), t.text);
+            p.text(
+                pos2(rect.left() + 32.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                label,
+                FontId::proportional(12.5),
+                if enabled { t.text } else { t.text_dim },
+            );
             p.line_segment([pos2(rect.left() + 15.0, rect.top()), pos2(rect.left() + 15.0, rect.center().y)], Stroke::new(1.0, t.border));
             p.line_segment([pos2(rect.left() + 15.0, rect.center().y), pos2(rect.left() + 25.0, rect.center().y)], Stroke::new(1.0, t.border));
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-            if resp.on_hover_text(*id).clicked() {
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+            let tip = Unavailable::tip(id, missing.as_ref());
+            if resp.on_hover_text(tip).clicked() && enabled {
                 start = Some(id);
             }
         }
@@ -392,7 +404,8 @@ pub fn dropdown(app: &mut ModelApp, ui: &mut egui::Ui, entries: &'static [Capabi
 
 /// The toolbar as the control channel reports it: the workspaces and tabs, the current ones, the
 /// panels' labels (screen points, last frame), the open menu, and every entry with its status
-/// and where it is: a button (`full`), a collapsed panel, the » menu, or its panel's drop-down
+/// (`enabled`, and `unavailable`: what its command is missing, `Unavailable::to_json`) and where
+/// it is: a button (`full`), a collapsed panel, the » menu, or its panel's drop-down
 /// (`menu`, with the row's rect while the drop-down is open).
 pub fn describe(app: &ModelApp) -> serde_json::Value {
     let rect = |r: &Rect| {
@@ -402,6 +415,7 @@ pub fn describe(app: &ModelApp) -> serde_json::Value {
         .iter()
         .map(|c| {
             let shown = app.toolbar_rects.iter().rev().find(|(id, ..)| *id == c.id);
+            let missing = app.unavailable(c.id);
             serde_json::json!({
                 "id": c.id,
                 "label": c.label,
@@ -410,6 +424,8 @@ pub fn describe(app: &ModelApp) -> serde_json::Value {
                 "command": c.command(),
                 "more": c.more,
                 "coming_soon": c.milestone(),
+                "enabled": c.command().is_some() && missing.is_none(),
+                "unavailable": missing.map(|u| u.to_json()),
                 "rect": shown.map(|(_, r, _)| rect(r)),
                 "fit": shown.map(|(.., f)| f),
             })

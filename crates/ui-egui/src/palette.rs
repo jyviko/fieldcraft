@@ -3,7 +3,8 @@
 //! The command line runs `id {json}` (`mesh.node.add {"label": 1, "xyz": [0, 0, 0]}`), starts a
 //! command given by its id alone, or starts the best match for a name. Beside it, the status and
 //! the model's size. The search lists every catalogue entry and related command by name, id or
-//! tip; coming-soon entries are listed greyed with their milestone. Adapted from SolidCraft's
+//! tip; coming-soon entries are listed greyed with their milestone, and commands missing what
+//! they need greyed with what is missing. Adapted from SolidCraft's
 //! `crates/ui-egui/src/palette.rs` (MIT OR Apache-2.0), see ATTRIBUTION.md.
 
 use egui::{Align2, FontId, Rect, RichText, Sense, Vec2, pos2, vec2};
@@ -169,14 +170,17 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
             }
             let list = app.search.as_ref().map(|(_, l)| l.clone()).unwrap_or_default();
             if entered {
-                picked = list.iter().find(|h| h.soon.is_none()).map(|h| h.id);
+                picked = list.iter().find(|h| h.soon.is_none() && app.unavailable(h.id).is_none()).map(|h| h.id);
             }
             egui::ScrollArea::vertical().max_height(320.0).auto_shrink([false, true]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for h in list.iter().take(MAX_RESULTS) {
+                    // Coming soon, or missing what its command needs: listed, greyed, with why.
+                    let missing = app.unavailable(h.id);
+                    let enabled = h.soon.is_none() && missing.is_none();
                     let (rect, resp) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 26.0), if h.soon.is_none() { Sense::click() } else { Sense::hover() });
-                    if resp.hovered() && h.soon.is_none() {
+                        ui.allocate_exact_size(vec2(ui.available_width(), 26.0), if enabled { Sense::click() } else { Sense::hover() });
+                    if resp.hovered() && enabled {
                         ui.painter().rect_filled(rect, 3.0, t.hover);
                     }
                     icons::paint(
@@ -184,7 +188,7 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
                         ui,
                         h.icon,
                         Rect::from_center_size(pos2(rect.left() + 14.0, rect.center().y), Vec2::splat(18.0)),
-                        Look::of(h.soon.is_none()),
+                        Look::of(enabled),
                     );
                     let p = ui.painter();
                     p.text(
@@ -192,15 +196,17 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
                         Align2::LEFT_CENTER,
                         h.label,
                         FontId::proportional(13.0),
-                        if h.soon.is_none() { t.text } else { t.text_dim },
+                        if enabled { t.text } else { t.text_dim },
                     );
-                    let right = match h.soon {
-                        Some(m) => format!("{} · soon ({m})", h.place),
-                        None => h.place.clone(),
+                    let right = match (h.soon, &missing) {
+                        (Some(m), _) => format!("{} · soon ({m})", h.place),
+                        (None, Some(u)) => u.missing.first().map_or_else(|| h.place.clone(), |m| format!("needs {}", m.0.what())),
+                        (None, None) => h.place.clone(),
                     };
                     p.text(pos2(rect.right() - 6.0, rect.center().y), Align2::RIGHT_CENTER, right, FontId::proportional(11.0), t.text_dim);
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, h.soon.is_none(), h.label));
-                    if resp.on_hover_text(h.id).clicked() && h.soon.is_none() {
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, h.label));
+                    let tip = fieldcraft_engine::requirement::Unavailable::tip(h.id, missing.as_ref());
+                    if resp.on_hover_text(tip).clicked() && enabled {
                         picked = Some(h.id);
                     }
                 }

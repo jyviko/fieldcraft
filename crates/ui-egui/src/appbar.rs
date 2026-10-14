@@ -195,8 +195,11 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
         }
         // Solve: the one prominent action, a filled button with its label.
         let solve = lay.solve;
-        let resp = ui.interact(solve, ui.id().with("fc_solve"), Sense::click());
-        let can = !app.session.model.steps().is_empty() && !busy;
+        // Solve runs `solve.run`: greyed while the model misses what it needs, every missing
+        // piece listed in the tooltip.
+        let missing = app.unavailable("solve.run");
+        let can = missing.is_none() && !busy;
+        let resp = ui.interact(solve, ui.id().with("fc_solve"), if can { Sense::click() } else { Sense::hover() });
         let fill = if resp.hovered() && can {
             t.accent.gamma_multiply(1.15)
         } else if can {
@@ -221,13 +224,10 @@ pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {
                 Color32::WHITE,
             );
         }
-        let tip = if app.session.model.steps().is_empty() {
-            "Solve: the model has no steps yet (try Help › Samples)"
-        } else {
-            "Solve every step and show the results"
-        };
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Solve"));
-        if resp.on_hover_text(tip).clicked() {
+        let head = if missing.is_some() { "Solve: not ready yet (or try Help › Samples)" } else { "Solve every step and show the results" };
+        let tip = fieldcraft_engine::requirement::Unavailable::tip(head, missing.as_ref());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can, "Solve"));
+        if resp.on_hover_text(tip).clicked() && can {
             clicked = Some(Quick::Solve);
         }
         anchors.push((Quick::Solve, solve));

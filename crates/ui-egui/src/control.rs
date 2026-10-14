@@ -187,6 +187,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "results": app.session.results_report(),
             "probe": app.probe,
             "busy": app.busy(),
+            "solve": solve_json(app),
             "selected": app.selected.as_ref().map(|(k, n)| json!({"kind": k, "name": n})),
             "nav": app.nav,
             "layout": app.layout.iter().map(|(k, r)| (k.to_string(), json!([r.left(), r.top(), r.width(), r.height()]))).collect::<serde_json::Map<String, Value>>(),
@@ -506,6 +507,12 @@ pub fn save_screenshot(image: &egui::ColorImage, path: Option<&str>) -> Value {
     }
 }
 
+/// The title bar's Solve as `ui.inspect` reports it.
+fn solve_json(app: &ModelApp) -> Value {
+    let missing = app.unavailable("solve.run");
+    json!({"enabled": app.busy().is_none() && missing.is_none(), "unavailable": missing.map(|u| u.to_json())})
+}
+
 #[cfg(test)]
 mod tests {
     use fieldcraft_engine::Session;
@@ -638,6 +645,8 @@ mod tests {
         let ctx = egui::Context::default();
         for same_frame in [true, false] {
             let mut app = ModelApp::new(Session::default());
+            // Plasticity needs a material to act on.
+            app.run("model.material.create", json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 1, "poisson": 0.3}})).unwrap();
             call_in(&mut app, &ctx, "ui.start", json!({"command": "model.material.create"}));
             for _ in 0..2 {
                 frame(&mut app, &ctx);

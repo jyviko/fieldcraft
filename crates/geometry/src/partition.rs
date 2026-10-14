@@ -209,6 +209,15 @@ impl Faces {
     }
 }
 
+impl Shape {
+    /// For each point, the face (by index, the [`SurfaceMesh::tri_face`] tag) nearest to it,
+    /// measured to a tessellation within `tolerance`; `None` for a body without faces.
+    pub fn nearest_faces(&self, points: &[[f64; 3]], tolerance: f64) -> Result<Vec<Option<u32>>> {
+        let faces = Faces { surfaces: Vec::new(), names: Vec::new(), mesh: self.tessellate(tolerance)? };
+        Ok(points.iter().map(|p| faces.nearest(*p, |_| true).and_then(|f| u32::try_from(f).ok())).collect())
+    }
+}
+
 /// Whether two analytic surfaces are the same surface (within `tol`); free-form faces match any
 /// free-form face.
 fn same_surface(a: Option<FaceSurface>, b: Option<FaceSurface>, tol: f64) -> bool {
@@ -458,6 +467,21 @@ mod tests {
         assert_eq!(features, ["partition Out", "partition Gone"], "{:?}", p.errors);
         assert_eq!(p.bodies[0].name, body);
         assert!(p.cuts.iter().all(|c| c.split.is_empty() && c.faces == 0), "{:?}", p.cuts);
+    }
+
+    #[test]
+    fn the_nearest_face_of_a_point() {
+        let d = plate();
+        let b = &d.bodies[0];
+        // Above the top (z = 10) and beside the side at y = 0.
+        let f = b.nearest_faces(&[[30.0, 20.0, 10.5], [30.0, -0.5, 5.0]], 0.05).unwrap();
+        let surfaces = b.face_surfaces().unwrap();
+        let normal = |f: Option<u32>| match surfaces[f.unwrap() as usize] {
+            Some(FaceSurface::Plane { normal, .. }) => normal,
+            s => panic!("{s:?}"),
+        };
+        assert!((normal(f[0])[2] - 1.0).abs() < 1e-12);
+        assert!((normal(f[1])[1] + 1.0).abs() < 1e-12);
     }
 
     #[test]

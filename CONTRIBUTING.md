@@ -1,7 +1,59 @@
-# Contributing
+# Contributing to FieldCraft
 
-Thanks for helping. Read [AGENTS.md](AGENTS.md) first: it holds the rules every change follows,
-whether a person or an agent writes it.
+FieldCraft is one open-source modeler for structures, heat and fluids, written in pure Rust: open a
+parametric SolidCraft part, mesh it (tet or all-hex), define the analysis, solve it with our own
+implicit, explicit, thermal or lattice Boltzmann solvers, and look at verified results — from the
+desktop app, the command line, or an AI agent over MCP.
+
+Help is welcome, whether that's a one-line fix, a verification benchmark, a file format or owning a
+whole solver. This page covers how to build it, the few rules that aren't negotiable, where help is
+needed most, and how to claim work. The rules every change follows, by a person or an agent, are in
+[AGENTS.md](AGENTS.md).
+
+## Get it running (about 10 minutes on a fast machine)
+
+You need stable Rust 1.95 or newer.
+
+```sh
+git clone https://github.com/jyviko/fieldcraft && cd fieldcraft
+cargo run --release -p fieldcraft -- --sample cantilever   # the desktop app on a sample model
+cargo run -p fieldcraft-cli -- commands                    # every command and its parameters
+cargo test -p fieldcraft-solver                            # the tests of one crate
+cargo xtask oracle --quick                                 # the verification cases (docs/oracle.md)
+```
+
+`develop` is the trunk and `main` holds released code. The layers and crates are in
+[docs/architecture.md](docs/architecture.md); every user-visible capability is a command in
+`crates/engine/src/cmd/` ([docs/features.md](docs/features.md) lists them).
+
+## Where help is wanted most
+
+See the [`help wanted`](https://github.com/jyviko/fieldcraft/labels/help%20wanted) and
+[`good first issue`](https://github.com/jyviko/fieldcraft/labels/good%20first%20issue) labels, and
+the `area:` labels for your field. In order of how much they would help users:
+
+1. **Reproducible meshes** ([#115](https://github.com/jyviko/fieldcraft/issues/115)). The same part
+   must give the same tet mesh on every platform and every run, as the solvers already do.
+2. **All-hex meshing of thin and curved parts** ([#85](https://github.com/jyviko/fieldcraft/issues/85)).
+   The octree mesher over-refines thin walls; concave transition templates and an up-front depth
+   are next. Hex meshing is the centre of gravity of the project.
+3. **Getting results in and out**: ParaView export ([#90](https://github.com/jyviko/fieldcraft/issues/90)),
+   Gmsh import ([#91](https://github.com/jyviko/fieldcraft/issues/91)), Abaqus deck reading
+   ([#98](https://github.com/jyviko/fieldcraft/issues/98)), CSV and STL
+   ([#92](https://github.com/jyviko/fieldcraft/issues/92), [#93](https://github.com/jyviko/fieldcraft/issues/93)).
+4. **Verification benchmarks** ([#97](https://github.com/jyviko/fieldcraft/issues/97),
+   [#106](https://github.com/jyviko/fieldcraft/issues/106)). An engineer with a published benchmark
+   can add it as an oracle case without touching solver code.
+5. **Nonlinear elements and materials**: incompatible modes at finite strain
+   ([#82](https://github.com/jyviko/fieldcraft/issues/82)), kinematic hardening
+   ([#81](https://github.com/jyviko/fieldcraft/issues/81)), and the material library
+   ([#99](https://github.com/jyviko/fieldcraft/issues/99)).
+6. **The app**: typed command forms ([#112](https://github.com/jyviko/fieldcraft/issues/112)), XY and
+   path plots ([#94](https://github.com/jyviko/fieldcraft/issues/94), [#95](https://github.com/jyviko/fieldcraft/issues/95)).
+
+Bigger areas on the [roadmap](ROADMAP.md) — contact, dynamics, composites, coupled fields, wave
+propagation, turbulence — are open to anyone who wants to own one: start a thread in
+[Discussions](https://github.com/jyviko/fieldcraft/discussions).
 
 ## Before you start: claim an issue
 

@@ -29,8 +29,20 @@
 //! respect to the corner coordinates, variables `3 i + k` for secondary corner i and
 //! `12 + 3 j + k` for main corner j: the exact linearisation of the segmentation, the normal and
 //! the projection, which the consistent tangent of mortar contact needs (Popp et al. 2009, §4).
+//!
+//! **Edges of 2D models** ([`integrate_edges`]): plane strain, plane stress and axisymmetric
+//! models touch along element edges, two-node segments in the XY plane. The main edge is
+//! projected along the secondary edge's unit normal onto its line, which maps each main point to
+//! one parameter of the secondary edge linearly, so the overlap is an interval of that parameter
+//! (B. Yang, T. A. Laursen, X. Meng, *Two dimensional mortar contact methods for large
+//! deformation frictional sliding*, IJNME 62:1183–1225, 2005, §3). It is integrated with the
+//! three-point Gauss–Legendre rule, exact for the degree-3 products Φ_a N_b r that the
+//! axisymmetric patch test needs (the edge's out-of-plane measure, the thickness or 2π r at the
+//! secondary point, is part of the weight). Points stay three-component with z = 0, so the solver
+//! takes edges through the same variables as faces.
 
 use crate::dual::Real;
+use fieldcraft_model::Extent;
 
 /// A point in space over a scalar.
 pub type Point<T> = [T; 3];
@@ -323,6 +335,81 @@ pub fn integrate<T: Real>(secondary: &[Point<T>], main: &[Point<T>], mut f: impl
     Some(())
 }
 
+/// The out-of-plane measure of a 2D model at a point: the thickness, or 2π x.
+fn measure<T: Real>(extent: Extent, x: T) -> T {
+    match extent {
+        Extent::Thickness(t) => T::cst(t),
+        Extent::Revolved => x * (2.0 * std::f64::consts::PI),
+    }
+}
+
+/// The unit tangent of a two-point edge in the XY plane and its length.
+fn edge_frame<T: Real>(x: &[Point<T>]) -> Option<(Flat<T>, T)> {
+    let [a, b] = x else { return None };
+    let t = [b[0] - a[0], b[1] - a[1]];
+    let length = (t[0] * t[0] + t[1] * t[1]).sqrt();
+    if !(length.val() > 0.0 && length.val().is_finite()) {
+        return None;
+    }
+    let inv = T::cst(1.0) / length;
+    Some(([t[0] * inv, t[1] * inv], length))
+}
+
+/// An edge's area vector in a 2D model (two corners in the XY plane): its unit normal
+/// (t_y, −t_x), outward when the edge runs counter-clockwise round its element, times its
+/// length and its out-of-plane measure at its midpoint (∫ 2π r ds exactly for a straight edge).
+pub fn edge_area_vector<T: Real>(x: &[Point<T>], extent: Extent) -> Option<Point<T>> {
+    let (t, length) = edge_frame(x)?;
+    let [a, b] = x else { return None };
+    let size = length * measure(extent, (a[0] + b[0]) * 0.5);
+    Some([t[1] * size, -(t[0] * size), T::cst(0.0)])
+}
+
+/// Integrate over the overlap of secondary edge `secondary` with main edge `main` of a 2D model
+/// (two corners each, z ignored), as [`integrate`] does for faces: the samples' shape functions
+/// are those of the edges' two corners (the last two are zero), the normal is the secondary
+/// edge's (t_y, −t_x, 0) and the weight carries the out-of-plane measure `extent` at the
+/// secondary point. `None` when an edge does not have two corners or the secondary one has no
+/// length; edges that do not overlap, or a main edge along the normal, give no point.
+pub fn integrate_edges<T: Real>(secondary: &[Point<T>], main: &[Point<T>], extent: Extent, mut f: impl FnMut(&Sample<T>)) -> Option<()> {
+    let (t, length) = edge_frame(secondary)?;
+    let ([s0, s1], [m0, m1]) = (secondary, main) else { return None };
+    let inv = T::cst(1.0) / length;
+    let along = |p: &Point<T>| ((p[0] - s0[0]) * t[0] + (p[1] - s0[1]) * t[1]) * inv;
+    let (a, b) = (along(m0), along(m1));
+    let span = b - a;
+    if !(span.val().abs() > 1e-12) || !span.val().is_finite() {
+        return Some(());
+    }
+    let zero = T::cst(0.0);
+    let one = T::cst(1.0);
+    let (low, high) = if a.val() <= b.val() { (a, b) } else { (b, a) };
+    let lo = if low.val() > 0.0 { low } else { zero };
+    let hi = if high.val() < 1.0 { high } else { one };
+    let width = hi - lo;
+    if !(width.val() > 0.0) {
+        return Some(());
+    }
+    let normal = [t[1], -t[0], zero];
+    let size = width * length;
+    // Three-point Gauss–Legendre mapped from [−1, 1] onto the overlap.
+    for &(g, w) in crate::quadrature::gauss_legendre(3) {
+        let xi = lo + width * (0.5 * (1.0 + g));
+        let eta = (xi - a) / span;
+        let xs = [s0[0] + (s1[0] - s0[0]) * xi, s0[1] + (s1[1] - s0[1]) * xi, zero];
+        let xm = [m0[0] + (m1[0] - m0[0]) * eta, m0[1] + (m1[1] - m0[1]) * eta, zero];
+        f(&Sample {
+            weight: size * measure(extent, xs[0]) * (0.5 * w),
+            secondary: [one - xi, xi, zero, zero],
+            main: [one - eta, eta, zero, zero],
+            xs,
+            xm,
+            normal,
+        });
+    }
+    Some(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,6 +554,81 @@ mod tests {
         for c in 0..3 {
             let sum: f64 = (0..8).map(|n| d.g[3 * n + c]).sum();
             assert!(sum.abs() < 1e-13, "{sum}");
+        }
+    }
+
+    #[test]
+    fn edges_integrate_their_overlap_and_measure() {
+        // Secondary edge along +x at y = 0 (normal −y), main edge 0.1 below, half overlapping.
+        let s = [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+        let m = [[2.5, -0.1, 0.0], [1.5, -0.1, 0.0]];
+        for (extent, at) in [(Extent::Thickness(3.0), (3.0, 0.0)), (Extent::Revolved, (0.0, 2.0 * std::f64::consts::PI))] {
+            let at = |x: f64| at.0 + at.1 * x;
+            let (mut d, mut g, mut area) = ([0.0; 2], 0.0, 0.0);
+            integrate_edges(&s, &m, extent, |p| {
+                area += p.weight;
+                g += p.weight * p.gap();
+                for a in 0..2 {
+                    d[a] += p.weight * p.secondary[a];
+                }
+                assert!((p.xm[1] + 0.1).abs() < 1e-15 && (p.xm[0] - p.xs[0]).abs() < 1e-15);
+            })
+            .unwrap();
+            // ∫_{1.5}^{2} m(x) dx and ∫ (x − 1) m(x) dx (the second corner's share).
+            let simpson = |f: &dyn Fn(f64) -> f64| (f(1.5) + 4.0 * f(1.75) + f(2.0)) * 0.5 / 6.0;
+            assert!((area - simpson(&|x| at(x))).abs() < 1e-12, "{area}");
+            assert!((d[1] - simpson(&|x| (x - 1.0) * at(x))).abs() < 1e-12);
+            assert!((g - 0.1 * area).abs() < 1e-12);
+        }
+        // The area vector points along −y with the edge's measure.
+        let v = edge_area_vector(&s, Extent::Revolved).unwrap();
+        assert!(v[0].abs() < 1e-15 && (v[1] + 2.0 * std::f64::consts::PI * 1.5).abs() < 1e-12);
+        // Apart, perpendicular or degenerate: nothing.
+        let mut count = 0;
+        integrate_edges(&s, &[[3.0, -0.1, 0.0], [4.0, -0.1, 0.0]], Extent::Revolved, |_| count += 1).unwrap();
+        integrate_edges(&s, &[[1.5, -0.1, 0.0], [1.5, -1.0, 0.0]], Extent::Revolved, |_| count += 1).unwrap();
+        assert_eq!(count, 0);
+        assert!(integrate_edges(&[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &m, Extent::Revolved, |_| {}).is_none());
+    }
+
+    #[test]
+    fn edge_derivatives_are_those_of_the_integral() {
+        let base: [f64; VARS] = std::array::from_fn(|k| match k {
+            0 => 1.0,
+            1 => 0.02,
+            3 => 2.1,
+            4 => -0.05,
+            12 => 2.4,
+            13 => -0.12,
+            15 => 1.3,
+            16 => -0.08,
+            _ => 0.0,
+        });
+        let gap = |x: &[Hyper; VARS]| {
+            let s = [[x[0], x[1], x[2]], [x[3], x[4], x[5]]];
+            let m = [[x[12], x[13], x[14]], [x[15], x[16], x[17]]];
+            let mut g = Hyper::cst(0.0);
+            integrate_edges(&s, &m, Extent::Revolved, |p| g = g + p.weight * p.secondary[1] * p.gap()).unwrap();
+            g
+        };
+        let value = |x: [f64; VARS]| gap(&std::array::from_fn(|k| Hyper::cst(x[k]))).v;
+        let e = gap(&std::array::from_fn(|k| Hyper::var(base[k], k)));
+        let h = 1e-6;
+        for k in [0, 1, 3, 4, 12, 13, 15, 16] {
+            let (mut p, mut m) = (base, base);
+            p[k] += h;
+            m[k] -= h;
+            let fd = (value(p) - value(m)) / (2.0 * h);
+            assert!((e.g[k] - fd).abs() < 1e-7, "gradient {k}: {} {fd}", e.g[k]);
+            for j in [0, 1, 3, 4, 12, 13, 15, 16] {
+                let (mut pp, mut pm, mut mp, mut mm) = (p, p, m, m);
+                pp[j] += h;
+                pm[j] -= h;
+                mp[j] += h;
+                mm[j] -= h;
+                let fd = (value(pp) - value(pm) - value(mp) + value(mm)) / (4.0 * h * h);
+                assert!((e.hessian(k, j) - fd).abs() < 2e-3, "hessian ({k}, {j}): {} {fd}", e.hessian(k, j));
+            }
         }
     }
 

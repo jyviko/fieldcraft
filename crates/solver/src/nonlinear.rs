@@ -123,7 +123,7 @@ use crate::constraints::Reduction;
 use crate::contact::{self, ContactResult, Interface};
 use crate::ldlt::{Kind, Symmetric};
 use crate::sparse::{Csr, NodeGraph, add_block, add_entry};
-use crate::system::{Mesh, add_element_thermal_loads, loads, temperature_loads, translations};
+use crate::system::{Mesh, add_element_thermal_loads, loads, temperature_loads, translation_block, translations};
 use crate::{Error, Limits, Result};
 
 /// One Newton iteration of an increment.
@@ -445,8 +445,10 @@ impl Problem<'_> {
             }
         });
         if let Some(k) = k.as_mut() {
+            // Contact blocks are over X, Y and Z per node; a 2D model keeps the in-plane rows.
+            let kinds = self.mesh.translation_kinds();
             for (nodes, data) in &blocks {
-                add_block(k, layout, nodes, self.mesh.translation_kinds(), data)?;
+                add_block(k, layout, nodes, kinds, &translation_block(data, nodes.len(), kinds))?;
             }
         }
         let mut history = Vec::with_capacity(self.mesh.elements.len());
@@ -945,13 +947,10 @@ fn check_supported(model: &Model, mesh: &Mesh, step: &Step, settings: &Nonlinear
         return Err(at(format!("centrifugal loads (load `{name}`), which depend on the deformed position")));
     }
     plasticity(model, step, settings, warnings)?;
-    if let Some(name) = model.contacts().keys().next() {
-        if mesh.theory.is_some() {
-            return Err(at(format!("contact (`{name}`) in 2D models")));
-        }
-        if settings.arc_length.is_some() {
-            return Err(at(format!("contact (`{name}`) with arc-length control")));
-        }
+    if let Some(name) = model.contacts().keys().next()
+        && settings.arc_length.is_some()
+    {
+        return Err(at(format!("contact (`{name}`) with arc-length control")));
     }
     if settings.nonlinear_geometry
         && let Some(name) = model.couplings().keys().next()

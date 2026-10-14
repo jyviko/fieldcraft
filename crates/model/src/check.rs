@@ -388,13 +388,16 @@ impl Model {
             }
         }
 
-        // Contacts: their surfaces are element faces of solids.
+        // Contacts: their surfaces are element faces of solids, or edges of 2D elements.
         for (name, c) in &self.contacts {
             for set in c.surfaces.sets() {
                 let faces = &set_of(set).faces;
                 let solid = |f: &crate::ElementFace| self.elements.get(&f.element).is_some_and(|e| e.kind.dimension() == 3);
-                if faces.is_empty() {
-                    d.error(format!("contact `{name}`"), format!("set `{set}` has no element faces (a contact surface is a set of faces)"));
+                if faces.is_empty() && resolved.planar_edges(set).is_empty() {
+                    d.error(
+                        format!("contact `{name}`"),
+                        format!("set `{set}` has no element faces (a contact surface is a set of faces, or of 2D element edges)"),
+                    );
                 } else if !faces.iter().all(solid) {
                     d.error(
                         format!("contact `{name}`"),

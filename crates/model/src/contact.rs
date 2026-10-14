@@ -3,12 +3,12 @@
 //! A contact is a model definition, active in every step that can take it (explicit dynamics,
 //! and nonlinear static steps; the linear analyses refuse contact by name). Its
 //! surfaces are sets with element
-//! faces, so they survive remeshing like a pressure load does:
+//! faces (in a 2D model, element edges), so they survive remeshing like a pressure load does:
 //! - a **pair**: the faces of `main` against those of `secondary`, both ways (each surface's
 //!   nodes are kept out of the other's faces, so neither surface is privileged);
 //! - **general** contact: every face against every other face of one surface (single-surface or
 //!   self contact, for folding and buckling), or of every exterior face of the model's solid
-//!   elements when no surface is named.
+//!   elements (in a 2D model every exterior edge of its 2D elements) when no surface is named.
 //!
 //! **Friction** is Coulomb's law with a coefficient that falls from its static to its kinetic
 //! value with the slip rate γ̇: μ = μ_k + (μ_s − μ_k) e^{−d γ̇} (the exponential decay of

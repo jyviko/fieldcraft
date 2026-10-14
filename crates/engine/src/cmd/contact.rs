@@ -1,7 +1,8 @@
 //! `interaction.contact.*`: contact definitions (pairs of surfaces, general contact) and the
 //! search for surfaces that touch; `interaction.tie*`: ties between non-matching meshes.
 //!
-//! A contact's surfaces are sets of element faces ([`fieldcraft_model::contact`]). The commands
+//! A contact's surfaces are sets of element faces, or of element edges in a 2D model
+//! ([`fieldcraft_model::contact`]). The commands
 //! take the friction, penalty scale and initial-penetration choice of the model's form; `edit`
 //! replaces a definition with the model's JSON form, `delete` removes it.
 //!

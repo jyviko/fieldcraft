@@ -1,0 +1,432 @@
+{
+ "title": "Contact patch test, axisymmetric: two rings with non-matching edges in axial compression (implicit mortar contact)",
+ "kind": "theory",
+ "source": "The contact patch test: a contact discretisation must transmit a uniform pressure across a non-matching interface exactly; Taylor & Papadopoulos, On a patch test for contact problems in two dimensions, Nonlinear Computational Mechanics, Springer 1991, 690–702; passed by 2D mortar methods: Yang, Laursen & Meng, IJNME 62:1183–1225, 2005. Uniaxial stress between frictionless supports is uniform in both blocks",
+ "quantities": [
+  {
+   "id": "small_lower_corner",
+   "quantity": "Small: σ_yy of element 4 over that of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      4
+     ]
+    },
+    "pointer": "/elements/0/stress/0/1",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "small sliding is linear and its edge mortar integrals exact (degree-3 Gauss on the overlaps): the uniform stress is the discrete solution up to the convergence tolerance"
+  },
+  {
+   "id": "small_lower_far",
+   "quantity": "Small: σ_yy of element 6 over that of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      6
+     ]
+    },
+    "pointer": "/elements/0/stress/0/1",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "small_lower_base",
+   "quantity": "Small: σ_yy of element 1 over that of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/stress/0/1",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "small_upper_top",
+   "quantity": "Small: σ_yy of element 10 over that of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      10
+     ]
+    },
+    "pointer": "/elements/0/stress/0/1",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "small_lateral",
+   "quantity": "Small: σ_xx of element 6 over its σ_yy (uniaxial stress: 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      6
+     ]
+    },
+    "pointer": "/elements/0/stress/0/0",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       6
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 1e-06
+   },
+   "reason": "a frictionless interface (and symmetry plane) leaves the blocks free to expand sideways; the non-matching interface must not hold them"
+  },
+  {
+   "id": "small_pressure",
+   "quantity": "Small: the contact pressure at the secondary node (1.5, 1) over −σ_yy of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "at": [
+      [
+       1.5,
+       1.0,
+       0.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/contact/0/pressure",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Small",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1",
+     "scale": -1.0
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "the mortar multipliers are the nodal values of the contact pressure, uniform and equal to the stress across the interface"
+  },
+  {
+   "id": "small_force",
+   "quantity": "Small: the integrated contact pressure over the reaction at the pushed top",
+   "measure": {
+    "from": "small",
+    "pointer": "/contacts/0/normal_force",
+    "over": {
+     "command": "results.reactions",
+     "params": {
+      "step": "Small",
+      "sets": [
+       "top"
+      ]
+     },
+     "pointer": "/sets/0/force/1",
+     "scale": -1.0
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "the pressure carries the whole load across the interface (both are totals over the circumference)"
+  },
+  {
+   "id": "finite_lower_corner",
+   "quantity": "Finite: σ_yy of element 4 over that of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      4
+     ]
+    },
+    "pointer": "/elements/0/stress/0/1",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "finite sliding is exact up to the geometric terms of the gaps the augmentation leaves (10⁻⁵ of the element thickness) and the default convergence tolerances"
+  },
+  {
+   "id": "finite_lower_far",
+   "quantity": "Finite: σ_yy of element 6 over that of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      6
+     ]
+    },
+    "pointer": "/elements/0/stress/0/1",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "finite_lower_base",
+   "quantity": "Finite: σ_yy of element 1 over that of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/stress/0/1",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "finite_upper_top",
+   "quantity": "Finite: σ_yy of element 10 over that of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      10
+     ]
+    },
+    "pointer": "/elements/0/stress/0/1",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "as for the corner element"
+  },
+  {
+   "id": "finite_lateral",
+   "quantity": "Finite: σ_xx of element 6 over its σ_yy (uniaxial stress: 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "elements": [
+      6
+     ]
+    },
+    "pointer": "/elements/0/stress/0/0",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       6
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1"
+    }
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 0.0002
+   },
+   "reason": "a frictionless interface (and symmetry plane) leaves the blocks free to expand sideways; the non-matching interface must not hold them"
+  },
+  {
+   "id": "finite_pressure",
+   "quantity": "Finite: the contact pressure at the secondary node (1.5, 1) over −σ_yy of element 7",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Finite",
+     "at": [
+      [
+       1.5,
+       1.0,
+       0.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/contact/0/pressure",
+    "over": {
+     "command": "solve.probe",
+     "params": {
+      "step": "Finite",
+      "elements": [
+       7
+      ]
+     },
+     "pointer": "/elements/0/stress/0/1",
+     "scale": -1.0
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "the mortar multipliers are the nodal values of the contact pressure, uniform and equal to the stress across the interface"
+  },
+  {
+   "id": "finite_force",
+   "quantity": "Finite: the integrated contact pressure over the reaction at the pushed top",
+   "measure": {
+    "from": "finite",
+    "pointer": "/contacts/0/normal_force",
+    "over": {
+     "command": "results.reactions",
+     "params": {
+      "step": "Finite",
+      "sets": [
+       "top"
+      ]
+     },
+     "pointer": "/sets/0/force/1",
+     "scale": -1.0
+    }
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.0002
+   },
+   "reason": "the pressure carries the whole load across the interface (both are totals over the circumference)"
+  },
+  {
+   "id": "small_stress",
+   "quantity": "Small: σ_yy of element 7 (uniaxial stress E ε = −10 for the 1% squeeze)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Small",
+     "elements": [
+      7
+     ]
+    },
+    "pointer": "/elements/0/stress/0/1"
+   },
+   "value": -10.0,
+   "tolerance": {
+    "relative": 0.0001
+   },
+   "reason": "the squeeze less the penetration the augmented Lagrangian leaves (up to 10⁻⁵ of the element thickness)"
+  }
+ ]
+}

@@ -81,17 +81,25 @@
 //! and that it does not reach through more than half an element (the far side of a thin wall),
 //! so two faces pressing together are paired both ways, symmetrically: self-contact of folds.
 //!
+//! **2D models.** In plane strain, plane stress and axisymmetric models the surfaces are element
+//! edges (sets' edges; general contact defaults to every exterior edge of the 2D elements),
+//! integrated by [`fieldcraft_fem::mortar::integrate_edges`] with the out-of-plane measure
+//! (thickness, or 2π r) in the weights, so A_A, g̃_A and the forces are those of the whole ring
+//! or slab. Each edge is oriented so that its normal points out of its element; the element's
+//! thickness under it is its area over the edge's length. Points keep z = 0 and the 2D nodes have
+//! no Z translation, so the tangent blocks keep their in-plane rows.
+//!
 //! **Scope.** Linear solid faces (tri3 and quad4 faces: tet4, wedge6 and hex8 elements) in 3D
-//! models, with Coulomb friction ([`Interface::friction`]). Quadratic faces, 2D models and
-//! arc-length steps are refused by name.
+//! models and linear edges (tri3 and quad4 elements) in 2D ones, with Coulomb friction
+//! ([`Interface::friction`]). Quadratic faces and edges and arc-length steps are refused by name.
 
 use std::collections::BTreeMap;
 
 use fieldcraft_fem::contact::{Aabb, Grid, bounds};
 use fieldcraft_fem::dual::{Dual, Hyper, Real, VARS};
 use fieldcraft_fem::frame::{Vec3, dot, norm, unit};
-use fieldcraft_fem::mortar::{area_vector, integrate};
-use fieldcraft_model::{Contact, ContactSurfaces, ElementFace, ElementKind, Friction, InitialPenetration, Model, Resolved};
+use fieldcraft_fem::mortar::{Sample, area_vector, edge_area_vector, integrate, integrate_edges};
+use fieldcraft_model::{Contact, ContactSurfaces, ElementEdge, ElementFace, ElementKind, Extent, Friction, InitialPenetration, Model, Resolved};
 use fieldcraft_parallel as parallel;
 use serde::Serialize;
 
@@ -136,7 +144,8 @@ const GRAIN: usize = 16;
 #[derive(Debug, Clone)]
 pub(crate) struct Face {
     pub(crate) nodes: Vec<usize>,
-    pub(crate) dofs: Vec<[usize; 3]>,
+    /// X, Y and Z translations per corner (a 2D model's nodes have no Z).
+    pub(crate) dofs: Vec<[Option<usize>; 3]>,
     /// The nodes of its element (never in contact with the face).
     owner: Vec<usize>,
     /// The penetration beyond which a point has passed through, and its element's thickness.
@@ -166,6 +175,8 @@ pub struct Interface {
     fixed: Option<Vec<Vec<Fixed>>>,
     /// Coulomb friction (frictionless: none).
     friction: Option<Friction>,
+    /// A 2D model's out-of-plane measure (its surfaces are edges); `None`: solid faces.
+    extent: Option<Extent>,
 }
 
 /// A contact's state carried from one converged increment to the next: per secondary node the
@@ -277,7 +288,7 @@ pub struct ContactResult {
 struct PairTerms {
     /// Mesh slots of the pair's corners (secondary first) and their degrees of freedom.
     nodes: Vec<usize>,
-    dofs: Vec<[usize; 3]>,
+    dofs: Vec<[Option<usize>; 3]>,
     /// Secondary node indices (in [`Interface::nodes`]) of the secondary corners.
     corners: Vec<usize>,
     /// ∂g̃_a/∂x per secondary corner (24 variables; corner c of the pair at 3c, main corners from 12).
@@ -290,17 +301,39 @@ struct PairTerms {
 /// translations (row-major, node by node).
 pub type Blocks = Vec<(Vec<usize>, Vec<f64>)>;
 
-fn position(mesh: &Mesh, u: &[f64], node: usize, dofs: &[usize; 3]) -> Vec3 {
+fn position(mesh: &Mesh, u: &[f64], node: usize, dofs: &[Option<usize>; 3]) -> Vec3 {
     let x = mesh.xyz.get(node).copied().unwrap_or_default();
-    [0, 1, 2].map(|k| x[k] + u.get(dofs[k]).copied().unwrap_or(0.0))
+    [0, 1, 2].map(|k| x[k] + dofs[k].and_then(|d| u.get(d)).copied().unwrap_or(0.0))
 }
 
-/// The element's volume (hex8, tet4) for the thickness under a face.
+/// The element's volume (hex8, tet4), or a 2D element's area (tri3, quad4), for the thickness
+/// under a face or edge.
 fn volume(kind: ElementKind, x: &[Vec3]) -> Option<f64> {
     match kind {
         ElementKind::Hex8 => <[Vec3; 8]>::try_from(x).ok().and_then(|a| fieldcraft_fem::uniform::Hex8::hex8(&a).ok()).map(|k| k.volume),
         ElementKind::Tet4 => <[Vec3; 4]>::try_from(x).ok().and_then(|a| fieldcraft_fem::uniform::Tet4::tet4(&a).ok()).map(|k| k.volume),
+        ElementKind::Tri3 | ElementKind::Quad4 => {
+            // The shoelace formula over the corners in the XY plane.
+            let doubled: f64 = x.iter().zip(x.iter().cycle().skip(1)).map(|(a, b)| a[0] * b[1] - a[1] * b[0]).sum();
+            Some(0.5 * doubled.abs())
+        }
         _ => None,
+    }
+}
+
+/// The overlap integration of a face pair (`extent`: `None`) or an edge pair of a 2D model.
+fn overlap<T: Real>(extent: Option<Extent>, xs: &[[T; 3]], xm: &[[T; 3]], f: impl FnMut(&Sample<T>)) -> Option<()> {
+    match extent {
+        None => integrate(xs, xm, f),
+        Some(e) => integrate_edges(xs, xm, e, f),
+    }
+}
+
+/// A face's area vector, or an edge's ([`edge_area_vector`]) in a 2D model.
+fn area_of(extent: Option<Extent>, x: &[Vec3]) -> Option<Vec3> {
+    match extent {
+        None => area_vector(x),
+        Some(e) => edge_area_vector(x, e),
     }
 }
 
@@ -315,37 +348,86 @@ pub(crate) fn faces(model: &Model, resolved: &Resolved, mesh: &Mesh, owner: &str
     face_list(model, mesh, owner, resolved.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default())
 }
 
+/// The edges of set `set` of a 2D model for definition `owner`, refused unless they are linear
+/// edges of analysed 2D elements.
+fn edges(model: &Model, resolved: &Resolved, mesh: &Mesh, owner: &str, set: &str) -> Result<Vec<Face>> {
+    edge_list(model, mesh, owner, resolved.sets.get(set).map(|s| s.edges.as_slice()).unwrap_or_default())
+}
+
 /// The faces `list` for definition `owner`, as [`faces`].
 fn face_list(model: &Model, mesh: &Mesh, owner: &str, list: &[ElementFace]) -> Result<Vec<Face>> {
-    let mut out = Vec::with_capacity(list.len());
-    for f in list {
-        let at = |what: String| Error::Invalid(format!("{owner}: element {} face {}: {what}", f.element, f.face));
-        let el = mesh.element(f.element).ok_or_else(|| at("the element is not a solid element of the analysis".into()))?;
-        let labels = model.face_nodes(*f).ok_or_else(|| at("no such face".into()))?;
-        if !matches!(labels.len(), 3 | 4) {
-            return Err(Error::NotSupported(format!(
-                "{owner} on the faces of {} elements (element {}) in implicit analyses; it takes the linear faces of tet4, wedge6 and hex8 elements",
-                el.kind.name(),
-                f.element
-            )));
-        }
-        let nodes: Vec<usize> = labels.iter().map(|l| mesh.node(*l).ok_or_else(|| at(format!("node {l} is not analysed")))).collect::<Result<_>>()?;
-        let dofs = nodes
-            .iter()
-            .map(|n| translations(mesh, *n).and_then(|d| <[usize; 3]>::try_from(d).map_err(|_| Error::Internal("solid node translations".into()))))
-            .collect::<Result<Vec<_>>>()?;
-        let x: Vec<Vec3> = nodes.iter().map(|n| mesh.xyz.get(*n).copied().unwrap_or_default()).collect();
-        let area = area_vector(&x).map_or(0.0, norm);
-        let thickness = volume(el.kind, &el.xyz).filter(|v| *v > 0.0 && area > 0.0).map_or(size(&x), |v| v / area);
-        if !(thickness > 0.0 && thickness.is_finite()) {
-            return Err(at("the face has no size".into()));
-        }
-        let shear = (el.d[3][3] + el.d[4][4] + el.d[5][5]) / 3.0;
-        let mut owner = el.nodes.clone();
-        owner.sort_unstable();
-        out.push(Face { nodes, dofs, owner, depth: DEPTH_FRACTION * thickness, thickness, stiffness: PENALTY_FACTOR * 3.0 * shear / thickness });
+    list.iter()
+        .map(|f| {
+            let at = |what: String| Error::Invalid(format!("{owner}: element {} face {}: {what}", f.element, f.face));
+            let labels = model.face_nodes(*f).ok_or_else(|| at("no such face".into()))?;
+            surface_face(mesh, owner, f.element, labels, false, at)
+        })
+        .collect()
+}
+
+/// The edges `list` of a 2D model for definition `owner`, as [`edges`].
+fn edge_list(model: &Model, mesh: &Mesh, owner: &str, list: &[ElementEdge]) -> Result<Vec<Face>> {
+    list.iter()
+        .map(|e| {
+            let at = |what: String| Error::Invalid(format!("{owner}: element {} edge {}: {what}", e.element, e.edge));
+            let labels = model.edge_nodes(*e).ok_or_else(|| at("no such edge".into()))?;
+            surface_face(mesh, owner, e.element, labels, true, at)
+        })
+        .collect()
+}
+
+/// One face (or, `edge`, one edge of a 2D element) of element `element` with nodes `labels`.
+fn surface_face(mesh: &Mesh, owner: &str, element: u32, labels: Vec<u32>, edge: bool, at: impl Fn(String) -> Error) -> Result<Face> {
+    let el = mesh.element(element).ok_or_else(|| at("the element is not a solid or 2D element of the analysis".into()))?;
+    let (linear, takes) = if edge {
+        (labels.len() == 2 && el.kind.dimension() == 2, "the linear edges of tri3 and quad4 elements")
+    } else {
+        (matches!(labels.len(), 3 | 4) && el.kind.dimension() == 3, "the linear faces of tet4, wedge6 and hex8 elements")
+    };
+    if !linear {
+        let what = if edge { "edges" } else { "faces" };
+        return Err(Error::NotSupported(format!(
+            "{owner} on the {what} of {} elements (element {element}) in implicit analyses; it takes {takes}",
+            el.kind.name()
+        )));
     }
-    Ok(out)
+    let mut nodes: Vec<usize> = labels.iter().map(|l| mesh.node(*l).ok_or_else(|| at(format!("node {l} is not analysed")))).collect::<Result<_>>()?;
+    let mut x: Vec<Vec3> = nodes.iter().map(|n| mesh.xyz.get(*n).copied().unwrap_or_default()).collect();
+    if edge {
+        // Outward: the edge's normal (t_y, −t_x) away from its element's centroid.
+        let count = el.xyz.len().max(1) as f64;
+        let centroid: Vec3 = std::array::from_fn(|k| el.xyz.iter().map(|p| p[k]).sum::<f64>() / count);
+        let (Some(a), Some(b)) = (x.first(), x.get(1)) else { return Err(at("the edge has no size".into())) };
+        let mid = [0.5 * (a[0] + b[0]) - centroid[0], 0.5 * (a[1] + b[1]) - centroid[1]];
+        if (b[1] - a[1]) * mid[0] - (b[0] - a[0]) * mid[1] < 0.0 {
+            nodes.reverse();
+            x.reverse();
+        }
+    }
+    let dofs = nodes
+        .iter()
+        .map(|n| {
+            let d = translations(mesh, *n)?;
+            match d.as_slice() {
+                [a, b, c] => Ok([Some(*a), Some(*b), Some(*c)]),
+                [a, b] if edge => Ok([Some(*a), Some(*b), None]),
+                _ => Err(Error::Internal("node translations".into())),
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // The face's area, or the edge's length.
+    let area = match x.as_slice() {
+        [a, b] if edge => norm([b[0] - a[0], b[1] - a[1], 0.0]),
+        _ => area_vector(&x).map_or(0.0, norm),
+    };
+    let thickness = volume(el.kind, &el.xyz).filter(|v| *v > 0.0 && area > 0.0).map_or(size(&x), |v| v / area);
+    if !(thickness > 0.0 && thickness.is_finite()) {
+        return Err(at(format!("the {} has no size", if edge { "edge" } else { "face" })));
+    }
+    let shear = (el.d[3][3] + el.d[4][4] + el.d[5][5]) / 3.0;
+    let mut owner = el.nodes.clone();
+    owner.sort_unstable();
+    Ok(Face { nodes, dofs, owner, depth: DEPTH_FRACTION * thickness, thickness, stiffness: PENALTY_FACTOR * 3.0 * shear / thickness })
 }
 
 /// A face pair of small-sliding contact: its mortar integrals in the reference configuration,
@@ -401,9 +483,9 @@ struct Found {
 }
 
 /// The weighted gaps g̃_a of one face pair (corners `xs`, `xm`) over any scalar.
-fn weighted_gaps<T: Real>(xs: &[[T; 3]], xm: &[[T; 3]]) -> Option<[T; 4]> {
+fn weighted_gaps<T: Real>(extent: Option<Extent>, xs: &[[T; 3]], xm: &[[T; 3]]) -> Option<[T; 4]> {
     let mut g = [T::cst(0.0); 4];
-    integrate(xs, xm, |p| {
+    overlap(extent, xs, xm, |p| {
         let w = p.weight * p.gap();
         for a in 0..4 {
             g[a] = g[a] + w * p.secondary[a];
@@ -418,9 +500,9 @@ fn weighted_gaps<T: Real>(xs: &[[T; 3]], xm: &[[T; 3]]) -> Option<[T; 4]> {
 /// corners from 0, main corners from 12), with the integrals on the current configuration: the
 /// rate form of the mortar slip, B_a = [∫ Φ_a N_i P, −∫ Φ_a N_j P] (McDevitt & Laursen 2000; Puso &
 /// Laursen 2004), P = I − n n.
-fn slip_operator(xs: &[Vec3], xm: &[Vec3]) -> Option<[[[f64; VARS]; 3]; 4]> {
+fn slip_operator(extent: Option<Extent>, xs: &[Vec3], xm: &[Vec3]) -> Option<[[[f64; VARS]; 3]; 4]> {
     let mut b = [[[0.0; VARS]; 3]; 4];
-    integrate(xs, xm, |p| {
+    overlap(extent, xs, xm, |p| {
         let n = p.normal;
         for a in 0..4 {
             let wa = p.weight * p.secondary[a];
@@ -470,17 +552,20 @@ impl Interface {
 
     fn new(model: &Model, resolved: &Resolved, mesh: &Mesh, name: &str, contact: &Contact) -> Result<Interface> {
         let owner = format!("contact `{name}`");
+        let extent = mesh.theory.map(|t| t.extent());
+        // A set's faces or (2D) edges, or every exterior one of the model.
+        let surface = |set: Option<&String>| match (set, extent) {
+            (Some(s), None) => faces(model, resolved, mesh, &owner, s),
+            (Some(s), Some(_)) => edges(model, resolved, mesh, &owner, s),
+            (None, None) => face_list(model, mesh, &owner, &model.exterior_faces()),
+            (None, Some(_)) => edge_list(model, mesh, &owner, &model.exterior_edges()),
+        };
         let (secondary, main) = match &contact.surfaces {
-            ContactSurfaces::Pair { main, secondary } => {
-                (faces(model, resolved, mesh, &owner, secondary)?, faces(model, resolved, mesh, &owner, main)?)
-            }
+            ContactSurfaces::Pair { main, secondary } => (surface(Some(secondary))?, surface(Some(main))?),
             // Single surface: every face against every other one that faces it and shares no node
             // with its element (its neighbours), both ways.
-            ContactSurfaces::General { surface } => {
-                let list = match surface {
-                    Some(set) => faces(model, resolved, mesh, &owner, set)?,
-                    None => face_list(model, mesh, &owner, &model.exterior_faces())?,
-                };
+            ContactSurfaces::General { surface: set } => {
+                let list = surface(set.as_ref())?;
                 (list.clone(), list)
             }
         };
@@ -493,7 +578,7 @@ impl Interface {
             // ∫ Φ_a over the face itself (the face against its own mirror image).
             let mirror: Vec<Vec3> = x.iter().rev().copied().collect();
             let mut own = [0.0; 4];
-            integrate(&x, &mirror, |p| {
+            overlap(extent, &x, &mirror, |p| {
                 for a in 0..4 {
                     own[a] += p.weight * p.secondary[a];
                 }
@@ -528,6 +613,7 @@ impl Interface {
             offset,
             fixed: None,
             friction: (!contact.friction.is_frictionless()).then_some(contact.friction),
+            extent,
         })
     }
 
@@ -609,7 +695,7 @@ impl Interface {
                 .filter_map(|f| {
                     let xm = xm.get(f.main)?;
                     let (mut d, mut m, mut normal) = ([[0.0; 4]; 4], [[0.0; 4]; 4], [0.0; 3]);
-                    integrate(xs, xm, |p| {
+                    overlap(self.extent, xs, xm, |p| {
                         normal = p.normal;
                         for a in 0..4 {
                             for i in 0..4 {
@@ -631,12 +717,12 @@ impl Interface {
         let main_x: Vec<Vec<Vec3>> = self.main.iter().map(|f| Interface::corners(mesh, u, f)).collect();
         let boxes: Vec<Aabb> = self.main.iter().zip(&main_x).map(|(f, x)| bounds(x, reach * f.depth)).collect();
         let grid = Grid::new(&boxes, 4 * boxes.len() + 64);
-        let main_normals: Vec<Option<Vec3>> = main_x.iter().map(|x| area_vector(x).filter(|a| norm(*a) > 0.0)).collect();
+        let main_normals: Vec<Option<Vec3>> = main_x.iter().map(|x| area_of(self.extent, x).filter(|a| norm(*a) > 0.0)).collect();
         Ok(parallel::map_grained(self.secondary.len(), GRAIN, |i| {
             let mut found = Vec::new();
             let Some(f) = self.secondary.get(i) else { return keep(&[], &main_x, found) };
             let xs = Interface::corners(mesh, u, f);
-            let Some(ns) = area_vector(&xs).filter(|a| norm(*a) > 0.0) else { return keep(&xs, &main_x, found) };
+            let Some(ns) = area_of(self.extent, &xs).filter(|a| norm(*a) > 0.0) else { return keep(&xs, &main_x, found) };
             let mut candidates = Vec::new();
             grid.candidates_in(&bounds(&xs, 0.0), &mut candidates);
             for &c in &candidates {
@@ -649,7 +735,7 @@ impl Interface {
                     continue;
                 }
                 let (mut gap, mut support, mut deepest, mut any) = ([0.0; 4], [0.0; 4], f64::INFINITY, false);
-                integrate(&xs, xm, |p| {
+                overlap(self.extent, &xs, xm, |p| {
                     any = true;
                     let g = p.gap();
                     deepest = deepest.min(g);
@@ -741,7 +827,7 @@ impl Interface {
             slipping: Vec::new(),
         };
         for (f, corners) in self.secondary.iter().zip(&corner_index) {
-            let Some(a) = area_vector(&Interface::corners(mesh, u, f)) else { continue };
+            let Some(a) = area_of(self.extent, &Interface::corners(mesh, u, f)) else { continue };
             for i in corners {
                 if let Some(v) = state.normal.get_mut(*i) {
                     (0..3).for_each(|k| v[k] += a[k]);
@@ -786,7 +872,7 @@ impl Interface {
                 ((0..corners.len()).map(|a| fixed.gradient(a)).collect(), None)
             } else if tangent {
                 let (vs, vm) = variables(&xs, &xm, Hyper::var);
-                let Some(g) = weighted_gaps(&vs, &vm) else { return Ok(None) };
+                let Some(g) = weighted_gaps(self.extent, &vs, &vm) else { return Ok(None) };
                 let mut h = vec![0.0; fieldcraft_fem::dual::PACKED];
                 for (ga, p) in g.iter().zip(&pressure) {
                     h.iter_mut().zip(&ga.h).for_each(|(x, y)| *x += p * y);
@@ -794,7 +880,7 @@ impl Interface {
                 (g.iter().take(corners.len()).map(|ga| ga.g).collect::<Vec<_>>(), Some(h))
             } else {
                 let (vs, vm) = variables(&xs, &xm, Dual::var);
-                let Some(g) = weighted_gaps(&vs, &vm) else { return Ok(None) };
+                let Some(g) = weighted_gaps(self.extent, &vs, &vm) else { return Ok(None) };
                 (g.iter().take(corners.len()).map(|ga| ga.g).collect(), None)
             };
             let nodes = f.nodes.iter().chain(&m.nodes).copied().collect();
@@ -815,7 +901,7 @@ impl Interface {
                     let mut on = [0.0; 3];
                     for k in 0..3 {
                         let f = -p * gv[k];
-                        if let Some(x) = internal.get_mut(dofs[k]) {
+                        if let Some(x) = dofs[k].and_then(|d| internal.get_mut(d)) {
                             *x += f;
                         }
                         on[k] = -f;
@@ -917,7 +1003,7 @@ impl Interface {
             let (rs, rm) = (Interface::corners(mesh, reference, f), Interface::corners(mesh, reference, m));
             let operator: Vec<[[f64; VARS]; 3]> = match self.fixed.as_ref().and_then(|f| f.get(s)).and_then(|l| l.get(k)) {
                 Some(fixed) => (0..corners.len()).map(|a| fixed.slip_jacobian(a)).collect(),
-                None => slip_operator(&xs, &xm)?.into_iter().take(corners.len()).collect(),
+                None => slip_operator(self.extent, &xs, &xm)?.into_iter().take(corners.len()).collect(),
             };
             let mut delta = [0.0; VARS];
             for (i, (x, r)) in xs.iter().zip(&rs).enumerate() {
@@ -929,7 +1015,7 @@ impl Interface {
             let slips: Vec<(Vec3, [[f64; VARS]; 3])> =
                 operator.into_iter().map(|b| (b.map(|row| row.iter().zip(&delta).map(|(x, y)| x * y).sum()), b)).collect();
             let nodes: Vec<usize> = f.nodes.iter().chain(&m.nodes).copied().collect();
-            let dofs: Vec<[usize; 3]> = f.dofs.iter().chain(&m.dofs).copied().collect();
+            let dofs: Vec<[Option<usize>; 3]> = f.dofs.iter().chain(&m.dofs).copied().collect();
             Some((nodes, dofs, corners.clone(), slips))
         });
         let terms: Vec<_> = terms.into_iter().flatten().collect();
@@ -997,7 +1083,7 @@ impl Interface {
                 for (c, d) in dofs.iter().enumerate() {
                     let on: Vec3 = std::array::from_fn(|l| (0..3).map(|k| t[k] * jac[k].get(var(corners.len(), c, l)).copied().unwrap_or(0.0)).sum());
                     for l in 0..3 {
-                        if let Some(x) = internal.get_mut(d[l]) {
+                        if let Some(x) = d[l].and_then(|d| internal.get_mut(d)) {
                             *x -= on[l];
                         }
                     }

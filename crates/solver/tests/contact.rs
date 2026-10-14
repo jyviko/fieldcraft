@@ -700,3 +700,109 @@ fn a_rubber_bellows_folds_onto_itself() {
     assert!(c.closed() > 0, "the folds touch");
     assert!(c.penetration < 1e-3 * wall, "{}", c.penetration);
 }
+
+/// The C-ring of [`c_ring`] as a plane strain model (quad4, hybrid, 0.2 thick: the hex8 layer's
+/// thickness) with general contact on every exterior edge.
+fn planar_c_ring(closing: f64, threads: usize) -> (Blocks, StaticResult) {
+    let mut b = Blocks::default();
+    let (n, open) = (36usize, 5f64.to_radians());
+    let angle = move |i: f64| open + i * (2.0 * std::f64::consts::PI - 2.0 * open);
+    let label = |i: usize, j: usize| 1 + (i + (n + 1) * j) as u32;
+    for j in 0..=2 {
+        for i in 0..=n {
+            let (t, r) = (angle(i as f64 / n as f64), 1.5 - 0.25 * j as f64);
+            let x = [r * t.cos(), r * t.sin(), 0.0];
+            b.model.set_node(label(i, j), x).unwrap();
+            b.xyz.insert(label(i, j), x);
+        }
+    }
+    let mut next = 0;
+    for j in 0..2 {
+        for i in 0..n {
+            next += 1;
+            // Counter-clockwise in the plane: along the outer arc, then inwards and back.
+            b.model.set_element(next, ElementKind::Quad4, vec![label(i, j), label(i + 1, j), label(i + 1, j + 1), label(i, j + 1)]).unwrap();
+        }
+    }
+    let all: Vec<u32> = b.model.elements().keys().copied().collect();
+    b.model.add_set("all", Set { elements: all, ..Set::default() }).unwrap();
+    let rubber = Material {
+        elastic: Some(Elastic::Isotropic { young: 3.0, poisson: 0.499 }),
+        hyperelastic: Some(Hyperelastic::MooneyRivlin { c01: 0.1 }),
+        ..Material::default()
+    };
+    b.model.add_material("Rubber", rubber).unwrap();
+    let section = Section {
+        set: "all".into(),
+        material: "Rubber".into(),
+        kind: SectionKind::PlaneStrain { thickness: 0.2 },
+        formulation: Formulation { hybrid: true, ..Formulation::default() },
+    };
+    b.model.add_section("ring", section).unwrap();
+    let settings = NonlinearStatic { initial_increment: 0.1, max_increments: 200, ..NonlinearStatic::default() };
+    b.model.add_step(Step::new("Step", Procedure::NonlinearStatic(settings)), None).unwrap();
+    b.model.add_contact("self", Contact::new(ContactSurfaces::General { surface: None })).unwrap();
+    let step = 2.0 * std::f64::consts::PI - 2.0 * open;
+    let at = |x: [f64; 3], i: f64| {
+        ((x[0] * x[0] + x[1] * x[1]).sqrt() - 1.5).abs() < 1e-9
+            && (x[1].atan2(x[0]).rem_euclid(2.0 * std::f64::consts::PI) - angle(i)).abs() < 1e-6 * step
+    };
+    let near_end = 2.0 / n as f64;
+    b.bc("upper", [None, Some(-closing), None], move |x| at(x, near_end));
+    b.bc("lower", [None, Some(closing), None], move |x| at(x, 1.0 - near_end));
+    b.bc("back", [Some(0.0), Some(0.0), None], move |x| at(x, 0.5));
+    let r = fieldcraft_parallel::with_threads(threads, || solve_nonlinear(&b.model, Some("Step"), &Limits::default()).unwrap());
+    (b, r)
+}
+
+/// 2D self-contact: the plane strain ring closes on itself like the one-layer solid ring with
+/// its z held (the same problem), the edges' mortar pressing as the faces' does; bit for bit on
+/// any thread count.
+#[test]
+fn a_plane_strain_ring_closes_on_itself_as_the_solid_ring_does() {
+    let (b2, r2) = planar_c_ring(0.15, 1);
+    let (b3, r3) = c_ring(true, 0.15);
+    let (c2, c3) = (&r2.contacts[0], &r3.contacts[0]);
+    assert!(c2.closed() > 0 && c2.penetration < 1e-4, "{} {}", c2.closed(), c2.penetration);
+    // Each edge node closes where its face nodes do (two per edge node, at z = 0 and 0.2).
+    assert_eq!(2 * c2.closed(), c3.closed());
+    // The same motion: every node of the plane against the solid's node at z = 0.
+    let mut checked = 0;
+    for (l, x) in &b2.xyz {
+        let Some((m, _)) = b3.xyz.iter().find(|(_, y)| (y[0] - x[0]).abs() < 1e-9 && (y[1] - x[1]).abs() < 1e-9 && y[2] == 0.0) else { continue };
+        let (u, v) = (r2.displacement[r2.nodes.binary_search(l).unwrap()], r3.displacement[r3.nodes.binary_search(m).unwrap()]);
+        assert!((u[0] - v[0]).abs() < 1e-5 && (u[1] - v[1]).abs() < 1e-5, "node {l}: {u:?} {v:?}");
+        checked += 1;
+    }
+    assert_eq!(checked, b2.xyz.len());
+    let (_, many) = planar_c_ring(0.15, 4);
+    assert_eq!(r2.displacement, many.displacement);
+    assert_eq!(r2.contacts, many.contacts);
+}
+
+#[test]
+fn what_2d_contact_refuses() {
+    // Quadratic edges.
+    let (mut b, _) = planar_c_ring(0.0, 1);
+    let mut m = Model::default();
+    for (i, x) in [[0., 0.], [1., 0.], [1., 1.], [0., 1.], [0.5, 0.], [1., 0.5], [0.5, 1.], [0., 0.5]].iter().enumerate() {
+        m.set_node(i as u32 + 1, [x[0], x[1], 0.0]).unwrap();
+    }
+    m.set_element(1, ElementKind::Quad8, (1..=8).collect()).unwrap();
+    m.add_set("all", Set { elements: vec![1], ..Set::default() }).unwrap();
+    m.add_material("Mat", Material { elastic: Some(Elastic::Isotropic { young: 1.0, poisson: 0.3 }), ..Material::default() }).unwrap();
+    m.add_section(
+        "s",
+        Section { set: "all".into(), material: "Mat".into(), kind: SectionKind::PlaneStrain { thickness: 1.0 }, formulation: Formulation::default() },
+    )
+    .unwrap();
+    m.add_step(Step::new("Step", Procedure::NonlinearStatic(NonlinearStatic::default())), None).unwrap();
+    m.add_contact("self", Contact::new(ContactSurfaces::General { surface: None })).unwrap();
+    let e = solve_nonlinear(&m, Some("Step"), &Limits::default()).unwrap_err().to_string();
+    assert!(e.contains("edges of quad8") && e.contains("tri3 and quad4"), "{e}");
+    // A plane strain ring with arc-length control.
+    let arc = NonlinearStatic { arc_length: Some(ArcLength::default()), ..NonlinearStatic::default() };
+    b.model.replace_step(Step { procedure: Procedure::NonlinearStatic(arc), ..b.model.step("Step").unwrap().clone() }).unwrap();
+    let e = solve_nonlinear(&b.model, Some("Step"), &Limits::default()).unwrap_err().to_string();
+    assert!(e.contains("arc-length"), "{e}");
+}

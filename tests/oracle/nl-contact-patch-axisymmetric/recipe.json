@@ -1,0 +1,20 @@
+[
+ {"command": "mesh.block", "params": {"body": "Lower", "kind": "quad4", "corners": [[1.0, 0, 0], [2.0, 0, 0], [2.0, 1, 0], [1.0, 1, 0]], "divisions": [3, 2], "bias": [2.0, 1.0], "edges": [{"corners": [1, 2], "name": "bottom"}, {"corners": [3, 4], "name": "top"}, {"corners": [4, 1], "name": "x0"}]}},
+ {"command": "mesh.block", "params": {"body": "Upper", "kind": "quad4", "corners": [[1.0, 1, 0], [2.0, 1, 0], [2.0, 2, 0], [1.0, 2, 0]], "divisions": [2, 2], "edges": [{"corners": [1, 2], "name": "bottom"}, {"corners": [3, 4], "name": "top"}, {"corners": [4, 1], "name": "x0"}], "merge": 0}},
+ {"command": "model.set.create", "params": {"name": "lower", "geometry": [{"body": "Lower", "face": "area"}]}},
+ {"command": "model.set.create", "params": {"name": "upper", "geometry": [{"body": "Upper", "face": "area"}]}},
+ {"command": "model.set.create", "params": {"name": "lower_top", "geometry": [{"body": "Lower", "edge": "top"}]}},
+ {"command": "model.set.create", "params": {"name": "upper_bottom", "geometry": [{"body": "Upper", "edge": "bottom"}]}},
+ {"command": "model.set.create", "params": {"name": "base", "geometry": [{"body": "Lower", "edge": "bottom"}]}},
+ {"command": "model.set.create", "params": {"name": "top", "geometry": [{"body": "Upper", "edge": "top"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.3}}},
+ {"command": "model.section.create", "params": {"name": "lower", "set": "lower", "material": "Mat", "kind": {"type": "axisymmetric"}}},
+ {"command": "model.section.create", "params": {"name": "upper", "set": "upper", "material": "Mat", "kind": {"type": "axisymmetric"}}},
+ {"command": "interaction.contact.pair", "params": {"name": "interface", "main": "lower_top", "secondary": "upper_bottom"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "base", "type": "displacement", "target": {"set": "base"}, "values": [null, 0, null, null, null, null]}},
+ {"command": "model.boundary_condition.create", "params": {"name": "push", "type": "displacement", "target": {"set": "top"}, "values": [null, -0.02, null, null, null, null]}},
+ {"command": "model.step.create", "params": {"name": "Small", "procedure": {"type": "nonlinear_static", "nonlinear_geometry": false, "tolerances": {"force": 1e-10, "displacement": 1e-08, "energy": 1e-16}}, "boundary_conditions": ["base", "push"], "loads": []}},
+ {"command": "model.step.create", "params": {"name": "Finite", "procedure": {"type": "nonlinear_static"}, "boundary_conditions": ["base", "push"], "loads": []}},
+ {"command": "solve.nonlinear", "params": {"step": "Small"}, "id": "small"},
+ {"command": "solve.nonlinear", "params": {"step": "Finite"}, "id": "finite"}
+]

@@ -1,0 +1,65 @@
+{
+  "note": "FieldCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "finite_force": {
+      "band": 1.000000000000021e-9,
+      "value": 1.0000000000000209
+    },
+    "finite_lateral": {
+      "band": 0.0002,
+      "value": -6.202292989414768e-6
+    },
+    "finite_lower_base": {
+      "band": 1e-9,
+      "value": 0.9999851288470675
+    },
+    "finite_lower_corner": {
+      "band": 1.0000001256632718e-9,
+      "value": 1.0000001256632718
+    },
+    "finite_lower_far": {
+      "band": 1e-9,
+      "value": 0.9999675186278648
+    },
+    "finite_pressure": {
+      "band": 1e-9,
+      "value": 0.999971468750515
+    },
+    "finite_upper_top": {
+      "band": 1e-9,
+      "value": 0.999981532712154
+    },
+    "small_force": {
+      "band": 1e-9,
+      "value": 0.9999999999999044
+    },
+    "small_lateral": {
+      "band": 1e-6,
+      "value": 3.4213832901728455e-15
+    },
+    "small_lower_base": {
+      "band": 1.0000000000000207e-9,
+      "value": 1.0000000000000207
+    },
+    "small_lower_corner": {
+      "band": 1e-9,
+      "value": 0.9999999999999943
+    },
+    "small_lower_far": {
+      "band": 1.0000000000000418e-9,
+      "value": 1.0000000000000417
+    },
+    "small_pressure": {
+      "band": 1e-9,
+      "value": 0.9999999999998981
+    },
+    "small_stress": {
+      "band": 1e-8,
+      "value": -9.999573821916737
+    },
+    "small_upper_top": {
+      "band": 1.0000000000000296e-9,
+      "value": 1.0000000000000295
+    }
+  }
+}

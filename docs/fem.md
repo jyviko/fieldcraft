@@ -468,8 +468,20 @@ contact patch test. General (single-surface) contact uses one face list, a set's
 exterior face of the solids, as both sides: each face against every other one facing it that
 shares no node with its element (its neighbours) and that it does not reach through more than
 half an element (the far side of a thin wall), paired both ways, so the folds of one body press
-on each other symmetrically. Linear faces (tri3, quad4: tet4, wedge6, hex8); quadratic faces, 2D
-models and arc-length steps are refused by name.
+on each other symmetrically. Linear faces (tri3, quad4: tet4, wedge6, hex8), and in 2D models
+(plane strain, plane stress, axisymmetric) the linear edges of tri3 and quad4 elements (sets'
+edges; general contact defaults to every exterior edge); quadratic faces and edges and
+arc-length steps are refused by name.
+
+**2D models**: each edge is oriented with its normal (t_y, −t_x) out of its element; the main
+edge is projected along the secondary edge's normal onto its line, which maps main points to the
+secondary parameter linearly, so the overlap is an interval integrated with three-point
+Gauss–Legendre (exact for the degree-3 Φ_a N_b r of the axisymmetric patch test). The
+out-of-plane measure (the thickness, or 2πr at the secondary point) is in the weights, so A_A,
+g̃_A and the forces are totals over the slab or the ring, as the 2D elements' are (B. Yang,
+T. A. Laursen, X. Meng, IJNME 62:1183–1225, 2005). Points keep z = 0 and the same 24 variables
+as faces, and the tangent blocks keep their in-plane rows. The element's thickness under an edge
+is its area over the edge's length.
 
 **Segmentation** (`fieldcraft_fem::mortar`): both faces are projected along the secondary
 face's unit normal onto its plane, the main polygon is clipped by the secondary one
@@ -540,7 +552,9 @@ entries, and the results display draws `contact_pressure`, `contact_gap`, `conta
 `contact_shear` and `contact_slip`.
 
 **Verification** (`crates/solver/tests/contact.rs`, `tests/oracle/nl-contact-patch`,
-`tests/oracle/nl-hertz-cylinder`): the contact patch test on non-matching hex8 and tet4 meshes
+`tests/oracle/nl-hertz-cylinder`, and their 2D forms `nl-contact-patch-plane-strain`,
+`nl-contact-patch-axisymmetric`, `nl-hertz-cylinder-plane-strain`): the contact patch test on
+non-matching hex8, tet4 and (plane strain and axisymmetric) quad4 meshes
 (uniform σ_zz, pressure equal to it, no lateral stress: to 10⁻⁹ with small sliding, 10⁻⁴ with
 finite sliding, where the gaps the augmentation leaves enter through their geometric terms);
 Hertz's line contact, plane strain (peak pressure within 0.3%, the pressure at two nodes within
@@ -550,7 +564,10 @@ Newton's quadratic rate near the solution with finite sliding; Coulomb friction 
 blocks (stick well below the cone with the forces of glued blocks, slip on it carrying μ N to 0.1%
 with small sliding and 3% with finite sliding, where the block turns a little, and μ_k N once
 slipping; `tests/oracle/nl-friction-sliding-blocks`); initial overclosure adjusted and
-refused; bit-for-bit results on one and four threads; the refusals.
+refused; bit-for-bit results on one and four threads; the refusals. In 2D: the patch tests pass
+to 10⁻⁹ (small sliding) and 10⁻⁴ (finite), Hertz's line contact on quad4 edges matches the
+hex8 model to 10⁻⁵, and a hybrid Mooney–Rivlin C-ring closing on itself in plane strain moves as
+the one-layer solid ring with z held, node for node to 10⁻⁵.
 
 ## Ties (non-matching meshes)
 

@@ -12,10 +12,9 @@
 
 use std::collections::BTreeMap;
 
-use super::geom::{add, scale};
 use super::interval::Intervals;
 use super::{Ctx, Raw, project_to_face, project_to_faces};
-use crate::quad::transfinite_grid;
+use crate::quad::{transfinite_grid, transfinite_volume};
 use crate::size::{divide_polyline, ideal_divisions};
 use crate::vec3::{P, det, sub};
 use crate::{Error, Result};
@@ -191,38 +190,10 @@ pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
             }
         }
     }
-    // Volume: trivariate transfinite interpolation.
-    let (fi, fj, fk) = (ni as f64, nj as f64, nk as f64);
-    for k in 1..nk {
-        for j in 1..nj {
-            for i in 1..ni {
-                let (u, v, w) = (i as f64 / fi, j as f64 / fj, k as f64 / fk);
-                let g = |i: usize, j: usize, k: usize| get(&x, i, j, k);
-                let lin = |t: f64, a: P, b: P| add(scale(a, 1.0 - t), scale(b, t));
-                // Faces.
-                let faces = add(add(lin(u, g(0, j, k)?, g(ni, j, k)?), lin(v, g(i, 0, k)?, g(i, nj, k)?)), lin(w, g(i, j, 0)?, g(i, j, nk)?));
-                // Edges.
-                let bil = |s: f64, t: f64, p00: P, p10: P, p01: P, p11: P| lin(t, lin(s, p00, p10), lin(s, p01, p11));
-                let edges = add(
-                    add(
-                        bil(v, w, g(i, 0, 0)?, g(i, nj, 0)?, g(i, 0, nk)?, g(i, nj, nk)?),
-                        bil(u, w, g(0, j, 0)?, g(ni, j, 0)?, g(0, j, nk)?, g(ni, j, nk)?),
-                    ),
-                    bil(u, v, g(0, 0, k)?, g(ni, 0, k)?, g(0, nj, k)?, g(ni, nj, k)?),
-                );
-                // Corners.
-                let corners = lin(
-                    w,
-                    bil(u, v, g(0, 0, 0)?, g(ni, 0, 0)?, g(0, nj, 0)?, g(ni, nj, 0)?),
-                    bil(u, v, g(0, 0, nk)?, g(ni, 0, nk)?, g(0, nj, nk)?, g(ni, nj, nk)?),
-                );
-                let p = add(sub(faces, edges), corners);
-                if let Some(slot) = x.get_mut(idx(i, j, k)) {
-                    *slot = Some(p);
-                }
-            }
-        }
-    }
+    // Volume: trivariate transfinite interpolation, blended by index.
+    let uniform = |n: usize| -> Vec<f64> { (0..=n).map(|q| q as f64 / n as f64).collect() };
+    let (bi, bj, bk) = (uniform(ni), uniform(nj), uniform(nk));
+    transfinite_volume(&mut x, [ni, nj, nk], [&bi, &bj, &bk])?;
     let nodes: Vec<P> = x.into_iter().map(|p| p.ok_or_else(|| Error::Failed("mapped grid node missing".into()))).collect::<Result<_>>()?;
     let id = |i: usize, j: usize, k: usize| idx(i, j, k) as u32;
     let mut hexes = Vec::with_capacity(ni * nj * nk);

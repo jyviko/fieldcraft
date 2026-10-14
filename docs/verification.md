@@ -63,7 +63,8 @@ cargo xtask oracle --quick              # skip cases marked "slow"
   A tolerance is `relative` (of the reference), `absolute`, both, or `"exact": true`. A pending
   case cites its reference values (or `null` until transcribed) and has no recipe yet.
 - `fixture.json` holds each passing quantity's accepted `value` and its `band`
-  (10⁻⁹ of the larger of value and reference, plus 10⁻³ of an absolute tolerance): the result is
+  (10⁻⁹ of the larger of value and reference, plus 10⁻³ of an absolute tolerance; a quantity whose
+  reference is zero, which is rounding noise, keeps its absolute tolerance as its band): the result is
   deterministic, the band only absorbs last-digit differences of the system maths library.
 
 The run fails when a quantity misses its reference (unless it is a `known_failure`, which is

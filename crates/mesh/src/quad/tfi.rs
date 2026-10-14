@@ -9,7 +9,7 @@
 //! `u = (1−v) u_B(i) + v u_T(i)` and `v = (1−u) v_L(j) + u v_R(j)` (the standard treatment of
 //! unequal spacing on opposite sides, e.g. Thompson, Soni, Weatherill, *Handbook of Grid
 //! Generation*, CRC 1999, ch. 3). The map is dimension-generic: faces of a block in space use it
-//! with `D = 3`.
+//! with `D = 3`, and [`transfinite_volume`] fills a block from its six face grids.
 
 use crate::{Error, Result};
 
@@ -105,4 +105,50 @@ pub fn transfinite_grid<const D: usize>(bottom: &[[f64; D]], right: &[[f64; D]],
         }
     }
     Ok(grid)
+}
+
+/// The trivariate transfinite interpolation of a block's interior from its boundary (W. J.
+/// Gordon, L. C. Thiel, *Transfinite mappings and their application to grid generation*, Applied
+/// Mathematics and Computation 10–11:171–233, 1982): faces blended linearly, minus edges blended
+/// bilinearly, plus corners blended trilinearly. `x` is the `(n[0] + 1) × (n[1] + 1) × (n[2] + 1)`
+/// lattice, node `(i, j, k)` at `(k·(n[1] + 1) + j)·(n[0] + 1) + i`, with every boundary node set;
+/// `blend[d]` holds the blending parameter of each lattice index along direction `d`, from 0 to 1
+/// (`i/n` for uniform blending). Interior nodes are set; boundary nodes are left as they are.
+pub fn transfinite_volume(x: &mut [Option<[f64; 3]>], n: [usize; 3], blend: [&[f64]; 3]) -> Result<()> {
+    let [ni, nj, nk] = n;
+    let total = (ni + 1).checked_mul(nj + 1).and_then(|c| c.checked_mul(nk + 1));
+    if total != Some(x.len()) || (0..3).any(|d| blend[d].len() != n[d] + 1) {
+        return Err(Error::Invalid("a transfinite volume needs a full lattice and one blending parameter per index".into()));
+    }
+    let idx = |i: usize, j: usize, k: usize| (k * (nj + 1) + j) * (ni + 1) + i;
+    let get = |x: &[Option<[f64; 3]>], i: usize, j: usize, k: usize| -> Result<[f64; 3]> {
+        x.get(idx(i, j, k)).copied().flatten().ok_or_else(|| Error::Failed("transfinite volume: a boundary node is missing".into()))
+    };
+    let lin = |t: f64, a: [f64; 3], b: [f64; 3]| [0, 1, 2].map(|c| (1.0 - t) * a[c] + t * b[c]);
+    let bil = |s: f64, t: f64, p00, p10, p01, p11| lin(t, lin(s, p00, p10), lin(s, p01, p11));
+    for k in 1..nk {
+        for j in 1..nj {
+            for i in 1..ni {
+                let at = |d: usize, q: usize| blend[d].get(q).copied().unwrap_or(0.0);
+                let (u, v, w) = (at(0, i), at(1, j), at(2, k));
+                let g = |i: usize, j: usize, k: usize| get(x, i, j, k);
+                let faces = [lin(u, g(0, j, k)?, g(ni, j, k)?), lin(v, g(i, 0, k)?, g(i, nj, k)?), lin(w, g(i, j, 0)?, g(i, j, nk)?)];
+                let edges = [
+                    bil(v, w, g(i, 0, 0)?, g(i, nj, 0)?, g(i, 0, nk)?, g(i, nj, nk)?),
+                    bil(u, w, g(0, j, 0)?, g(ni, j, 0)?, g(0, j, nk)?, g(ni, j, nk)?),
+                    bil(u, v, g(0, 0, k)?, g(ni, 0, k)?, g(0, nj, k)?, g(ni, nj, k)?),
+                ];
+                let corners = lin(
+                    w,
+                    bil(u, v, g(0, 0, 0)?, g(ni, 0, 0)?, g(0, nj, 0)?, g(ni, nj, 0)?),
+                    bil(u, v, g(0, 0, nk)?, g(ni, 0, nk)?, g(0, nj, nk)?, g(ni, nj, nk)?),
+                );
+                let p = [0, 1, 2].map(|c| faces.iter().map(|f| f[c]).sum::<f64>() - edges.iter().map(|e| e[c]).sum::<f64>() + corners[c]);
+                if let Some(slot) = x.get_mut(idx(i, j, k)) {
+                    *slot = Some(p);
+                }
+            }
+        }
+    }
+    Ok(())
 }

@@ -178,8 +178,13 @@ pub struct Frozen {
     pub band: f64,
 }
 
-/// The band a fixture value gets when it is blessed.
+/// The band a fixture value gets when it is blessed. A quantity whose reference is zero (a
+/// rigid-body frequency, an equilibrium residual, an invalid-element count) is rounding noise
+/// inside its tolerance: its band is that tolerance, as freezing noise would only flag rounding.
 pub fn fixture_band(value: f64, reference: f64, tolerance: Tolerance) -> f64 {
+    if reference == 0.0 {
+        return tolerance.absolute;
+    }
     FIXTURE_RELATIVE * value.abs().max(reference.abs()) + 1e-3 * tolerance.absolute
 }
 
@@ -475,14 +480,33 @@ fn show(x: Option<f64>) -> String {
 }
 
 /// The error against the reference: relative where the reference is not zero.
+/// Below this fraction of its absolute tolerance, a quantity whose reference is zero is shown as
+/// zero: it is rounding noise, and its digits change with any reordering of the arithmetic
+/// (docs/oracle.md must not).
+const NOISE: f64 = 1e-2;
+
+fn is_noise(r: &Row, value: f64) -> bool {
+    r.quantity.reference == Some(0.0) && value.abs() < NOISE * r.quantity.tolerance.absolute
+}
+
+/// Our value as the report shows it.
+fn ours_text(r: &Row) -> String {
+    match r.ours {
+        Some(v) if is_noise(r, v) => "≈ 0".into(),
+        other => show(other),
+    }
+}
+
+/// The error against the reference: relative where the reference is not zero. Errors inside the
+/// fixture band are rounding and are shown as a bound.
 fn error_of(r: &Row) -> String {
     let (Some(ours), Some(reference)) = (r.ours, r.quantity.reference) else { return "—".into() };
     let d = ours - reference;
     if reference != 0.0 && r.quantity.tolerance.relative > 0.0 {
         let rel = d / reference.abs();
-        if rel.abs() < 1e-12 { "< 1e-10%".into() } else { percent(rel) }
-    } else if d.abs() < 1e-12 {
-        "< 1e-12".into()
+        if rel.abs() < FIXTURE_RELATIVE { "< 1e-7%".into() } else { percent(rel) }
+    } else if is_noise(r, d) || d == 0.0 {
+        "≈ 0".into()
     } else {
         format!("{d:.1e}")
     }
@@ -565,7 +589,7 @@ benchmark, {} experiment; {} pending cases wait for capabilities still being bui
                     "| [{case}](../tests/oracle/{case}/) | {} | {} | {} | {} | {} | {} | {} |",
                     cell(&r.quantity.description),
                     show(r.quantity.reference),
-                    show(r.ours),
+                    ours_text(r),
                     error_of(r),
                     r.quantity.tolerance.describe(),
                     cell(&result),
@@ -635,7 +659,7 @@ mod tests {
         // Zero references use the absolute tolerance, and the band keeps a floor from it.
         let a = Tolerance { relative: 0.0, absolute: 1e-9 };
         assert!(a.allows(0.0, 5e-10) && !a.allows(0.0, 2e-9));
-        assert!(fixture_band(1e-16, 0.0, a) >= 1e-12);
+        assert_eq!(fixture_band(1e-16, 0.0, a), 1e-9, "a zero reference keeps its tolerance as the band");
     }
 
     #[test]

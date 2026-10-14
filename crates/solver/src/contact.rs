@@ -128,14 +128,14 @@ const GRAIN: usize = 16;
 
 /// A face of a contact surface: its corners (mesh slots) and their translations.
 #[derive(Debug, Clone)]
-struct Face {
-    nodes: Vec<usize>,
-    dofs: Vec<[usize; 3]>,
+pub(crate) struct Face {
+    pub(crate) nodes: Vec<usize>,
+    pub(crate) dofs: Vec<[usize; 3]>,
     /// The nodes of its element (never in contact with the face).
     owner: Vec<usize>,
     /// The penetration beyond which a point has passed through, and its element's thickness.
     depth: f64,
-    thickness: f64,
+    pub(crate) thickness: f64,
     /// The penalty per length its element sets (before the penalty scale).
     stiffness: f64,
 }
@@ -303,17 +303,18 @@ fn size(x: &[Vec3]) -> f64 {
     (0..3).map(|k| b[1][k] - b[0][k]).fold(0.0, f64::max)
 }
 
-/// The faces of a set, refused unless they are linear faces of analysed solid elements.
-fn faces(model: &Model, resolved: &Resolved, mesh: &Mesh, name: &str, set: &str) -> Result<Vec<Face>> {
+/// The faces of set `set` for definition `owner` (``contact `name` ``, ``tie `name` ``), refused
+/// unless they are linear faces of analysed solid elements.
+pub(crate) fn faces(model: &Model, resolved: &Resolved, mesh: &Mesh, owner: &str, set: &str) -> Result<Vec<Face>> {
     let list = resolved.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default();
     let mut out = Vec::with_capacity(list.len());
     for f in list {
-        let at = |what: String| Error::Invalid(format!("contact `{name}`: element {} face {}: {what}", f.element, f.face));
+        let at = |what: String| Error::Invalid(format!("{owner}: element {} face {}: {what}", f.element, f.face));
         let el = mesh.element(f.element).ok_or_else(|| at("the element is not a solid element of the analysis".into()))?;
         let labels = model.face_nodes(*f).ok_or_else(|| at("no such face".into()))?;
         if !matches!(labels.len(), 3 | 4) {
             return Err(Error::NotSupported(format!(
-                "contact `{name}` on the faces of {} elements (element {}) in implicit steps; it takes the linear faces of tet4, wedge6 and hex8 elements",
+                "{owner} on the faces of {} elements (element {}) in implicit analyses; it takes the linear faces of tet4, wedge6 and hex8 elements",
                 el.kind.name(),
                 f.element
             )));
@@ -463,8 +464,9 @@ impl Interface {
                 "general (single-surface) contact `{name}` in implicit steps; define contact pairs (interaction.contact.pair), or solve it in explicit dynamics"
             )));
         };
-        let secondary = faces(model, resolved, mesh, name, secondary)?;
-        let main = faces(model, resolved, mesh, name, main)?;
+        let owner = format!("contact `{name}`");
+        let secondary = faces(model, resolved, mesh, &owner, secondary)?;
+        let main = faces(model, resolved, mesh, &owner, main)?;
         let mut nodes: Vec<usize> = secondary.iter().flat_map(|f| f.nodes.iter().copied()).collect();
         nodes.sort_unstable();
         nodes.dedup();

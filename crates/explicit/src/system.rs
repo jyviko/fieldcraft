@@ -215,6 +215,9 @@ impl System {
         if let Some(name) = model.couplings().keys().next() {
             return Err(Error::NotSupported(format!("couplings (coupling `{name}`) in explicit dynamics")));
         }
+        if let Some(name) = model.ties().keys().next() {
+            return Err(Error::NotSupported(format!("ties (tie `{name}`) in explicit dynamics")));
+        }
 
         // Elements by label, with their section's material.
         let mut materials: Vec<Material> = Vec::new();

@@ -463,3 +463,100 @@ fn coulomb_friction_sticks_below_the_cone_and_slips_on_it() {
         assert!((t3 - 0.2 * n3).abs() < tol * 0.2 * n3, "finite {finite}: T {t3} vs μk N {}", 0.2 * n3);
     }
 }
+
+/// Two blocks of non-matching meshes tied at z = 1 (`lower_kind` 3 × 3 × 2, graded or distorted,
+/// below; `upper_kind` 2 × 2 × 2 above), every outer boundary node moved by the linear field
+/// u = G x: the tie patch test.
+fn tied(lower_kind: ElementKind, upper_kind: ElementKind, distorted: bool, procedure: Procedure) -> (Blocks, [[f64; 3]; 3]) {
+    let mut b = Blocks::default();
+    let low = if distorted {
+        b.block(lower_kind, [3, 3, 2], |p| [p[0] + 0.3 * p[0] * (1.0 - p[0]) * (p[1] - 0.5), p[1] + 0.3 * p[1] * (1.0 - p[1]) * (p[0] - 0.4), p[2]])
+    } else {
+        b.block(lower_kind, [3, 3, 2], |p| [p[0].powf(1.4), p[1].powf(0.8), p[2]])
+    };
+    let up = b.block(upper_kind, [2, 2, 2], |p| [p[0], p[1], 1.0 + p[2]]);
+    let all: Vec<u32> = b.model.elements().keys().copied().collect();
+    b.model.add_set("all", Set { elements: all, ..Set::default() }).unwrap();
+    b.model.add_material("Mat", Material { elastic: Some(Elastic::Isotropic { young: 1000.0, poisson: 0.3 }), ..Material::default() }).unwrap();
+    b.model
+        .add_section("solid", Section { set: "all".into(), material: "Mat".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
+        .unwrap();
+    b.model.add_step(Step::new("Step", procedure), None).unwrap();
+    b.face_set("lower_top", &low, |x| near(x[2], 1.0));
+    b.face_set("upper_bottom", &up, |x| near(x[2], 1.0));
+    b.model.add_tie("glue", Tie::new("lower_top", "upper_bottom")).unwrap();
+    let g = [[1e-3, 2e-4, -3e-4], [4e-4, -5e-4, 1e-4], [-2e-4, 3e-4, 2e-3]];
+    let outer = |x: [f64; 3]| near(x[0], 0.0) || near(x[0], 1.0) || near(x[1], 0.0) || near(x[1], 1.0) || near(x[2], 0.0) || near(x[2], 2.0);
+    for l in b.nodes(outer) {
+        let x = b.xyz[&l];
+        let u: [f64; 3] = std::array::from_fn(|i| (0..3).map(|j| g[i][j] * x[j]).sum());
+        let name = format!("n{l}");
+        b.model.add_set(&name, Set { nodes: vec![l], ..Set::default() }).unwrap();
+        b.model
+            .add_boundary_condition(
+                &name,
+                BoundaryCondition::Displacement { target: Target::Set(name.clone()), values: [Some(u[0]), Some(u[1]), Some(u[2]), None, None, None] },
+            )
+            .unwrap();
+        b.model.set_boundary_condition_active("Step", &name, true).unwrap();
+    }
+    (b, g)
+}
+
+/// The tie patch test (dual mortar: Wohlmuth 2000): a linear displacement field across a tie
+/// of non-matching meshes is reproduced exactly, so every element has the same stress, in linear
+/// static, nonlinear static and through the interface nodes the tie moves.
+#[test]
+fn a_tie_passes_the_patch_test() {
+    for (lower, upper, distorted, name) in [
+        (ElementKind::Hex8, ElementKind::Hex8, false, "hex8 on graded hex8"),
+        (ElementKind::Hex8, ElementKind::Tet4, false, "tet4 on hex8"),
+        (ElementKind::Tet4, ElementKind::Hex8, false, "hex8 on tet4"),
+        (ElementKind::Hex8, ElementKind::Hex8, true, "hex8 on distorted hex8"),
+    ] {
+        let (b, g) = tied(lower, upper, distorted, Procedure::Static {});
+        let r = fieldcraft_solver::solve_static(&b.model, Some("Step"), &Limits::default()).unwrap();
+        // The interface nodes follow the field too.
+        let tol = if distorted { 1e-6 } else { 1e-11 };
+        for l in b.nodes(|x| near(x[2], 1.0)) {
+            let x = b.xyz[&l];
+            let u = r.displacement[r.nodes.binary_search(&l).unwrap()];
+            for i in 0..3 {
+                let want: f64 = (0..3).map(|j| g[i][j] * x[j]).sum();
+                assert!((u[i] - want).abs() < tol * 1e-2, "{name}: node {l} u {u:?}");
+            }
+        }
+        let first = r.elements[0].nodal[0];
+        for e in &r.elements {
+            for s in &e.nodal {
+                for k in 0..6 {
+                    assert!((s[k] - first[k]).abs() < tol * 10.0, "{name}: element {} {s:?} vs {first:?}", e.label);
+                }
+            }
+        }
+        assert!(r.warnings.iter().all(|w| !w.contains("stay free")), "{name}: {:?}", r.warnings);
+    }
+    // The same in a nonlinear step with small strain.
+    let (b, _) = tied(
+        ElementKind::Hex8,
+        ElementKind::Hex8,
+        false,
+        Procedure::NonlinearStatic(NonlinearStatic { nonlinear_geometry: false, ..NonlinearStatic::default() }),
+    );
+    let r = solve_nonlinear(&b.model, Some("Step"), &Limits::default()).unwrap();
+    let first = r.elements[0].nodal[0];
+    assert!(r.elements.iter().flat_map(|e| &e.nodal).all(|s| (0..6).all(|k| (s[k] - first[k]).abs() < 1e-8)));
+}
+
+#[test]
+fn what_ties_refuse() {
+    let (mut b, _) = tied(ElementKind::Hex8, ElementKind::Hex8, false, Procedure::Static {});
+    b.model.add_step(Step::new("Heat", Procedure::HeatTransfer { transient: None }), None).unwrap();
+    let e = fieldcraft_solver::solve_heat(&b.model, Some("Heat"), &Limits::default()).unwrap_err().to_string();
+    assert!(e.contains("tie `glue`") && e.contains("heat transfer"), "{e}");
+    let (mut b, _) = tied(ElementKind::Hex8, ElementKind::Hex8, false, Procedure::Static {});
+    // (Touching surfaces are tied within any tolerance.)
+    b.model.replace_tie("glue", Tie { position_tolerance: Some(1e-9), ..Tie::new("lower_top", "upper_bottom") }).unwrap();
+    let r = fieldcraft_solver::solve_static(&b.model, Some("Step"), &Limits::default()).unwrap();
+    assert!(r.warnings.iter().all(|w| !w.contains("stay free")), "{:?}", r.warnings);
+}

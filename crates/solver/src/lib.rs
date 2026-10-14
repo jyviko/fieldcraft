@@ -40,6 +40,7 @@ pub mod nonlinear;
 pub mod ordering;
 pub mod sparse;
 pub mod system;
+pub mod tie;
 
 pub use analysis::{
     ElementStress, FrequencyOptions, FrequencyResult, Location, MassKind, Mode, PointResult, StaticResult, Stats, StepResult, solve_frequency,

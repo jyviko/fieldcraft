@@ -1,0 +1,1 @@
+The filleted bracket split into 30 cells with SolidCraft's Split Body (three slabs across its width, the corner halved along its diagonal, an O-grid of four cells round each hole) so that every cell is a mapped block: conforming multi-block hex meshing.

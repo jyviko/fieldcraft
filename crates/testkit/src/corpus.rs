@@ -40,6 +40,7 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ("blocky", "axis-aligned blocks (polycube-friendly)"),
     ("organic", "free-form, lofted or revolved spline surfaces"),
     ("assembly", "several bodies placed by component transforms"),
+    ("partitioned", "split into cells that each mesh as a mapped block (conforming multi-block hex)"),
     ("analytic", "closed-form geometry for solver verification"),
 ];
 

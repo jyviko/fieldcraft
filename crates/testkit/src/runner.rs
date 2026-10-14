@@ -15,7 +15,7 @@ use std::time::Instant;
 use crate::corpus::{self, CATEGORIES, Part};
 use fieldcraft_geometry::{Design, FaceSurface, Measure, SurfaceMesh};
 use fieldcraft_mesh::cdt::{CdtOptions, tetrahedralize};
-use fieldcraft_mesh::hex::{HexOptions, Surface, hex_mesh};
+use fieldcraft_mesh::hex::{Cell, HexOptions, Surface, hex_mesh, hex_mesh_cells};
 use fieldcraft_mesh::size::UniformSize;
 use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 
@@ -123,7 +123,8 @@ const REASON_CHARS: usize = 240;
 
 /// Structured all-hex meshing (`fieldcraft_mesh::hex`): the method that meshed each body, the
 /// element count and the smallest scaled Jacobian of the hex8 mesh and of the hex20 mesh (mid-edge
-/// nodes on the geometry), or why no structured method fits.
+/// nodes on the geometry), or why no structured method fits. A `partitioned` part's bodies are
+/// the cells of one conforming mesh (`blocks`).
 struct StructuredHex;
 
 impl Stage for StructuredHex {
@@ -144,6 +145,12 @@ impl Stage for StructuredHex {
         let size = UniformSize(HEX_RELATIVE_SIZE * diagonal);
         let linear = HexOptions { chordal_tolerance: l.tolerance, ..HexOptions::default() };
         let quadratic = HexOptions { quadratic: true, ..linear.clone() };
+        if l.part.categories.iter().any(|c| c == "partitioned") {
+            return blocks(l, &size, &linear, &quadratic).map(|mut cells| {
+                cells.push(format!("{:.0}", start.elapsed().as_secs_f64() * 1e3));
+                cells
+            });
+        }
         let (mut methods, mut elements, mut sj8, mut sj20) = (Vec::new(), 0usize, f64::INFINITY, Ok(f64::INFINITY));
         for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
             let surface_options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
@@ -178,6 +185,39 @@ impl Stage for StructuredHex {
         let sj20 = sj20.map_or_else(|e| format!("error: {e}"), |v| format!("{v:.3}"));
         Ok(vec![methods.join(", "), elements.to_string(), format!("{sj8:.3}"), sj20, format!("{ms:.0}")])
     }
+}
+
+/// The bodies of a partitioned part as the cells of one conforming mesh: method, elements and
+/// the hex8 and hex20 smallest scaled Jacobians.
+fn blocks(l: &Loaded, size: &UniformSize, linear: &HexOptions, quadratic: &HexOptions) -> Result<Vec<String>, String> {
+    let mut surfaces = Vec::with_capacity(l.surfaces.len());
+    let mut faces: Vec<Vec<Option<Surface>>> = Vec::with_capacity(l.surfaces.len());
+    for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
+        let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
+        surfaces.push(BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).map_err(|e| format!("{}: {e}", body.name))?);
+        faces.push(body.face_surfaces().map_err(|e| format!("{}: {e}", body.name))?.into_iter().map(|f| f.map(analytic)).collect());
+    }
+    let cells: Vec<Cell> =
+        l.design.bodies.iter().zip(&surfaces).zip(&faces).map(|((b, surface), faces)| Cell { name: &b.name, surface, faces }).collect();
+    let m = match hex_mesh_cells(&cells, size, linear) {
+        Ok(m) => m,
+        Err(e) => {
+            return Ok(vec![
+                format!("no: {}", e.to_string().chars().take(REASON_CHARS).collect::<String>()),
+                String::new(),
+                String::new(),
+                String::new(),
+            ]);
+        }
+    };
+    let sj20 =
+        hex_mesh_cells(&cells, size, quadratic).map_or_else(|e| format!("error: {e}"), |q| format!("{:.3}", q.mesh.report.min_scaled_jacobian));
+    Ok(vec![
+        format!("blocks ({} cells, {} shared faces)", cells.len(), m.interfaces),
+        m.mesh.element_count().to_string(),
+        format!("{:.3}", m.mesh.report.min_scaled_jacobian),
+        sj20,
+    ])
 }
 
 /// The geometry's analytic face surface in the mesher's terms.
@@ -328,6 +368,17 @@ mod tests {
             let cells = BoundaryCheck.run(&loaded).unwrap();
             assert_eq!(cells[1], genus, "{name}: {cells:?}");
         }
+    }
+
+    /// The partitioned bracket's 30 cells mesh into one conforming hex mesh.
+    #[test]
+    fn partitioned_bracket_meshes_as_blocks() {
+        let part = corpus::read_recipe(&corpus::corpus_dir().join("filleted-bracket-blocks")).unwrap();
+        let (loaded, _) = load(&part).unwrap();
+        assert_eq!(loaded.design.bodies.len(), 30);
+        let cells = StructuredHex.run(&loaded).unwrap();
+        assert!(cells[0].starts_with("blocks (30 cells"), "{cells:?}");
+        assert!(cells[2].parse::<f64>().unwrap() > 0.5, "{cells:?}");
     }
 
     /// The constrained Delaunay tetrahedralization passes the gate on parts that exercise each

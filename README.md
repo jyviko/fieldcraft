@@ -92,6 +92,19 @@ The same part also meshes all-hex automatically with the octree mesher (`mesh.he
 
 ![The FieldCraft window: a clamped cantilever with its supports, pressure, gravity and a coupled reference point drawn in the viewport](docs/media/setup-symbols.png)
 
+## Examples
+
+Ready-to-solve samples: open one from **File ▸ Samples** (or the start screen), or start the app
+with `fieldcraft --sample NAME`, and press **Solve**. Each opens and solves within half a minute and is checked
+against a closed form or a reference solution ([docs/examples.md](docs/examples.md)).
+
+| | | |
+|---|---|---|
+| ![Drop test](docs/media/examples/drop-test.png) | ![Rubber seal](docs/media/examples/rubber-seal.png) | ![Heated bracket](docs/media/examples/heated-bracket.png) |
+| **Drop test** (`drop-test`): an aluminium bracket dropped 2 m onto a tilted floor; explicit dynamics, the strike's stress waves | **Rubber seal** (`rubber-seal`): a Mooney–Rivlin gasket ring squeezed 25 %; nonlinear static, large strain | **Heated bracket** (`heated-bracket`): a clamped steel bracket heated at one end; steady heat and thermal stress |
+| ![Hex-meshed bracket](docs/media/examples/bracket-hex.png) | *No picture yet: the viewport does not draw flow results (M12).* | |
+| **Hex-meshed bracket** (`bracket-hex`): the bracket split into 30 cells, meshed all-hex (hex20), von Mises | **Flow past a bracket** (`flow-past`): air past an L-bracket on the floor; lattice Boltzmann flow, the drag and the force on each face | |
+
 ## Build
 
 ```sh
@@ -106,6 +119,7 @@ Rust 1.95 or later, with the `wasm32-unknown-unknown` target for `cargo xtask ci
 
 ## Documentation
 
+- [Examples](docs/examples.md): the ready-to-solve samples and their checks
 - [Architecture](docs/architecture.md): crates, layers and the meshing pipeline
 - [Element library](docs/elements.md) and [verification and validation](docs/verification.md)
 - [Capability checklist](docs/parity.md) and [roadmap](ROADMAP.md)

@@ -14,6 +14,10 @@ the wider material and multiphysics library. See [ROADMAP.md](ROADMAP.md).
 [help wanted](https://github.com/jyviko/fieldcraft/labels/help%20wanted) and read
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+![Claude analyses an I-beam cantilever in FieldCraft over MCP: it opens the part, hex meshes it, sets steel, the clamp and a 1 kN tip load, solves, shows von Mises stress and the deformed shape, and checks the tip deflection against beam theory](docs/media/claude-mcp.gif)
+
+*Claude driving FieldCraft through its [MCP server](docs/mcp.md): one prompt, and it opens the part, meshes it, defines and solves the analysis, then checks the tip deflection against beam theory. Real session, waits shortened. [Full video](docs/media/claude-mcp.mp4).*
+
 ![An AI agent analyses an I-beam cantilever in FieldCraft over MCP: open, hex mesh, steel, clamp and tip load, solve, von Mises contours, the deformed shape and an orbit round it](docs/media/ibeam-analysis.gif)
 
 An AI agent drives FieldCraft over [MCP](docs/mcp.md), each stage captioned with the tool it

@@ -35,7 +35,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Structured Hex | Quad Faces — All-quad meshes of faces on shared edge nodes | coming soon (M5) |  |
 | Structured Hex | Mapped Hex — Mapped hex mesh of a six-sided block (curved faces allowed) | ready | `mesh.hex.mapped`, `mesh.hex.generate` |
 | Structured Hex | Sweep Hex — Hex mesh swept along extrusions (several levels), around revolutions, or from a source face to a target | ready | `mesh.hex.sweep`, `mesh.hex.generate` |
-| Structured Hex | Block Hex — One conforming hex mesh of a part split into six-sided blocks: shared faces meshed once | ready | `mesh.hex.blocks` |
+| Structured Hex | Block Hex — One conforming hex mesh of a part split into six-sided blocks: shared faces meshed once | ready | `mesh.hex.blocks`, `mesh.cells` |
 | Structured Hex | Decompose — Find sweepable and mappable regions and propose the splits | coming soon (M5) |  |
 | Structured Hex | Transition — Conforming tet–hex interfaces with pyramids | coming soon (M5) |  |
 | Automatic Hex | Octree Hex — Unstructured all-hex mesh of any part: adaptive grid, boundary layers on every sharp edge, untangled and proven valid | ready | `mesh.hex.octree` |

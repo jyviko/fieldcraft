@@ -1,6 +1,7 @@
 //! The command registry. Each area has its own module; [`ALL`] lists every command.
 
 mod block;
+mod cells;
 mod contact;
 pub(crate) mod datum;
 pub(crate) mod deck;
@@ -53,6 +54,7 @@ pub static ALL: &[CommandSpec] = &[
     hex::HEX_SWEEP,
     hex::HEX_MAPPED,
     hex::HEX_BLOCKS,
+    cells::CELLS,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

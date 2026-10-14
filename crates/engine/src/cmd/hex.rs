@@ -65,7 +65,7 @@ fn diagonal(lo: [f64; 3], hi: [f64; 3]) -> f64 {
     (0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f64>().sqrt()
 }
 
-fn shape_input(shape: &Shape, tolerance: Option<f64>) -> Result<Input<'static>> {
+pub(super) fn shape_input(shape: &Shape, tolerance: Option<f64>) -> Result<Input<'static>> {
     let diag = shape.size()?;
     let tol = tolerance.unwrap_or(DEFAULT_RELATIVE_TOLERANCE * diag);
     if tol < MIN_RELATIVE_TOLERANCE * diag {
@@ -293,41 +293,14 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
     let bodies = inputs(s, p)?;
     let mut meshes: Vec<(Input, HexMesh)> = Vec::with_capacity(bodies.len());
     for b in bodies {
-        if !(b.diagonal > 0.0 && b.diagonal.is_finite()) {
-            return Err(EngineError::Params(format!("body `{}` has no extent", b.name)));
-        }
-        let h = size.unwrap_or(DEFAULT_RELATIVE_SIZE * b.diagonal);
-        if h < MIN_RELATIVE_SIZE * b.diagonal {
-            return Err(EngineError::Params(format!("`size` must be at least {} mm for body `{}`", MIN_RELATIVE_SIZE * b.diagonal, b.name)));
-        }
-        let surface_options = super::mesh::surface_options(p, &b.mesh)?;
-        let surface = BoundarySurface::new(&b.mesh.positions, &b.mesh.triangles, &b.mesh.tri_face, &surface_options)
-            .map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?;
-        let chord = if b.surfaces.is_empty() { 0.0 } else { number(p, "tolerance")?.unwrap_or(DEFAULT_RELATIVE_TOLERANCE * b.diagonal) };
-        let options =
-            HexOptions { method, quadratic, chordal_tolerance: chord, max_elements: fieldcraft_model::MAX_ELEMENTS / 8, ..HexOptions::default() };
-        let mesh = hex_mesh(&surface, &b.surfaces, &UniformSize(h), &options).map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?;
+        let mesh = hex_body(p, &b, method, quadratic, size)?;
         meshes.push((b, mesh));
     }
     // Replace the mesh: definitions stay, nodes, elements and geometry tags are new.
     let mut model = s.model.without_mesh();
     let mut report = Vec::with_capacity(meshes.len());
-    let (mut node_label, mut element_label) = (1u32, 1u32);
     for (b, m) in &meshes {
-        let first_node = node_label;
-        for xyz in &m.nodes {
-            model.set_node(node_label, *xyz)?;
-            node_label = node_label.checked_add(1).ok_or_else(|| EngineError::Params("too many nodes".into()))?;
-        }
-        let body_tag = model.geometry_tag(&GeometryRef::body(b.name.as_str())?)?;
-        let first_element = element_label;
-        for e in 0..m.element_count() {
-            let nodes: Vec<u32> = m.element(e).unwrap_or(&[]).iter().map(|&i| first_node + i).collect();
-            model.set_element(element_label, m.kind, nodes)?;
-            model.tag_element(element_label, body_tag)?;
-            element_label = element_label.checked_add(1).ok_or_else(|| EngineError::Params("too many elements".into()))?;
-        }
-        tag_faces(&mut model, std::slice::from_ref(b), |_| 0, &m.boundary, first_element)?;
+        add_hex(&mut model, b, m)?;
         report.push(json!({
             "body": b.name,
             "method": m.report.method.name(),
@@ -341,8 +314,47 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
             "surface_volume": m.report.surface_volume,
         }));
     }
+    let (nodes, elements) = (model.nodes().len(), model.elements().len());
     s.model = model;
-    Ok(json!({"bodies": report, "nodes": node_label - 1, "elements": element_label - 1}))
+    Ok(json!({"bodies": report, "nodes": nodes, "elements": elements}))
+}
+
+/// Mesh one body with `method` (hex20 when `quadratic`) at `size` (default: from its extent);
+/// the model is not touched. Errors name the body.
+pub(super) fn hex_body(p: &Value, b: &Input, method: HexMethod, quadratic: bool, size: Option<f64>) -> Result<HexMesh> {
+    if !(b.diagonal > 0.0 && b.diagonal.is_finite()) {
+        return Err(EngineError::Params(format!("body `{}` has no extent", b.name)));
+    }
+    let h = size.unwrap_or(DEFAULT_RELATIVE_SIZE * b.diagonal);
+    if h < MIN_RELATIVE_SIZE * b.diagonal {
+        return Err(EngineError::Params(format!("`size` must be at least {} mm for body `{}`", MIN_RELATIVE_SIZE * b.diagonal, b.name)));
+    }
+    let surface_options = super::mesh::surface_options(p, &b.mesh)?;
+    let surface = BoundarySurface::new(&b.mesh.positions, &b.mesh.triangles, &b.mesh.tri_face, &surface_options)
+        .map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?;
+    let chord = if b.surfaces.is_empty() { 0.0 } else { number(p, "tolerance")?.unwrap_or(DEFAULT_RELATIVE_TOLERANCE * b.diagonal) };
+    let options =
+        HexOptions { method, quadratic, chordal_tolerance: chord, max_elements: fieldcraft_model::MAX_ELEMENTS / 8, ..HexOptions::default() };
+    hex_mesh(&surface, &b.surfaces, &UniformSize(h), &options).map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))
+}
+
+/// Add one body's hex mesh after the model's largest labels, tagging the elements with the body
+/// and the boundary element faces with its B-rep faces; returns the first node and element
+/// labels.
+pub(super) fn add_hex(model: &mut Model, b: &Input, m: &HexMesh) -> Result<(u32, u32)> {
+    let (first_node, first_element) = super::fresh_labels(model, m.nodes.len(), m.element_count())?;
+    for (i, xyz) in m.nodes.iter().enumerate() {
+        model.set_node(first_node + i as u32, *xyz)?;
+    }
+    let body_tag = model.geometry_tag(&GeometryRef::body(b.name.as_str())?)?;
+    for e in 0..m.element_count() {
+        let nodes: Vec<u32> = m.element(e).unwrap_or(&[]).iter().map(|&i| first_node + i).collect();
+        let l = first_element + e as u32;
+        model.set_element(l, m.kind, nodes)?;
+        model.tag_element(l, body_tag)?;
+    }
+    tag_faces(model, std::slice::from_ref(b), |_| 0, &m.boundary, first_element)?;
+    Ok((first_node, first_element))
 }
 
 /// Tag every boundary element face with the B-rep face it lies on, of the body

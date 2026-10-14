@@ -148,7 +148,7 @@ fn number_in(p: &Value, key: &str, default: f64, range: std::ops::RangeInclusive
 }
 
 /// The quality options of `mesh.tet.generate`, and whether the quality stage runs at all.
-fn quality_options(p: &Value, max_tets: u64) -> Result<(QualityOptions, bool)> {
+pub(super) fn quality_options(p: &Value, max_tets: u64) -> Result<(QualityOptions, bool)> {
     let d = QualityOptions::default();
     let size = match p.get("size") {
         None => None,
@@ -209,7 +209,7 @@ pub fn analytic_surfaces(shape: &fieldcraft_geometry::Shape) -> Vec<Option<Analy
         .collect()
 }
 
-fn quality_json(q: &TetQuality) -> Value {
+pub(super) fn quality_json(q: &TetQuality) -> Value {
     json!({
         "tets": q.tets,
         "min_dihedral": q.min_dihedral,
@@ -222,10 +222,10 @@ fn quality_json(q: &TetQuality) -> Value {
 }
 
 /// One body's tetrahedra, ready to add, with what its report needs of the surface and the CDT.
-struct BodyTets {
-    name: String,
-    face_names: Vec<String>,
-    mesh: QualityMesh,
+pub(super) struct BodyTets {
+    pub(super) name: String,
+    pub(super) face_names: Vec<String>,
+    pub(super) mesh: QualityMesh,
     steiner: usize,
     cavities: usize,
     surface_volume: f64,
@@ -233,7 +233,7 @@ struct BodyTets {
 
 /// Mesh one body or imported surface; the model is not touched. With `several` bodies an error
 /// names the body.
-fn mesh_body(
+pub(super) fn mesh_body(
     s: &Session,
     p: &Value,
     input: super::hex::Input,
@@ -277,7 +277,7 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
 
     let mut bodies = Vec::with_capacity(meshed.len());
     for b in &meshed {
-        let (first_node, first_element) = add_tets(s, &b.name, &b.face_names, &b.mesh)?;
+        let (first_node, first_element) = add_tets(&mut s.model, &b.name, &b.face_names, &b.mesh)?;
         let r = &b.mesh.report;
         bodies.push(json!({
             "body": b.name,
@@ -322,16 +322,16 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Add one body's elements after the model's largest labels, tagging them with the body and each
 /// boundary element face with its geometry face; returns the first node and element labels.
-fn add_tets(s: &mut Session, body: &str, face_names: &[String], mesh: &QualityMesh) -> Result<(u32, u32)> {
-    let (first_node, first_element) = super::fresh_labels(&s.model, mesh.points.len(), mesh.elements.len())?;
+pub(super) fn add_tets(model: &mut fieldcraft_model::Model, body: &str, face_names: &[String], mesh: &QualityMesh) -> Result<(u32, u32)> {
+    let (first_node, first_element) = super::fresh_labels(model, mesh.points.len(), mesh.elements.len())?;
     for (i, xyz) in mesh.points.iter().enumerate() {
-        s.model.set_node(first_node + i as u32, *xyz)?;
+        model.set_node(first_node + i as u32, *xyz)?;
     }
-    let body_tag = s.model.geometry_tag(&GeometryRef::body(body)?)?;
+    let body_tag = model.geometry_tag(&GeometryRef::body(body)?)?;
     for (i, e) in mesh.elements.iter().enumerate() {
         let label = first_element + i as u32;
-        s.model.set_element(label, mesh.kind, e.iter().map(|&v| first_node + v).collect())?;
-        s.model.tag_element(label, body_tag)?;
+        model.set_element(label, mesh.kind, e.iter().map(|&v| first_node + v).collect())?;
+        model.tag_element(label, body_tag)?;
     }
     let mut face_tags: Vec<Option<u32>> = vec![None; face_names.len()];
     for b in &mesh.boundary {
@@ -340,7 +340,7 @@ fn add_tets(s: &mut Session, body: &str, face_names: &[String], mesh: &QualityMe
             Some(t) => t,
             None => {
                 let name = face_names.get(face).ok_or_else(|| EngineError::Params(format!("boundary face {} has no geometry face", b.face)))?;
-                let t = s.model.geometry_tag(&GeometryRef::face(body, name.clone())?)?;
+                let t = model.geometry_tag(&GeometryRef::face(body, name.clone())?)?;
                 if let Some(slot) = face_tags.get_mut(face) {
                     *slot = Some(t);
                 }
@@ -348,7 +348,7 @@ fn add_tets(s: &mut Session, body: &str, face_names: &[String], mesh: &QualityMe
             }
         };
         let number = b.element_face().ok_or_else(|| EngineError::Params(format!("boundary face {} has no element face number", b.opposite)))?;
-        s.model.tag_element_face(first_element + b.tet, number, tag)?;
+        model.tag_element_face(first_element + b.tet, number, tag)?;
     }
     Ok((first_node, first_element))
 }

@@ -700,6 +700,16 @@ pub const HEX_MAPPED: &[Field] = &[BODY, SURFACE, HEX_SIZE, HEX_ORDER, TOLERANCE
 pub const HEX_BLOCKS: &[Field] =
     &[references("bodies", "Cells", C::Body).hint("every body of the design"), HEX_SIZE, HEX_ORDER, TOLERANCE, WELD, WELD_DISTANCE, FEATURE_ANGLE];
 
+pub const CELLS: &[Field] = &[
+    json("methods", "Methods").hint(r#"{"cell": "auto | hex | swept | extrude | sweep | revolve | mapped | tet"}"#),
+    choice("default", "Other cells", &[("auto", "Auto (hex, else tet)"), ("hex", "Hex"), ("swept", "Swept"), ("mapped", "Mapped"), ("tet", "Tet")])
+        .def("\"auto\""),
+    references("bodies", "Cells", C::Body).hint("every body of the design"),
+    HEX_SIZE,
+    HEX_ORDER,
+    TOLERANCE,
+];
+
 pub const HEX_OCTREE: &[Field] = &[
     BODY,
     SURFACE,

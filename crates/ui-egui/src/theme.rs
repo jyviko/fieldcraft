@@ -82,6 +82,10 @@ pub struct Tokens {
     pub glyph_interaction: Color32,
     /// Temperatures, heat fluxes, convection and heat sources.
     pub glyph_thermal: Color32,
+    // ---- selection ----
+    /// What is selected in the viewport, and what a click would pick under the pointer.
+    pub pick_selected: Color32,
+    pub pick_hover: Color32,
 }
 
 /// The contour colour scale: blue, cyan, green, yellow, red.
@@ -155,6 +159,8 @@ impl Tokens {
             glyph_load: Color32::from_rgb(0xd0, 0x24, 0x24),
             glyph_interaction: Color32::from_rgb(0x9a, 0x30, 0xc0),
             glyph_thermal: Color32::from_rgb(0xe8, 0x4c, 0x00),
+            pick_selected: Color32::from_rgb(0xd6, 0x00, 0x7f),
+            pick_hover: Color32::from_rgb(0xf0, 0x7c, 0xc0),
         }
     }
 
@@ -215,6 +221,8 @@ impl Tokens {
         t.glyph_load = Color32::from_rgb(0xff, 0x5a, 0x4c);
         t.glyph_interaction = Color32::from_rgb(0xd2, 0x82, 0xff);
         t.glyph_thermal = Color32::from_rgb(0xff, 0x8c, 0x00);
+        t.pick_selected = Color32::from_rgb(0xff, 0x3f, 0xb4);
+        t.pick_hover = Color32::from_rgb(0xff, 0xa6, 0xdc);
         t
     }
 
@@ -363,6 +371,26 @@ mod tests {
                 }
                 for o in symbols.iter().skip(i + 1) {
                     assert!(far(*s, *o) > 90, "{s:?} vs {o:?} dark={dark}");
+                }
+            }
+        }
+    }
+
+    /// The selection and hover colours differ from each other, from every element, geometry,
+    /// node and symbol colour, and from the background.
+    #[test]
+    fn selection_colours_stand_out() {
+        let far = |a: Color32, b: Color32| {
+            (i32::from(a.r()) - i32::from(b.r())).abs() + (i32::from(a.g()) - i32::from(b.g())).abs() + (i32::from(a.b()) - i32::from(b.b())).abs()
+        };
+        for dark in [true, false] {
+            let t = Tokens::get(dark);
+            assert!(far(t.pick_selected, t.pick_hover) > 90, "dark={dark}");
+            for c in [t.pick_selected, t.pick_hover] {
+                let others =
+                    [t.geometry, t.node, t.glyph_constraint, t.glyph_load, t.glyph_interaction, t.glyph_thermal, t.viewport_bottom, t.mesh_edge];
+                for o in others.into_iter().chain(ElementKind::ALL.map(|k| t.element(k))) {
+                    assert!(far(c, o) > 100, "{c:?} vs {o:?} dark={dark}");
                 }
             }
         }

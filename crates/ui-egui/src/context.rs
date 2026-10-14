@@ -6,10 +6,10 @@
 use egui::{RichText, vec2};
 use serde_json::{Value, json};
 
-use crate::ModelApp;
 use crate::browser::{self, Def};
 use crate::frame::{Level, heading};
 use crate::theme::{Tokens, label_font};
+use crate::{ModelApp, selection};
 
 /// The panel's width.
 pub const WIDTH: f32 = 310.0;
@@ -59,7 +59,11 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
 }
 
 /// The open command's parameters as JSON, with the command's parameter documentation; OK runs it.
+/// A command that applies to part of the model (a set, a boundary condition, a load, a section, a
+/// coupling) has a Target row that takes the viewport's selection.
 fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
+    let selected = (!app.pick.selection.is_empty()).then(|| app.pick.selection.summary());
+    let mut use_selection = false;
     let Some(d) = app.dialog.as_mut() else { return };
     let Some(spec) = fieldcraft_engine::find_command(d.command) else {
         app.dialog = None;
@@ -74,6 +78,23 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     ui.add_space(4.0);
     ui.label(RichText::new(spec.id).small().color(t.text_dim));
+    let params = serde_json::from_str::<Value>(&d.text).unwrap_or(Value::Null);
+    if let Some(target) = selection::target(spec.id, &params) {
+        heading(ui, t, Level::Section, |ui| {
+            ui.label(RichText::new("Target").size(12.0));
+        });
+        ui.horizontal(|ui| {
+            let tip = match target {
+                selection::Target::Members => "The selection becomes the set's members (geometry by name, the mesh by label)",
+                selection::Target::Set | selection::Target::TargetSet => "Makes a set of the selection (model.set.create) and names it here",
+            };
+            use_selection = ui.add_enabled(selected.is_some(), egui::Button::new("Use selection")).on_hover_text(tip).clicked();
+            match &selected {
+                Some(text) => ui.label(RichText::new(text).color(t.pick_selected)),
+                None => ui.label(RichText::new("Pick in the viewport, or type the names below").color(t.text_dim)),
+            };
+        });
+    }
     heading(ui, t, Level::Section, |ui| {
         ui.label(RichText::new("Parameters").size(12.0));
     });
@@ -98,6 +119,11 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         app.dialog = None;
     } else if run {
         let _ = app.run_dialog();
+    } else if use_selection
+        && let Err(e) = app.use_selection_in_dialog()
+        && let Some(d) = app.dialog.as_mut()
+    {
+        d.error = Some(e);
     }
 }
 

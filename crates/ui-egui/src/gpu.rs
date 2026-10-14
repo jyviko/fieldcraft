@@ -1,7 +1,9 @@
 //! GPU viewport: lit triangles and screen-space wide lines with a depth buffer, drawn in an
 //! `egui_wgpu` paint callback. Geometry is uploaded when the scene changes; each frame only the
 //! camera uniform changes. Nodes are drawn as zero-length lines, which the line shader turns
-//! into squares.
+//! into squares. The selection highlight is a second, small scene (the overlay) drawn over the
+//! first: its faces pass the depth test over the faces they repeat, so a hover change uploads
+//! only the overlay.
 //!
 //! A large mesh does not fit one vertex buffer (wgpu's default `max_buffer_size`, which eframe
 //! requests, is 256 MiB): geometry is split into batches of at most [`MAX_BATCH_BYTES`] and the
@@ -79,6 +81,9 @@ pub struct ViewportCallback {
     /// Changes whenever the scene does; the slot holds the scene for a new key.
     pub key: u64,
     pub slot: SceneSlot,
+    /// The same for the overlay (the selection highlight).
+    pub overlay_key: u64,
+    pub overlay_slot: SceneSlot,
     /// Column-major view-projection.
     pub view_proj: [[f32; 4]; 4],
     /// Direction toward the eye (for lighting).
@@ -94,15 +99,61 @@ struct Batch {
     count: u32,
 }
 
+/// Uploaded geometry: triangle and line batches, and the key they were uploaded for.
+#[derive(Default)]
+struct Layer {
+    key: Option<u64>,
+    tris: Vec<Batch>,
+    lines: Vec<Batch>,
+}
+
+impl Layer {
+    fn take(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, key: u64, slot: &SceneSlot) {
+        if self.key == Some(key) {
+            return;
+        }
+        if let Some(sc) = slot.lock().ok().and_then(|mut s| s.take()) {
+            // The old buffers go first, so the new ones don't have to fit beside them.
+            self.tris.clear();
+            self.lines.clear();
+            let max = device.limits().max_buffer_size;
+            self.tris = upload(device, queue, "fc_tris", &sc.tris, TRI_SIZE, 3, max);
+            self.lines = upload(device, queue, "fc_lines", &sc.lines, LINE_SIZE, 1, max);
+            self.key = Some(key);
+        }
+    }
+
+    fn paint_tris(&self, pass: &mut wgpu::RenderPass<'static>, tri: &wgpu::RenderPipeline) {
+        if !self.tris.is_empty() {
+            pass.set_pipeline(tri);
+            for b in &self.tris {
+                pass.set_vertex_buffer(0, b.buffer.slice(..));
+                pass.draw(0..b.count, 0..1);
+            }
+        }
+    }
+
+    fn paint_lines(&self, pass: &mut wgpu::RenderPass<'static>, line: &wgpu::RenderPipeline) {
+        if !self.lines.is_empty() {
+            pass.set_pipeline(line);
+            for b in &self.lines {
+                pass.set_vertex_buffer(0, b.buffer.slice(..));
+                pass.draw(0..6, 0..b.count);
+            }
+        }
+    }
+}
+
 struct Resources {
     tri: wgpu::RenderPipeline,
+    /// The overlay's faces: pulled toward the eye and depth-tested without writing depth.
+    overlay_tri: wgpu::RenderPipeline,
     line: wgpu::RenderPipeline,
     uniform: wgpu::Buffer,
     bind: wgpu::BindGroup,
     linear_out: bool,
-    key: Option<u64>,
-    tris: Vec<Batch>,
-    lines: Vec<Batch>,
+    scene: Layer,
+    overlay: Layer,
 }
 
 const SHADER: &str = r#"
@@ -164,6 +215,18 @@ fn biased_z(p: vec3<f32>, c: vec4<f32>, s: f32) -> f32 {
         return q.z / max(q.w, 1e-6) * c.w;
     }
     return c.z - u.screen.z * s * c.w;
+}
+
+/// An overlay face: as `vs_tri`, half a depth bias toward the eye, so it covers the scene face it
+/// repeats (or the contour bands that split it).
+@vertex
+fn vs_overlay_tri(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: vec4<f32>) -> TOut {
+    var o: TOut;
+    let clip = u.vp * vec4<f32>(p, 1.0);
+    o.pos = vec4<f32>(clip.xy, biased_z(p, clip, 0.5), clip.w);
+    o.n = n;
+    o.c = c;
+    return o;
 }
 
 struct LOut {
@@ -295,6 +358,7 @@ impl Resources {
         };
         Resources {
             tri: pipeline("fc_tris", "vs_tri", "fs_tri", tri_layout(), depth(wgpu::CompareFunction::Less, true), None),
+            overlay_tri: pipeline("fc_overlay_tris", "vs_overlay_tri", "fs_tri", tri_layout(), depth(wgpu::CompareFunction::LessEqual, false), None),
             line: pipeline(
                 "fc_lines",
                 "vs_line",
@@ -306,24 +370,8 @@ impl Resources {
             uniform,
             bind,
             linear_out: t.format.is_srgb(),
-            key: None,
-            tris: Vec::new(),
-            lines: Vec::new(),
-        }
-    }
-
-    fn take(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, key: u64, slot: &SceneSlot) {
-        if self.key == Some(key) {
-            return;
-        }
-        if let Some(sc) = slot.lock().ok().and_then(|mut s| s.take()) {
-            // The old buffers go first, so the new ones don't have to fit beside them.
-            self.tris.clear();
-            self.lines.clear();
-            let max = device.limits().max_buffer_size;
-            self.tris = upload(device, queue, "fc_tris", &sc.tris, TRI_SIZE, 3, max);
-            self.lines = upload(device, queue, "fc_lines", &sc.lines, LINE_SIZE, 1, max);
-            self.key = Some(key);
+            scene: Layer::default(),
+            overlay: Layer::default(),
         }
     }
 }
@@ -391,7 +439,8 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
-        res.take(device, queue, self.key, &self.slot);
+        res.scene.take(device, queue, self.key, &self.slot);
+        res.overlay.take(device, queue, self.overlay_key, &self.overlay_slot);
         queue.write_buffer(&res.uniform, 0, &uniform_bytes(self, res.linear_out));
         Vec::new()
     }
@@ -404,20 +453,12 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         }
         pass.set_viewport(vp.left_px as f32, vp.top_px as f32, vp.width_px as f32, vp.height_px as f32, 0.0, 1.0);
         pass.set_bind_group(0, &res.bind, &[]);
-        if !res.tris.is_empty() {
-            pass.set_pipeline(&res.tri);
-            for b in &res.tris {
-                pass.set_vertex_buffer(0, b.buffer.slice(..));
-                pass.draw(0..b.count, 0..1);
-            }
-        }
-        if !res.lines.is_empty() {
-            pass.set_pipeline(&res.line);
-            for b in &res.lines {
-                pass.set_vertex_buffer(0, b.buffer.slice(..));
-                pass.draw(0..6, 0..b.count);
-            }
-        }
+        // Faces first, the overlay's over the scene's, then every line, so the mesh edges stay on
+        // highlighted faces (as the CPU renderer draws them).
+        res.scene.paint_tris(pass, &res.tri);
+        res.overlay.paint_tris(pass, &res.overlay_tri);
+        res.scene.paint_lines(pass, &res.line);
+        res.overlay.paint_lines(pass, &res.line);
     }
 }
 
@@ -492,8 +533,16 @@ mod tests {
         // Widths are in physical pixels.
         assert_eq!(f32::from_le_bytes([g.lines[28], g.lines[29], g.lines[30], g.lines[31]]), 3.0);
         assert_eq!(f32::from_le_bytes([g.lines[60], g.lines[61], g.lines[62], g.lines[63]]), 8.0);
-        let cb =
-            ViewportCallback { key: 0, slot: SceneSlot::default(), view_proj: [[0.0; 4]; 4], back: [0.0; 3], eye: [0.0; 4], size_px: [1.0, 1.0] };
+        let cb = ViewportCallback {
+            key: 0,
+            slot: SceneSlot::default(),
+            overlay_key: 0,
+            overlay_slot: SceneSlot::default(),
+            view_proj: [[0.0; 4]; 4],
+            back: [0.0; 3],
+            eye: [0.0; 4],
+            size_px: [1.0, 1.0],
+        };
         assert_eq!(uniform_bytes(&cb, true).len() as u64, UNIFORM_SIZE);
     }
 }

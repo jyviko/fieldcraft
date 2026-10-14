@@ -10,7 +10,8 @@
 //!   labelled drop-downs list the whole catalogue (coming-soon entries greyed with their
 //!   milestone);
 //! - the browser on the left ([`browser`]): the model's geometry, mesh and definitions;
-//! - the viewport ([`viewport`]) with its navigation bar and orientation gizmo;
+//! - the viewport ([`viewport`]) with its navigation bar, orientation gizmo and selection bar
+//!   (picking faces, edges, vertices, bodies, nodes and elements: [`selection`]);
 //! - the context panel on the right ([`context`]), only while there is context: the open command
 //!   form, the results controls, the selected definition's properties;
 //! - the command line and status ([`palette`]), and the journal timeline at the bottom
@@ -35,6 +36,7 @@ pub mod palette;
 pub mod results;
 pub mod results_panel;
 pub mod scene;
+pub mod selection;
 pub mod theme;
 pub mod timeline;
 pub mod titlebar;
@@ -162,6 +164,38 @@ pub struct Status {
     pub error: bool,
 }
 
+/// Selection by picking in the viewport ([`selection`]): the filter, what is selected and what
+/// is under the pointer, and what they are drawn with.
+#[derive(Default)]
+pub struct PickState {
+    pub filter: selection::Filter,
+    pub selection: selection::Selection,
+    /// What a click would pick under the pointer.
+    pub hover: Option<selection::Item>,
+    /// A left drag draws a selection box (nodes, element faces, elements) instead of orbiting.
+    pub box_mode: bool,
+    /// The box being dragged (window points).
+    pub dragging: Option<(egui::Pos2, egui::Pos2)>,
+    /// Where the pointer was when the hover was worked out (window points).
+    pub hover_at: Option<egui::Pos2>,
+    /// Bumped whenever the selection changes, and whenever the hover does.
+    generation: u64,
+    hover_generation: u64,
+    /// The geometry tags behind the drawn mesh and the model revision they were read at.
+    index: (Option<u64>, Arc<selection::Index>),
+    /// The names of the drawn geometry surfaces, in the order they were added to the display.
+    names: Vec<selection::BodyNames>,
+    /// The selection's highlight and what it was built for (kept while only the hover changes).
+    selected_overlay: (Option<u64>, Arc<Scene>),
+    /// The highlight overlay (the selection's and the hover's) and what it was built for.
+    overlay: (Option<u64>, Arc<Scene>),
+    /// What the hover was last worked out for: the pointer, the camera, the scene, the filter
+    /// and the viewport.
+    pub(crate) hover_key: Option<(Option<egui::Pos2>, Camera, u64, selection::Filter, Option<egui::Rect>)>,
+    /// The model revision the selection's mesh labels were last checked at.
+    checked: Option<u64>,
+}
+
 /// The viewport's renderer state.
 #[derive(Default)]
 pub struct Viewport {
@@ -172,8 +206,11 @@ pub struct Viewport {
     pub slot: gpu::SceneSlot,
     /// The scene key last handed to the GPU.
     pub uploaded: Option<u64>,
-    /// CPU fallback: the texture and what it shows (scene key, camera, size).
-    cpu: Option<(egui::TextureHandle, u64, Camera, [usize; 2])>,
+    /// The selection highlight for the GPU, and the overlay key last handed to it.
+    pub overlay_slot: gpu::SceneSlot,
+    pub overlay_uploaded: Option<u64>,
+    /// CPU fallback: the texture and what it shows (scene and overlay keys, camera, size).
+    cpu: Option<(egui::TextureHandle, (u64, u64), Camera, [usize; 2])>,
     /// CPU fallback: the scene key the renderer last refused.
     cpu_failed: Option<u64>,
     /// GPU errors reported by the device (see [`gpu::GpuErrors`]), shown in the status bar.
@@ -241,8 +278,8 @@ pub struct ModelApp {
     pub reactions: Option<Value>,
     /// Whether results were shown last frame (the Results tab comes up when they appear).
     results_shown: bool,
-    /// Tessellated design bodies, kept while the same design is open.
-    bodies: (Option<Arc<fieldcraft_geometry::Design>>, Vec<fieldcraft_geometry::SurfaceMesh>),
+    /// Tessellated design bodies with their names, kept while the same design is open.
+    bodies: (Option<Arc<fieldcraft_geometry::Design>>, Vec<(selection::BodyNames, fieldcraft_geometry::SurfaceMesh)>),
     /// The frame-independent part of the results plot (scale, contour) and what it was built for.
     prepared: (Option<PlotKey>, results::Prepared),
     /// The built scene, its key and the box around its symbols (they reach beyond the model).
@@ -280,6 +317,11 @@ pub struct ModelApp {
     pub tree_open: std::collections::BTreeSet<String>,
     /// The definition selected in the browser: (kind, name), its properties on the right.
     pub selected: Option<(browser::Def, String)>,
+    /// What is picked in the viewport.
+    pub pick: PickState,
+    /// Set while [`ModelApp::capture`] draws the window offscreen: no pointer there is the
+    /// user's, so the hover stays as it is.
+    capturing: bool,
     /// What a left drag in the viewport does.
     pub nav: NavMode,
     /// Where the window's regions were drawn last frame (`ui.inspect`'s `layout`).
@@ -338,6 +380,8 @@ impl ModelApp {
             command_line: String::new(),
             tree_open: ["mesh", "results"].into_iter().map(str::to_string).collect(),
             selected: None,
+            pick: PickState::default(),
+            capturing: false,
             nav: NavMode::default(),
             layout: std::collections::BTreeMap::new(),
             panel_rects: Vec::new(),
@@ -570,7 +614,9 @@ impl ModelApp {
                     .flat_map(|d| &d.bodies)
                     .filter_map(|body| {
                         let tolerance = body.measure().map(|m| display_tolerance(&Aabb3 { min: m.bbox_min.into(), max: m.bbox_max.into() }));
-                        tolerance.and_then(|t| body.tessellate(t)).map_err(|e| failed.push(format!("{}: {e}", body.name))).ok()
+                        let mesh = tolerance.and_then(|t| body.tessellate(t)).map_err(|e| failed.push(format!("{}: {e}", body.name))).ok()?;
+                        let names = selection::BodyNames { name: body.name.clone(), faces: body.faces().iter().map(|f| f.name.clone()).collect() };
+                        Some((names, mesh))
                     })
                     .collect();
                 self.bodies = (design, meshes);
@@ -578,8 +624,15 @@ impl ModelApp {
                     self.set_status(format!("Some bodies cannot be drawn: {}", failed.join("; ")), true);
                 }
             }
-            for mesh in self.bodies.1.iter().chain(self.session.surfaces.iter().map(|s| &s.mesh)) {
+            self.pick.names.clear();
+            for (names, mesh) in &self.bodies.1 {
                 d.add_surface(&mesh.positions, &mesh.triangles, &mesh.tri_face);
+                self.pick.names.push(names.clone());
+            }
+            // An imported surface's faces are named by their tags.
+            for s in &self.session.surfaces {
+                d.add_surface(&s.mesh.positions, &s.mesh.triangles, &s.mesh.tri_face);
+                self.pick.names.push(selection::BodyNames { name: s.name.clone(), faces: (0..s.faces).map(|f| f.to_string()).collect() });
             }
             let was_empty = self.display.1.bounds.is_empty();
             self.display = (Some(self.revision), d);
@@ -659,11 +712,215 @@ impl ModelApp {
         (key, &self.scene.1)
     }
 
-    /// A CPU render of the viewport's scene with the current camera, as PNG bytes.
+    /// A CPU render of the viewport's scene with the current camera and the selection, as PNG
+    /// bytes.
     pub fn render_png(&mut self, w: usize, h: usize) -> Result<Vec<u8>, fieldcraft_render::RenderError> {
         let cam = self.cam;
+        let (_, overlay) = self.overlay();
         let (_, scene) = self.scene();
-        fieldcraft_render::render_png(scene, &cam, w, h)
+        fieldcraft_render::render_layers_png(scene, Some(&overlay), &cam, w, h)
+    }
+
+    /// The geometry tags behind the drawn mesh, read again when the model changed.
+    fn pick_index(&mut self) -> Arc<selection::Index> {
+        self.display();
+        if self.pick.index.0 != Some(self.revision) {
+            self.pick.index = (Some(self.revision), Arc::new(selection::Index::new(&self.session.model, &self.display.1)));
+        }
+        self.pick.index.1.clone()
+    }
+
+    /// Run `f` with the picker of what the viewport draws: a results plot's elements, or the
+    /// model's elements and its geometry where no element faces cover it (as [`scene::build`]).
+    pub fn with_picker<R>(&mut self, f: impl FnOnce(&selection::Picker) -> R) -> R {
+        let index = self.pick_index();
+        let plot = self.plot();
+        let (show_mesh, show_geometry) = (self.ui.show_mesh, self.ui.show_geometry);
+        let display = plot.as_ref().map_or(&self.display.1, |p| &p.display);
+        let mesh_faces = show_mesh && !display.tris.is_empty();
+        let picker = selection::Picker {
+            display,
+            names: &self.pick.names,
+            model: &self.session.model,
+            index: &index,
+            elements: show_mesh,
+            geometry: show_geometry && !mesh_faces,
+        };
+        f(&picker)
+    }
+
+    /// The viewport's projection as drawn last frame (`None` before it was drawn).
+    pub fn projector(&mut self) -> Option<fieldcraft_render::pick::Projector> {
+        let rect = self.viewport.rect?;
+        let radius = self.scene().1.radius;
+        Some(fieldcraft_render::pick::Projector::new(&self.cam, f64::from(rect.width()), f64::from(rect.height()), radius))
+    }
+
+    /// What a click at window point `at` would pick with the current filter.
+    pub fn pick_at(&mut self, at: egui::Pos2) -> Option<selection::Item> {
+        let rect = self.viewport.rect.filter(|r| r.contains(at))?;
+        let proj = self.projector()?;
+        let filter = self.pick.filter;
+        let local = [f64::from(at.x - rect.left()), f64::from(at.y - rect.top())];
+        self.with_picker(|p| p.pick(&proj, local, filter))
+    }
+
+    /// Change the selection by `items` (see [`selection::Mode`]); the status bar says what is
+    /// selected.
+    pub fn select(&mut self, items: impl IntoIterator<Item = selection::Item>, mode: selection::Mode) {
+        if self.pick.selection.apply(items, mode) {
+            self.pick.generation = self.pick.generation.wrapping_add(1);
+        }
+        let mut text = format!("Selected: {}", self.pick.selection.summary());
+        if self.pick.selection.capped() {
+            text.push_str(&format!(" (at most {} items)", selection::MAX_SELECTION));
+        }
+        self.set_status(text, false);
+    }
+
+    pub fn clear_selection(&mut self) {
+        if !self.pick.selection.is_empty() {
+            self.pick.selection.clear();
+            self.pick.generation = self.pick.generation.wrapping_add(1);
+            self.set_status("Selection cleared", false);
+        }
+    }
+
+    /// Pick at window point `at` and change the selection by it; a plain click on nothing clears
+    /// the selection. Returns what was picked.
+    pub fn select_at(&mut self, at: egui::Pos2, mode: selection::Mode) -> Option<selection::Item> {
+        // A click where the hover was just worked out picks what is highlighted.
+        let current =
+            self.pick.hover_key.as_ref().is_some_and(|k| k.0 == Some(at) && k.1 == self.cam && k.2 == self.scene_key() && k.3 == self.pick.filter);
+        let item = if current { self.pick.hover.clone() } else { self.pick_at(at) };
+        match &item {
+            Some(i) => self.select([i.clone()], mode),
+            None if mode == selection::Mode::Replace => self.clear_selection(),
+            None => {}
+        }
+        item
+    }
+
+    /// Select what is visible inside the box between window points `a` and `b` (nodes, element
+    /// faces or elements, with the filter); returns how many items it held.
+    pub fn select_box(&mut self, a: egui::Pos2, b: egui::Pos2, mode: selection::Mode) -> usize {
+        let (Some(rect), Some(proj)) = (self.viewport.rect, self.projector()) else { return 0 };
+        let filter = self.pick.filter;
+        let r = [a.x - rect.left(), a.y - rect.top(), b.x - rect.left(), b.y - rect.top()].map(f64::from);
+        let items = self.with_picker(|p| p.pick_box(&proj, r, filter));
+        let n = items.len();
+        self.select(items, mode);
+        n
+    }
+
+    /// Set what is under the pointer (`None` when nothing, or the pointer is elsewhere).
+    pub fn set_hover(&mut self, item: Option<selection::Item>) {
+        if self.pick.hover != item {
+            self.pick.hover = item;
+            self.pick.hover_generation = self.pick.hover_generation.wrapping_add(1);
+        }
+    }
+
+    /// The selection and the hover drawn over the scene in the theme's highlight colours,
+    /// rebuilt when either or the scene changes; and its key.
+    pub fn overlay(&mut self) -> (u64, Arc<Scene>) {
+        let hash = |v: &dyn Fn(&mut std::hash::DefaultHasher)| {
+            let mut h = std::hash::DefaultHasher::new();
+            v(&mut h);
+            h.finish()
+        };
+        let scene = self.scene_key();
+        let selected = hash(&|h| (scene, self.pick.generation).hash(h));
+        let key = hash(&|h| (selected, self.pick.hover_generation).hash(h));
+        if self.pick.overlay.0 == Some(key) {
+            return (key, self.pick.overlay.1.clone());
+        }
+        let t = theme::Tokens::get(self.ui.dark);
+        // The selection's part is kept while only the hover changes.
+        if self.pick.selected_overlay.0 != Some(selected) {
+            let sel = std::mem::take(&mut self.pick.selection);
+            let s = self.with_picker(|p| p.overlay(&sel, None, theme::rgb(t.pick_selected), theme::rgb(t.pick_hover)));
+            self.pick.selection = sel;
+            self.pick.selected_overlay = (Some(selected), Arc::new(s));
+        }
+        let mut s = (*self.pick.selected_overlay.1).clone();
+        if let Some(hover) = self.pick.hover.clone() {
+            let h = self
+                .with_picker(|p| p.overlay(&selection::Selection::default(), Some(&hover), theme::rgb(t.pick_selected), theme::rgb(t.pick_hover)));
+            s.tris.extend(h.tris);
+            s.lines.extend(h.lines);
+            s.points.extend(h.points);
+        }
+        self.pick.overlay = (Some(key), Arc::new(s));
+        (key, self.pick.overlay.1.clone())
+    }
+
+    /// Drop selected nodes, elements and element faces the model no longer has (after an edit,
+    /// an undo or a remesh); geometry stays selected by name.
+    fn check_selection(&mut self) {
+        if self.pick.checked == Some(self.revision) {
+            return;
+        }
+        self.pick.checked = Some(self.revision);
+        let model = &self.session.model;
+        let before = self.pick.selection.len();
+        self.pick.selection.retain(|item| match item {
+            selection::Item::Geometry(_) => true,
+            selection::Item::Node(n) => model.node(*n).is_some(),
+            selection::Item::Element(e) => model.element(*e).is_some(),
+            selection::Item::Face(f) => model.face_nodes(*f).is_some(),
+        });
+        if self.pick.selection.len() != before {
+            self.pick.generation = self.pick.generation.wrapping_add(1);
+        }
+    }
+
+    /// Open `model.set.create`'s form with the selection as the new set's members.
+    pub fn create_set_from_selection(&mut self) -> Result<(), String> {
+        let params = self.selection_set(None)?;
+        self.open_form("model.set.create", params);
+        Ok(())
+    }
+
+    /// `model.set.create`'s parameters for a set of the selection, named after `base` (`Set-1`
+    /// by default; the first name not taken).
+    fn selection_set(&self, base: Option<&str>) -> Result<Value, String> {
+        if self.pick.selection.is_empty() {
+            return Err("nothing is selected".into());
+        }
+        let name = selection::fresh_set_name(&self.session.model, base.unwrap_or("Set-1"));
+        Ok(selection::with_members(&json!({"name": name}), &self.pick.selection))
+    }
+
+    /// Put the selection into the open command form: a set's members, or a new set made from it
+    /// (`model.set.create`, named after the definition) as the target of a boundary condition,
+    /// load, section or coupling.
+    pub fn use_selection_in_dialog(&mut self) -> Result<(), String> {
+        let Some(d) = self.dialog.as_ref() else { return Err("no command form is open".into()) };
+        let command = d.command;
+        if self.pick.selection.is_empty() {
+            return Err("nothing is selected".into());
+        }
+        let params: Value = serde_json::from_str(&d.text).map_err(|e| format!("the parameters are not JSON: {e}"))?;
+        if !params.is_object() {
+            return Err("the parameters must be a JSON object".into());
+        }
+        let Some(target) = selection::target(command, &params) else { return Err(format!("{command} takes no selection")) };
+        let filled = match target {
+            selection::Target::Members => selection::with_members(&params, &self.pick.selection),
+            selection::Target::Set | selection::Target::TargetSet => {
+                let base = params.get("name").and_then(Value::as_str).map(|n| format!("{n}-set"));
+                let set = self.selection_set(base.as_deref())?;
+                let name = set.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+                self.run("model.set.create", set)?;
+                selection::with_set(&params, target, &name)
+            }
+        };
+        if let Some(open) = self.dialog.as_mut() {
+            open.text = serde_json::to_string_pretty(&filled).unwrap_or_else(|_| filled.to_string());
+            open.error = None;
+        }
+        Ok(())
     }
 
     /// Frame the whole model.
@@ -705,6 +962,7 @@ impl ModelApp {
             self.ui.select_tab(Tab::Results);
         }
         self.results_shown = shown;
+        self.check_selection();
         // A selected definition that is gone (undo, delete) is no longer selected.
         if self.selected.as_ref().is_some_and(|(kind, name)| !kind.exists(&self.session.model, name)) {
             self.selected = None;
@@ -721,6 +979,14 @@ impl ModelApp {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.memory(|m| m.focused().is_some()) {
             return;
+        }
+        // Escape clears the viewport's selection first (a second one cancels an open form).
+        if !self.pick.selection.is_empty()
+            && self.ui.menu.is_none()
+            && !self.ui.palette
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.clear_selection();
         }
         let shortcut = |modifiers, key| egui::KeyboardShortcut::new(modifiers, key);
         let shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
@@ -1258,6 +1524,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A face picked by name stays selected through a remesh and highlights the new mesh's faces;
+    /// the set made from it resolves on the new mesh.
+    #[test]
+    fn a_geometry_pick_survives_a_remesh() {
+        let block = |n: u32| {
+            let corners = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 10], [10, 0, 10], [10, 10, 10], [0, 10, 10]];
+            json!({"body": "Bar", "kind": "hex8", "corners": corners, "divisions": [n, n, n], "faces": {"4": "tip"}})
+        };
+        let mut app = ModelApp::new(Session::default());
+        app.run("mesh.block", block(2)).unwrap();
+        app.viewport.rect = Some(egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(800.0, 600.0)));
+        app.set_view(StandardView::Right);
+        app.fit_view();
+        let at = viewport::to_screen(&app, Vec3::new(10.0, 5.5, 4.5)).unwrap();
+        let tip = selection::Item::Geometry(fieldcraft_model::GeometryRef::face("Bar", "tip").unwrap());
+        assert_eq!(app.select_at(at, selection::Mode::Replace), Some(tip.clone()));
+        assert_eq!(app.overlay().1.tris.len(), 2 * 2 * 2);
+        // A click beside the model clears the selection; a Shift click adds back.
+        assert_eq!(app.select_at(egui::pos2(105.0, 55.0), selection::Mode::Replace), None);
+        assert!(app.pick.selection.is_empty());
+        app.select_at(at, selection::Mode::Add);
+        // Remeshed finer: the tip is still selected and highlights the new faces.
+        app.run("edit.undo", json!({})).unwrap();
+        app.run("mesh.block", block(4)).unwrap();
+        app.logic(&egui::Context::default());
+        assert_eq!(app.pick.selection.items().iter().collect::<Vec<_>>(), vec![&tip]);
+        assert_eq!(app.overlay().1.tris.len(), 4 * 4 * 2);
+        app.create_set_from_selection().unwrap();
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("model.set.create"));
+        app.run_dialog().unwrap();
+        assert_eq!(app.session.model.resolve_set("Set-1").unwrap().faces.len(), 16);
+        // Mesh labels that are gone leave the selection.
+        app.select([selection::Item::Node(1), selection::Item::Element(9999)], selection::Mode::Replace);
+        app.run("mesh.node.add", json!({"label": 100_000, "xyz": [50, 50, 50]})).unwrap();
+        app.logic(&egui::Context::default());
+        assert_eq!(app.pick.selection.items().iter().collect::<Vec<_>>(), vec![&selection::Item::Node(1)]);
     }
 
     #[test]

@@ -5,12 +5,19 @@
 //! drag (or Shift + left drag) pans, the wheel or a pinch zooms at the cursor, a double click or F
 //! frames the model. The gizmo's axis tips turn the view to look along them. The bar and the gizmo
 //! follow SolidCraft's `viewport.rs` (MIT OR Apache-2.0), see ATTRIBUTION.md.
+//!
+//! Selection ([`crate::selection`]): what a click would pick is highlighted under the pointer; a
+//! click selects it (Shift adds, Cmd/Ctrl adds or removes, a click on nothing clears), Escape
+//! clears. The selection bar (top centre) chooses what is picked and turns on box selection,
+//! where a left drag selects the visible nodes, element faces or elements inside the box. A
+//! right click offers a set made from the selection.
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use fieldcraft_render::{StandardView, Vec3};
 
 use crate::gpu::{GpuScene, ViewportCallback};
 use crate::icons::{self, Look};
+use crate::selection::{Filter, Mode};
 use crate::theme::Tokens;
 use crate::{ModelApp, NavMode, Style};
 
@@ -22,12 +29,21 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     app.viewport.rect = Some(rect);
     app.place("viewport", rect);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
-    navigate(app, ui, &response, rect);
+    let boxing = app.pick.box_mode && app.pick.filter.boxes();
+    navigate(app, ui, &response, rect, boxing);
+    if boxing {
+        box_drag(app, ui, &response);
+    }
     if response.clicked()
         && let Some(at) = response.interact_pointer_pos()
     {
+        let _ = app.select_at(at, mode(ui.input(|i| i.modifiers)));
         probe_at(app, at, rect);
     }
+    if !app.capturing {
+        hover(app, &response);
+    }
+    context_menu(app, &response);
     let t = Tokens::get(app.ui.dark);
     let painter = ui.painter_at(rect);
     gradient(&painter, rect, t.viewport_top, t.viewport_bottom);
@@ -38,8 +54,15 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
         paint_cpu(app, ui, &painter, rect);
     }
     sampled_note(app, &painter, rect, &t);
+    hover_label(app, &painter, &t);
+    if let Some((a, b)) = app.pick.dragging {
+        let r = Rect::from_two_pos(a, b);
+        painter.rect(r, 0.0, t.pick_selected.gamma_multiply(0.12), Stroke::new(1.0, t.pick_selected), egui::StrokeKind::Inside);
+    }
     if app.display().bounds.is_empty() && app.busy().is_none() {
         start_screen(app, ui, rect, &t);
+    } else {
+        selection_bar(app, ui, rect, &t);
     }
     crate::results_panel::show(app, ui, rect, &t);
     axis_view(app, ui, rect, &t);
@@ -78,12 +101,147 @@ fn probe_at(app: &mut ModelApp, at: Pos2, rect: Rect) {
     }
 }
 
-fn navigate(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response, rect: Rect) {
+/// How a click with these modifier keys changes the selection: Cmd/Ctrl adds or removes, Shift
+/// adds, a plain click replaces.
+fn mode(m: egui::Modifiers) -> Mode {
+    if m.command || m.ctrl {
+        Mode::Toggle
+    } else if m.shift {
+        Mode::Add
+    } else {
+        Mode::Replace
+    }
+}
+
+/// Box selection: a left drag draws the box; on release, what is visible inside it is selected
+/// (with the release's modifier keys).
+fn box_drag(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response) {
+    let pointer = response.interact_pointer_pos();
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        app.pick.dragging = pointer.map(|p| (p, p));
+    } else if let (Some((a, _)), Some(p)) = (app.pick.dragging, pointer)
+        && response.dragged_by(egui::PointerButton::Primary)
+    {
+        app.pick.dragging = Some((a, p));
+    }
+    if response.drag_stopped_by(egui::PointerButton::Primary)
+        && let Some((a, b)) = app.pick.dragging.take()
+        && a.distance(b) > 3.0
+    {
+        app.select_box(a, b, mode(ui.input(|i| i.modifiers)));
+    }
+}
+
+/// What a click would pick under the pointer, worked out again when the pointer, the camera, the
+/// scene or the filter change.
+fn hover(app: &mut ModelApp, response: &egui::Response) {
+    let at = response.hover_pos().filter(|_| !response.dragged() && app.pick.dragging.is_none());
+    let key = (at, app.cam, app.scene_key(), app.pick.filter, app.viewport.rect);
+    if app.pick.hover_key == Some(key) {
+        return;
+    }
+    app.pick.hover_key = Some(key);
+    app.pick.hover_at = at;
+    let item = at.and_then(|p| app.pick_at(p));
+    app.set_hover(item);
+}
+
+/// The hovered item's name beside the pointer.
+fn hover_label(app: &ModelApp, painter: &egui::Painter, t: &Tokens) {
+    let (Some(item), Some(at)) = (&app.pick.hover, app.pick.hover_at) else { return };
+    if !painter.clip_rect().contains(at) {
+        return;
+    }
+    let galley = painter.layout_no_wrap(item.describe(), egui::FontId::proportional(12.0), t.overlay_text);
+    let r = Rect::from_min_size(at + vec2(14.0, 14.0), galley.size()).expand2(vec2(5.0, 2.0));
+    painter.rect_filled(r, 3.0, t.overlay);
+    painter.galley(r.min + vec2(5.0, 2.0), galley, t.overlay_text);
+}
+
+/// The right-click menu: a set from the selection, clearing it, and the filter.
+fn context_menu(app: &mut ModelApp, response: &egui::Response) {
+    response.context_menu(|ui| {
+        let has = !app.pick.selection.is_empty();
+        if ui
+            .add_enabled(has, egui::Button::new("Create set from selection…"))
+            .on_hover_text("model.set.create with the selection as members")
+            .clicked()
+        {
+            let _ = app.create_set_from_selection();
+            ui.close();
+        }
+        if ui.add_enabled(has, egui::Button::new("Clear selection")).on_hover_text("Esc").clicked() {
+            app.clear_selection();
+            ui.close();
+        }
+        ui.separator();
+        for f in Filter::ALL {
+            if ui.radio(app.pick.filter == f, format!("Select {}", f.label().to_lowercase())).clicked() {
+                app.pick.filter = f;
+                ui.close();
+            }
+        }
+    });
+}
+
+/// The selection bar, top centre: what a click picks, box selection, and what is selected.
+fn selection_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
+    let area = egui::Area::new(egui::Id::new("fc_selection_bar"))
+        .fixed_pos(pos2(rect.center().x, rect.top() + 10.0))
+        .pivot(egui::Align2::CENTER_TOP)
+        .constrain_to(rect)
+        .order(egui::Order::Middle);
+    let shown = area.show(ui.ctx(), |ui| {
+        egui::Frame::NONE.fill(t.overlay).stroke(Stroke::new(1.0, t.border)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 4)).show(
+            ui,
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Select").color(t.text_dim));
+                    egui::ComboBox::from_id_salt("fc_selection_filter").selected_text(app.pick.filter.label()).width(110.0).show_ui(ui, |ui| {
+                        for (i, f) in Filter::ALL.into_iter().enumerate() {
+                            // Geometry, then the mesh.
+                            if i > 0 && Filter::ALL.get(i - 1).is_some_and(|p| p.geometry() != f.geometry()) {
+                                ui.separator();
+                            }
+                            if ui.selectable_label(app.pick.filter == f, f.label()).clicked() {
+                                app.pick.filter = f;
+                            }
+                        }
+                    });
+                    let boxes = app.pick.filter.boxes();
+                    let tip = if boxes {
+                        "Box selection: a left drag selects the visible items inside the box (right or middle drag pans)"
+                    } else {
+                        "Box selection picks nodes, element faces and elements"
+                    };
+                    if ui.add_enabled(boxes, egui::Button::selectable(app.pick.box_mode && boxes, "Box")).on_hover_text(tip).clicked() {
+                        app.pick.box_mode = !app.pick.box_mode;
+                    }
+                    if !app.pick.selection.is_empty() {
+                        ui.separator();
+                        let mut text = app.pick.selection.summary();
+                        if app.pick.selection.capped() {
+                            text.push_str(" (capped)");
+                        }
+                        ui.label(egui::RichText::new(text).color(t.pick_selected));
+                        if ui.small_button("×").on_hover_text("Clear the selection (Esc)").clicked() {
+                            app.clear_selection();
+                        }
+                    }
+                });
+            },
+        );
+    });
+    app.place("selection_bar", shown.response.rect);
+}
+
+fn navigate(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response, rect: Rect, boxing: bool) {
     let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
     let d = response.drag_delta();
     let (dx, dy) = (f64::from(d.x), f64::from(d.y));
     let shift = ui.input(|i| i.modifiers.shift);
-    let left = response.dragged_by(egui::PointerButton::Primary);
+    // In box selection a left drag draws the box.
+    let left = response.dragged_by(egui::PointerButton::Primary) && !boxing;
     if left && !shift && app.nav == NavMode::Orbit {
         app.cam.orbit(dx, dy);
     } else if left && !shift && app.nav == NavMode::Zoom {
@@ -130,9 +288,18 @@ fn paint_gpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
     let cam = app.cam;
     let aspect = f64::from(rect.width()) / f64::from(rect.height()).max(1.0);
     let eye = cam.eye();
+    let (overlay_key, overlay) = app.overlay();
+    if app.viewport.overlay_uploaded != Some(overlay_key)
+        && let Ok(mut slot) = app.viewport.overlay_slot.lock()
+    {
+        *slot = Some(GpuScene::from_scene(&overlay, ppp));
+        app.viewport.overlay_uploaded = Some(overlay_key);
+    }
     let cb = ViewportCallback {
         key,
         slot: app.viewport.slot.clone(),
+        overlay_key,
+        overlay_slot: app.viewport.overlay_slot.clone(),
         view_proj: cam.view_proj(aspect, radius).to_f32(),
         back: cam.back().to_f32(),
         eye: [eye.x as f32, eye.y as f32, eye.z as f32, if cam.fov > 0.0 { 1.0 } else { 0.0 }],
@@ -149,15 +316,16 @@ fn paint_cpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
     let (w, h) = fieldcraft_render::fit_size((rect.width() * ppp) as usize, (rect.height() * ppp) as usize);
     let size = [w, h];
     let cam = app.cam;
-    let key = app.scene().0;
+    let (overlay_key, overlay) = app.overlay();
+    let key = (app.scene().0, overlay_key);
     let fresh = app.viewport.cpu.as_ref().is_some_and(|(_, k, c, s)| *k == key && *c == cam && *s == size);
     // A scene the renderer refused is reported once and not retried until it changes.
-    if !fresh && app.viewport.cpu_failed != Some(key) {
-        let c = match fieldcraft_render::render(&app.scene.1, &cam, w, h) {
+    if !fresh && app.viewport.cpu_failed != Some(key.0) {
+        let c = match fieldcraft_render::render_layers(&app.scene.1, Some(&overlay), &cam, w, h) {
             Ok(c) => c,
             Err(e) => {
                 app.viewport.cpu = None;
-                app.viewport.cpu_failed = Some(key);
+                app.viewport.cpu_failed = Some(key.0);
                 app.set_status(format!("Viewport: {e}"), true);
                 return;
             }
@@ -361,7 +529,7 @@ fn nav_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
 /// The screen point (points) of a world point in the viewport drawn last frame.
 pub fn to_screen(app: &ModelApp, p: Vec3) -> Option<Pos2> {
     let rect = app.viewport.rect?;
-    let radius = app.scene.1.radius.max(1.0);
-    let (x, y, _) = app.cam.to_screen(p, f64::from(rect.width()), f64::from(rect.height()), radius)?;
+    // The projection picking uses ([`ModelApp::projector`]).
+    let (x, y, _) = app.cam.to_screen(p, f64::from(rect.width()), f64::from(rect.height()), app.scene.1.radius)?;
     Some(pos2(rect.left() + x as f32, rect.top() + y as f32))
 }

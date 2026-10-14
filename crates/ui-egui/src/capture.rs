@@ -84,6 +84,7 @@ impl ModelApp {
         let toolbar = std::mem::take(&mut self.toolbar_rects);
         let layout = std::mem::take(&mut self.layout);
         let panels = std::mem::take(&mut self.panel_rects);
+        self.capturing = true;
         crate::theme::apply(&off.ctx, self.ui.dark);
         // A capture is one still frame: windows and menus appear without fading in.
         off.ctx.global_style_mut(|s| s.animation_time = 0.0);
@@ -114,6 +115,7 @@ impl ModelApp {
         }
         std::mem::swap(&mut self.icons, &mut off.icons);
         std::mem::swap(&mut self.viewport, &mut off.viewport);
+        self.capturing = false;
         self.toolbar_rects = toolbar;
         self.layout = layout;
         self.panel_rects = panels;

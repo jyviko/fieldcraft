@@ -1901,6 +1901,7 @@ dependencies = [
  "modelcraft-lbm",
  "modelcraft-mesh",
  "modelcraft-model",
+ "modelcraft-parallel",
  "modelcraft-render",
  "modelcraft-solver",
  "serde",

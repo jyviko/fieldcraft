@@ -308,6 +308,8 @@ fn factor(a: &Csr, limits: &Limits, mesh: &HeatMesh, eqs: &Equations) -> Result<
         FactorError::TooLarge { entries, limit } => {
             Error::Limit(format!("the factorization needs {entries} entries; the limit is {limit} (refine less or raise the limit)"))
         }
+        FactorError::OutOfMemory { entries } => Error::Limit(format!("not enough memory for the factorization ({entries} entries)")),
+        FactorError::Internal(what) => Error::Internal(what),
         FactorError::NotPositiveDefinite { column } => {
             let label = eqs.node.get(column).and_then(|n| mesh.labels.get(*n)).copied().unwrap_or(0);
             Error::Singular(format!(

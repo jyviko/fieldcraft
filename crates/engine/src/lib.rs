@@ -135,12 +135,16 @@ pub struct Limits {
     pub max_steiner: usize,
     /// `mesh.tet.generate`'s `max_tets`.
     pub max_tets: usize,
+    /// Threads the solvers use (the `solve.*` commands' `threads`): by default
+    /// `MODELCRAFT_THREADS` or the available cores, 1 to [`modelcraft_parallel::MAX_THREADS`].
+    /// Results do not depend on it.
+    pub threads: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
         let cdt = modelcraft_mesh::cdt::CdtOptions::default();
-        Limits { max_steiner: cdt.max_steiner, max_tets: cdt.max_tets }
+        Limits { max_steiner: cdt.max_steiner, max_tets: cdt.max_tets, threads: modelcraft_parallel::default_threads() }
     }
 }
 
@@ -469,7 +473,7 @@ mod tests {
         // Small work caps, so input that would mesh up to the production caps (needle triangles
         // need Steiner points all along them) is refused at once. The caps themselves are what
         // `tet_generate_honours_the_session_caps` checks.
-        let capped = || Session { limits: Limits { max_steiner: 64, max_tets: 100_000 }, ..Session::default() };
+        let capped = || Session { limits: Limits { max_steiner: 64, max_tets: 100_000, ..Limits::default() }, ..Session::default() };
         for spec in commands() {
             for p in &hostile {
                 let mut s = capped();

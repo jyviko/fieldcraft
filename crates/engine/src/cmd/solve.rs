@@ -5,6 +5,7 @@ use modelcraft_explicit::{ExplicitResult, solve_explicit};
 use modelcraft_lbm::{FluidResult, Obstacle};
 use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 use modelcraft_model::FluidDomain;
+use modelcraft_parallel as parallel;
 use modelcraft_solver::{
     FrequencyOptions, Limits, Location, MassKind, StaticResult, StepResult as ImplicitResult, solve_frequency, solve_heat, solve_static,
 };
@@ -24,7 +25,7 @@ pub const RUN: CommandSpec = CommandSpec {
 pub const STATIC: CommandSpec = CommandSpec {
     id: "solve.static",
     label: "Solve Static Step",
-    params: r#"{"step": "Load", "max_dofs": 6000000, "max_factor_entries": 400000000} — solves a linear static or coupled temperature–displacement step (the only one when `step` is left out) and keeps the result in the session; the caps may only be lowered"#,
+    params: r#"{"step": "Load", "max_dofs": 6000000, "max_factor_entries": 400000000, "threads": 8} — solves a linear static or coupled temperature–displacement step (the only one when `step` is left out) and keeps the result in the session; the caps may only be lowered; `threads` (1 to 256, by default the session's: `MODELCRAFT_THREADS` or the cores) changes only the time, never the result"#,
     kind: CommandKind::Model,
     run: run_static,
 };
@@ -32,7 +33,7 @@ pub const STATIC: CommandSpec = CommandSpec {
 pub const HEAT: CommandSpec = CommandSpec {
     id: "solve.heat",
     label: "Solve Heat Transfer Step",
-    params: r#"{"step": "Heat", "max_dofs": 6000000, "max_factor_entries": 400000000} — steady or transient heat conduction of a heat transfer step (the only one when `step` is left out): temperatures, heat flux and the heat flow at prescribed temperatures, kept in the session; the caps may only be lowered"#,
+    params: r#"{"step": "Heat", "max_dofs": 6000000, "max_factor_entries": 400000000, "threads": 8} — steady or transient heat conduction of a heat transfer step (the only one when `step` is left out): temperatures, heat flux and the heat flow at prescribed temperatures, kept in the session; the caps may only be lowered; `threads` as for solve.static"#,
     kind: CommandKind::Model,
     run: run_heat,
 };
@@ -40,7 +41,7 @@ pub const HEAT: CommandSpec = CommandSpec {
 pub const FREQUENCY: CommandSpec = CommandSpec {
     id: "solve.frequency",
     label: "Solve Frequency Step",
-    params: r#"{"step": "Modes", "mass": "consistent|lumped", "shift": 0.0, "max_dofs": 6000000, "max_factor_entries": 400000000, "max_iterations": 3000} — natural frequencies and mode shapes of a frequency step (its modes and range); `max_iterations` caps the Lanczos vectors; the result stays in the session"#,
+    params: r#"{"step": "Modes", "mass": "consistent|lumped", "shift": 0.0, "max_dofs": 6000000, "max_factor_entries": 400000000, "max_iterations": 3000, "threads": 8} — natural frequencies and mode shapes of a frequency step (its modes and range); `max_iterations` caps the Lanczos vectors; the result stays in the session; `threads` as for solve.static"#,
     kind: CommandKind::Model,
     run: run_frequency,
 };
@@ -48,7 +49,7 @@ pub const FREQUENCY: CommandSpec = CommandSpec {
 pub const EXPLICIT: CommandSpec = CommandSpec {
     id: "solve.explicit",
     label: "Solve Explicit Dynamic Step",
-    params: r#"{"step": "Impact", "max_dofs": 6000000, "max_increments": 1000000000, "max_output_values": 50000000} — transient response of an explicit dynamic step (the only one when `step` is left out) by central differences; keeps its histories and field frames in the session; the caps may only be lowered (the step's own increment cap applies too)"#,
+    params: r#"{"step": "Impact", "max_dofs": 6000000, "max_increments": 1000000000, "max_output_values": 50000000, "threads": 8} — transient response of an explicit dynamic step (the only one when `step` is left out) by central differences; keeps its histories and field frames in the session; the caps may only be lowered (the step's own increment cap applies too); `threads` as for solve.static"#,
     kind: CommandKind::Model,
     run: run_explicit,
 };
@@ -64,7 +65,7 @@ pub const HISTORY: CommandSpec = CommandSpec {
 pub const FLUID: CommandSpec = CommandSpec {
     id: "solve.fluid",
     label: "Solve Fluid Step",
-    params: r#"{"step": "Flow", "max_cells": 16000000, "max_steps": 10000000, "max_cell_updates": 1e12, "max_frame_bytes": 2e9} — runs a fluid step with the lattice Boltzmann solver (the only fluid step when `step` is left out): obstacles are triangulated from the open design or taken from imported surfaces; returns the time step, relaxation time, Mach number, mass and the final force on every wall; the caps may only be lowered"#,
+    params: r#"{"step": "Flow", "max_cells": 16000000, "max_steps": 10000000, "max_cell_updates": 1e12, "max_frame_bytes": 2e9, "threads": 8} — runs a fluid step with the lattice Boltzmann solver (the only fluid step when `step` is left out): obstacles are triangulated from the open design or taken from imported surfaces; returns the time step, relaxation time, Mach number, mass and the final force on every wall; the caps may only be lowered; `threads` as for solve.static"#,
     kind: CommandKind::Model,
     run: run_fluid,
 };
@@ -96,6 +97,18 @@ fn cap<T: Copy + TryInto<u64> + TryFrom<u64> + std::fmt::Display>(p: &Value, key
             .filter(|n| (1..=most).contains(n))
             .and_then(|n| T::try_from(n).ok())
             .ok_or_else(|| EngineError::Params(format!("`{key}` must be a whole number from 1 to {default}"))),
+    }
+}
+
+/// The `threads` parameter: 1 to [`parallel::MAX_THREADS`], by default the session's.
+fn threads(s: &Session, p: &Value) -> Result<usize> {
+    match p.get("threads") {
+        None => Ok(s.limits.threads.clamp(1, parallel::MAX_THREADS)),
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| (1..=parallel::MAX_THREADS).contains(n))
+            .ok_or_else(|| EngineError::Params(format!("`threads` must be a whole number from 1 to {}", parallel::MAX_THREADS))),
     }
 }
 
@@ -155,7 +168,8 @@ fn smallest(values: impl Iterator<Item = (u32, f64)>) -> Value {
 fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
     let limits = limits(p)?;
     let step = opt::<String>(p, "step")?;
-    let r = solve_static(&s.model, step.as_deref(), &limits)?;
+    let model = &s.model;
+    let r = parallel::with_threads(threads(s, p)?, || solve_static(model, step.as_deref(), &limits))?;
 
     let summary = json!({
         "step": r.step,
@@ -182,7 +196,8 @@ fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_heat(s: &mut Session, p: &Value) -> Result<Value> {
     let limits = limits(p)?;
     let step = opt::<String>(p, "step")?;
-    let r = solve_heat(&s.model, step.as_deref(), &limits)?;
+    let model = &s.model;
+    let r = parallel::with_threads(threads(s, p)?, || solve_heat(model, step.as_deref(), &limits))?;
     let t = r.temperature();
     let summary = json!({
         "step": r.step,
@@ -206,7 +221,8 @@ fn run_frequency(s: &mut Session, p: &Value) -> Result<Value> {
     let step = opt::<String>(p, "step")?;
     let mass = opt::<MassKind>(p, "mass")?.unwrap_or_default();
     let shift = opt::<f64>(p, "shift")?;
-    let r = solve_frequency(&s.model, step.as_deref(), &FrequencyOptions { mass, shift }, &limits)?;
+    let model = &s.model;
+    let r = parallel::with_threads(threads(s, p)?, || solve_frequency(model, step.as_deref(), &FrequencyOptions { mass, shift }, &limits))?;
     let summary = json!({
         "step": r.step,
         "dofs": r.stats.dofs,
@@ -233,7 +249,8 @@ fn run_explicit(s: &mut Session, p: &Value) -> Result<Value> {
         max_output_values: cap(p, "max_output_values", ExplicitLimits::MAX_OUTPUT_VALUES)?,
     };
     let step = opt::<String>(p, "step")?;
-    let r = solve_explicit(&s.model, step.as_deref(), &limits)?;
+    let model = &s.model;
+    let r = parallel::with_threads(threads(s, p)?, || solve_explicit(model, step.as_deref(), &limits))?;
     let summary = explicit_summary(&r);
     s.store_result(StepResult::Explicit(r));
     Ok(summary)
@@ -333,7 +350,8 @@ fn run_fluid(s: &mut Session, p: &Value) -> Result<Value> {
     let step = opt::<String>(p, "step")?;
     let (_, domain) = modelcraft_lbm::fluid_step(&s.model, step.as_deref())?;
     let obstacles = obstacles(s, domain)?;
-    let r = modelcraft_lbm::solve_fluid(&s.model, step.as_deref(), &obstacles, &limits)?;
+    let model = &s.model;
+    let r = parallel::with_threads(threads(s, p)?, || modelcraft_lbm::solve_fluid(model, step.as_deref(), &obstacles, &limits))?;
     let summary = fluid_summary(&r);
     s.store_result(StepResult::Fluid(r));
     Ok(summary)
@@ -756,6 +774,13 @@ pub(crate) mod tests {
             json!({"step": "Modes", "nodes": [1], "mode": 1e300}),
             json!({"step": "Bend", "nodes": [0, 99999999, 4294967296u64]}),
             json!({"step": "Bend", "nodes": vec![1; 20_000]}),
+            json!({"step": "Bend", "threads": 0}),
+            json!({"step": "Bend", "threads": -3}),
+            json!({"step": "Bend", "threads": 257}),
+            json!({"step": "Bend", "threads": 1e300}),
+            json!({"step": "Bend", "threads": "all"}),
+            json!({"step": "Modes", "threads": 18446744073709551615u64}),
+            json!({"step": "Modes", "threads": 2.5}),
         ];
         for id in ["solve.static", "solve.frequency", "solve.probe"] {
             for p in &hostile {
@@ -896,6 +921,9 @@ pub(crate) mod tests {
             json!({"step": "Shear", "forces": vec!["y_min"; 1000]}),
             json!({"step": "Shear", "forces": "y_min"}),
             json!({"step": "Shear", "nodes": [1]}),
+            json!({"step": "Shear", "threads": 0}),
+            json!({"step": "Shear", "threads": 100000}),
+            json!({"step": "Shear", "threads": null}),
         ];
         for id in ["solve.fluid", "solve.probe", "solve.static", "solve.frequency"] {
             for p in &hostile {
@@ -970,6 +998,69 @@ pub(crate) mod tests {
             {"command": "model.step.create", "params": {"name": "Modes", "procedure": {"type": "frequency", "modes": 1}, "boundary_conditions": ["clamp"]}},
         ]);
         s.run_script(&script).unwrap();
+    }
+
+    /// The stored result of a step, hashed bit for bit (Debug prints every float exactly).
+    fn result_hash(s: &Session, step: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::hash::DefaultHasher::new();
+        format!("{:?}", s.result(step).unwrap()).hash(&mut h);
+        h.finish()
+    }
+
+    /// Implicit (static, frequency), explicit and lattice Boltzmann solves large enough for every
+    /// parallel path (factorization tasks and tiles, element rounds, cell blocks) give the same
+    /// bits on 1, 2 and 7 threads.
+    #[test]
+    fn results_do_not_depend_on_the_thread_count() {
+        let solve_all = |threads: usize| -> Vec<u64> {
+            let mut s = Session::default();
+            explicit_cantilever(&mut s, 10.0, [30, 6]);
+            let script = json!([
+                {"command": "model.load.create", "params": {"name": "push", "type": "force", "target": {"set": "x30"}, "vector": [0, 0.3, -1]}},
+                {"command": "model.step.create", "params": {"name": "Bend", "procedure": {"type": "static"}, "boundary_conditions": ["clamp"], "loads": ["push"]}},
+            ]);
+            s.run_script(&script).unwrap();
+            s.execute("solve.static", &json!({"step": "Bend", "threads": threads})).unwrap();
+            s.execute("solve.frequency", &json!({"step": "Modes", "threads": threads})).unwrap();
+            let mut hashes = vec![result_hash(&s, "Bend"), result_hash(&s, "Modes")];
+            let step = json!({
+                "type": "explicit_dynamic", "end_time": 0.15, "output_interval": 0.05,
+                "initial_velocities": [{"set": "x30", "velocity": [0, 0, -2]}], "hourglass": {"type": "stiffness"}
+            });
+            let script = json!([
+                {"command": "model.section.edit", "params": {"name": "beam", "set": "all", "material": "Mat", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+                {"command": "model.step.create", "params": {"name": "Hit", "procedure": step, "boundary_conditions": ["clamp"]}},
+            ]);
+            s.run_script(&script).unwrap();
+            s.execute("solve.explicit", &json!({"step": "Hit", "threads": threads})).unwrap();
+            hashes.push(result_hash(&s, "Hit"));
+            let mut f = Session::default();
+            let periodic = json!({"type": "periodic"});
+            let script = json!([
+                {"command": "model.material.create", "params": {"name": "Oil", "density": 1.0, "fluid": {"type": "newtonian", "viscosity": 0.1}}},
+                {"command": "model.fluid_domain.create", "params": {"name": "Gap", "material": "Oil", "min": [0, 0, 0], "max": [5, 1, 2], "spacing": 0.125,
+                    "faces": {"z_min": periodic, "z_max": periodic}}},
+                {"command": "model.fluid_domain.boundary", "params": {"domain": "Gap", "at": "y_max", "condition": {"type": "moving_wall", "velocity": [0.1, 0, 0.02]}}},
+                {"command": "model.step.create", "params": {"name": "Shear", "procedure": {"type": "fluid", "domain": "Gap", "end_time": 2, "frames": 2}}},
+            ]);
+            f.run_script(&script).unwrap();
+            f.execute("solve.fluid", &json!({"step": "Shear", "threads": threads})).unwrap();
+            hashes.push(result_hash(&f, "Shear"));
+            hashes
+        };
+        let one = solve_all(1);
+        for threads in [2, 7] {
+            assert_eq!(solve_all(threads), one, "{threads} threads");
+        }
+        let mut s = Session::default();
+        cantilever(&mut s);
+        for bad in [json!(0), json!(257), json!(-1), json!(1.5), json!("8")] {
+            let e = s.execute("solve.static", &json!({"threads": bad})).unwrap_err().to_string();
+            assert!(e.contains("`threads` must be a whole number from 1 to 256"), "{e}");
+        }
+        s.limits.threads = 3;
+        s.execute("solve.static", &json!({})).unwrap();
     }
 
     /// Upward zero crossings of a sampled signal, linearly interpolated.

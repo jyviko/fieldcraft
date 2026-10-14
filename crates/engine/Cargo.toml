@@ -18,6 +18,7 @@ modelcraft-solver = { workspace = true }
 modelcraft-explicit = { workspace = true }
 modelcraft-fem = { workspace = true }
 modelcraft-lbm = { workspace = true }
+modelcraft-parallel = { workspace = true }
 modelcraft-render = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

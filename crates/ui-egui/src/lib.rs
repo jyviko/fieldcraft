@@ -750,7 +750,10 @@ impl ModelApp {
             };
             // Symbols follow the drawn nodes: the deformed shape of a results plot.
             let drawn = self.plot.1.as_ref().map_or(&self.display.1, |p| &p.display);
-            let symbols = scene::symbols(&mut s, &self.glyphs, |n| drawn.node_position(n), show, self.plot.1.is_some(), &t);
+            let mut symbols = scene::symbols(&mut s, &self.glyphs, |n| drawn.node_position(n), show, self.plot.1.is_some(), &t);
+            if show.geometry && self.plot.1.is_none() {
+                symbols.union(scene::datums(&mut s, &self.session.model, &self.display.1.bounds, &t));
+            }
             self.scene = (Some(key), s, symbols);
         }
         let mut bounds = self.display.1.bounds;

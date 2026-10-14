@@ -72,6 +72,7 @@ impl Palette {
             interaction: Rgb(0x9a, 0x30, 0xc0),
             thermal: Rgb(0xe8, 0x4c, 0x00),
             label: Rgb(0x26, 0x2a, 0x32),
+            datum: Rgb(0x1e, 0x8c, 0x6e),
         },
     };
 
@@ -156,6 +157,7 @@ pub fn scene(s: &Session, p: &Palette) -> (Scene, Aabb3, Shown) {
         let mut bounds = base.bounds;
         let mut scene = model_scene(&base, p);
         bounds.union(glyphs.draw(|label| base.node_position(label), GlyphShow::ALL, &p.glyphs, &mut scene));
+        bounds.union(fieldcraft_render::glyphs::datums(&s.model, &base.bounds, &p.glyphs, &mut scene));
         return (scene, bounds, shown);
     };
     shown.step = Some(view.step.clone());

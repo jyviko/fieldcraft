@@ -1,4 +1,5 @@
-//! The browser (left): the model as a tree. Geometry and Mesh with eye toggles, then the model's
+//! The browser (left): the model as a tree. Geometry (the design's bodies, datums and
+//! partitions) and Mesh with eye toggles, then the model's
 //! definitions (sets, materials, sections, steps, loads and boundary conditions, interactions)
 //! with counts (Loads & BCs and Interactions with eye toggles for their viewport symbols), and
 //! the solved steps' results. Clicking a definition selects it (its properties show on the
@@ -386,6 +387,26 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
                 ui,
                 egui::Id::new(("fc_row_surface", i)),
                 &Row { depth: 2, icon: Some("geometry.import.mesh"), label: s, ..Default::default() },
+            );
+        }
+        // Datum planes and axes, then the partitions in the order they cut.
+        let datums: Vec<(String, &'static str)> =
+            app.session.model.datums().iter().map(|(n, d)| (n.clone(), if d.plane().is_some() { "plane" } else { "axis" })).collect();
+        for (i, (n, kind)) in datums.iter().enumerate() {
+            draw_row(
+                app,
+                ui,
+                egui::Id::new(("fc_row_datum", i)),
+                &Row { depth: 2, icon: Some("geometry.datum"), label: n, note: Some((*kind).into()), ..Default::default() },
+            );
+        }
+        let partitions: Vec<(String, String)> = app.session.model.partitions().iter().map(|p| (p.name.clone(), p.datum.clone())).collect();
+        for (i, (n, datum)) in partitions.iter().enumerate() {
+            draw_row(
+                app,
+                ui,
+                egui::Id::new(("fc_row_partition", i)),
+                &Row { depth: 2, icon: Some("geometry.partition"), label: n, note: Some(format!("by {datum}")), ..Default::default() },
             );
         }
         if design.is_none() && surfaces.is_empty() {

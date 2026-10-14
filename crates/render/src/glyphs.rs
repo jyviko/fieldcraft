@@ -72,6 +72,8 @@ pub struct GlyphColors {
     pub thermal: Rgb,
     /// Reference point names.
     pub label: Rgb,
+    /// Datum planes and axes.
+    pub datum: Rgb,
 }
 
 impl GlyphColors {
@@ -89,6 +91,7 @@ impl GlyphColors {
             interaction: mix(self.interaction),
             thermal: mix(self.thermal),
             label: mix(self.label),
+            datum: mix(self.datum),
         }
     }
 
@@ -647,6 +650,49 @@ impl Glyphs {
     }
 }
 
+/// How far a datum plane's square reaches from the model's centre, and a datum axis's line,
+/// as a fraction of the bounding box diagonal.
+const DATUM_REACH: f64 = 0.6;
+/// Hatch lines across a datum plane's square.
+const DATUM_HATCH: usize = 4;
+
+/// Draw the model's datum planes (an outlined, hatched square around the model, `bounds`) and
+/// axes (a line through the model), each with its name; returns the box around them.
+pub fn datums(model: &Model, bounds: &Aabb3, colors: &GlyphColors, scene: &mut Scene) -> Aabb3 {
+    let mut d = Draw { scene, bounds: Aabb3::EMPTY };
+    let (centre, diagonal) = if bounds.is_empty() { (Vec3::ZERO, 1.0) } else { (bounds.center(), bounds.diagonal().max(1e-9)) };
+    let reach = DATUM_REACH * diagonal;
+    for (name, datum) in model.datums() {
+        match *datum {
+            fieldcraft_model::Datum::Plane { point, normal } => {
+                let (p, n) = (Vec3::from(point), Vec3::from(normal));
+                // The model's centre moved onto the plane.
+                let c = centre - n * (centre - p).dot(n);
+                let (u, v) = perpendiculars(n);
+                let corner = |a: f64, b: f64| c + u * (a * reach) + v * (b * reach);
+                let ring = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
+                for (k, a) in ring.iter().enumerate() {
+                    let b = ring.get((k + 1) % 4).copied().unwrap_or(*a);
+                    d.line(*a, b, colors.datum, OUTLINE_WIDTH);
+                }
+                for k in 1..DATUM_HATCH {
+                    let t = -1.0 + 2.0 * k as f64 / DATUM_HATCH as f64;
+                    d.line(corner(t, -1.0), corner(t, 1.0), colors.datum, COUPLING_WIDTH);
+                    d.line(corner(-1.0, t), corner(1.0, t), colors.datum, COUPLING_WIDTH);
+                }
+                d.scene.labels.push(SceneLabel { p: corner(1.0, 1.0), text: name.clone(), color: colors.datum });
+            }
+            fieldcraft_model::Datum::Axis { point, direction } => {
+                let (p, a) = (Vec3::from(point), Vec3::from(direction));
+                let c = p + a * (centre - p).dot(a);
+                d.line(c - a * reach, c + a * reach, colors.datum, SHAFT_WIDTH);
+                d.scene.labels.push(SceneLabel { p: c + a * reach, text: name.clone(), color: colors.datum });
+            }
+        }
+    }
+    d.bounds
+}
+
 /// Symbol primitives into a scene.
 struct Draw<'s> {
     scene: &'s mut Scene,
@@ -745,8 +791,14 @@ mod tests {
 
     use super::*;
 
-    const COLORS: GlyphColors =
-        GlyphColors { constraint: Rgb(0, 0, 255), load: Rgb(255, 0, 0), interaction: Rgb(0, 255, 0), thermal: Rgb(255, 128, 0), label: Rgb(0, 0, 0) };
+    const COLORS: GlyphColors = GlyphColors {
+        constraint: Rgb(0, 0, 255),
+        load: Rgb(255, 0, 0),
+        interaction: Rgb(0, 255, 0),
+        thermal: Rgb(255, 128, 0),
+        label: Rgb(0, 0, 0),
+        datum: Rgb(0, 128, 128),
+    };
 
     /// A row of `n` unit hex8 cells along x.
     fn bar(n: u32) -> Model {
@@ -947,5 +999,25 @@ mod tests {
         assert_eq!(thin(&items, f64::NAN, 1000).len(), 10);
         assert!(thin::<u32>(&[], 1.0, 10).is_empty());
         assert!(thin(&[(1u32, Vec3::new(f64::INFINITY, 0.0, 0.0))], 1.0, 10).is_empty());
+    }
+
+    #[test]
+    fn datums_draw_around_the_model_with_their_names() {
+        let mut m = Model::default();
+        m.add_datum("Mid", fieldcraft_model::Datum::Plane { point: [5.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0] }).unwrap();
+        m.add_datum("Ax", fieldcraft_model::Datum::Axis { point: [0.0; 3], direction: [0.0, 0.0, 1.0] }).unwrap();
+        let mut bounds = Aabb3::EMPTY;
+        bounds.add(Vec3::ZERO);
+        bounds.add(Vec3::new(10.0, 10.0, 10.0));
+        let mut scene = Scene::default();
+        let drawn = datums(&m, &bounds, &COLORS, &mut scene);
+        // A square with its hatch (4 + 2 × 3 lines) and the axis line.
+        assert_eq!(scene.lines.len(), 11);
+        let mut names: Vec<&str> = scene.labels.iter().map(|l| l.text.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Ax", "Mid"]);
+        // The plane's lines lie on x = 5, centred on the model.
+        assert!(scene.lines.iter().skip(1).all(|l| (l.a.x - 5.0).abs() < 1e-12 && (l.b.x - 5.0).abs() < 1e-12));
+        assert!(drawn.diagonal() > bounds.diagonal());
     }
 }

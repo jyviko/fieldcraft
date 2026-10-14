@@ -69,6 +69,11 @@ pub fn symbols(s: &mut Scene, glyphs: &Glyphs, pos: impl Fn(u32) -> Option<Vec3>
     glyphs.draw(pos, GlyphShow { loads: show.loads, interactions: show.interactions }, &colors, s)
 }
 
+/// Draw the model's datum planes and axes around `bounds` into `s`; returns the box around them.
+pub fn datums(s: &mut Scene, model: &fieldcraft_model::Model, bounds: &Aabb3, t: &Tokens) -> Aabb3 {
+    fieldcraft_render::glyphs::datums(model, bounds, &t.glyph_colors(), s)
+}
+
 /// The scene for `display` drawn in `style`.
 pub fn build(display: &DisplayMesh, style: Style, show: Show, t: &Tokens) -> Scene {
     let mut s = Scene { background: Some((rgb(t.viewport_top), rgb(t.viewport_bottom))), ..Default::default() };

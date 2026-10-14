@@ -82,6 +82,8 @@ pub struct Tokens {
     pub glyph_interaction: Color32,
     /// Temperatures, heat fluxes, convection and heat sources.
     pub glyph_thermal: Color32,
+    /// Datum planes and axes.
+    pub glyph_datum: Color32,
     // ---- selection ----
     /// What is selected in the viewport, and what a click would pick under the pointer.
     pub pick_selected: Color32,
@@ -159,6 +161,7 @@ impl Tokens {
             glyph_load: Color32::from_rgb(0xd0, 0x24, 0x24),
             glyph_interaction: Color32::from_rgb(0x9a, 0x30, 0xc0),
             glyph_thermal: Color32::from_rgb(0xe8, 0x4c, 0x00),
+            glyph_datum: Color32::from_rgb(0x1e, 0x8c, 0x6e),
             pick_selected: Color32::from_rgb(0xd6, 0x00, 0x7f),
             pick_hover: Color32::from_rgb(0xf0, 0x7c, 0xc0),
         }
@@ -221,6 +224,7 @@ impl Tokens {
         t.glyph_load = Color32::from_rgb(0xff, 0x5a, 0x4c);
         t.glyph_interaction = Color32::from_rgb(0xd2, 0x82, 0xff);
         t.glyph_thermal = Color32::from_rgb(0xff, 0x8c, 0x00);
+        t.glyph_datum = Color32::from_rgb(0x5a, 0xd8, 0xaa);
         t.pick_selected = Color32::from_rgb(0xff, 0x3f, 0xb4);
         t.pick_hover = Color32::from_rgb(0xff, 0xa6, 0xdc);
         t
@@ -239,6 +243,7 @@ impl Tokens {
             interaction: rgb(self.glyph_interaction),
             thermal: rgb(self.glyph_thermal),
             label: rgb(self.overlay_text),
+            datum: rgb(self.glyph_datum),
         }
     }
 

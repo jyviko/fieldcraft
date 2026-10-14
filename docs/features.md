@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-47 ready, 53 coming soon.
+48 ready, 53 coming soon.
 
 ## Geometry
 
@@ -31,6 +31,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Tet | Tet Mesh — Constrained Delaunay tet mesh of a body: every boundary triangle kept, faces tagged (refinement comes next) | ready | `mesh.tet.generate` |
 | Tet | Quadratic — Second-order elements with mid-side nodes on the geometry | coming soon (M2) |  |
 | Tet | Delaunay Points — Delaunay tetrahedralization of a point list (debugging aid) | ready | `mesh.delaunay.points` |
+| 2D | 2D Mesh — Quad or triangle mesh of a planar face or polygon in the XY plane for plane stress, plane strain and axisymmetric models; edges tagged | ready | `mesh.planar` |
 | Structured Hex | Quad Faces — All-quad meshes of faces on shared edge nodes | coming soon (M5) |  |
 | Structured Hex | Mapped Hex — Mapped hex mesh of a six-sided block (curved faces allowed) | ready | `mesh.hex.mapped`, `mesh.hex.generate` |
 | Structured Hex | Sweep Hex — Hex mesh swept along extrusions (several levels), around revolutions, or from a source face to a target | ready | `mesh.hex.sweep`, `mesh.hex.generate` |
@@ -61,7 +62,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Materials | Damage — Damage initiation and evolution | coming soon (M8) |  |
 | Materials | Thermal — Conductivity, specific heat and expansion | coming soon (M8) |  |
 | Materials | Equation of State — Polynomial, ideal gas, Mie–Grüneisen, JWL and tabulated equations of state | coming soon (M11) |  |
-| Sections | Section — Solid, shell, beam or rod section assigned to a set, with its element formulation | ready | `model.section.create`, `model.section.edit`, `model.section.delete` |
+| Sections | Section — Solid, shell, beam, rod or 2D (plane stress, plane strain, axisymmetric) section assigned to a set, with its element formulation | ready | `model.section.create`, `model.section.edit`, `model.section.delete` |
 | Sections | Composite — Composite layups and continuum shells | coming soon (M8) |  |
 | Sections | Orientation — Material orientations | coming soon (M8) |  |
 | Sets | Set — A set of nodes, elements and faces, or of named geometry that survives remeshing | ready | `model.set.create`, `model.set.edit`, `model.set.delete`, `model.set.resolve` |

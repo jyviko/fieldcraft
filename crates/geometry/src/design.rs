@@ -23,6 +23,10 @@ pub struct Design {
     /// Features that failed to rebuild. The design still opens with the bodies the rest made,
     /// as it does in SolidCraft.
     pub errors: Vec<FeatureError>,
+    /// The partitions applied ([`Design::partitioned`]), in order; empty for the design as opened.
+    pub cuts: Vec<crate::partition::CutReport>,
+    /// The bodies as opened, before any partition: what [`Design::partitioned`] starts from.
+    pub(crate) source: std::sync::Arc<Vec<Shape>>,
 }
 
 /// A feature of the design that failed to rebuild.
@@ -68,7 +72,7 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
         })?;
         bodies.push(Shape { name: b.name.clone(), body: b.body.clone(), faces });
     }
-    Ok(Design { name: doc.name.clone(), bodies, errors })
+    Ok(Design { name: doc.name.clone(), source: std::sync::Arc::new(bodies.clone()), bodies, errors, cuts: Vec::new() })
 }
 
 #[cfg(test)]

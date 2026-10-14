@@ -1,0 +1,477 @@
+//! Partitions: a design's bodies cut into cells by planes, for meshing cell by cell.
+//!
+//! A partition cuts bodies of the open design by a plane with SolidCraft's kernel
+//! (`split_by_plane`, the operation behind SolidCraft's split body), in memory: the design file is
+//! never changed. The partitions live in the FieldCraft model and are applied again, in order,
+//! whenever the design is opened, so an edit of the design followed by a re-open replays them.
+//!
+//! Names are FieldCraft's own, so they do not depend on the order of the design's timeline:
+//! - **Cells.** A body cut by a plane gives `<body>/a` (the piece on the plane's negative side)
+//!   and `<body>/b`; several disjoint pieces on one side are `<body>/a1`, `<body>/a2`, … ordered
+//!   by centroid.
+//! - **Cut faces** pair across the cut: on a cell on the negative side (its outward normal along
+//!   the plane's normal) the face is `partition:<name>:a`, on the positive side
+//!   `partition:<name>:b`. Several disjoint faces on one cell (a cut through a hole) are `…#0`,
+//!   `…#1`, ordered along the plane, which a set naming `partition:<name>:a` selects together.
+//! - **Every other face** inherits the persistent name of the face it is a piece of (found on the
+//!   same surface under a point of the piece). Where a cell has several pieces of one face they
+//!   are `<name>#0`, `<name>#1`, …, which sets naming `<name>` select.
+
+use solidcraft_geom::{Plane, Vec3};
+use solidcraft_kernel::guard;
+
+use crate::{Design, Error, Face, FaceSurface, FeatureError, Result, Shape, SurfaceMesh};
+
+/// Most partitions a design takes.
+pub const MAX_CUTS: usize = 256;
+/// Most cells the partitions make in all.
+pub const MAX_CELLS: usize = 4096;
+/// A cut face lies on the plane within this fraction of its body's size.
+const ON_PLANE: f64 = 1e-6;
+/// Tessellation tolerance (fraction of a body's size) for matching and ordering faces.
+const MATCH_TOLERANCE: f64 = 2e-3;
+
+/// One partition: the bodies it cuts by a plane.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cut {
+    /// Names the cut faces (`partition:<name>:a|b`).
+    pub name: String,
+    /// A point on the plane and its normal (any length but zero).
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    /// The bodies to cut, by name, as they are when this partition comes (the cells of earlier
+    /// partitions included); empty: every body the plane divides.
+    pub bodies: Vec<String>,
+}
+
+/// What a partition did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CutReport {
+    pub name: String,
+    /// The bodies it cut, each into two or more cells.
+    pub split: Vec<String>,
+    /// How many cut faces it named.
+    pub faces: usize,
+}
+
+fn vec3(p: [f64; 3]) -> Vec3 {
+    Vec3 { x: p[0], y: p[1], z: p[2] }
+}
+
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn lexical(a: &[f64; 3], b: &[f64; 3]) -> std::cmp::Ordering {
+    a.iter().zip(b).map(|(x, y)| x.total_cmp(y)).find(|o| o.is_ne()).unwrap_or(std::cmp::Ordering::Equal)
+}
+
+/// The plane of a cut, with its unit normal.
+fn plane_of(cut: &Cut) -> Result<(Plane, [f64; 3])> {
+    let finite = cut.point.iter().chain(&cut.normal).all(|v| v.is_finite() && v.abs() <= 1e9);
+    let len = dot(cut.normal, cut.normal).sqrt();
+    if !finite || !(len > 1e-12) {
+        return Err(Error::Invalid(format!("partition `{}`: the plane needs a finite point and a non-zero normal", cut.name)));
+    }
+    let n = cut.normal.map(|v| v / len);
+    let plane = Plane::from_normal(vec3(cut.point), vec3(n))
+        .ok_or_else(|| Error::Invalid(format!("partition `{}`: the plane needs a non-zero normal", cut.name)))?;
+    Ok((plane, n))
+}
+
+impl Design {
+    /// The design as opened, cut by `cuts` in order (the partitions replace any applied before).
+    /// A cut that names a body the design does not have, or that does not divide a body it
+    /// names, is listed in [`Design::errors`] (feature `partition <name>`), as a feature of the
+    /// design that failed to rebuild; the rest still apply.
+    pub fn partitioned(&self, cuts: &[Cut]) -> Result<Design> {
+        if cuts.len() > MAX_CUTS {
+            return Err(Error::Invalid(format!("a design takes at most {MAX_CUTS} partitions")));
+        }
+        let planes: Vec<(Plane, [f64; 3])> = cuts.iter().map(plane_of).collect::<Result<_>>()?;
+        let mut bodies: Vec<Shape> = self.source.as_ref().clone();
+        let mut errors: Vec<FeatureError> = self.errors.iter().filter(|e| !e.feature.starts_with("partition ")).cloned().collect();
+        let mut reports = Vec::with_capacity(cuts.len());
+        for (cut, (plane, n)) in cuts.iter().zip(&planes) {
+            let feature = format!("partition {}", cut.name);
+            for b in &cut.bodies {
+                if !bodies.iter().any(|x| &x.name == b) {
+                    errors.push(FeatureError { feature: feature.clone(), message: format!("no body `{b}` to cut") });
+                }
+            }
+            let mut report = CutReport { name: cut.name.clone(), split: Vec::new(), faces: 0 };
+            let mut next = Vec::with_capacity(bodies.len() + 1);
+            for body in bodies {
+                let listed = cut.bodies.iter().any(|b| b == &body.name);
+                if !(cut.bodies.is_empty() || listed) {
+                    next.push(body);
+                    continue;
+                }
+                match split(&body, plane, *n, cut)? {
+                    Some((cells, faces)) => {
+                        report.split.push(body.name.clone());
+                        report.faces += faces;
+                        next.extend(cells);
+                    }
+                    None => {
+                        if listed {
+                            errors.push(FeatureError { feature: feature.clone(), message: format!("the plane does not divide `{}`", body.name) });
+                        }
+                        next.push(body);
+                    }
+                }
+                if next.len() > MAX_CELLS {
+                    return Err(Error::Invalid(format!("the partitions make at most {MAX_CELLS} cells")));
+                }
+            }
+            bodies = next;
+            reports.push(report);
+        }
+        Ok(Design { name: self.name.clone(), bodies, errors, cuts: reports, source: std::sync::Arc::clone(&self.source) })
+    }
+}
+
+/// Cut one body: its cells, named, and how many cut faces they have; `None` when the plane does
+/// not divide it.
+fn split(body: &Shape, plane: &Plane, n: [f64; 3], cut: &Cut) -> Result<Option<(Vec<Shape>, usize)>> {
+    let parts = match guard("partition", || solidcraft_kernel::split_by_plane(&body.body, plane)) {
+        Ok(p) if p.len() >= 2 => p,
+        _ => return Ok(None),
+    };
+    let size = body.size()?;
+    let tol = (MATCH_TOLERANCE * size).max(1e-4);
+    let parent = Faces::of(body, tol)?;
+    let mut cells: Vec<(bool, [f64; 3], Shape)> = Vec::with_capacity(parts.len());
+    for part in parts {
+        let mut shape = Shape { name: String::new(), body: part, faces: Vec::new() };
+        let m = shape.measure()?;
+        let negative = dot(sub(m.centroid, cut.point), n) < 0.0;
+        shape.faces = (0..m.faces).map(|_| Face { name: String::new(), exact: false }).collect();
+        cells.push((negative, m.centroid, shape));
+    }
+    cells.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| lexical(&a.1, &b.1)));
+    let mut faces = 0;
+    let count = |neg: bool| cells.iter().filter(|c| c.0 == neg).count();
+    let (na, nb) = (count(true), count(false));
+    let (mut ka, mut kb) = (0, 0);
+    let mut out = Vec::with_capacity(cells.len());
+    for (negative, _, mut shape) in cells {
+        let (k, of) = if negative {
+            ka += 1;
+            (ka, na)
+        } else {
+            kb += 1;
+            (kb, nb)
+        };
+        let side = if negative { "a" } else { "b" };
+        shape.name = if of > 1 { format!("{}/{side}{k}", body.name) } else { format!("{}/{side}", body.name) };
+        faces += name_faces(&mut shape, &parent, cut, n, size, tol)?;
+        out.push(shape);
+    }
+    Ok(Some((out, faces)))
+}
+
+/// A body's faces as matching needs them: each face's analytic surface, name and triangles.
+struct Faces {
+    surfaces: Vec<Option<FaceSurface>>,
+    names: Vec<Face>,
+    mesh: SurfaceMesh,
+}
+
+impl Faces {
+    fn of(body: &Shape, tol: f64) -> Result<Faces> {
+        Ok(Faces { surfaces: body.face_surfaces()?, names: body.faces.clone(), mesh: body.tessellate(tol)? })
+    }
+
+    /// The face nearest to `p` (by distance to its triangles), among those `keep` allows.
+    fn nearest(&self, p: [f64; 3], keep: impl Fn(usize) -> bool) -> Option<usize> {
+        let mut best: Option<(f64, usize)> = None;
+        for (t, &f) in self.mesh.triangles.iter().zip(&self.mesh.tri_face) {
+            let f = f as usize;
+            if !keep(f) {
+                continue;
+            }
+            let q = |k: usize| t.get(k).and_then(|&i| self.mesh.positions.get(i as usize)).copied().unwrap_or([0.0; 3]);
+            let d = point_triangle(p, q(0), q(1), q(2));
+            if best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, f));
+            }
+        }
+        best.map(|(_, f)| f)
+    }
+}
+
+/// Whether two analytic surfaces are the same surface (within `tol`); free-form faces match any
+/// free-form face.
+fn same_surface(a: Option<FaceSurface>, b: Option<FaceSurface>, tol: f64) -> bool {
+    let close = |x: [f64; 3], y: [f64; 3]| dot(sub(x, y), sub(x, y)).sqrt() <= tol;
+    let parallel = |x: [f64; 3], y: [f64; 3]| dot(cross(x, y), cross(x, y)).sqrt() <= 1e-6;
+    let on_line = |p: [f64; 3], o: [f64; 3], axis: [f64; 3]| {
+        let c = cross(sub(p, o), axis);
+        dot(c, c).sqrt() <= tol
+    };
+    match (a, b) {
+        (None, None) => true,
+        (Some(FaceSurface::Plane { normal: n1, point: p1 }), Some(FaceSurface::Plane { normal: n2, point: p2 })) => {
+            dot(n1, n2) > 1.0 - 1e-9 && dot(sub(p2, p1), n1).abs() <= tol
+        }
+        (Some(FaceSurface::Cylinder { origin: o1, axis: a1, radius: r1 }), Some(FaceSurface::Cylinder { origin: o2, axis: a2, radius: r2 })) => {
+            (r1 - r2).abs() <= tol && parallel(a1, a2) && on_line(o2, o1, a1)
+        }
+        (Some(FaceSurface::Cone { apex: p1, axis: a1, half_angle: h1 }), Some(FaceSurface::Cone { apex: p2, axis: a2, half_angle: h2 })) => {
+            close(p1, p2) && dot(a1, a2) > 1.0 - 1e-9 && (h1 - h2).abs() <= 1e-9
+        }
+        (Some(FaceSurface::Sphere { center: c1, radius: r1 }), Some(FaceSurface::Sphere { center: c2, radius: r2 })) => {
+            close(c1, c2) && (r1 - r2).abs() <= tol
+        }
+        (
+            Some(FaceSurface::Torus { center: c1, axis: a1, major: m1, minor: n1 }),
+            Some(FaceSurface::Torus { center: c2, axis: a2, major: m2, minor: n2 }),
+        ) => close(c1, c2) && parallel(a1, a2) && (m1 - m2).abs() <= tol && (n1 - n2).abs() <= tol,
+        _ => false,
+    }
+}
+
+/// The distance from `p` to the triangle `a b c` (Ericson, Real-Time Collision Detection §5.1.5).
+fn point_triangle(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
+    let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
+    let (d1, d2) = (dot(ab, ap), dot(ac, ap));
+    let at = |q: [f64; 3]| dot(sub(p, q), sub(p, q)).sqrt();
+    let lerp = |o: [f64; 3], d: [f64; 3], t: f64| [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return at(a);
+    }
+    let bp = sub(p, b);
+    let (d3, d4) = (dot(ab, bp), dot(ac, bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return at(b);
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return at(lerp(a, ab, d1 / (d1 - d3)));
+    }
+    let cp = sub(p, c);
+    let (d5, d6) = (dot(ab, cp), dot(ac, cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return at(c);
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return at(lerp(a, ac, d2 / (d2 - d6)));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        return at(lerp(b, sub(c, b), (d4 - d3) / ((d4 - d3) + (d5 - d6))));
+    }
+    let denom = va + vb + vc;
+    if denom.abs() < f64::MIN_POSITIVE {
+        return at(a);
+    }
+    let (v, w) = (vb / denom, vc / denom);
+    at([a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w])
+}
+
+/// The name without a trailing piece number (`F2:top#1` → `F2:top`).
+fn base_name(name: &str) -> &str {
+    match name.rsplit_once('#') {
+        Some((b, k)) if !k.is_empty() && k.bytes().all(|c| c.is_ascii_digit()) => b,
+        _ => name,
+    }
+}
+
+/// Name a cell's faces: cut faces after the cut, the rest after the face of `parent` they are a
+/// piece of. Returns how many cut faces it has.
+fn name_faces(cell: &mut Shape, parent: &Faces, cut: &Cut, n: [f64; 3], size: f64, tol: f64) -> Result<usize> {
+    let own = Faces::of(cell, tol)?;
+    // A point on each face (the centroid of its largest triangle) and its area-weighted centroid.
+    let count = cell.faces.len();
+    let mut probe = vec![(0.0f64, [0.0; 3]); count];
+    let mut centroid = vec![([0.0; 3], 0.0f64); count];
+    for (t, &f) in own.mesh.triangles.iter().zip(&own.mesh.tri_face) {
+        let q = |k: usize| t.get(k).and_then(|&i| own.mesh.positions.get(i as usize)).copied().unwrap_or([0.0; 3]);
+        let (a, b, c) = (q(0), q(1), q(2));
+        let cr = cross(sub(b, a), sub(c, a));
+        let area = 0.5 * dot(cr, cr).sqrt();
+        let mid = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0];
+        if let Some(slot) = probe.get_mut(f as usize).filter(|s| area > s.0) {
+            *slot = (area, mid);
+        }
+        if let Some((s, w)) = centroid.get_mut(f as usize) {
+            for k in 0..3 {
+                s[k] += area * mid[k];
+            }
+            *w += area;
+        }
+    }
+    let centroid: Vec<[f64; 3]> = centroid.into_iter().map(|(s, w)| if w > 0.0 { s.map(|x| x / w) } else { s }).collect();
+    let on_plane = ON_PLANE * size.max(1.0);
+    let mut names: Vec<(String, bool)> = Vec::with_capacity(count); // (name, exact)
+    let mut cut_faces = 0;
+    for i in 0..count {
+        let surface = own.surfaces.get(i).copied().flatten();
+        if let Some(FaceSurface::Plane { normal, point }) = surface {
+            let along = dot(normal, n);
+            if (along.abs() - 1.0).abs() < 1e-9 && dot(sub(point, cut.point), n).abs() < on_plane.max(tol * 1e-3) {
+                // Outward along the normal: the cell is on the negative side.
+                let side = if along > 0.0 { "a" } else { "b" };
+                names.push((format!("partition:{}:{side}", cut.name), true));
+                cut_faces += 1;
+                continue;
+            }
+        }
+        let p = probe.get(i).map_or([0.0; 3], |x| x.1);
+        let from =
+            parent.nearest(p, |f| same_surface(surface, parent.surfaces.get(f).copied().flatten(), tol)).or_else(|| parent.nearest(p, |_| true));
+        let face = from.and_then(|f| parent.names.get(f));
+        names.push(match face {
+            Some(f) if !f.name.is_empty() => (f.name.clone(), f.exact),
+            _ => (i.to_string(), false),
+        });
+    }
+    // Several pieces of one face on the cell: numbered by position.
+    let mut order: Vec<usize> = (0..count).collect();
+    order.sort_by(|&a, &b| lexical(centroid.get(a).unwrap_or(&[0.0; 3]), centroid.get(b).unwrap_or(&[0.0; 3])));
+    let bases: Vec<String> = names.iter().map(|(nm, _)| base_name(nm).to_string()).collect();
+    let mut numbered = vec![None; count];
+    for (i, base) in bases.iter().enumerate() {
+        if numbered.get(i).is_some_and(Option::is_some) {
+            continue;
+        }
+        let group: Vec<usize> = order.iter().copied().filter(|&j| bases.get(j) == Some(base)).collect();
+        // Untouched pieces keep the numbers SolidCraft gave them; pieces the cut made (or a
+        // name two pieces now share) are numbered again.
+        let distinct = {
+            let mut v: Vec<&str> = group.iter().filter_map(|&j| names.get(j).map(|x| x.0.as_str())).collect();
+            v.sort_unstable();
+            v.dedup();
+            v.len() == group.len()
+        };
+        for (k, &j) in group.iter().enumerate() {
+            if let Some(slot) = numbered.get_mut(j) {
+                *slot = Some(if distinct { names.get(j).map(|x| x.0.clone()).unwrap_or_default() } else { format!("{base}#{k}") });
+            }
+        }
+    }
+    for ((face, name), (_, exact)) in cell.faces.iter_mut().zip(numbered).zip(&names) {
+        face.name = name.unwrap_or_default();
+        face.exact = *exact;
+    }
+    Ok(cut_faces)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::open_design;
+    use crate::sample::{self, Plate};
+
+    fn plate() -> Design {
+        open_design(&sample::plate_design(&Plate::default()).unwrap()).unwrap()
+    }
+
+    fn cut(name: &str, point: [f64; 3], normal: [f64; 3]) -> Cut {
+        Cut { name: name.into(), point, normal, bodies: Vec::new() }
+    }
+
+    fn names(b: &Shape) -> Vec<&str> {
+        b.faces().iter().map(|f| f.name.as_str()).collect()
+    }
+
+    #[test]
+    fn a_plane_cuts_the_plate_into_cells_with_paired_cut_faces() {
+        let d = plate();
+        let whole = d.bodies[0].measure().unwrap().volume;
+        // Through the hole's centre (x = 15): each half has two cut faces, either side of the hole.
+        let p = d.partitioned(&[cut("Mid", [15.0, 0.0, 0.0], [1.0, 0.0, 0.0])]).unwrap();
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert_eq!(p.bodies.len(), 2, "{:?}", p.bodies.iter().map(|b| &b.name).collect::<Vec<_>>());
+        let volume: f64 = p.bodies.iter().map(|b| b.measure().unwrap().volume).sum();
+        assert!((volume - whole).abs() < 1e-6 * whole, "{volume} vs {whole}");
+        assert_eq!(p.cuts, vec![CutReport { name: "Mid".into(), split: vec![d.bodies[0].name.clone()], faces: 4 }]);
+        let mut sides = Vec::new();
+        for b in &p.bodies {
+            let m = b.measure().unwrap();
+            let side = if m.centroid[0] < 15.0 { "a" } else { "b" };
+            let mut cut: Vec<&str> = names(b).into_iter().filter(|n| n.starts_with("partition:")).collect();
+            cut.sort_unstable();
+            assert_eq!(cut, vec![format!("partition:Mid:{side}#0"), format!("partition:Mid:{side}#1")], "{:?}", names(b));
+            sides.push(side);
+        }
+        sides.sort_unstable();
+        assert_eq!(sides, ["a", "b"]);
+        // Faces the cut did not touch keep their names; the cut's faces pair by index (#0 with
+        // #0) and lie on the same piece of the plane.
+        let original: Vec<&str> = names(&d.bodies[0]).into_iter().map(base_name).collect();
+        let body = &d.bodies[0].name;
+        let mut cells: Vec<&str> = p.bodies.iter().map(|b| b.name.as_str()).collect();
+        cells.sort_unstable();
+        assert_eq!(cells, [format!("{body}/a"), format!("{body}/b")]);
+        for b in &p.bodies {
+            let n = names(b);
+            assert!(n.iter().filter(|n| !n.starts_with("partition:")).all(|n| original.contains(&base_name(n))), "{n:?} {original:?}");
+            assert!(b.faces().iter().all(|f| f.exact), "{:?}", b.faces());
+            let mut unique = n.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), n.len(), "{n:?}");
+        }
+        // The cut is replayed from the design as opened: partitioning again replaces it.
+        let again = p.partitioned(&[]).unwrap();
+        assert_eq!(again.bodies.len(), 1);
+    }
+
+    #[test]
+    fn cuts_follow_each_other_and_name_only_the_bodies_they_divide() {
+        let d = plate();
+        let p = d.partitioned(&[cut("X", [30.0, 0.0, 0.0], [1.0, 0.0, 0.0]), cut("Z", [0.0, 0.0, 5.0], [0.0, 0.0, -1.0])]).unwrap();
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert_eq!(p.bodies.len(), 4);
+        assert_eq!(p.cuts.len(), 2);
+        assert_eq!(p.cuts[1].split.len(), 2);
+        for b in &p.bodies {
+            let n = names(b);
+            assert_eq!(n.iter().filter(|n| n.starts_with("partition:X:")).count(), 1, "{n:?}");
+            assert_eq!(n.iter().filter(|n| n.starts_with("partition:Z:")).count(), 1, "{n:?}");
+            // The normal points down: the cell above z = 5 is on its negative side.
+            let above = b.measure().unwrap().centroid[2] > 5.0;
+            assert!(n.contains(&if above { "partition:Z:a" } else { "partition:Z:b" }), "{n:?}");
+        }
+    }
+
+    #[test]
+    fn a_plane_that_misses_or_a_missing_body_is_reported_not_fatal() {
+        let d = plate();
+        let body = d.bodies[0].name.clone();
+        let miss = Cut { bodies: vec![body.clone()], ..cut("Out", [100.0, 0.0, 0.0], [1.0, 0.0, 0.0]) };
+        let gone = Cut { bodies: vec!["Nope".into()], ..cut("Gone", [10.0, 0.0, 0.0], [1.0, 0.0, 0.0]) };
+        let p = d.partitioned(&[miss, gone, cut("Free", [100.0, 0.0, 0.0], [1.0, 0.0, 0.0])]).unwrap();
+        assert_eq!(p.bodies.len(), 1);
+        let features: Vec<&str> = p.errors.iter().map(|e| e.feature.as_str()).collect();
+        assert_eq!(features, ["partition Out", "partition Gone"], "{:?}", p.errors);
+        assert_eq!(p.bodies[0].name, body);
+        assert!(p.cuts.iter().all(|c| c.split.is_empty() && c.faces == 0), "{:?}", p.cuts);
+    }
+
+    #[test]
+    fn hostile_planes_are_an_error() {
+        let d = plate();
+        for (point, normal) in [
+            ([0.0; 3], [0.0; 3]),
+            ([f64::NAN, 0.0, 0.0], [1.0, 0.0, 0.0]),
+            ([0.0; 3], [f64::INFINITY, 0.0, 0.0]),
+            ([1e300, 0.0, 0.0], [1.0, 0.0, 0.0]),
+        ] {
+            assert!(d.partitioned(&[cut("Bad", point, normal)]).is_err(), "{point:?} {normal:?}");
+        }
+        let many = vec![cut("M", [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]); MAX_CUTS + 1];
+        assert!(d.partitioned(&many).is_err());
+    }
+}

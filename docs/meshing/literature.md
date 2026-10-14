@@ -799,7 +799,11 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
   shape metrics for hexes, wedges and quads.
 
 
-### B7. Planar quadrilateral meshing (implemented in `modelcraft-mesh::quad`)
+### B7. Planar quadrilateral meshing
+
+> Shell (curved-face) quad meshing — advancing front in (u,v) with a cross field, recombination and cleanup — is surveyed separately in [shell-quad-literature.md](shell-quad-literature.md).
+
+ (implemented in `modelcraft-mesh::quad`)
 
 The face meshers under mapped and swept hex meshing and shell meshing. All quads on prescribed
 boundary nodes, so faces sharing an edge share its nodes. DOIs below were checked through
@@ -824,7 +828,7 @@ boundary nodes, so faces sharing an edge share its nodes. DOIs below were checke
   non-uniform quadrilateral mesh generator using a minimum-cost perfect-matching algorithm.* IJNME 89(9):1102–1119,
   2012. DOI [10.1002/nme.3279](https://doi.org/10.1002/nme.3279). **Verdict: reference (upgrade path for the
   matching).** Paper only: the implementation lives in Gmsh, which is GPL and forbidden.
-- **Recombination and split.** D. T. Lee, S. H. Lo. *A new scheme for the generation of a graded quadrilateral
+- **Recombination and split.** C. K. Lee, S. H. Lo. *A new scheme for the generation of a graded quadrilateral
   mesh.* Computers & Structures 52(5):847–857, 1994. DOI
   [10.1016/0045-7949(94)90070-1](https://doi.org/10.1016/0045-7949(94)90070-1). **Verdict: BUILD ON.** Triangles
   merged into quads, then every element split once, which makes the mesh all-quad whatever the merge found.

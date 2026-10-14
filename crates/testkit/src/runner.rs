@@ -16,6 +16,7 @@ use crate::corpus::{self, CATEGORIES, Part};
 use fieldcraft_geometry::{Design, FaceSurface, Measure, SurfaceMesh};
 use fieldcraft_mesh::cdt::{CdtOptions, tetrahedralize};
 use fieldcraft_mesh::hex::{Cell, HexOptions, Surface, hex_mesh, hex_mesh_cells};
+use fieldcraft_mesh::octree::{OctreeOptions, octree_hex_mesh};
 use fieldcraft_mesh::size::UniformSize;
 use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 
@@ -33,6 +34,8 @@ pub struct Loaded<'a> {
     pub surfaces: Vec<SurfaceMesh>,
     /// The chordal tolerance the surfaces were made with (mm).
     pub tolerance: f64,
+    /// The bounding-box diagonal of all bodies (mm).
+    pub diagonal: f64,
 }
 
 /// A column group of the results table: a mesher, a check.
@@ -44,7 +47,7 @@ pub trait Stage {
 
 /// The stages, in column order. Meshers add theirs here.
 fn stages() -> Vec<Box<dyn Stage>> {
-    vec![Box::new(SurfaceVolume), Box::new(BoundaryCheck), Box::new(TetCdt), Box::new(StructuredHex)]
+    vec![Box::new(SurfaceVolume), Box::new(BoundaryCheck), Box::new(TetCdt), Box::new(StructuredHex), Box::new(OctreeHex)]
 }
 
 /// The boundary surface's enclosed volume against SolidCraft's measured volume and the closed
@@ -116,7 +119,7 @@ impl Stage for TetCdt {
     }
 }
 
-/// Element size of the structured hex stage, relative to the part's bounding-box diagonal.
+/// Element size of the hex stages, relative to the part's bounding-box diagonal.
 const HEX_RELATIVE_SIZE: f64 = 1.0 / 25.0;
 /// Characters of a "not meshed" reason kept in the table.
 const REASON_CHARS: usize = 240;
@@ -134,15 +137,7 @@ impl Stage for StructuredHex {
 
     fn run(&self, l: &Loaded) -> Result<Vec<String>, String> {
         let start = Instant::now();
-        let (lo, hi) = l.measures.iter().fold(([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]), |(mut lo, mut hi), m| {
-            for i in 0..3 {
-                lo[i] = lo[i].min(m.bbox_min[i]);
-                hi[i] = hi[i].max(m.bbox_max[i]);
-            }
-            (lo, hi)
-        });
-        let diagonal = (0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f64>().sqrt();
-        let size = UniformSize(HEX_RELATIVE_SIZE * diagonal);
+        let size = UniformSize(HEX_RELATIVE_SIZE * l.diagonal);
         let linear = HexOptions { chordal_tolerance: l.tolerance, ..HexOptions::default() };
         let quadratic = HexOptions { quadratic: true, ..linear.clone() };
         if l.part.categories.iter().any(|c| c == "partitioned") {
@@ -231,6 +226,49 @@ pub fn analytic(s: FaceSurface) -> Surface {
     }
 }
 
+/// Element cap of the octree hex column: well above every part that meshes, and low enough that a
+/// part whose grid explodes (a thin spline wall refined everywhere) is refused in seconds instead
+/// of optimised for an hour.
+const OCTREE_MAX_ELEMENTS: usize = 500_000;
+
+/// The unstructured all-hex mesher (`fieldcraft_mesh::octree`) at a size of 1/25 of the part's
+/// diagonal: elements, the smallest and mean scaled Jacobian, and the mesh volume against
+/// SolidCraft's. Every element is proven valid before the mesher returns; a part it cannot mesh
+/// gets the reason, as in the structured hex column.
+struct OctreeHex;
+
+impl Stage for OctreeHex {
+    fn headers(&self) -> &'static [&'static str] {
+        &["octree hexes", "min SJ", "mean SJ", "hex vol. diff", "octree ms"]
+    }
+
+    fn run(&self, l: &Loaded) -> Result<Vec<String>, String> {
+        let start = Instant::now();
+        let (mut hexes, mut min_sj, mut sum_sj, mut volume) = (0usize, f64::INFINITY, 0.0, 0.0);
+        for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
+            let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
+            let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).map_err(|e| format!("{}: {e}", body.name))?;
+            let options = OctreeOptions { max_elements: OCTREE_MAX_ELEMENTS, ..OctreeOptions::default() };
+            let m = match octree_hex_mesh(&s, &UniformSize(HEX_RELATIVE_SIZE * l.diagonal), &options) {
+                Ok(m) => m,
+                Err(e) => {
+                    let reason: String = e.to_string().chars().take(REASON_CHARS).collect();
+                    let ms = start.elapsed().as_secs_f64() * 1e3;
+                    return Ok(vec![format!("no: {}: {reason}", body.name), String::new(), String::new(), String::new(), format!("{ms:.0}")]);
+                }
+            };
+            hexes += m.hexes.len();
+            min_sj = min_sj.min(m.report.min_scaled_jacobian);
+            sum_sj += m.report.mean_scaled_jacobian * m.hexes.len() as f64;
+            volume += m.report.volume;
+        }
+        let measured: f64 = l.measures.iter().map(|m| m.volume).sum();
+        let rel = if measured.abs() > 0.0 { (volume - measured) / measured } else { f64::NAN };
+        let ms = start.elapsed().as_secs_f64() * 1e3;
+        Ok(vec![hexes.to_string(), format!("{min_sj:.3}"), format!("{:.3}", sum_sj / hexes.max(1) as f64), format!("{rel:.1e}"), format!("{ms:.0}")])
+    }
+}
+
 fn load(part: &Part) -> Result<(Loaded<'_>, f64), String> {
     let start = Instant::now();
     let design = corpus::load(part).map_err(|e| e.to_string())?;
@@ -250,7 +288,7 @@ fn load(part: &Part) -> Result<(Loaded<'_>, f64), String> {
     let surfaces =
         design.bodies.iter().map(|b| b.tessellate(tolerance).map_err(|e| format!("tessellate {}: {e}", b.name))).collect::<Result<Vec<_>, _>>()?;
     let ms = start.elapsed().as_secs_f64() * 1e3;
-    Ok((Loaded { part, design, measures, surfaces, tolerance }, ms))
+    Ok((Loaded { part, design, measures, surfaces, tolerance, diagonal }, ms))
 }
 
 /// A failed part or stage: the error, then blanks to fill `width` cells.

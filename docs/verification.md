@@ -25,7 +25,7 @@ Rules:
   still passes), and writes `docs/oracle.md` with the table of cases, sources, errors and status.
 - A fixture is updated only deliberately (`--bless`), in a PR that says why the result moved
   (a better element, a finer default mesh), never to hide a regression.
-- The theory suite is the gate for every PR; experiment and benchmark cases run in CI too, with
+- The theory suite is the gate for every merge; experiment and benchmark cases run in CI too, with
   their cited tolerances.
 
 ## The case format

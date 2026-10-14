@@ -1,21 +1,46 @@
 name: Bug report
-description: Something FieldCraft does wrong, or a crash
+description: Something FieldCraft does wrong, a wrong result, or a crash
 labels: [bug]
 body:
   - type: textarea
-    id: what
+    id: observed
     attributes:
-      label: What happened
-      description: What you did, what you expected, and what FieldCraft did instead.
+      label: Observed failure
+      description: Exactly what happened. Quote error messages and wrong numbers as they appear.
     validations:
       required: true
   - type: textarea
-    id: reproduce
+    id: reproduction
     attributes:
-      label: How to reproduce
-      description: The commands, script, `.fieldcraft` or `.solidcraft` file that shows it. For a crash, attach the crash report folder (`fieldcraft-cli crashes`).
+      label: Reproduction
+      description: Numbered steps, or a script (`fieldcraft-cli run script.json`, control-channel JSON lines), with the sample, corpus part or attached `.fieldcraft` / `.solidcraft` file that shows it.
+      placeholder: |
+        1. fieldcraft --sample cantilever
+        2. Mesh ▸ Tet ▸ OK
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Screenshots, log output, numbers. For a crash, attach the crash report (`fieldcraft-cli crashes`, then `crashes show <id>`).
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should happen instead, and why — a closed form, a published benchmark, the documentation, or how the rest of the app behaves. Never output from a commercial CAE product.
+    validations:
+      required: true
+  - type: textarea
+    id: investigation
+    attributes:
+      label: Investigation
+      description: Anything you found about the cause — code you suspect, what you ruled out. Leave empty if you have not looked.
   - type: input
     id: version
     attributes:
       label: Version and platform
-      placeholder: "v0.1.0, macOS 15 arm64"
+      placeholder: "v0.1.0 (or commit), macOS 15 arm64"
+    validations:
+      required: true

@@ -3,6 +3,13 @@ description: A capability FieldCraft should have
 labels: [enhancement]
 body:
   - type: textarea
+    id: current
+    attributes:
+      label: Current behaviour
+      description: What you can and cannot do today, and what happens when you try.
+    validations:
+      required: true
+  - type: textarea
     id: need
     attributes:
       label: What you need and why
@@ -10,7 +17,12 @@ body:
     validations:
       required: true
   - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What FieldCraft should do, as precisely as you can.
+  - type: textarea
     id: reference
     attributes:
       label: References
-      description: Papers, textbooks or published benchmarks that define the behaviour. Do not paste text, files or results from commercial CAE products.
+      description: Papers, textbooks, public specifications or published benchmarks that define the behaviour. Do not paste text, files or results from commercial CAE products.

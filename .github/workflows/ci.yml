@@ -27,6 +27,9 @@ on:
   schedule:
     # Nightly, on the default branch (develop): the heavy tests.
     - cron: '23 3 * * *'
+    # Weekly: the oracle on macOS too, so results that differ by platform show up in CI (the
+    # fixtures are often blessed on a Mac; #115).
+    - cron: '41 4 * * 0'
   workflow_dispatch:
 
 permissions:
@@ -44,7 +47,7 @@ env:
 jobs:
   ci:
     name: cargo xtask ci
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -61,7 +64,7 @@ jobs:
   heavy:
     # The heavy verification and corpus tests (#[ignore]d) and the doc tests.
     name: cargo xtask test --heavy
-    if: github.event_name != 'pull_request'
+    if: github.event.schedule != '41 4 * * 0' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -77,7 +80,7 @@ jobs:
     # its fixture, and docs/oracle.md must be the table the cases produce. Cases marked `slow`
     # run here too while the whole set stays within a few minutes; `--quick` skips them.
     name: cargo xtask oracle
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -91,9 +94,27 @@ jobs:
       - name: docs/oracle.md is current
         run: git diff --exit-code docs/oracle.md
 
+  oracle-macos:
+    # The same oracle on macOS, weekly and on demand: the solvers must agree across platforms
+    # to the fixture bands, and docs/oracle.md must read the same.
+    name: cargo xtask oracle (macOS)
+    if: github.event.schedule == '41 4 * * 0' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: oracle-macos
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - run: cargo xtask oracle
+      - name: docs/oracle.md is current
+        run: git diff --exit-code docs/oracle.md
+
   advisories:
     name: Dependency advisories and sources
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

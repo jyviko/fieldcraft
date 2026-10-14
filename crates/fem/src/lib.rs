@@ -13,8 +13,13 @@
 //! - [`shape`]: the hand-written first-order functions of tet4, tet10, wedge6, hex8, hex20 that
 //!   the solid kernels evaluate;
 //! - [`material`]: isotropic and orthotropic elasticity matrices, von Mises stress;
+//! - [`constitutive`]: the material point of finite-strain analysis (Kirchhoff stress and
+//!   spatial tangent from the deformation gradient, with history): St Venant–Kirchhoff and
+//!   neo-Hookean;
 //! - [`element`]: the element table, stiffness (full, reduced, incompatible modes), consistent
 //!   and lumped mass, body forces, integration-point stresses and their extrapolation to nodes;
+//! - [`finite`]: total Lagrangian solid and 2D elements (internal forces, the consistent tangent
+//!   with its geometric part, mixed u–p at finite strain, Cauchy stress and logarithmic strain);
 //! - [`plane`]: 2D elements (plane stress, plane strain, axisymmetric) on tri3, tri6, quad4 and
 //!   quad8, with two displacement components per node;
 //! - [`shell`]: flat MITC4 quadrilateral and MITC3 triangle shells with a drilling rotation, six
@@ -44,10 +49,12 @@
 
 pub mod basis;
 pub mod beam;
+pub mod constitutive;
 pub mod dense;
 pub mod dof;
 pub mod element;
 pub mod face;
+pub mod finite;
 pub mod frame;
 pub mod heat;
 pub mod hybrid;

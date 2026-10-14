@@ -111,7 +111,7 @@ impl PressureField {
 
 /// The pressure functions at a point: 1, then (x − c)/h, (y − c)/h, (z − c)/h for the linear
 /// field (`np` = 4).
-fn pressure_basis(np: usize, x: [f64; 3], frame: &([f64; 3], f64)) -> [f64; 4] {
+pub(crate) fn pressure_basis(np: usize, x: [f64; 3], frame: &([f64; 3], f64)) -> [f64; 4] {
     let (c, h) = frame;
     let mut out = [1.0, 0.0, 0.0, 0.0];
     if np == 4 && *h > 0.0 {
@@ -124,7 +124,7 @@ fn pressure_basis(np: usize, x: [f64; 3], frame: &([f64; 3], f64)) -> [f64; 4] {
 
 impl Solid<'_> {
     /// The pressure unknowns of this (hybrid) element.
-    fn np(&self) -> usize {
+    pub(crate) fn np(&self) -> usize {
         match self.formulation {
             Formulation::Hybrid { pressures } => pressures.min(4),
             _ => 0,
@@ -133,7 +133,7 @@ impl Solid<'_> {
 
     /// The element's centre (mean of its corners) and size (largest corner distance from it),
     /// which scale the linear pressure functions.
-    fn frame(&self) -> ([f64; 3], f64) {
+    pub(crate) fn frame(&self) -> ([f64; 3], f64) {
         let corners = self.xyz.get(..self.ty.corners).unwrap_or_default();
         let n = corners.len().max(1) as f64;
         let c = corners.iter().fold([0.0; 3], |a, x| [a[0] + x[0] / n, a[1] + x[1] / n, a[2] + x[2] / n]);

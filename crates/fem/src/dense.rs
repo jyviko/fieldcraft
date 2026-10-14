@@ -113,6 +113,57 @@ pub fn positive_inverse(j: &[[f64; 3]; 3]) -> Option<([[f64; 3]; 3], f64)> {
     (det > 1e-12 * norms).then_some((inv, det))
 }
 
+/// The eigenvalues and unit eigenvectors (the columns of the matrix returned) of a symmetric
+/// 3 × 3 matrix, by cyclic Jacobi rotations (G. H. Golub, C. F. Van Loan, *Matrix
+/// Computations*, 4th ed., Johns Hopkins 2013, §8.5): each rotation zeroes one off-diagonal
+/// entry with the stable choice of angle, and the sweeps stop when the off-diagonal part is
+/// round-off relative to the diagonal (at most 32 sweeps; three or four suffice). Accurate to a
+/// few ulps of the largest eigenvalue; `None` for non-finite input.
+pub fn symmetric_eigen(a: &[[f64; 3]; 3]) -> Option<([f64; 3], [[f64; 3]; 3])> {
+    if a.iter().flatten().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let mut m = [[a[0][0], 0.5 * (a[0][1] + a[1][0]), 0.5 * (a[0][2] + a[2][0])], [0.0; 3], [0.0; 3]];
+    m[1] = [m[0][1], a[1][1], 0.5 * (a[1][2] + a[2][1])];
+    m[2] = [m[0][2], m[1][2], a[2][2]];
+    let mut v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    for _ in 0..32 {
+        let off = m[0][1] * m[0][1] + m[0][2] * m[0][2] + m[1][2] * m[1][2];
+        let diag = m[0][0] * m[0][0] + m[1][1] * m[1][1] + m[2][2] * m[2][2];
+        if off <= 1e-36 * diag || off == 0.0 {
+            break;
+        }
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            let apq = m[p][q];
+            if apq == 0.0 {
+                continue;
+            }
+            // tan of the rotation angle, the smaller root of t² + 2θt − 1 = 0.
+            let theta = (m[q][q] - m[p][p]) / (2.0 * apq);
+            let sign = if theta >= 0.0 { 1.0 } else { -1.0 };
+            let t = sign / (theta.abs() + (theta * theta + 1.0).sqrt());
+            let c = 1.0 / (t * t + 1.0).sqrt();
+            let s = t * c;
+            for k in 0..3 {
+                let (mkp, mkq) = (m[k][p], m[k][q]);
+                m[k][p] = c * mkp - s * mkq;
+                m[k][q] = s * mkp + c * mkq;
+            }
+            for k in 0..3 {
+                let (mpk, mqk) = (m[p][k], m[q][k]);
+                m[p][k] = c * mpk - s * mqk;
+                m[q][k] = s * mpk + c * mqk;
+            }
+            for row in &mut v {
+                let (vp, vq) = (row[p], row[q]);
+                row[p] = c * vp - s * vq;
+                row[q] = s * vp + c * vq;
+            }
+        }
+    }
+    Some(([m[0][0], m[1][1], m[2][2]], v))
+}
+
 pub fn det3(m: &[[f64; 3]; 3]) -> f64 {
     m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
@@ -142,5 +193,30 @@ mod tests {
             }
         }
         assert!(inverse3(&[[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [0.0, 0.0, 1.0]]).is_none());
+    }
+
+    #[test]
+    fn symmetric_eigen_decomposes() {
+        for a in [
+            [[4.0, 1.0, -2.0], [1.0, 3.0, 0.5], [-2.0, 0.5, 1.0]],
+            [[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 5.0]],
+            [[1.0, 1e-9, 0.0], [1e-9, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            [[1e6, 3.0, 2.0], [3.0, 1e-3, 0.0], [2.0, 0.0, -7.0]],
+        ] {
+            let (l, v) = symmetric_eigen(&a).unwrap();
+            let scale = l.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+            for k in 0..3 {
+                // A v_k = λ_k v_k and the v_k are orthonormal.
+                for i in 0..3 {
+                    let av: f64 = (0..3).map(|j| a[i][j] * v[j][k]).sum();
+                    assert!((av - l[k] * v[i][k]).abs() < 1e-12 * scale, "{a:?}: {l:?}");
+                }
+                for m in 0..3 {
+                    let d: f64 = (0..3).map(|i| v[i][k] * v[i][m]).sum();
+                    assert!((d - if k == m { 1.0 } else { 0.0 }).abs() < 1e-13);
+                }
+            }
+        }
+        assert!(symmetric_eigen(&[[f64::NAN, 0.0, 0.0], [0.0; 3], [0.0; 3]]).is_none());
     }
 }

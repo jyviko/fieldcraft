@@ -124,6 +124,55 @@ pub fn integrate_face(xyz: &[[f64; 3]], mut visit: impl FnMut(&[f64], [f64; 3]))
     Ok(())
 }
 
+/// A quadrature point of a reference face or edge: the shape function values, their
+/// derivatives along the face's natural coordinates ξ and η (an edge has ξ only; its `deta` is
+/// empty) and the weight.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuadraturePoint {
+    pub n: Vec<f64>,
+    pub dxi: Vec<f64>,
+    pub deta: Vec<f64>,
+    pub weight: f64,
+}
+
+/// The quadrature points of a face of `nodes` nodes (3, 4, 6 or 8), with the rule and shape
+/// functions of [`integrate_face`]: what a load on the deformed face (follower pressure)
+/// integrates with.
+pub fn face_points(nodes: usize) -> Result<Vec<QuadraturePoint>> {
+    let (corners, shape): (usize, fn(usize, f64, f64) -> Shape) = match nodes {
+        3 | 6 => (3, triangle),
+        4 | 8 => (4, quadrilateral),
+        n => return Err(Error::Invalid(format!("a face has 3, 4, 6 or 8 nodes, not {n}"))),
+    };
+    Ok(rule(corners)
+        .into_iter()
+        .map(|(xi, eta, weight)| {
+            let s = shape(nodes, xi, eta);
+            QuadraturePoint { n: s.n, dxi: s.dxi, deta: s.deta, weight }
+        })
+        .collect())
+}
+
+/// The quadrature points of an element edge of `nodes` nodes (2 or 3), with the rule and shape
+/// functions of [`edge_normal_weights`].
+pub fn edge_points(nodes: usize) -> Result<Vec<QuadraturePoint>> {
+    if !matches!(nodes, 2 | 3) {
+        return Err(Error::Invalid(format!("an edge has 2 or 3 nodes, not {nodes}")));
+    }
+    let g = (0.6f64).sqrt();
+    Ok([(-g, 5.0 / 9.0), (0.0, 8.0 / 9.0), (g, 5.0 / 9.0)]
+        .into_iter()
+        .map(|(s, weight)| {
+            let (n, dn) = if nodes == 2 {
+                (vec![(1.0 - s) / 2.0, (1.0 + s) / 2.0], vec![-0.5, 0.5])
+            } else {
+                (vec![s * (s - 1.0) / 2.0, s * (s + 1.0) / 2.0, 1.0 - s * s], vec![s - 0.5, s + 0.5, -2.0 * s])
+            };
+            QuadraturePoint { n, dxi: dn, deta: Vec::new(), weight }
+        })
+        .collect())
+}
+
 /// ∫ Nᵢ n dA for every node of a face: the consistent nodal forces of a unit pressure pulling
 /// along the face's right-hand (outward, for solids) normal.
 pub fn face_normal_weights(xyz: &[[f64; 3]]) -> Result<Vec<[f64; 3]>> {

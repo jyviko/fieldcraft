@@ -189,18 +189,18 @@ pub fn formulation(kind: ElementKind, f: &fieldcraft_model::Formulation) -> Resu
 }
 
 /// One column of the strain operator: (∂N/∂x, ∂N/∂y, hoop N/r), for a node or an internal mode.
-type Column = [f64; 3];
+pub(crate) type Column = [f64; 3];
 
 /// What the kernels need at one integration point.
-struct At {
-    shape: Shape,
+pub(crate) struct At {
+    pub(crate) shape: Shape,
     /// Strain columns of the nodes.
-    g: [Column; MAX_NODES],
-    det: f64,
-    x: [f64; 3],
+    pub(crate) g: [Column; MAX_NODES],
+    pub(crate) det: f64,
+    pub(crate) x: [f64; 3],
     /// det J times the point's weight times the out-of-plane extent: the point's share of the
     /// volume.
-    dv: f64,
+    pub(crate) dv: f64,
 }
 
 /// The incompatible modes' count of internal degrees of freedom: two modes, two directions.
@@ -210,14 +210,14 @@ const INCOMPATIBLE_DOFS: usize = 4;
 #[derive(Debug, Clone, Copy)]
 pub struct Plane<'a> {
     pub ty: &'static ElementType,
-    xyz: &'a [[f64; 3]],
-    formulation: Formulation,
-    theory: Theory,
+    pub(crate) xyz: &'a [[f64; 3]],
+    pub(crate) formulation: Formulation,
+    pub(crate) theory: Theory,
 }
 
 /// out[2i + r][2j + c] += w (Bᵢᵀ D Bⱼ)[r][c] over every pair of columns (row-major, `cols` wide),
 /// computed for j ≥ i and mirrored, so the result is exactly symmetric.
-fn accumulate(out: &mut [f64], columns: &[Column], d: &Elasticity2, w: f64) {
+pub(crate) fn accumulate(out: &mut [f64], columns: &[Column], d: &Elasticity2, w: f64) {
     let cols = 2 * columns.len();
     let block = |g: &Column| -> [[f64; 2]; 4] { [[g[0], 0.0], [0.0, g[1]], [g[2], 0.0], [g[1], g[0]]] };
     for (j, gj) in columns.iter().enumerate() {
@@ -293,7 +293,7 @@ impl<'a> Plane<'a> {
         }
     }
 
-    fn degenerate(&self) -> Error {
+    pub(crate) fn degenerate(&self) -> Error {
         Error::Degenerate(format!("a 2D {} element is inverted, clockwise or degenerate (its Jacobian is not positive)", self.ty.kind.name()))
     }
 
@@ -310,7 +310,7 @@ impl<'a> Plane<'a> {
         (j, j[0][0] * j[1][1] - j[0][1] * j[1][0])
     }
 
-    fn at(&self, p: &Point) -> Result<At> {
+    pub(crate) fn at(&self, p: &Point) -> Result<At> {
         let basis = Basis::of(self.ty.kind);
         let shape = basis.eval(p.xi);
         let grads = basis.gradients(&shape, self.xyz).map_err(|_| self.degenerate())?;

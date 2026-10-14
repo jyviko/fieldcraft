@@ -11,12 +11,13 @@ pub const TAG: CommandSpec = CommandSpec {
     id: "mesh.tag",
     label: "Tag Mesh with Geometry",
     params: r#"{"geometry": {"body": "Body1"} | {"body", "face"} | {"body", "edge"} | {"body", "vertex"}, "elements": [labels] (filling a body, face or edge), "faces": [{"element": 1, "face": 3}] (on a face), "edges": [{"element": 1, "edge": 2}] (on an edge), "nodes": [labels] (on a vertex)} — records where the mesh lies on the geometry, so sets named by geometry resolve"#,
+    form: None,
     kind: CommandKind::Model,
     run: tag,
 };
 
 pub const TAG_CLEAR: CommandSpec =
-    CommandSpec { id: "mesh.tag.clear", label: "Clear Geometry Tags", params: "{}", kind: CommandKind::Model, run: tag_clear };
+    CommandSpec { id: "mesh.tag.clear", label: "Clear Geometry Tags", params: "{}", form: None, kind: CommandKind::Model, run: tag_clear };
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]

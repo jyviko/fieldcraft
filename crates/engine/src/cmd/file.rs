@@ -23,6 +23,7 @@ pub const OPEN: CommandSpec = CommandSpec {
     id: "file.open",
     label: "Open Model",
     params: r#"{"path": "bracket.fieldcraft"} — opens the model, its mesh and its journal, and opens its design and imported meshes again from their files (one that is missing or changed is listed in `warnings`; the model still opens); unsaved changes of the current model are discarded and the undo history starts empty"#,
+    form: None,
     kind: CommandKind::Session,
     run: open,
 };
@@ -31,6 +32,7 @@ pub const SAVE: CommandSpec = CommandSpec {
     id: "file.save",
     label: "Save Model",
     params: r#"{"path"?: "bracket.fieldcraft"} — saves to `path`, else to the file the model was opened from or last saved to; written atomically, the previous version kept as `<file>.bak`"#,
+    form: None,
     kind: CommandKind::Session,
     run: save,
 };
@@ -39,6 +41,7 @@ pub const SAVE_AS: CommandSpec = CommandSpec {
     id: "file.save_as",
     label: "Save Model As",
     params: r#"{"path": "bracket.fieldcraft"} — saves to a new file, which becomes the model's file"#,
+    form: None,
     kind: CommandKind::Session,
     run: save_as,
 };
@@ -47,6 +50,7 @@ pub const RECOVERY_LIST: CommandSpec = CommandSpec {
     id: "file.recovery.list",
     label: "Recoverable Models",
     params: r#"{"dir"?: "…"} — models autosaved by apps that crashed or closed with unsaved changes, newest first (default folder: FIELDCRAFT_RECOVERY_DIR or the per-user data folder)"#,
+    form: None,
     kind: CommandKind::Session,
     run: recovery_list,
 };
@@ -55,6 +59,7 @@ pub const RECOVER: CommandSpec = CommandSpec {
     id: "file.recover",
     label: "Recover Model",
     params: r#"{"id": "…", "dir"?: "…"} — opens an autosaved model (an id from file.recovery.list) with its original file path, as unsaved changes; the autosave stays until file.recovery.discard"#,
+    form: None,
     kind: CommandKind::Session,
     run: recover,
 };
@@ -63,6 +68,7 @@ pub const RECOVERY_DISCARD: CommandSpec = CommandSpec {
     id: "file.recovery.discard",
     label: "Discard Recovered Model",
     params: r#"{"id": "…"} or {"all": true}; "dir"?: "…" — deletes autosaves of apps that are no longer running"#,
+    form: None,
     kind: CommandKind::Session,
     run: recovery_discard,
 };
@@ -71,6 +77,7 @@ pub const SAMPLE: CommandSpec = CommandSpec {
     id: "file.sample",
     label: "Open Sample",
     params: r#"{"name": "parts|cantilever|impact"} — opens a sample model (fieldcraft_engine::sample) in place of the current one, unsaved changes discarded; `cantilever` and `impact` are ready to solve (solve.run)"#,
+    form: None,
     kind: CommandKind::Session,
     run: open_sample,
 };

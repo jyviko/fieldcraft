@@ -20,6 +20,7 @@ pub use cmd::analytic_surfaces;
 pub mod history;
 pub mod results;
 pub mod sample;
+pub mod schema;
 pub mod view;
 
 use std::collections::BTreeMap;
@@ -108,6 +109,9 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// The JSON parameters, documented for scripts, `fieldcraft-cli commands` and agents.
     pub params: &'static str,
+    /// The parameters field by field, for forms and JSON Schema; `None` when not described yet
+    /// (the form is then the JSON text alone).
+    pub form: Option<&'static [schema::Field]>,
     pub kind: CommandKind,
     pub run: fn(&mut Session, &Value) -> Result<Value>,
 }

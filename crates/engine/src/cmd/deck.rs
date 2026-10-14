@@ -12,6 +12,7 @@ pub const WRITE: CommandSpec = CommandSpec {
     id: "deck.write",
     label: "Write Solver Deck",
     params: r#"{"format": "abaqus|nastran|lsdyna", "path": "part.inp", "steps": ["Load"]} — writes the model as a solver deck (formats: fieldcraft_decks::FORMATS); `steps` (optional) writes only those steps, as a Nastran run needs (static or frequency steps, not both); LS-DYNA writes several steps as *CASE analyses (run it with CASE); fails naming every error of the model check and everything the format cannot express"#,
+    form: None,
     kind: CommandKind::Session,
     run: write,
 };

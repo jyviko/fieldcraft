@@ -43,6 +43,7 @@ pub const PAIR: CommandSpec = CommandSpec {
         r#""friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb, μ = μk + (μs − μk) e^(−decay × slip rate); default frictionless), "penalty_scale": 1 (0 < scale ≤ 1: a factor on the stiffest penalty that leaves the time increment alone), "initial_penetration": "adjust" (move nodes that start inside onto the surface, strain-free, and report them) | "refuse" (refuse the analysis, naming the first)"#,
         r#"} — contact between two surfaces, each one's nodes kept out of the other's faces (explicit dynamics; fails if the name is taken)"#
     ),
+    form: None,
     kind: CommandKind::Model,
     run: |s: &mut Session, p: &Value| {
         let n = name(p)?;
@@ -60,6 +61,7 @@ pub const GENERAL: CommandSpec = CommandSpec {
         r#""friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb, μ = μk + (μs − μk) e^(−decay × slip rate); default frictionless), "penalty_scale": 1 (0 < scale ≤ 1: a factor on the stiffest penalty that leaves the time increment alone), "initial_penetration": "adjust" (move nodes that start inside onto the surface, strain-free, and report them) | "refuse" (refuse the analysis, naming the first)"#,
         r#"} — single-surface contact of everything that may touch (explicit dynamics; fails if the name is taken)"#
     ),
+    form: None,
     kind: CommandKind::Model,
     run: |s: &mut Session, p: &Value| {
         let n = name(p)?;
@@ -76,6 +78,7 @@ pub const EDIT: CommandSpec = CommandSpec {
     id: "interaction.contact.edit",
     label: "Edit Contact",
     params: r#"{"name": "impact", "surfaces": {"type": "pair", "main": "plate", "secondary": "ball"} | {"type": "general", "surface": "skin" (optional)}, "friction": {…}, "penalty_scale": 1, "initial_penetration": "adjust|refuse"} — replaces the contact of that name (the model's form; see interaction.contact.pair)"#,
+    form: None,
     kind: CommandKind::Model,
     run: |s: &mut Session, p: &Value| {
         let n = name(p)?;
@@ -91,6 +94,7 @@ pub const DELETE: CommandSpec = CommandSpec {
     id: "interaction.contact.delete",
     label: "Delete Contact",
     params: r#"{"name": "impact"}"#,
+    form: None,
     kind: CommandKind::Model,
     run: |s: &mut Session, p: &Value| {
         s.model.remove_contact(name(p)?)?;
@@ -105,6 +109,7 @@ pub const FIND: CommandSpec = CommandSpec {
         r#"{"tolerance": 0.1 (distance within which surfaces touch; default a tenth of the mean exterior face size), "create": false (true: add two face sets and a contact pair per touching pair of parts, named find-N-main, find-N-secondary and find-N), "#,
         r#""friction", "penalty_scale", "initial_penetration" (of the created pairs, as interaction.contact.pair)} — the parts of the mesh (solid elements connected through their nodes) whose exterior faces come within the tolerance of each other"#
     ),
+    form: None,
     kind: CommandKind::Model,
     run: find,
 };

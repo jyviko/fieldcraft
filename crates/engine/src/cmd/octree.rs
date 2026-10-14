@@ -15,6 +15,7 @@ pub const HEX_OCTREE: CommandSpec = CommandSpec {
     id: "mesh.hex.octree",
     label: "Octree Hex Mesh",
     params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size in the interior, mm; default 1/25 of the bounding-box diagonal), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal), "max_depth": 3 (refinement levels below the size, each a third, 0..=5), "max_elements": 2000000 (1..=10000000; default the session limit), "attempts": 4 (builds, refining where one failed, 1..=8), "max_sweeps": 300 (optimiser sweeps, 0..=10000), and the boundary options of mesh.tet.generate ("weld", "weld_distance", "feature_angle")} — replaces the mesh with an unstructured all-hex8 mesh of any part: an adaptive 3-refinement grid with conforming transition templates, a core inside the part, two boundary layers that capture every B-rep face boundary and sharp edge, and untangling. Every element is proven valid; boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name), so sets by geometry resolve. Reports per body the elements, quality, volume and grid statistics"#,
+    form: None,
     kind: CommandKind::Model,
     run: hex_octree,
 };

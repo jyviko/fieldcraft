@@ -36,6 +36,7 @@ pub const UNDO: CommandSpec = CommandSpec {
     id: "edit.undo",
     label: "Undo",
     params: r#"{"count"?: 1} — takes back the last command that changed the model (it leaves the journal and can be redone); `count` takes back that many, as far as the history reaches"#,
+    form: None,
     kind: CommandKind::Session,
     run: |s, p| repeat(s, p, Session::undo),
 };
@@ -44,6 +45,7 @@ pub const REDO: CommandSpec = CommandSpec {
     id: "edit.redo",
     label: "Redo",
     params: r#"{"count"?: 1} — runs the last undone command's change again; `count` redoes that many, as far as there are undone commands"#,
+    form: None,
     kind: CommandKind::Session,
     run: |s, p| repeat(s, p, Session::redo),
 };

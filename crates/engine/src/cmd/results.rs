@@ -12,6 +12,7 @@ pub const DEFORMED: CommandSpec = CommandSpec {
     id: "results.deformed",
     label: "Deformed Shape",
     params: r#"{"step": "Load", "show": true, "scale": "auto"} — shows a solved step's deformed shape (`show: false` the undeformed mesh); `scale` is a factor (0 draws the undeformed shape, so a sequence from 0 swings it out) or "auto" (the largest displacement drawn a tenth of the model's size); `step` defaults to the step shown or the first solved one"#,
+    form: None,
     kind: CommandKind::Session,
     run: deformed,
 };
@@ -20,6 +21,7 @@ pub const CONTOUR: CommandSpec = CommandSpec {
     id: "results.contour",
     label: "Contours",
     params: r#"{"step": "Load", "field": "von_mises", "bands": 12} — contours of a nodal field: displacement, displacement_x/y/z, von_mises, max/mid/min_principal, stress_xx/yy/zz/xy/xz/yz (stresses for static steps); "none" turns them off; 2 to 24 bands"#,
+    form: None,
     kind: CommandKind::Session,
     run: contour,
 };
@@ -28,6 +30,7 @@ pub const MODES: CommandSpec = CommandSpec {
     id: "results.modes",
     label: "Mode Shapes",
     params: r#"{"step": "Modes", "mode": 1} — shows a mode shape of a solved frequency step (from 1) and lists every mode's frequency"#,
+    form: None,
     kind: CommandKind::Session,
     run: modes,
 };
@@ -36,6 +39,7 @@ pub const ANIMATE: CommandSpec = CommandSpec {
     id: "results.animate",
     label: "Animate",
     params: r#"{"on": true} — animates the deformed shape: a mode swings through its positive and negative shape, a static step grows from undeformed to deformed"#,
+    form: None,
     kind: CommandKind::Session,
     run: animate,
 };
@@ -44,6 +48,7 @@ pub const FRAME: CommandSpec = CommandSpec {
     id: "results.frame",
     label: "Field Frame",
     params: r#"{"step": "Impact", "frame": 3, "time": 0.002} — shows a field frame of a solved explicit step, by index from 0 or the frame nearest a time (neither: the last), or of a nonlinear static step (one per converged increment, `time` its load factor; the deformed shape follows it, its contours show the final state); the deformed shape and contours follow it"#,
+    form: None,
     kind: CommandKind::Session,
     run: frame,
 };
@@ -52,6 +57,7 @@ pub const REACTIONS: CommandSpec = CommandSpec {
     id: "results.reactions",
     label: "Reaction Sums",
     params: r#"{"step": "Load", "sets": ["root"], "about": [0, 0, 0]} — reaction force and moment (about the point) summed over each node set, and over the whole model; `sets` defaults to the sets the step's boundary conditions hold"#,
+    form: None,
     kind: CommandKind::Session,
     run: reactions,
 };
@@ -60,6 +66,7 @@ pub const CLEAR: CommandSpec = CommandSpec {
     id: "results.clear",
     label: "Hide Results",
     params: "{} — back to the model: hides the deformed shape, contours and modes",
+    form: None,
     kind: CommandKind::Session,
     run: clear,
 };

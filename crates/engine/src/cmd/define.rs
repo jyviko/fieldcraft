@@ -31,28 +31,31 @@ macro_rules! definition_commands {
             id: concat!("model.", $id, ".create"),
             label: concat!("New ", $label),
             params: concat!($doc, " — fails if the name is taken"),
+            form: None,
             kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
                 let n = name(p)?;
-                s.model.$add(n, fields::<$ty>(p, $what)?)?;
-        Ok(json!({"name": n}))
+        s.model.$add(n, fields::<$ty>(p, $what)?)?;
+                Ok(json!({"name": n}))
             },
         };
         pub const $EDIT: CommandSpec = CommandSpec {
             id: concat!("model.", $id, ".edit"),
             label: concat!("Edit ", $label),
             params: concat!($doc, " — replaces the existing definition of that name"),
+            form: None,
             kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
-                let n = name(p)?;
+        let n = name(p)?;
                 s.model.$replace(n, fields::<$ty>(p, $what)?)?;
-        Ok(json!({"name": n}))
+                Ok(json!({"name": n}))
             },
         };
         pub const $DELETE: CommandSpec = CommandSpec {
             id: concat!("model.", $id, ".delete"),
             label: concat!("Delete ", $label),
             params: r#"{"name": "…"} — refused while another definition refers to it"#,
+            form: None,
             kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
                 s.model.$remove(name(p)?)?;
@@ -103,6 +106,7 @@ pub const MATERIAL_PLASTICITY: CommandSpec = CommandSpec {
     id: "model.material.plasticity",
     label: "Plasticity",
     params: r#"{"name": "Steel", "plastic": {"type": "bilinear", "yield_stress": 250, "hardening_modulus": 1000, "hardening": "isotropic|kinematic"} | {"type": "table", "points": [{"strain": 0, "stress": 250}, {"strain": 0.1, "stress": 300}]} | {"type": "johnson_cook", "a": 792, "b": 510, "n": 0.26, "c": 0.014, "m": 1.03, "reference_strain_rate": 1, "room_temperature": 294, "melt_temperature": 1793, "specific_heat": 4.77e8, "taylor_quinney": 0.9} | null} — von Mises plasticity of an isotropic material (null removes it); explicit dynamics uses it, the linear solver the elastic constants alone"#,
+    form: None,
     kind: CommandKind::Model,
     run: |s: &mut Session, p: &Value| {
         change_material(s, p, |m, p| {
@@ -116,6 +120,7 @@ pub const MATERIAL_DAMAGE: CommandSpec = CommandSpec {
     id: "model.material.damage",
     label: "Damage",
     params: r#"{"name": "Steel", "damage": {"type": "johnson_cook", "d1": 0.05, "d2": 3.44, "d3": -2.12, "d4": 0.002, "d5": 0.61} | null, "erosion": {"plastic_strain": 1.0} | null} — damage to failure and element erosion of a plastic material (each key optional; null removes it); a failed element is eroded in explicit dynamics"#,
+    form: None,
     kind: CommandKind::Model,
     run: |s: &mut Session, p: &Value| {
         change_material(s, p, |m, p| {
@@ -251,6 +256,7 @@ pub const FLUID_BOUNDARY: CommandSpec = CommandSpec {
     id: "model.fluid_domain.boundary",
     label: "Inlet, Outlet or Wall",
     params: r#"{"domain": "Flow", "at": "x_min" (a box face) | {"body": "Body1", "face": "F2:top"} (an obstacle face), "condition": {"type": "velocity", "velocity": [u, v, w], "profile": "uniform|parabolic"} | {"type": "pressure", "pressure": 0} | {"type": "wall"} | {"type": "moving_wall", "velocity": [u, v, w]} | {"type": "slip"} | {"type": "periodic"}} — sets one boundary's condition (obstacle faces take walls and moving walls)"#,
+    form: None,
     kind: CommandKind::Model,
     run: fluid_boundary,
 };
@@ -267,6 +273,7 @@ pub const STEP_CREATE: CommandSpec = CommandSpec {
     id: "model.step.create",
     label: "New Step",
     params: r#"{"name": "Bend", "procedure": {"type": "static"} | {"type": "nonlinear_static", "nonlinear_geometry": true, "initial_increment": 0.1, "min_increment": 1e-5, "max_increment": 1.0 (fractions of the step), "max_increments": 100, "max_iterations": 16 (per increment), "tolerances": {"force": 1e-6, "displacement": 1e-5, "energy": 1e-10}, "line_search": false, "load_path": [[0, 0], [0.5, 1], [1, 0]] (optional: the load factor against the step fraction, piecewise linear from [0, 0] to fraction 1; increments end at its points)} (loads and prescribed displacements are the load factor times their values; it ramps from 0 to 1 without a load path) | {"type": "frequency", "modes": 10, "min_hz": 0, "max_hz": 500} | {"type": "fluid", "domain": "Flow", "end_time": 1.0 | "steps": 1000, "time_step": (default: chosen for Mach 0.087 and τ ≤ 1), "frames": 10, "magic": 0.1875 (the two-relaxation-time Λ)} | {"type": "explicit_dynamic", "end_time": 0.001, "dt_scale": 0.9, "max_increments": 10000000, "output_interval", "history_interval", "history_nodes": "set", "initial_velocities": [{"set", "velocity": [vx, vy, vz]}], "rigid_walls": [{"set", "point", "normal", "friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb; default frictionless)}], "hourglass": {"type": "viscous|stiffness", "coefficient": 0.1}, "bulk_viscosity": {"linear": 0.06, "quadratic": 1.5}}, "output": ["displacement", "reaction_force", "stress", "strain"] (default by procedure), "boundary_conditions": [names], "loads": [names] (active in this step; nothing carries over between steps), "before": "step" (default: last)}"#,
+    form: None,
     kind: CommandKind::Model,
     run: step_create,
 };
@@ -275,6 +282,7 @@ pub const STEP_EDIT: CommandSpec = CommandSpec {
     id: "model.step.edit",
     label: "Edit Step",
     params: r#"{"name": "Bend", "procedure", "output", "boundary_conditions", "loads"} — as model.step.create; what is left out keeps its value"#,
+    form: None,
     kind: CommandKind::Model,
     run: step_edit,
 };
@@ -283,6 +291,7 @@ pub const STEP_DELETE: CommandSpec = CommandSpec {
     id: "model.step.delete",
     label: "Delete Step",
     params: r#"{"name": "Bend"}"#,
+    form: None,
     kind: CommandKind::Model,
     run: |s, p| s.model.remove_step(name(p)?).map(|_| Value::Null).map_err(Into::into),
 };
@@ -291,12 +300,13 @@ pub const STEP_ACTIVATE: CommandSpec = CommandSpec {
     id: "model.step.activate",
     label: "Activate in Step",
     params: r#"{"step": "Bend", "boundary_conditions": [names], "loads": [names], "active": true} — switches the listed items on (or off with false) in that step only"#,
+    form: None,
     kind: CommandKind::Model,
     run: step_activate,
 };
 
 pub const ACTIVITY: CommandSpec =
-    CommandSpec { id: "model.activity", label: "Step Table", params: "{}", kind: CommandKind::Model, run: |s, _| Ok(activity(&s.model)) };
+    CommandSpec { id: "model.activity", label: "Step Table", params: "{}", form: None, kind: CommandKind::Model, run: |s, _| Ok(activity(&s.model)) };
 
 fn step_create(s: &mut Session, p: &Value) -> Result<Value> {
     let n = name(p)?;

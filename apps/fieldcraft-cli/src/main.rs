@@ -2,6 +2,7 @@
 //! fieldcraft-cli run <script.json>
 //! fieldcraft-cli features
 //! fieldcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
+//! fieldcraft-cli --version
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -26,6 +27,7 @@ usage:
       --automation-read-root DIR       files may be read only inside DIR
       --automation-write-root DIR      files may be written only inside DIR (with either root,
                                        the access a root left out is not granted)
+  fieldcraft-cli --version             print the version
 ";
 
 /// Largest script accepted (bytes).
@@ -46,6 +48,10 @@ fn main() -> ExitCode {
         }
         Some("mcp") => mcp(args.get(1..).unwrap_or(&[])),
         Some("run") => args.get(1).ok_or_else(|| format!("run needs a script\n\n{USAGE}")).and_then(|p| run(p)),
+        Some("-V" | "--version") => {
+            println!("fieldcraft-cli {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())

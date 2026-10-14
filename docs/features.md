@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-44 ready, 56 coming soon.
+47 ready, 53 coming soon.
 
 ## Geometry
 
@@ -91,8 +91,8 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 |---|---|---|---|
 | Boundary Conditions | Boundary Condition — Fixed, displacement or symmetry condition on a set or reference point | ready | `model.boundary_condition.create`, `model.boundary_condition.edit`, `model.boundary_condition.delete` |
 | Loads | Load — Force, moment, pressure, traction, gravity or body force | ready | `model.load.create`, `model.load.edit`, `model.load.delete` |
-| Flow | Fluid Domain — The fluid grid voxelised from the face-tagged surface | coming soon (M12) |  |
-| Flow | Inlet & Outlet — Velocity inlets, pressure outlets and walls | coming soon (M12) |  |
+| Flow | Fluid Domain — The box of fluid cells, its fluid, and the obstacle bodies voxelised from their face-tagged surfaces | ready | `model.fluid_domain.create`, `model.fluid_domain.edit`, `model.fluid_domain.delete` |
+| Flow | Inlet & Outlet — Velocity inlets, pressure outlets, walls, moving and slip walls, periodic faces | ready | `model.fluid_domain.boundary` |
 
 ## Interactions
 
@@ -124,7 +124,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Implicit | Frequency — Natural frequencies and mode shapes of a frequency step | ready | `solve.frequency` |
 | Explicit | Explicit — Transient dynamics of an explicit step by central differences (contact and erosion coming in M10) | ready | `solve.explicit` |
 | Explicit | Blast & Impact — EOS-driven fluids with fluid–structure contact (ALE or SPH) | coming soon (M14) |  |
-| Fluids | Lattice Boltzmann — Lattice Boltzmann flow on the CPU or the GPU | coming soon (M12) |  |
+| Fluids | Lattice Boltzmann — Lattice Boltzmann flow of a fluid step on the CPU, with wall forces | ready | `solve.fluid` |
 | Fluids | Fluid–Structure — Coupled fluid and structure solve | coming soon (M13) |  |
 
 ## Results

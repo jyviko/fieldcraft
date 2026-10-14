@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-48 ready, 53 coming soon.
+50 ready, 51 coming soon.
 
 ## Geometry
 
@@ -57,9 +57,9 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Panel | Capability | Status | Command |
 |---|---|---|---|
 | Materials | Material — Elastic (isotropic, orthotropic) material with density | ready | `model.material.create`, `model.material.edit`, `model.material.delete` |
-| Materials | Plasticity — Plastic hardening data | coming soon (M8) |  |
+| Materials | Plasticity — Von Mises plasticity: bilinear, hardening table or Johnson–Cook | ready | `model.material.plasticity` |
 | Materials | Hyperelastic — Hyperelastic material models | coming soon (M8) |  |
-| Materials | Damage — Damage initiation and evolution | coming soon (M8) |  |
+| Materials | Damage — Johnson–Cook damage and element erosion | ready | `model.material.damage` |
 | Materials | Thermal — Conductivity, specific heat and expansion | coming soon (M8) |  |
 | Materials | Equation of State — Polynomial, ideal gas, Mie–Grüneisen, JWL and tabulated equations of state | coming soon (M11) |  |
 | Sections | Section — Solid, shell, beam, rod or 2D (plane stress, plane strain, axisymmetric) section assigned to a set, with its element formulation | ready | `model.section.create`, `model.section.edit`, `model.section.delete` |

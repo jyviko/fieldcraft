@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    # Nightly: the heavy tests on main.
+    - cron: '23 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -65,7 +68,25 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Branches restore main's cache; saving their own would only evict it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo xtask ci
+
+  heavy:
+    # The heavy verification and corpus tests (#[ignore]d) and the doc tests: on main, nightly
+    # and on demand, not on every pull request.
+    name: cargo xtask test --heavy
+    if: contains(fromJSON('["push", "schedule", "workflow_dispatch"]'), github.event_name)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo xtask test --heavy
 
   advisories:
     name: Dependency advisories and sources

@@ -13,6 +13,7 @@ geometry boundary (SolidCraft's kernel and tessellator) are in place; meshing is
 
 ```sh
 cargo xtask ci                                  # fmt, assets, licences, layers, clippy, tests, wasm
+cargo xtask test --heavy                        # the heavy (ignored) tests and the doc tests
 cargo run -p modelcraft-cli -- commands         # every command and its parameters
 cargo run -p modelcraft-cli -- run script.json  # run a command script
 ```

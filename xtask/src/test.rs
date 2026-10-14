@@ -1,6 +1,6 @@
 //! `cargo xtask test`: build the workspace's tests once, then run every test binary at the same
 //! time. `cargo test` runs them one after another, so one slow binary held up all the others;
-//! the doc tests and any other `side` jobs run alongside on their own thread.
+//! `side` jobs (the wasm check, the doc tests) run alongside on their own thread.
 
 use std::process::{Command, Stdio};
 use std::sync::mpsc;

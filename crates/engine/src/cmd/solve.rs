@@ -792,6 +792,7 @@ pub(crate) mod tests {
     /// bending energy, so without hourglass stiffness (viscous control) the period is longer by
     /// (1 − 1/n²)^{−½} (3.3% for n = 4); the stiffness form restores part of it.
     #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
     fn explicit_cantilever_period_matches_the_modal_frequency() {
         let (length, n) = (10.0, [40usize, 4usize]);
         let mut s = Session::default();

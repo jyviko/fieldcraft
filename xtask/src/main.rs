@@ -30,15 +30,17 @@ commands:
   licences [--check]
                   write THIRD-PARTY-LICENSES.txt (the licences of every shipped crate);
                   --check fails when it is out of date
-  test [CARGO ARGS] [-- TEST ARGS]
-                  build the tests with the ci profile, then run every test binary at once
-                  (and the doc tests alongside)
+  test [--heavy] [CARGO ARGS] [-- TEST ARGS]
+                  build the tests with the ci profile, then run every test binary at once;
+                  --heavy runs only the ignored tests instead (heavy verification and corpus
+                  tests, and the benchmarks) and the doc tests alongside: the CI heavy job
   corpus [--part NAME] [--no-write]
                   build every meshing test corpus part (tests/corpus, analytic shapes), tessellate
                   and mesh it, and write the results to docs/meshing/corpus.md (release build)
   wasm            cargo check every library crate for wasm32-unknown-unknown
   ci              fmt --check, assets, licences --check, layers, clippy -D warnings, then the tests
-                  with the wasm check alongside (stops at the first failing step)
+                  (not the heavy ones) with the wasm check alongside (stops at the first failing
+                  step)
 ";
 
 fn main() -> ExitCode {
@@ -51,8 +53,17 @@ fn main() -> ExitCode {
         Some("app-icon") => app_icon::run(&root()),
         Some("licences") => licences::run(&root(), rest.contains(&"--check")),
         Some("test") => {
-            let (cargo_args, test_args) = rest.iter().position(|a| *a == "--").map_or((&rest[..], &[][..]), |i| (&rest[..i], &rest[i + 1..]));
-            test::run(cargo_args, test_args, vec![test::doc_tests(cargo_args, test_args)])
+            let (heavy, rest) = match rest.split_first() {
+                Some((&"--heavy", after)) => (true, after),
+                _ => (false, &rest[..]),
+            };
+            let (cargo_args, test_args) = rest.iter().position(|a| *a == "--").map_or((rest, &[][..]), |i| (&rest[..i], &rest[i + 1..]));
+            if heavy {
+                let ignored: Vec<&str> = ["--ignored"].into_iter().chain(test_args.iter().copied()).collect();
+                test::run(cargo_args, &ignored, vec![test::doc_tests(cargo_args, test_args)])
+            } else {
+                test::run(cargo_args, test_args, vec![])
+            }
         }
         Some("ci") => cmd_ci(),
         Some("corpus") => {
@@ -159,8 +170,9 @@ fn wasm_check() -> Result<(Command, usize), String> {
     Ok((c, set.len()))
 }
 
-/// The quick gates first, so they fail fast; the wasm check (and doc tests) run while the test
-/// binaries do, which leaves cargo's build lock free.
+/// The quick gates first, so they fail fast; the wasm check runs while the test binaries do,
+/// which leaves cargo's build lock free. The heavy tests and the doc tests are the CI heavy job's
+/// (`cargo xtask test --heavy`).
 fn cmd_ci() -> Result<(), String> {
     let mut c = cargo();
     c.args(["fmt", "--all", "--", "--check"]);
@@ -172,7 +184,7 @@ fn cmd_ci() -> Result<(), String> {
     c.args(["clippy", "--workspace", "--all-targets", "--profile", "ci", "--", "-D", "warnings"]);
     run(c, "cargo clippy -D warnings")?;
     let (wasm, n) = wasm_check()?;
-    test::run(&[], &[], vec![(format!("wasm32-unknown-unknown check ({n} crates)"), wasm), test::doc_tests(&[], &[])])?;
+    test::run(&[], &[], vec![(format!("wasm32-unknown-unknown check ({n} crates)"), wasm)])?;
     eprintln!("ci: all gates passed");
     Ok(())
 }

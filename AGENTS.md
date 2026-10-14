@@ -97,6 +97,14 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   warnings, tests, wasm) on every PR; don't run the full gate locally. Before pushing: `cargo fmt
   --all`, `cargo check` the touched crates, and run the tests you added or changed. Commit after
   each working step (a layer that compiles with its tests passing), not one big commit per PR.
+- **Keep the PR gate fast** (under ~3 minutes on CI). A test that takes more than a few seconds
+  (convergence studies, the whole corpus, cross-checks between solvers) is
+  `#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]`, with a fast representative
+  test left in the PR gate. The `heavy` CI job runs `cargo xtask test --heavy` (every ignored
+  test, benchmarks included, and the doc tests) on pushes to `main`, nightly and on demand
+  (`gh workflow run CI --ref <branch>`). Hostile-input tests run commands on sessions with small
+  work caps (`Session::limits`) so refusals are instant; never lower the production caps for a
+  test.
 - **Publishing**: `origin` is github.com/jyviko/modelcraft. Changes land through pull requests:
   branch, **rebase onto the latest `origin/main` right before opening the PR and before every push
   that updates it** (never merge `main` into a branch), push, open a PR, let CI run. A PR merges

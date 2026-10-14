@@ -253,6 +253,7 @@ mod tests {
     /// Every committed recipe builds without a failed feature, and its volume matches the closed
     /// form where it states one.
     #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
     fn every_recipe_builds() {
         let parts = read_recipes(&corpus_dir()).unwrap();
         assert!(parts.len() >= 15, "{}", parts.len());

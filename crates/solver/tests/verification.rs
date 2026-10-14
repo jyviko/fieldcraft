@@ -151,6 +151,7 @@ fn timoshenko() -> f64 {
 }
 
 #[test]
+#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
 fn cantilever_tip_deflection_and_convergence() {
     let exact = timoshenko();
     let euler_bernoulli = 4.0;

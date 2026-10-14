@@ -652,6 +652,7 @@ fn lnc_points_lie_on_their_segment_in_parameter_order() {
 }
 
 #[test]
+#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
 fn generic_orient3d_and_insphere_match_rationals_on_lnc_points() {
     let mut r = Rng(12);
     let mut checked = 0;

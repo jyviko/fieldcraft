@@ -369,6 +369,9 @@ impl ModelApp {
         }
         // The results display commands reply with what is shown, which the viewport shows.
         let display = (id.starts_with("results.") && id != "results.reactions") || id == "solve.run";
+        if r.is_ok() && (changed || display) {
+            self.follow_stage(id);
+        }
         match &r {
             Ok(v) if v.is_null() || changed || display => self.set_status(format!("{label} done"), false),
             Ok(v) => self.set_status(format!("{label}: {v}"), false),
@@ -377,15 +380,32 @@ impl ModelApp {
         r
     }
 
-    /// Run a script (a JSON array of `{command, params}`), stopping at the first error.
+    /// Run a script (a JSON array of `{command, params}`), stopping at the first error. The
+    /// ribbon follows its last command that has a stage.
     pub fn run_script(&mut self, script: &Value) -> Result<(), String> {
         let r = self.session.run_script(script).map(|_| ()).map_err(|e| e.to_string());
         self.model_changed();
+        if r.is_ok() {
+            let commands = script.as_array().into_iter().flatten().filter_map(|step| step.get("command").and_then(Value::as_str));
+            if let Some(id) = commands.rev().find(|id| catalogue::stage_tab(id).is_some()) {
+                self.follow_stage(id);
+            }
+        }
         match &r {
             Ok(()) => self.set_status("Script done", false),
             Err(e) => self.set_status(format!("Script: {e}"), true),
         }
         r
+    }
+
+    /// The ribbon turns to the tab where `id` lives ([`catalogue::stage_tab`]), as a person's click
+    /// there would, so commands run by scripts, the control channel and MCP show their stage.
+    /// Called after a command changed the model or the results display; queries leave the ribbon
+    /// alone, and a ribbon click never moves it.
+    fn follow_stage(&mut self, id: &str) {
+        if let Some(tab) = catalogue::stage_tab(id) {
+            self.ui.select_tab(tab);
+        }
     }
 
     /// What a click on a toolbar entry, a menu row or a palette result does: a command without
@@ -870,6 +890,30 @@ mod tests {
         assert!(app.status.as_ref().is_some_and(|s| s.error && s.text.starts_with("Add Node:")), "{err}");
         app.run("model.info", json!({})).unwrap();
         assert!(app.status.as_ref().is_some_and(|s| s.text.contains("\"nodes\":1")));
+    }
+
+    /// Commands run from outside the ribbon bring their tab; queries and Tools commands leave it.
+    #[test]
+    fn the_ribbon_follows_commands_to_their_stage() {
+        let mut app = ModelApp::new(Session::default());
+        app.ui.select_tab(Tab::Results);
+        app.run("mesh.node.add", json!({"label": 1, "xyz": [0, 0, 0]})).unwrap();
+        assert_eq!((app.ui.workspace, app.ui.tab), (Workspace::Prepare, Tab::Mesh));
+        app.run("model.material.create", json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}})).unwrap();
+        assert_eq!((app.ui.workspace, app.ui.tab), (Workspace::Model, Tab::Properties));
+        // A query and a failed command leave it; so does undo (Tools).
+        app.run("mesh.quality", json!({})).ok();
+        let _ = app.run("model.load.create", json!({"name": "bad"}));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.ui.tab, Tab::Properties);
+        // A script follows its last command with a stage.
+        app.run_script(&json!([{"command": "mesh.node.add", "params": {"label": 2, "xyz": [1, 0, 0]}}, {"command": "model.info", "params": {}}]))
+            .unwrap();
+        assert_eq!(app.ui.tab, Tab::Mesh);
+        // The ribbon's own entries never move it.
+        app.ui.select_tab(Tab::Properties);
+        app.start("model.units").unwrap();
+        assert_eq!(app.ui.tab, Tab::Properties);
     }
 
     #[test]

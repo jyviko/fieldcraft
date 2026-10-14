@@ -509,6 +509,15 @@ pub fn entry_of(command: &str) -> Option<&'static Capability> {
     CATALOGUE.iter().find(|c| c.command() == Some(command)).or_else(|| CATALOGUE.iter().find(|c| c.more.contains(&command)))
 }
 
+/// The tab the ribbon follows to when `command` has run from anywhere but the ribbon (a script,
+/// the control channel, MCP, the command search, the browser), as a person's click on that tab
+/// would: its entry's tab. `None` for commands on the Tools tab (files, history, the model
+/// summary: on every workspace and no stage of an analysis) and for unknown commands. A ribbon
+/// click runs a command of the tab shown, so it never moves the ribbon (a test checks it).
+pub fn stage_tab(command: &str) -> Option<Tab> {
+    entry_of(command).map(|c| c.tab).filter(|t| *t != Tab::Tools)
+}
+
 /// The entries of a tab (one run of the catalogue).
 pub fn tab_entries(tab: Tab) -> &'static [Capability] {
     let start = CATALOGUE.iter().position(|c| c.tab == tab).unwrap_or(CATALOGUE.len());
@@ -567,6 +576,26 @@ mod tests {
         assert_eq!(entry_of("model.material.edit").map(|c| c.id), Some("model.material.create"));
         for tab in Tab::ALL {
             assert_eq!(serde_json::to_value(tab).ok().and_then(|v| v.as_str().map(str::to_string)).as_deref(), Some(tab.id()));
+        }
+    }
+
+    #[test]
+    fn the_ribbon_follows_each_command_to_its_stage() {
+        assert_eq!(stage_tab("mesh.hex.sweep"), Some(Tab::Mesh));
+        assert_eq!(stage_tab("model.material.create"), Some(Tab::Properties));
+        assert_eq!(stage_tab("model.material.edit"), Some(Tab::Properties));
+        assert_eq!(stage_tab("model.load.create"), Some(Tab::Loads));
+        assert_eq!(stage_tab("solve.static"), Some(Tab::Solve));
+        assert_eq!(stage_tab("results.contour"), Some(Tab::Results));
+        assert_eq!(stage_tab("edit.undo"), None);
+        assert_eq!(stage_tab("file.save"), None);
+        assert_eq!(stage_tab("model.info"), None);
+        assert_eq!(stage_tab("no.such"), None);
+        // A ribbon click (an entry's command, or one of its drop-down's) stays on the tab shown.
+        for c in CATALOGUE {
+            for command in c.command().into_iter().chain(c.more.iter().copied()) {
+                assert!(stage_tab(command).is_none_or(|t| t == c.tab), "{}: `{command}` would move the ribbon from {:?}", c.id, c.tab);
+            }
         }
     }
 

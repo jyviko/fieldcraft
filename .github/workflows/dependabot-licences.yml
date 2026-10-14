@@ -34,5 +34,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "deps: regenerate THIRD-PARTY-LICENSES.txt" -- THIRD-PARTY-LICENSES.txt
+          # [skip ci]: the pull request's CI run already regenerated this file and tested the
+          # tree with it; a bot-authored commit would otherwise wait for a maintainer's approval.
+          git commit -m "deps: regenerate THIRD-PARTY-LICENSES.txt [skip ci]" -- THIRD-PARTY-LICENSES.txt
           git push origin "HEAD:${GITHUB_HEAD_REF}"

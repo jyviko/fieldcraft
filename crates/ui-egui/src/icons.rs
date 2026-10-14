@@ -1,9 +1,11 @@
 //! Toolbar icons: original artwork drawn with VectorCraft (`assets/icons`, `cargo xtask icons`),
 //! embedded at build time and rasterised with resvg.
 //!
-//! Icons are drawn in four palette roles, each in one fixed colour (the dark theme's). Before
-//! rasterising, every role colour is replaced by the theme token it stands for, so the same SVG
-//! serves the dark and light themes and the greyed "coming soon" state. Textures are cached per
+//! Icons are drawn in four palette roles (line, accent, soft fill, warm), each in one fixed colour.
+//! Before rasterising, every role colour is replaced by the theme token it stands for (`icon`,
+//! `accent`, `icon_fill`, `warm`, as SolidCraft paints its icons), so the same SVG serves the dark
+//! and light themes and the greyed "coming soon" state. Icons named `ui.*` belong to the window
+//! itself (navigation bar, title bar), the others to catalogue entries. Textures are cached per
 //! icon, theme, state and pixel size.
 
 use std::collections::HashMap;
@@ -30,7 +32,7 @@ pub fn svg(id: &str) -> Option<&'static str> {
 /// The colours the palette roles (line, accent, soft, warm) take in a theme, greyed when the
 /// entry is not available yet.
 pub fn colours(t: &Tokens, enabled: bool) -> [Color32; 4] {
-    if enabled { [t.text, t.accent, t.accent_soft, t.warm] } else { [t.text_dim, t.text_dim, t.panel_header, t.text_dim] }
+    if enabled { [t.icon, t.accent, t.icon_fill, t.warm] } else { [t.border, t.border, t.panel_header, t.border] }
 }
 
 /// The SVG with each palette colour replaced by its role's colour.
@@ -54,29 +56,75 @@ pub fn rasterise(svg: &str, px: u32) -> Result<egui::ColorImage, String> {
     Ok(egui::ColorImage::from_rgba_premultiplied([px as usize, px as usize], pixmap.data()))
 }
 
-/// Icon textures by (id, enabled) for one theme and pixel size; `None` when the icon is missing
-/// or does not rasterise, so it is not tried again every frame. A change of theme or size
-/// (zoom) drops the old textures.
+/// How an icon is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Look {
+    /// In the theme's colours.
+    Normal,
+    /// Greyed: coming soon or unavailable.
+    Greyed,
+    /// On the title bar, which is dark in both themes: the dark theme's colours.
+    AppBar,
+}
+
+impl Look {
+    pub fn of(enabled: bool) -> Look {
+        if enabled { Look::Normal } else { Look::Greyed }
+    }
+
+    fn colours(self, dark: bool) -> [Color32; 4] {
+        match self {
+            Look::Normal => colours(&Tokens::get(dark), true),
+            Look::Greyed => colours(&Tokens::get(dark), false),
+            Look::AppBar => colours(&Tokens::dark(), true),
+        }
+    }
+}
+
+/// Icon textures by (id, look) for one theme and pixel size; `None` when the icon is missing or
+/// does not rasterise, so it is not tried again every frame. A change of theme or size (zoom)
+/// drops the old textures.
 #[derive(Default)]
 pub struct IconCache {
     theme_px: Option<(bool, u32)>,
-    textures: HashMap<(&'static str, bool), Option<TextureHandle>>,
+    textures: HashMap<(&'static str, Look), Option<TextureHandle>>,
 }
 
 impl IconCache {
-    pub fn get(&mut self, ctx: &egui::Context, id: &'static str, dark: bool, enabled: bool, px: u32) -> Option<TextureHandle> {
+    pub fn get(&mut self, ctx: &egui::Context, id: &'static str, dark: bool, look: Look, px: u32) -> Option<TextureHandle> {
         if self.theme_px != Some((dark, px)) {
             self.textures.clear();
             self.theme_px = Some((dark, px));
         }
         self.textures
-            .entry((id, enabled))
+            .entry((id, look))
             .or_insert_with(|| {
                 let svg = svg(id)?;
-                let image = rasterise(&recolour(svg, colours(&Tokens::get(dark), enabled)), px).map_err(|e| log::warn!("icon {id}: {e}")).ok()?;
-                Some(ctx.load_texture(format!("icon:{id}:{dark}:{enabled}:{px}"), image, egui::TextureOptions::LINEAR))
+                let image = rasterise(&recolour(svg, look.colours(dark)), px).map_err(|e| log::warn!("icon {id}: {e}")).ok()?;
+                Some(ctx.load_texture(format!("icon:{id}:{dark}:{look:?}:{px}"), image, egui::TextureOptions::LINEAR))
             })
             .clone()
+    }
+}
+
+/// Paint icon `id` into `rect` (a square); a missing icon draws a thin box so nothing is blank.
+pub fn paint(app: &mut crate::ModelApp, ui: &egui::Ui, id: &'static str, rect: egui::Rect, look: Look) {
+    paint_tinted(app, ui, id, rect, look, Color32::WHITE);
+}
+
+/// [`paint`] multiplied by `tint` (a translucent white dims it).
+pub fn paint_tinted(app: &mut crate::ModelApp, ui: &egui::Ui, id: &'static str, rect: egui::Rect, look: Look, tint: Color32) {
+    let ctx = ui.ctx();
+    let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).round().clamp(1.0, MAX_PX as f32) as u32;
+    let p = ui.painter();
+    match app.icons.get(ctx, id, app.ui.dark, look, px) {
+        Some(tex) => {
+            p.image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
+        }
+        None => {
+            let t = Tokens::get(app.ui.dark);
+            p.rect_stroke(rect.shrink(3.0), 3.0, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+        }
     }
 }
 
@@ -91,7 +139,7 @@ mod tests {
             assert!(svg(c.id).is_some(), "no icon assets/icons/{}.svg", c.id);
         }
         for (id, _) in ICONS {
-            assert!(CATALOGUE.iter().any(|c| c.id == *id), "assets/icons/{id}.svg belongs to no catalogue entry");
+            assert!(id.starts_with("ui.") || CATALOGUE.iter().any(|c| c.id == *id), "assets/icons/{id}.svg belongs to no catalogue entry");
         }
         assert!(ICONS.windows(2).all(|w| w[0].0 < w[1].0), "sorted for the binary search");
     }
@@ -110,11 +158,17 @@ mod tests {
         }
     }
 
-    /// The SVG colours are the dark theme's own, so the dark theme draws icons as authored.
+    /// Each role takes its own token, so recolouring never merges two roles into one colour.
     #[test]
-    fn the_palette_is_the_dark_themes_colours() {
-        let hex: Vec<String> = colours(&Tokens::dark(), true).iter().map(|c| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())).collect();
-        assert_eq!(hex, PALETTE);
+    fn every_role_takes_a_distinct_theme_colour() {
+        for t in [Tokens::dark(), Tokens::light()] {
+            let c = colours(&t, true);
+            for i in 0..c.len() {
+                for j in i + 1..c.len() {
+                    assert_ne!(c[i], c[j], "roles {i} and {j}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -122,9 +176,10 @@ mod tests {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0 L24 24" stroke="#4f9ce8" fill="#2d4e70"/></svg>"##;
         let light = Tokens::light();
         let out = recolour(svg, colours(&light, true));
-        assert!(out.contains("stroke=\"#1f6fc4\"") && out.contains("fill=\"#c6dcf4\""), "{out}");
+        let hex = |c: Color32| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
+        assert!(out.contains(&format!("stroke=\"{}\"", hex(light.accent))) && out.contains(&format!("fill=\"{}\"", hex(light.icon_fill))), "{out}");
         let grey = recolour(svg, colours(&light, false));
-        let dim = light.text_dim;
+        let dim = light.border;
         assert!(grey.contains(&format!("stroke=\"#{:02x}{:02x}{:02x}\"", dim.r(), dim.g(), dim.b())), "{grey}");
         assert!(rasterise("not svg", 24).is_err());
         assert_eq!(rasterise(svg, 100_000).unwrap().size, [MAX_PX as usize; 2]);

@@ -1,0 +1,257 @@
+//! The command line (bottom) and the command search (S or Cmd/Ctrl+K).
+//!
+//! The command line runs `id {json}` (`mesh.node.add {"label": 1, "xyz": [0, 0, 0]}`), starts a
+//! command given by its id alone, or starts the best match for a name. Beside it, the status and
+//! the model's size. The search lists every catalogue entry and related command by name, id or
+//! tip; coming-soon entries are listed greyed with their milestone. Adapted from SolidCraft's
+//! `crates/ui-egui/src/palette.rs` (MIT OR Apache-2.0), see ATTRIBUTION.md.
+
+use egui::{Align2, FontId, Rect, RichText, Sense, Vec2, pos2, vec2};
+use modelcraft_engine::catalogue::{self, CATALOGUE};
+use serde_json::Value;
+
+use crate::ModelApp;
+use crate::icons::{self, Look};
+use crate::theme::Tokens;
+
+/// The command line's height.
+pub const HEIGHT: f32 = 28.0;
+/// Most results the search lists.
+const MAX_RESULTS: usize = 60;
+
+/// One search result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hit {
+    /// What starting it starts: a catalogue entry or a command.
+    pub id: &'static str,
+    pub label: &'static str,
+    /// Where it is on the toolbar: `Tab › Panel`.
+    pub place: String,
+    /// The icon (its catalogue entry's).
+    pub icon: &'static str,
+    /// The milestone that brings it, while it is coming soon.
+    pub soon: Option<&'static str>,
+}
+
+/// Every entry and related command matching `query` (by label, id, panel or tip), best first:
+/// labels starting with it, then ids starting with it, then the rest, ready before coming soon.
+pub fn matches(query: &str) -> Vec<Hit> {
+    let q = query.trim().to_lowercase();
+    let mut hits: Vec<(u8, Hit)> = Vec::new();
+    let rank = |label: &str, id: &str| -> u8 {
+        if label.to_lowercase().starts_with(&q) {
+            0
+        } else if id.starts_with(&q) {
+            1
+        } else {
+            2
+        }
+    };
+    for c in CATALOGUE {
+        let place = format!("{} › {}", c.tab.label(), c.panel);
+        let text = format!("{} {} {} {}", c.label, c.id, c.panel, c.tip).to_lowercase();
+        if q.is_empty() || text.contains(&q) {
+            let soon = c.milestone();
+            hits.push((
+                rank(c.label, c.id) + if soon.is_some() { 3 } else { 0 },
+                Hit { id: c.id, label: c.label, place: place.clone(), icon: c.id, soon },
+            ));
+        }
+        for m in c.more {
+            let label = crate::command_label(m);
+            if q.is_empty() || format!("{label} {m}").to_lowercase().contains(&q) {
+                hits.push((rank(label, m), Hit { id: m, label, place: place.clone(), icon: c.id, soon: None }));
+            }
+        }
+    }
+    hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.label.cmp(b.1.label)));
+    hits.dedup_by(|a, b| a.1.id == b.1.id);
+    hits.into_iter().map(|(_, h)| h).collect()
+}
+
+/// Run a line of command-line input: `id {json}` runs the command with those parameters, `id`
+/// starts it, anything else starts the best match.
+pub fn submit(app: &mut ModelApp, line: &str) {
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    let (id, rest) = match line.find(|c: char| c.is_whitespace() || c == '{') {
+        Some(i) => (line.get(..i).unwrap_or(line), line.get(i..).unwrap_or("").trim()),
+        None => (line, ""),
+    };
+    if modelcraft_engine::find_command(id).is_some() || catalogue::find(id).is_some() {
+        if rest.is_empty() {
+            let _ = app.start(id);
+        } else {
+            match serde_json::from_str::<Value>(rest) {
+                Ok(p) => {
+                    let _ = app.run(id, p);
+                }
+                Err(e) => app.set_status(format!("the parameters must be JSON: {e}"), true),
+            }
+        }
+        return;
+    }
+    match matches(line).into_iter().find(|h| h.soon.is_none()) {
+        Some(h) => {
+            let _ = app.start(h.id);
+        }
+        None => app.set_status(format!("no command matches `{line}`"), true),
+    }
+}
+
+/// The command line, the status and the model's size, above the timeline.
+pub fn command_line(app: &mut ModelApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(app.ui.dark);
+    egui::Panel::bottom("mc_command_line")
+        .exact_size(HEIGHT)
+        .frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(8, 3)))
+        .show(ui, |ui| {
+            app.place("command_line", ui.max_rect());
+            ui.horizontal_centered(|ui| {
+                ui.label(RichText::new("›").strong().color(t.accent));
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut app.command_line)
+                        .id(egui::Id::new("mc_command_line_text"))
+                        .hint_text(r#"Type a command, e.g. mesh.node.add {"label": 1, "xyz": [0, 0, 0]} — or press S to search"#)
+                        .desired_width(440.0),
+                );
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let line = std::mem::take(&mut app.command_line);
+                    submit(app, &line);
+                }
+                let (nodes, elements) = (app.session.model.nodes().len(), app.session.model.elements().len());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(app.gpu_info.as_deref().unwrap_or("CPU renderer")).size(11.5).color(t.text_dim));
+                    ui.separator();
+                    ui.label(RichText::new(if app.ui.perspective { "Perspective" } else { "Orthographic" }).size(11.5).color(t.text_dim));
+                    ui.separator();
+                    ui.label(RichText::new(format!("{nodes} nodes  {elements} elements")).size(11.5).color(t.text_dim));
+                    ui.separator();
+                    let (text, color) = match &app.status {
+                        Some(s) => (s.text.as_str(), if s.error { t.error } else { t.text }),
+                        None => ("Ready", t.text_dim),
+                    };
+                    ui.add(egui::Label::new(RichText::new(text).size(11.5).color(color)).truncate());
+                });
+            });
+        });
+}
+
+/// The command search, centred near the top of the window.
+pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
+    if !app.ui.palette {
+        return;
+    }
+    let t = Tokens::get(app.ui.dark);
+    let mut picked: Option<&'static str> = None;
+    let mut open = true;
+    let center = ctx.content_rect().center();
+    let r = crate::frame::window(ctx, "Search commands", crate::frame::Width::Normal)
+        .id(egui::Id::new("mc_search"))
+        .pivot(Align2::CENTER_TOP)
+        .fixed_pos(pos2(center.x, 140.0))
+        .fixed_size(vec2(440.0, 380.0))
+        .open(&mut open)
+        .show(ctx, |ui| {
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut app.palette_text)
+                    .id(egui::Id::new("mc_search_text"))
+                    .hint_text("command name, id or what it does")
+                    .desired_width(f32::INFINITY),
+            );
+            let entered = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            r.request_focus();
+            let list = matches(&app.palette_text);
+            if entered {
+                picked = list.iter().find(|h| h.soon.is_none()).map(|h| h.id);
+            }
+            egui::ScrollArea::vertical().max_height(320.0).auto_shrink([false, true]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for h in list.iter().take(MAX_RESULTS) {
+                    let (rect, resp) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), 26.0), if h.soon.is_none() { Sense::click() } else { Sense::hover() });
+                    if resp.hovered() && h.soon.is_none() {
+                        ui.painter().rect_filled(rect, 3.0, t.hover);
+                    }
+                    icons::paint(
+                        app,
+                        ui,
+                        h.icon,
+                        Rect::from_center_size(pos2(rect.left() + 14.0, rect.center().y), Vec2::splat(18.0)),
+                        Look::of(h.soon.is_none()),
+                    );
+                    let p = ui.painter();
+                    p.text(
+                        pos2(rect.left() + 30.0, rect.center().y),
+                        Align2::LEFT_CENTER,
+                        h.label,
+                        FontId::proportional(13.0),
+                        if h.soon.is_none() { t.text } else { t.text_dim },
+                    );
+                    let right = match h.soon {
+                        Some(m) => format!("{} · soon ({m})", h.place),
+                        None => h.place.clone(),
+                    };
+                    p.text(pos2(rect.right() - 6.0, rect.center().y), Align2::RIGHT_CENTER, right, FontId::proportional(11.0), t.text_dim);
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, h.soon.is_none(), h.label));
+                    if resp.on_hover_text(h.id).clicked() && h.soon.is_none() {
+                        picked = Some(h.id);
+                    }
+                }
+            });
+        });
+    if let Some(r) = r {
+        app.place("palette", r.response.rect);
+    }
+    if let Some(id) = picked {
+        app.palette_text.clear();
+        app.ui.palette = false;
+        let _ = app.start(id);
+    } else if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.ui.palette = false;
+        app.palette_text.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use modelcraft_engine::Session;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn search_finds_entries_and_related_commands_ready_first() {
+        let hits = matches("material");
+        assert_eq!(hits.first().map(|h| h.id), Some("model.material.create"));
+        assert!(hits.iter().any(|h| h.id == "model.material.delete"), "related commands are found");
+        let soon = hits.iter().position(|h| h.soon.is_some()).unwrap();
+        assert!(hits.iter().skip(soon).all(|h| h.soon.is_some()), "coming soon last");
+        assert_eq!(matches("").len(), {
+            let mut ids: Vec<&str> = CATALOGUE.iter().flat_map(|c| std::iter::once(c.id).chain(c.more.iter().copied())).collect();
+            ids.sort();
+            ids.dedup();
+            ids.len()
+        });
+        assert!(matches("no such thing at all").is_empty());
+    }
+
+    #[test]
+    fn the_command_line_runs_ids_with_json_and_starts_names() {
+        let mut app = ModelApp::new(Session::default());
+        submit(&mut app, r#"mesh.node.add {"label": 4, "xyz": [1, 2, 3]}"#);
+        assert!(app.session.model.node(4).is_some());
+        submit(&mut app, "mesh.node.add");
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("mesh.node.add"));
+        app.dialog = None;
+        submit(&mut app, "material");
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("model.material.create"));
+        submit(&mut app, "mesh.node.add {not json");
+        assert!(app.status.as_ref().is_some_and(|s| s.error));
+        submit(&mut app, "zzzz qqqq");
+        assert!(app.status.as_ref().is_some_and(|s| s.error && s.text.contains("no command")));
+        let _ = json!({});
+    }
+}

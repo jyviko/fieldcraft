@@ -205,6 +205,11 @@ impl Session {
         (self.history.undo.len(), self.history.redo.len())
     }
 
+    /// The undone commands redo would run, the next one first.
+    pub fn redo_entries(&self) -> impl Iterator<Item = &(String, Value)> {
+        self.history.redo.iter().rev().map(|r| &r.entry)
+    }
+
     fn history_report(&self, done: &str, command: &str) -> Value {
         let (undo, redo) = self.undo_depth();
         json!({done: command, "undo": undo, "redo": redo})

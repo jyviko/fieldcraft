@@ -51,6 +51,70 @@ impl Tab {
     }
 }
 
+/// The workspaces: one per stage of an analysis, each a set of toolbar tabs. Tools is on every
+/// workspace.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Workspace {
+    /// Geometry and meshing.
+    #[default]
+    Prepare,
+    /// Materials, sections, sets, steps, loads, boundary conditions and interactions.
+    Model,
+    /// Checking, writing decks and solving.
+    Analysis,
+    /// Looking at results.
+    Results,
+}
+
+impl Workspace {
+    pub const ALL: [Workspace; 4] = [Workspace::Prepare, Workspace::Model, Workspace::Analysis, Workspace::Results];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Workspace::Prepare => "Prepare",
+            Workspace::Model => "Model",
+            Workspace::Analysis => "Analysis",
+            Workspace::Results => "Results",
+        }
+    }
+
+    /// One line: what it is for.
+    pub fn about(self) -> &'static str {
+        match self {
+            Workspace::Prepare => "Open geometry and mesh it",
+            Workspace::Model => "Materials, sections, steps, loads and boundary conditions",
+            Workspace::Analysis => "Check the model, write decks and solve",
+            Workspace::Results => "Deformed shapes, contours, modes and probes",
+        }
+    }
+
+    /// Its tabs, in order.
+    pub fn tabs(self) -> &'static [Tab] {
+        match self {
+            Workspace::Prepare => &[Tab::Geometry, Tab::Mesh, Tab::Tools],
+            Workspace::Model => &[Tab::Properties, Tab::Assembly, Tab::Steps, Tab::Loads, Tab::Interactions, Tab::Tools],
+            Workspace::Analysis => &[Tab::Solve, Tab::Tools],
+            Workspace::Results => &[Tab::Results, Tab::Tools],
+        }
+    }
+
+    /// The workspace that shows `tab`: `current` when it does, else the first that does.
+    pub fn showing(tab: Tab, current: Workspace) -> Workspace {
+        if current.tabs().contains(&tab) { current } else { Workspace::ALL.into_iter().find(|w| w.tabs().contains(&tab)).unwrap_or(current) }
+    }
+
+    /// The catalogue entry whose icon stands for the workspace.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Workspace::Prepare => "mesh.tet.generate",
+            Workspace::Model => "model.material.create",
+            Workspace::Analysis => "solve.run",
+            Workspace::Results => "results.contour",
+        }
+    }
+}
+
 /// Whether an entry runs today.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -402,6 +466,12 @@ pub fn find(id: &str) -> Option<&'static Capability> {
     CATALOGUE.iter().find(|c| c.id == id)
 }
 
+/// The entry that claims a command: the one running it, else the one listing it among its
+/// related commands. Every registered command has one (a test checks it).
+pub fn entry_of(command: &str) -> Option<&'static Capability> {
+    CATALOGUE.iter().find(|c| c.command() == Some(command)).or_else(|| CATALOGUE.iter().find(|c| c.more.contains(&command)))
+}
+
 /// The entries of a tab (one run of the catalogue).
 pub fn tab_entries(tab: Tab) -> &'static [Capability] {
     let start = CATALOGUE.iter().position(|c| c.tab == tab).unwrap_or(CATALOGUE.len());
@@ -443,6 +513,21 @@ pub fn features_page() -> String {
 mod tests {
     use super::*;
     use crate::{commands, find_command};
+
+    #[test]
+    fn every_tab_is_on_a_workspace_and_every_command_has_an_entry() {
+        for tab in Tab::ALL {
+            assert!(Workspace::ALL.iter().any(|w| w.tabs().contains(&tab)), "{tab:?} is on no workspace");
+        }
+        assert!(Workspace::ALL.iter().all(|w| w.tabs().contains(&Tab::Tools)));
+        assert!(Workspace::ALL.iter().all(|w| find(w.icon()).is_some()));
+        assert_eq!(Workspace::showing(Tab::Results, Workspace::Prepare), Workspace::Results);
+        assert_eq!(Workspace::showing(Tab::Tools, Workspace::Model), Workspace::Model);
+        for c in commands() {
+            assert!(entry_of(c.id).is_some(), "{} has no catalogue entry", c.id);
+        }
+        assert_eq!(entry_of("model.material.edit").map(|c| c.id), Some("model.material.create"));
+    }
 
     #[test]
     fn every_command_is_claimed_and_every_ready_entry_runs_a_command() {

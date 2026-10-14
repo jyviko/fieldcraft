@@ -82,7 +82,11 @@ impl ModelApp {
         std::mem::swap(&mut self.icons, &mut off.icons);
         std::mem::swap(&mut self.viewport, &mut off.viewport);
         let toolbar = std::mem::take(&mut self.toolbar_rects);
+        let layout = std::mem::take(&mut self.layout);
+        let panels = std::mem::take(&mut self.panel_rects);
         crate::theme::apply(&off.ctx, self.ui.dark);
+        // A capture is one still frame: windows and menus appear without fading in.
+        off.ctx.global_style_mut(|s| s.animation_time = 0.0);
         let mut shapes = Vec::new();
         let mut ppp = size.scale;
         // Textures freed by the frame painted, released after it is painted.
@@ -111,6 +115,8 @@ impl ModelApp {
         std::mem::swap(&mut self.icons, &mut off.icons);
         std::mem::swap(&mut self.viewport, &mut off.viewport);
         self.toolbar_rects = toolbar;
+        self.layout = layout;
+        self.panel_rects = panels;
         let primitives = off.ctx.tessellate(shapes, ppp);
         let mut canvas = Canvas::new(w, h, Tokens::get(self.ui.dark).panel)?;
         for p in &primitives {
@@ -329,17 +335,17 @@ mod tests {
         let image = app.capture(size(900.0, 600.0)).unwrap();
         assert_eq!(image.size, [900, 600]);
         let t = Tokens::dark();
-        // The menu bar along the top, the status bar along the bottom (their own colour).
-        let bar = pixel(&image, 450, 595);
-        assert_eq!(bar, t.app_bar, "status bar");
+        // The title bar along the top, the timeline along the bottom (their own colours).
+        assert_eq!(pixel(&image, 450, 595), t.timeline, "timeline");
+        assert_eq!(pixel(&image, 899, 1), t.app_bar, "title bar");
         // The viewport shows the model: the middle is neither panel nor background.
         let middle = pixel(&image, 450, 330);
         assert!(middle != t.panel && middle != t.app_bar, "{middle:?}");
-        // Text was drawn: the menu bar has pixels brighter than its fill.
-        let bright = (0..300).any(|x| (2..20).any(|y| pixel(&image, x, y).r() > 150));
-        assert!(bright, "menu text");
+        // Text was drawn: the title bar has pixels brighter than its fill.
+        let bright = (0..300).any(|x| (2..30).any(|y| pixel(&image, x, y).r() > 150));
+        assert!(bright, "title text");
         // The live window's state is untouched.
-        assert!(app.viewport.rect.is_none() && app.toolbar_rects.is_empty());
+        assert!(app.viewport.rect.is_none() && app.toolbar_rects.is_empty() && app.layout.is_empty());
         // A second capture reuses the offscreen context; at scale 2 it doubles the pixels.
         let twice = app.capture(CaptureSize { width: 450.0, height: 300.0, scale: 2.0 }).unwrap();
         assert_eq!(twice.size, [900, 600]);

@@ -174,9 +174,9 @@ pub fn plot(session: &Session, base: &DisplayMesh, frame: Option<u64>, prepared:
 
 /// The scene of a plot: the deformed elements drawn as the model is ([`scene::build`]), with
 /// their faces split into contour bands when a field is shown.
-pub fn scene(plot: &Plot, style: Style, show_nodes: bool, t: &Tokens) -> Scene {
-    let mut s = crate::scene::build(&plot.display, style, show_nodes, t);
-    let Some(c) = plot.contour.as_ref().filter(|_| style != Style::Wireframe) else { return s };
+pub fn scene(plot: &Plot, style: Style, show: crate::scene::Show, t: &Tokens) -> Scene {
+    let mut s = crate::scene::build(&plot.display, style, show, t);
+    let Some(c) = plot.contour.as_ref().filter(|_| style != Style::Wireframe && show.mesh) else { return s };
     let nodes = plot.result.nodes();
     let stops = t.contour_stops();
     s.tris.clear();
@@ -270,7 +270,7 @@ pub(crate) mod tests {
         // The tip moves most (lowest band), the clamped root not at all (highest band).
         assert!(legend.min.1 < -0.2 && legend.max.1.abs() < 1e-12, "{legend:?}");
         let t = Tokens::dark();
-        let scene = scene(&p, Style::Shaded, false, &t);
+        let scene = scene(&p, Style::Shaded, crate::scene::Show::DEFAULT, &t);
         let stops = t.contour_stops();
         let (low, high) = (band_color(&stops, 0, 4), band_color(&stops, 3, 4));
         // Faces whose corners are all near the root are in the top band; near the tip, the bottom.

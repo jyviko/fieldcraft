@@ -12,7 +12,7 @@
 
 use serde_json::{Value, json};
 
-/// A sample the app offers (Help ▸ Samples, the empty viewport, `file.sample`, `--sample NAME`).
+/// A sample the app offers (Help › Samples, the empty viewport, `file.sample`, `--sample NAME`).
 pub struct Sample {
     pub name: &'static str,
     pub label: &'static str,

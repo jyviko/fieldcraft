@@ -48,6 +48,9 @@ resvg = { version = "0.48", default-features = false }
 egui = "0.36"
 eframe = { version = "0.36", default-features = false }
 egui-wgpu = "0.36"
+# Shared Craft-family egui components (icon buttons, tabs, widget palette); the same rev as
+# VectorCraft. MIT OR Apache-2.0.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675" }
 # native file pickers (the desktop app only; the UI crate takes them as services)
 rfd = "0.17"
 

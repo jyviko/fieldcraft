@@ -1,8 +1,9 @@
-//! Colours and widget style: a dark theme (the default) and a light one. Every colour the UI
-//! uses comes from [`Tokens`].
+//! Colours and widget style: the Craft family's dark theme (the default, blue-grey chrome around a
+//! #2e3440 viewport) and its light one, with the same values as SolidCraft's tokens so the apps
+//! look alike side by side. Every colour the UI uses comes from [`Tokens`].
 //!
 //! Adapted from SolidCraft's `crates/ui-egui/src/theme.rs` (MIT OR Apache-2.0), see
-//! ATTRIBUTION.md.
+//! ATTRIBUTION.md. Widget states are coloured with craft-ui's `WidgetPalette`.
 
 use egui::{Color32, Stroke};
 use modelcraft_model::ElementKind;
@@ -10,9 +11,15 @@ use modelcraft_render::Rgb;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
+    /// The title bar (dark in both themes) and its text.
     pub app_bar: Color32,
+    pub app_bar_text: Color32,
+    /// The ribbon.
+    pub toolbar: Color32,
     pub panel: Color32,
     pub panel_header: Color32,
+    /// Command forms and the context panel.
+    pub dialog_bg: Color32,
     /// Band behind a panel's heading and, lighter, behind its section headings.
     pub heading_bg: Color32,
     pub subheading_bg: Color32,
@@ -25,13 +32,20 @@ pub struct Tokens {
     pub hover: Color32,
     pub error: Color32,
     pub ok: Color32,
-    /// Loads and heat in icons.
+    /// Warnings, loads and heat in icons.
     pub warm: Color32,
+    /// Icon line work and fills.
+    pub icon: Color32,
+    pub icon_fill: Color32,
+    /// The journal timeline: its strip, its items and the current-position marker.
+    pub timeline: Color32,
+    pub timeline_item: Color32,
+    pub timeline_marker: Color32,
     // ---- viewport ----
-    /// Background gradient, top and bottom.
+    /// Background gradient, top and bottom (equal for a flat fill).
     pub viewport_top: Color32,
     pub viewport_bottom: Color32,
-    /// Buttons drawn over the viewport.
+    /// Chips drawn over the viewport (navigation bar, legend, start screen).
     pub overlay: Color32,
     pub overlay_text: Color32,
     pub axis_x: Color32,
@@ -47,7 +61,7 @@ pub struct Tokens {
     pub mesh_edge: Color32,
     pub node: Color32,
     // ---- geometry ----
-    /// Faces of the open design and imported surfaces.
+    /// Faces of the open design and imported surfaces (SolidCraft's body colour).
     pub geometry: Color32,
     /// Their face boundaries.
     pub geometry_edge: Color32,
@@ -72,65 +86,35 @@ impl Tokens {
         if dark { Tokens::dark() } else { Tokens::light() }
     }
 
-    pub const fn dark() -> Tokens {
-        Tokens {
-            app_bar: Color32::from_rgb(0x23, 0x27, 0x2e),
-            panel: Color32::from_rgb(0x2b, 0x30, 0x38),
-            panel_header: Color32::from_rgb(0x34, 0x3a, 0x44),
-            heading_bg: Color32::from_rgb(38, 44, 55),
-            subheading_bg: Color32::from_rgb(48, 55, 68),
-            border: Color32::from_rgb(0x44, 0x4b, 0x57),
-            field: Color32::from_rgb(0x1f, 0x23, 0x29),
-            text: Color32::from_rgb(0xdd, 0xe2, 0xea),
-            text_dim: Color32::from_rgb(0x96, 0x9f, 0xad),
-            accent: Color32::from_rgb(0x4f, 0x9c, 0xe8),
-            accent_soft: Color32::from_rgb(0x2d, 0x4e, 0x70),
-            hover: Color32::from_rgb(0x3c, 0x43, 0x4f),
-            error: Color32::from_rgb(0xf0, 0x6c, 0x64),
-            ok: Color32::from_rgb(0x8c, 0xc8, 0x8c),
-            warm: Color32::from_rgb(0xf0, 0xb4, 0x4a),
-            viewport_top: Color32::from_rgb(0x3a, 0x41, 0x4d),
-            viewport_bottom: Color32::from_rgb(0x1e, 0x22, 0x28),
-            overlay: Color32::from_rgba_unmultiplied_const(0x1c, 0x20, 0x26, 0xd0),
-            overlay_text: Color32::from_rgb(0xdd, 0xe2, 0xea),
-            axis_x: Color32::from_rgb(0xe0, 0x5a, 0x50),
-            axis_y: Color32::from_rgb(0x6c, 0xc0, 0x5a),
-            axis_z: Color32::from_rgb(0x52, 0x8c, 0xe6),
-            hex: Color32::from_rgb(0x82, 0xa6, 0xc8),
-            tet: Color32::from_rgb(0x8c, 0xc0, 0x96),
-            wedge: Color32::from_rgb(0xc8, 0xb4, 0x82),
-            shell: Color32::from_rgb(0xc8, 0x96, 0x82),
-            line_element: Color32::from_rgb(0xf0, 0xc0, 0x50),
-            mesh_edge: Color32::from_rgb(0x14, 0x18, 0x1e),
-            node: Color32::from_rgb(0xf2, 0xe6, 0x6e),
-            geometry: Color32::from_rgb(0xa8, 0xae, 0xb8),
-            geometry_edge: Color32::from_rgb(0xe8, 0xec, 0xf2),
-            contour: CONTOUR,
-            no_result: Color32::from_rgb(0x70, 0x76, 0x80),
-        }
-    }
-
     pub const fn light() -> Tokens {
         Tokens {
-            app_bar: Color32::from_rgb(0xe4, 0xe8, 0xee),
-            panel: Color32::from_rgb(0xf3, 0xf5, 0xf8),
-            panel_header: Color32::from_rgb(0xe2, 0xe6, 0xec),
+            app_bar: Color32::from_rgb(52, 56, 64),
+            app_bar_text: Color32::from_rgb(230, 234, 242),
+            toolbar: Color32::from_rgb(246, 247, 249),
+            panel: Color32::from_rgb(250, 251, 252),
+            panel_header: Color32::from_rgb(236, 238, 242),
+            dialog_bg: Color32::from_rgb(250, 251, 252),
             heading_bg: Color32::from_rgb(218, 223, 231),
             subheading_bg: Color32::from_rgb(234, 237, 242),
-            border: Color32::from_rgb(0xc4, 0xcb, 0xd5),
-            field: Color32::from_rgb(0xff, 0xff, 0xff),
-            text: Color32::from_rgb(0x1e, 0x23, 0x2a),
-            text_dim: Color32::from_rgb(0x5e, 0x67, 0x74),
-            accent: Color32::from_rgb(0x1f, 0x6f, 0xc4),
-            accent_soft: Color32::from_rgb(0xc6, 0xdc, 0xf4),
-            hover: Color32::from_rgb(0xd8, 0xde, 0xe6),
-            error: Color32::from_rgb(0xc0, 0x30, 0x28),
-            ok: Color32::from_rgb(0x2c, 0x7a, 0x3a),
-            warm: Color32::from_rgb(0xc0, 0x7a, 0x14),
-            viewport_top: Color32::from_rgb(0xf0, 0xf3, 0xf7),
-            viewport_bottom: Color32::from_rgb(0xc8, 0xd0, 0xdc),
-            overlay: Color32::from_rgba_unmultiplied_const(0xea, 0xee, 0xf3, 0xe0),
-            overlay_text: Color32::from_rgb(0x1e, 0x23, 0x2a),
+            border: Color32::from_rgb(208, 212, 220),
+            field: Color32::WHITE,
+            text: Color32::from_rgb(38, 42, 50),
+            text_dim: Color32::from_rgb(110, 116, 128),
+            accent: Color32::from_rgb(38, 120, 218),
+            accent_soft: Color32::from_rgb(214, 230, 250),
+            hover: Color32::from_rgb(226, 234, 246),
+            error: Color32::from_rgb(214, 54, 54),
+            ok: Color32::from_rgb(44, 122, 58),
+            warm: Color32::from_rgb(222, 150, 30),
+            icon: Color32::from_rgb(70, 78, 92),
+            icon_fill: Color32::from_rgb(178, 196, 222),
+            timeline: Color32::from_rgb(232, 235, 240),
+            timeline_item: Color32::WHITE,
+            timeline_marker: Color32::from_rgb(70, 76, 88),
+            viewport_top: Color32::from_rgb(240, 243, 247),
+            viewport_bottom: Color32::from_rgb(203, 210, 221),
+            overlay: Color32::from_rgba_unmultiplied_const(255, 255, 255, 235),
+            overlay_text: Color32::from_rgb(38, 42, 50),
             axis_x: Color32::from_rgb(0xc8, 0x3c, 0x32),
             axis_y: Color32::from_rgb(0x3c, 0x96, 0x32),
             axis_z: Color32::from_rgb(0x2c, 0x64, 0xc8),
@@ -141,11 +125,57 @@ impl Tokens {
             line_element: Color32::from_rgb(0xc8, 0x8c, 0x1e),
             mesh_edge: Color32::from_rgb(0x1e, 0x23, 0x2a),
             node: Color32::from_rgb(0xb4, 0x3c, 0x8c),
-            geometry: Color32::from_rgb(0xb4, 0xba, 0xc4),
-            geometry_edge: Color32::from_rgb(0x2a, 0x30, 0x3a),
+            geometry: Color32::from_rgb(176, 186, 198),
+            geometry_edge: Color32::from_rgb(40, 44, 52),
             contour: CONTOUR,
             no_result: Color32::from_rgb(0x9a, 0xa0, 0xaa),
         }
+    }
+
+    /// Dark blue-grey: the viewport #2e3440, the chrome a little darker, light text, a blue
+    /// accent.
+    pub const fn dark() -> Tokens {
+        let mut t = Tokens::light();
+        t.app_bar = Color32::from_rgb(28, 31, 38);
+        t.toolbar = Color32::from_rgb(37, 41, 49);
+        t.panel = Color32::from_rgb(39, 43, 52);
+        t.panel_header = Color32::from_rgb(47, 52, 62);
+        t.dialog_bg = Color32::from_rgb(59, 68, 83);
+        t.heading_bg = Color32::from_rgb(38, 44, 55);
+        t.subheading_bg = Color32::from_rgb(48, 55, 68);
+        t.border = Color32::from_rgb(63, 69, 82);
+        t.field = Color32::from_rgb(30, 34, 41);
+        t.text = Color32::from_rgb(222, 226, 232);
+        t.text_dim = Color32::from_rgb(148, 155, 168);
+        t.accent = Color32::from_rgb(58, 136, 238);
+        t.accent_soft = Color32::from_rgb(42, 70, 110);
+        t.hover = Color32::from_rgb(54, 61, 74);
+        t.error = Color32::from_rgb(240, 100, 96);
+        t.ok = Color32::from_rgb(0x8c, 0xc8, 0x8c);
+        t.warm = Color32::from_rgb(236, 170, 70);
+        t.icon = Color32::from_rgb(208, 214, 226);
+        t.icon_fill = Color32::from_rgb(86, 112, 150);
+        t.timeline = Color32::from_rgb(33, 37, 45);
+        t.timeline_item = Color32::from_rgb(52, 58, 70);
+        t.timeline_marker = Color32::from_rgb(170, 178, 192);
+        t.viewport_top = Color32::from_rgb(46, 52, 64);
+        t.viewport_bottom = Color32::from_rgb(46, 52, 64);
+        t.overlay = Color32::from_rgba_unmultiplied_const(34, 38, 46, 240);
+        t.overlay_text = Color32::from_rgb(222, 226, 232);
+        t.axis_x = Color32::from_rgb(0xe0, 0x5a, 0x50);
+        t.axis_y = Color32::from_rgb(0x6c, 0xc0, 0x5a);
+        t.axis_z = Color32::from_rgb(0x52, 0x8c, 0xe6);
+        t.hex = Color32::from_rgb(0x82, 0xa6, 0xc8);
+        t.tet = Color32::from_rgb(0x8c, 0xc0, 0x96);
+        t.wedge = Color32::from_rgb(0xc8, 0xb4, 0x82);
+        t.shell = Color32::from_rgb(0xc8, 0x96, 0x82);
+        t.line_element = Color32::from_rgb(0xf0, 0xc0, 0x50);
+        t.mesh_edge = Color32::from_rgb(0x14, 0x18, 0x1e);
+        t.node = Color32::from_rgb(0xf2, 0xe6, 0x6e);
+        t.geometry = Color32::from_rgb(152, 156, 162);
+        t.geometry_edge = Color32::from_rgb(16, 16, 18);
+        t.no_result = Color32::from_rgb(0x70, 0x76, 0x80);
+        t
     }
 
     /// The contour colour scale for the renderer, low to high.
@@ -179,18 +209,19 @@ fn visuals(dark: bool) -> egui::Visuals {
     v.extreme_bg_color = t.field;
     v.faint_bg_color = t.panel_header;
     v.override_text_color = Some(t.text);
-    v.widgets.inactive.weak_bg_fill = t.panel_header;
-    v.widgets.inactive.bg_fill = t.panel_header;
-    v.widgets.active.weak_bg_fill = t.accent_soft;
+    craft_ui::theme::WidgetPalette {
+        noninteractive: v.widgets.noninteractive.bg_fill,
+        inactive: t.panel_header,
+        hovered: t.hover,
+        active: t.accent_soft,
+        open: t.panel_header,
+    }
+    .apply_to(&mut v.widgets, egui::CornerRadius::same(3), Stroke::new(1.0, t.text));
     v.selection.bg_fill = t.accent_soft;
     v.selection.stroke = Stroke::new(1.0, t.accent);
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, t.border);
-    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, t.text);
-    v.widgets.inactive.fg_stroke = Stroke::new(1.0, t.text);
-    v.widgets.hovered.weak_bg_fill = t.hover;
-    v.widgets.hovered.bg_fill = t.hover;
-    v.widgets.open.weak_bg_fill = t.panel_header;
     v.window_corner_radius = egui::CornerRadius::same(6);
+    v.menu_corner_radius = egui::CornerRadius::same(6);
     v
 }
 
@@ -207,6 +238,16 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Title and section bands stand out from a panel, the title more than its sections.
+    #[test]
+    fn heading_bands_are_darker_than_panels_in_order() {
+        let luma = |c: Color32| u32::from(c.r()) * 3 + u32::from(c.g()) * 6 + u32::from(c.b());
+        for t in [Tokens::light(), Tokens::dark()] {
+            assert!(luma(t.heading_bg) < luma(t.subheading_bg), "{t:?}");
+            assert!(luma(t.subheading_bg) < luma(t.dialog_bg), "{t:?}");
+        }
+    }
 
     /// Every element kind has a colour, and edges stand out from the faces they lie on.
     #[test]

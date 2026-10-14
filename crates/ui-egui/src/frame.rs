@@ -57,6 +57,56 @@ pub fn heading<R>(ui: &mut Ui, t: &crate::theme::Tokens, level: Level, add: impl
         .inner
 }
 
+/// A menu below `anchor`, open while [`crate::UiState::menu`] is `key` (so `ui.set {menu}` and
+/// offscreen captures open it too). A click on one of its rows, a click outside or Escape closes
+/// it. Returns where it was drawn.
+pub fn menu<R>(
+    app: &mut crate::ModelApp,
+    ui: &Ui,
+    key: &str,
+    anchor: egui::Rect,
+    add: impl FnOnce(&mut crate::ModelApp, &mut Ui) -> R,
+) -> Option<egui::Rect> {
+    popup(app, ui, key, anchor, egui::PopupCloseBehavior::CloseOnClick, add)
+}
+
+/// As [`menu`], but clicks inside keep it open (settings with checkboxes).
+pub fn settings_menu<R>(
+    app: &mut crate::ModelApp,
+    ui: &Ui,
+    key: &str,
+    anchor: egui::Rect,
+    add: impl FnOnce(&mut crate::ModelApp, &mut Ui) -> R,
+) -> Option<egui::Rect> {
+    popup(app, ui, key, anchor, egui::PopupCloseBehavior::CloseOnClickOutside, add)
+}
+
+fn popup<R>(
+    app: &mut crate::ModelApp,
+    ui: &Ui,
+    key: &str,
+    anchor: egui::Rect,
+    close: egui::PopupCloseBehavior,
+    add: impl FnOnce(&mut crate::ModelApp, &mut Ui) -> R,
+) -> Option<egui::Rect> {
+    let mut open = app.ui.menu.as_deref() == Some(key);
+    if !open {
+        return None;
+    }
+    let id = egui::Id::new(("mc_menu", key));
+    let shown =
+        egui::Popup::new(id, ui.ctx().clone(), anchor, ui.layer_id()).kind(egui::PopupKind::Menu).open_bool(&mut open).close_behavior(close).show(
+            |ui| {
+                ui.set_min_width(200.0);
+                add(app, ui)
+            },
+        );
+    if (!open || ui.input(|i| i.key_pressed(egui::Key::Escape))) && app.ui.menu.as_deref() == Some(key) {
+        app.ui.menu = None;
+    }
+    shown.map(|r| r.response.rect)
+}
+
 #[cfg(test)]
 mod tests {
     /// Windows are made in this file only, so none can skip the width limits.

@@ -116,6 +116,9 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "results": app.session.results_report(),
             "probe": app.probe,
             "busy": app.busy(),
+            "selected": app.selected.as_ref().map(|(k, n)| json!({"kind": k, "name": n})),
+            "nav": app.nav,
+            "layout": app.layout.iter().map(|(k, r)| (k.to_string(), json!([r.left(), r.top(), r.width(), r.height()]))).collect::<serde_json::Map<String, Value>>(),
             "prompt": app.prompt.as_ref().map(|p| match p {
                 crate::files::Prompt::Unsaved(next) => json!({"unsaved": match next {
                     crate::files::Replace::File(p) => p.clone(),
@@ -128,6 +131,21 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "version": crate::VERSION,
         })),
         "ui.toolbar" => ok(crate::toolbar::describe(app)),
+        "ui.select" => {
+            // Select a definition as a browser click does (its properties show on the right).
+            let kind = p.get("kind").cloned().and_then(|k| serde_json::from_value::<crate::browser::Def>(k).ok());
+            match (kind, s("name")) {
+                (Some(kind), Some(name)) if crate::browser::definition(&app.session.model, kind, name).is_some() => {
+                    app.selected = Some((kind, name.to_string()));
+                    ok(Value::Null)
+                }
+                (Some(_), Some(name)) => err(format!("no such definition `{name}`")),
+                _ => {
+                    app.selected = None;
+                    ok(Value::Null)
+                }
+            }
+        }
         "ui.set" => {
             let mut cur = serde_json::to_value(&app.ui).unwrap_or(json!({}));
             if let (Some(o), Some(src)) = (cur.as_object_mut(), p.as_object()) {
@@ -479,6 +497,7 @@ mod tests {
             "ui.capture",
             "ui.toolbar",
             "ui.prompt",
+            "ui.select",
         ] {
             for p in &hostile {
                 let _ = call(&mut app, method, p.clone());

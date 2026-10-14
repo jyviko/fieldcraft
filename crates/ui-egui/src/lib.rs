@@ -1,27 +1,43 @@
 //! The ModelCraft egui front end.
 //!
 //! A thin shell over [`modelcraft_engine::Session`]: panels read engine state and act through
-//! commands ([`ModelApp::run`]); nothing here owns model data. The window has a menu bar, the
-//! model tree on the left, the 3D viewport in the middle, the commands (generated from the
-//! engine's registry) on the right and a status bar at the bottom. The control channel's
-//! requests are handled here ([`control`]); the desktop app owns the socket.
+//! commands ([`ModelApp::run`]); nothing here owns model data. The window follows the Craft
+//! family's layout (SolidCraft, VectorCraft):
 //!
-//! Structure and conventions follow SolidCraft's `crates/ui-egui` (MIT OR Apache-2.0), see
-//! ATTRIBUTION.md.
+//! - the title bar ([`appbar`]): the app, quick actions (File menu, save, undo, redo, Solve,
+//!   search, theme, help) and the model's document tab;
+//! - the ribbon ([`toolbar`]): the workspace switcher, its tabs, and panels of icon buttons whose
+//!   labelled drop-downs list the whole catalogue (coming-soon entries greyed with their
+//!   milestone);
+//! - the browser on the left ([`browser`]): the model's geometry, mesh and definitions;
+//! - the viewport ([`viewport`]) with its navigation bar and orientation gizmo;
+//! - the context panel on the right ([`context`]), only while there is context: the open command
+//!   form, the results controls, the selected definition's properties;
+//! - the command line and status ([`palette`]), and the journal timeline at the bottom
+//!   ([`timeline`]). Every command is also one search away (S or Cmd/Ctrl+K).
+//!
+//! The control channel's requests are handled here ([`control`]); the desktop app owns the
+//! socket. Structure and conventions follow SolidCraft's `crates/ui-egui` (MIT OR Apache-2.0),
+//! see ATTRIBUTION.md.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod appbar;
+pub mod browser;
 pub mod capture;
+pub mod context;
 pub mod control;
 pub mod files;
 pub mod frame;
 pub mod gpu;
 pub mod icons;
-pub mod panels;
+pub mod palette;
 pub mod results;
 pub mod results_panel;
 pub mod scene;
 pub mod theme;
+pub mod timeline;
+pub mod titlebar;
 pub mod toolbar;
 pub mod viewport;
 
@@ -30,7 +46,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
 use modelcraft_engine::Session;
-use modelcraft_engine::catalogue::{self, Tab};
+use modelcraft_engine::catalogue::{self, Tab, Workspace};
 use modelcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -42,18 +58,31 @@ pub use scene::Style;
 /// The version shown in Help and over the control channel.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// View settings: what is shown and how. `ui.set` changes any of them by name.
+/// View settings: what is shown and how, and which menu or search is open. `ui.set` changes any
+/// of them by name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiState {
     pub style: Style,
     pub show_nodes: bool,
+    /// The open design and imported surfaces.
+    pub show_geometry: bool,
+    /// Elements.
+    pub show_mesh: bool,
     pub perspective: bool,
     pub dark: bool,
+    /// The browser (left).
     pub show_tree: bool,
-    pub show_commands: bool,
-    /// The toolbar tab shown.
+    /// The journal timeline (bottom).
+    pub show_timeline: bool,
+    /// The workspace shown, and its toolbar tab.
+    pub workspace: Workspace,
     pub tab: Tab,
+    /// The command search (S, Cmd/Ctrl+K).
+    pub palette: bool,
+    /// The open menu: `file`, `help`, `workspace`, `view`, or a toolbar panel's drop-down as
+    /// `<tab>/<panel>` (`mesh/Tet`).
+    pub menu: Option<String>,
 }
 
 impl Default for UiState {
@@ -61,13 +90,35 @@ impl Default for UiState {
         UiState {
             style: Style::ShadedEdges,
             show_nodes: false,
+            show_geometry: true,
+            show_mesh: true,
             perspective: false,
             dark: true,
             show_tree: true,
-            show_commands: true,
+            show_timeline: true,
+            workspace: Workspace::default(),
             tab: Tab::default(),
+            palette: false,
+            menu: None,
         }
     }
+}
+
+impl UiState {
+    /// What the viewport shows.
+    pub fn show(&self) -> scene::Show {
+        scene::Show { geometry: self.show_geometry, mesh: self.show_mesh, nodes: self.show_nodes }
+    }
+}
+
+/// What a left drag in the viewport does (the navigation bar's modes).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavMode {
+    #[default]
+    Orbit,
+    Pan,
+    Zoom,
 }
 
 /// The parameter form a command opens when started from the Commands panel.
@@ -191,6 +242,23 @@ pub struct ModelApp {
     pub queued: std::collections::VecDeque<String>,
     /// The question the window is asking (unsaved changes, recover).
     pub prompt: Option<files::Prompt>,
+    /// The window draws its own title bar and caption buttons (Windows, Linux).
+    pub custom_titlebar: bool,
+    /// The title bar runs under the macOS traffic lights.
+    pub integrated_titlebar: bool,
+    /// The command search's query and the command line's text.
+    pub palette_text: String,
+    pub command_line: String,
+    /// Browser sections that are unfolded.
+    pub tree_open: std::collections::BTreeSet<String>,
+    /// The definition selected in the browser: (kind, name), its properties on the right.
+    pub selected: Option<(browser::Def, String)>,
+    /// What a left drag in the viewport does.
+    pub nav: NavMode,
+    /// Where the window's regions were drawn last frame (`ui.inspect`'s `layout`).
+    pub layout: std::collections::BTreeMap<&'static str, egui::Rect>,
+    /// The toolbar's panel labels drawn last frame, by `<tab>/<panel>`.
+    pub panel_rects: Vec<(String, egui::Rect)>,
 }
 
 impl ModelApp {
@@ -228,6 +296,15 @@ impl ModelApp {
             loading: None,
             queued: std::collections::VecDeque::new(),
             prompt: None,
+            custom_titlebar: false,
+            integrated_titlebar: false,
+            palette_text: String::new(),
+            command_line: String::new(),
+            tree_open: ["mesh", "results"].into_iter().map(str::to_string).collect(),
+            selected: None,
+            nav: NavMode::default(),
+            layout: std::collections::BTreeMap::new(),
+            panel_rects: Vec::new(),
         };
         app.fit_view();
         app
@@ -271,7 +348,7 @@ impl ModelApp {
             self.model_changed();
         }
         // The results display commands reply with what is shown, which the viewport shows.
-        let display = id.starts_with("results.") && id != "results.reactions";
+        let display = (id.starts_with("results.") && id != "results.reactions") || id == "solve.run";
         match &r {
             Ok(v) if v.is_null() || changed || display => self.set_status(format!("{label} done"), false),
             Ok(v) => self.set_status(format!("{label}: {v}"), false),
@@ -462,7 +539,7 @@ impl ModelApp {
     pub fn scene_key(&self) -> u64 {
         let mut h = std::hash::DefaultHasher::new();
         let plot = self.plot.1.as_ref().map(|p| Arc::as_ptr(p) as usize);
-        (self.revision, self.ui.style, self.ui.show_nodes, self.ui.dark, plot).hash(&mut h);
+        (self.revision, self.ui.style, self.ui.show(), self.ui.dark, plot).hash(&mut h);
         h.finish()
     }
 
@@ -501,10 +578,10 @@ impl ModelApp {
         let key = self.scene_key();
         if self.scene.0 != Some(key) {
             let t = theme::Tokens::get(self.ui.dark);
-            let (style, nodes) = (self.ui.style, self.ui.show_nodes);
+            let (style, show) = (self.ui.style, self.ui.show());
             let s = match &self.plot.1 {
-                Some(p) => results::scene(p, style, nodes, &t),
-                None => scene::build(&self.display.1, style, nodes, &t),
+                Some(p) => results::scene(p, style, show, &t),
+                None => scene::build(&self.display.1, style, show, &t),
             };
             self.scene = (Some(key), s);
         }
@@ -557,6 +634,12 @@ impl ModelApp {
             self.ui.tab = Tab::Results;
         }
         self.results_shown = shown;
+        // A tab set on its own (ui.set, the palette) brings its workspace.
+        self.ui.workspace = Workspace::showing(self.ui.tab, self.ui.workspace);
+        // A selected definition that is gone (undo, delete) is no longer selected.
+        if self.selected.as_ref().is_some_and(|(kind, name)| browser::definition(&self.session.model, *kind, name).is_none()) {
+            self.selected = None;
+        }
         if self.session.results_view.as_ref().is_some_and(|v| v.animate) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(results::PERIOD / results::FRAMES as f64));
         }
@@ -593,6 +676,14 @@ impl ModelApp {
         if open {
             self.open_dialog(None);
         }
+        // The command search: S (as in SolidCraft) or Cmd/Ctrl+K.
+        let search = ctx.input_mut(|i| {
+            i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::K)) || i.consume_key(egui::Modifiers::NONE, egui::Key::S)
+        });
+        if search {
+            self.ui.palette = true;
+            self.ui.menu = None;
+        }
     }
 
     /// Inject synthetic events: one pointer event per frame (egui reads a press and release in
@@ -625,18 +716,34 @@ impl ModelApp {
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         self.show_gpu_errors();
-        panels::menu_bar(self, ui);
+        self.ui.workspace = Workspace::showing(self.ui.tab, self.ui.workspace);
+        self.layout.clear();
+        appbar::app_bar(self, ui);
         toolbar::toolbar(self, ui);
-        panels::status_bar(self, ui);
+        if self.ui.show_timeline {
+            timeline::timeline(self, ui);
+        }
+        palette::command_line(self, ui);
         if self.ui.show_tree {
-            panels::model_tree(self, ui);
+            browser::browser(self, ui);
         }
-        if self.ui.show_commands {
-            panels::commands(self, ui);
-        }
+        context::panel(self, ui);
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| viewport::show(self, ui));
-        panels::params_dialog(self, ui.ctx());
+        palette::popup(self, ui.ctx());
         files::show(self, ui.ctx());
+        if self.custom_titlebar {
+            titlebar::resize_zones(ui);
+        }
+    }
+
+    /// Remember where a region of the window was drawn (`ui.inspect`'s `layout`).
+    pub fn place(&mut self, region: &'static str, rect: egui::Rect) {
+        self.layout.insert(region, rect);
+    }
+
+    /// Open, or close when it is open, a menu (see [`UiState::menu`]).
+    pub fn toggle_menu(&mut self, key: &str) {
+        self.ui.menu = if self.ui.menu.as_deref() == Some(key) { None } else { Some(key.to_string()) };
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
@@ -803,7 +910,7 @@ mod tests {
         assert!(d.tris.is_empty());
         // Without elements, geometry draws as faces with their boundaries; the camera frames it.
         let t = theme::Tokens::dark();
-        let s = scene::build(&d, Style::ShadedEdges, false, &t);
+        let s = scene::build(&d, Style::ShadedEdges, scene::Show::DEFAULT, &t);
         assert_eq!(s.tris.len(), d.surface_tris.len());
         assert!(s.tris.iter().all(|tri| tri.color == theme::rgb(t.geometry)));
         assert!(!d.bounds.is_empty());
@@ -939,6 +1046,101 @@ mod tests {
         };
         let found = (0..600).any(|x| (150..400).any(|y| near(image.pixels[y * 1200 + x], red)));
         assert!(found, "a red legend swatch");
+    }
+
+    fn region(app: &ModelApp, name: &str) -> egui::Rect {
+        app.layout.get(name).copied().unwrap_or_else(|| panic!("no {name} in {:?}", app.layout.keys()))
+    }
+
+    /// The family layout: title bar, ribbon, browser left, viewport, command line and timeline at
+    /// the bottom; the context panel on the right only while there is context.
+    #[test]
+    fn the_window_is_laid_out_like_the_other_crafts() {
+        let mut app = ModelApp::new(Session::default());
+        app.open_sample("cantilever");
+        let size = capture::CaptureSize { width: 1400.0, height: 900.0, scale: 1.0 };
+        // `layout` is the live window's; a capture leaves it, so draw a frame of the UI directly.
+        let frame = |app: &mut ModelApp| {
+            let ctx = egui::Context::default();
+            for _ in 0..2 {
+                let raw = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.width, size.height))),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(raw, |ui| app.ui(ui));
+                out.textures_delta.clear();
+            }
+        };
+        frame(&mut app);
+        let (bar, ribbon, browser, view) = (region(&app, "app_bar"), region(&app, "ribbon"), region(&app, "browser"), region(&app, "viewport"));
+        let (line, timeline) = (region(&app, "command_line"), region(&app, "timeline"));
+        assert_eq!((bar.top(), bar.height()), (0.0, appbar::HEIGHT));
+        assert!((ribbon.top() - bar.bottom()).abs() < 1.0 && (ribbon.height() - toolbar::HEIGHT).abs() < 1.0, "{ribbon:?}");
+        // The browser's content, inside its margin.
+        assert!(browser.left() < 8.0 && (browser.width() - browser::WIDTH).abs() <= 14.0, "{browser:?}");
+        assert!(view.left() >= browser.right() - 1.0 && view.top() >= ribbon.bottom() - 1.0 && view.bottom() <= line.top() + 1.0);
+        assert!((timeline.bottom() - 900.0).abs() < 1.0 && line.bottom() <= timeline.top() + 1.0);
+        assert!((view.right() - 1400.0).abs() < 1.0, "no context: the viewport reaches the right edge");
+        assert!(!app.layout.contains_key("context"));
+        for chrome in ["nav_bar", "axis_view", "workspace_switcher", "document_tab", "app_bar:solve"] {
+            let r = region(&app, chrome);
+            assert!(r.is_positive(), "{chrome}");
+        }
+        assert!(view.contains_rect(region(&app, "nav_bar")) && view.contains_rect(region(&app, "axis_view")));
+        // A form brings the context panel; the viewport makes room.
+        app.start("model.material.create").unwrap();
+        frame(&mut app);
+        let context = region(&app, "context");
+        assert!(context.right() > 1390.0 && context.width() > 280.0, "{context:?}");
+        assert!(region(&app, "viewport").right() <= context.left() + 1.0);
+        // The search and a drop-down are drawn when their state says so.
+        app.dialog = None;
+        app.ui.palette = true;
+        app.ui.menu = Some("mesh/Tet".into());
+        app.ui.tab = Tab::Mesh;
+        frame(&mut app);
+        assert!(app.layout.contains_key("palette") && app.layout.contains_key("toolbar_dropdown"), "{:?}", app.layout.keys());
+        assert_eq!(app.ui.workspace, Workspace::Prepare);
+    }
+
+    /// No entry is lost: on every tab, at a wide and a narrow window, every catalogue entry is a
+    /// button, a collapsed panel or a » panel, and a row of its panel's drop-down once it is open.
+    #[test]
+    fn every_catalogue_entry_is_reachable_from_its_tab() {
+        for width in [1400.0, 960.0] {
+            for tab in Tab::ALL {
+                let mut app = ModelApp::new(Session::default());
+                app.ui.tab = tab;
+                let ctx = egui::Context::default();
+                let run = |app: &mut ModelApp| {
+                    let raw = egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 800.0))),
+                        ..Default::default()
+                    };
+                    let mut out = ctx.run_ui(raw, |ui| app.ui(ui));
+                    out.textures_delta.clear();
+                };
+                run(&mut app);
+                for c in catalogue::tab_entries(tab) {
+                    assert!(app.toolbar_rects.iter().any(|(id, ..)| *id == c.id), "{width}: {} is not on the {tab:?} tab", c.id);
+                }
+                for p in catalogue::panels(tab) {
+                    let Some(panel) = p.first().map(|c| c.panel) else { continue };
+                    let collapsed_or_more = app.toolbar_rects.iter().any(|(id, _, f)| *id == p[0].id && matches!(f, toolbar::Fit::More));
+                    if collapsed_or_more {
+                        continue;
+                    }
+                    app.ui.menu = Some(toolbar::panel_key(tab, panel));
+                    run(&mut app);
+                    run(&mut app);
+                    for c in p {
+                        let row = app.toolbar_rects.iter().any(|(id, r, f)| *id == c.id && *f == toolbar::Fit::Menu && r.is_positive());
+                        assert!(row, "{width}: {} has no row in the {panel} drop-down", c.id);
+                    }
+                    app.ui.menu = None;
+                }
+            }
+        }
     }
 
     #[test]

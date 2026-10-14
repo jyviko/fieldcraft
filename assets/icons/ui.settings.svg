@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>ui.settings</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M4 6 L20 6 M4 12 L20 12 M4 18 L20 18" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M6.8 6 C6.8 4.785 7.785 3.8 9 3.8 C10.215 3.8 11.2 4.785 11.2 6 C11.2 7.215 10.215 8.2 9 8.2 C7.785 8.2 6.8 7.215 6.8 6 Z" fill="#4f9ce8" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M13.3 12 C13.3 10.785 14.285 9.8 15.5 9.8 C16.715 9.8 17.7 10.785 17.7 12 C17.7 13.215 16.715 14.2 15.5 14.2 C14.285 14.2 13.3 13.215 13.3 12 Z" fill="#4f9ce8" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M4.8 18 C4.8 16.785 5.785 15.8 7 15.8 C8.215 15.8 9.2 16.785 9.2 18 C9.2 19.215 8.215 20.2 7 20.2 C5.785 20.2 4.8 19.215 4.8 18 Z" fill="#4f9ce8" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

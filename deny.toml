@@ -13,4 +13,5 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # SolidCraft's kernel and its patched truck crates, pinned by rev in Cargo.toml.
-allow-git = ["https://github.com/bherbruck/solidcraft"]
+# storytold/craft-libs: the Craft family's shared UI components (craft-ui), pinned by rev.
+allow-git = ["https://github.com/bherbruck/solidcraft", "https://github.com/storytold/craft-libs"]

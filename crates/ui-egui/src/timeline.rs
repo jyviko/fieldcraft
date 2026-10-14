@@ -1,0 +1,232 @@
+//! The timeline (bottom): the command journal in order, as SolidCraft shows its features. Runs of
+//! the same command make one item with a count; the marker stands after the current state, and
+//! undone commands follow it greyed, ready to redo. Clicking an item (or the transport buttons)
+//! undoes or redoes up to it with `edit.undo` / `edit.redo`; commands older than the undo history
+//! cannot be reached and say so.
+//!
+//! Layout follows SolidCraft's `crates/ui-egui/src/timeline.rs` (MIT OR Apache-2.0), see
+//! ATTRIBUTION.md.
+
+use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, UiBuilder, Vec2, pos2, vec2};
+use serde_json::{Value, json};
+
+use crate::ModelApp;
+use crate::icons::{self, Look};
+use crate::theme::Tokens;
+
+/// The timeline's height.
+pub const HEIGHT: f32 = 40.0;
+const ITEM: f32 = 28.0;
+const STRIDE: f32 = 30.0;
+
+/// A run of the same command in the journal (`start..end`), or among the undone commands
+/// (positions past the journal's end).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Item {
+    pub command: String,
+    /// Journal positions: after this item the journal holds `end` commands.
+    pub start: usize,
+    pub end: usize,
+    /// The first command's parameters (the tooltip).
+    pub params: Value,
+}
+
+impl Item {
+    pub fn count(&self) -> usize {
+        self.end - self.start
+    }
+}
+
+/// The journal and the undone commands as runs of the same command.
+pub fn items(app: &ModelApp) -> (Vec<Item>, usize) {
+    let done = app.session.journal.len();
+    let all = app.session.journal.iter().chain(app.session.redo_entries());
+    let mut out: Vec<Item> = Vec::new();
+    for (i, (command, params)) in all.enumerate() {
+        // A run never crosses the current position.
+        match out.last_mut() {
+            Some(last) if last.command == *command && last.end == i && i != done => last.end = i + 1,
+            _ => out.push(Item { command: command.clone(), start: i, end: i + 1, params: params.clone() }),
+        }
+    }
+    (out, done)
+}
+
+impl ModelApp {
+    /// Undo or redo until the journal holds `target` commands (as far as the history reaches).
+    pub fn roll_to(&mut self, target: usize) {
+        let (undo, redo) = self.session.undo_depth();
+        let done = self.session.journal.len();
+        let target = target.clamp(done.saturating_sub(undo), done + redo);
+        for _ in 0..done.abs_diff(target) {
+            let step = if target < self.session.journal.len() { "edit.undo" } else { "edit.redo" };
+            if self.run(step, json!({})).is_err() {
+                break;
+            }
+        }
+    }
+}
+
+/// Text for an item's tooltip: the command, how many, and its first parameters.
+fn tip(item: &Item, reachable: bool) -> String {
+    let label = crate::command_label(&item.command);
+    let mut s = if item.count() > 1 { format!("{label} × {}", item.count()) } else { label.to_string() };
+    let params = item.params.to_string();
+    if params != "{}" {
+        let short: String = params.chars().take(160).collect();
+        s.push_str(&format!("\n{}{short}{}", if item.count() > 1 { "first: " } else { "" }, if params.chars().count() > 160 { "…" } else { "" }));
+    }
+    s.push_str(if reachable { "\nClick to roll the model to here" } else { "\nOlder than the undo history" });
+    s
+}
+
+/// The transport buttons' glyphs: to the start, back, forward, to the end.
+fn transport_glyph(p: &egui::Painter, c: egui::Pos2, what: &str, col: Color32) {
+    let tri = |x: f32, left: bool| {
+        let (a, b) = if left { (x + 3.5, x - 3.5) } else { (x - 3.5, x + 3.5) };
+        egui::Shape::convex_polygon(vec![pos2(a, c.y - 4.5), pos2(a, c.y + 4.5), pos2(b, c.y)], col, Stroke::NONE)
+    };
+    let bar = |x: f32| egui::Shape::line_segment([pos2(x, c.y - 4.5), pos2(x, c.y + 4.5)], Stroke::new(1.5, col));
+    match what {
+        "first" => {
+            p.add(bar(c.x - 4.5));
+            p.add(tri(c.x + 1.0, true));
+        }
+        "back" => {
+            p.add(tri(c.x, true));
+        }
+        "forward" => {
+            p.add(tri(c.x, false));
+        }
+        _ => {
+            p.add(tri(c.x - 1.0, false));
+            p.add(bar(c.x + 4.5));
+        }
+    }
+}
+
+pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(app.ui.dark);
+    let mut roll: Option<usize> = None;
+    egui::Panel::bottom("mc_timeline").exact_size(HEIGHT).show_separator_line(false).frame(egui::Frame::NONE.fill(t.timeline)).show(ui, |ui| {
+        let r = ui.max_rect();
+        app.place("timeline", r);
+        let p = ui.painter().clone();
+        p.line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.border));
+        let (undo, redo) = app.session.undo_depth();
+        let done = app.session.journal.len();
+        let oldest = done.saturating_sub(undo);
+        let mut x = r.left() + 10.0;
+        for (what, target, tip) in [
+            ("first", oldest, "Undo everything the history holds"),
+            ("back", done.saturating_sub(1), "Undo"),
+            ("forward", done + 1, "Redo"),
+            ("last", done + redo, "Redo everything undone"),
+        ] {
+            let br = Rect::from_center_size(pos2(x + 11.0, r.center().y), Vec2::splat(22.0));
+            let enabled = target != done && target >= oldest && target <= done + redo;
+            let resp = ui.interact(br, ui.id().with(("mc_transport", what)), if enabled { Sense::click() } else { Sense::hover() });
+            if resp.hovered() && enabled {
+                p.rect_filled(br, 3.0, t.hover);
+            }
+            transport_glyph(&p, br.center(), what, if enabled { t.icon } else { t.border });
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
+            if resp.on_hover_text(tip).clicked() && enabled {
+                roll = Some(target);
+            }
+            x += 24.0;
+        }
+        x += 14.0;
+        let (list, done) = items(app);
+        let strip = Rect::from_min_max(pos2(x, r.top()), r.right_bottom());
+        if list.is_empty() {
+            p.text(
+                pos2(x, r.center().y),
+                Align2::LEFT_CENTER,
+                "The journal is empty: every command that changes the model appears here",
+                FontId::proportional(12.0),
+                t.text_dim,
+            );
+            return;
+        }
+        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+            egui::ScrollArea::horizontal().id_salt("mc_timeline_scroll").stick_to_right(true).auto_shrink([false, false]).show(ui, |ui| {
+                let marker_at = list.iter().position(|i| i.start >= done).unwrap_or(list.len());
+                let width = list.len() as f32 * STRIDE + 12.0;
+                let (area, _) = ui.allocate_exact_size(vec2(width, r.height()), Sense::hover());
+                let p = ui.painter().clone();
+                let mut x = area.left();
+                for (k, item) in list.iter().enumerate() {
+                    if k == marker_at {
+                        p.rect_filled(Rect::from_min_size(pos2(x, r.top() + 5.0), vec2(5.0, r.height() - 10.0)), 2.0, t.timeline_marker);
+                        x += 10.0;
+                    }
+                    let br = Rect::from_min_size(pos2(x, r.top() + 6.0), Vec2::splat(ITEM));
+                    x += STRIDE;
+                    if !ui.is_rect_visible(br) {
+                        continue;
+                    }
+                    let undone = item.start >= done;
+                    let reachable = item.end >= oldest;
+                    let resp = ui.interact(br, ui.id().with(("mc_journal", k)), if reachable { Sense::click() } else { Sense::hover() });
+                    let bg = if resp.hovered() && reachable { t.hover } else { t.timeline_item };
+                    p.rect(br, 3.0, bg, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                    let icon = modelcraft_engine::catalogue::entry_of(&item.command).map_or("ui.views", |c| c.id);
+                    let tint = if undone || !reachable { Color32::from_white_alpha(110) } else { Color32::WHITE };
+                    icons::paint_tinted(app, ui, icon, br.shrink(4.0), Look::of(!undone), tint);
+                    if item.count() > 1 {
+                        let text = p.layout_no_wrap(format!("{}", item.count()), FontId::proportional(9.0), t.text);
+                        let b = Rect::from_min_size(br.right_bottom() - text.size() - vec2(3.0, 1.0), text.size() + vec2(3.0, 1.0));
+                        p.rect_filled(b, 3.0, t.panel_header);
+                        p.galley(b.min + vec2(1.5, 0.5), text, t.text);
+                    }
+                    let label = crate::command_label(&item.command);
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, reachable, label));
+                    if resp.on_hover_text(tip(item, reachable)).clicked() && reachable {
+                        roll = Some(item.end);
+                    }
+                }
+                if marker_at == list.len() {
+                    p.rect_filled(Rect::from_min_size(pos2(x, r.top() + 5.0), vec2(5.0, r.height() - 10.0)), 2.0, t.timeline_marker);
+                }
+            });
+        });
+    });
+    if let Some(target) = roll {
+        app.roll_to(target);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use modelcraft_engine::Session;
+
+    use super::*;
+
+    #[test]
+    fn runs_of_a_command_are_one_item_and_rolling_undoes_and_redoes() {
+        let mut app = ModelApp::new(Session::default());
+        for l in 1..=3 {
+            app.run("mesh.node.add", json!({"label": l, "xyz": [l, 0, 0]})).unwrap();
+        }
+        app.run(
+            "model.material.create",
+            json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}, "density": 7.85e-9}),
+        )
+        .unwrap();
+        let (list, done) = items(&app);
+        assert_eq!(done, 4);
+        assert_eq!(list.iter().map(|i| (i.command.as_str(), i.count())).collect::<Vec<_>>(), [("mesh.node.add", 3), ("model.material.create", 1)]);
+        app.roll_to(2);
+        assert_eq!(app.session.journal.len(), 2);
+        assert!(app.session.model.node(3).is_none());
+        // The undone commands follow the marker, split from the done ones.
+        let (list, done) = items(&app);
+        assert_eq!(done, 2);
+        assert_eq!(list.iter().map(|i| (i.start, i.end)).collect::<Vec<_>>(), [(0, 2), (2, 3), (3, 4)]);
+        app.roll_to(4);
+        assert!(app.session.model.materials().contains_key("Steel"));
+        app.roll_to(100);
+        assert_eq!(app.session.journal.len(), 4, "clamped to what can be redone");
+    }
+}

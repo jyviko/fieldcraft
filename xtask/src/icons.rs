@@ -8,16 +8,16 @@
 //! `dash` (`[dash, gap]`). The task turns every recipe into VectorCraft
 //! commands, runs them headlessly with `vectorcraft-cli run` (`VECTORCRAFT_CLI`, else
 //! `vectorcraft-cli` on the PATH) and writes `assets/icons/<id>.vectorcraft` (the editable
-//! source) and `assets/icons/<id>.svg` (what the app draws). The roles' colours are the dark
-//! theme's; the app recolours each role with its theme tokens (`crates/ui-egui/src/icons.rs`).
+//! source) and `assets/icons/<id>.svg` (what the app draws). The roles' fixed colours are
+//! keys: the app recolours each role with its theme tokens (`crates/ui-egui/src/icons.rs`).
 
 use std::path::Path;
 use std::process::Command;
 
 use serde_json::{Value, json};
 
-/// Palette roles and the colour each is drawn in (the dark theme's tokens). Keep in step with
-/// `PALETTE` in `crates/ui-egui/src/icons.rs`.
+/// Palette roles and the fixed colour each is drawn in: keys the app swaps for its theme tokens.
+/// Keep in step with `PALETTE` in `crates/ui-egui/src/icons.rs`.
 pub const PALETTE: &[(&str, &str)] = &[("line", "#dde2ea"), ("accent", "#4f9ce8"), ("soft", "#2d4e70"), ("warm", "#f0b44a")];
 
 /// The artboard side (pixels) and the default stroke weight.

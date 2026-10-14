@@ -19,6 +19,8 @@ use modelcraft_ui_egui::{Filter, ModelApp, Services};
 
 const USAGE: &str = "usage: modelcraft [--sample [parts|cantilever|impact]] [--control PORT] [FILE…]  (FILE: .modelcraft, .solidcraft or .3mf)";
 const DEPTH_BITS: u8 = 24;
+/// The window draws its own caption buttons where the OS ones would sit apart from the app bar.
+const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
 const MSAA: u16 = 4;
 
 /// The window and Dock icon: the 256 px export of the application icon (assets/app-icon).
@@ -159,6 +161,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut app = ModelApp::new(Session::default()).with_services(services());
+            app.custom_titlebar = CUSTOM_TITLEBAR;
+            app.integrated_titlebar = cfg!(target_os = "macos");
             if let Some(rs) = &cc.wgpu_render_state {
                 let info = rs.adapter.get_info();
                 eprintln!("modelcraft: graphics {:?} {}, MSAA {}x (requested {MSAA}x)", info.backend, info.name, rs.msaa_samples);
@@ -177,7 +181,7 @@ fn main() -> eframe::Result {
                 let listed = app.session.execute("file.recovery.list", &serde_json::json!({"dir": dir}));
                 let recoverable = listed.ok().and_then(|v| v.as_array().map(Vec::len)).unwrap_or(0);
                 if recoverable > 0 {
-                    app.set_status(format!("{recoverable} autosaved model(s) can be recovered (file.recovery.list, file.recover)"), false);
+                    app.set_status(format!("{recoverable} autosaved model(s) can be recovered: File › Recover…"), false);
                 }
                 Autosaver::new(&dir).map_err(|e| log::warn!("autosave unavailable: {e}")).ok()
             });

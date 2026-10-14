@@ -40,27 +40,53 @@ const GEOMETRY_EDGE_WIDTH: f64 = 1.5;
 const LINE_ELEMENT_WIDTH: f64 = 3.0;
 const NODE_SIZE: f64 = 5.0;
 
+/// What is shown (the browser's eye toggles).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Show {
+    /// The open design and imported surfaces.
+    pub geometry: bool,
+    /// Elements.
+    pub mesh: bool,
+    pub nodes: bool,
+}
+
+impl Show {
+    /// Geometry and mesh, without nodes.
+    pub const DEFAULT: Show = Show { geometry: true, mesh: true, nodes: false };
+}
+
 /// The scene for `display` drawn in `style`.
-pub fn build(display: &DisplayMesh, style: Style, show_nodes: bool, t: &Tokens) -> Scene {
+pub fn build(display: &DisplayMesh, style: Style, show: Show, t: &Tokens) -> Scene {
     let mut s = Scene { background: Some((rgb(t.viewport_top), rgb(t.viewport_bottom))), ..Default::default() };
+    // Geometry faces draw where no element faces cover them.
+    let mesh_faces = show.mesh && !display.tris.is_empty();
     if style != Style::Wireframe {
-        s.tris = display.tris.iter().map(|d| SceneTri { p: d.p, normal: d.normal, color: rgb(t.element(d.kind)) }).collect();
-        if display.tris.is_empty() {
+        if show.mesh {
+            s.tris = display.tris.iter().map(|d| SceneTri { p: d.p, normal: d.normal, color: rgb(t.element(d.kind)) }).collect();
+        }
+        if !mesh_faces && show.geometry {
             s.tris.extend(display.surface_tris.iter().map(|d| SceneTri { p: d.p, normal: d.normal, color: rgb(t.geometry) }));
         }
     }
-    if style != Style::Shaded {
+    if style != Style::Shaded && show.mesh {
         // Without faces behind them the edges take the element colour, so they read on the
         // background.
         let color = rgb(if style == Style::Wireframe { t.hex } else { t.mesh_edge });
         s.lines = display.edges.iter().map(|e| SceneLine { a: e.p[0], b: e.p[1], color, width: EDGE_WIDTH }).collect();
     }
     // Face boundaries in every style: they are the geometry's outline.
-    let faces_drawn = style != Style::Wireframe && display.tris.is_empty();
-    let edge = rgb(if faces_drawn { t.mesh_edge } else { t.geometry_edge });
-    s.lines.extend(display.surface_edges.iter().map(|[a, b]| SceneLine { a: *a, b: *b, color: edge, width: GEOMETRY_EDGE_WIDTH }));
-    s.lines.extend(display.lines.iter().map(|l| SceneLine { a: l.a, b: l.b, color: rgb(t.element(l.kind)), width: LINE_ELEMENT_WIDTH }));
-    if show_nodes {
+    if show.geometry {
+        s.lines.extend(display.surface_edges.iter().map(|[a, b]| SceneLine {
+            a: *a,
+            b: *b,
+            color: rgb(t.geometry_edge),
+            width: GEOMETRY_EDGE_WIDTH,
+        }));
+    }
+    if show.mesh {
+        s.lines.extend(display.lines.iter().map(|l| SceneLine { a: l.a, b: l.b, color: rgb(t.element(l.kind)), width: LINE_ELEMENT_WIDTH }));
+    }
+    if show.nodes {
         s.points = display.nodes.iter().map(|n| ScenePoint { p: n.p, color: rgb(t.node), size: NODE_SIZE }).collect();
     }
     s
@@ -86,11 +112,13 @@ mod tests {
         m.set_element(1, ElementKind::Tet4, vec![1, 2, 3, 4]).unwrap();
         let d = DisplayMesh::from_model(&m);
         let t = Tokens::dark();
-        let s = build(&d, Style::ShadedEdges, false, &t);
+        let s = build(&d, Style::ShadedEdges, Show::DEFAULT, &t);
         assert_eq!((s.tris.len(), s.lines.len(), s.points.len()), (4, 6, 0));
-        let s = build(&d, Style::Shaded, true, &t);
+        let s = build(&d, Style::Shaded, Show { nodes: true, ..Show::DEFAULT }, &t);
         assert_eq!((s.tris.len(), s.lines.len(), s.points.len()), (4, 0, 4));
-        let s = build(&d, Style::Wireframe, false, &t);
+        let s = build(&d, Style::ShadedEdges, Show { mesh: false, ..Show::DEFAULT }, &t);
+        assert_eq!((s.tris.len(), s.lines.len()), (0, 0), "a hidden mesh draws nothing");
+        let s = build(&d, Style::Wireframe, Show::DEFAULT, &t);
         assert_eq!((s.tris.len(), s.lines.len()), (0, 6));
         assert_eq!(s.tris.first().map(|t| t.color), None);
         assert!(radius(&d.bounds, &Camera::default()) > 0.5);

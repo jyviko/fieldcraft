@@ -312,7 +312,7 @@ impl ModelApp {
         self.begin_job(kind.command(), json!({"path": path}), format!("{} {name}", kind.verb()), done, Some(path));
     }
 
-    /// Help ▸ Samples (and the empty viewport): open a sample model, asking first when that
+    /// Help › Samples (and the empty viewport): open a sample model, asking first when that
     /// would discard unsaved changes.
     pub fn open_sample(&mut self, name: &str) {
         let Some(sample) = modelcraft_engine::sample::find(name) else {
@@ -339,7 +339,7 @@ impl ModelApp {
     /// Solve every step (`solve.run`) in the background; the results come up when it is done.
     pub fn solve_all(&mut self) {
         if self.session.model.steps().is_empty() {
-            self.set_status("Nothing to solve: the model has no steps (Steps ▸ Step, or open a sample from Help ▸ Samples)", true);
+            self.set_status("Nothing to solve: the model has no steps (Steps › Step, or open a sample from Help › Samples)", true);
             return;
         }
         let n = self.session.model.steps().len();

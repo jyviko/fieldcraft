@@ -1,6 +1,6 @@
 //! What the viewport shows over a results plot: the legend (field, bands, range, deformation
-//! scale, a stale-result warning), the probed node, and the results panel whose controls run
-//! the `results.*` commands.
+//! scale, a stale-result warning) and the probed node; and the results controls of the context
+//! panel (right), which run the `results.*` commands.
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Stroke, pos2, vec2};
 use modelcraft_engine::results::{Field, Kind};
@@ -11,8 +11,6 @@ use crate::ModelApp;
 use crate::results::{Plot, number};
 use crate::theme::Tokens;
 
-/// Width of the results panel and of the legend's colour swatches (points).
-const PANEL_WIDTH: f32 = 260.0;
 /// Width of the panel's drop-down lists.
 const COMBO_WIDTH: f32 = 160.0;
 const SWATCH: egui::Vec2 = vec2(18.0, 15.0);
@@ -20,13 +18,12 @@ const SWATCH: egui::Vec2 = vec2(18.0, 15.0);
 const PLOT_HEIGHT: f32 = 90.0;
 const MAX_PLOT_POINTS: usize = 400;
 
-/// Draw the legend, the probe and the panel when a results plot is shown.
+/// Draw the legend and the probe when a results plot is shown.
 pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
     let Some(plot) = app.plot() else { return };
     let painter = ui.painter_at(rect);
     legend(&plot, &painter, rect, t);
     probe(app, &plot, &painter, t);
-    panel(app, &plot, ui, rect, t);
 }
 
 /// The legend, top left under the view buttons.
@@ -53,7 +50,7 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
     if plot.stale {
         lines.push(("Stale: the model changed since this step was solved".into(), t.warm));
     }
-    let origin = rect.left_top() + vec2(12.0, 44.0);
+    let origin = rect.left_top() + vec2(12.0, 12.0);
     let font = FontId::proportional(12.0);
     let line_h = 16.0;
     let bands = plot.contour.as_ref().map_or(0, |l| l.bands.count) as f32;
@@ -106,23 +103,12 @@ fn probe(app: &ModelApp, plot: &Plot, painter: &egui::Painter, t: &Tokens) {
     painter.galley(box_rect.left_top() + vec2(8.0, 4.0), galley, t.overlay_text);
 }
 
-/// The results panel, top right: step, contour field, deformation, modes, animation, reaction
-/// sums. Every control runs a command.
-fn panel(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
-    let area = Rect::from_min_size(pos2(rect.right() - PANEL_WIDTH - 12.0, rect.top() + 44.0), vec2(PANEL_WIDTH, rect.height() - 56.0));
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
+/// The results controls (the context panel's Results section): step, contour field,
+/// deformation, modes, animation, reaction sums. Every control runs a command.
+pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) {
     let mut run: Vec<(&'static str, Value)> = Vec::new();
     let steps: Vec<(String, bool)> = app.session.result_steps().map(|(n, c)| (n.to_string(), c)).collect();
-    egui::Frame::NONE.fill(t.overlay).corner_radius(4.0).inner_margin(egui::Margin::same(8)).show(&mut child, |ui| {
-        ui.set_width(PANEL_WIDTH - 16.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Results").strong().color(t.overlay_text));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Close").on_hover_text("Back to the model (results.clear)").clicked() {
-                    run.push(("results.clear", json!({})));
-                }
-            });
-        });
+    {
         egui::Grid::new("mc_results_grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
             ui.label("Step");
             egui::ComboBox::from_id_salt("mc_results_step").selected_text(&plot.view.step).width(COMBO_WIDTH).truncate().show_ui(ui, |ui| {
@@ -195,7 +181,7 @@ fn panel(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, rect: Rect, t: &Tok
             }
         }
         ui.label(RichText::new("Click the model to probe a node").small().color(t.text_dim));
-    });
+    }
     for (id, params) in run {
         let reply = app.run(id, params);
         if id == "results.reactions" {

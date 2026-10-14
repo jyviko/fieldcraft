@@ -313,7 +313,7 @@ fn products(l: &Panel, kw: usize, p: usize, mu: usize, wu: usize) -> Vec<Vec<f64
         for c in 0..cols {
             let mut acc = [0.0f64; TILE];
             let ys = yt.get(c * kw..(c + 1) * kw).unwrap_or_default();
-            for (xs, b) in x.chunks_exact(TILE).zip(ys) {
+            for (xs, b) in x.as_chunks::<TILE>().0.iter().zip(ys) {
                 for (a, xi) in acc.iter_mut().zip(xs) {
                     *a += xi * b;
                 }
@@ -362,7 +362,7 @@ fn solve_below(l: &Panel, c0: usize, c1: usize) -> Vec<Vec<f64>> {
         for c in 0..pw {
             let (done, rest) = buf.split_at_mut(c * TILE);
             let Some(target) = rest.get_mut(..TILE) else { continue };
-            for (k, src) in done.chunks_exact(TILE).enumerate() {
+            for (k, src) in done.as_chunks::<TILE>().0.iter().enumerate() {
                 let lck = l.at(c0 + c, c0 + k);
                 for (y, x) in target.iter_mut().zip(src) {
                     *y -= x * lck;

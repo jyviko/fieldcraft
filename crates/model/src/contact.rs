@@ -219,27 +219,47 @@ impl Model {
         remove_existing(&mut self.contacts, "contact", name).map(|_| ())
     }
 
+    /// The exterior edges of the 2D elements (the edges no other 2D element shares), in
+    /// element order: the boundary of a 2D model, which general contact takes by default.
+    pub fn exterior_edges(&self) -> Vec<crate::ElementEdge> {
+        self.unshared(2, |kind| kind.edges(), 2, |element, i| crate::ElementEdge { element, edge: i })
+    }
+
     /// The exterior faces of the solid elements (the faces no other solid element shares), in
-    /// element and face order: the surface of general contact without a named set.
+    /// element order.
     pub fn exterior_faces(&self) -> Vec<crate::ElementFace> {
-        let mut keyed: Vec<([u32; 4], crate::ElementFace)> = Vec::new();
-        for (label, e) in self.elements.iter().filter(|(_, e)| e.kind.dimension() == 3) {
-            for (i, local) in e.kind.faces().iter().enumerate() {
-                // A face is known by its sorted corner nodes (three or four).
-                let corners = if local.len() == 6 || local.len() == 3 { 3 } else { 4 };
+        // A face is known by its sorted corner nodes (three or four).
+        self.unshared(3, |kind| kind.faces(), 4, |element, face| crate::ElementFace { element, face })
+    }
+
+    /// The sides (`sides` of each element kind) of the elements of `dimension` that no other
+    /// such element shares, each known by its sorted corners (at most `corners`; triangles of
+    /// quadratic kinds by their first three), made by `make` from the element and the 1-based
+    /// side number, sorted.
+    fn unshared<T: Ord>(
+        &self,
+        dimension: u8,
+        sides: impl Fn(crate::ElementKind) -> &'static [&'static [usize]],
+        corners: usize,
+        make: impl Fn(u32, u8) -> T,
+    ) -> Vec<T> {
+        let mut keyed: Vec<([u32; 4], u32, u8)> = Vec::new();
+        for (label, e) in self.elements.iter().filter(|(_, e)| e.kind.dimension() == dimension) {
+            for (i, local) in sides(e.kind).iter().enumerate() {
+                let count = if local.len() == 6 || local.len() == 3 { 3 } else { 4 }.min(corners);
                 let mut key = [u32::MAX; 4];
-                for (k, n) in key.iter_mut().zip(local.iter().take(corners)) {
+                for (k, n) in key.iter_mut().zip(local.iter().take(count)) {
                     *k = e.nodes.get(*n).copied().unwrap_or(u32::MAX);
                 }
                 key.sort_unstable();
-                keyed.push((key, crate::ElementFace { element: *label, face: i as u8 + 1 }));
+                keyed.push((key, *label, i as u8 + 1));
             }
         }
         keyed.sort_unstable();
-        let mut out: Vec<crate::ElementFace> = keyed
+        let mut out: Vec<T> = keyed
             .chunk_by(|a, b| a.0 == b.0)
             .filter_map(|run| match run {
-                [(_, face)] => Some(*face),
+                [(_, element, side)] => Some(make(*element, *side)),
                 _ => None,
             })
             .collect();
@@ -354,6 +374,23 @@ mod tests {
         assert_eq!(of(2), [2, 3, 4, 5, 6], "all but the shared bottom (its top meets the tet over half its area)");
         assert_eq!(of(3), [1, 2, 3, 4], "a triangle never matches a quad");
         assert!(Model::default().exterior_faces().is_empty());
+    }
+
+    #[test]
+    fn exterior_edges_are_those_of_one_2d_element() {
+        // Two quads sharing an edge and a triangle on the second's top edge.
+        let mut m = Model::default();
+        for (i, xy) in [[0., 0.], [1., 0.], [2., 0.], [0., 1.], [1., 1.], [2., 1.], [1.5, 2.]].iter().enumerate() {
+            m.set_node(i as u32 + 1, [xy[0], xy[1], 0.0]).unwrap();
+        }
+        m.set_element(1, crate::ElementKind::Quad4, vec![1, 2, 5, 4]).unwrap();
+        m.set_element(2, crate::ElementKind::Quad4, vec![2, 3, 6, 5]).unwrap();
+        m.set_element(3, crate::ElementKind::Tri3, vec![5, 6, 7]).unwrap();
+        let edges = m.exterior_edges();
+        let of = |e: u32| edges.iter().filter(|f| f.element == e).map(|f| f.edge).collect::<Vec<_>>();
+        assert_eq!(of(1), [1, 3, 4]);
+        assert_eq!(of(2), [1, 2]);
+        assert_eq!(of(3), [2, 3]);
     }
 
     #[test]

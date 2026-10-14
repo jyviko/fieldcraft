@@ -30,8 +30,8 @@ hex8/20/27 with first and second derivatives).
 
 | Element | Use | Status |
 |---|---|---|
-| Truss, 2-node (2D and 3D) | Axial members, cables (compression allowed) | done (rod2: implicit, explicit; T3D2, CROD, LS-DYNA truss beam; a plane truss is a space truss with its out-of-plane motion held) |
-| Truss, 3-node (2D and 3D) | Curved axial members | done (rod3: implicit, explicit; Abaqus T3D3; no Nastran or LS-DYNA counterpart) |
+| Truss, 2-node (2D and 3D) | Axial members, cables (compression allowed) | done (rod2: implicit, in plane models with their two unknowns per node; explicit, corotational under nonlinear geometry; Abaqus T3D2 / T2D2, Nastran CROD, LS-DYNA truss beam (3D models)) |
+| Truss, 3-node (2D and 3D) | Curved axial members | done (rod3: implicit, plane models too; explicit with small displacements; Abaqus T3D3 / T2D3; no Nastran or LS-DYNA counterpart) |
 | Beam, 2-node Timoshenko, 3D | Frames, stiffeners; shear deformable | in progress (shells and beams) |
 | Beam, 2-node Euler–Bernoulli (cubic), 2D and 3D | Slender frames; exact for end-loaded prismatic members | planned (1D elements II) |
 | Beam, 3-node Timoshenko (quadratic), 2D and 3D | Curved and stocky beams | planned (1D elements II) |

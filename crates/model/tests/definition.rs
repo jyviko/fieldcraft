@@ -516,3 +516,13 @@ fn two_dimensional_models_resolve_edges_and_check_their_rules() {
         assert!(m.add_load("hostile", bad.clone()).is_err(), "{bad:?}");
     }
 }
+
+#[test]
+fn display_resolves_what_is_on_the_mesh() {
+    let mut m = defined();
+    // A set with a node the mesh does not have: the check refuses it, the display shows the rest.
+    m.add_set("half", Set { nodes: vec![1, 999], ..Set::default() }).unwrap();
+    assert!(m.resolve_set("half").is_err());
+    assert_eq!(m.resolve_set_partial("half").map(|r| r.nodes), Some(vec![1]));
+    assert_eq!(m.resolve_set_partial("nope"), None);
+}

@@ -165,6 +165,17 @@ impl Model {
         Ok(resolved)
     }
 
+    /// The mesh nodes with rotational degrees of freedom: those of shells (2D elements that are
+    /// not `planar`: plane stress, plane strain or axisymmetric) and of beams. Reference points
+    /// rotate too.
+    pub fn rotational_nodes(&self, planar: impl Fn(u32) -> bool) -> BTreeSet<u32> {
+        self.elements
+            .iter()
+            .filter(|(l, e)| (e.kind.dimension() == 2 && !planar(**l)) || e.kind == ElementKind::Beam2)
+            .flat_map(|(_, e)| e.nodes.iter().copied())
+            .collect()
+    }
+
     fn analyze(&self) -> (Resolved, Vec<Diagnostic>) {
         let mut d = Diagnostics::default();
         let mut resolved = Resolved::default();
@@ -381,13 +392,7 @@ impl Model {
         let has_rotations = |t: &Target| match t {
             Target::ReferencePoint(_) => true,
             Target::Set(s) => {
-                let rotational: &BTreeSet<u32> = rotational.get_or_init(|| {
-                    self.elements
-                        .iter()
-                        .filter(|(l, e)| (e.kind.dimension() == 2 && !resolved.planar.contains_key(l)) || e.kind == ElementKind::Beam2)
-                        .flat_map(|(_, e)| e.nodes.iter().copied())
-                        .collect()
-                });
+                let rotational = rotational.get_or_init(|| self.rotational_nodes(|l| resolved.planar.contains_key(&l)));
                 set_of(s).nodes.iter().any(|n| rotational.contains(n))
             }
         };

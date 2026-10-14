@@ -138,6 +138,13 @@ impl Model {
         if missing.is_empty() { Ok(resolved) } else { Err(Error::NotFound(format!("set `{name}`: {}", missing.join("; ")))) }
     }
 
+    /// Resolve one set against the current mesh, leaving out the members that are not on it
+    /// (for display: a set with a missing member still shows what it has). `None` when there is
+    /// no set called `name`.
+    pub fn resolve_set_partial(&self, name: &str) -> Option<ResolvedSet> {
+        self.sets.get(name).map(|set| self.resolve_definition(set).0)
+    }
+
     /// Resolve a definition, and list the members that are not on the mesh.
     pub(crate) fn resolve_definition(&self, set: &Set) -> (ResolvedSet, Vec<String>) {
         let c = &self.classification;

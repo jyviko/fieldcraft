@@ -414,9 +414,19 @@ impl Problem<'_> {
 
     /// The forces at displacements `u` and load factor λ, and the tangent (symmetric part of the
     /// load stiffness included) when `tangent`.
-    /// `multipliers` are the contacts' augmented Lagrange multipliers per secondary node (none:
-    /// zero).
-    fn evaluate(&self, u: &[f64], lambda: f64, tangent: bool, committed: &[Vec<f64>], multipliers: &[Vec<f64>]) -> Result<Evaluation> {
+    /// `contact` is each contact's state at the last converged increment (augmented Lagrange
+    /// multipliers, friction tractions; none: zero) and `reference` the displacements there (the
+    /// start of the friction's slip increment; none: zero).
+    fn evaluate(
+        &self,
+        u: &[f64],
+        lambda: f64,
+        tangent: bool,
+        committed: &[Vec<f64>],
+        contact: &[contact::Committed],
+        reference: &[f64],
+        band: f64,
+    ) -> Result<Evaluation> {
         let layout = &self.mesh.layout;
         let n = u.len();
         let mut internal = vec![0.0; n];
@@ -424,7 +434,8 @@ impl Problem<'_> {
         let mut blocks = contact::Blocks::new();
         let mut states = Vec::with_capacity(self.contacts.len());
         for (i, c) in self.contacts.iter().enumerate() {
-            states.push(c.evaluate(self.mesh, u, multipliers.get(i).map(Vec::as_slice).unwrap_or_default(), tangent, &mut internal, &mut blocks)?);
+            let empty = contact::Committed::default();
+            states.push(c.evaluate(self.mesh, u, reference, contact.get(i).unwrap_or(&empty), band, tangent, &mut internal, &mut blocks)?);
         }
         let mut k = tangent.then(|| {
             if blocks.is_empty() {
@@ -569,7 +580,12 @@ struct Run<'a> {
     undeformed: Option<std::result::Result<(), FactorError>>,
     /// The contacts' multipliers per secondary node (the last converged increment's, or the
     /// current augmentation's), and the augmentations over the step.
-    multipliers: Vec<Vec<f64>>,
+    contact: Vec<contact::Committed>,
+    /// The displacements of the last converged increment (all degrees of freedom).
+    reference: Vec<f64>,
+    /// The band of the engaged contact nodes ([`contact::ENGAGED_BAND`] once an increment's
+    /// active set has chattered, for the rest of the step; else 0).
+    band: f64,
     augmentations: usize,
     /// The augmentation being solved in the current increment.
     augmentation: usize,
@@ -611,7 +627,15 @@ impl Run<'_> {
     }
 
     fn state(&self, q: &[f64], lambda: f64, tangent: bool) -> std::result::Result<Evaluation, Failure> {
-        Ok(self.problem.evaluate(&self.problem.red.expand_scaled(q, lambda), lambda, tangent, &self.committed, &self.multipliers)?)
+        Ok(self.problem.evaluate(
+            &self.problem.red.expand_scaled(q, lambda),
+            lambda,
+            tangent,
+            &self.committed,
+            &self.contact,
+            &self.reference,
+            self.band,
+        )?)
     }
 
     /// How the tangent of the undeformed, unloaded model factors (Cholesky): a first tangent
@@ -621,7 +645,7 @@ impl Run<'_> {
         if let Some(u) = &self.undeformed {
             return Ok(u.clone());
         }
-        let mut e = self.problem.evaluate(&vec![0.0; self.problem.mesh.dofs()], 0.0, true, &self.committed, &[])?;
+        let mut e = self.problem.evaluate(&vec![0.0; self.problem.mesh.dofs()], 0.0, true, &self.committed, &[], &[], 0.0)?;
         let k = e.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
         let [kff] = self.problem.red.reduce([&k])?;
         let u = factor_raw(&kff, self.limits).map(|_| ());
@@ -670,7 +694,7 @@ impl Run<'_> {
     /// factored (the increment then starts from `q0`).
     fn tangent_predictor(&mut self, q0: &[f64], from: f64, to: f64) -> std::result::Result<Option<(Vec<f64>, f64)>, Failure> {
         let red = self.problem.red;
-        let mut e = self.problem.evaluate(&red.expand_scaled(q0, from), to, true, &self.committed, &self.multipliers)?;
+        let mut e = self.problem.evaluate(&red.expand_scaled(q0, from), to, true, &self.committed, &self.contact, &self.reference, self.band)?;
         let k = e.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
         let rf: Vec<f64> = free_residual(red, &e).iter().zip(prescribed_force(red, &k, to - from)).map(|(a, b)| a - b).collect();
         let mut dq = rf.clone();
@@ -756,6 +780,8 @@ impl Run<'_> {
                 if sets.0 == Some(set) && set != sets.1 {
                     flips += 1;
                     if flips >= contact::CHATTER_LIMIT {
+                        // From now on the nodes about to touch stay in the tangent.
+                        self.band = contact::ENGAGED_BAND;
                         return Err(Failure::Cutback("the contact status alternates between two states (chattering)".into()));
                     }
                 }
@@ -816,9 +842,9 @@ impl Run<'_> {
                 .problem
                 .contacts
                 .iter()
-                .zip(&self.multipliers)
+                .zip(&self.contact)
                 .zip(&c.evaluation.contact)
-                .fold(0.0f64, |m, ((i, l), s)| m.max(i.augmentation_error(l, s)));
+                .fold(0.0f64, |m, ((i, l), s)| m.max(i.augmentation_error(&l.multipliers, s)));
             if error <= contact::GAP_TOLERANCE {
                 return Ok(c);
             }
@@ -832,7 +858,9 @@ impl Run<'_> {
             *count += 1;
             self.augmentations += 1;
             self.augmentation = *count;
-            self.multipliers = c.evaluation.contact.iter().map(|s| s.pressure.clone()).collect();
+            for (l, s) in self.contact.iter_mut().zip(&c.evaluation.contact) {
+                l.multipliers.clone_from(&s.pressure);
+            }
             // From the converged state, measured against the increment's start and its first
             // correction like the increment itself.
             let start = std::mem::take(&mut c.q);
@@ -1151,7 +1179,7 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
         .collect::<Result<Vec<_>>>()?;
     // The undeformed state first: an element that is bad before anything moves is an error in
     // the model, not a reason to cut increments back.
-    problem.evaluate(&vec![0.0; mesh.dofs()], 0.0, false, &committed, &[])?;
+    problem.evaluate(&vec![0.0; mesh.dofs()], 0.0, false, &committed, &[], &[], 0.0)?;
     let path_dependent = problem.materials.iter().any(MaterialModel::is_path_dependent);
     let mut run = Run {
         problem: &problem,
@@ -1165,7 +1193,9 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
         committed,
         path_dependent,
         undeformed: None,
-        multipliers: problem.contacts.iter().map(|c| vec![0.0; c.nodes.len()]).collect(),
+        contact: problem.contacts.iter().map(Interface::committed).collect(),
+        reference: vec![0.0; mesh.dofs()],
+        band: 0.0,
         augmentations: 0,
         augmentation: 0,
         converged_scale: 0.0,
@@ -1232,14 +1262,14 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
                     Err(Failure::Fatal(e)) => return Err(e),
                 }
             }
-            let multipliers = run.multipliers.clone();
+            let saved = run.contact.clone();
             let mut augmentations = 0;
             run.augmentation = 0;
             let solved = run
                 .increment(&q, predictor.as_deref(), predicted_energy, target_lambda, change.abs(), &mut iterations)
                 .and_then(|c| run.augment(c, &q, target_lambda, change.abs(), &mut iterations, &mut augmentations, &mut warnings));
             if solved.is_err() {
-                run.multipliers = multipliers;
+                run.contact = saved;
             }
             match solved {
                 Ok(c) => {
@@ -1261,6 +1291,10 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
                     q = c.q;
                     keep_frame(&mut history, lambda, &red.expand_scaled(&q, lambda), &mut warnings);
                     run.committed.clone_from(&c.evaluation.history);
+                    for (l, s) in run.contact.iter_mut().zip(&c.evaluation.contact) {
+                        l.commit(s);
+                    }
+                    run.reference = red.expand_scaled(&q, lambda);
                     run.converged_scale = run.converged_scale.max(norm_inf(&c.evaluation.external)).max(norm_inf(&c.evaluation.internal));
                     last = Some(c.evaluation);
                     fast = if count <= FAST_ITERATIONS { fast + 1 } else { 0 };
@@ -1300,7 +1334,7 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
     let u = red.expand_scaled(&q, lambda);
     let evaluation = match last {
         Some(e) => e,
-        None => problem.evaluate(&u, lambda, false, &run.committed, &run.multipliers)?,
+        None => problem.evaluate(&u, lambda, false, &run.committed, &run.contact, &run.reference, 0.0)?,
     };
     if let Some((at, negative)) = history
         .increments

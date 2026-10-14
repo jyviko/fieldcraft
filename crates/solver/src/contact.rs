@@ -76,7 +76,7 @@
 //! per contact the force on the secondary surface and its normal part.
 //!
 //! **Scope.** Pairs of surfaces of linear solid faces (tri3 and quad4 faces: tet4, wedge6 and
-//! hex8 elements) in 3D models, frictionless. General (single-surface) contact, quadratic faces,
+//! hex8 elements) in 3D models, with Coulomb friction ([`Interface::friction`]). General (single-surface) contact, quadratic faces,
 //! 2D models and arc-length steps are refused by name.
 
 use std::collections::BTreeMap;
@@ -85,7 +85,7 @@ use fieldcraft_fem::contact::{Aabb, Grid, bounds};
 use fieldcraft_fem::dual::{Dual, Hyper, Real, VARS};
 use fieldcraft_fem::frame::{Vec3, dot, norm, unit};
 use fieldcraft_fem::mortar::{area_vector, integrate};
-use fieldcraft_model::{Contact, ContactSurfaces, ElementKind, InitialPenetration, Model, Resolved};
+use fieldcraft_model::{Contact, ContactSurfaces, ElementKind, Friction, InitialPenetration, Model, Resolved};
 use fieldcraft_parallel as parallel;
 use serde::Serialize;
 
@@ -105,10 +105,19 @@ pub const PENALTY_FACTOR: f64 = 10.0;
 /// the element under it (and no open node keeps a multiplier).
 pub const GAP_TOLERANCE: f64 = 1e-5;
 
+/// Once an increment's active set has chattered, a node open by less than this fraction of its
+/// element's thickness keeps its penalty in the tangent for the rest of the step (its
+/// pressure, and so the residual, is still zero): a node that touches with no pressure, the edge
+/// of a contact that lifts, otherwise flips between open and closed from one Newton iteration to
+/// the next, each state's correction pushing it into the other, and a smaller increment does not
+/// help under proportional loading.
+pub const ENGAGED_BAND: f64 = 1e-3;
+
 /// Most augmentations of one increment.
 pub const MAX_AUGMENTATIONS: usize = 25;
 
-/// An increment is cut back when the active set alternates between two states this many times.
+/// An increment is cut back when the active set alternates between two states this many times
+/// (and the step takes [`ENGAGED_BAND`] from then on).
 pub const CHATTER_LIMIT: usize = 3;
 
 /// Most faces over the contacts of a model.
@@ -149,20 +158,48 @@ pub struct Interface {
     /// fixed in the reference configuration; `None`: finite sliding, searched and integrated
     /// on the current configuration at every evaluation.
     fixed: Option<Vec<Vec<Fixed>>>,
+    /// Coulomb friction (frictionless: none).
+    friction: Option<Friction>,
 }
 
-/// Whether a secondary node presses on the main surface.
+/// A contact's state carried from one converged increment to the next: per secondary node the
+/// augmented Lagrange multiplier, and with friction the tangential traction and whether the node
+/// was slipping.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Committed {
+    pub multipliers: Vec<f64>,
+    pub traction: Vec<Vec3>,
+    pub slipping: Vec<bool>,
+}
+
+impl Committed {
+    /// Take a converged state's friction (the multipliers are the augmentation's).
+    pub fn commit(&mut self, state: &State) {
+        self.traction.clone_from(&state.traction);
+        self.slipping.clone_from(&state.slipping);
+    }
+}
+
+/// Whether a secondary node presses on the main surface (and with friction, sticks or slips).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Open,
     Closed,
+    Stick,
+    Slip,
+}
+
+impl Status {
+    pub fn is_closed(self) -> bool {
+        self != Status::Open
+    }
 }
 
 impl ContactResult {
     /// The closed nodes.
     pub fn closed(&self) -> usize {
-        self.status.iter().filter(|s| **s == Status::Closed).count()
+        self.status.iter().filter(|s| s.is_closed()).count()
     }
 }
 
@@ -178,6 +215,12 @@ pub struct State {
     /// (its faces' area vectors summed).
     pub nodal_force: Vec<Vec3>,
     pub normal: Vec<Vec3>,
+    /// Friction: the tangential traction on each secondary node (on it, against its slip), its
+    /// slip over the increment (relative to the main surface, normalised like the gap) and
+    /// whether it slips; empty without friction.
+    pub traction: Vec<Vec3>,
+    pub slip: Vec<Vec3>,
+    pub slipping: Vec<bool>,
 }
 
 impl State {
@@ -206,6 +249,12 @@ pub struct ContactResult {
     pub pressure: Vec<f64>,
     /// The mortar multipliers (the coefficients of the pressure field, Φ_A-interpolated).
     pub multiplier: Vec<f64>,
+    /// Friction: the shear traction (the tangential contact force over the area, on the node)
+    /// and the slip over the last increment, per node; empty without friction.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shear: Vec<Vec3>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub slip: Vec<Vec3>,
     /// The normalised gap ĝ (negative: penetration), `None` where no main face is over the node.
     pub gap: Vec<Option<f64>>,
     pub status: Vec<Status>,
@@ -301,6 +350,23 @@ struct Fixed {
 }
 
 impl Fixed {
+    /// B_a, the slip operator ([`slip_operator`]) of the reference configuration.
+    fn slip_jacobian(&self, a: usize) -> [[f64; VARS]; 3] {
+        let mut j = [[0.0; VARS]; 3];
+        let (Some(d), Some(m)) = (self.d.get(a), self.m.get(a)) else { return j };
+        let n = self.normal;
+        for k in 0..3 {
+            for l in 0..3 {
+                let proj = if k == l { 1.0 } else { 0.0 } - n[k] * n[l];
+                for i in 0..4 {
+                    j[k][3 * i + l] = d[i] * proj;
+                    j[k][12 + 3 * i + l] = -m[i] * proj;
+                }
+            }
+        }
+        j
+    }
+
     /// ∂g̃_a/∂x over the pair's variables (secondary corners from 0, main corners from 12).
     fn gradient(&self, a: usize) -> [f64; VARS] {
         let mut g = [0.0; VARS];
@@ -333,6 +399,35 @@ fn weighted_gaps<T: Real>(xs: &[[T; 3]], xm: &[[T; 3]]) -> Option<[T; 4]> {
         }
     })?;
     Some(g)
+}
+
+/// The slip operator of one face pair (corners `xs`, `xm`): per secondary corner a the matrix
+/// B_a with w_a = B_a Δx, the weighted tangential slip ∫ Φ_a (I − n n)(Δx_s − Δx_m) dA of the
+/// pair's corners' motions Δx (rows: its components; columns: the pair's variables, secondary
+/// corners from 0, main corners from 12), with the integrals on the current configuration: the
+/// rate form of the mortar slip, B_a = [∫ Φ_a N_i P, −∫ Φ_a N_j P] (McDevitt & Laursen 2000; Puso &
+/// Laursen 2004), P = I − n n.
+fn slip_operator(xs: &[Vec3], xm: &[Vec3]) -> Option<[[[f64; VARS]; 3]; 4]> {
+    let mut b = [[[0.0; VARS]; 3]; 4];
+    integrate(xs, xm, |p| {
+        let n = p.normal;
+        for a in 0..4 {
+            let wa = p.weight * p.secondary[a];
+            if wa == 0.0 {
+                continue;
+            }
+            for k in 0..3 {
+                for l in 0..3 {
+                    let proj = wa * (if k == l { 1.0 } else { 0.0 } - n[k] * n[l]);
+                    for c in 0..4 {
+                        b[a][k][3 * c + l] += proj * p.secondary[c];
+                        b[a][k][12 + 3 * c + l] -= proj * p.main[c];
+                    }
+                }
+            }
+        }
+    })?;
+    Some(b)
 }
 
 /// The variables of a face pair: secondary corners at 0, main corners from 12.
@@ -368,9 +463,6 @@ impl Interface {
                 "general (single-surface) contact `{name}` in implicit steps; define contact pairs (interaction.contact.pair), or solve it in explicit dynamics"
             )));
         };
-        if !contact.friction.is_frictionless() {
-            return Err(Error::NotSupported(format!("friction (contact `{name}`) in implicit steps")));
-        }
         let secondary = faces(model, resolved, mesh, name, secondary)?;
         let main = faces(model, resolved, mesh, name, main)?;
         let mut nodes: Vec<usize> = secondary.iter().flat_map(|f| f.nodes.iter().copied()).collect();
@@ -406,7 +498,18 @@ impl Interface {
             return Err(Error::Invalid(format!("contact `{name}`: the secondary faces at node {label} have no area")));
         }
         let offset = vec![0.0; nodes.len()];
-        Ok(Interface { name: name.to_string(), secondary, main, nodes, area, penalty, thickness, offset, fixed: None })
+        Ok(Interface {
+            name: name.to_string(),
+            secondary,
+            main,
+            nodes,
+            area,
+            penalty,
+            thickness,
+            offset,
+            fixed: None,
+            friction: (!contact.friction.is_frictionless()).then_some(contact.friction),
+        })
     }
 
     /// Adjust (offset) or refuse the nodes that start behind the main surface.
@@ -577,13 +680,47 @@ impl Interface {
         (gap, support, index)
     }
 
+    /// The state a step starts from: no multipliers, no friction traction.
+    pub fn committed(&self) -> Committed {
+        let n = self.nodes.len();
+        let friction = self.friction.is_some();
+        Committed {
+            multipliers: vec![0.0; n],
+            traction: if friction { vec![[0.0; 3]; n] } else { Vec::new() },
+            slipping: vec![false; if friction { n } else { 0 }],
+        }
+    }
+
     /// The contact's forces at displacements `u` (added to `internal`), its tangent blocks when
-    /// `tangent`, and its state, with the multipliers `multipliers` (per node).
-    pub fn evaluate(&self, mesh: &Mesh, u: &[f64], multipliers: &[f64], tangent: bool, internal: &mut [f64], blocks: &mut Blocks) -> Result<State> {
+    /// `tangent`, and its state, from the last converged increment's state `committed` and
+    /// displacements `reference`; nodes open by less than `band` of their element's thickness
+    /// keep their penalty in the tangent ([`ENGAGED_BAND`]; 0: only closed nodes).
+    #[allow(clippy::too_many_arguments)]
+    pub fn evaluate(
+        &self,
+        mesh: &Mesh,
+        u: &[f64],
+        reference: &[f64],
+        committed: &Committed,
+        band: f64,
+        tangent: bool,
+        internal: &mut [f64],
+        blocks: &mut Blocks,
+    ) -> Result<State> {
+        let multipliers = committed.multipliers.as_slice();
         let pairs = self.pairs(mesh, u)?;
         let (weighted, support, corner_index) = self.sums(&pairs);
         let n = self.nodes.len();
-        let mut state = State { gap: vec![None; n], pressure: vec![0.0; n], support, nodal_force: vec![[0.0; 3]; n], normal: vec![[0.0; 3]; n] };
+        let mut state = State {
+            gap: vec![None; n],
+            pressure: vec![0.0; n],
+            support,
+            nodal_force: vec![[0.0; 3]; n],
+            normal: vec![[0.0; 3]; n],
+            traction: Vec::new(),
+            slip: Vec::new(),
+            slipping: Vec::new(),
+        };
         for (f, corners) in self.secondary.iter().zip(&corner_index) {
             let Some(a) = area_vector(&Interface::corners(mesh, u, f)) else { continue };
             for i in corners {
@@ -595,19 +732,23 @@ impl Interface {
         for v in &mut state.normal {
             *v = unit(*v).unwrap_or(*v);
         }
+        // Nodes closed, or open by less than `band` of their element's thickness: their penalty
+        // stays in the tangent.
+        let mut engaged = vec![false; n];
         for i in 0..self.nodes.len() {
             let (Some(Some(g)), Some(a), Some(e)) = (weighted.get(i), self.area.get(i), self.penalty.get(i)) else { continue };
             let gap = g / a;
             let lambda = multipliers.get(i).copied().unwrap_or(0.0);
-            if let (Some(slot), Some(p)) = (state.gap.get_mut(i), state.pressure.get_mut(i)) {
+            if let (Some(slot), Some(p), Some(h)) = (state.gap.get_mut(i), state.pressure.get_mut(i), self.thickness.get(i)) {
                 *slot = Some(gap);
                 *p = (lambda - e * gap).max(0.0);
+                engaged[i] = lambda - e * gap > -e * band * h;
             }
         }
         // The pairs with a closed secondary corner, linearised.
         let mut active: Vec<(usize, usize)> = Vec::new();
         for (s, found) in pairs.iter().enumerate() {
-            let closed = corner_index.get(s).is_some_and(|c| c.iter().any(|i| state.pressure.get(*i).is_some_and(|p| *p > 0.0)));
+            let closed = corner_index.get(s).is_some_and(|c| c.iter().any(|i| engaged.get(*i).copied().unwrap_or(false)));
             if closed {
                 active.extend((0..found.len()).map(|k| (s, k)));
             }
@@ -663,7 +804,7 @@ impl Interface {
                     if let Some(own) = own {
                         (0..3).for_each(|k| own[k] += on[k]);
                     }
-                    if p > 0.0 && tangent {
+                    if tangent && engaged.get(*i).copied().unwrap_or(false) {
                         let entry = node_gradients.entry(*i).or_default().entry(*node).or_insert([0.0; 3]);
                         for k in 0..3 {
                             entry[k] += gv[k];
@@ -710,22 +851,213 @@ impl Interface {
             }
             blocks.push((nodes, data));
         }
+        if let Some(law) = self.friction {
+            self.friction(mesh, u, reference, committed, (&pairs, &corner_index, &active), law, tangent, &mut state, internal, blocks)?;
+        }
         Ok(state)
+    }
+
+    /// Coulomb friction at the closed secondary nodes by a return map (Wriggers 2006, §5.2;
+    /// Simo & Laursen 1992): the weighted tangential slip of each node since the last converged
+    /// increment, w_A = Σ ∫ Φ_A (I − n n)(Δx_s − Δx_m) dA = B_A Δx ([`slip_operator`]) and
+    /// ĝ_T = w_A / A_A; the trial traction
+    /// t* = P t_n − ε_A ĝ_T (P projects the committed traction on the current tangent plane);
+    /// stick, t = t*, when |t*| ≤ μ p_A, else slip back to the cone, t = μ p_A t*/|t*|, μ the
+    /// static coefficient for a node that stuck in the last increment and the kinetic one for
+    /// one that slipped. The traction does the virtual work t · B_A δx, so the forces −B_Aᵀ t enter
+    /// the internal forces (B_A at the current configuration: the friction force is exactly μ
+    /// times the normal one where nodes slip). The tangent keeps the symmetric stick/slip
+    /// stiffness (ε_A/A_A) Bᵀ B, or (ε_A μ p_A/(A_A |t*|)) Bᵀ (I − t̂ t̂) B for slip, and leaves out
+    /// the coupling to the pressure (μ t̂ ⊗ ∂p_A/∂x, not symmetric) and the change of B with the
+    /// geometry: the factorization stays symmetric and the residual exact, so only the rate of
+    /// convergence can suffer while nodes slip.
+    #[allow(clippy::too_many_arguments)]
+    fn friction(
+        &self,
+        mesh: &Mesh,
+        u: &[f64],
+        reference: &[f64],
+        committed: &Committed,
+        (pairs, corner_index, active): (&[Vec<Found>], &[Vec<usize>], &[(usize, usize)]),
+        law: Friction,
+        tangent: bool,
+        state: &mut State,
+        internal: &mut [f64],
+        blocks: &mut Blocks,
+    ) -> Result<()> {
+        let n = self.nodes.len();
+        state.traction = vec![[0.0; 3]; n];
+        state.slip = vec![[0.0; 3]; n];
+        state.slipping = vec![false; n];
+        // Per active pair: its corners' weighted slips and their Jacobians.
+        let terms = parallel::map_grained(active.len(), GRAIN, |t| {
+            let &(s, k) = active.get(t)?;
+            let (f, corners) = (self.secondary.get(s)?, corner_index.get(s)?);
+            let m = self.main.get(pairs.get(s)?.get(k)?.main)?;
+            let (xs, xm) = (Interface::corners(mesh, u, f), Interface::corners(mesh, u, m));
+            let (rs, rm) = (Interface::corners(mesh, reference, f), Interface::corners(mesh, reference, m));
+            let operator: Vec<[[f64; VARS]; 3]> = match self.fixed.as_ref().and_then(|f| f.get(s)).and_then(|l| l.get(k)) {
+                Some(fixed) => (0..corners.len()).map(|a| fixed.slip_jacobian(a)).collect(),
+                None => slip_operator(&xs, &xm)?.into_iter().take(corners.len()).collect(),
+            };
+            let mut delta = [0.0; VARS];
+            for (i, (x, r)) in xs.iter().zip(&rs).enumerate() {
+                (0..3).for_each(|c| delta[3 * i + c] = x[c] - r[c]);
+            }
+            for (j, (x, r)) in xm.iter().zip(&rm).enumerate() {
+                (0..3).for_each(|c| delta[12 + 3 * j + c] = x[c] - r[c]);
+            }
+            let slips: Vec<(Vec3, [[f64; VARS]; 3])> =
+                operator.into_iter().map(|b| (b.map(|row| row.iter().zip(&delta).map(|(x, y)| x * y).sum()), b)).collect();
+            let nodes: Vec<usize> = f.nodes.iter().chain(&m.nodes).copied().collect();
+            let dofs: Vec<[usize; 3]> = f.dofs.iter().chain(&m.dofs).copied().collect();
+            Some((nodes, dofs, corners.clone(), slips))
+        });
+        let terms: Vec<_> = terms.into_iter().flatten().collect();
+        let var = |count: usize, c: usize, l: usize| if c < count { 3 * c + l } else { 12 + 3 * (c - count) + l };
+        // Node sums: the slip, and with the tangent J_A over the nodes the node reaches.
+        let mut total = vec![[0.0; 3]; n];
+        let mut jacobians: BTreeMap<usize, BTreeMap<usize, [[f64; 3]; 3]>> = BTreeMap::new();
+        for (nodes, _, corners, slips) in &terms {
+            for (a, i) in corners.iter().enumerate() {
+                let (Some((w, jac)), Some(sum)) = (slips.get(a), total.get_mut(*i)) else { continue };
+                (0..3).for_each(|k| sum[k] += w[k]);
+                if tangent && state.pressure.get(*i).is_some_and(|p| *p > 0.0) {
+                    for (c, node) in nodes.iter().enumerate() {
+                        let block = jacobians.entry(*i).or_default().entry(*node).or_insert([[0.0; 3]; 3]);
+                        for k in 0..3 {
+                            for l in 0..3 {
+                                block[k][l] += jac[k].get(var(corners.len(), c, l)).copied().unwrap_or(0.0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // The return map, and per node the tangent's middle matrix.
+        let mut middle: Vec<Option<[[f64; 3]; 3]>> = vec![None; n];
+        for i in 0..n {
+            let (Some(&p), Some(&area), Some(&eps), Some(&normal)) =
+                (state.pressure.get(i), self.area.get(i), self.penalty.get(i), state.normal.get(i))
+            else {
+                continue;
+            };
+            if !(p > 0.0) {
+                continue;
+            }
+            let old = committed.traction.get(i).copied().unwrap_or_default();
+            let along = dot(old, normal);
+            let slip = total.get(i).copied().unwrap_or_default().map(|w| w / area);
+            let trial: Vec3 = std::array::from_fn(|k| old[k] - along * normal[k] - eps * slip[k]);
+            let mu = if committed.slipping.get(i).copied().unwrap_or(false) { law.kinetic_coefficient() } else { law.static_coefficient };
+            let (limit, size) = (mu * p, norm(trial));
+            let (traction, slipping, m) = if size <= limit {
+                (trial, false, std::array::from_fn(|k| std::array::from_fn(|l| if k == l { eps / area } else { 0.0 })))
+            } else {
+                let dir = trial.map(|c| c / size);
+                let c = eps * limit / (size * area);
+                (
+                    dir.map(|d| limit * d),
+                    true,
+                    std::array::from_fn(|k| std::array::from_fn(|l| c * (if k == l { 1.0 } else { 0.0 } - dir[k] * dir[l]))),
+                )
+            };
+            if let (Some(t), Some(g), Some(s), Some(mm)) =
+                (state.traction.get_mut(i), state.slip.get_mut(i), state.slipping.get_mut(i), middle.get_mut(i))
+            {
+                (*t, *g, *s, *mm) = (traction, slip, slipping, Some(m));
+            }
+        }
+        // Forces −t · ∂w/∂x.
+        for (_, dofs, corners, slips) in &terms {
+            for (a, i) in corners.iter().enumerate() {
+                let (Some(t), Some((_, jac))) = (state.traction.get(*i).copied(), slips.get(a)) else { continue };
+                if t == [0.0; 3] {
+                    continue;
+                }
+                for (c, d) in dofs.iter().enumerate() {
+                    let on: Vec3 = std::array::from_fn(|l| (0..3).map(|k| t[k] * jac[k].get(var(corners.len(), c, l)).copied().unwrap_or(0.0)).sum());
+                    for l in 0..3 {
+                        if let Some(x) = internal.get_mut(d[l]) {
+                            *x -= on[l];
+                        }
+                    }
+                    if let Some(own) = corners.get(c).and_then(|j| state.nodal_force.get_mut(*j)) {
+                        (0..3).for_each(|l| own[l] += on[l]);
+                    }
+                }
+            }
+        }
+        // Jᵀ M J per closed node.
+        for (i, reach) in jacobians {
+            let Some(Some(m)) = middle.get(i) else { continue };
+            let nodes: Vec<usize> = reach.keys().copied().collect();
+            let blocks_of: Vec<&[[f64; 3]; 3]> = reach.values().collect();
+            let width = 3 * nodes.len();
+            let mut data = vec![0.0; width * width];
+            for (a, ja) in blocks_of.iter().enumerate() {
+                for (b, jb) in blocks_of.iter().enumerate() {
+                    for l in 0..3 {
+                        for r in 0..3 {
+                            let mut v = 0.0;
+                            for k in 0..3 {
+                                for q in 0..3 {
+                                    v += ja[k][l] * m[k][q] * jb[q][r];
+                                }
+                            }
+                            if let Some(x) = data.get_mut((3 * a + l) * width + 3 * b + r) {
+                                *x = v;
+                            }
+                        }
+                    }
+                }
+            }
+            blocks.push((nodes, data));
+        }
+        Ok(())
     }
 
     /// The result of a converged state.
     pub fn result(&self, mesh: &Mesh, state: &State, augmentations: usize) -> ContactResult {
-        let status: Vec<Status> = state.pressure.iter().map(|p| if *p > 0.0 { Status::Closed } else { Status::Open }).collect();
-        let penetration = state.gap.iter().zip(&status).filter(|(_, s)| **s == Status::Closed).filter_map(|(g, _)| *g).fold(0.0f64, |m, g| m.max(-g));
-        // The force on the secondary nodes pushes them back along −n.
+        let status: Vec<Status> = state
+            .pressure
+            .iter()
+            .enumerate()
+            .map(|(i, p)| match (*p > 0.0, self.friction.is_some(), state.slipping.get(i).copied().unwrap_or(false)) {
+                (false, ..) => Status::Open,
+                (true, false, _) => Status::Closed,
+                (true, true, false) => Status::Stick,
+                (true, true, true) => Status::Slip,
+            })
+            .collect();
+        let penetration = state.gap.iter().zip(&status).filter(|(_, s)| s.is_closed()).filter_map(|(g, _)| *g).fold(0.0f64, |m, g| m.max(-g));
+        // The force on the secondary nodes pushes them back along −n; its tangential part is the
+        // friction's.
         let normal: Vec<f64> = state.nodal_force.iter().zip(&state.normal).map(|(f, n)| -dot(*f, *n)).collect();
-        let pressure = normal.iter().zip(&state.support).map(|(f, a)| if *a > 0.0 { f / a } else { 0.0 }).collect();
+        let per_area = |v: f64, a: f64| if a > 0.0 { v / a } else { 0.0 };
+        let pressure = normal.iter().zip(&state.support).map(|(f, a)| per_area(*f, *a)).collect();
+        let shear = if self.friction.is_some() {
+            state
+                .nodal_force
+                .iter()
+                .zip(&state.normal)
+                .zip(&state.support)
+                .map(|((f, n), a)| {
+                    let along = dot(*f, *n);
+                    std::array::from_fn(|k| per_area(f[k] - along * n[k], *a))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let force = state.nodal_force.iter().fold([0.0; 3], |s, f| [s[0] + f[0], s[1] + f[1], s[2] + f[2]]);
         ContactResult {
             name: self.name.clone(),
             nodes: self.nodes.iter().map(|n| mesh.labels.get(*n).copied().unwrap_or(0)).collect(),
             pressure,
             multiplier: state.pressure.clone(),
+            shear,
+            slip: state.slip.clone(),
             gap: state.gap.clone(),
             status,
             force,

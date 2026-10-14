@@ -403,3 +403,63 @@ fn hertz_sphere_on_a_flat() {
     assert!((found - peak).abs() < 0.05 * peak, "p0 {found} vs {peak}");
     assert!(before <= a && a <= next, "a {a} not in ({before}, {next})");
 }
+
+/// Two blocks, the upper one pressed down by `down` and moved sideways by `side` at its top
+/// (both in proportion over the step), with Coulomb friction `friction`; the reactions at the
+/// top (normal, tangential) and the result.
+fn sheared(down: f64, side: f64, friction: Friction, finite: bool) -> (f64, f64, StaticResult) {
+    let mut b = Blocks::default();
+    let low = b.block(ElementKind::Hex8, [3, 3, 1], |p| p);
+    let up = b.block(ElementKind::Hex8, [2, 2, 1], |p| [p[0], p[1], 1.0 + p[2]]);
+    b.define(1000.0, 0.3, NonlinearStatic { nonlinear_geometry: finite, initial_increment: 0.25, ..NonlinearStatic::default() });
+    b.face_set("lower_top", &low, |x| near(x[2], 1.0));
+    b.face_set("upper_bottom", &up, |x| near(x[2], 1.0));
+    let mut c = Contact::new(ContactSurfaces::Pair { main: "lower_top".into(), secondary: "upper_bottom".into() });
+    c.friction = friction;
+    b.model.add_contact("interface", c).unwrap();
+    b.bc("base", [Some(0.0), Some(0.0), Some(0.0)], |x| near(x[2], 0.0));
+    b.bc("top", [Some(side), Some(0.0), Some(-down)], |x| near(x[2], 2.0));
+    let r = solve_nonlinear(&b.model, Some("Step"), &Limits::default()).unwrap();
+    report(&r);
+    let sum = |k: usize| -> f64 { b.nodes(|x| near(x[2], 2.0)).iter().map(|l| r.reaction[r.nodes.binary_search(l).unwrap()][k]).sum() };
+    (-sum(2), sum(0), r)
+}
+
+/// Coulomb's law across a frictional interface: a tangential demand below μ N sticks (the blocks
+/// shear as one, nothing slips), above it the interface slips and carries exactly μ N; with a
+/// kinetic coefficient the slipping interface carries μ_k N.
+#[test]
+fn coulomb_friction_sticks_below_the_cone_and_slips_on_it() {
+    for finite in [false, true] {
+        let mu = 0.3;
+        // Stuck as one body, the shear the top displacement asks for: a frictionless trial gives
+        // the normal force, a stuck one with a very large μ the tangential force.
+        let (n, t, _) = sheared(0.01, 0.001, Friction::coulomb(5.0), finite);
+        let ratio = t / n;
+        eprintln!("finite {finite}: stuck N {n:.4} T {t:.4} ratio {ratio:.4}");
+        // Well below the cone (the shear concentrates at the edges of the interface, which slip
+        // first): sticks, the same forces as glued.
+        let below = 0.4 * mu / ratio;
+        let (n1, t1, r1) = sheared(0.01, 0.001 * below, Friction::coulomb(mu), finite);
+        assert!((t1 / n1 - 0.4 * mu).abs() < 1e-3 * mu, "finite {finite}: {} vs {}", t1 / n1, 0.4 * mu);
+        // The middle of the interface sticks (its corners, where the shear concentrates, may slip).
+        // (The upper block's 3 × 3 bottom nodes come first, in x then y order: the fifth.)
+        assert_eq!(r1.contacts[0].status[4], Status::Stick, "finite {finite}: {:?}", r1.contacts[0].status);
+        // Above it: slips, carrying μ N.
+        let (n2, t2, r2) = sheared(0.01, 0.001 * 2.0 * mu / ratio, Friction::coulomb(mu), finite);
+        // With finite sliding the upper block turns a little as it slides, and the contact acts
+        // along its face's normal, a few thousandths of a radian from the vertical.
+        let tol = if finite { 0.03 } else { 1e-3 };
+        assert!((t2 - mu * n2).abs() < tol * mu * n2, "finite {finite}: T {t2} vs μN {}", mu * n2);
+        assert!(r2.contacts[0].status.iter().all(|s| *s == Status::Slip), "finite {finite}: {:?}", r2.contacts[0].status);
+        let shear: f64 = r2.contacts[0].shear.iter().map(|s| s[0]).zip(&r2.contacts[0].pressure).map(|(s, p)| s / p).sum::<f64>()
+            / r2.contacts[0].nodes.len() as f64;
+        // Node by node the nodal forces' ratio scatters a little about μ (the smoothing of the
+        // nodal pressure and shear differs at the interface's edges); the mean is μ.
+        assert!((shear + mu).abs() < 0.05 * mu, "finite {finite}: shear over pressure {shear}");
+        // Kinetic friction once slipping.
+        let decaying = Friction { static_coefficient: mu, kinetic: Some(0.2), decay: 1.0 };
+        let (n3, t3, _) = sheared(0.01, 0.001 * 2.0 * mu / ratio, decaying, finite);
+        assert!((t3 - 0.2 * n3).abs() < tol * 0.2 * n3, "finite {finite}: T {t3} vs μk N {}", 0.2 * n3);
+    }
+}

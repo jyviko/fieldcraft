@@ -13,6 +13,8 @@
 //! **Friction** is Coulomb's law with a coefficient that falls from its static to its kinetic
 //! value with the slip rate γ̇: μ = μ_k + (μ_s − μ_k) e^{−d γ̇} (the exponential decay of
 //! E. Rabinowicz's observations, as LS-DYNA's and Abaqus's exponential decay friction write it).
+//! A static step has no slip rate: its nodes take the static coefficient while they stick and the
+//! kinetic one once they slip.
 //! The same friction applies to the planar rigid walls of an explicit step
 //! ([`crate::RigidWall`]).
 //!

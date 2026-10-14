@@ -401,7 +401,8 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         let truss = t.truss()?;
         let at = |err| Error::element(t.label, err);
         let ue: Vec<[f64; 3]> = t.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
-        let points = truss.stresses(t.young, &ue).map_err(at)?;
+        let thermal = field.as_deref().and_then(|f| t.thermal_strain(f));
+        let points = truss.stresses_with(t.young, &ue, thermal.as_ref()).map_err(at)?;
         let nodal = truss.extrapolate(&points.iter().map(|p| p.stress).collect::<Vec<_>>()).map_err(at)?;
         for (n, s) in t.nodes.iter().zip(&nodal) {
             if let (Some(acc), Some(c)) = (sum.get_mut(*n), count.get_mut(*n)) {

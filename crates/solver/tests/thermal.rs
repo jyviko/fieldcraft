@@ -381,3 +381,60 @@ fn heat_steps_refuse_what_they_cannot_solve() {
     let g = heated_bar(ElementKind::Hex8, full(), Directional::Isotropic(1e-5), 10.0, 0.3);
     assert!(solve_heat(&g.model, None, &Limits::default()).is_err());
 }
+
+/// One rod3 or two rod2 along X over [0, `len`], heated by `dt`, fixed at x = 0, the other
+/// nodes held in Y and Z, and the end held along X too when `held`.
+fn heated_rod(kind: ElementKind, len: f64, alpha: [f64; 3], dt: f64, held: bool) -> modelcraft_solver::StaticResult {
+    let mut m = Model::default();
+    for (label, x) in [(1, 0.0), (2, len), (3, 0.5 * len)] {
+        m.set_node(label, [x, 0.0, 0.0]).unwrap();
+    }
+    // One rod3, or two rod2 in a row.
+    let elements = if kind == ElementKind::Rod3 {
+        m.set_element(1, kind, vec![1, 2, 3]).unwrap();
+        vec![1]
+    } else {
+        m.set_element(1, kind, vec![1, 3]).unwrap();
+        m.set_element(2, kind, vec![3, 2]).unwrap();
+        vec![1, 2]
+    };
+    m.add_set("rod", Set { elements, nodes: vec![1, 2, 3], ..Set::default() }).unwrap();
+    m.add_set("a", Set { nodes: vec![1], ..Set::default() }).unwrap();
+    m.add_set("b", Set { nodes: vec![2], ..Set::default() }).unwrap();
+    m.add_set("c", Set { nodes: vec![3], ..Set::default() }).unwrap();
+    let thermal = Thermal { expansion: Some(Directional::Orthotropic(alpha)), ..Thermal::default() };
+    m.add_material("Mat", Material { elastic: Some(iso(2e5, 0.3)), thermal: Some(thermal), ..Material::default() }).unwrap();
+    m.add_section("rod", Section { set: "rod".into(), material: "Mat".into(), kind: SectionKind::Rod { area: 4.0 }, formulation: full() }).unwrap();
+    let mut step = Step::new("Step", Procedure::Static {});
+    let lateral = [None, Some(0.0), Some(0.0)];
+    for (name, v) in [("a", [Some(0.0); 3]), ("b", if held { [Some(0.0); 3] } else { lateral }), ("c", lateral)] {
+        let values = [v[0], v[1], v[2], None, None, None];
+        m.add_boundary_condition(name, BoundaryCondition::Displacement { target: Target::Set(name.into()), values }).unwrap();
+        step.boundary_conditions.insert(name.into());
+    }
+    m.add_load("warm", Load::Temperature { target: Target::Set("rod".into()), value: dt }).unwrap();
+    step.loads.insert("warm".into());
+    m.add_step(step, None).unwrap();
+    solve_static(&m, None, &Limits::default()).unwrap()
+}
+
+#[test]
+fn trusses_take_thermal_strain_along_their_axis() {
+    // Along X the member's thermal strain is αₓ ΔT (the projection Σ αₖ tₖ² is checked on the
+    // kernel): free it lengthens by αₓ ΔT L stress-free; held at both ends it carries −E αₓ ΔT.
+    let alpha = [1.0e-5, 2.0e-5, 3.0e-5];
+    let (e, area, dt, len) = (2e5, 4.0, 50.0, 3.0);
+    let sigma = -e * alpha[0] * dt;
+    for kind in [ElementKind::Rod2, ElementKind::Rod3] {
+        let r = heated_rod(kind, len, alpha, dt, true);
+        for p in r.elements.iter().flat_map(|el| &el.points) {
+            assert!((p.stress[0] - sigma).abs() < 1e-9 * sigma.abs(), "{kind:?}: {:?}", p.stress);
+        }
+        let reaction = r.reaction[r.nodes.binary_search(&2).unwrap()][0];
+        assert!((reaction - sigma * area).abs() < 1e-9 * (sigma * area).abs(), "{kind:?}: {reaction}");
+        let r = heated_rod(kind, len, alpha, dt, false);
+        let u = r.displacement[r.nodes.binary_search(&2).unwrap()][0];
+        assert!((u - alpha[0] * dt * len).abs() < 1e-12, "{kind:?}: {u}");
+        assert!(r.elements.iter().flat_map(|el| &el.points).all(|p| p.stress[0].abs() < 1e-9));
+    }
+}

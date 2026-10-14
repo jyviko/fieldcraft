@@ -83,6 +83,6 @@ hex8/20/27 with first and second derivatives).
 | Cohesive (2D, 3D) | Adhesive layers, delamination | planned |
 | Gasket | Through-thickness gasket behaviour | planned |
 | Infinite elements | Unbounded domains | planned |
-| Heat transfer (all shapes), coupled temperature–displacement | Thermal and thermal-stress analyses | done for solids (tet4/10, wedge6, hex8/20: steady and transient conduction, flux, convection, sources; coupled temperature–displacement); thermal strain in solids, 2D elements (plane stress, plane strain, axisymmetric) and explicit dynamics (one-point hex8, nodal-pressure tet4, with plasticity); 2D/shell/beam conduction and shell/beam thermal strain planned |
+| Heat transfer (all shapes), coupled temperature–displacement | Thermal and thermal-stress analyses | done for solids (tet4/10, wedge6, hex8/20: steady and transient conduction, flux, convection, sources; coupled temperature–displacement); thermal strain in solids, trusses, 2D elements (plane stress, plane strain, axisymmetric) and explicit dynamics (one-point hex8, nodal-pressure tet4, with plasticity); 2D/shell/beam conduction and shell/beam thermal strain planned |
 | Acoustic | Fluid acoustics, structural–acoustic coupling | planned |
 | Rigid elements | Rigid bodies from meshes | planned (M7) |

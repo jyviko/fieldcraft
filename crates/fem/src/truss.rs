@@ -29,7 +29,7 @@ use modelcraft_model::{Elastic, ElementKind};
 use crate::basis::Basis;
 use crate::dense::Matrix;
 use crate::dof::{DofSet, ElementDofs};
-use crate::element::PointStress;
+use crate::element::{PointStress, ThermalStrain};
 use crate::quadrature::gauss_legendre;
 use crate::{Error, Result};
 
@@ -196,12 +196,51 @@ impl<'a> Truss<'a> {
 
     /// Strain and stress at the integration points as global tensors (see the module docs).
     pub fn stresses(&self, young: f64, u: &[[f64; 3]]) -> Result<Vec<PointStress>> {
-        let strains = self.axial_strains(u)?;
+        self.stresses_with(young, u, None)
+    }
+
+    /// The axial thermal strain at each integration point: the thermal strain tensor
+    /// diag(α) ΔT along the tangent, Σ αₖ tₖ² ΔT, with ΔT interpolated from the nodes.
+    fn thermal_strains(&self, thermal: &ThermalStrain) -> Result<Vec<f64>> {
+        thermal.check(self.nodes())?;
         Ok(self
             .points()?
             .iter()
-            .zip(strains)
-            .map(|(p, e)| PointStress { xyz: p.xyz, strain: uniaxial(e, p.tangent, 2.0), stress: uniaxial(young * e, p.tangent, 1.0) })
+            .map(|p| {
+                let dt: f64 = p.n.iter().zip(&thermal.delta).map(|(a, b)| a * b).sum();
+                (0..3).map(|k| thermal.alpha[k] * p.tangent[k] * p.tangent[k]).sum::<f64>() * dt
+            })
+            .collect())
+    }
+
+    /// The equivalent nodal forces of a thermal strain, ∫ Bᵀ E A ε_th ds.
+    pub fn thermal_load(&self, young: f64, area: f64, thermal: &ThermalStrain) -> Result<Vec<[f64; 3]>> {
+        let strains = self.thermal_strains(thermal)?;
+        let mut f = vec![[0.0; 3]; self.nodes()];
+        for (p, e) in self.points()?.iter().zip(strains) {
+            let force = young * area * e * p.weight * p.jacobian;
+            for (fi, ds) in f.iter_mut().zip(p.ds) {
+                for k in 0..3 {
+                    fi[k] += force * ds * p.tangent[k];
+                }
+            }
+        }
+        Ok(f)
+    }
+
+    /// Strain and stress at the integration points with an optional thermal strain: the
+    /// stress is E (ε − ε_th), the strain reported the total.
+    pub fn stresses_with(&self, young: f64, u: &[[f64; 3]], thermal: Option<&ThermalStrain>) -> Result<Vec<PointStress>> {
+        let strains = self.axial_strains(u)?;
+        let thermal = match thermal {
+            Some(t) => self.thermal_strains(t)?,
+            None => vec![0.0; strains.len()],
+        };
+        Ok(self
+            .points()?
+            .iter()
+            .zip(strains.into_iter().zip(thermal))
+            .map(|(p, (e, th))| PointStress { xyz: p.xyz, strain: uniaxial(e, p.tangent, 2.0), stress: uniaxial(young * (e - th), p.tangent, 1.0) })
             .collect())
     }
 
@@ -400,5 +439,27 @@ mod tests {
             let err = (t.length().unwrap() - radius * span).abs() / (radius * span);
             assert!(err < 0.01 * span.powi(4), "{span}: {err}");
         }
+    }
+
+    #[test]
+    fn thermal_strain_follows_the_axis() {
+        // A skew rod3 with orthotropic α: the free expansion along the member, u = ε_t (x − x₀)
+        // with ε_t = Σ αₖ tₖ² ΔT, is stress-free and balances the thermal load (K u = f_th).
+        let t = [2.0f64, 1.0, 2.0].map(|c| c / 3.0);
+        let xyz = [[0.0; 3], t.map(|c| 3.0 * c), t.map(|c| 1.5 * c)];
+        let truss = Truss::new(ElementKind::Rod3, &xyz).unwrap();
+        let alpha = [1.0e-5, 2.0e-5, 3.0e-5];
+        let th = ThermalStrain { alpha, delta: vec![40.0; 3] };
+        let eps: f64 = (0..3).map(|k| alpha[k] * t[k] * t[k]).sum::<f64>() * 40.0;
+        let u: Vec<[f64; 3]> = xyz.iter().map(|x| x.map(|c| eps * c)).collect();
+        for p in truss.stresses_with(2e5, &u, Some(&th)).unwrap() {
+            assert!(p.stress.iter().all(|s| s.abs() < 1e-9), "{:?}", p.stress);
+        }
+        let f = truss.thermal_load(2e5, 2.0, &th).unwrap();
+        let ku = truss.stiffness(2e5, 2.0).unwrap().mul_vec(&u.iter().flatten().copied().collect::<Vec<_>>());
+        for (a, b) in f.iter().flatten().zip(&ku) {
+            assert!((a - b).abs() < 1e-9 * 2e5 * 2.0 * eps, "{a} vs {b}");
+        }
+        assert!(truss.thermal_load(2e5, 2.0, &ThermalStrain { alpha, delta: vec![1.0] }).is_err());
     }
 }

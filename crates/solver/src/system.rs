@@ -137,9 +137,7 @@ impl Elem {
     /// The element's thermal strain in a temperature field (nodes the field leaves out are at
     /// the reference temperature); `None` when the material does not expand or nothing changes.
     pub fn thermal_strain(&self, field: &[Option<f64>]) -> Option<ThermalStrain> {
-        let (alpha, reference) = self.expansion?;
-        let delta: Vec<f64> = self.nodes.iter().map(|n| field.get(*n).copied().flatten().map_or(0.0, |t| t - reference)).collect();
-        delta.iter().any(|d| *d != 0.0).then_some(ThermalStrain { alpha, delta })
+        thermal_strain(self.expansion, &self.nodes, field)
     }
 }
 
@@ -154,12 +152,29 @@ pub struct Bar {
     pub young: f64,
     pub area: f64,
     pub density: Option<f64>,
+    /// The expansion coefficients along X, Y, Z and the reference temperature, when the
+    /// material expands.
+    pub expansion: Option<([f64; 3], f64)>,
 }
 
 impl Bar {
     pub fn truss(&self) -> Result<Truss<'_>> {
         Truss::new(self.kind, &self.xyz).map_err(|e| Error::element(self.label, e))
     }
+
+    /// The member's thermal strain in a temperature field, as for [`Elem::thermal_strain`].
+    pub fn thermal_strain(&self, field: &[Option<f64>]) -> Option<ThermalStrain> {
+        thermal_strain(self.expansion, &self.nodes, field)
+    }
+}
+
+/// The thermal strain of an element of nodes `nodes` in a temperature field (nodes the field
+/// leaves out are at the reference temperature); `None` when the material does not expand or
+/// nothing changes.
+fn thermal_strain(expansion: Option<([f64; 3], f64)>, nodes: &[usize], field: &[Option<f64>]) -> Option<ThermalStrain> {
+    let (alpha, reference) = expansion?;
+    let delta: Vec<f64> = nodes.iter().map(|n| field.get(*n).copied().flatten().map_or(0.0, |t| t - reference)).collect();
+    delta.iter().any(|d| *d != 0.0).then_some(ThermalStrain { alpha, delta })
 }
 
 /// What a shell or beam element is made of.
@@ -414,7 +429,8 @@ impl Mesh {
                     young_modulus(elastic).map_err(|e| Error::Invalid(format!("material `{}` of section `{name}`: {e}", section.material)))?;
                 for &label in &set.elements {
                     let el = model.element(label).ok_or_else(|| Error::Invalid(format!("element {label} is missing")))?;
-                    trusses.push((label, el.kind, el.nodes.clone(), young, area, material.density));
+                    let expansion = material.thermal.and_then(|t| t.expansion.map(|a| (a.axes(), t.reference_temperature)));
+                    trusses.push((label, el.kind, el.nodes.clone(), young, area, material.density, expansion));
                 }
                 continue;
             }
@@ -498,10 +514,10 @@ impl Mesh {
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
             mesh.elements.push(Elem { label, kind, nodes: idx, xyz: exyz, formulation, d, density, theory, expansion });
         }
-        for (label, kind, nodes, young, area, density) in trusses {
+        for (label, kind, nodes, young, area, density, expansion) in trusses {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
-            mesh.trusses.push(Bar { label, kind, nodes: idx, xyz: exyz, young, area, density });
+            mesh.trusses.push(Bar { label, kind, nodes: idx, xyz: exyz, young, area, density, expansion });
         }
         for (label, kind, nodes, density, section) in structural {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
@@ -836,6 +852,13 @@ pub fn add_thermal_loads(f: &mut [f64], mesh: &Mesh, field: &[Option<f64>]) -> R
         let Some(th) = e.thermal_strain(field) else { continue };
         let forces = e.kernel()?.thermal_load(&e.d, &th).map_err(|err| Error::element(e.label, err))?;
         for (node, v) in e.nodes.iter().zip(forces) {
+            add(f, &translations(mesh, *node)?, v);
+        }
+    }
+    for t in &mesh.trusses {
+        let Some(th) = t.thermal_strain(field) else { continue };
+        let forces = t.truss()?.thermal_load(t.young, t.area, &th).map_err(|err| Error::element(t.label, err))?;
+        for (node, v) in t.nodes.iter().zip(forces) {
             add(f, &translations(mesh, *node)?, v);
         }
     }

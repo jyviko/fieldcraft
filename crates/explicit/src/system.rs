@@ -430,6 +430,10 @@ impl System {
         if !any {
             return Ok(());
         }
+        if !self.rods.is_empty() {
+            self.warnings
+                .push("trusses take no thermal strain in explicit dynamics yet; the temperature loads strain the solid elements only".into());
+        }
         let materials = &self.materials;
         let rate = |nodes: &[usize], material: usize| -> f64 {
             let Some((alpha, reference)) = materials.get(material).and_then(|m| m.expansion) else { return 0.0 };

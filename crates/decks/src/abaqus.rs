@@ -37,7 +37,10 @@
 //!   and tolerances are left to Abaqus's controls, whose residual norms are defined differently.
 //!   Abaqus starts each general step from the end of the previous one, while every model step
 //!   starts from the undeformed state; for elastic materials the end state depends on the final
-//!   loads alone, so the two agree.
+//!   loads alone, so the two agree. A plastic material's state depends on the path, so a deck
+//!   with nonlinear steps, a plastic material and more than one general step is refused, as is
+//!   a nonlinear step's load path (an amplitude on every load and boundary condition, not
+//!   written yet).
 //!
 //! # Loads
 //!
@@ -312,6 +315,27 @@ fn check_expressible(model: &Model) -> Result<()> {
                 step.name
             ));
         }
+    }
+    for step in model.steps() {
+        if let Procedure::NonlinearStatic(n) = &step.procedure
+            && n.load_path.is_some()
+        {
+            bad.insert(format!(
+                "step `{}`: a load path (it would be an amplitude on every load and boundary condition of the step; not written yet)",
+                step.name
+            ));
+        }
+    }
+    let general = model.steps().iter().filter(|s| matches!(s.procedure, Procedure::Static {} | Procedure::NonlinearStatic(_))).count();
+    let plastic_in_use = model.sections().values().find(|s| model.material(&s.material).is_some_and(|m| m.plastic.is_some()));
+    if has_nonlinear_step(model)
+        && general > 1
+        && let Some(section) = plastic_in_use
+    {
+        bad.insert(format!(
+            "plastic material `{}` in a deck of {general} general steps (Abaqus carries the plastic state from one general step to the next, while every model step starts from the undeformed state; write each step to its own deck)",
+            section.material
+        ));
     }
     for (name, m) in model.materials() {
         if m.damage.is_some() || m.erosion.is_some() {

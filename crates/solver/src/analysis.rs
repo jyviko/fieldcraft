@@ -61,6 +61,9 @@ pub struct ElementStress {
     pub points: Vec<PointStress>,
     /// Extrapolated to the element's nodes, in its node order.
     pub nodal: Vec<[f64; 6]>,
+    /// The equivalent plastic strain at the integration points (nonlinear steps with a plastic
+    /// material; empty otherwise).
+    pub plastic_strain: Vec<f64>,
 }
 
 /// The motion and reaction of a coupled reference point: translations along X, Y, Z, then
@@ -431,7 +434,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
                 *c += 1;
             }
         }
-        elements.push(ElementStress { label: e.label, kind: e.kind, points, nodal });
+        elements.push(ElementStress { label: e.label, kind: e.kind, points, nodal, plastic_strain: Vec::new() });
     }
     for t in &mesh.trusses {
         let truss = t.truss()?;
@@ -448,7 +451,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
                 *c += 1;
             }
         }
-        elements.push(ElementStress { label: t.label, kind: t.kind, points, nodal });
+        elements.push(ElementStress { label: t.label, kind: t.kind, points, nodal, plastic_strain: Vec::new() });
     }
     elements.sort_by_key(|e| e.label);
     let (mut shells, mut beams) = (Vec::new(), Vec::new());

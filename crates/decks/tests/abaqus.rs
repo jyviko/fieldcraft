@@ -795,3 +795,23 @@ fn nonlinear_steps_and_hyperelastic_materials_are_written() {
     m.remove_step("Bend").unwrap();
     assert!(abaqus::write(&m).unwrap().contains("*ELASTIC, TYPE=ISOTROPIC\n"), "with linear steps only, the elastic constants are the whole of it");
 }
+
+/// A plastic material in nonlinear steps is `*PLASTIC` in a general step; what Abaqus would
+/// read differently is refused: a load path, and several general steps (Abaqus carries the
+/// plastic state between them).
+#[test]
+fn nonlinear_plastic_steps_and_what_is_refused() {
+    use fieldcraft_model::{Hardening, NonlinearStatic, Plastic};
+    let mut m = cantilever();
+    let plastic = Plastic::Bilinear { yield_stress: 250.0, hardening_modulus: 2000.0, hardening: Hardening::Isotropic };
+    m.replace_material("Steel", Material { plastic: Some(plastic), ..steel() }).unwrap();
+    m.replace_step(step("Bend", Procedure::NonlinearStatic(NonlinearStatic::default()), &["clamp"], &["end"])).unwrap();
+    let deck = abaqus::write(&m).unwrap();
+    assert!(deck.contains("*PLASTIC\n250.0, 0.0\n") && deck.contains("NLGEOM=YES"), "{deck}");
+    let path = NonlinearStatic { load_path: Some(vec![[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]), ..NonlinearStatic::default() };
+    m.replace_step(step("Bend", Procedure::NonlinearStatic(path), &["clamp"], &["end"])).unwrap();
+    assert!(unsupported(&m).contains("step `Bend`: a load path"));
+    m.replace_step(step("Bend", Procedure::NonlinearStatic(NonlinearStatic::default()), &["clamp"], &["end"])).unwrap();
+    m.add_step(step("Again", Procedure::NonlinearStatic(NonlinearStatic::default()), &["clamp"], &["end"]), None).unwrap();
+    assert!(unsupported(&m).contains("plastic material `Steel` in a deck of 2 general steps"));
+}

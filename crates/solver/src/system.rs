@@ -13,11 +13,13 @@ use fieldcraft_fem::dense::Matrix;
 use fieldcraft_fem::element::{Formulation, Solid, ThermalStrain};
 use fieldcraft_fem::finite::Kinematics;
 use fieldcraft_fem::plane::{Plane, Theory};
+use fieldcraft_fem::plasticity::J2;
 use fieldcraft_fem::shell::{Shell, ShellSection};
 use fieldcraft_fem::truss::{Truss, young_modulus};
 use fieldcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, ElementDofs, PointStress, elasticity, face, plane};
 use fieldcraft_model::nodal::edge_pressure;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use fieldcraft_model::{Elastic, ElementKind, Hyperelastic, Integration, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
 
@@ -42,6 +44,9 @@ pub struct Elem {
     pub expansion: Option<([f64; 3], f64)>,
     /// The large-strain option of the element's material (nonlinear steps).
     pub hyperelastic: Option<Hyperelastic>,
+    /// The element's material's plasticity (nonlinear steps), shared by the elements of a
+    /// section.
+    pub plastic: Option<Arc<J2>>,
 }
 
 /// An element's kernel: a solid or a 2D element.
@@ -206,6 +211,21 @@ fn thermal_strain(expansion: Option<([f64; 3], f64)>, nodes: &[usize], field: &[
     let (alpha, reference) = expansion?;
     let delta: Vec<f64> = nodes.iter().map(|n| field.get(*n).copied().flatten().map_or(0.0, |t| t - reference)).collect();
     delta.iter().any(|d| *d != 0.0).then_some(ThermalStrain { alpha, delta })
+}
+
+/// A solid or 2D element of a section, by model labels, before the mesh numbers its nodes.
+struct SolidEntry {
+    label: u32,
+    kind: ElementKind,
+    nodes: Vec<u32>,
+    formulation: Formulation,
+    d: Elasticity,
+    density: Option<f64>,
+    theory: Option<Theory>,
+    dofs: ElementDofs,
+    expansion: Option<([f64; 3], f64)>,
+    hyperelastic: Option<Hyperelastic>,
+    plastic: Option<Arc<J2>>,
 }
 
 /// What a shell or beam element is made of.
@@ -472,6 +492,13 @@ impl Mesh {
                 continue;
             }
             let d = elasticity(elastic).map_err(|e| Error::Invalid(format!("material `{}`: {e}", section.material)))?;
+            let plastic = match &material.plastic {
+                Some(p) => Some(Arc::new(
+                    J2::from_model(elastic, Some(p), material.damage.as_ref())
+                        .map_err(|e| Error::Invalid(format!("material `{}`: {e}", section.material)))?,
+                )),
+                None => None,
+            };
             for &label in &set.elements {
                 let el = model.element(label).ok_or_else(|| Error::Invalid(format!("element {label} is missing")))?;
                 let (formulation, dofs) = match theory {
@@ -480,20 +507,32 @@ impl Mesh {
                 }
                 .map_err(|e| Error::element(label, e))?;
                 let expansion = material.thermal.and_then(|t| t.expansion.map(|a| (a.axes(), t.reference_temperature)));
-                elements.push((label, el.kind, el.nodes.clone(), formulation, d, material.density, theory, dofs, expansion, material.hyperelastic));
+                elements.push(SolidEntry {
+                    label,
+                    kind: el.kind,
+                    nodes: el.nodes.clone(),
+                    formulation,
+                    d,
+                    density: material.density,
+                    theory,
+                    dofs,
+                    expansion,
+                    hyperelastic: material.hyperelastic,
+                    plastic: plastic.clone(),
+                });
             }
         }
         if let (Some(_), Some(name)) = (planar, model.couplings().keys().next()) {
             return Err(Error::NotSupported(format!("couplings in 2D models (coupling `{name}`)")));
         }
-        elements.sort_by_key(|e| e.0);
+        elements.sort_by_key(|e| e.label);
         trusses.sort_by_key(|e| e.0);
         structural.sort_by_key(|e| e.0);
         let translations = translation_kinds(planar.is_some());
         // What discrete elements need: at mesh nodes (some only they use), and at reference
         // points, which then get their six degrees of freedom like coupled ones.
         let needs: Vec<(u32, DofSet)> = crate::discrete::needs(resolved, translations).collect();
-        let mut labels: Vec<u32> = elements.iter().flat_map(|e| e.2.iter().copied()).collect();
+        let mut labels: Vec<u32> = elements.iter().flat_map(|e| e.nodes.iter().copied()).collect();
         labels.extend(trusses.iter().flat_map(|e| e.2.iter().copied()));
         labels.extend(structural.iter().flat_map(|e| e.2.iter().copied()));
         labels.extend(needs.iter().map(|n| n.0).filter(|l| model.node(*l).is_some()));
@@ -511,7 +550,7 @@ impl Mesh {
             .collect::<Result<_>>()?;
         let mut layout = DofLayout::builder();
         for e in &elements {
-            layout.element(&e.2, e.7);
+            layout.element(&e.nodes, e.dofs);
         }
         for e in &trusses {
             layout.element(&e.2, fieldcraft_fem::ElementDofs::new(translations));
@@ -546,10 +585,22 @@ impl Mesh {
             warnings,
             discrete: crate::discrete::Discrete::default(),
         };
-        for (label, kind, nodes, formulation, d, density, theory, _, expansion, hyperelastic) in elements {
-            let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
+        for e in elements {
+            let idx: Vec<usize> = e.nodes.iter().filter_map(|n| mesh.node(*n)).collect();
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
-            mesh.elements.push(Elem { label, kind, nodes: idx, xyz: exyz, formulation, d, density, theory, expansion, hyperelastic });
+            mesh.elements.push(Elem {
+                label: e.label,
+                kind: e.kind,
+                nodes: idx,
+                xyz: exyz,
+                formulation: e.formulation,
+                d: e.d,
+                density: e.density,
+                theory: e.theory,
+                expansion: e.expansion,
+                hyperelastic: e.hyperelastic,
+                plastic: e.plastic,
+            });
         }
         for (label, kind, nodes, young, area, density, expansion) in trusses {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
@@ -940,15 +991,15 @@ fn body(f: &mut [f64], mesh: &Mesh, e: &Elem, b: [f64; 3]) -> Result<()> {
     Ok(())
 }
 
-/// The linear solver uses the elastic constants alone: a warning for each material in use whose
-/// plasticity, damage or erosion it leaves out.
+/// The linear solvers use the elastic constants alone: a warning for each material in use whose
+/// plasticity, damage or erosion they leave out.
 pub fn inelastic_warnings(model: &Model) -> Vec<String> {
     let used: BTreeSet<&str> = model.sections().values().map(|s| s.material.as_str()).collect();
     used.into_iter()
         .filter(|name| model.material(name).is_some_and(|m| m.plastic.is_some() || m.damage.is_some() || m.erosion.is_some()))
         .map(|name| {
             format!(
-                "material `{name}`: the linear solver uses its elastic constants only (its plasticity, damage and erosion act in explicit dynamics)"
+                "material `{name}`: the linear solver uses its elastic constants only (its plasticity acts in nonlinear static steps and explicit dynamics, its damage and erosion in explicit dynamics)"
             )
         })
         .collect()

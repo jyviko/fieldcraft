@@ -25,7 +25,8 @@
 //! - per step: `*CONTROL_IMPLICIT_GENERAL`, `*CONTROL_IMPLICIT_SOLUTION` (linear) or
 //!   `*CONTROL_IMPLICIT_EIGENVALUE`, `*CONTROL_TERMINATION` (a static step is one implicit step
 //!   from time 0 to 1 with every load ramped by one curve, `*DEFINE_CURVE`); a nonlinear static
-//!   step runs over the same time with the same ramp, its first increment as `dt0`, the nonlinear
+//!   step runs over the same time with the same ramp (or its load path as the curve), its first
+//!   increment as `dt0`, the nonlinear
 //!   solver with a stiffness reformation every iteration (`ilimit` 1, full Newton) and its
 //!   iteration cap as `maxref`, and `*CONTROL_IMPLICIT_AUTO` with its minimum and maximum
 //!   increments (its increment cap and tolerances have no LS-DYNA counterpart and are left to
@@ -872,8 +873,13 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
         d.header(&["lcid"]);
         d.card([Field::from(n)]);
         d.header(&["a1", "o1"]);
-        d.card([Field::from(0.0), Field::from(0.0)]);
-        d.card([Field::from(1.0), Field::from(1.0)]);
+        let path = match &step.procedure {
+            Procedure::NonlinearStatic(s) => s.load_path.clone(),
+            _ => None,
+        };
+        for [t, f] in path.unwrap_or_else(|| vec![[0.0, 0.0], [1.0, 1.0]]) {
+            d.card([Field::from(t), Field::from(f)]);
+        }
     }
 
     for b in &step.boundary_conditions {

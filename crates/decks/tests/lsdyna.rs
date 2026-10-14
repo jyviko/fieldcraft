@@ -760,6 +760,19 @@ fn nonlinear_static_steps() {
     assert_eq!(auto.iter().map(num).collect::<Vec<_>>(), [1.0, 1e-4, 0.5], "blank fields are skipped: {auto:?}");
     assert!(deck.contains("*DEFINE_CURVE_TITLE\nBend ramp\n"), "the loads follow the ramp");
     assert!(deck.contains("*LOAD_NODE"), "{deck}");
+    // A load path is the curve.
+    let path = NonlinearStatic { load_path: Some(vec![[0.0, 0.0], [0.5, 1.0], [1.0, -1.0]]), ..controls.clone() };
+    m.replace_step(step("Bend", Procedure::NonlinearStatic(path), &["clamp"], &["tip_load"])).unwrap();
+    let deck = lsdyna::write(&m).unwrap().text;
+    let curve: Vec<Vec<f64>> = deck
+        .lines()
+        .skip_while(|l| *l != "Bend ramp")
+        .filter(|l| !l.starts_with('$'))
+        .skip(2)
+        .take(3)
+        .map(|l| l.split_whitespace().map(|v| v.parse().unwrap()).collect())
+        .collect();
+    assert_eq!(curve, [vec![0.0, 0.0], vec![0.5, 1.0], vec![1.0, -1.0]], "{deck}");
 
     m.replace_step(step("Bend", Procedure::NonlinearStatic(NonlinearStatic { nonlinear_geometry: false, ..controls }), &["clamp"], &["tip_load"]))
         .unwrap();

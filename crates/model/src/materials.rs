@@ -1,7 +1,7 @@
 //! Materials: linear elasticity, mass density, fluid behaviour, thermal properties (conductivity,
-//! specific heat, expansion), and the inelastic behaviours of
-//! explicit dynamics: von Mises (J2) plasticity with a bilinear, tabulated or Johnson–Cook flow stress,
-//! Johnson–Cook damage, and element erosion criteria.
+//! specific heat, expansion), and the inelastic behaviours: von Mises (J2) plasticity with a
+//! bilinear, tabulated or Johnson–Cook flow stress (explicit dynamics and nonlinear static
+//! steps), Johnson–Cook damage and element erosion criteria (explicit dynamics).
 //!
 //! The records are solver-neutral and named for what they describe, never after a product's
 //! keyword or material number; the deck writers map them to each format.
@@ -372,8 +372,8 @@ pub struct Material {
     /// How it flows, for fluid domains (needs a density).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fluid: Option<Fluid>,
-    /// Von Mises plasticity (explicit dynamics; the linear implicit solver uses the elastic
-    /// constants alone).
+    /// Von Mises plasticity (explicit dynamics and nonlinear static steps; the linear solvers use
+    /// the elastic constants alone).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plastic: Option<Plastic>,
     /// Damage to failure (explicit dynamics: a failed element erodes).

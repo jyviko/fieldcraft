@@ -34,7 +34,7 @@ pub const STATIC: CommandSpec = CommandSpec {
 pub const NONLINEAR: CommandSpec = CommandSpec {
     id: "solve.nonlinear",
     label: "Solve Nonlinear Static Step",
-    params: r#"{"step": "Inflate", "max_dofs": 6000000, "max_factor_entries": 400000000, "max_newton_iterations": 100000, "threads": 8} — solves a nonlinear static step (the only one when `step` is left out) in load increments with Newton–Raphson iterations and keeps the result in the session: the final displacements, reactions, Cauchy stresses and logarithmic strains, every increment's load factor, iterations and residuals (force, displacement and energy, relative to their tolerances' scales), and a displacement frame per converged increment; the caps may only be lowered (`max_newton_iterations` over the whole step); `threads` as for solve.static"#,
+    params: r#"{"step": "Inflate", "max_dofs": 6000000, "max_factor_entries": 400000000, "max_newton_iterations": 100000, "threads": 8} — solves a nonlinear static step (the only one when `step` is left out) in load increments with Newton–Raphson iterations and keeps the result in the session: the final displacements, reactions, Cauchy stresses and logarithmic strains (small strains without nonlinear geometry), the equivalent plastic strain of plastic materials (the largest in the summary), every increment's load factor, iterations and residuals (force, displacement and energy, relative to their tolerances' scales), and a displacement frame per converged increment; the caps may only be lowered (`max_newton_iterations` over the whole step); `threads` as for solve.static"#,
     kind: CommandKind::Model,
     run: run_nonlinear,
 };
@@ -82,7 +82,7 @@ pub const FLUID: CommandSpec = CommandSpec {
 pub const PROBE: CommandSpec = CommandSpec {
     id: "solve.probe",
     label: "Probe Results",
-    params: r#"{"step": "Load", "nodes": [1, 2], "mode": 1, "frame": 0} — the stored result at nodes: displacement, rotation, reaction, reaction moment, stress and von Mises (static, with `elements` each element's results: solid, 2D and truss nodal stresses, shell section forces (N, M, Q per length in the element's axes) and bottom, middle and top stresses, beam end forces (N, V_y, V_z, T, M_y, M_z in its axes)), the shape of mode `mode` with its rotations (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` (or at the nodes nearest to points: "at": [[x, y, z], ...], lowest label on a tie, each entry then giving its `xyz` and `distance`) and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
+    params: r#"{"step": "Load", "nodes": [1, 2], "mode": 1, "frame": 0} — the stored result at nodes: displacement, rotation, reaction, reaction moment, stress and von Mises (static, with `elements` each element's results: solid, 2D and truss nodal stresses (and, in a nonlinear step, the equivalent plastic strain at the integration points of a plastic element), shell section forces (N, M, Q per length in the element's axes) and bottom, middle and top stresses, beam end forces (N, V_y, V_z, T, M_y, M_z in its axes)), the shape of mode `mode` with its rotations (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` (or at the nodes nearest to points: "at": [[x, y, z], ...], lowest label on a tie, each entry then giving its `xyz` and `distance`) and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
     kind: CommandKind::Model,
     run: probe,
 };
@@ -220,6 +220,7 @@ fn run_nonlinear(s: &mut Session, p: &Value) -> Result<Value> {
         "frames": history.map(|h| h.load_factors()),
         "max_displacement": largest(r.nodes.iter().zip(&r.displacement).map(|(l, u)| (*l, crate::results::magnitude(*u)))),
         "max_von_mises": largest(r.nodes.iter().zip(&r.von_mises).map(|(l, v)| (*l, *v))),
+        "max_plastic_strain": largest(r.elements.iter().flat_map(|e| e.plastic_strain.iter().map(|v| (e.label, *v)))),
         "applied_total": r.applied_total,
         "reaction_total": r.reaction_total,
         "reference_points": r.reference_points.iter().map(|p| json!({
@@ -613,7 +614,11 @@ fn by_label<T>(list: &[T], label: u32, key: impl Fn(&T) -> u32) -> Option<&T> {
 /// The stored results of one element of a static step.
 fn element_result(r: &StaticResult, label: u32) -> Option<Value> {
     if let Some(e) = by_label(&r.elements, label, |e| e.label) {
-        return Some(json!({"element": label, "kind": e.kind.name(), "stress": e.nodal}));
+        let mut v = json!({"element": label, "kind": e.kind.name(), "stress": e.nodal});
+        if !e.plastic_strain.is_empty() {
+            v["plastic_strain"] = json!(e.plastic_strain);
+        }
+        return Some(v);
     }
     if let Some(e) = by_label(&r.shells, label, |e| e.label) {
         let s = &e.stress;

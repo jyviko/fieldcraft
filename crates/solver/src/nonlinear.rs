@@ -25,7 +25,9 @@
 //!   for the solution of nonlinear finite element equations*, CMAME 22:59–85, 1980);
 //!
 //! or when the force residual is a thousandth of its tolerance (round-off: no correction can
-//! improve it).
+//! improve it). With path-dependent materials, an increment that starts within the force
+//! tolerance (a predictor that already solved it) waives the energy criterion, whose reference
+//! would be round-off.
 //!
 //! **Automatic incrementation.** Each increment starts from the linear extrapolation of the
 //! last converged one (the free motion scaled by the ratio of their sizes), which keeps the
@@ -50,10 +52,21 @@
 //!
 //! **Elements.** Solids (tet4, tet10, wedge6, hex8, hex20 full and reduced, hybrid hex8, hex20
 //! and tet10) and 2D plane strain and axisymmetric elements, total Lagrangian
-//! ([`fieldcraft_fem::finite`]); without nonlinear geometry the elements are the linear ones
-//! (every material is elastic today, so such a step is the linear solution reached by Newton).
+//! ([`fieldcraft_fem::finite`]); without nonlinear geometry an element of a plastic material
+//! takes the same loops with small strain, and an elastic one its linear stiffness (K u).
 //! Springs act along their fixed directions. Trusses, shells and beams (large rotations), plane
-//! stress, incompatible modes, temperature and centrifugal loads are refused by name.
+//! stress, incompatible modes (with nonlinear geometry, or with an inelastic material),
+//! temperature and centrifugal loads are refused by name.
+//!
+//! **Plasticity** (`Material::plastic`, J2 with the radial return explicit dynamics uses,
+//! [`fieldcraft_fem::elastoplastic`]): Simo's exponential return map at finite strain, the
+//! additive radial return at small strain, both with their consistent tangents, so Newton keeps
+//! its quadratic rate. The plastic history is committed when an increment converges and
+//! discarded when it is cut back. A static step has no time, so the Johnson–Cook strain-rate term
+//! is refused (C = 0 is the rate-independent law), and kinematic hardening at finite strain is
+//! refused (its back stress breaks the principal-frame return); damage, erosion and adiabatic
+//! heating act in explicit dynamics only, with a warning. Results add the equivalent plastic
+//! strain at the integration points.
 //! Couplings stay the linear (small-rotation) constraints of the linear solver, with a warning.
 //!
 //! Element forces and tangents are computed in parallel and added in label order, so results are
@@ -63,9 +76,10 @@ use fieldcraft_fem::constitutive::MaterialModel;
 use fieldcraft_fem::dense::Matrix;
 use fieldcraft_fem::element::{Extrapolation, extrapolation};
 use fieldcraft_fem::finite::Kinematics;
+use fieldcraft_fem::plane::Theory;
 use fieldcraft_fem::quadrature::Rule;
 use fieldcraft_fem::{DofKind, DofSet, ElementType, PointStress, face, von_mises};
-use fieldcraft_model::{Extent, Load, Model, NonlinearStatic, Procedure, Step};
+use fieldcraft_model::{Extent, Hardening, Load, Model, NonlinearStatic, Plastic, Procedure, SectionKind, Step};
 use fieldcraft_parallel as parallel;
 use serde::Serialize;
 
@@ -76,7 +90,7 @@ use crate::analysis::{
 use crate::cholesky::FactorError;
 use crate::constraints::Reduction;
 use crate::sparse::{Csr, add_block};
-use crate::system::{Mesh, inelastic_warnings, loads, translations};
+use crate::system::{Mesh, loads, translations};
 use crate::{Error, Limits, Result};
 
 /// One Newton iteration of an increment.
@@ -237,6 +251,12 @@ impl Problem<'_> {
         self.element_dofs.get(e).map(|dofs| dofs.iter().map(|d| u.get(*d).copied().unwrap_or(0.0)).collect()).unwrap_or_default()
     }
 
+    /// How element `e` is evaluated: total Lagrangian with nonlinear geometry, with small
+    /// strain when its material is inelastic, and by its linear stiffness otherwise (`None`).
+    fn kinematics(&self, e: usize) -> Option<Kinematics> {
+        if self.finite { Some(Kinematics::Finite) } else { self.materials.get(e).filter(|m| m.is_path_dependent()).map(|_| Kinematics::Small) }
+    }
+
     /// Internal forces and the tangent of element `e` at displacements `u` (all degrees of
     /// freedom).
     fn element(&self, e: usize, u: &[f64], tangent: bool, committed: &[f64]) -> Result<(Vec<f64>, Option<Matrix>, Vec<f64>)> {
@@ -244,14 +264,14 @@ impl Problem<'_> {
         let at = |err| Error::element(el.label, err);
         let ue = self.element_vector(e, u);
         let kernel = el.kernel()?;
-        if !self.finite {
+        let Some(kin) = self.kinematics(e) else {
             let k = kernel.stiffness(&el.d).map_err(at)?;
             let f = k.mul_vec(&ue);
             return Ok((f, tangent.then_some(k), committed.to_vec()));
-        }
+        };
         let material = self.materials.get(e).ok_or_else(|| Error::Internal("element material".into()))?;
         let mut updated = committed.to_vec();
-        let r = kernel.nonlinear(material, &ue, Kinematics::Finite, committed, &mut updated, tangent).map_err(at)?;
+        let r = kernel.nonlinear(material, &ue, kin, committed, &mut updated, tangent).map_err(at)?;
         Ok((r.force, r.tangent, updated))
     }
 
@@ -382,6 +402,10 @@ struct Run<'a> {
     /// Every element's material history at the end of the last converged increment
     /// (integration points × the material's history length).
     committed: Vec<Vec<f64>>,
+    /// Whether a material keeps history (the tangent predictor and its convergence rules).
+    path_dependent: bool,
+    /// Whether the undeformed model's tangent factors, once asked.
+    undeformed_stable: Option<bool>,
 }
 
 /// The outcome of a converged increment.
@@ -405,12 +429,53 @@ impl Run<'_> {
         Ok(self.problem.evaluate(&self.problem.red.expand_scaled(q, lambda), lambda, tangent, &self.committed)?)
     }
 
+    /// Whether the tangent of the undeformed, unloaded model is positive definite: a first
+    /// tangent that is not, at a state the first increment has already strained, is then the
+    /// material or the geometry (a cutback), not a model that can move freely (an error).
+    fn undeformed_is_stable(&mut self) -> std::result::Result<bool, Failure> {
+        if let Some(stable) = self.undeformed_stable {
+            return Ok(stable);
+        }
+        let mut e = self.problem.evaluate(&vec![0.0; self.problem.mesh.dofs()], 0.0, true, &self.committed)?;
+        let k = e.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
+        let [kff] = self.problem.red.reduce([&k])?;
+        let stable = factor_raw(&kff, self.limits).is_ok();
+        self.undeformed_stable = Some(stable);
+        Ok(stable)
+    }
+
+    /// The tangent predictor of an increment from the converged `q0` at load factor `from` to
+    /// `to`, and its work δq · r (the increment's reference for the energy criterion, since the
+    /// Newton iterations after it only correct it): one linear solve with the tangent of the converged state for the change of the
+    /// loads and of the prescribed displacements, K δq = T_fᵀ (f_ext(to) − f_int(u₀) − K T_p Δλ u_p).
+    /// It spreads a prescribed motion into the interior before the material sees it, which a
+    /// path-dependent material needs: started from the boundary's jump alone, the elements next
+    /// to it would flow plastically far beyond the solution. `None` when the tangent cannot be
+    /// factored (the increment then starts from `q0`).
+    fn tangent_predictor(&mut self, q0: &[f64], from: f64, to: f64) -> std::result::Result<Option<(Vec<f64>, f64)>, Failure> {
+        let red = self.problem.red;
+        let mut e = self.problem.evaluate(&red.expand_scaled(q0, from), to, true, &self.committed)?;
+        let k = e.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
+        let jump = red.expand_scaled(&vec![0.0; red.neq()], to - from);
+        let mut kj = vec![0.0; jump.len()];
+        k.mul(&jump, &mut kj);
+        let rf: Vec<f64> = free_residual(red, &e).iter().zip(red.restrict(&kj)).map(|(a, b)| a - b).collect();
+        let mut dq = rf.clone();
+        let [kff] = red.reduce([&k])?;
+        drop(k);
+        let Ok(chol) = factor_raw(&kff, self.limits) else { return Ok(None) };
+        chol.solve(&mut dq)?;
+        let energy = dot(&dq, &rf).abs();
+        Ok(dq.iter().all(|v| v.is_finite()).then(|| (q0.iter().zip(&dq).map(|(a, d)| a + d).collect(), energy)))
+    }
+
     /// Newton iterations from the converged `q0` (at the previous load factor) to load factor
     /// `lambda`.
     fn increment(
         &mut self,
         q0: &[f64],
         predictor: Option<&[f64]>,
+        predicted_energy: Option<f64>,
         lambda: f64,
         size: f64,
         iterations: &mut Vec<Iteration>,
@@ -425,8 +490,14 @@ impl Run<'_> {
             Some(Err(Failure::Cutback(_))) | None => (q0.to_vec(), self.state(q0, lambda, true)?),
         };
         let mut r = self.residual(&eval);
+        // With path-dependent materials, an increment that starts within the force tolerance (a
+        // predictor that already solved it) has only round-off left for the energy criterion to
+        // measure against: it is waived.
+        let started_converged = self.path_dependent && self.force_floor.is_some() && norm_inf(&r) <= tol.force * self.scale();
         let prescribed = size * red.largest_prescribed();
-        let mut first_energy: Option<f64> = None;
+        // The energy criterion's reference: the first correction's work, or the tangent
+        // predictor's when the increment started from one that is still in use.
+        let mut first_energy: Option<f64> = predicted_energy.filter(|_| q.as_slice() != q0);
         let mut history: Vec<f64> = Vec::new();
         let max_iterations = usize::try_from(self.settings.max_iterations).unwrap_or(usize::MAX);
         for _ in 0..max_iterations {
@@ -453,7 +524,7 @@ impl Run<'_> {
             drop(k);
             let chol = match factor_raw(&kff, self.limits) {
                 Ok(c) => c,
-                Err(FactorError::NotPositiveDefinite { .. }) if !first => {
+                Err(FactorError::NotPositiveDefinite { .. }) if !first || self.undeformed_is_stable()? => {
                     return Err(Failure::Cutback(
                         "the tangent stiffness is not positive definite (a limit point, a bifurcation or an unstable material)".into(),
                     ));
@@ -488,7 +559,8 @@ impl Run<'_> {
             if !it.force.is_finite() {
                 return Err(Failure::Cutback("the residual is not finite".into()));
             }
-            if (it.force <= tol.force && it.displacement <= tol.displacement && it.energy <= tol.energy) || it.force <= ROUND_OFF * tol.force {
+            let energy_met = it.energy <= tol.energy || started_converged;
+            if (it.force <= tol.force && it.displacement <= tol.displacement && energy_met) || it.force <= ROUND_OFF * tol.force {
                 return Ok(Converged { q, evaluation: eval });
             }
             history.push(it.force);
@@ -582,12 +654,52 @@ fn check_supported(model: &Model, mesh: &Mesh, step: &Step, settings: &Nonlinear
             _ => {}
         }
     }
+    plasticity(model, step, settings, warnings)?;
     if settings.nonlinear_geometry
         && let Some(name) = model.couplings().keys().next()
     {
         warnings.push(format!(
             "coupling `{name}` and the others are linear constraints (small rotations of their reference points) in this nonlinear step"
         ));
+    }
+    Ok(())
+}
+
+/// Refuse the plasticity a static step cannot take, and warn about what it leaves out, for the
+/// materials of the solid and 2D sections.
+fn plasticity(model: &Model, step: &Step, settings: &NonlinearStatic, warnings: &mut Vec<String>) -> Result<()> {
+    let at = |what: String| Error::NotSupported(format!("{what} in nonlinear steps (step `{}`)", step.name));
+    let used: std::collections::BTreeSet<&str> = model
+        .sections()
+        .values()
+        .filter(|s| matches!(s.kind, SectionKind::Solid {}) || Theory::from_section(&s.kind).is_some())
+        .map(|s| s.material.as_str())
+        .collect();
+    for name in used {
+        let Some(m) = model.material(name) else { continue };
+        match &m.plastic {
+            Some(Plastic::JohnsonCook { c, specific_heat, .. }) => {
+                if *c != 0.0 {
+                    return Err(at(format!(
+                        "the Johnson–Cook strain-rate term of material `{name}` (C = {c}): a static step has no time, so no strain rate; set C to 0 or use explicit dynamics"
+                    )));
+                }
+                if specific_heat.is_some() {
+                    warnings.push(format!(
+                        "material `{name}`: a static step is isothermal, so plastic work does not heat it (adiabatic heating acts in explicit dynamics)"
+                    ));
+                }
+            }
+            Some(Plastic::Bilinear { hardening: Hardening::Kinematic, .. }) if settings.nonlinear_geometry => {
+                return Err(at(format!(
+                    "the kinematic hardening of material `{name}` at finite strain (its back stress is not coaxial with the elastic stretch, which the exponential return map needs); use nonlinear_geometry false or isotropic hardening"
+                )));
+            }
+            _ => {}
+        }
+        if m.plastic.is_some() && (m.damage.is_some() || m.erosion.is_some()) {
+            warnings.push(format!("material `{name}`: damage and erosion act in explicit dynamics; this static step leaves them out"));
+        }
     }
     Ok(())
 }
@@ -646,7 +758,6 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
     settings.validate()?;
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).chain(mesh.warnings.iter().cloned()).collect();
-    warnings.extend(inelastic_warnings(model));
     check_supported(model, &mesh, step, settings, &mut warnings)?;
     let (graph, order) = pattern(&mesh);
     ignored_dashpots(&mesh, &mut warnings);
@@ -683,7 +794,14 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
         finite: settings.nonlinear_geometry,
         element_dofs,
         element_kinds,
-        materials: mesh.elements.iter().map(|e| MaterialModel::from_elasticity(&e.d, e.hyperelastic.as_ref())).collect(),
+        materials: mesh
+            .elements
+            .iter()
+            .map(|e| match &e.plastic {
+                Some(j2) => MaterialModel::Plastic(j2.clone()),
+                None => MaterialModel::from_elasticity(&e.d, e.hyperelastic.as_ref()),
+            })
+            .collect(),
         pattern: graph.zero_matrix(&mesh.layout),
     };
     let (lo, hi) = mesh.xyz.iter().fold(([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]), |(lo, hi), p| {
@@ -699,8 +817,20 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
     // The undeformed state first: an element that is bad before anything moves is an error in
     // the model, not a reason to cut increments back.
     problem.evaluate(&vec![0.0; mesh.dofs()], 0.0, false, &committed)?;
-    let mut run =
-        Run { problem: &problem, settings, limits, force_scale: 0.0, force_floor: None, length, iterations: 0, factor_entries: 0, committed };
+    let path_dependent = problem.materials.iter().any(MaterialModel::is_path_dependent);
+    let mut run = Run {
+        problem: &problem,
+        settings,
+        limits,
+        force_scale: 0.0,
+        force_floor: None,
+        length,
+        iterations: 0,
+        factor_entries: 0,
+        committed,
+        path_dependent,
+        undeformed_stable: None,
+    };
 
     let mut history = History::default();
     let (mut frame_values, mut frames_full) = (0usize, false);
@@ -719,32 +849,50 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
     };
     keep_frame(&mut history, 0.0, &vec![0.0; mesh.dofs()], &mut warnings);
     let mut q = vec![0.0; red.neq()];
-    let mut lambda = 0.0f64;
+    // The step fraction t and the load factor λ(t) of the step's load path (λ = t without one).
+    let (mut t, mut lambda) = (0.0f64, 0.0f64);
     let mut size = settings.initial_increment;
     let mut fast = 0usize;
     let mut last: Option<Evaluation> = None;
+    // The last converged increment's free motion and the change of the load factor over it.
     let mut previous: Option<(Vec<f64>, f64)> = None;
     let max_increments = usize::try_from(settings.max_increments).unwrap_or(usize::MAX);
-    while lambda < 1.0 {
+    while t < 1.0 {
         if history.increments.len() >= max_increments {
             return Err(Error::Limit(format!(
                 "step `{}`: {} increments reached the step's cap at load factor {lambda:.6} (raise max_increments)",
                 step.name, settings.max_increments
             )));
         }
-        let remaining = 1.0 - lambda;
-        let (target, this) = if size >= remaining * (1.0 - 1e-9) { (1.0, remaining) } else { (lambda + size, size) };
+        // An increment ends at the next point of the load path at the latest.
+        let turn = settings.next_turn(t);
+        let remaining = turn - t;
+        let (target, this) = if size >= remaining * (1.0 - 1e-9) { (turn, remaining) } else { (t + size, size) };
+        let target_lambda = settings.load_factor(target);
+        let change = if settings.load_path.is_some() { target_lambda - lambda } else { this };
         let mut iterations = Vec::new();
         let number = history.increments.len() + 1;
-        // Linear extrapolation of the last converged increment's free motion.
-        let predictor: Option<Vec<f64>> =
-            previous.as_ref().map(|(dq, prev): &(Vec<f64>, f64)| q.iter().zip(dq).map(|(a, d)| a + this / prev * d).collect());
-        match run.increment(&q, predictor.as_deref(), target, this, &mut iterations) {
+        // Linear extrapolation of the last converged increment's free motion, in proportion to
+        // the change of the load factor (so it turns with the load path).
+        let mut predictor: Option<Vec<f64>> = previous
+            .as_ref()
+            .filter(|(_, prev)| *prev != 0.0)
+            .map(|(dq, prev): &(Vec<f64>, f64)| q.iter().zip(dq).map(|(a, d)| a + change / prev * d).collect());
+        // Path-dependent materials start without one from the tangent predictor.
+        let mut predicted_energy = None;
+        if predictor.is_none() && path_dependent {
+            match run.tangent_predictor(&q, lambda, target_lambda) {
+                Ok(Some((p, energy))) => (predictor, predicted_energy) = (Some(p), Some(energy)),
+                Ok(None) | Err(Failure::Cutback(_)) => {}
+                Err(Failure::Fatal(e)) => return Err(e),
+            }
+        }
+        match run.increment(&q, predictor.as_deref(), predicted_energy, target_lambda, change.abs(), &mut iterations) {
             Ok(c) => {
-                previous = Some((c.q.iter().zip(&q).map(|(a, b)| a - b).collect(), this));
+                previous = Some((c.q.iter().zip(&q).map(|(a, b)| a - b).collect(), change));
                 let count = iterations.len();
-                history.increments.push(Increment { number, load_factor: target, size: this, iterations, converged: true, cutback: None });
-                lambda = target;
+                history.increments.push(Increment { number, load_factor: target_lambda, size: this, iterations, converged: true, cutback: None });
+                (t, lambda) = (target, target_lambda);
                 q = c.q;
                 keep_frame(&mut history, lambda, &red.expand_scaled(&q, lambda), &mut warnings);
                 run.committed.clone_from(&c.evaluation.history);
@@ -761,7 +909,7 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
             Err(Failure::Cutback(reason)) => {
                 history.increments.push(Increment {
                     number,
-                    load_factor: target,
+                    load_factor: target_lambda,
                     size: this,
                     iterations,
                     converged: false,
@@ -771,7 +919,7 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
                 size = this * CUTBACK;
                 if size < settings.min_increment * (1.0 - 1e-9) {
                     return Err(Error::NotConverged(format!(
-                        "step `{}` stopped at load factor {lambda:.6}: the increment to {target:.6} failed ({reason}) and a smaller one would be below the minimum increment {}",
+                        "step `{}` stopped at load factor {lambda:.6} (step fraction {t:.6}): the increment to {target_lambda:.6} failed ({reason}) and a smaller one would be below the minimum increment {}",
                         step.name, settings.min_increment
                     )));
                 }
@@ -827,27 +975,32 @@ fn finish(
         .zip(point_motion.iter().zip(&point_reaction))
         .map(|(p, (d, r))| PointResult { name: p.name.clone(), label: p.label, displacement: *d, reaction: *r })
         .collect();
-    let all_points = parallel::map_grained(mesh.elements.len(), GRAIN, |i| -> Result<(Vec<PointStress>, &'static ElementType, Rule)> {
+    #[allow(clippy::type_complexity)]
+    let all_points = parallel::map_grained(mesh.elements.len(), GRAIN, |i| -> Result<(Vec<PointStress>, Vec<f64>, &'static ElementType, Rule)> {
         let el = mesh.elements.get(i).ok_or_else(|| Error::Internal("element index".into()))?;
         let at = |err| Error::element(el.label, err);
         let ue = problem.element_vector(i, &u);
         let kernel = el.kernel()?;
-        let points = if problem.finite {
-            let material = problem.materials.get(i).ok_or_else(|| Error::Internal("element material".into()))?;
-            kernel.nonlinear_stresses(material, &ue, Kinematics::Finite, committed.get(i).map(Vec::as_slice).unwrap_or_default())
-        } else {
-            let per_node: Vec<[f64; 3]> = el.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
-            kernel.stresses_with(&el.d, &per_node, None)
+        let history = committed.get(i).map(Vec::as_slice).unwrap_or_default();
+        let material = problem.materials.get(i).ok_or_else(|| Error::Internal("element material".into()))?;
+        let points = match problem.kinematics(i) {
+            Some(kin) => kernel.nonlinear_stresses(material, &ue, kin, history),
+            None => {
+                let per_node: Vec<[f64; 3]> = el.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
+                kernel.stresses_with(&el.d, &per_node, None)
+            }
         }
         .map_err(at)?;
-        Ok((points, kernel.ty(), kernel.rule()))
+        let len = material.history_len();
+        let plastic: Vec<f64> = if len > 0 { history.chunks(len).filter_map(|h| material.plastic_strain(h)).collect() } else { Vec::new() };
+        Ok((points, plastic, kernel.ty(), kernel.rule()))
     });
     let mut extrapolations: Vec<(&'static ElementType, Rule, Extrapolation)> = Vec::new();
     let mut elements = Vec::with_capacity(mesh.elements.len());
     let mut sum = vec![[0.0; 6]; mesh.labels.len()];
     let mut count = vec![0u32; mesh.labels.len()];
     for (el, computed) in mesh.elements.iter().zip(all_points) {
-        let (points, ty, rule) = computed?;
+        let (points, plastic_strain, ty, rule) = computed?;
         let values: Vec<[f64; 6]> = points.iter().map(|p| p.stress).collect();
         let index = match extrapolations.iter().position(|(t, r, _)| std::ptr::eq(*t, ty) && *r == rule) {
             Some(i) => i,
@@ -865,7 +1018,7 @@ fn finish(
                 *c += 1;
             }
         }
-        elements.push(ElementStress { label: el.label, kind: el.kind, points, nodal });
+        elements.push(ElementStress { label: el.label, kind: el.kind, points, nodal, plastic_strain });
     }
     let stress: Vec<[f64; 6]> = sum.iter().zip(&count).map(|(s, c)| s.map(|v| if *c > 0 { v / f64::from(*c) } else { 0.0 })).collect();
     let von_mises = stress.iter().map(von_mises).collect();

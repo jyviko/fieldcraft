@@ -218,7 +218,7 @@ impl Session {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.chars().take(100).collect()))?;
         // Session commands (open, save, undo, redo) change the session only in their last step,
         // after everything that can fail, so they need no copy of the model to restore.
-        let before = (spec.kind == CommandKind::Model).then(|| self.snapshot());
+        let before = (spec.kind == CommandKind::Model).then(|| (self.snapshot(), self.document()));
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
         let result = match outcome {
             Ok(r) => r,
@@ -228,10 +228,15 @@ impl Session {
                 Err(EngineError::Internal { command: id.to_string(), message })
             }
         };
-        if let Some(before) = before {
+        if let Some((mut before, document)) = before {
+            // A command that makes the session another document (a new model) keeps the old
+            // one in its undo step.
+            if self.document() != document {
+                before.document = Some(document);
+            }
             if result.is_err() {
                 self.restore(before);
-            } else if self.differs_from(&before) {
+            } else if before.document.is_some() || self.differs_from(&before) {
                 self.journal.push((id.to_string(), params.clone()));
                 self.revision = next_revision();
                 self.record_undo(before);
@@ -715,5 +720,54 @@ mod tests {
         let mut s = defined.clone();
         assert!(s.execute("geometry.open", &json!({"path": path, "model": "discard"})).is_err());
         assert!(s.design.is_none() && s.model == defined.model);
+    }
+
+    #[test]
+    fn a_new_model_is_untitled_and_undo_brings_the_file_back() {
+        let (dir, design) = sample_design_file(&Plate::default());
+        let file = dir.0.join("a.fieldcraft").to_string_lossy().into_owned();
+        let mut s = defined_model("Seal", "no-such-face");
+        s.execute("file.save_as", &json!({"path": file})).unwrap();
+        assert!(!s.is_dirty());
+
+        s.execute("geometry.open", &json!({"path": design, "model": "new"})).unwrap();
+        assert_eq!(s.path, None, "a new model must not save over the old model's file");
+        assert!(s.is_dirty());
+        assert!(s.execute("file.save", &json!({})).is_err(), "save asks for a file");
+
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.path.as_deref(), Some(file.as_str()));
+        assert!(!s.is_dirty(), "undo returns to the saved state of the old file");
+
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.path, None);
+        assert!(s.is_dirty());
+
+        // Saving the new model and then editing it: undoing the edit keeps the new file.
+        let b = dir.0.join("b.fieldcraft").to_string_lossy().into_owned();
+        s.execute("file.save_as", &json!({"path": b})).unwrap();
+        s.execute("model.material.create", &json!({"name": "Al", "elastic": {"type": "isotropic", "young": 70000, "poisson": 0.33}})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.path.as_deref(), Some(b.as_str()));
+        assert!(!s.is_dirty());
+        // Undoing the open after that save returns to the old file; redo to the saved new one.
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.path.as_deref(), Some(file.as_str()));
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.path.as_deref(), Some(b.as_str()));
+        assert!(!s.is_dirty());
+    }
+
+    #[test]
+    fn keeping_the_model_keeps_its_file_and_a_sample_has_none() {
+        let (dir, design) = sample_design_file(&Plate::default());
+        let file = dir.0.join("a.fieldcraft").to_string_lossy().into_owned();
+        let mut s = defined_model("Seal", "no-such-face");
+        s.execute("file.save_as", &json!({"path": file})).unwrap();
+        s.execute("geometry.open", &json!({"path": design})).unwrap();
+        assert_eq!(s.path.as_deref(), Some(file.as_str()));
+        s.execute("file.sample", &json!({"name": "cantilever"})).unwrap();
+        assert_eq!(s.path, None, "a sample must not save over the last opened file");
+        assert!(s.execute("file.save", &json!({})).is_err());
     }
 }

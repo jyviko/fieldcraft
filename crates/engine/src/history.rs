@@ -6,6 +6,11 @@
 //! journal always replays to the current model, and the undo steps are the journal's last
 //! entries, newest last. A new command clears the redo stack.
 //!
+//! A step also carries the session's [`Document`] (its file and the revision saved there) when
+//! its command changed which document the session is, as `geometry.open` with `"model": "new"`
+//! does: undo makes the previous file current again, redo the new untitled model. Other steps
+//! leave the document alone, so saving between edits and then undoing them keeps the file.
+//!
 //! History is bounded by step count ([`MAX_UNDO_STEPS`]) and by an estimate of the memory the
 //! kept states hold ([`DEFAULT_UNDO_MEMORY`], [`Session::set_undo_memory`]): when either is
 //! exceeded, the oldest undo steps go first, then the redo steps farthest from the current state.
@@ -46,6 +51,16 @@ pub(crate) struct State {
     surfaces: Vec<Arc<TaggedSurface>>,
     sources: fieldcraft_io::Geometry,
     revision: u64,
+    /// The document before the step, when the step changed it.
+    pub(crate) document: Option<Document>,
+}
+
+/// Which document the session is: the `.fieldcraft` file it belongs to and the revision saved
+/// there ([`Session::is_dirty`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Document {
+    pub(crate) path: Option<String>,
+    pub(crate) saved_revision: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +162,19 @@ impl Session {
             surfaces: self.surfaces.clone(),
             sources: self.sources.clone(),
             revision: self.revision,
+            document: None,
+        }
+    }
+
+    pub(crate) fn document(&self) -> Document {
+        Document { path: self.path.clone(), saved_revision: self.saved_revision }
+    }
+
+    /// Make `document` current; returns the one it replaces.
+    pub(crate) fn set_document(&mut self, document: Document) -> Document {
+        Document {
+            path: std::mem::replace(&mut self.path, document.path),
+            saved_revision: std::mem::replace(&mut self.saved_revision, document.saved_revision),
         }
     }
 
@@ -158,6 +186,7 @@ impl Session {
             surfaces: std::mem::replace(&mut self.surfaces, state.surfaces),
             sources: std::mem::replace(&mut self.sources, state.sources),
             revision: std::mem::replace(&mut self.revision, state.revision),
+            document: state.document.map(|d| self.set_document(d)),
         }
     }
 

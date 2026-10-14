@@ -12,6 +12,7 @@ pub mod cdt;
 pub mod delaunay;
 pub mod hex;
 pub mod join;
+pub mod mirror;
 pub mod octree;
 pub mod planar;
 pub mod quad;

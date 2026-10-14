@@ -172,7 +172,7 @@ is committed and listed here with its exports.
 | apps/fieldcraft/src/control_server.rs | SolidCraft `apps/solidcraft/src/control_server.rs` | MIT OR Apache-2.0 |
 | crates/mcp/src/ (JSON-RPC framing, MCP lifecycle, tool schema checks, the control-channel backend, base64) | SolidCraft `crates/mcp/src/` | MIT OR Apache-2.0 |
 | crates/io/src/roots.rs (the rules of read and write roots) | VectorCraft's automation roots (docs/mcp.md there) | MIT OR Apache-2.0 |
-| packaging/env.sh, packaging/macos/package.sh, packaging/macos/Info.plist.in, packaging/linux/package.sh, packaging/linux/AppRun, packaging/windows/package.ps1 | SolidCraft `packaging/` and VectorCraft `packaging/` (signing and notarization in macos/package.sh) | MIT OR Apache-2.0 |
+| packaging/env.sh, packaging/.shellcheckrc, packaging/macos/package.sh, packaging/macos/Info.plist.in, packaging/linux/package.sh, packaging/linux/AppRun, packaging/windows/package.ps1 | SolidCraft `packaging/` and VectorCraft `packaging/` (signing and notarization in macos/package.sh) | MIT OR Apache-2.0 |
 | packaging/macos/import-cert.sh | VectorCraft `packaging/macos/import-cert.sh` | MIT OR Apache-2.0 |
 | packaging/windows/check-exe.ps1 | SolidCraft `packaging/windows/check-icon.ps1` | MIT OR Apache-2.0 |
 | .github/workflows/release.yml, .github/release-notes.md, docs/releasing.md | SolidCraft `.github/workflows/release.yml`, `.github/release-notes.md`, `docs/releasing.md`; VectorCraft `.github/workflows/release.yml` | MIT OR Apache-2.0 |

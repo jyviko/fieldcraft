@@ -15,6 +15,7 @@ use serde_json::json;
 const USAGE: &str = "\
 usage:
   fieldcraft-cli commands              list every command with its parameters
+  fieldcraft-cli commands --json       the same as JSON, each command's parameters as JSON Schema
   fieldcraft-cli run <script.json>     run a script (a JSON array of {\"command\", \"params\"})
                                        and print the model summary
   fieldcraft-cli features              print docs/features.md (every capability, ready or
@@ -36,6 +37,10 @@ const MAX_SCRIPT_BYTES: u64 = 256 * 1024 * 1024;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
+        Some("commands") if args.get(1).map(String::as_str) == Some("--json") => {
+            let all: Vec<_> = fieldcraft_engine::commands().iter().map(fieldcraft_engine::CommandSpec::listing).collect();
+            serde_json::to_string_pretty(&all).map(|text| println!("{text}")).map_err(|e| e.to_string())
+        }
         Some("commands") => {
             for c in fieldcraft_engine::commands() {
                 println!("{:<24} {:<18} {}", c.id, c.label, c.params);

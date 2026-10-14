@@ -98,7 +98,7 @@ impl Backend for Headless {
     }
 
     fn commands(&mut self) -> Result<Value, String> {
-        Ok(fieldcraft_engine::commands().iter().map(|c| json!({"id": c.id, "label": c.label, "params": c.params})).collect())
+        Ok(fieldcraft_engine::commands().iter().map(fieldcraft_engine::CommandSpec::listing).collect())
     }
 
     fn picture(&mut self, r: &PictureRequest) -> Result<Picture, String> {

@@ -243,6 +243,9 @@ fn a_batch_stops_at_the_first_error() {
     assert_eq!(ok(&mut s, "inspect_model", json!({}))["model"]["nodes"], 0);
     let listed = ok(&mut s, "list_commands", json!({"filter": "SOLVE."}));
     assert!(listed.as_array().unwrap().iter().all(|c| c["id"].as_str().unwrap().starts_with("solve.")));
+    // Each command's parameters as JSON Schema, for agents to build valid calls.
+    let statics = listed.as_array().unwrap().iter().find(|c| c["id"] == "solve.static").unwrap();
+    assert_eq!(statics["schema"]["properties"]["threads"]["maximum"], 256);
 }
 
 #[test]

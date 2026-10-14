@@ -121,6 +121,19 @@ pub fn commands() -> &'static [CommandSpec] {
     cmd::ALL
 }
 
+impl CommandSpec {
+    /// The command as JSON for listings (`fieldcraft-cli commands --json`, the control channel's
+    /// `engine.commands`, MCP `list_commands`): id, label, the parameter doc and, when described,
+    /// the parameters as JSON Schema.
+    pub fn listing(&self) -> Value {
+        let mut v = serde_json::json!({"id": self.id, "label": self.label, "params": self.params});
+        if let Some(form) = self.form {
+            v["schema"] = schema::json_schema(form);
+        }
+        v
+    }
+}
+
 pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
     commands().iter().find(|c| c.id == id)
 }

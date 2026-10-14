@@ -174,9 +174,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             let Some(steps) = p.get("commands") else { return err("missing `commands` (a list of {command, params})") };
             wrap(app.run_script(steps).map(|()| json!({"journal": app.session.journal.len()})))
         }
-        "engine.commands" => {
-            ok(Value::Array(fieldcraft_engine::commands().iter().map(|c| json!({"id": c.id, "label": c.label, "params": c.params})).collect()))
-        }
+        "engine.commands" => ok(Value::Array(fieldcraft_engine::commands().iter().map(fieldcraft_engine::CommandSpec::listing).collect())),
         "ui.inspect" => ok(json!({
             "ui": app.ui,
             "camera": app.cam,

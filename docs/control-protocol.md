@@ -26,7 +26,7 @@ checked and clamped (drag steps, wheel lines, window size); `ui.render` refuses 
 |---|---|---|
 | `engine.execute` | `command`: command id, `params`: JSON object | the command's result |
 | `engine.script` | `commands`: `[{command, params}, …]` | stops at the first error; `journal`: commands that changed the model so far |
-| `engine.commands` | — | every command: `id`, `label`, `params` (the parameter documentation) |
+| `engine.commands` | — | every command: `id`, `label`, `params` (the parameter documentation) and `schema` (its parameters as JSON Schema) |
 
 Commands never open forms or file pickers when run this way. `fieldcraft-cli commands` prints the
 same registry. `file.sample {name}` opens a sample (`parts`, `cantilever`, `impact`) and

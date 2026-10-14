@@ -81,7 +81,7 @@ definition_commands!(
     Material,
     "material",
     "Material",
-    r#"{"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3} | {"type": "engineering_constants", "young": [E1, E2, E3], "poisson": [ν12, ν13, ν23], "shear": [G12, G13, G23]}, "density": 7.85e-9, "fluid": {"type": "newtonian", "viscosity": 1.0e-9} (dynamic viscosity; a fluid needs a density), "plastic": {…} (see model.material.plasticity), "damage": {…}, "erosion": {…} (see model.material.damage), "hyperelastic": {"type": "neo_hookean"} (large strain in nonlinear steps, from the isotropic constants: μ = E/(2(1 + ν)), κ = E/(3(1 − 2ν)); without it an elastic material is St Venant–Kirchhoff there)} — in the model's unit system (model.units), never converted"#,
+    r#"{"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3} | {"type": "engineering_constants", "young": [E1, E2, E3], "poisson": [ν12, ν13, ν23], "shear": [G12, G13, G23]}, "density": 7.85e-9, "fluid": {"type": "newtonian", "viscosity": 1.0e-9} (dynamic viscosity; a fluid needs a density), "plastic": {…} (see model.material.plasticity), "damage": {…}, "erosion": {…} (see model.material.damage), "hyperelastic": {"type": "neo_hookean"} | {"type": "mooney_rivlin", "c01": 0.1} (C10 = μ/2 − C01) | {"type": "yeoh", "c20": -0.01, "c30": 0.001} (C10 = μ/2) (large strain in nonlinear steps, from the isotropic constants: μ = E/(2(1 + ν)), κ = E/(3(1 − 2ν)); without it an elastic material is St Venant–Kirchhoff there)} — in the model's unit system (model.units), never converted"#,
     add_material,
     replace_material,
     remove_material,

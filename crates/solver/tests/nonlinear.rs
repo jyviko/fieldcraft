@@ -433,3 +433,81 @@ fn nonlinear_results_are_deterministic() {
         assert_eq!(fieldcraft_parallel::with_threads(threads, || solve(&g)), a, "{threads} threads");
     }
 }
+
+/// The principal Cauchy stresses of a decoupled polynomial energy at principal stretches `l`:
+/// σᵢ = (λᵢ/J) ∂W/∂λᵢ by central differences of W itself (independent of the solver's
+/// stress and tangent), W = C₁₀ (Ī₁ − 3) + C₀₁ (Ī₂ − 3) + C₂₀ (Ī₁ − 3)² + C₃₀ (Ī₁ − 3)³ + κ/2 (J − 1)².
+fn polynomial_stress(c: [f64; 4], kappa: f64, l: [f64; 3]) -> [f64; 3] {
+    let w = |l: [f64; 3]| {
+        let j = l[0] * l[1] * l[2];
+        let b: Vec<f64> = l.iter().map(|x| x * x * j.powf(-2.0 / 3.0)).collect();
+        let i1 = b[0] + b[1] + b[2];
+        let i2 = b[0] * b[1] + b[1] * b[2] + b[2] * b[0];
+        let x = i1 - 3.0;
+        c[0] * x + c[1] * (i2 - 3.0) + c[2] * x * x + c[3] * x * x * x + 0.5 * kappa * (j - 1.0) * (j - 1.0)
+    };
+    let j = l[0] * l[1] * l[2];
+    std::array::from_fn(|i| {
+        let h = 1e-6 * l[i];
+        let (mut p, mut m) = (l, l);
+        p[i] += h;
+        m[i] -= h;
+        l[i] / j * (w(p) - w(m)) / (2.0 * h)
+    })
+}
+
+/// Mooney–Rivlin and Yeoh blocks in the homogeneous modes of rubber testing (L. R. G. Treloar,
+/// *The Physics of Rubber Elasticity*, 3rd ed., Oxford 1975, ch. 10): uniaxial and equibiaxial
+/// tension and pure shear, against the closed form of the compressible decoupled energy (the
+/// free stretches found by bisection so the free faces carry no stress).
+#[test]
+fn mooney_rivlin_and_yeoh_in_the_homogeneous_modes() {
+    let (e, nu) = (3.0, 0.49);
+    let (mu, kappa) = (e / (2.0 * (1.0 + nu)), e / (3.0 * (1.0 - 2.0 * nu)));
+    let hybrid = Formulation { hybrid: true, ..Formulation::default() };
+    let (c01, c20, c30) = (0.2, -0.02, 0.004);
+    for option in [Hyperelastic::MooneyRivlin { c01 }, Hyperelastic::Yeoh { c20, c30 }] {
+        let c = option.constants(mu);
+        for (mode, lam) in [("uniaxial", 2.0), ("equibiaxial", 1.5), ("pure shear", 2.0)] {
+            // The stretches with the free one(s) l from σ_free(l) = 0.
+            let stretches = |l: f64| match mode {
+                "uniaxial" => [lam, l, l],
+                "equibiaxial" => [lam, lam, l],
+                _ => [lam, 1.0, l],
+            };
+            let (mut lo, mut hi) = (0.05, 1.5);
+            for _ in 0..200 {
+                let mid = 0.5 * (lo + hi);
+                if polynomial_stress(c, kappa, stretches(mid))[2] > 0.0 { hi = mid } else { lo = mid }
+            }
+            let want = polynomial_stress(c, kappa, stretches(0.5 * (lo + hi)));
+            let mut g = grid([1, 1, 1], ElementKind::Hex20, |x| x);
+            g.define(iso(e, nu), None, hybrid, nonlinear());
+            g.model.replace_material("Mat", Material { elastic: Some(iso(e, nu)), hyperelastic: Some(option), ..Material::default() }).unwrap();
+            g.symmetry("x0", Symmetry::X, |x| near(x[0], 0.0));
+            g.symmetry("y0", Symmetry::Y, |x| near(x[1], 0.0));
+            g.symmetry("z0", Symmetry::Z, |x| near(x[2], 0.0));
+            g.node_set("x1", |x| near(x[0], 1.0));
+            g.bc(
+                "pull",
+                BoundaryCondition::Displacement { target: Target::Set("x1".into()), values: [Some(lam - 1.0), None, None, None, None, None] },
+            );
+            g.node_set("y1", |x| near(x[1], 1.0));
+            let y = match mode {
+                "equibiaxial" => Some(lam - 1.0),
+                "pure shear" => Some(0.0),
+                _ => None,
+            };
+            if let Some(v) = y {
+                g.bc("y1", BoundaryCondition::Displacement { target: Target::Set("y1".into()), values: [None, Some(v), None, None, None, None] });
+            }
+            let r = solve(&g);
+            for s in &r.stress {
+                for k in 0..3 {
+                    assert!((s[k] - want[k]).abs() < 1e-7 * want[0], "{} {mode}: {s:?} vs {want:?}", option.name());
+                }
+            }
+            eprintln!("{} {mode} λ = {lam}: σ = {:.6?} (closed form {want:.6?})", option.name(), &r.stress[0][..3]);
+        }
+    }
+}

@@ -108,7 +108,8 @@
 //!
 //! Isotropic elasticity is `*ELASTIC, TYPE=ISOTROPIC` (or, for a neo-Hookean material in a deck
 //! with nonlinear steps, `*HYPERELASTIC, NEO HOOKE` with C₁₀ = μ/2 and D₁ = 2/κ, the same strain
-//! energy; a linear static step is then refused, since Abaqus's general static step would apply
+//! energy, and likewise `MOONEY-RIVLIN` (C₁₀, C₀₁, D₁) and `YEOH` (C₁₀, C₂₀, C₃₀, D₁, the higher
+//! volumetric terms zero); a linear static step is then refused, since Abaqus's general static step would apply
 //! the hyperelastic law), engineering constants
 //! `TYPE=ENGINEERING CONSTANTS`, density `*DENSITY`. Von Mises plasticity is `*PLASTIC`: a
 //! hardening table as its (yield stress, plastic strain) lines; bilinear isotropic hardening as
@@ -129,8 +130,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use fieldcraft_model::{
-    BeamProfile, BoundaryCondition, CouplingKind, Elastic, Element, ElementKind, Hardening, Integration, Load, Model, OutputVariable, Plastic,
-    Procedure, Resolved, Section, SectionKind, Step, Symmetry, Target,
+    BeamProfile, BoundaryCondition, CouplingKind, Elastic, Element, ElementKind, Hardening, Hyperelastic, Integration, Load, Model, OutputVariable,
+    Plastic, Procedure, Resolved, Section, SectionKind, Step, Symmetry, Target,
 };
 
 use crate::{Error, Result, unsupported};
@@ -809,11 +810,20 @@ impl Deck {
         for (name, m) in model.materials() {
             self.line(&format!("*MATERIAL, NAME={name}"));
             match m.elastic {
-                Some(Elastic::Isotropic { young, poisson }) if m.hyperelastic.is_some() && has_nonlinear_step(model) => {
-                    // W = C10 (Ī1 − 3) + (J − 1)²/D1 with C10 = μ/2 and D1 = 2/κ.
-                    let (shear, bulk) = fieldcraft_model::Hyperelastic::moduli(young, poisson);
-                    self.line("*HYPERELASTIC, NEO HOOKE");
-                    self.numbers_line("", &[shear / 2.0, 2.0 / bulk])?;
+                Some(Elastic::Isotropic { young, poisson })
+                    if has_nonlinear_step(model)
+                        && let Some(h) = m.hyperelastic =>
+                {
+                    // The polynomial constants of the option and U = (J − 1)²/D1 with D1 = 2/κ.
+                    let (shear, bulk) = Hyperelastic::moduli(young, poisson);
+                    let [c10, c01, c20, c30] = h.constants(shear);
+                    let (keyword, values) = match h {
+                        Hyperelastic::NeoHookean {} => ("NEO HOOKE", vec![c10, 2.0 / bulk]),
+                        Hyperelastic::MooneyRivlin { .. } => ("MOONEY-RIVLIN", vec![c10, c01, 2.0 / bulk]),
+                        Hyperelastic::Yeoh { .. } => ("YEOH", vec![c10, c20, c30, 2.0 / bulk]),
+                    };
+                    self.line(&format!("*HYPERELASTIC, {keyword}"));
+                    self.numbers_line("", &values)?;
                 }
                 Some(Elastic::Isotropic { young, poisson }) => {
                     self.line("*ELASTIC, TYPE=ISOTROPIC");

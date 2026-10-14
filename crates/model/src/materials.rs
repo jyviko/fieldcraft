@@ -88,6 +88,16 @@ pub enum Hyperelastic {
     /// reference volume W = μ/2 (Ī₁ − 3) + κ/2 (J − 1)², with Ī₁ = J^(−2/3) tr C (C₁₀ = μ/2,
     /// D₁ = 2/κ in the usual polynomial notation).
     NeoHookean {},
+    /// Mooney–Rivlin (M. Mooney, J. Appl. Phys. 11:582–592, 1940; R. S. Rivlin, Phil. Trans. R.
+    /// Soc. A 241:379–397, 1948), decoupled: W = C₁₀ (Ī₁ − 3) + C₀₁ (Ī₂ − 3) + κ/2 (J − 1)². The
+    /// small-strain shear modulus 2 (C₁₀ + C₀₁) is the elastic μ, so `c01` sets the second
+    /// invariant's share and C₁₀ = μ/2 − C₀₁ (0 ≤ C₀₁ ≤ μ/2, both constants non-negative).
+    MooneyRivlin { c01: f64 },
+    /// Yeoh (O. H. Yeoh, Rubber Chem. Technol. 66(5):754–771, 1993), decoupled:
+    /// W = C₁₀ (Ī₁ − 3) + C₂₀ (Ī₁ − 3)² + C₃₀ (Ī₁ − 3)³ + κ/2 (J − 1)², with C₁₀ = μ/2 from the
+    /// elastic constants (the small-strain shear modulus); `c20` (often negative) and `c30`
+    /// shape the large-strain response.
+    Yeoh { c20: f64, c30: f64 },
 }
 
 impl Hyperelastic {
@@ -101,7 +111,38 @@ impl Hyperelastic {
     pub fn name(&self) -> &'static str {
         match self {
             Hyperelastic::NeoHookean {} => "neo-Hookean",
+            Hyperelastic::MooneyRivlin { .. } => "Mooney–Rivlin",
+            Hyperelastic::Yeoh { .. } => "Yeoh",
         }
+    }
+
+    /// The polynomial constants (C₁₀, C₀₁, C₂₀, C₃₀) for the shear modulus μ.
+    pub fn constants(&self, shear: f64) -> [f64; 4] {
+        match *self {
+            Hyperelastic::NeoHookean {} => [shear / 2.0, 0.0, 0.0, 0.0],
+            Hyperelastic::MooneyRivlin { c01 } => [shear / 2.0 - c01, c01, 0.0, 0.0],
+            Hyperelastic::Yeoh { c20, c30 } => [shear / 2.0, 0.0, c20, c30],
+        }
+    }
+
+    /// Check the option's constants against the elastic shear modulus μ.
+    pub fn validate(&self, shear: f64) -> Result<()> {
+        match *self {
+            Hyperelastic::NeoHookean {} => {}
+            Hyperelastic::MooneyRivlin { c01 } => {
+                if !(c01 >= 0.0 && c01 <= shear / 2.0) {
+                    return Err(Error::Invalid(format!(
+                        "the Mooney–Rivlin C01 = {c01} must be within [0, μ/2 = {}] (C10 = μ/2 − C01 and C01 both non-negative)",
+                        shear / 2.0
+                    )));
+                }
+            }
+            Hyperelastic::Yeoh { c20, c30 } => {
+                finite("Yeoh C20", c20)?;
+                finite("Yeoh C30", c30)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -407,6 +448,9 @@ impl Material {
             if self.plastic.is_some() {
                 return Err(Error::Invalid(format!("plasticity of a {} hyperelastic material is not supported yet", h.name())));
             }
+            if let Some(Elastic::Isotropic { young, poisson }) = self.elastic {
+                h.validate(Hyperelastic::moduli(young, poisson).0)?;
+            }
         }
         if let Some(d) = self.density {
             positive("density", d)?;
@@ -607,7 +651,28 @@ mod tests {
         let ortho = Elastic::EngineeringConstants { young: [1.0; 3], poisson: [0.0; 3], shear: [1.0; 3] };
         assert!(Material { elastic: Some(ortho), ..alone }.validate().is_err());
         let plastic = Plastic::Bilinear { yield_stress: 1.0, hardening_modulus: 0.0, hardening: Hardening::Isotropic };
-        assert!(Material { plastic: Some(plastic), ..m }.validate().is_err());
+        assert!(Material { plastic: Some(plastic), ..m.clone() }.validate().is_err());
+        // Mooney–Rivlin and Yeoh: μ = E/(2(1 + ν)) = 1.00671 here, so C01 is within [0, μ/2].
+        let mr: Material = serde_json::from_value(serde_json::json!({
+            "elastic": {"type": "isotropic", "young": 3.0, "poisson": 0.49}, "hyperelastic": {"type": "mooney_rivlin", "c01": 0.1}
+        }))
+        .unwrap();
+        mr.validate().unwrap();
+        let mu = Hyperelastic::moduli(3.0, 0.49).0;
+        let c = Hyperelastic::MooneyRivlin { c01: 0.1 }.constants(mu);
+        assert!((2.0 * (c[0] + c[1]) - mu).abs() < 1e-15 && c[1] == 0.1);
+        let yeoh = Hyperelastic::Yeoh { c20: -0.01, c30: 0.001 };
+        assert_eq!(yeoh.constants(mu), [mu / 2.0, 0.0, -0.01, 0.001]);
+        assert!(Material { hyperelastic: Some(yeoh), ..m.clone() }.validate().is_ok());
+        for bad in [
+            Hyperelastic::MooneyRivlin { c01: -0.1 },
+            Hyperelastic::MooneyRivlin { c01: 0.6 },
+            Hyperelastic::MooneyRivlin { c01: f64::NAN },
+            Hyperelastic::Yeoh { c20: f64::INFINITY, c30: 0.0 },
+            Hyperelastic::Yeoh { c20: 0.0, c30: f64::NAN },
+        ] {
+            assert!(Material { hyperelastic: Some(bad), ..m.clone() }.validate().is_err(), "{bad:?}");
+        }
     }
 
     #[test]

@@ -36,6 +36,9 @@
 //!   §6.6, eqs. 6.165–6.169 and 6.193, in Kirchhoff form). The split is what the mixed (hybrid)
 //!   elements need: they take the isochoric part from [`MaterialModel::isochoric`] and the
 //!   volumetric one from [`MaterialModel::volumetric`] with the element's own dilatation.
+//! - **Mooney–Rivlin and Yeoh**: decoupled polynomials
+//!   W̄ = C₁₀ (Ī₁ − 3) + C₀₁ (Ī₂ − 3) + C₂₀ (Ī₁ − 3)² + C₃₀ (Ī₁ − 3)³ with the neo-Hookean volume; their fictitious stress and
+//!   elasticity from Holzapfel 2000, eqs. 6.193 and 6.168 ([`MaterialModel::Polynomial`]).
 //! - **J2 plasticity** ([`crate::elastoplastic`]): Simo's multiplicative plasticity with the
 //!   exponential return map in the principal logarithmic strains (finite strain), or the
 //!   additive radial return (small strain, [`MaterialModel::small_strain`]); decoupled too, the
@@ -71,6 +74,14 @@ pub enum MaterialModel {
     StVenantKirchhoff(Box<Elasticity>),
     NeoHookean {
         shear: f64,
+        bulk: f64,
+    },
+    /// A decoupled polynomial in the isochoric invariants,
+    /// W̄ = C₁₀ (Ī₁ − 3) + C₀₁ (Ī₂ − 3) + C₂₀ (Ī₁ − 3)² + C₃₀ (Ī₁ − 3)³ with `c` = (C₁₀, C₀₁, C₂₀, C₃₀), and U = κ/2 (J − 1)²:
+    /// Mooney–Rivlin and Yeoh.
+    Polynomial {
+        name: &'static str,
+        c: [f64; 4],
         bulk: f64,
     },
     /// Von Mises plasticity (shared: one per material, whatever the element count).
@@ -123,27 +134,35 @@ fn jacobian(f: &Mat3) -> Result<f64> {
 }
 
 impl MaterialModel {
-    /// The model of a material's elastic behaviour in a nonlinear step: neo-Hookean when the
-    /// material asks for it (its isotropic constants give μ and κ), St Venant–Kirchhoff
+    /// The model of a material's elastic behaviour in a nonlinear step: the hyperelastic option
+    /// when the material has one (its isotropic constants give μ and κ), St Venant–Kirchhoff
     /// otherwise.
     pub fn from_model(elastic: &Elastic, hyperelastic: Option<&Hyperelastic>) -> Result<MaterialModel> {
         match hyperelastic {
             None => Ok(MaterialModel::StVenantKirchhoff(Box::new(elasticity(elastic)?))),
-            Some(Hyperelastic::NeoHookean {}) => {
-                let (young, poisson) = crate::material::isotropic_constants(elastic, "neo-Hookean")?;
+            Some(h) => {
+                let (young, poisson) = crate::material::isotropic_constants(elastic, h.name())?;
                 let (shear, bulk) = Hyperelastic::moduli(young, poisson);
-                Ok(MaterialModel::NeoHookean { shear, bulk })
+                Ok(Self::hyperelastic(h, shear, bulk))
             }
         }
     }
 
+    /// The hyperelastic model of an option with small-strain moduli μ and κ.
+    fn hyperelastic(h: &Hyperelastic, shear: f64, bulk: f64) -> MaterialModel {
+        match h {
+            Hyperelastic::NeoHookean {} => MaterialModel::NeoHookean { shear, bulk },
+            _ => MaterialModel::Polynomial { name: h.name(), c: h.constants(shear), bulk },
+        }
+    }
+
     /// The model of an element whose elasticity is `d` (the small-strain one) and whose material
-    /// has the large-strain option `hyperelastic`: neo-Hookean takes μ = D₄₄ and κ = D₁₂ + ⅔ μ of
-    /// an isotropic `d`, St Venant–Kirchhoff `d` itself.
+    /// has the large-strain option `hyperelastic`: the hyperelastic models take μ = D₄₄ and
+    /// κ = D₁₂ + ⅔ μ of an isotropic `d`, St Venant–Kirchhoff `d` itself.
     pub fn from_elasticity(d: &Elasticity, hyperelastic: Option<&Hyperelastic>) -> MaterialModel {
         match hyperelastic {
             None => MaterialModel::StVenantKirchhoff(Box::new(*d)),
-            Some(Hyperelastic::NeoHookean {}) => MaterialModel::NeoHookean { shear: d[3][3], bulk: d[0][1] + 2.0 / 3.0 * d[3][3] },
+            Some(h) => Self::hyperelastic(h, d[3][3], d[0][1] + 2.0 / 3.0 * d[3][3]),
         }
     }
 
@@ -151,6 +170,7 @@ impl MaterialModel {
         match self {
             MaterialModel::StVenantKirchhoff(_) => "St Venant–Kirchhoff",
             MaterialModel::NeoHookean { .. } => "neo-Hookean",
+            MaterialModel::Polynomial { name, .. } => name,
             MaterialModel::Plastic(_) => "J2 plastic",
         }
     }
@@ -180,7 +200,7 @@ impl MaterialModel {
     /// Whether the strain energy splits into isochoric and volumetric parts (what mixed
     /// elements need).
     pub fn is_decoupled(&self) -> bool {
-        matches!(self, MaterialModel::NeoHookean { .. } | MaterialModel::Plastic(_))
+        !matches!(self, MaterialModel::StVenantKirchhoff(_))
     }
 
     /// The Kirchhoff stress and spatial tangent at deformation gradient `f` and (for
@@ -197,7 +217,7 @@ impl MaterialModel {
                 let t = push_forward(f);
                 Ok(Response { stress: std::array::from_fn(|a| (0..6).map(|b| t[a][b] * s[b]).sum()), tangent: sandwich(&t, d) })
             }
-            MaterialModel::NeoHookean { .. } | MaterialModel::Plastic(_) => {
+            MaterialModel::NeoHookean { .. } | MaterialModel::Polynomial { .. } | MaterialModel::Plastic(_) => {
                 let iso = self.isochoric(f, temperature, committed, updated)?;
                 let (p, dp) = self.volumetric(j, false).ok_or_else(|| Error::Invalid("volumetric response".into()))?;
                 Ok(add_pressure(&iso, j, p, j * dp))
@@ -212,6 +232,7 @@ impl MaterialModel {
         let mu = match self {
             MaterialModel::NeoHookean { shear, .. } => *shear,
             MaterialModel::Plastic(j2) => return elastoplastic::finite_isochoric(j2, f, temperature, committed, updated),
+            MaterialModel::Polynomial { c, .. } => return polynomial_isochoric(c, f),
             MaterialModel::StVenantKirchhoff(_) => {
                 return Err(Error::NotSupported(format!("the isochoric–volumetric split of a {} material", self.name())));
             }
@@ -241,7 +262,7 @@ impl MaterialModel {
     /// `small`, J = 1 + tr ε of small strain, where every material's is K/2 (J − 1)²).
     pub fn volumetric(&self, j: f64, small: bool) -> Option<(f64, f64)> {
         match self {
-            MaterialModel::NeoHookean { bulk, .. } => Some((bulk * (j - 1.0), *bulk)),
+            MaterialModel::NeoHookean { bulk, .. } | MaterialModel::Polynomial { bulk, .. } => Some((bulk * (j - 1.0), *bulk)),
             MaterialModel::Plastic(j2) => elastoplastic::volumetric(j2, j, small),
             MaterialModel::StVenantKirchhoff(_) => None,
         }
@@ -260,6 +281,51 @@ impl MaterialModel {
             _ => Err(Error::NotSupported(format!("the {} material at small strain{}", self.name(), if bulk { "" } else { " in mixed elements" }))),
         }
     }
+}
+
+/// The isochoric response of the polynomial energy W̄(Ī₁, Ī₂) with `c` = (C₁₀, C₀₁, C₂₀, C₃₀)
+/// (Holzapfel 2000, §6.5–6.6, in Kirchhoff form): the fictitious stress
+/// τ̄ = 2 (Ψ₁ + Ī₁ Ψ₂) b̄ − 2 Ψ₂ b̄², τ_iso = dev τ̄, and with the fictitious elasticity
+/// c̄ = 4 (Ψ₁₁ + Ψ₂) b̄ ⊗ b̄ − 4 Ψ₂ b̄ ⊙ b̄ (eq. 6.193 pushed forward, Ψ₁₂ = Ψ₂₂ = 0 here),
+/// c_iso = ℙ : c̄ : ℙ + ⅔ tr τ̄ ℙ − ⅔ (τ_iso ⊗ I + I ⊗ τ_iso) (eq. 6.168). With C₁₀ alone it is
+/// the neo-Hookean response.
+fn polynomial_isochoric(c: &[f64; 4], f: &Mat3) -> Result<Response> {
+    let [c10, c01, c20, c30] = *c;
+    let j = jacobian(f)?;
+    let scale = j.powf(-2.0 / 3.0);
+    let b = mul(f, &transpose(f)).map(|row| row.map(|v| scale * v));
+    let b2 = mul(&b, &b);
+    let i1 = b[0][0] + b[1][1] + b[2][2];
+    let x = i1 - 3.0;
+    let (psi1, psi2, psi11) = (c10 + 2.0 * c20 * x + 3.0 * c30 * x * x, c01, 2.0 * c20 + 6.0 * c30 * x);
+    let (bv, b2v) = (voigt(&b), voigt(&b2));
+    let fict: [f64; 6] = std::array::from_fn(|a| 2.0 * (psi1 + i1 * psi2) * bv[a] - 2.0 * psi2 * b2v[a]);
+    let tr = fict[0] + fict[1] + fict[2];
+    let mut tau = fict;
+    for v in tau.iter_mut().take(3) {
+        *v -= tr / 3.0;
+    }
+    let mut cbar = [[0.0; 6]; 6];
+    for (a, &(i, jj)) in PAIRS.iter().enumerate() {
+        for (bb, &(k, l)) in PAIRS.iter().enumerate() {
+            cbar[a][bb] = 4.0 * (psi11 + psi2) * bv[a] * bv[bb] - 2.0 * psi2 * (b[i][k] * b[jj][l] + b[i][l] * b[jj][k]);
+        }
+    }
+    // ℙ : c̄ : ℙ = c̄ − ⅓ I ⊗ (I : c̄) − ⅓ (c̄ : I) ⊗ I + ⅑ (I : c̄ : I) I ⊗ I.
+    let row: [f64; 6] = std::array::from_fn(|a| (0..3).map(|bb| cbar[a][bb]).sum());
+    let col: [f64; 6] = std::array::from_fn(|bb| (0..3).map(|a| cbar[a][bb]).sum());
+    let all: f64 = (0..3).map(|a| row[a]).sum();
+    let i4 = identity4();
+    let mut out = [[0.0; 6]; 6];
+    for a in 0..6 {
+        for bb in 0..6 {
+            let (ia, ib) = (if a < 3 { 1.0 } else { 0.0 }, if bb < 3 { 1.0 } else { 0.0 });
+            let projected = cbar[a][bb] - ia * col[bb] / 3.0 - row[a] * ib / 3.0 + ia * ib * all / 9.0;
+            let projector = i4[a][bb] - ia * ib / 3.0;
+            out[a][bb] = projected + 2.0 / 3.0 * tr * projector - 2.0 / 3.0 * (tau[a] * ib + ia * tau[bb]);
+        }
+    }
+    Ok(Response { stress: tau, tangent: out })
 }
 
 /// An isochoric response with a pressure p acting on dilatation J: τ + J p I, and the tangent
@@ -361,6 +427,21 @@ mod tests {
                 }
             }
         }
+        // Mooney–Rivlin and Yeoh: consistent and symmetric; with C₁₀ alone the neo-Hookean model.
+        for m in [
+            MaterialModel::Polynomial { name: "Mooney–Rivlin", c: [120.0, 30.0, 0.0, 0.0], bulk: 5000.0 },
+            MaterialModel::Polynomial { name: "Yeoh", c: [150.0, 0.0, -12.0, 1.5], bulk: 5000.0 },
+        ] {
+            check_tangent(&m, &deformation());
+            check_tangent(&m, &IDENTITY);
+            let c = m.response(&deformation(), None, &[], &mut []).unwrap().tangent;
+            assert!((0..36).all(|k| (c[k / 6][k % 6] - c[k % 6][k / 6]).abs() < 1e-9 * 5000.0), "{} symmetric", m.name());
+        }
+        let neo = MaterialModel::NeoHookean { shear: 300.0, bulk: 5000.0 };
+        let poly = MaterialModel::Polynomial { name: "neo", c: [150.0, 0.0, 0.0, 0.0], bulk: 5000.0 };
+        let (a, b) = (neo.response(&deformation(), None, &[], &mut []).unwrap(), poly.response(&deformation(), None, &[], &mut []).unwrap());
+        assert!(a.stress.iter().zip(&b.stress).all(|(x, y)| (x - y).abs() < 1e-11 * 300.0));
+        assert!(a.tangent.iter().flatten().zip(b.tangent.iter().flatten()).all(|(x, y)| (x - y).abs() < 1e-10 * 5000.0));
         let ortho = crate::material::orthotropic([1000.0, 300.0, 500.0], [0.3, 0.2, 0.25], [100.0, 120.0, 90.0]).unwrap();
         check_tangent(&MaterialModel::StVenantKirchhoff(Box::new(ortho)), &deformation());
     }

@@ -597,6 +597,10 @@ mod tests {
         for (kind, x, np) in [(ElementKind::Hex8, &x8, 1), (ElementKind::Hex20, &x20, 4), (ElementKind::Tet10, &x10, 1)] {
             let hybrid = Solid::new(kind, x, Formulation::Hybrid { pressures: np }).unwrap();
             check_tangent(&hybrid, &neo, &displacement(x.len(), 0.08));
+            let mr = MaterialModel::Polynomial { name: "Mooney–Rivlin", c: [100.0, 50.0, 0.0, 0.0], bulk: 3000.0 };
+            let yeoh = MaterialModel::Polynomial { name: "Yeoh", c: [150.0, 0.0, -10.0, 2.0], bulk: 3000.0 };
+            check_tangent(&hybrid, &mr, &displacement(x.len(), 0.08));
+            check_tangent(&hybrid, &yeoh, &displacement(x.len(), 0.08));
             assert!(hybrid.finite_strain(&svk, &displacement(x.len(), 0.0), &[], &mut [], false).is_err(), "SVK has no split");
         }
         let im = Solid::new(ElementKind::Hex8, &x8, Formulation::IncompatibleModes).unwrap();

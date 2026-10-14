@@ -790,6 +790,19 @@ fn nonlinear_steps_and_hyperelastic_materials_are_written() {
     assert!((values[0] - c10).abs() < 1e-9 * c10 && (values[1] - d1).abs() < 1e-9 * d1, "{line}");
     assert!(!deck.contains("*ELASTIC"), "{deck}");
 
+    // Mooney–Rivlin and Yeoh: C10 = μ/2 − C01, C01, D1 and C10, C20, C30, D1.
+    m.replace_material("Steel", Material { hyperelastic: Some(Hyperelastic::MooneyRivlin { c01: 10000.0 }), ..steel() }).unwrap();
+    let deck = abaqus::write(&m).unwrap();
+    let line = deck.split("*HYPERELASTIC, MOONEY-RIVLIN\n").nth(1).and_then(|s| s.lines().next()).unwrap();
+    let values: Vec<f64> = line.split(", ").map(|v| v.parse().unwrap()).collect();
+    assert!((values[0] - (c10 - 10000.0)).abs() < 1e-9 * c10 && values[1] == 10000.0 && (values[2] - d1).abs() < 1e-9 * d1, "{line}");
+    m.replace_material("Steel", Material { hyperelastic: Some(Hyperelastic::Yeoh { c20: -50.0, c30: 2.0 }), ..steel() }).unwrap();
+    let deck = abaqus::write(&m).unwrap();
+    let line = deck.split("*HYPERELASTIC, YEOH\n").nth(1).and_then(|s| s.lines().next()).unwrap();
+    let values: Vec<f64> = line.split(", ").map(|v| v.parse().unwrap()).collect();
+    assert!((values[0] - c10).abs() < 1e-9 * c10 && values[1..3] == [-50.0, 2.0] && (values[3] - d1).abs() < 1e-9 * d1, "{line}");
+    m.replace_material("Steel", Material { hyperelastic: Some(Hyperelastic::NeoHookean {}), ..steel() }).unwrap();
+
     m.add_step(step("Linear", Procedure::Static {}, &["clamp"], &["end"]), None).unwrap();
     assert!(unsupported(&m).contains("step `Linear`: a linear static step beside nonlinear steps of hyperelastic material `Steel`"));
     m.remove_step("Bend").unwrap();

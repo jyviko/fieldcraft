@@ -36,7 +36,7 @@ log = "0.4"
 
 # 3MF packages (docs/formats/tagged-mesh.md): the same versions SolidCraft uses.
 zip = { version = "3", default-features = false, features = ["deflate"] }
-quick-xml = "0.41"
+quick-xml = "0.42"
 
 # content hashes and part checksums of .fieldcraft files (the version SolidCraft uses)
 sha2 = "0.10"

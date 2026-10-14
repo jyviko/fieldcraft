@@ -18,11 +18,27 @@ use crate::{Error, Result};
 /// A 6 × 6 elasticity matrix, row-major.
 pub type Elasticity = [[f64; 6]; 6];
 
-/// The isotropic elasticity matrix.
-pub fn isotropic(young: f64, poisson: f64) -> Result<Elasticity> {
+/// Check isotropic constants: E > 0 and −1 < ν < 0.5.
+fn check_isotropic(young: f64, poisson: f64) -> Result<()> {
     if !(young > 0.0 && young.is_finite() && poisson > -1.0 && poisson < 0.5) {
         return Err(Error::Invalid(format!("isotropic constants E = {young}, ν = {poisson} are not a stable material")));
     }
+    Ok(())
+}
+
+/// The checked (E, ν) of an isotropic material, for the structural sections (shells, beams,
+/// rods) that need one; `what` names the section kind in the error for other materials.
+pub fn isotropic_constants(elastic: &Elastic, what: &str) -> Result<(f64, f64)> {
+    let Elastic::Isotropic { young, poisson } = *elastic else {
+        return Err(Error::NotSupported(format!("orthotropic {what} sections (they need material orientations)")));
+    };
+    check_isotropic(young, poisson)?;
+    Ok((young, poisson))
+}
+
+/// The isotropic elasticity matrix.
+pub fn isotropic(young: f64, poisson: f64) -> Result<Elasticity> {
+    check_isotropic(young, poisson)?;
     let lambda = young * poisson / ((1.0 + poisson) * (1.0 - 2.0 * poisson));
     let mu = young / (2.0 * (1.0 + poisson));
     let mut d = [[0.0; 6]; 6];

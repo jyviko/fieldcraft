@@ -17,6 +17,10 @@
 //!   and lumped mass, body forces, integration-point stresses and their extrapolation to nodes;
 //! - [`plane`]: 2D elements (plane stress, plane strain, axisymmetric) on tri3, tri6, quad4 and
 //!   quad8, with two displacement components per node;
+//! - [`shell`]: flat MITC4 quadrilateral and MITC3 triangle shells with a drilling rotation, six
+//!   degrees of freedom per node;
+//! - [`beam`]: two-node Timoshenko beams with profile section properties;
+//! - [`frame`]: local axes of shells and beams and the rotation of their matrices;
 //! - [`face`]: consistent nodal forces of pressure on element faces;
 //! - [`uniform`]: uniform-strain (one-point) hexahedron and tetrahedron kinematics, hourglass
 //!   shape vectors and element frequency bounds for explicit dynamics;
@@ -29,7 +33,7 @@
 //! - [`dense`]: the small dense linear algebra inside an element.
 //!
 //! Conventions: element matrices are ordered node by node, each node's degrees of freedom in
-//! [`DofKind`] order (three translations for solids; docs/fem.md); stress
+//! [`DofKind`] order (three translations for solids, six for shells and beams; docs/fem.md); stress
 //! and strain 6-vectors in the order xx, yy, zz, xy, xz, yz with engineering shear strains.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
@@ -37,10 +41,12 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod basis;
+pub mod beam;
 pub mod dense;
 pub mod dof;
 pub mod element;
 pub mod face;
+pub mod frame;
 pub mod jet;
 pub mod material;
 pub mod plane;
@@ -48,6 +54,7 @@ pub mod plasticity;
 pub mod quadrature;
 pub mod rotation;
 pub mod shape;
+pub mod shell;
 pub mod truss;
 pub mod uniform;
 

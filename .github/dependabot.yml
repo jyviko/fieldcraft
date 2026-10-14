@@ -1,0 +1,53 @@
+# Weekly dependency updates against develop, the trunk, grouped so each ecosystem opens one pull
+# request a week. Security updates are switched on in the repository settings and open their own
+# pull requests as advisories appear. CI runs the full gate on Dependabot's pull requests
+# (.github/workflows/ci.yml).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      # Compatible updates (Cargo.lock only) in one pull request; a breaking release of a
+      # dependency comes on its own, since it usually needs code changes.
+      cargo-compatible:
+        update-types: [minor, patch]
+    ignore:
+      # Pinned to the SolidCraft commit FieldCraft builds against, together with the truck and
+      # egui-wgpu patches from that commit ([patch.crates-io] in Cargo.toml); moved by hand.
+      - dependency-name: "solidcraft-*"
+      - dependency-name: "truck-*"
+      - dependency-name: matext4cgmath
+      - dependency-name: egui-wgpu
+      # The egui line follows SolidCraft's (its egui-wgpu fixes are patched in): patch releases
+      # come with the group, a new line (0.36 -> 0.37) moves by hand with SolidCraft.
+      - dependency-name: egui
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: eframe
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # The shared Craft components follow VectorCraft's rev.
+      - dependency-name: craft-ui
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+    groups:
+      # Actions are pinned by commit SHA with a version comment; Dependabot updates both.
+      actions:
+        patterns: ["*"]

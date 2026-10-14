@@ -4,7 +4,8 @@ name: CI
 # team's pull requests are checked locally on the crates they touch and merged; a red trunk is
 # fixed forward. `main` holds released code only (docs/releasing.md).
 # Pull requests from forks (outside contributors) run the full gate, once the maintainer approves
-# the run, so the review sees it.
+# the run, so the review sees it; so do Dependabot's (.github/dependabot.yml), which nobody tests
+# locally. The heavy job stays off pull requests.
 on:
   pull_request:
     paths:
@@ -47,7 +48,7 @@ env:
 jobs:
   ci:
     name: cargo xtask ci
-    if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -80,7 +81,7 @@ jobs:
     # its fixture, and docs/oracle.md must be the table the cases produce. Cases marked `slow`
     # run here too while the whole set stays within a few minutes; `--quick` skips them.
     name: cargo xtask oracle
-    if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -114,7 +115,7 @@ jobs:
 
   advisories:
     name: Dependency advisories and sources
-    if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

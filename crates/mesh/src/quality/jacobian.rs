@@ -32,7 +32,7 @@ pub(crate) const HEX_CORNERS: [[usize; 3]; 8] = [[0, 0, 0], [1, 0, 0], [1, 1, 0]
 /// Hex edges in the order of hex20's mid-side nodes.
 pub(crate) const HEX_EDGES: [(usize, usize); 12] = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)];
 /// Tet edges in the order of tet10's mid-side nodes.
-pub(crate) const TET_EDGES: [(usize, usize); 6] = [(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)];
+pub const TET_EDGES: [(usize, usize); 6] = [(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)];
 
 /// A Jacobian determinant is positive when it exceeds this fraction of its largest magnitude.
 /// Anything smaller is degenerate to rounding and counts as invalid.
@@ -280,15 +280,35 @@ impl Piece {
     }
 }
 
-/// Decide the sign of a Jacobian determinant on the whole reference domain.
-pub(crate) fn certify(det: Bernstein) -> Result<JacobianCheck> {
+/// An upper bound of `|∂x/∂ξ_a|` over the whole element for one Jacobian column (a vector
+/// polynomial in Bernstein form): the longest control vector, since the polynomial stays in the
+/// convex hull of its control points.
+fn column_norm_bound(column: &[Bernstein; 3]) -> f64 {
+    let [x, y, z] = column.each_ref().map(Bernstein::coefficients);
+    x.iter().zip(&y).zip(&z).map(|((a, b), c)| (a * a + b * b + c * c).sqrt()).fold(0.0, f64::max)
+}
+
+/// The determinant's floor for [`certify`] that proves FieldCraft's validity criterion
+/// ([`fieldcraft_model::admissible_jacobian`]) on the whole element: with `N` the product of the
+/// columns' norm bounds, `det J(ξ) > 2 · MIN_NORMALIZED_JACOBIAN · N` everywhere gives
+/// `det J(ξ) / Π|J_a(ξ)| > MIN_NORMALIZED_JACOBIAN` at every point, so the solvers, which check
+/// the same criterion at their integration points, accept every element the gate accepts. The
+/// factor 2 covers the rounding of the solvers' own Jacobian evaluation.
+pub(crate) fn admissible_floor(columns: &[[Bernstein; 3]; 3]) -> f64 {
+    let n: f64 = columns.iter().map(column_norm_bound).product();
+    2.0 * fieldcraft_model::MIN_NORMALIZED_JACOBIAN * n
+}
+
+/// Decide whether a Jacobian determinant exceeds `floor` (and [`RELATIVE_TOLERANCE`] of its
+/// largest magnitude) on the whole reference domain.
+pub(crate) fn certify(det: Bernstein, floor: f64) -> Result<JacobianCheck> {
     let (lo, hi) = det.bounds();
     let volume = det.integral();
     let scale = lo.abs().max(hi.abs());
-    if !scale.is_finite() || !volume.is_finite() {
+    if !scale.is_finite() || !volume.is_finite() || !floor.is_finite() {
         return Err(Error::Invalid("the element's Jacobian is not a finite number".into()));
     }
-    let tol = RELATIVE_TOLERANCE * scale;
+    let tol = (RELATIVE_TOLERANCE * scale).max(floor);
     let ratio_of = |v: f64| if scale > 0.0 { v / scale } else { 0.0 };
     let verts = det.factors().iter().map(|f| (0..=f.dim).map(|k| simplex_vertex(k, 1).map(|x| x as f64)).collect()).collect();
     let mut stack = vec![Piece::new(det, verts, 0)];

@@ -30,7 +30,7 @@
 
 use fieldcraft_model::Elastic;
 
-use crate::dense::inverse3;
+use crate::dense::positive_inverse;
 use crate::material::Elasticity;
 use crate::quadrature::Rule;
 use crate::shape::{self, HEX_CORNERS};
@@ -72,11 +72,7 @@ impl UniformStrain<8> {
                     }
                 }
             }
-            let (inv, det) = inverse3(&j).ok_or_else(|| degenerate("hex8"))?;
-            let norms: f64 = j.iter().map(|r| (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt()).product();
-            if !(det > 1e-12 * norms) {
-                return Err(degenerate("hex8"));
-            }
+            let (inv, det) = positive_inverse(&j).ok_or_else(|| degenerate("hex8"))?;
             let w = det * p.weight;
             volume += w;
             for (((bi, vi), d), n) in b.iter_mut().zip(nodal_volume.iter_mut()).zip(s.derivatives()).zip(s.values()) {
@@ -172,15 +168,9 @@ impl UniformStrain<4> {
     /// The linear tetrahedron of corners `xyz` (the model's tet4 node order).
     pub fn tet4(xyz: &[[f64; 3]; 4]) -> Result<Tet4> {
         fieldcraft_model::check_coordinates(xyz.as_flattened()).map_err(|e| Error::Invalid(e.to_string()))?;
-        let [x0, x1, x2, x3] = *xyz;
-        let e = |x: [f64; 3]| [x[0] - x0[0], x[1] - x0[1], x[2] - x0[2]];
         // J[a][c] = ∂x_c/∂ξ_a: the edges from corner 1.
-        let j = [e(x1), e(x2), e(x3)];
-        let (inv, det) = inverse3(&j).ok_or_else(|| degenerate("tet4"))?;
-        let norms: f64 = j.iter().map(|r| (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt()).product();
-        if !(det > 1e-12 * norms) {
-            return Err(degenerate("tet4"));
-        }
+        let j = fieldcraft_model::tet4_jacobian(xyz);
+        let (inv, det) = positive_inverse(&j).ok_or_else(|| degenerate("tet4"))?;
         let volume = det / 6.0;
         let s = shape::tet4([0.25; 3]);
         let mut b = [[0.0; 3]; 4];

@@ -19,6 +19,7 @@ use fieldcraft_mesh::hex::{Cell, HexOptions, Surface, hex_mesh, hex_mesh_cells};
 use fieldcraft_mesh::octree::{OctreeOptions, octree_hex_mesh};
 use fieldcraft_mesh::size::UniformSize;
 use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
+use fieldcraft_mesh::tet::{QualityOptions, quality_mesh};
 
 pub const FILE: &str = "docs/meshing/corpus.md";
 /// Chordal tolerance of the boundary surface, relative to the part's bounding-box diagonal.
@@ -47,7 +48,7 @@ pub trait Stage {
 
 /// The stages, in column order. Meshers add theirs here.
 fn stages() -> Vec<Box<dyn Stage>> {
-    vec![Box::new(SurfaceVolume), Box::new(BoundaryCheck), Box::new(TetCdt), Box::new(StructuredHex), Box::new(OctreeHex)]
+    vec![Box::new(SurfaceVolume), Box::new(BoundaryCheck), Box::new(TetCdt), Box::new(TetQualityStage), Box::new(StructuredHex), Box::new(OctreeHex)]
 }
 
 /// The boundary surface's enclosed volume against SolidCraft's measured volume and the closed
@@ -104,18 +105,63 @@ impl Stage for TetCdt {
 
     fn run(&self, l: &Loaded) -> Result<Vec<String>, String> {
         let start = Instant::now();
-        let (mut tets, mut steiner, mut cavities) = (0, 0, 0);
+        let (mut tets, mut steiner, mut cavities, mut inadmissible) = (0, 0, 0, 0);
         for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
             let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
             let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).map_err(|e| format!("{}: {e}", body.name))?;
             let m = tetrahedralize(&s, &CdtOptions::default()).map_err(|e| format!("{}: {e}", body.name))?;
-            m.gate(s.volume()).and_then(|r| r.into_result()).map_err(|e| format!("{}: rounded mesh: {e}", body.name))?;
+            let report = m.gate(s.volume()).map_err(|e| format!("{}: rounded mesh: {e}", body.name))?;
+            if !report.volume_matches() {
+                return Err(format!("{}: rounded mesh: {:?}", body.name, report.into_result().err()));
+            }
+            inadmissible += report.invalid.len() + report.undetermined.len();
             tets += m.tets.len();
             steiner += m.steiner.len();
             cavities += m.stats.cavities;
         }
         let ms = start.elapsed().as_secs_f64() * 1e3;
-        Ok(vec![tets.to_string(), steiner.to_string(), cavities.to_string(), "pass".into(), format!("{ms:.0}")])
+        let gate = if inadmissible == 0 { "pass".to_string() } else { format!("{inadmissible} flat") };
+        Ok(vec![tets.to_string(), steiner.to_string(), cavities.to_string(), gate, format!("{ms:.0}")])
+    }
+}
+
+/// The quality stage (`fieldcraft_mesh::tet`) on each body's CDT, with the default options: the
+/// mesh's tetrahedra, its extreme dihedral angles, the slivers (a dihedral angle below 10° or
+/// above 170°) of the CDT and of the result, and the validity gate.
+struct TetQualityStage;
+
+impl Stage for TetQualityStage {
+    fn headers(&self) -> &'static [&'static str] {
+        &["quality tets", "min dihedral °", "max dihedral °", "min radius ratio", "slivers CDT → mesh", "quality gate", "quality ms"]
+    }
+
+    fn run(&self, l: &Loaded) -> Result<Vec<String>, String> {
+        let start = Instant::now();
+        let (mut tets, mut lo, mut hi, mut rr, mut before, mut after) = (0, 180.0_f64, 0.0_f64, 1.0_f64, 0, 0);
+        for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
+            let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
+            let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).map_err(|e| format!("{}: {e}", body.name))?;
+            let m = tetrahedralize(&s, &CdtOptions::default()).map_err(|e| format!("{}: {e}", body.name))?;
+            let q = quality_mesh(&s, &m, fieldcraft_engine::analytic_surfaces(body), &QualityOptions::default())
+                .map_err(|e| format!("{}: {e}", body.name))?;
+            let r = &q.report;
+            tets += r.output.tets;
+            lo = lo.min(r.output.min_dihedral);
+            hi = hi.max(r.output.max_dihedral);
+            rr = rr.min(r.output.min_radius_ratio);
+            before += r.input.slivers;
+            after += r.output.slivers;
+        }
+        let ms = start.elapsed().as_secs_f64() * 1e3;
+        Ok(vec![
+            tets.to_string(),
+            format!("{lo:.1}"),
+            format!("{hi:.1}"),
+            format!("{rr:.3}"),
+            format!("{before} → {after}"),
+            "pass".into(),
+            format!("{ms:.0}"),
+        ])
     }
 }
 

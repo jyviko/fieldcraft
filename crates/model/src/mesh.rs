@@ -227,6 +227,43 @@ pub fn check_coordinates(xyz: &[f64]) -> Result<()> {
     }
 }
 
+/// The smallest normalized Jacobian ([`normalized_jacobian`]) of an admissible solid element.
+///
+/// This is FieldCraft's one definition of an inverted or degenerate element. The solvers
+/// (implicit and explicit) refuse an element whose Jacobian at one of their integration points is
+/// not admissible ([`admissible_jacobian`]); the meshers' validity gate proves the same bound on
+/// the whole element (`fieldcraft_mesh::quality`), so a mesh that passes the gate always passes
+/// the solvers. A linear tetrahedron has one constant Jacobian ([`tet4_jacobian`]), which the gate
+/// and the solvers compute from the same coordinate differences, so they agree on it bit for bit.
+pub const MIN_NORMALIZED_JACOBIAN: f64 = 1e-12;
+
+/// The normalized Jacobian `det J / (|J₁| |J₂| |J₃|)` of a Jacobian matrix with rows
+/// `J_a = ∂x/∂ξ_a`: the signed volume of the parallelepiped its rows span over that of a box with
+/// the same edge lengths. It lies in `[-1, 1]` (Hadamard's inequality), does not depend on the
+/// scale of each reference direction, is 1 for orthogonal rows and 0 for a flat element. A zero
+/// row, or a matrix that is not finite, gives 0.
+pub fn normalized_jacobian(j: &[[f64; 3]; 3]) -> f64 {
+    let [a, b, c] = j;
+    let det = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+    let norms: f64 = j.iter().map(|r| (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt()).product();
+    let q = det / norms;
+    if q.is_finite() { q.clamp(-1.0, 1.0) } else { 0.0 }
+}
+
+/// Whether a Jacobian matrix belongs to an admissible (not inverted, not degenerate) element:
+/// its normalized Jacobian exceeds [`MIN_NORMALIZED_JACOBIAN`].
+pub fn admissible_jacobian(j: &[[f64; 3]; 3]) -> bool {
+    normalized_jacobian(j) > MIN_NORMALIZED_JACOBIAN
+}
+
+/// The Jacobian matrix of a linear tetrahedron with corners `xyz` in tet4 order: its edges from
+/// the first corner (`∂x/∂ξ_a` of the linear map), the form the solvers and the gate share.
+pub fn tet4_jacobian(xyz: &[[f64; 3]; 4]) -> [[f64; 3]; 3] {
+    let [o, a, b, c] = xyz;
+    let e = |p: &[f64; 3]| [p[0] - o[0], p[1] - o[1], p[2] - o[2]];
+    [e(a), e(b), e(c)]
+}
+
 pub(crate) fn check_label(what: &str, label: u32) -> Result<()> {
     if label == 0 || label > MAX_LABEL {
         return Err(Error::Invalid(format!("{what} label {label} is outside 1..={MAX_LABEL}")));

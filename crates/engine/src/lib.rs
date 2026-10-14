@@ -15,6 +15,8 @@
 pub mod autosave;
 pub mod catalogue;
 pub mod cmd;
+
+pub use cmd::analytic_surfaces;
 pub mod history;
 pub mod results;
 pub mod sample;
@@ -365,7 +367,8 @@ mod tests {
             json!({"format": "nastran", "path": "/no/such/dir/part.bdf", "steps": vec!["x".repeat(1000); 2000]}),
             json!({"format": "nastran", "path": "/no/such/dir/part.bdf", "steps": {}}),
             json!({"path": 7}),
-            json!({"body": "Body1", "tolerance": 0.05}),
+            // (`max_points` and `max_passes` keep mesh.tet.generate's quality stage small.)
+            json!({"body": "Body1", "tolerance": 0.05, "max_points": 3000, "max_passes": 1}),
             json!({"body": null, "tolerance": "fine"}),
             json!({"elements": [u32::MAX, -1, 1.5]}),
             json!({"elements": {}, "bins": -5}),
@@ -385,7 +388,7 @@ mod tests {
             json!({"polygon": [[0, 0], [1, 0], [0, 1]], "holes": [[[0.1, 0.1], [0.2, 0.1], [0.1, 0.2]], [[0.1, 0.1], [0.2, 0.1], [0.1, 0.2]]], "size": 0.2}),
             json!({"polygon": [["a", 0], [1, null], {}], "size": "big", "kind": 7}),
             json!({"polygon": [[0, 0], [1, 0], [0, 1]], "size": 1e300, "kind": "tri6", "max_elements": 1e300}),
-            json!({"body": "Body1", "face": "", "tolerance": 0.05, "size": 1}),
+            json!({"body": "Body1", "face": "", "tolerance": 0.05, "size": 1, "max_points": 3000, "max_passes": 1}),
             // Structured hex meshing.
             json!({"size": -1, "order": 9, "method": "x"}),
             json!({"size": 1e-300}),
@@ -515,15 +518,34 @@ mod tests {
             json!({"body": "Body1", "tolerance": 1e-300}),
             json!({"body": "Body1", "tolerance": 1e300}),
             json!({"body": "Body2", "tolerance": 0.1}),
-            json!({"body": "Body1", "tolerance": 0.5, "surface": 0}),
-            json!({"body": "Body1", "tolerance": 0.5, "weld": 0}),
-            json!({"body": "Body1", "tolerance": 0.5, "weld": 1e-3}),
-            json!({"body": "Body1", "tolerance": 0.5, "weld": f64::MIN_POSITIVE}),
-            json!({"body": "Body1", "tolerance": 0.5, "weld": 0, "weld_distance": 0}),
-            json!({"body": "Body1", "tolerance": 0.5, "weld_distance": 1e300}),
-            json!({"body": "Body1", "tolerance": 0.5, "weld_distance": 0.05}),
-            json!({"body": "Body1", "tolerance": 0.5, "feature_angle": 1e-300}),
-            json!({"body": "Body1", "tolerance": 0.5, "feature_angle": null}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1, "surface": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1, "weld": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1, "weld": 1e-3}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1, "weld": f64::MIN_POSITIVE}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1, "weld": 0, "weld_distance": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1, "weld_distance": 1e300}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1, "weld_distance": 0.05}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1, "feature_angle": 1e-300}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1, "feature_angle": null}),
+            // The quality stage's own parameters, hostile, with small caps so this stays fast.
+            json!({"body": "Body1", "tolerance": 0.5, "size": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": -1}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 1e300}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 1e-300, "max_points": 2000, "max_tets": 5000}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": "fine"}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "order": "cubic"}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "order": "quadratic", "quality": false}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "quality": "yes"}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "quality_target": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "quality_target": 1e300}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "curvature_angle": -1}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "curvature_angle": 1e-300, "max_points": 2000}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "grading": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "grading": f64::MAX}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_passes": 1e9}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_points": 0}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 20, "max_points": 30, "max_passes": 1}),
+            json!({"body": "Body1", "tolerance": 0.5, "size": 0.5, "max_tets": 3000, "max_passes": 1}),
             json!({"body": "Body1", "size": 1e-300}),
             json!({"body": "Body1", "size": 1e300, "order": 2}),
             json!({"body": "Body1", "size": 4, "method": "sweep", "order": 2}),

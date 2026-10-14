@@ -106,11 +106,13 @@ pub fn inverse3(m: &[[f64; 3]; 3]) -> Option<([[f64; 3]; 3], f64)> {
 }
 
 /// The inverse and determinant of a Jacobian that maps a reference element onto a valid one:
-/// `None` unless det J is positive beyond round-off relative to the product of its row norms.
+/// `None` unless it is admissible by FieldCraft's one validity criterion
+/// ([`fieldcraft_model::admissible_jacobian`], the one the meshers' validity gate proves).
 pub fn positive_inverse(j: &[[f64; 3]; 3]) -> Option<([[f64; 3]; 3], f64)> {
-    let (inv, det) = inverse3(j)?;
-    let norms: f64 = j.iter().map(|r| (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt()).product();
-    (det > 1e-12 * norms).then_some((inv, det))
+    if !fieldcraft_model::admissible_jacobian(j) {
+        return None;
+    }
+    inverse3(j)
 }
 
 /// The eigenvalues and unit eigenvectors (the columns of the matrix returned) of a symmetric

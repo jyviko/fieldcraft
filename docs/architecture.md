@@ -65,9 +65,13 @@ Rules beyond the layer order:
    perturbation for degeneracies), boundary recovery by the robust constrained Delaunay method of
    Diazzi et al. 2023 (implicit Steiner points on indirect predicates, gift-wrapping facet
    recovery; `fieldcraft-mesh::cdt`, command `mesh.tet.generate`), so every boundary triangle and
-   its B-rep face tag survives. Then constrained Delaunay refinement to a
-   size field, ODT smoothing interleaved as in Tournois et al. 2009, and the Klingner–Shewchuk 2007
-   improvement schedule against slivers.
+   its B-rep face tag survives; rounding is repaired by flips (§5.1). Then the quality stage
+   (`fieldcraft-mesh::tet`): a curvature-graded size field, edge-collapse coarsening, constrained
+   Delaunay refinement with boundary points projected onto the B-rep faces and curves (exact
+   surfaces from SolidCraft where analytic, the tessellation otherwise), ODT smoothing
+   interleaved as in Tournois et al. 2009, the Klingner–Shewchuk 2007 improvement schedule
+   against slivers, and tet10 with mid-edge nodes on the geometry. Every step is a checked local
+   replacement, so the mesh stays valid throughout.
 4. **Hexahedral meshing (the core).** Grid-based all-hex first, the one family that meshes any
    input validly. `fieldcraft-mesh::octree` (command `mesh.hex.octree`): a 27-tree over the part,
    refined by curvature, thickness and narrow faces, balanced and cut by the 3-refinement
@@ -107,7 +111,10 @@ Rules beyond the layer order:
    faces, edges and vertices become geometry tags that sets select. It meshes the analytic
    shapes of the verification cases.
 6. **Quality.** Scaled Jacobian, aspect ratio, dihedral angles; every generated mesh is checked
-   for positive Jacobians and conserved volume before it reaches the model.
+   for valid Jacobians and conserved volume before it reaches the model. Validity is one
+   criterion shared with both solvers (`fieldcraft_model::admissible_jacobian`: normalized
+   Jacobian above 1e-12): the gate proves it on the whole element, the solvers check it at their
+   integration points, so a mesh the gate accepts is never refused by a solver.
 
 ## Model definition
 

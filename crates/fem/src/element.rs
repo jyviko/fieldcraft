@@ -35,7 +35,7 @@
 use fieldcraft_model::ElementKind;
 
 use crate::basis::Basis;
-use crate::dense::{Cholesky, Matrix, inverse3, positive_inverse};
+use crate::dense::{Cholesky, Matrix, positive_inverse};
 use crate::dof::{DofSet, ElementDofs, Internal};
 use crate::material::{Elasticity, stress};
 use crate::quadrature::{Point, Rule};
@@ -356,7 +356,7 @@ impl<'a> Solid<'a> {
 
     fn centre_jacobian(&self) -> Result<([[f64; 3]; 3], f64)> {
         let s = (self.ty.shape)([0.0; 3]);
-        inverse3(&self.jacobian(&s)).filter(|(_, d)| *d > 0.0).ok_or_else(|| self.degenerate())
+        positive_inverse(&self.jacobian(&s)).ok_or_else(|| self.degenerate())
     }
 
     /// The parts of the stiffness with the incompatible modes: K_uu (when `with_uu`), K_ua

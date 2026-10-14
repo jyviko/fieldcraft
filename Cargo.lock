@@ -1353,6 +1353,7 @@ name = "fieldcraft-solver"
 version = "0.1.0"
 dependencies = [
  "fieldcraft-fem",
+ "fieldcraft-mesh",
  "fieldcraft-model",
  "fieldcraft-parallel",
  "serde",

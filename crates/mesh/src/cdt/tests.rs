@@ -10,7 +10,7 @@ use crate::vec3::{cross, dot, norm, sub};
 
 /// A closed surface from points and triangles, each triangle oriented outward from `centre`
 /// (the shapes here are star-shaped about it).
-fn surface(points: &[[f64; 3]], triangles: &[[u32; 3]], centre: [f64; 3]) -> BoundarySurface {
+pub(crate) fn surface(points: &[[f64; 3]], triangles: &[[u32; 3]], centre: [f64; 3]) -> BoundarySurface {
     let oriented: Vec<[u32; 3]> = triangles
         .iter()
         .map(|&[a, b, c]| {
@@ -47,7 +47,7 @@ fn check(s: &BoundarySurface, m: &TetMesh) {
     }
 }
 
-fn cube() -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
+pub(crate) fn cube() -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
     let p: Vec<[f64; 3]> = (0..8).map(|i| [(i & 1) as f64, (i >> 1 & 1) as f64, (i >> 2 & 1) as f64]).collect();
     let quads = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
     let t = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
@@ -98,7 +98,7 @@ fn schonhardt_prism_gets_steiner_points_and_conforms() {
 }
 
 /// A UV sphere: many cospherical vertices.
-fn uv_sphere(rings: usize, sectors: usize) -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
+pub(crate) fn uv_sphere(rings: usize, sectors: usize) -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
     let mut p = vec![[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]];
     for r in 1..rings {
         let th = std::f64::consts::PI * r as f64 / rings as f64;

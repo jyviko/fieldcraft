@@ -296,6 +296,12 @@ impl Bernstein {
         Ok((a, b))
     }
 
+    /// The coefficients of the used slots, in a fixed order shared by every polynomial on the
+    /// same domain (so the coefficients of a vector-valued polynomial's components line up).
+    pub fn coefficients(&self) -> Vec<f64> {
+        self.multis().iter().map(|m| self.get(m)).collect()
+    }
+
     /// The smallest and largest coefficient: bounds of the polynomial on its domain.
     pub fn bounds(&self) -> (f64, f64) {
         self.multis().iter().map(|m| self.get(m)).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c), hi.max(c)))

@@ -18,6 +18,7 @@ pub mod quad;
 pub mod quality;
 pub mod size;
 pub mod surface;
+pub mod tet;
 mod vec3;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

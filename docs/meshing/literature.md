@@ -250,9 +250,12 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
   - Reference points (§3.3) are searched among the tetrahedra whose boxes meet the missing subsegment's box (they
     contain the tetrahedra the subsegment crosses); on the corpus this picks the same point as searching the whole
     diametral ball.
-  - Rounding (§5.1): a Steiner point whose rounding leaves an incident tetrahedron non-positive tries the doubles
-    within two ulps per coordinate, nearest first; the flip-based improvement of §5.1 is not implemented. All 20
-    valid corpus parts pass the validity gate after rounding.
+  - Rounding (§5.1): the flips of §5.1 run on the rounded coordinates (`cdt::repair`), decided by exact `orient3d` on
+    the doubles: every tetrahedron that rounding (or nearly cospherical input) leaves flat, inverted or below
+    FieldCraft's validity criterion is targeted by edge removal and multi-face removal that never touch a segment, and
+    a flat tetrahedron lying on one input triangle is deleted. What survives (a flat tetrahedron spanning two nearly
+    coplanar input triangles: 1–65 per part on 7 corpus parts) is counted by the gate and removed by the quality stage,
+    whose boundary is the B-rep faces rather than the input triangles.
 
 **A2.4 Diazzi and Attene 2021, convex polyhedral meshing.** **Verdict: reference.**
 - **Citation.** L. Diazzi, M. Attene. *Convex polyhedral meshing for robust solid modeling.* ACM TOG 40(6):259, 2021.
@@ -319,6 +322,16 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 - **Complexity.** Medium, on top of A2.3.
 - **Code.** None read.
 
+- **Implemented** in `fieldcraft-mesh::tet::refine`: circumcentres of tetrahedra whose radius–edge ratio exceeds B = 2
+  (when their circumradius is at least half the local size) or whose circumradius exceeds 0.75 of the local size; a
+  circumcentre outside the domain or inside a boundary face's diametral sphere splits that face instead (at its
+  circumcentre when inside it, else at its longest edge's midpoint, a feature edge split when that edge is one), every
+  boundary point projected onto its B-rep face or curve. Small input angles are handled by bounds rather than Si's
+  theory: faces below half the local size are not split, no vertex closer than 0.05 of the size to another, a
+  tetrahedron whose point could not go in is not retried, caps on insertions and tetrahedra. Before refinement, edge
+  collapse coarsens the boundary recovery's dense Steiner points (X. Li, M. S. Shephard, M. W. Beall, *3D anisotropic
+  mesh adaptation by mesh modification*, CMAME 194(48–49):4915–4950, 2005).
+
 **A3.2 Cheng, Dey, Shewchuk, *Delaunay Mesh Generation* (CRC, 2012).** **Verdict: reference (the textbook).**
 - **Links.** DOI [10.1201/b12987](https://doi.org/10.1201/b12987).
 - **Use.** The consolidated treatment of 3D refinement, small-angle handling and sliver theory. Buy it.
@@ -356,6 +369,12 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 - **Complexity.** Moderate.
 - **Code.** CGAL is GPL: FORBIDDEN. This paper is the readable source of the scheme.
 
+- **Implemented** in `fieldcraft-mesh::tet::smooth` as the density-weighted ODT update (Chen–Xu, Alliez et al.; weight
+  `h⁻³`), interleaved with refinement in three rounds as in A3.5; boundary vertices move in their face's tangent plane
+  and are projected back onto the B-rep face, curve vertices move along their curve, corners stay. A move is kept when
+  every tetrahedron stays positive and its star's worst quality stays above min(old worst, sin 17.5°). Tetrahedra whose
+  circumcentre is further than their longest edge from their centroid contribute their centroid instead.
+
 **A3.6 Klingner and Shewchuk 2007, Aggressive Tetrahedral Mesh Improvement.** **Verdict: BUILD ON (final sliver-removal stage).**
 - **Citation.** B. M. Klingner, J. R. Shewchuk. IMR 16, 3–23, 2007.
 - **Links.** DOI [10.1007/978-3-540-75103-8_1](https://doi.org/10.1007/978-3-540-75103-8_1).
@@ -376,6 +395,16 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
 - **Complexity.** Moderate: edge removal requires Shewchuk's dynamic programming over the edge ring.
   PDF: https://people.eecs.berkeley.edu/~jrs/papers/edge.pdf, not separately verified.
 - **Code.** The Stellar code's licence was not verified, so it is not read.
+- **Implemented** in `fieldcraft-mesh::tet::{ops, improve}` from the two papers: Klincsek's dynamic programming for edge
+  removal (interior edges; boundary edges of one flat B-rep face end in a 2-2 flip), multi-face removal grown greedily
+  over the sandwiched faces, nonsmooth optimization smoothing (active set, smallest vector of the convex hull of the
+  active gradients, line search; gradients by central differences), and the composite vertex insertion with rollback
+  (barycentres of boundary faces, of the tetrahedron, midpoints of boundary edges, and a point inside off a flat
+  boundary edge). Deviations: the inserted vertex takes the Delaunay cavity rather than the optimal cut of §3.4; each pass
+  smooths and flips the tetrahedra below sin 40° and inserts only when the worst did not improve; passes and the
+  insertion list are capped. Objective: the minimum dihedral sine. Every operation is a checked replacement of a region
+  (positive by exact `orient3d`, faces matched with opposite orientation, removed vertices fully inside), so the mesh is
+  valid after each step.
 
 **A3.7 Cheng, Dey, Edelsbrunner, Facello, Teng 2000, Sliver exudation.** **Verdict: reference.**
 - **Citation.** J. ACM 47(5):883–904, 2000. DOI [10.1145/355483.355487](https://doi.org/10.1145/355483.355487).

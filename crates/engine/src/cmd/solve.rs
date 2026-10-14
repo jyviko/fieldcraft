@@ -82,7 +82,7 @@ pub const FLUID: CommandSpec = CommandSpec {
 pub const PROBE: CommandSpec = CommandSpec {
     id: "solve.probe",
     label: "Probe Results",
-    params: r#"{"step": "Load", "nodes": [1, 2], "mode": 1, "frame": 0} — the stored result at nodes: displacement, rotation, reaction, reaction moment, stress and von Mises (static, with `elements` each element's results: solid, 2D and truss nodal stresses (and, in a nonlinear step, the equivalent plastic strain at the integration points of a plastic element), shell section forces (N, M, Q per length in the element's axes) and bottom, middle and top stresses, beam end forces (N, V_y, V_z, T, M_y, M_z in its axes)), the shape of mode `mode` with its rotations (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` (or at the nodes nearest to points: "at": [[x, y, z], ...], lowest label on a tie, each entry then giving its `xyz` and `distance`) and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
+    params: r#"{"step": "Load", "nodes": [1, 2] (or "set": "fillet", a set's nodes), "mode": 1, "frame": 0} — the stored result at nodes (with `max_von_mises`, the largest among them, for static steps): displacement, rotation, reaction, reaction moment, stress and von Mises (static, with `elements` each element's results: solid, 2D and truss nodal stresses (and, in a nonlinear step, the equivalent plastic strain at the integration points of a plastic element), shell section forces (N, M, Q per length in the element's axes) and bottom, middle and top stresses, beam end forces (N, V_y, V_z, T, M_y, M_z in its axes)), the shape of mode `mode` with its rotations (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` (or at the nodes nearest to points: "at": [[x, y, z], ...], lowest label on a tie, each entry then giving its `xyz` and `distance`) and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
     kind: CommandKind::Model,
     run: probe,
 };
@@ -489,13 +489,21 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (nodes, located) = match (p.get("nodes"), p.get("at")) {
         (Some(_), None) => (labels(p, "nodes", MAX_PROBE)?, None),
+        (None, None) if p.get("set").is_some() => {
+            let name = opt::<String>(p, "set")?.unwrap_or_default();
+            let set = s.model.resolve_set(&name)?;
+            if set.nodes.len() > MAX_PROBE {
+                return Err(EngineError::Params(format!("set `{name}` has {} nodes; a probe takes at most {MAX_PROBE}", set.nodes.len())));
+            }
+            (set.nodes, None)
+        }
         (None, Some(_)) => {
             let at = points(p, "at", MAX_PROBE)?;
             let found = nearest_nodes(&s.model, result.nodes(), &at)?;
             (found.iter().map(|(l, _, _)| *l).collect(), Some(found))
         }
         (None, None) if matches!(result.as_ref(), StepResult::Explicit(_)) || p.get("elements").is_some() => (Vec::new(), None),
-        _ => return Err(EngineError::Params("give either `nodes` or `at`".into())),
+        _ => return Err(EngineError::Params("give one of `nodes`, `at` or `set`".into())),
     };
     let mut out = match result.as_ref() {
         StepResult::Explicit(r) => {
@@ -505,6 +513,16 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
         StepResult::Implicit(r) => probe_implicit(r, &step, &nodes, p)?,
         StepResult::Fluid(r) => probe_fluid(r, p)?,
     };
+    // The largest von Mises stress among the probed nodes (static results).
+    let peak = out.get("nodes").and_then(Value::as_array).and_then(|entries| {
+        entries
+            .iter()
+            .filter_map(|e| Some((e.get("node")?.as_u64()?, e.get("von_mises")?.as_f64()?)))
+            .fold(None, |best: Option<(u64, f64)>, (n, v)| if best.is_none_or(|b| v > b.1) { Some((n, v)) } else { best })
+    });
+    if let (Some((node, value)), Some(obj)) = (peak, out.as_object_mut()) {
+        obj.insert("max_von_mises".into(), json!({"node": node, "value": value}));
+    }
     if let (Some(found), Some(entries)) = (located, out.get_mut("nodes").and_then(Value::as_array_mut)) {
         for (entry, (_, xyz, distance)) in entries.iter_mut().zip(found) {
             if let Some(obj) = entry.as_object_mut() {

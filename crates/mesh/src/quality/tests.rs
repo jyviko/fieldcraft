@@ -78,9 +78,12 @@ fn inverted_and_flat_tetrahedra() {
     assert_eq!(metric(&q, Metric::AspectRatio), f64::INFINITY);
     assert!(q.metrics.iter().all(|(_, v)| !v.is_nan()));
 
-    // A sliver with an exactly positive orientation is valid, however thin (exact orient3d).
+    // A sliver with an exactly positive orientation but a normalized Jacobian below the one
+    // criterion the solvers share is invalid; a thin one above it is valid.
     let sliver = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0.3, 0.3, 1e-30]];
-    assert_eq!(element_validity(ElementKind::Tet4, &sliver).unwrap().validity, Validity::Valid);
+    assert_eq!(element_validity(ElementKind::Tet4, &sliver).unwrap().validity, Validity::Invalid);
+    let thin = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0.3, 0.3, 1e-9]];
+    assert_eq!(element_validity(ElementKind::Tet4, &thin).unwrap().validity, Validity::Valid);
     let below = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0.3, 0.3, -1e-30]];
     assert_eq!(element_validity(ElementKind::Tet4, &below).unwrap().validity, Validity::Invalid);
 

@@ -34,9 +34,10 @@
 //! then the Steiner points, each with its segment and parameter, rounded to doubles; and for each
 //! boundary tetrahedron face the input triangle it lies on (so the B-rep face tag carries over).
 //! Rounding a Steiner point to the nearest doubles moves it off its segment by under an ulp and
-//! can, on a nearly flat tetrahedron, flip it (§5.1). [`round`] then tries the doubles a few ulps
-//! around such a point for one that keeps every incident tetrahedron positive; [`TetMesh::gate`]
-//! runs the validity gate on the rounded mesh and any failure left is reported, never hidden.
+//! can, on a nearly flat tetrahedron, flip it (§5.1); nearly cospherical input also gives
+//! tetrahedra that are positive yet flat to rounding. [`repair`] removes them by flips that keep
+//! the boundary (§5.1); [`TetMesh::gate`] runs the validity gate on the rounded mesh and any
+//! failure left is reported, never hidden.
 //!
 //! # Determinism and bounds
 //! Same surface → same mesh: the Delaunay step is deterministic, segments and facets are
@@ -46,11 +47,11 @@
 mod complex;
 mod facets;
 mod meet;
-mod round;
+mod repair;
 mod segments;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 
@@ -122,9 +123,9 @@ pub struct CdtStats {
     pub gift_wrapped_tets: usize,
     /// Tetrahedra in the box at the end.
     pub box_tets: usize,
-    /// Steiner points moved by a few ulps from their nearest doubles to keep every incident
-    /// tetrahedron positive ([`round`]).
-    pub rounding_adjusted: usize,
+    /// Tetrahedra that were flat, inverted or inadmissible on the rounded coordinates and were
+    /// removed by flips ([`repair`]).
+    pub repaired: usize,
 }
 
 /// The constrained Delaunay tetrahedralization of a closed surface (see the module docs).
@@ -355,7 +356,7 @@ impl Recovery {
         }
         let mut stats = self.stats;
         stats.box_tets = self.cx.live_count();
-        stats.rounding_adjusted = round::repair(&mut points, &tets, n)?;
+        stats.repaired = repair::repair(&points, &mut tets, &mut boundary, self.options.max_tets)?;
         Ok(TetMesh { points, steiner, tets, boundary, stats })
     }
 }

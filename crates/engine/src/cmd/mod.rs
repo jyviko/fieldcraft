@@ -8,6 +8,8 @@ pub(crate) mod file;
 mod geometry;
 mod hex;
 pub(crate) mod mesh;
+
+pub use mesh::analytic_surfaces;
 mod model;
 pub(crate) mod octree;
 mod results;

@@ -8,67 +8,17 @@
 //! the hull. The hull is the bounding box the recovery adds around the surface, so every Steiner
 //! point is strictly inside it and no ghost tetrahedra are needed.
 
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
+pub(super) use crate::tet::complex::{IdMap, NONE, face_toward, sorted3};
 
 use crate::delaunay::Triangulation;
 use crate::predicates::{GenericPoint, Sign, generic_insphere_sos, generic_lex, generic_orient3d};
 use crate::{Error, Result};
 
-/// A multiplicative hasher for small integer keys (vertex triples). The maps it serves are only
-/// looked up, never iterated, so its order cannot leak into the output.
-#[derive(Default)]
-pub(super) struct IdHasher(u64);
-
-impl Hasher for IdHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.write_u64(u64::from(b));
-        }
-    }
-
-    fn write_u32(&mut self, x: u32) {
-        self.write_u64(u64::from(x));
-    }
-
-    fn write_u64(&mut self, x: u64) {
-        self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
-    }
-}
-
-/// A hash map keyed by vertex ids.
-pub(super) type IdMap<K, V> = HashMap<K, V, BuildHasherDefault<IdHasher>>;
-
-/// No tetrahedron / no vertex.
-pub(super) const NONE: u32 = u32::MAX;
 /// Marks a recycled tetrahedron slot.
 const DEAD: u32 = u32::MAX - 1;
 
 pub(super) fn corrupt(what: &str) -> Error {
     Error::Failed(format!("constrained tetrahedralization is inconsistent: {what}"))
-}
-
-/// The face of `vs` opposite slot `k`, ordered so that vertex `k` is on its positive side
-/// ([`Complex::volume`] of the face plus that vertex is positive).
-pub(super) fn face_toward(vs: [u32; 4], k: usize) -> [u32; 3] {
-    let [a, b, c, d] = vs;
-    match k {
-        0 => [b, d, c],
-        1 => [a, c, d],
-        2 => [a, d, b],
-        _ => [a, b, c],
-    }
-}
-
-/// A triangle's vertices sorted: the key of an unoriented face.
-pub(super) fn sorted3([a, b, c]: [u32; 3]) -> [u32; 3] {
-    let mut f = [a, b, c];
-    f.sort_unstable();
-    f
 }
 
 /// The working tetrahedralization.

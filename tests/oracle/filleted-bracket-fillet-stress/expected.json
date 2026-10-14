@@ -1,0 +1,38 @@
+{
+ "title": "Filleted L-bracket under a side load: the peak von Mises stress on the R6 fillet, fine tet10 mesh",
+ "kind": "theory",
+ "source": "mesh convergence of the finite element solution (P. J. Roache, Verification and Validation in Computational Science and Engineering, Hermosa, 1998, ch. 5): the bracket has no closed-form stress; the reference is the mesh-independent peak of a four-level study of quadratic tetrahedral meshes refined by √2 in size and in curvature resolution (README.md); equilibrium",
+ "slow": true,
+ "quantities": [
+  {
+   "id": "fillet_peak",
+   "quantity": "largest nodal von Mises stress on the fillet face (MPa)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "set": "fillet"
+    },
+    "pointer": "/max_von_mises/value"
+   },
+   "value": 213.0,
+   "tolerance": {
+    "relative": 0.03
+   },
+   "reason": "the four-level study gives 213.3, 210.6, 214.3, 213.3 MPa (2k to 13.5k elements): the bending stress is converged across the fillet, and the peak nodal value moves only with which of the fillet's tessellation lines (fixed angles, through every level) carries the largest node, by under 2%"
+  },
+  {
+   "id": "reaction",
+   "quantity": "total reaction x (N)",
+   "measure": {
+    "from": "solve",
+    "pointer": "/reaction_total/0"
+   },
+   "value": -2000.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "equilibrium holds to rounding"
+  }
+ ]
+}

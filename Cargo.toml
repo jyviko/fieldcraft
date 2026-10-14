@@ -88,6 +88,14 @@ opt-level = 1
 [profile.dev.package.fieldcraft-lbm]
 opt-level = 3
 
+# Meshing and the sparse solver are compute loops too: the tet quality stage and the
+# mesh-convergence oracle cases (tests/oracle) run in tests.
+[profile.dev.package.fieldcraft-mesh]
+opt-level = 3
+
+[profile.dev.package.fieldcraft-solver]
+opt-level = 3
+
 # Tests and lints (`cargo xtask ci`, GitHub CI). Debug assertions are off because truck's
 # debug-only checks reject valid geometry (SolidCraft builds its tests the same way).
 [profile.ci]
@@ -102,6 +110,12 @@ incremental = false
 opt-level = 2
 
 [profile.ci.package.fieldcraft-lbm]
+opt-level = 3
+
+[profile.ci.package.fieldcraft-mesh]
+opt-level = 3
+
+[profile.ci.package.fieldcraft-solver]
 opt-level = 3
 
 [profile.release]

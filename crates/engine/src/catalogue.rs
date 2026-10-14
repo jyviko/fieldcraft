@@ -244,7 +244,7 @@ pub static CATALOGUE: &[Capability] = &[
         "Tet Mesh",
         Mesh,
         "Tet",
-        "Constrained Delaunay tet mesh of a body: every boundary triangle kept, faces tagged (refinement comes next)",
+        "Quality tet4 or tet10 mesh of a body to a size: refined, smoothed and improved, boundary on the B-rep faces, faces tagged",
     ),
     soon("mesh.order.quadratic", "Quadratic", Mesh, "Tet", "M2", "Second-order elements with mid-side nodes on the geometry"),
     ready("mesh.delaunay.points", "Delaunay Points", Mesh, "Tet", "Delaunay tetrahedralization of a point list (debugging aid)"),

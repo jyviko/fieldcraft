@@ -14,16 +14,22 @@
 //! Inputs are hostile: coordinates must be finite and within [`fieldcraft_model::MAX_COORD`],
 //! and every metric has a defined value on degenerate and inverted elements.
 //!
-//! Linear tetrahedra take their validity from the exact `orient3d` ([`crate::predicates`]); the
-//! other kinds from the floating-point Bernstein certificate, which counts a Jacobian within
-//! [`jacobian::RELATIVE_TOLERANCE`] of zero as degenerate.
+//! Validity is FieldCraft's one criterion, shared with the solvers: an element is admissible when
+//! its normalized Jacobian `det J / Π|∂x/∂ξ_a|` exceeds
+//! [`fieldcraft_model::MIN_NORMALIZED_JACOBIAN`] ([`fieldcraft_model::admissible_jacobian`]).
+//! Linear tetrahedra take their orientation from the exact `orient3d` ([`crate::predicates`]) and
+//! must also pass the criterion on the solvers' own Jacobian (the edges of the input coordinates),
+//! so the gate and the solvers decide every tet4 alike. The other kinds use the floating-point
+//! Bernstein certificate, which proves the criterion on the whole element (and counts a Jacobian
+//! within [`jacobian::RELATIVE_TOLERANCE`] of zero as degenerate); the solvers check it only at
+//! their integration points, so whatever passes the gate passes the solvers.
 
 mod bernstein;
 pub mod jacobian;
 mod report;
 pub(crate) mod shape;
 
-use fieldcraft_model::{ElementKind, check_coordinates};
+use fieldcraft_model::{ElementKind, admissible_jacobian, check_coordinates, tet4_jacobian};
 
 pub use jacobian::{JacobianCheck, Validity};
 pub use report::{
@@ -156,15 +162,19 @@ fn checked(kind: ElementKind, xyz: &[[f64; 3]], p: &[[f64; 3]]) -> Result<(Optio
     {
         let [a, b, c, d]: [[f64; 3]; 4] = corners(p)?;
         let volume = shape::det(shape::sub(b, a), shape::sub(c, a), shape::sub(d, a)) / 6.0;
+        // FieldCraft's one criterion, on the solvers' own Jacobian (edges of the input
+        // coordinates); the exact sign settles the orientation of the rest.
+        let admissible = admissible_jacobian(&tet4_jacobian(&corners(xyz)?));
         let (validity, ratio) = match sign {
-            Sign::Positive => (Validity::Valid, 1.0),
+            Sign::Positive if admissible => (Validity::Valid, 1.0),
+            Sign::Positive | Sign::Zero => (Validity::Invalid, 0.0),
             Sign::Negative => (Validity::Invalid, -1.0),
-            Sign::Zero => (Validity::Invalid, 0.0),
         };
         return Ok((None, JacobianCheck { validity, ratio, volume }));
     }
     let jacobian::Jacobian { columns, det } = jacobian::jacobian(kind, p)?;
-    Ok((Some(columns), jacobian::certify(det)?))
+    let floor = jacobian::admissible_floor(&columns);
+    Ok((Some(columns), jacobian::certify(det, floor)?))
 }
 
 /// The exact orientation of a tetrahedron (positive for node 4 on the side of face 1-2-3's

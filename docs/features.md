@@ -28,7 +28,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Size | Global Size — One element size for the whole part | coming soon (M2) |  |
 | Size | Seed Edges — Element counts, sizes and bias per edge and face | coming soon (M2) |  |
 | Size | Curvature — Refine by curvature and proximity | coming soon (M2) |  |
-| Tet | Tet Mesh — Constrained Delaunay tet mesh of a body: every boundary triangle kept, faces tagged (refinement comes next) | ready | `mesh.tet.generate` |
+| Tet | Tet Mesh — Quality tet4 or tet10 mesh of a body to a size: refined, smoothed and improved, boundary on the B-rep faces, faces tagged | ready | `mesh.tet.generate` |
 | Tet | Quadratic — Second-order elements with mid-side nodes on the geometry | coming soon (M2) |  |
 | Tet | Delaunay Points — Delaunay tetrahedralization of a point list (debugging aid) | ready | `mesh.delaunay.points` |
 | 2D | 2D Mesh — Quad or triangle mesh of a planar face or polygon in the XY plane for plane stress, plane strain and axisymmetric models; edges tagged | ready | `mesh.planar` |

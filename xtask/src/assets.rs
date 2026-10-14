@@ -16,6 +16,7 @@ const ASSET_EXT: &[&str] = &[
     "woff",
     "woff2",
     "gif",
+    "mp4",
     "bmp",
     "webp",
     "wav",

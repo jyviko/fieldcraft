@@ -62,6 +62,7 @@
 use fieldcraft_fem::constitutive::MaterialModel;
 use fieldcraft_fem::dense::Matrix;
 use fieldcraft_fem::element::{Extrapolation, extrapolation};
+use fieldcraft_fem::finite::Kinematics;
 use fieldcraft_fem::quadrature::Rule;
 use fieldcraft_fem::{DofKind, DofSet, ElementType, PointStress, face, von_mises};
 use fieldcraft_model::{Extent, Load, Model, NonlinearStatic, Procedure, Step};
@@ -250,7 +251,7 @@ impl Problem<'_> {
         }
         let material = self.materials.get(e).ok_or_else(|| Error::Internal("element material".into()))?;
         let mut updated = committed.to_vec();
-        let r = kernel.finite_strain(material, &ue, committed, &mut updated, tangent).map_err(at)?;
+        let r = kernel.nonlinear(material, &ue, Kinematics::Finite, committed, &mut updated, tangent).map_err(at)?;
         Ok((r.force, r.tangent, updated))
     }
 
@@ -833,7 +834,7 @@ fn finish(
         let kernel = el.kernel()?;
         let points = if problem.finite {
             let material = problem.materials.get(i).ok_or_else(|| Error::Internal("element material".into()))?;
-            kernel.finite_strain_stresses(material, &ue, committed.get(i).map(Vec::as_slice).unwrap_or_default())
+            kernel.nonlinear_stresses(material, &ue, Kinematics::Finite, committed.get(i).map(Vec::as_slice).unwrap_or_default())
         } else {
             let per_node: Vec<[f64; 3]> = el.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
             kernel.stresses_with(&el.d, &per_node, None)

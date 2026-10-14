@@ -30,6 +30,11 @@
 //! [`MIN_FRACTURE_STRAIN`] counts as that (some published sets give negative values at high
 //! triaxiality, where the point fails at once). The point has failed at D ≥ 1.
 //!
+//! **One return map for both solvers.** [`J2::radial_return`] is the return above; explicit
+//! dynamics calls it through [`J2::update`] on its hypoelastic stress, the implicit material
+//! point ([`crate::elastoplastic`]) on its trial elastic strain, small or logarithmic, and adds
+//! the consistent tangent [`J2::tangent`].
+//!
 //! The strain increment the update takes is the **mechanical** one: a caller with initial or
 //! thermal strains subtracts their increment first.
 //!
@@ -96,6 +101,21 @@ impl PointState {
     pub fn new(temperature: f64) -> PointState {
         PointState { stress: [0.0; 6], back: [0.0; 6], plastic_strain: 0.0, temperature, damage: 0.0 }
     }
+}
+
+/// What a radial return did: what the consistent tangent needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Return {
+    /// The equivalent plastic strain increment Δε_p.
+    pub plastic_strain: f64,
+    /// The trial von Mises stress of ξ* = s* − α, q* = √(3/2)‖ξ*‖.
+    pub trial: f64,
+    /// The flow direction ξ*/‖ξ*‖ (tensor components).
+    pub normal: [f64; 6],
+    /// The kinematic hardening modulus H_k.
+    pub kinematic: f64,
+    /// The slope of the flow stress against the plastic strain at the end of the increment.
+    pub slope: f64,
 }
 
 /// What one update did.
@@ -232,27 +252,11 @@ impl J2 {
         }
         let pressure = mean + self.bulk * vol;
         let mut out = Increment::default();
-        if let Some(flow) = &self.flow {
-            let xi: [f64; 6] = std::array::from_fn(|k| trial[k] - state.back[k]);
-            let norm = norm2(&xi).sqrt();
-            let q = (1.5f64).sqrt() * norm;
-            let (yield_now, _) = flow.stress(state.plastic_strain, 0.0, state.temperature, dt);
-            if q > yield_now && norm > 0.0 {
-                let hk = flow.kinematic();
-                let de = self.plastic_increment(flow, state, q, yield_now, hk, dt);
-                let n: [f64; 6] = xi.map(|x| x / norm);
-                let radial = g2 * (1.5f64).sqrt() * de;
-                let shift = (2.0f64 / 3.0).sqrt() * hk * de;
-                for k in 0..6 {
-                    trial[k] -= radial * n[k];
-                    state.back[k] += shift * n[k];
-                }
-                state.plastic_strain += de;
-                let q_new = q - (3.0 * self.shear + hk) * de;
-                out = Increment { plastic_strain: de, plastic_work: q_new * de };
-                if self.heating > 0.0 && density > 0.0 {
-                    state.temperature += self.heating * out.plastic_work / density;
-                }
+        if let Some(r) = self.radial_return(state, &mut trial, dt) {
+            let q_new = r.trial - (3.0 * self.shear + r.kinematic) * r.plastic_strain;
+            out = Increment { plastic_strain: r.plastic_strain, plastic_work: q_new * r.plastic_strain };
+            if self.heating > 0.0 && density > 0.0 {
+                state.temperature += self.heating * out.plastic_work / density;
             }
         }
         for k in 0..3 {
@@ -271,6 +275,68 @@ impl J2 {
             state.damage += out.plastic_strain / fracture.max(MIN_FRACTURE_STRAIN);
         }
         out
+    }
+
+    /// The radial return of a trial deviator `trial` (tensor components) from `state`: when the
+    /// trial von Mises stress exceeds the yield stress, `trial` is moved back to the yield
+    /// surface, the back stress and the equivalent plastic strain of `state` are advanced, and
+    /// what the consistent tangent needs is returned; `None` when the point stays elastic.
+    pub fn radial_return(&self, state: &mut PointState, trial: &mut [f64; 6], dt: f64) -> Option<Return> {
+        let flow = self.flow.as_ref()?;
+        let xi: [f64; 6] = std::array::from_fn(|k| trial[k] - state.back[k]);
+        let norm = norm2(&xi).sqrt();
+        let q = (1.5f64).sqrt() * norm;
+        let (yield_now, _) = flow.stress(state.plastic_strain, 0.0, state.temperature, dt);
+        if !(q > yield_now && norm > 0.0) {
+            return None;
+        }
+        let hk = flow.kinematic();
+        let de = self.plastic_increment(flow, state, q, yield_now, hk, dt);
+        let n: [f64; 6] = xi.map(|x| x / norm);
+        let radial = 2.0 * self.shear * (1.5f64).sqrt() * de;
+        let shift = (2.0f64 / 3.0).sqrt() * hk * de;
+        for k in 0..6 {
+            trial[k] -= radial * n[k];
+            state.back[k] += shift * n[k];
+        }
+        let rate = if dt > 0.0 { de / dt } else { 0.0 };
+        let (_, slope) = flow.stress(state.plastic_strain + de, rate, state.temperature, dt);
+        state.plastic_strain += de;
+        Some(Return { plastic_strain: de, trial: q, normal: n, kinematic: hk, slope })
+    }
+
+    /// The consistent (algorithmic) tangent of the return map, dσ/dε of the stress after the
+    /// update against the total strain of the increment (engineering-shear columns): the
+    /// elasticity K I ⊗ I + 2G ℙ while elastic, and after a return
+    /// K I ⊗ I + 2G θ ℙ − 2G θ̄ n ⊗ n with θ = 1 − 3G Δε_p / q*, θ̄ = 1/(1 + H/3G) − (1 − θ) and
+    /// H the slope of the flow stress plus the kinematic modulus at the end of the increment
+    /// (Simo & Hughes 1998, Box 3.2, eq. 3.3.10, in the equivalent plastic strain). `bulk`
+    /// leaves out the volumetric part K I ⊗ I when false (the isochoric part a mixed element
+    /// takes). `None` when 3G + H is not positive: the point softens faster than it unloads
+    /// elastically and has no tangent.
+    pub fn tangent(&self, r: Option<&Return>, bulk: bool) -> Option<[[f64; 6]; 6]> {
+        let g = self.shear;
+        let (theta, theta_bar, n) = match r {
+            None => (1.0, 0.0, [0.0; 6]),
+            Some(r) => {
+                let stiff = 3.0 * g + r.slope + r.kinematic;
+                if !(stiff > 0.0 && stiff.is_finite() && r.trial > 0.0) {
+                    return None;
+                }
+                let theta = 1.0 - 3.0 * g * r.plastic_strain / r.trial;
+                (theta, 3.0 * g / stiff - (1.0 - theta), r.normal)
+            }
+        };
+        let k = if bulk { self.bulk } else { 0.0 };
+        let identity = crate::constitutive::identity4();
+        let mut d = [[0.0; 6]; 6];
+        for a in 0..6 {
+            for b in 0..6 {
+                let (ia, ib) = (if a < 3 { 1.0 } else { 0.0 }, if b < 3 { 1.0 } else { 0.0 });
+                d[a][b] = k * ia * ib + 2.0 * g * theta * (identity[a][b] - ia * ib / 3.0) - 2.0 * g * theta_bar * n[a] * n[b];
+            }
+        }
+        Some(d)
     }
 
     /// The plastic strain increment of a trial state that yields.

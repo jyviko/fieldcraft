@@ -11,6 +11,7 @@ use fieldcraft_fem::beam::{Beam, BeamSection};
 use fieldcraft_fem::constitutive::MaterialModel;
 use fieldcraft_fem::dense::Matrix;
 use fieldcraft_fem::element::{Formulation, Solid, ThermalStrain};
+use fieldcraft_fem::finite::Kinematics;
 use fieldcraft_fem::plane::{Plane, Theory};
 use fieldcraft_fem::shell::{Shell, ShellSection};
 use fieldcraft_fem::truss::{Truss, young_modulus};
@@ -113,27 +114,30 @@ impl Kernel<'_> {
         }
     }
 
-    /// Finite-strain internal forces and tangent ([`fieldcraft_fem::finite`]) for the element's
-    /// displacements `u` (its degrees of freedom in order: 3 per node, or 2 for 2D elements).
-    pub fn finite_strain(
+    /// Nonlinear internal forces and tangent ([`fieldcraft_fem::finite`]) for the element's
+    /// displacements `u` (its degrees of freedom in order: 3 per node, or 2 for 2D elements),
+    /// total Lagrangian or with small strain.
+    pub fn nonlinear(
         &self,
         m: &MaterialModel,
         u: &[f64],
+        kin: Kinematics,
         committed: &[f64],
         updated: &mut [f64],
         tangent: bool,
     ) -> fieldcraft_fem::Result<fieldcraft_fem::finite::Finite> {
         match self {
-            Kernel::Solid(s) => s.finite_strain(m, u.as_chunks::<3>().0, committed, updated, tangent),
-            Kernel::Plane(p) => p.finite_strain(m, u.as_chunks::<2>().0, committed, updated, tangent),
+            Kernel::Solid(s) => s.nonlinear(m, u.as_chunks::<3>().0, kin, committed, updated, tangent),
+            Kernel::Plane(p) => p.nonlinear(m, u.as_chunks::<2>().0, kin, committed, updated, tangent),
         }
     }
 
-    /// Cauchy stress and logarithmic strain at the integration points, as [`Self::finite_strain`].
-    pub fn finite_strain_stresses(&self, m: &MaterialModel, u: &[f64], committed: &[f64]) -> fieldcraft_fem::Result<Vec<PointStress>> {
+    /// Cauchy stress and strain (logarithmic at finite strain) at the integration points, as
+    /// [`Self::nonlinear`].
+    pub fn nonlinear_stresses(&self, m: &MaterialModel, u: &[f64], kin: Kinematics, committed: &[f64]) -> fieldcraft_fem::Result<Vec<PointStress>> {
         match self {
-            Kernel::Solid(s) => s.finite_strain_stresses(m, u.as_chunks::<3>().0, committed),
-            Kernel::Plane(p) => p.finite_strain_stresses(m, u.as_chunks::<2>().0, committed),
+            Kernel::Solid(s) => s.nonlinear_stresses(m, u.as_chunks::<3>().0, kin, committed),
+            Kernel::Plane(p) => p.nonlinear_stresses(m, u.as_chunks::<2>().0, kin, committed),
         }
     }
 

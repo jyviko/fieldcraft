@@ -36,11 +36,19 @@
 //!   §6.6, eqs. 6.165–6.169 and 6.193, in Kirchhoff form). The split is what the mixed (hybrid)
 //!   elements need: they take the isochoric part from [`MaterialModel::isochoric`] and the
 //!   volumetric one from [`MaterialModel::volumetric`] with the element's own dilatation.
+//! - **J2 plasticity** ([`crate::elastoplastic`]): Simo's multiplicative plasticity with the
+//!   exponential return map in the principal logarithmic strains (finite strain), or the
+//!   additive radial return (small strain, [`MaterialModel::small_strain`]); decoupled too, the
+//!   return deviatoric and the Hencky volume K/2 (ln J)².
+
+use std::sync::Arc;
 
 use fieldcraft_model::{Elastic, Hyperelastic};
 
 use crate::dense::det3;
+use crate::elastoplastic;
 use crate::material::{Elasticity, elasticity, stress};
+use crate::plasticity::J2;
 use crate::rotation::{IDENTITY, Mat3, mul, transpose, voigt};
 use crate::{Error, Result};
 
@@ -61,11 +69,16 @@ pub struct Response {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MaterialModel {
     StVenantKirchhoff(Box<Elasticity>),
-    NeoHookean { shear: f64, bulk: f64 },
+    NeoHookean {
+        shear: f64,
+        bulk: f64,
+    },
+    /// Von Mises plasticity (shared: one per material, whatever the element count).
+    Plastic(Arc<J2>),
 }
 
 /// The 6 × 6 matrix of the symmetric fourth-order identity 𝕀 (engineering-shear columns).
-fn identity4() -> Tangent {
+pub(crate) fn identity4() -> Tangent {
     let mut i4 = [[0.0; 6]; 6];
     for k in 0..6 {
         i4[k][k] = if k < 3 { 1.0 } else { 0.5 };
@@ -138,23 +151,42 @@ impl MaterialModel {
         match self {
             MaterialModel::StVenantKirchhoff(_) => "St Venant–Kirchhoff",
             MaterialModel::NeoHookean { .. } => "neo-Hookean",
+            MaterialModel::Plastic(_) => "J2 plastic",
         }
     }
 
     /// History variables per integration point.
     pub fn history_len(&self) -> usize {
-        0
+        match self {
+            MaterialModel::Plastic(_) => elastoplastic::HISTORY,
+            _ => 0,
+        }
+    }
+
+    /// Whether the response depends on the path (the material keeps history), so the solver
+    /// treats it with the inelastic kinematics and predictors.
+    pub fn is_path_dependent(&self) -> bool {
+        self.history_len() > 0
+    }
+
+    /// The equivalent plastic strain in one point's history; `None` for an elastic material.
+    pub fn plastic_strain(&self, history: &[f64]) -> Option<f64> {
+        match self {
+            MaterialModel::Plastic(_) => Some(elastoplastic::value(history, elastoplastic::PLASTIC_STRAIN)),
+            _ => None,
+        }
     }
 
     /// Whether the strain energy splits into isochoric and volumetric parts (what mixed
     /// elements need).
     pub fn is_decoupled(&self) -> bool {
-        matches!(self, MaterialModel::NeoHookean { .. })
+        matches!(self, MaterialModel::NeoHookean { .. } | MaterialModel::Plastic(_))
     }
 
-    /// The Kirchhoff stress and spatial tangent at deformation gradient `f`, from the history
+    /// The Kirchhoff stress and spatial tangent at deformation gradient `f` and (for
+    /// temperature-dependent plasticity) temperature `temperature`, from the history
     /// `committed` (written, updated, to `updated`).
-    pub fn response(&self, f: &Mat3, committed: &[f64], updated: &mut [f64]) -> Result<Response> {
+    pub fn response(&self, f: &Mat3, temperature: Option<f64>, committed: &[f64], updated: &mut [f64]) -> Result<Response> {
         updated.iter_mut().zip(committed).for_each(|(u, c)| *u = *c);
         let j = jacobian(f)?;
         match self {
@@ -165,18 +197,24 @@ impl MaterialModel {
                 let t = push_forward(f);
                 Ok(Response { stress: std::array::from_fn(|a| (0..6).map(|b| t[a][b] * s[b]).sum()), tangent: sandwich(&t, d) })
             }
-            MaterialModel::NeoHookean { .. } => {
-                let iso = self.isochoric(f)?;
-                let (p, dp) = self.volumetric(j).ok_or_else(|| Error::Invalid("volumetric response".into()))?;
+            MaterialModel::NeoHookean { .. } | MaterialModel::Plastic(_) => {
+                let iso = self.isochoric(f, temperature, committed, updated)?;
+                let (p, dp) = self.volumetric(j, false).ok_or_else(|| Error::Invalid("volumetric response".into()))?;
                 Ok(add_pressure(&iso, j, p, j * dp))
             }
         }
     }
 
-    /// The isochoric part of a decoupled material (τ_iso = dev τ̄ and its tangent).
-    pub fn isochoric(&self, f: &Mat3) -> Result<Response> {
-        let &MaterialModel::NeoHookean { shear: mu, .. } = self else {
-            return Err(Error::NotSupported(format!("the isochoric–volumetric split of a {} material", self.name())));
+    /// The isochoric part of a decoupled material (τ_iso = dev τ̄ and its tangent), from the
+    /// history `committed`; the history that changes is written to `updated`, which the caller
+    /// starts as a copy of `committed`.
+    pub fn isochoric(&self, f: &Mat3, temperature: Option<f64>, committed: &[f64], updated: &mut [f64]) -> Result<Response> {
+        let mu = match self {
+            MaterialModel::NeoHookean { shear, .. } => *shear,
+            MaterialModel::Plastic(j2) => return elastoplastic::finite_isochoric(j2, f, temperature, committed, updated),
+            MaterialModel::StVenantKirchhoff(_) => {
+                return Err(Error::NotSupported(format!("the isochoric–volumetric split of a {} material", self.name())));
+            }
         };
         let j = jacobian(f)?;
         let scale = j.powf(-2.0 / 3.0);
@@ -199,11 +237,27 @@ impl MaterialModel {
         Ok(Response { stress: tau, tangent: c })
     }
 
-    /// U′(J) and U″(J) of a decoupled material's volumetric energy.
-    pub fn volumetric(&self, j: f64) -> Option<(f64, f64)> {
-        match *self {
-            MaterialModel::NeoHookean { bulk, .. } => Some((bulk * (j - 1.0), bulk)),
+    /// U′(J) and U″(J) of a decoupled material's volumetric energy at dilatation J (with
+    /// `small`, J = 1 + tr ε of small strain, where every material's is K/2 (J − 1)²).
+    pub fn volumetric(&self, j: f64, small: bool) -> Option<(f64, f64)> {
+        match self {
+            MaterialModel::NeoHookean { bulk, .. } => Some((bulk * (j - 1.0), *bulk)),
+            MaterialModel::Plastic(j2) => elastoplastic::volumetric(j2, j, small),
             MaterialModel::StVenantKirchhoff(_) => None,
+        }
+    }
+
+    /// Small strain: the stress and its tangent at the (mechanical) strain `strain`
+    /// (engineering shears), from the history `committed` (written, updated, to `updated`);
+    /// `bulk` false keeps the deviatoric part only (what a mixed element takes). St
+    /// Venant–Kirchhoff is linear elasticity here; hyperelastic materials have no small-strain
+    /// form.
+    pub fn small_strain(&self, strain: &[f64; 6], temperature: Option<f64>, committed: &[f64], updated: &mut [f64], bulk: bool) -> Result<Response> {
+        updated.iter_mut().zip(committed).for_each(|(u, c)| *u = *c);
+        match self {
+            MaterialModel::Plastic(j2) => elastoplastic::small(j2, strain, temperature, committed, updated, bulk),
+            MaterialModel::StVenantKirchhoff(d) if bulk => Ok(Response { stress: stress(d, strain), tangent: **d }),
+            _ => Err(Error::NotSupported(format!("the {} material at small strain{}", self.name(), if bulk { "" } else { " in mixed elements" }))),
         }
     }
 }
@@ -269,7 +323,7 @@ mod tests {
     /// The tangent's consistency: dS = C : dE with C the pull-back of c, checked by central
     /// differences of S along several directions dF (dE = sym(Fᵀ dF), engineering shears).
     fn check_tangent(m: &MaterialModel, f: &Mat3) {
-        let r = m.response(f, &[], &mut []).unwrap();
+        let r = m.response(f, None, &[], &mut []).unwrap();
         let (inv, _) = inverse3(f).unwrap();
         let back = sandwich(&push_forward(&inv), &r.tangent);
         let scale = back.iter().flatten().fold(0.0f64, |a, v| a.max(v.abs()));
@@ -280,7 +334,7 @@ mod tests {
             df[(k + 1) % 3][(k + 2) % 3] += 0.3;
             let at = |s: f64| {
                 let fp: Mat3 = std::array::from_fn(|i| std::array::from_fn(|j| f[i][j] + s * df[i][j]));
-                pull_back_stress(&fp, &m.response(&fp, &[], &mut []).unwrap().stress)
+                pull_back_stress(&fp, &m.response(&fp, None, &[], &mut []).unwrap().stress)
             };
             let (sp, sm) = (at(h), at(-h));
             let ftdf = mul(&transpose(f), &df);
@@ -300,7 +354,7 @@ mod tests {
             check_tangent(&m, &deformation());
             check_tangent(&m, &IDENTITY);
             // Symmetric (hyperelastic): major symmetry of c.
-            let c = m.response(&deformation(), &[], &mut []).unwrap().tangent;
+            let c = m.response(&deformation(), None, &[], &mut []).unwrap().tangent;
             for a in 0..6 {
                 for b in 0..6 {
                     assert!((c[a][b] - c[b][a]).abs() < 1e-9 * 5000.0, "{a} {b}");
@@ -317,7 +371,7 @@ mod tests {
         let d = isotropic(e, nu).unwrap();
         let neo = MaterialModel::from_model(&Elastic::Isotropic { young: e, poisson: nu }, Some(&Hyperelastic::NeoHookean {})).unwrap();
         for m in [MaterialModel::StVenantKirchhoff(Box::new(d)), neo] {
-            let c = m.response(&IDENTITY, &[], &mut []).unwrap().tangent;
+            let c = m.response(&IDENTITY, None, &[], &mut []).unwrap().tangent;
             for a in 0..6 {
                 for b in 0..6 {
                     assert!((c[a][b] - d[a][b]).abs() < 1e-9 * e, "{}: {a} {b}", m.name());
@@ -329,7 +383,7 @@ mod tests {
             let k = crate::rotation::skew(&axis);
             let k2 = mul(&k, &k);
             let rot: Mat3 = std::array::from_fn(|i| std::array::from_fn(|j| IDENTITY[i][j] + s * k[i][j] + (1.0 - cth) * k2[i][j]));
-            let tau = m.response(&rot, &[], &mut []).unwrap().stress;
+            let tau = m.response(&rot, None, &[], &mut []).unwrap().stress;
             assert!(tau.iter().all(|v| v.abs() < 1e-12 * e), "{}: {tau:?}", m.name());
         }
     }
@@ -343,14 +397,14 @@ mod tests {
         let (lam, l) = (1.5f64, 0.85f64);
         let f = [[lam, 0.0, 0.0], [0.0, l, 0.0], [0.0, 0.0, l]];
         let j = lam * l * l;
-        let tau = m.response(&f, &[], &mut []).unwrap().stress;
+        let tau = m.response(&f, None, &[], &mut []).unwrap().stress;
         let i1 = lam * lam + 2.0 * l * l;
         let sxx = mu / j.powf(5.0 / 3.0) * (lam * lam - i1 / 3.0) + kappa * (j - 1.0);
         let syy = mu / j.powf(5.0 / 3.0) * (l * l - i1 / 3.0) + kappa * (j - 1.0);
         assert!((tau[0] / j - sxx).abs() < 1e-10 * mu && (tau[1] / j - syy).abs() < 1e-10 * mu, "{tau:?}");
         let e = logarithmic_strain(&f).unwrap();
         assert!((e[0] - lam.ln()).abs() < 1e-14 && (e[1] - l.ln()).abs() < 1e-14 && e[3].abs() < 1e-14, "{e:?}");
-        assert!(m.response(&[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]], &[], &mut []).is_err(), "inverted");
-        assert!(MaterialModel::StVenantKirchhoff(Box::new(isotropic(1.0, 0.3).unwrap())).isochoric(&IDENTITY).is_err());
+        assert!(m.response(&[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]], None, &[], &mut []).is_err(), "inverted");
+        assert!(MaterialModel::StVenantKirchhoff(Box::new(isotropic(1.0, 0.3).unwrap())).isochoric(&IDENTITY, None, &[], &mut []).is_err());
     }
 }

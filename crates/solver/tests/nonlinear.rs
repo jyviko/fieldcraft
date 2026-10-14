@@ -130,7 +130,7 @@ fn nonlinear_patch_test() {
     };
     let (e, nu) = (100.0, 0.3);
     let neo = fieldcraft_fem::constitutive::MaterialModel::from_model(&iso(e, nu), Some(&Hyperelastic::NeoHookean {})).unwrap();
-    let tau = neo.response(&f, &[], &mut []).unwrap().stress;
+    let tau = neo.response(&f, None, &[], &mut []).unwrap().stress;
     let j = fieldcraft_fem::dense::det3(&f);
     let hybrid = Formulation { hybrid: true, ..Formulation::default() };
     let mut cases: Vec<(ElementKind, Formulation, &str)> = variants().into_iter().filter(|v| v.1 != incompatible()).collect();

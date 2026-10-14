@@ -14,12 +14,13 @@
 //!   the solid kernels evaluate;
 //! - [`material`]: isotropic and orthotropic elasticity matrices, von Mises stress;
 //! - [`constitutive`]: the material point of finite-strain analysis (Kirchhoff stress and
-//!   spatial tangent from the deformation gradient, with history): St Venant–Kirchhoff and
-//!   neo-Hookean;
+//!   spatial tangent from the deformation gradient, with history): St Venant–Kirchhoff,
+//!   neo-Hookean and J2 plasticity;
 //! - [`element`]: the element table, stiffness (full, reduced, incompatible modes), consistent
 //!   and lumped mass, body forces, integration-point stresses and their extrapolation to nodes;
 //! - [`finite`]: total Lagrangian solid and 2D elements (internal forces, the consistent tangent
-//!   with its geometric part, mixed u–p at finite strain, Cauchy stress and logarithmic strain);
+//!   with its geometric part, mixed u–p at finite strain, Cauchy stress and logarithmic strain),
+//!   and the same with small strain for inelastic materials;
 //! - [`plane`]: 2D elements (plane stress, plane strain, axisymmetric) on tri3, tri6, quad4 and
 //!   quad8, with two displacement components per node;
 //! - [`shell`]: flat MITC4 quadrilateral and MITC3 triangle shells with a drilling rotation, six
@@ -33,6 +34,9 @@
 //!   shape vectors and element frequency bounds for explicit dynamics;
 //! - [`rotation`]: incrementally objective stress updates (Hughes–Winget Jaumann, Flanagan–Taylor
 //!   Green–Naghdi);
+//! - [`elastoplastic`]: J2 plasticity at a material point of implicit analysis, at finite strain
+//!   (Simo's exponential map in the principal logarithmic strains) and at small strain, with the
+//!   consistent tangents, on the radial return of [`plasticity`];
 //! - [`plasticity`]: J2 radial return with isotropic, kinematic and Johnson–Cook hardening,
 //!   Johnson–Cook damage;
 //! - [`truss`]: two- and three-node trusses (straight or curved), their stiffness, mass, body
@@ -52,6 +56,7 @@ pub mod beam;
 pub mod constitutive;
 pub mod dense;
 pub mod dof;
+pub mod elastoplastic;
 pub mod element;
 pub mod face;
 pub mod finite;

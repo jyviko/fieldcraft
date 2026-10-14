@@ -7,15 +7,19 @@
 //! translations for solids, Ux and Uy for 2D elements), nodes by label, then six per coupled reference point (points by
 //! name): translations along X, Y, Z and rotations about them.
 
+use modelcraft_fem::beam::{Beam, BeamSection};
+use modelcraft_fem::dense::Matrix;
 use modelcraft_fem::element::{Formulation, Solid};
 use modelcraft_fem::plane::{Plane, Theory};
+use modelcraft_fem::shell::{Shell, ShellSection};
 use modelcraft_fem::truss::{Truss, young_modulus};
 use modelcraft_fem::{DofKind, DofLayout, DofSet, Elasticity, ElementDofs, PointStress, elasticity, face, plane};
 use modelcraft_model::nodal::edge_pressure;
 use std::collections::BTreeSet;
 
-use modelcraft_model::{ElementKind, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
+use modelcraft_model::{ElementKind, Integration, Load, Model, Resolved, SectionKind, Step, Target, centrifugal_acceleration};
 
+use crate::analysis::MassKind;
 use crate::{Error, Result};
 
 /// An element ready for the kernels: a solid, or a 2D element (`theory`).
@@ -138,6 +142,79 @@ impl Bar {
     }
 }
 
+/// What a shell or beam element is made of.
+#[derive(Debug, Clone, Copy)]
+pub enum Section {
+    Shell(ShellSection),
+    Beam { section: BeamSection, orientation: [f64; 3] },
+}
+
+/// A shell or beam element ready for its kernel: six degrees of freedom per node.
+#[derive(Debug, Clone)]
+pub struct Structural {
+    pub label: u32,
+    pub kind: ElementKind,
+    /// Indices into [`Mesh::labels`] (layout slots).
+    pub nodes: Vec<usize>,
+    pub xyz: Vec<[f64; 3]>,
+    pub density: Option<f64>,
+    pub section: Section,
+}
+
+/// The kernel of a shell or beam element.
+#[derive(Debug, Clone)]
+pub enum StructuralKernel {
+    Shell(Shell),
+    Beam(Beam),
+}
+
+impl Structural {
+    /// The unknowns every node of a shell or beam carries.
+    pub const KINDS: DofSet = DofSet::STRUCTURAL;
+
+    pub fn kernel(&self) -> Result<StructuralKernel> {
+        let k = match self.section {
+            Section::Shell(s) => Shell::new(self.kind, &self.xyz, s).map(StructuralKernel::Shell),
+            Section::Beam { section, orientation } => Beam::new(&self.xyz, orientation, section).map(StructuralKernel::Beam),
+        };
+        k.map_err(|e| Error::element(self.label, e))
+    }
+}
+
+impl StructuralKernel {
+    pub fn stiffness(&self) -> modelcraft_fem::Result<Matrix> {
+        match self {
+            StructuralKernel::Shell(s) => s.stiffness(),
+            StructuralKernel::Beam(b) => Ok(b.stiffness()),
+        }
+    }
+
+    /// The consistent or lumped mass over every element degree of freedom.
+    pub fn mass(&self, density: f64, kind: MassKind) -> modelcraft_fem::Result<Matrix> {
+        Ok(match (self, kind) {
+            (StructuralKernel::Shell(s), MassKind::Consistent) => s.mass(density)?,
+            (StructuralKernel::Shell(s), MassKind::Lumped) => {
+                let diagonal = s.lumped_mass(density)?;
+                let mut m = Matrix::zeros(diagonal.len());
+                for (i, v) in diagonal.iter().enumerate() {
+                    m.add(i, i, *v);
+                }
+                m
+            }
+            (StructuralKernel::Beam(b), MassKind::Consistent) => b.mass(density),
+            (StructuralKernel::Beam(b), MassKind::Lumped) => b.lumped_mass(density),
+        })
+    }
+
+    /// Consistent nodal forces and moments of a uniform force per volume, six per node.
+    pub fn body_force(&self, b: [f64; 3]) -> modelcraft_fem::Result<Vec<f64>> {
+        match self {
+            StructuralKernel::Shell(s) => s.body_force(b),
+            StructuralKernel::Beam(beam) => Ok(beam.body_force(b)),
+        }
+    }
+}
+
 /// The translations of a model's nodes: X and Y in a 2D model, else X, Y and Z. Trusses and
 /// translational discrete elements declare these.
 pub fn translation_kinds(planar: bool) -> DofSet {
@@ -177,6 +254,10 @@ pub struct Mesh {
     /// The 2D theory when this is a 2D model (a model is 2D as a whole).
     pub theory: Option<Theory>,
     pub trusses: Vec<Bar>,
+    /// Shells and beams, by label.
+    pub structural: Vec<Structural>,
+    /// What the solver changed or ignored in the model's sections.
+    pub warnings: Vec<String>,
     /// Point masses, springs and dashpots ([`crate::discrete`]).
     pub discrete: crate::discrete::Discrete,
 }
@@ -188,6 +269,11 @@ impl Mesh {
 
     pub fn truss(&self, label: u32) -> Option<&Bar> {
         self.trusses.binary_search_by_key(&label, |e| e.label).ok().and_then(|i| self.trusses.get(i))
+    }
+
+    /// The index of a shell or beam element in [`Self::structural`].
+    pub fn structural_index(&self, label: u32) -> Option<usize> {
+        self.structural.binary_search_by_key(&label, |e| e.label).ok()
     }
 
     /// The kinds trusses and translational discrete elements carry at their nodes.
@@ -239,6 +325,8 @@ impl Mesh {
     pub fn new(model: &Model, resolved: &Resolved, max_dofs: usize) -> Result<Mesh> {
         let mut elements = Vec::new();
         let mut trusses = Vec::new();
+        let mut structural = Vec::new();
+        let mut warnings = Vec::new();
         // A model is 2D as a whole (the model check refuses a mix).
         let planar = model.sections().values().find_map(|s| Theory::from_section(&s.kind));
         if matches!(planar, Some(Theory::Axisymmetric))
@@ -257,7 +345,11 @@ impl Mesh {
                 SectionKind::Rod { area } => Some(area),
                 _ => None,
             };
-            if !matches!(section.kind, SectionKind::Solid {}) && theory.is_none() && rod.is_none() {
+            let shell_or_beam = matches!(section.kind, SectionKind::Shell { .. } | SectionKind::Beam { .. });
+            if shell_or_beam && planar.is_some() {
+                return Err(Error::NotSupported(format!("{} sections in 2D models (section `{name}`)", section.kind.name())));
+            }
+            if !matches!(section.kind, SectionKind::Solid {}) && theory.is_none() && rod.is_none() && !shell_or_beam {
                 return Err(Error::NotSupported(format!(
                     "{} sections (section `{name}`); the solver has solid, 2D (plane stress, plane strain, axisymmetric) and truss elements so far",
                     section.kind.name()
@@ -272,6 +364,31 @@ impl Mesh {
             let elastic =
                 material.elastic.as_ref().ok_or_else(|| Error::Invalid(format!("material `{}` has no elastic constants", section.material)))?;
             let set = resolved.sets.get(&section.set).ok_or_else(|| Error::Invalid(format!("set `{}` is not resolved", section.set)))?;
+            let bad = |e: modelcraft_fem::Error| match e {
+                modelcraft_fem::Error::NotSupported(m) => Error::NotSupported(format!("section `{name}`: {m}")),
+                e => Error::Invalid(format!("section `{name}`, material `{}`: {e}", section.material)),
+            };
+            let shared = match &section.kind {
+                SectionKind::Shell { thickness, offset, .. } => {
+                    if section.formulation.integration == Integration::Reduced {
+                        warnings.push(format!(
+                            "section `{name}`: shells are MITC elements with full integration; reduced integration is solved the same way"
+                        ));
+                    }
+                    Some(Section::Shell(ShellSection::new(*thickness, *offset, elastic).map_err(bad)?))
+                }
+                SectionKind::Beam { profile, orientation } => {
+                    Some(Section::Beam { section: BeamSection::new(profile, elastic).map_err(bad)?, orientation: *orientation })
+                }
+                _ => None,
+            };
+            if let Some(body) = shared {
+                for &label in &set.elements {
+                    let el = model.element(label).ok_or_else(|| Error::Invalid(format!("element {label} is missing")))?;
+                    structural.push((label, el.kind, el.nodes.clone(), material.density, body));
+                }
+                continue;
+            }
             if let Some(area) = rod {
                 let young =
                     young_modulus(elastic).map_err(|e| Error::Invalid(format!("material `{}` of section `{name}`: {e}", section.material)))?;
@@ -297,12 +414,14 @@ impl Mesh {
         }
         elements.sort_by_key(|e| e.0);
         trusses.sort_by_key(|e| e.0);
+        structural.sort_by_key(|e| e.0);
         let translations = translation_kinds(planar.is_some());
         // What discrete elements need: at mesh nodes (some only they use), and at reference
         // points, which then get their six degrees of freedom like coupled ones.
         let needs: Vec<(u32, DofSet)> = crate::discrete::needs(resolved, translations).collect();
         let mut labels: Vec<u32> = elements.iter().flat_map(|e| e.2.iter().copied()).collect();
         labels.extend(trusses.iter().flat_map(|e| e.2.iter().copied()));
+        labels.extend(structural.iter().flat_map(|e| e.2.iter().copied()));
         labels.extend(needs.iter().map(|n| n.0).filter(|l| model.node(*l).is_some()));
         labels.sort_unstable();
         labels.dedup();
@@ -322,6 +441,9 @@ impl Mesh {
         }
         for e in &trusses {
             layout.element(&e.2, modelcraft_fem::ElementDofs::new(translations));
+        }
+        for e in &structural {
+            layout.element(&e.2, ElementDofs::new(Structural::KINDS));
         }
         for (label, kinds) in needs.iter().filter(|n| model.node(n.0).is_some()) {
             layout.node(*label, *kinds);
@@ -346,6 +468,8 @@ impl Mesh {
             layout,
             theory: planar,
             trusses: Vec::with_capacity(trusses.len()),
+            structural: Vec::with_capacity(structural.len()),
+            warnings,
             discrete: crate::discrete::Discrete::default(),
         };
         for (label, kind, nodes, formulation, d, density, theory, _) in elements {
@@ -358,6 +482,11 @@ impl Mesh {
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
             mesh.trusses.push(Bar { label, kind, nodes: idx, xyz: exyz, young, area, density });
         }
+        for (label, kind, nodes, density, section) in structural {
+            let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
+            let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
+            mesh.structural.push(Structural { label, kind, nodes: idx, xyz: exyz, density, section });
+        }
         mesh.discrete = crate::discrete::Discrete::new(&mesh, resolved)?;
         Ok(mesh)
     }
@@ -365,7 +494,12 @@ impl Mesh {
     /// The layout slots (mesh nodes, reference points) every element and discrete element
     /// couples, for the matrix pattern.
     pub fn blocks(&self) -> impl Iterator<Item = std::borrow::Cow<'_, [usize]>> {
-        let elements = self.elements.iter().map(|e| e.nodes.as_slice()).chain(self.trusses.iter().map(|t| t.nodes.as_slice()));
+        let elements = self
+            .elements
+            .iter()
+            .map(|e| e.nodes.as_slice())
+            .chain(self.trusses.iter().map(|t| t.nodes.as_slice()))
+            .chain(self.structural.iter().map(|s| s.nodes.as_slice()));
         elements.map(std::borrow::Cow::Borrowed).chain(self.discrete.couplings().map(|dofs| {
             let mut slots: Vec<usize> = dofs.iter().filter_map(|d| self.layout.locate(*d).map(|(slot, _)| slot)).collect();
             slots.dedup();
@@ -491,13 +625,16 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                         "load `{name}` acts on reference point `{rp}`, which no coupling ties to the mesh and no spring or point mass uses"
                     )));
                 }
-                // Moments act on the rotations, which only reference points have.
+                // Moments act on the rotations, which reference points and the nodes of shells
+                // and beams have.
                 let rotation = matches!(load, Load::Moment { .. });
                 for (label, v) in resolved.nodal_loads.get(name).map(Vec::as_slice).unwrap_or_default() {
                     let slot =
                         mesh.layout.slot(*label).ok_or_else(|| Error::Invalid(format!("load `{name}`: node {label} belongs to no solid element")))?;
                     let dofs = vector_dofs(mesh, slot, rotation).ok_or_else(|| {
-                        Error::Invalid(format!("moment `{name}`: solid nodes have no rotations; apply it to a coupled reference point"))
+                        Error::Invalid(format!(
+                            "moment `{name}`: node {label} has no rotations (only shell and beam nodes do); apply it to a coupled reference point"
+                        ))
                     })?;
                     for (&dof, x) in dofs.iter().zip(v) {
                         if *x != 0.0 && !active.get(dof).copied().unwrap_or(false) {
@@ -564,6 +701,13 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                     let rho = t.density.ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} has no density", t.label)))?;
                     bar_body(&mut f, mesh, t, acceleration.map(|a| rho * a))?;
                 }
+                for e in &mesh.structural {
+                    if chosen.is_some_and(|c| c.binary_search(&e.label).is_err()) {
+                        continue;
+                    }
+                    let rho = e.density.ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} has no density", e.label)))?;
+                    structural_body(&mut f, mesh, e, acceleration.map(|a| rho * a))?;
+                }
                 // Point masses take gravity on the whole model.
                 if set.is_none() {
                     mesh.discrete.add_gravity(&mut f, *acceleration, mesh);
@@ -575,6 +719,10 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                         bar_body(&mut f, mesh, t, *vector)?;
                         continue;
                     }
+                    if let Some(e) = mesh.structural_index(*label).and_then(|i| mesh.structural.get(i)) {
+                        structural_body(&mut f, mesh, e, *vector)?;
+                        continue;
+                    }
                     let e = mesh.element(*label).ok_or_else(|| Error::Invalid(format!("load `{name}`: element {label} is not a solid element")))?;
                     body(&mut f, mesh, e, *vector)?;
                 }
@@ -583,6 +731,9 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                 let chosen: Option<&[u32]> = set.as_ref().map(|s| resolved.sets.get(s).map(|r| r.elements.as_slice()).unwrap_or_default());
                 if let Some(t) = mesh.trusses.iter().find(|t| chosen.is_none_or(|c| c.binary_search(&t.label).is_ok())) {
                     return Err(Error::NotSupported(format!("centrifugal loads on trusses (load `{name}`, element {})", t.label)));
+                }
+                if let Some(e) = mesh.structural.iter().find(|e| chosen.is_none_or(|c| c.binary_search(&e.label).is_ok())) {
+                    return Err(Error::NotSupported(format!("centrifugal loads on shells and beams (load `{name}`, element {})", e.label)));
                 }
                 if set.is_none() && !mesh.discrete.masses.is_empty() {
                     return Err(Error::NotSupported(format!("centrifugal loads on point masses (load `{name}`)")));
@@ -613,6 +764,49 @@ fn bar_body(f: &mut [f64], mesh: &Mesh, t: &Bar, b: [f64; 3]) -> Result<()> {
         add(f, &translations(mesh, *node)?, v);
     }
     Ok(())
+}
+
+/// Consistent forces and moments of a uniform force per volume on a shell or beam.
+fn structural_body(f: &mut [f64], mesh: &Mesh, e: &Structural, b: [f64; 3]) -> Result<()> {
+    let forces = e.kernel()?.body_force(b).map_err(|err| Error::element(e.label, err))?;
+    let dofs =
+        mesh.layout.element_dofs(&e.nodes, Structural::KINDS).ok_or_else(|| Error::Internal(format!("element {} degrees of freedom", e.label)))?;
+    for (d, v) in dofs.iter().zip(&forces) {
+        if let Some(x) = f.get_mut(*d) {
+            *x += v;
+        }
+    }
+    Ok(())
+}
+
+/// The uniform force per volume a step's gravity and body forces put on each shell and beam
+/// element ([`Mesh::structural`] order): beam end forces are recovered with it.
+pub fn structural_body_forces(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step) -> Result<Vec<[f64; 3]>> {
+    let mut out = vec![[0.0; 3]; mesh.structural.len()];
+    for name in &step.loads {
+        let load = model.load(name).ok_or_else(|| Error::Invalid(format!("load `{name}` is missing")))?;
+        match load {
+            Load::Gravity { acceleration, set } => {
+                let chosen: Option<&[u32]> = set.as_ref().map(|s| resolved.sets.get(s).map(|r| r.elements.as_slice()).unwrap_or_default());
+                for (e, b) in mesh.structural.iter().zip(out.iter_mut()) {
+                    if chosen.is_some_and(|c| c.binary_search(&e.label).is_err()) {
+                        continue;
+                    }
+                    let rho = e.density.ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} has no density", e.label)))?;
+                    *b = [0, 1, 2].map(|k| b[k] + rho * acceleration[k]);
+                }
+            }
+            Load::BodyForce { set, vector } => {
+                for label in resolved.sets.get(set).map(|r| r.elements.as_slice()).unwrap_or_default() {
+                    if let Some(b) = mesh.structural_index(*label).and_then(|i| out.get_mut(i)) {
+                        *b = [0, 1, 2].map(|k| b[k] + vector[k]);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 fn body(f: &mut [f64], mesh: &Mesh, e: &Elem, b: [f64; 3]) -> Result<()> {

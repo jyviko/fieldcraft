@@ -10,7 +10,8 @@
 //!   D. S. Malkus, M. E. Plesha, R. J. Witt, *Concepts and Applications of Finite Element
 //!   Analysis*, 4th ed., Wiley 2002, §9.2). The reference point's rotations take part through the
 //!   lever arms, so a moment on it reaches the face as a couple even when only translations are
-//!   coupled; coupled rotations have nothing to act on at solid nodes, which have none.
+//!   coupled. Coupled rotations tie the rotations of shell and beam nodes, θ_s = θ_r; solid
+//!   nodes have none.
 //! - **Distributing** (an interpolation constraint): the reference point moves with the rigid
 //!   motion that fits the set's nodal translations best in the least-squares sense, with equal
 //!   weights (as the model and the deck writers define it). About the nodes' centroid c, with
@@ -50,8 +51,8 @@
 
 use std::collections::BTreeMap;
 
-use modelcraft_fem::DofKind;
 use modelcraft_fem::dense::inverse3;
+use modelcraft_fem::{DofKind, DofSet};
 use modelcraft_model::{CouplingKind, Model, Resolved};
 
 use crate::sparse::Csr;
@@ -113,7 +114,8 @@ pub fn coupling_rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh) -> 
         let coupled = |range: std::ops::Range<usize>| range.filter(|k| c.dofs.contains(*k as u8 + 1));
         match c.kind {
             CouplingKind::Kinematic => {
-                if coupled(0..3).next().is_none() {
+                let rotations = |n: usize| mesh.layout.kinds(n).includes(DofSet::ROTATIONS);
+                if coupled(0..3).next().is_none() && !(nodes.iter().any(|n| rotations(*n)) && coupled(3..6).next().is_some()) {
                     return Err(Error::Invalid(format!(
                         "coupling `{name}` couples only rotations, which the nodes of solid elements do not have; couple translations too"
                     )));
@@ -132,6 +134,14 @@ pub fn coupling_rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh) -> 
                             terms.push((rp(3 + b)?, r[a]));
                         }
                         rows.push(Row { terms, pivot, coupling: name });
+                    }
+                    // Shell and beam nodes also turn with the point: θ_s = θ_r.
+                    if rotations(n) {
+                        for k in coupled(3..6) {
+                            let pivot =
+                                DofKind::from_direction(k).ok_or_else(|| Error::Internal("direction".into())).and_then(|kind| mesh.dof(n, kind))?;
+                            rows.push(Row { terms: vec![(pivot, 1.0), (rp(k)?, -1.0)], pivot, coupling: name });
+                        }
                     }
                 }
             }

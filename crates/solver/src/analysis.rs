@@ -1,8 +1,10 @@
 //! Linear static and frequency analysis of a model's step, and their results.
 
 use modelcraft_fem::ElementType;
+use modelcraft_fem::beam::BeamForces;
 use modelcraft_fem::element::{Extrapolation, extrapolation};
 use modelcraft_fem::quadrature::Rule;
+use modelcraft_fem::shell::ShellStress;
 use modelcraft_fem::{DofKind, DofLayout, PointStress, von_mises};
 use modelcraft_model::{ElementKind, Model, Procedure, Resolved, Step};
 use serde::Serialize;
@@ -12,7 +14,7 @@ use crate::constraints::{Budget, Reduction, coupling_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
 use crate::ordering::nested_dissection;
 use crate::sparse::{Csr, NodeGraph, add_block, add_diagonal, add_scalar};
-use crate::system::{Mesh, inelastic_warnings, loads, prescribed, translation_block};
+use crate::system::{Mesh, Structural, StructuralKernel, inelastic_warnings, loads, prescribed, structural_body_forces, translation_block};
 use crate::{Error, Limits, Result};
 
 /// Size and effort of a solution.
@@ -27,6 +29,22 @@ pub struct Stats {
     pub factor_entries: usize,
     /// Lanczos vectors used (frequency analysis).
     pub lanczos_vectors: usize,
+}
+
+/// Section forces and surface stresses of one shell element.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShellResult {
+    pub label: u32,
+    pub kind: ElementKind,
+    pub stress: ShellStress,
+}
+
+/// End section forces of one beam element.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeamResult {
+    pub label: u32,
+    pub kind: ElementKind,
+    pub forces: BeamForces,
 }
 
 /// Stresses of one element.
@@ -57,13 +75,23 @@ pub struct StaticResult {
     /// Node labels with degrees of freedom, sorted; the per-node vectors follow this order.
     pub nodes: Vec<u32>,
     pub displacement: Vec<[f64; 3]>,
+    /// Rotations about X, Y, Z (zero at nodes without rotations: those of solids and trusses
+    /// only).
+    pub rotation: Vec<[f64; 3]>,
     /// Reaction forces (zero where nothing is prescribed).
     pub reaction: Vec<[f64; 3]>,
+    /// Reaction moments at held rotations.
+    pub reaction_moment: Vec<[f64; 3]>,
     /// Stress averaged at the nodes over the elements that share them (xx, yy, zz, xy, xz, yz).
     pub stress: Vec<[f64; 6]>,
     /// Von Mises stress of the averaged nodal stress.
     pub von_mises: Vec<f64>,
     pub elements: Vec<ElementStress>,
+    /// Shell section forces and surface stresses, by label (their top surface, the side their
+    /// normal points to, joins the nodal stress average).
+    pub shells: Vec<ShellResult>,
+    /// Beam end section forces, by label.
+    pub beams: Vec<BeamResult>,
     /// The coupled reference points, by name.
     pub reference_points: Vec<PointResult>,
     /// Sum of the applied forces and of the reaction forces (moments are not included).
@@ -82,6 +110,8 @@ pub struct Mode {
     pub frequency: f64,
     /// Mass-normalized (φᵀ M φ = 1), per node in [`FrequencyResult::nodes`] order.
     pub shape: Vec<[f64; 3]>,
+    /// The rotations of the shape (zero at nodes without rotations).
+    pub rotation: Vec<[f64; 3]>,
     /// Participation factors Γ = φᵀ M r for unit translations along X, Y, Z.
     pub participation: [f64; 3],
     /// Effective mass Γ² along X, Y, Z.
@@ -161,6 +191,15 @@ fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<As
             }
         }
     }
+    for s in &mesh.structural {
+        let kernel = s.kernel()?;
+        let at = |err| Error::element(s.label, err);
+        add_block(&mut k, layout, &s.nodes, Structural::KINDS, &kernel.stiffness().map_err(at)?.data)?;
+        if let (Some(mm), Some(kind)) = (m.as_mut(), mass) {
+            let rho = s.density.ok_or_else(|| Error::Invalid(format!("element {} has no density", s.label)))?;
+            add_block(mm, layout, &s.nodes, Structural::KINDS, &kernel.mass(rho, kind).map_err(at)?.data)?;
+        }
+    }
     mesh.discrete.add_stiffness(&mut k)?;
     if let Some(mm) = m.as_mut() {
         mesh.discrete.add_mass(mm)?;
@@ -195,11 +234,17 @@ fn directions<const N: usize>(full: &[f64], layout: &DofLayout, slot: usize) -> 
     std::array::from_fn(|c| DofKind::from_direction(c).and_then(|k| layout.dof(slot, k)).and_then(|d| full.get(d)).copied().unwrap_or(0.0))
 }
 
-/// The mesh nodes' translations in a full vector, per node, and the reference points'
-/// translations and rotations, per point.
-fn split(full: &[f64], mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[f64; 6]>) {
+/// A full vector split into the mesh nodes' translations and rotations (zero where a node has
+/// none), per node, and the reference points' translations and rotations, per point.
+fn split(full: &[f64], mesh: &Mesh) -> (Vec<[f64; 3]>, Vec<[f64; 3]>, Vec<[f64; 6]>) {
     let l = &mesh.layout;
-    ((0..l.nodes()).map(|n| directions(full, l, n)).collect(), (0..mesh.points.len()).map(|k| directions(full, l, l.point_slot(k))).collect())
+    let (translation, rotation) = (0..l.nodes())
+        .map(|n| {
+            let [a, b, c, d, e, f] = directions::<6>(full, l, n);
+            ([a, b, c], [d, e, f])
+        })
+        .unzip();
+    (translation, rotation, (0..mesh.points.len()).map(|k| directions(full, l, l.point_slot(k))).collect())
 }
 
 /// The matrix pattern of the mesh (node blocks of its elements, trusses and discrete elements)
@@ -252,7 +297,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     let resolved = model.resolve()?;
     let step = model.select_step(step, |p| matches!(p, Procedure::Static {}), "static")?;
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
-    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
+    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).chain(mesh.warnings.iter().cloned()).collect();
     warnings.extend(inelastic_warnings(model));
     let (graph, order) = pattern(&mesh);
     ignored_dashpots(&mesh, &mut warnings);
@@ -272,9 +317,9 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
     if u.iter().any(|x| !x.is_finite()) {
         return Err(Error::Singular("the solution is not finite; the model is ill-conditioned".into()));
     }
-    let (displacement, point_motion) = split(&u, &mesh);
+    let (displacement, rotation, point_motion) = split(&u, &mesh);
     let reactions = red.reactions(&k, &u, &f);
-    let (reaction, point_reaction) = split(&reactions, &mesh);
+    let (reaction, reaction_moment, point_reaction) = split(&reactions, &mesh);
     let (mut applied_total, mut reaction_total) = ([0.0; 3], [0.0; 3]);
     for (dof, (fv, rv)) in f.iter().zip(&reactions).enumerate() {
         let Some(d) = mesh.kind(dof).and_then(DofKind::direction) else { continue };
@@ -337,6 +382,31 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         elements.push(ElementStress { label: t.label, kind: t.kind, points, nodal });
     }
     elements.sort_by_key(|e| e.label);
+    let (mut shells, mut beams) = (Vec::new(), Vec::new());
+    let per_volume = structural_body_forces(model, &resolved, &mesh, step)?;
+    for (s, body) in mesh.structural.iter().zip(&per_volume) {
+        let at = |err| Error::element(s.label, err);
+        let dofs = mesh
+            .layout
+            .element_dofs(&s.nodes, Structural::KINDS)
+            .ok_or_else(|| Error::Internal(format!("element {} degrees of freedom", s.label)))?;
+        let ue: Vec<f64> = dofs.iter().map(|d| u.get(*d).copied().unwrap_or(0.0)).collect();
+        match s.kernel()? {
+            StructuralKernel::Shell(shell) => {
+                let stress = shell.stresses(&ue).map_err(at)?;
+                for (n, v) in s.nodes.iter().zip(&stress.top) {
+                    if let (Some(acc), Some(c)) = (sum.get_mut(*n), count.get_mut(*n)) {
+                        for k in 0..6 {
+                            acc[k] += v[k];
+                        }
+                        *c += 1;
+                    }
+                }
+                shells.push(ShellResult { label: s.label, kind: s.kind, stress });
+            }
+            StructuralKernel::Beam(beam) => beams.push(BeamResult { label: s.label, kind: s.kind, forces: beam.forces(&ue, *body).map_err(at)? }),
+        }
+    }
     let stress: Vec<[f64; 6]> = sum.iter().zip(&count).map(|(s, c)| s.map(|v| if *c > 0 { v / f64::from(*c) } else { 0.0 })).collect();
     let von_mises = stress.iter().map(von_mises).collect();
     let scale = applied_total.iter().chain(&reaction_total).fold(0.0f64, |m, v| m.max(v.abs()));
@@ -349,10 +419,14 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         step: step.name.clone(),
         nodes: mesh.labels.clone(),
         displacement,
+        rotation,
         reaction,
+        reaction_moment,
         stress,
         von_mises,
         elements,
+        shells,
+        beams,
         reference_points,
         applied_total,
         reaction_total,
@@ -398,7 +472,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
         return Err(Error::Invalid(format!("the shift must be a finite number, got {s}")));
     }
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
-    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
+    let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).chain(mesh.warnings.iter().cloned()).collect();
     warnings.extend(inelastic_warnings(model));
     let (graph, order) = pattern(&mesh);
     ignored_dashpots(&mesh, &mut warnings);
@@ -406,14 +480,18 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let red = reduction(&setup, false, &order, budget(limits, &mesh, &graph, 2), &mut warnings)?;
     let Assembled { k, m } = assemble(&mesh, &graph, Some(options.mass))?;
     let m = m.ok_or_else(|| Error::Internal("mass matrix".into()))?;
-    // Every element's mass entries sum to its mass, once per direction.
-    // (the mean over the directions for a point mass given per direction; rotary inertia is left
-    // out), added in storage order.
-    let translation = |d: usize| mesh.kind(d).and_then(DofKind::direction).is_some_and(|c| c < 3);
+    // Every element's mass entries between translations sum to its mass, once per direction
+    // (the mean over the directions for a point mass given per direction; rotary inertia, and
+    // the translation–rotation coupling of shells and beams, are left out), added in storage
+    // order.
+    let translation: Vec<bool> = (0..m.n).map(|d| mesh.kind(d).and_then(DofKind::direction).is_some_and(|c| c < 3)).collect();
     let mut translational = 0.0;
-    for d in (0..m.n).filter(|d| translation(*d)) {
-        for v in m.row(d).1 {
-            translational += v;
+    for d in (0..m.n).filter(|d| translation.get(*d).copied().unwrap_or(false)) {
+        let (cols, vals) = m.row(d);
+        for (c, v) in cols.iter().zip(vals) {
+            if translation.get(*c).copied().unwrap_or(false) {
+                translational += v;
+            }
         }
     }
     let total_mass = translational / mesh.translation_kinds().len() as f64;
@@ -468,11 +546,12 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let mut out = Vec::with_capacity(pairs.values.len());
     for (lambda, phi) in pairs.values.iter().zip(&pairs.vectors) {
         let participation = [0, 1, 2].map(|d| mr.get(d).map_or(0.0, |y| y.iter().zip(phi).map(|(a, b)| a * b).sum()));
-        let (shape, point_shape) = split(&red.expand(phi, false), &mesh);
+        let (shape, rotation, point_shape) = split(&red.expand(phi, false), &mesh);
         out.push(Mode {
             eigenvalue: *lambda,
             frequency: lambda.max(0.0).sqrt() / two_pi,
             shape,
+            rotation,
             participation,
             effective_mass: participation.map(|g| g * g),
             point_shape,
@@ -501,6 +580,8 @@ pub enum Location {
 
 /// The result of one step, as a session keeps it.
 #[derive(Debug, Clone, PartialEq)]
+// One per solved step; boxing the larger variant would buy nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum StepResult {
     Static(StaticResult),
     Frequency(FrequencyResult),

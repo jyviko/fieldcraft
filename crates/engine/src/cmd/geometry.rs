@@ -12,7 +12,7 @@ pub const OPEN: CommandSpec = CommandSpec {
     id: "geometry.open",
     label: "Open Design",
     params: r#"{"path": "part.solidcraft"} — rebuilds the SolidCraft design and makes its bodies the geometry; opening it again after an edit picks up the change"#,
-    form: None,
+    form: Some(super::forms::OPEN_DESIGN),
     kind: CommandKind::Model,
     run: open,
 };
@@ -21,7 +21,7 @@ pub const BODIES: CommandSpec = CommandSpec {
     id: "geometry.bodies",
     label: "Bodies",
     params: "{} — the open design's bodies: measures and persistent face names (by face index)",
-    form: None,
+    form: Some(&[]),
     kind: CommandKind::Model,
     run: bodies,
 };
@@ -30,7 +30,7 @@ pub const TESSELLATE: CommandSpec = CommandSpec {
     id: "geometry.tessellate",
     label: "Tessellate Body",
     params: r#"{"body": "Body1", "tolerance": 0.05} — triangulates the body's boundary within the chordal tolerance (mm); reports triangles per face"#,
-    form: None,
+    form: Some(super::forms::TESSELLATE),
     kind: CommandKind::Model,
     run: tessellate,
 };
@@ -39,7 +39,7 @@ pub const IMPORT_MESH: CommandSpec = CommandSpec {
     id: "geometry.import.mesh",
     label: "Import Tagged Mesh",
     params: r#"{"path": "part.3mf"} — adds each build item of a 3MF package as a surface; triangles keep their B-rep face tags (docs/formats/tagged-mesh.md)"#,
-    form: None,
+    form: Some(super::forms::IMPORT_MESH),
     kind: CommandKind::Model,
     run: import_mesh,
 };

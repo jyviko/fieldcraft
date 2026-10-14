@@ -25,37 +25,37 @@ fn fields<T: DeserializeOwned>(p: &Value, what: &str) -> Result<T> {
 
 /// Create, edit and delete commands for one kind of definition.
 macro_rules! definition_commands {
-    ($what:literal, $ty:ty, $id:literal, $label:literal, $doc:literal, $add:ident, $replace:ident, $remove:ident,
+    ($what:literal, $ty:ty, $id:literal, $label:literal, $doc:literal, $form:expr, $delete_form:expr, $add:ident, $replace:ident, $remove:ident,
      $CREATE:ident, $EDIT:ident, $DELETE:ident) => {
         pub const $CREATE: CommandSpec = CommandSpec {
             id: concat!("model.", $id, ".create"),
             label: concat!("New ", $label),
             params: concat!($doc, " — fails if the name is taken"),
-            form: None,
+            form: Some($form),
             kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
                 let n = name(p)?;
-        s.model.$add(n, fields::<$ty>(p, $what)?)?;
-                Ok(json!({"name": n}))
+                s.model.$add(n, fields::<$ty>(p, $what)?)?;
+        Ok(json!({"name": n}))
             },
         };
         pub const $EDIT: CommandSpec = CommandSpec {
             id: concat!("model.", $id, ".edit"),
             label: concat!("Edit ", $label),
             params: concat!($doc, " — replaces the existing definition of that name"),
-            form: None,
+            form: Some($form),
             kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
-        let n = name(p)?;
+                let n = name(p)?;
                 s.model.$replace(n, fields::<$ty>(p, $what)?)?;
-                Ok(json!({"name": n}))
+        Ok(json!({"name": n}))
             },
         };
         pub const $DELETE: CommandSpec = CommandSpec {
             id: concat!("model.", $id, ".delete"),
             label: concat!("Delete ", $label),
             params: r#"{"name": "…"} — refused while another definition refers to it"#,
-            form: None,
+            form: Some($delete_form),
             kind: CommandKind::Model,
             run: |s: &mut Session, p: &Value| {
                 s.model.$remove(name(p)?)?;
@@ -71,6 +71,8 @@ definition_commands!(
     "set",
     "Set",
     r#"{"name": "root", "geometry": [{"body": "Body1", "face": "F2:top"}, {"body": "Body1", "edge": "…"}, {"body": "Body1", "vertex": "…"}, {"body": "Body1"}], "nodes": [labels], "elements": [labels], "faces": [{"element": 1, "face": 3}], "edges": [{"element": 1, "edge": 2}]} — any of the member lists (element edges: where a 2D model's surface loads act); geometry members resolve against the mesh's geometry tags after every remesh (a face name also selects its split pieces `name#0`, `name#1`, …)"#,
+    super::forms::SET,
+    super::forms::SET_DELETE,
     add_set,
     replace_set,
     remove_set,
@@ -85,6 +87,8 @@ definition_commands!(
     "material",
     "Material",
     r#"{"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3} | {"type": "engineering_constants", "young": [E1, E2, E3], "poisson": [ν12, ν13, ν23], "shear": [G12, G13, G23]}, "density": 7.85e-9, "fluid": {"type": "newtonian", "viscosity": 1.0e-9} (dynamic viscosity; a fluid needs a density), "plastic": {…} (see model.material.plasticity), "damage": {…}, "erosion": {…} (see model.material.damage), "hyperelastic": {"type": "neo_hookean"} | {"type": "mooney_rivlin", "c01": 0.1} (C10 = μ/2 − C01) | {"type": "yeoh", "c20": -0.01, "c30": 0.001} (C10 = μ/2) (large strain in nonlinear steps, from the isotropic constants: μ = E/(2(1 + ν)), κ = E/(3(1 − 2ν)); without it an elastic material is St Venant–Kirchhoff there)} — in the model's unit system (model.units), never converted"#,
+    super::forms::MATERIAL,
+    super::forms::MATERIAL_DELETE,
     add_material,
     replace_material,
     remove_material,
@@ -106,7 +110,7 @@ pub const MATERIAL_PLASTICITY: CommandSpec = CommandSpec {
     id: "model.material.plasticity",
     label: "Plasticity",
     params: r#"{"name": "Steel", "plastic": {"type": "bilinear", "yield_stress": 250, "hardening_modulus": 1000, "hardening": "isotropic|kinematic"} | {"type": "table", "points": [{"strain": 0, "stress": 250}, {"strain": 0.1, "stress": 300}]} | {"type": "johnson_cook", "a": 792, "b": 510, "n": 0.26, "c": 0.014, "m": 1.03, "reference_strain_rate": 1, "room_temperature": 294, "melt_temperature": 1793, "specific_heat": 4.77e8, "taylor_quinney": 0.9} | null} — von Mises plasticity of an isotropic material (null removes it); explicit dynamics uses it, the linear solver the elastic constants alone"#,
-    form: None,
+    form: Some(super::forms::MATERIAL_PLASTICITY),
     kind: CommandKind::Model,
     run: |s: &mut Session, p: &Value| {
         change_material(s, p, |m, p| {
@@ -120,7 +124,7 @@ pub const MATERIAL_DAMAGE: CommandSpec = CommandSpec {
     id: "model.material.damage",
     label: "Damage",
     params: r#"{"name": "Steel", "damage": {"type": "johnson_cook", "d1": 0.05, "d2": 3.44, "d3": -2.12, "d4": 0.002, "d5": 0.61} | null, "erosion": {"plastic_strain": 1.0} | null} — damage to failure and element erosion of a plastic material (each key optional; null removes it); a failed element is eroded in explicit dynamics"#,
-    form: None,
+    form: Some(super::forms::MATERIAL_DAMAGE),
     kind: CommandKind::Model,
     run: |s: &mut Session, p: &Value| {
         change_material(s, p, |m, p| {
@@ -146,6 +150,8 @@ definition_commands!(
     "section",
     "Section",
     r#"{"name": "web", "set": "all", "material": "Steel", "kind": {"type": "solid"} | {"type": "shell", "thickness": 2, "offset": 0 (-0.5..=0.5 of the thickness), "points": 5} | {"type": "beam", "profile": {"type": "rectangle", "width", "height"} | {"type": "circle", "radius"} | {"type": "pipe", "radius", "thickness"} | {"type": "i", "height", "width", "web", "flange"} | {"type": "box", "width", "height", "thickness"}, "orientation": [x, y, z]} | {"type": "rod", "area": 10} | {"type": "plane_stress", "thickness": 1} | {"type": "plane_strain", "thickness": 1 (default)} | {"type": "axisymmetric"} (2D: elements in the XY plane; axisymmetric about Y with x the radius, forces totals over the circumference), "formulation": {"integration": "full|reduced", "incompatible_modes": false, "hybrid": false}}"#,
+    super::forms::SECTION,
+    super::forms::SECTION_DELETE,
     add_section,
     replace_section,
     remove_section,
@@ -160,6 +166,8 @@ definition_commands!(
     "reference_point",
     "Reference Point",
     r#"{"name": "RP", "xyz": [x, y, z], "label": 0} — label: its node label in decks (default: the highest free label, kept through remeshes)"#,
+    super::forms::REFERENCE_POINT,
+    super::forms::REFERENCE_POINT_DELETE,
     add_reference_point,
     replace_reference_point,
     remove_reference_point,
@@ -174,6 +182,8 @@ definition_commands!(
     "coupling",
     "Coupling",
     r#"{"name": "pad", "reference_point": "RP", "set": "hole", "kind": "kinematic|distributing", "dofs": [1, 2, 3, 4, 5, 6] (default all)}"#,
+    super::forms::COUPLING,
+    super::forms::COUPLING_DELETE,
     add_coupling,
     replace_coupling,
     remove_coupling,
@@ -188,6 +198,8 @@ definition_commands!(
     "mass",
     "Point Mass",
     r#"{"name": "motor", "target": {"set": "…"} | {"reference_point": "…"}, "mass": 2.5 | [mx, my, mz] (per global direction), "inertia": [I11, I22, I33, I12, I13, I23] (tensor about the node in global axes; needs rotations: a reference point)} — at every node of the target, each with the full value"#,
+    super::forms::MASS,
+    super::forms::MASS_DELETE,
     add_mass,
     replace_mass,
     remove_mass,
@@ -202,6 +214,8 @@ definition_commands!(
     "spring",
     "Spring or Dashpot",
     r#"{"name": "mount", "type": "spring", "stiffness": 1000 | "type": "dashpot", "coefficient": 5, "first": {"set": "…"} | {"reference_point": "…"}, "second": (optional; without it each node of `first` connects to the ground; with it each end is one node), "direction": {"dof": 1..6} (4–6: torsional) | {"vector": [x, y, z]} | "line" (along the two ends, two-point only)} — dashpots act in dynamic steps; static and frequency steps ignore them"#,
+    super::forms::SPRING,
+    super::forms::SPRING_DELETE,
     add_spring,
     replace_spring,
     remove_spring,
@@ -216,6 +230,8 @@ definition_commands!(
     "boundary_condition",
     "Boundary Condition",
     r#"{"name": "clamp", "type": "fixed", "target": {"set": "root"} | {"reference_point": "RP"}} | {"name", "type": "displacement", "target", "values": [u1, u2, u3, ur1, ur2, ur3] (null leaves a degree of freedom free)} | {"name", "type": "symmetry", "target", "plane": "x|y|z" (the plane's normal)} — active in the steps that list it (model.step.activate)"#,
+    super::forms::BOUNDARY_CONDITION,
+    super::forms::BOUNDARY_CONDITION_DELETE,
     add_boundary_condition,
     replace_boundary_condition,
     remove_boundary_condition,
@@ -230,6 +246,8 @@ definition_commands!(
     "load",
     "Load",
     r#"{"name": "push", "type": "force|moment", "target": {"set": "…"} | {"reference_point": "…"}, "vector": [x, y, z], "distribution": "total" (default: the vector is the total, split by area over the set's faces, or equally over its nodes) | "per_node" (at every node: depends on the mesh)} | {"name", "type": "traction", "set", "vector" (per area, on the set's faces)} | {"name", "type": "pressure", "set", "magnitude" (positive pushes in)} | {"name", "type": "gravity", "acceleration": [x, y, z], "set" (optional, default the whole model)} | {"name", "type": "body_force", "set", "vector" (per volume)} | {"name", "type": "centrifugal", "angular_velocity" (rad per time unit), "point": [x, y, z] (on the axis), "axis": [x, y, z], "set" (optional)} — 2D models: in-plane vectors, surface loads on element edges; active in the steps that list it (model.step.activate)"#,
+    super::forms::LOAD,
+    super::forms::LOAD_DELETE,
     add_load,
     replace_load,
     remove_load,
@@ -244,6 +262,8 @@ definition_commands!(
     "fluid_domain",
     "Fluid Domain",
     r#"{"name": "Flow", "material": "Water" (a density and fluid behaviour), "min": [x, y, z], "max": [x, y, z], "spacing": 1.0 (cubic cells; every extent a whole number of spacings), "faces": {"x_min": {"type": "velocity", "velocity": [u, v, w], "profile": "uniform|parabolic"}, "x_max": {"type": "pressure", "pressure": 0}, "y_min": {"type": "wall"} | {"type": "moving_wall", "velocity": [u, v, w] (in the face's plane)} | {"type": "slip"} | {"type": "periodic"} (in opposite pairs), …} (default walls), "obstacles": ["Body1"] (solid bodies of the design or imported surfaces, by name), "surfaces": [{"face": {"body": "Body1", "face": "F2:top"}, "condition": {"type": "moving_wall", "velocity": [u, v, w]}}] (obstacle faces are walls unless listed), "initial_velocity": [u, v, w], "acceleration": [x, y, z] (gravity or a driving force per mass), "tolerance": 0.1 (obstacle triangulation; default a tenth of the spacing)}"#,
+    super::forms::FLUID_DOMAIN,
+    super::forms::FLUID_DOMAIN_DELETE,
     add_fluid_domain,
     replace_fluid_domain,
     remove_fluid_domain,
@@ -256,7 +276,7 @@ pub const FLUID_BOUNDARY: CommandSpec = CommandSpec {
     id: "model.fluid_domain.boundary",
     label: "Inlet, Outlet or Wall",
     params: r#"{"domain": "Flow", "at": "x_min" (a box face) | {"body": "Body1", "face": "F2:top"} (an obstacle face), "condition": {"type": "velocity", "velocity": [u, v, w], "profile": "uniform|parabolic"} | {"type": "pressure", "pressure": 0} | {"type": "wall"} | {"type": "moving_wall", "velocity": [u, v, w]} | {"type": "slip"} | {"type": "periodic"}} — sets one boundary's condition (obstacle faces take walls and moving walls)"#,
-    form: None,
+    form: Some(super::forms::FLUID_BOUNDARY),
     kind: CommandKind::Model,
     run: fluid_boundary,
 };
@@ -273,7 +293,7 @@ pub const STEP_CREATE: CommandSpec = CommandSpec {
     id: "model.step.create",
     label: "New Step",
     params: r#"{"name": "Bend", "procedure": {"type": "static"} | {"type": "nonlinear_static", "nonlinear_geometry": true, "initial_increment": 0.1, "min_increment": 1e-5, "max_increment": 1.0 (fractions of the step), "max_increments": 100, "max_iterations": 16 (per increment), "tolerances": {"force": 1e-6, "displacement": 1e-5, "energy": 1e-10}, "line_search": false, "load_path": [[0, 0], [0.5, 1], [1, 0]] (optional: the load factor against the step fraction, piecewise linear from [0, 0] to fraction 1; increments end at its points)} (loads and prescribed displacements are the load factor times their values; it ramps from 0 to 1 without a load path) | {"type": "frequency", "modes": 10, "min_hz": 0, "max_hz": 500} | {"type": "fluid", "domain": "Flow", "end_time": 1.0 | "steps": 1000, "time_step": (default: chosen for Mach 0.087 and τ ≤ 1), "frames": 10, "magic": 0.1875 (the two-relaxation-time Λ)} | {"type": "explicit_dynamic", "end_time": 0.001, "dt_scale": 0.9, "max_increments": 10000000, "output_interval", "history_interval", "history_nodes": "set", "initial_velocities": [{"set", "velocity": [vx, vy, vz]}], "rigid_walls": [{"set", "point", "normal", "friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb; default frictionless)}], "hourglass": {"type": "viscous|stiffness", "coefficient": 0.1}, "bulk_viscosity": {"linear": 0.06, "quadratic": 1.5}}, "output": ["displacement", "reaction_force", "stress", "strain"] (default by procedure), "boundary_conditions": [names], "loads": [names] (active in this step; nothing carries over between steps), "before": "step" (default: last)}"#,
-    form: None,
+    form: Some(super::forms::STEP_CREATE),
     kind: CommandKind::Model,
     run: step_create,
 };
@@ -282,7 +302,7 @@ pub const STEP_EDIT: CommandSpec = CommandSpec {
     id: "model.step.edit",
     label: "Edit Step",
     params: r#"{"name": "Bend", "procedure", "output", "boundary_conditions", "loads"} — as model.step.create; what is left out keeps its value"#,
-    form: None,
+    form: Some(super::forms::STEP_EDIT),
     kind: CommandKind::Model,
     run: step_edit,
 };
@@ -291,7 +311,7 @@ pub const STEP_DELETE: CommandSpec = CommandSpec {
     id: "model.step.delete",
     label: "Delete Step",
     params: r#"{"name": "Bend"}"#,
-    form: None,
+    form: Some(super::forms::STEP_DELETE),
     kind: CommandKind::Model,
     run: |s, p| s.model.remove_step(name(p)?).map(|_| Value::Null).map_err(Into::into),
 };
@@ -300,13 +320,19 @@ pub const STEP_ACTIVATE: CommandSpec = CommandSpec {
     id: "model.step.activate",
     label: "Activate in Step",
     params: r#"{"step": "Bend", "boundary_conditions": [names], "loads": [names], "active": true} — switches the listed items on (or off with false) in that step only"#,
-    form: None,
+    form: Some(super::forms::STEP_ACTIVATE),
     kind: CommandKind::Model,
     run: step_activate,
 };
 
-pub const ACTIVITY: CommandSpec =
-    CommandSpec { id: "model.activity", label: "Step Table", params: "{}", form: None, kind: CommandKind::Model, run: |s, _| Ok(activity(&s.model)) };
+pub const ACTIVITY: CommandSpec = CommandSpec {
+    id: "model.activity",
+    label: "Step Table",
+    params: "{}",
+    form: Some(&[]),
+    kind: CommandKind::Model,
+    run: |s, _| Ok(activity(&s.model)),
+};
 
 fn step_create(s: &mut Session, p: &Value) -> Result<Value> {
     let n = name(p)?;

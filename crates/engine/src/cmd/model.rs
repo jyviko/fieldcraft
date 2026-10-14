@@ -4,25 +4,26 @@ use serde_json::{Value, json};
 use super::{listed, name};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
-pub const INFO: CommandSpec = CommandSpec { id: "model.info", label: "Model Info", params: "{}", form: None, kind: CommandKind::Model, run: info };
+pub const INFO: CommandSpec =
+    CommandSpec { id: "model.info", label: "Model Info", params: "{}", form: Some(&[]), kind: CommandKind::Model, run: info };
 
 pub const UNITS: CommandSpec = CommandSpec {
     id: "model.units",
     label: "Unit System",
     params: r#"{"system": "m-kg-s-N-Pa|mm-t-s-N-MPa|mm-kg-ms-kN-GPa|mm-g-ms-N-MPa|in-lbf-s-psi|unspecified"} — labels the system the model's numbers are in; nothing is converted"#,
-    form: None,
+    form: Some(super::forms::UNITS),
     kind: CommandKind::Model,
     run: units,
 };
 
 pub const CHECK: CommandSpec =
-    CommandSpec { id: "model.check", label: "Check Model", params: "{}", form: None, kind: CommandKind::Model, run: check };
+    CommandSpec { id: "model.check", label: "Check Model", params: "{}", form: Some(&[]), kind: CommandKind::Model, run: check };
 
 pub const SET_RESOLVE: CommandSpec = CommandSpec {
     id: "model.set.resolve",
     label: "Resolve Set",
     params: r#"{"name": "root"} — the set's nodes, elements and element faces on the current mesh (the first 100 of each); fails naming every member that is not on the mesh"#,
-    form: None,
+    form: Some(super::forms::SET_RESOLVE),
     kind: CommandKind::Model,
     run: set_resolve,
 };

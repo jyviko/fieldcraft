@@ -6,6 +6,7 @@ pub(crate) mod deck;
 pub(crate) mod define;
 mod edit;
 pub(crate) mod file;
+pub(crate) mod forms;
 mod geometry;
 mod hex;
 pub(crate) mod mesh;

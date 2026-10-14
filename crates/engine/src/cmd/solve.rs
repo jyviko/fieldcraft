@@ -19,7 +19,7 @@ pub const RUN: CommandSpec = CommandSpec {
     id: "solve.run",
     label: "Solve All Steps",
     params: r#"{} — solves every step in order with its procedure's solver (solve.static, solve.frequency, solve.explicit, solve.fluid with their default caps) and keeps the results; stops at the first step that fails, naming it"#,
-    form: None,
+    form: Some(&[]),
     kind: CommandKind::Model,
     run: run_all,
 };
@@ -28,7 +28,7 @@ pub const STATIC: CommandSpec = CommandSpec {
     id: "solve.static",
     label: "Solve Static Step",
     params: r#"{"step": "Load", "max_dofs": 6000000, "max_factor_entries": 400000000, "threads": 8} — solves a linear static or coupled temperature–displacement step (the only one when `step` is left out) and keeps the result in the session; the caps may only be lowered; `threads` (1 to 256, by default the session's: `FIELDCRAFT_THREADS` or the cores) changes only the time, never the result"#,
-    form: None,
+    form: Some(super::forms::SOLVE_STATIC),
     kind: CommandKind::Model,
     run: run_static,
 };
@@ -37,7 +37,7 @@ pub const NONLINEAR: CommandSpec = CommandSpec {
     id: "solve.nonlinear",
     label: "Solve Nonlinear Static Step",
     params: r#"{"step": "Inflate", "max_dofs": 6000000, "max_factor_entries": 400000000, "max_newton_iterations": 100000, "threads": 8} — solves a nonlinear static step (the only one when `step` is left out) in load increments with Newton–Raphson iterations and keeps the result in the session: the final displacements, reactions, Cauchy stresses and logarithmic strains (small strains without nonlinear geometry), the equivalent plastic strain of plastic materials (the largest in the summary), every increment's load factor, iterations and residuals (force, displacement and energy, relative to their tolerances' scales), and a displacement frame per converged increment; the caps may only be lowered (`max_newton_iterations` over the whole step); `threads` as for solve.static"#,
-    form: None,
+    form: Some(super::forms::SOLVE_NONLINEAR),
     kind: CommandKind::Model,
     run: run_nonlinear,
 };
@@ -46,7 +46,7 @@ pub const HEAT: CommandSpec = CommandSpec {
     id: "solve.heat",
     label: "Solve Heat Transfer Step",
     params: r#"{"step": "Heat", "max_dofs": 6000000, "max_factor_entries": 400000000, "threads": 8} — steady or transient heat conduction of a heat transfer step (the only one when `step` is left out): temperatures, heat flux and the heat flow at prescribed temperatures, kept in the session; the caps may only be lowered; `threads` as for solve.static"#,
-    form: None,
+    form: Some(super::forms::SOLVE_STATIC),
     kind: CommandKind::Model,
     run: run_heat,
 };
@@ -55,7 +55,7 @@ pub const FREQUENCY: CommandSpec = CommandSpec {
     id: "solve.frequency",
     label: "Solve Frequency Step",
     params: r#"{"step": "Modes", "mass": "consistent|lumped", "shift": 0.0, "max_dofs": 6000000, "max_factor_entries": 400000000, "max_iterations": 3000, "threads": 8} — natural frequencies and mode shapes of a frequency step (its modes and range); `max_iterations` caps the Lanczos vectors; the result stays in the session; `threads` as for solve.static"#,
-    form: None,
+    form: Some(super::forms::SOLVE_FREQUENCY),
     kind: CommandKind::Model,
     run: run_frequency,
 };
@@ -64,7 +64,7 @@ pub const EXPLICIT: CommandSpec = CommandSpec {
     id: "solve.explicit",
     label: "Solve Explicit Dynamic Step",
     params: r#"{"step": "Impact", "max_dofs": 6000000, "max_increments": 1000000000, "max_output_values": 50000000, "max_contact_faces": 10000000, "threads": 8} — transient response of an explicit dynamic step (the only one when `step` is left out) by central differences, with the model's contacts (interaction.contact.*) and the step's rigid walls; keeps its histories and field frames in the session and reports each contact's peak force, first and last contact, deepest penetration, friction dissipated and the nodes adjusted at the start; the caps may only be lowered (the step's own increment cap applies too); `threads` as for solve.static"#,
-    form: None,
+    form: Some(super::forms::SOLVE_EXPLICIT),
     kind: CommandKind::Model,
     run: run_explicit,
 };
@@ -73,7 +73,7 @@ pub const HISTORY: CommandSpec = CommandSpec {
     id: "solve.history",
     label: "Result Histories",
     params: r#"{"step": "Impact", "every": 1} — the time histories of a solved explicit step: time, increment, energies, momentum, constraint force, the normal force across each contact (in `contacts` order) and the history nodes' displacement and velocity; `every` keeps one sample in so many (by default enough to return at most 10000)"#,
-    form: None,
+    form: Some(super::forms::SOLVE_HISTORY),
     kind: CommandKind::Model,
     run: history,
 };
@@ -82,7 +82,7 @@ pub const FLUID: CommandSpec = CommandSpec {
     id: "solve.fluid",
     label: "Solve Fluid Step",
     params: r#"{"step": "Flow", "max_cells": 16000000, "max_steps": 10000000, "max_cell_updates": 1e12, "max_frame_bytes": 2e9, "threads": 8} — runs a fluid step with the lattice Boltzmann solver (the only fluid step when `step` is left out): obstacles are triangulated from the open design or taken from imported surfaces; returns the time step, relaxation time, Mach number, mass and the final force on every wall; the caps may only be lowered; `threads` as for solve.static"#,
-    form: None,
+    form: Some(super::forms::SOLVE_FLUID),
     kind: CommandKind::Model,
     run: run_fluid,
 };
@@ -91,7 +91,7 @@ pub const PROBE: CommandSpec = CommandSpec {
     id: "solve.probe",
     label: "Probe Results",
     params: r#"{"step": "Load", "nodes": [1, 2] (or "set": "fillet", a set's nodes), "mode": 1, "frame": 0} — the stored result at nodes (with `max_von_mises`, the largest among them, for static steps): displacement, rotation, reaction, reaction moment, stress and von Mises (static, with `elements` each element's results: solid, 2D and truss nodal stresses (and, in a nonlinear step, the equivalent plastic strain at the integration points of a plastic element), shell section forces (N, M, Q per length in the element's axes) and bottom, middle and top stresses, beam end forces (N, V_y, V_z, T, M_y, M_z in its axes)), the shape of mode `mode` with its rotations (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` (or at the nodes nearest to points: "at": [[x, y, z], ...], lowest label on a tie, each entry then giving its `xyz` and `distance`) and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
-    form: None,
+    form: Some(super::forms::SOLVE_PROBE),
     kind: CommandKind::Model,
     run: probe,
 };

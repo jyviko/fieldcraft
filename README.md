@@ -16,6 +16,7 @@ cargo xtask ci                                  # fmt, assets, licences, layers,
 cargo xtask test --heavy                        # the heavy (ignored) tests and the doc tests
 cargo run -p modelcraft-cli -- commands         # every command and its parameters
 cargo run -p modelcraft-cli -- run script.json  # run a command script
+cargo run -p modelcraft-cli -- mcp              # MCP server on stdio for AI agents (docs/mcp.md)
 ```
 
 Rust 1.95 or later, with the `wasm32-unknown-unknown` target for `cargo xtask ci`.
@@ -24,6 +25,8 @@ Rust 1.95 or later, with the `wasm32-unknown-unknown` target for `cargo xtask ci
 
 - [Architecture](docs/architecture.md): crates, layers and the meshing pipeline
 - [Libraries and licences](docs/adr/0001-libraries.md)
+- [AI agents (MCP)](docs/mcp.md): `claude mcp add modelcraft -- /path/to/modelcraft-cli mcp`
+- [Control protocol](docs/control-protocol.md): driving the desktop app
 - [Contributing](CONTRIBUTING.md) and [agent instructions](AGENTS.md)
 
 ## License

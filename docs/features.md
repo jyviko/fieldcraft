@@ -3,7 +3,8 @@
 Generated from the capability catalogue (`crates/engine/src/catalogue.rs`) by
 `cargo run -p modelcraft-cli -- features > docs/features.md`; a test fails when it is out of date.
 Every entry is a toolbar button. **Ready** entries run their command; **coming soon** entries are
-shown greyed with the roadmap milestone that brings them (ROADMAP.md).
+shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
+the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
 52 ready, 51 coming soon.
 

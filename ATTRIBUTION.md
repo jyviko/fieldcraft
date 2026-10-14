@@ -166,6 +166,8 @@ is committed and listed here with its exports.
 | crates/io/src/fs.rs (atomic writes) | SolidCraft `crates/io/src/safe_write.rs` | MIT OR Apache-2.0 |
 | crates/io/src/recovery.rs (recovery folder, entries, locks) | SolidCraft `crates/engine/src/recovery.rs` | MIT OR Apache-2.0 |
 | apps/modelcraft/src/control_server.rs | SolidCraft `apps/solidcraft/src/control_server.rs` | MIT OR Apache-2.0 |
+| crates/mcp/src/ (JSON-RPC framing, MCP lifecycle, tool schema checks, the control-channel backend, base64) | SolidCraft `crates/mcp/src/` | MIT OR Apache-2.0 |
+| crates/io/src/roots.rs (the rules of read and write roots) | VectorCraft's automation roots (docs/mcp.md there) | MIT OR Apache-2.0 |
 
 ## Test oracles
 

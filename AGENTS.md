@@ -122,6 +122,8 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   look at the result: `ui.capture {path}` (the whole window drawn offscreen; works with the
   screen locked), `ui.screenshot {path}` (a presented frame) or `ui.render {path}` (the model
   only), then read the PNG.
+- `cargo run -p modelcraft-cli -- mcp [--connect 127.0.0.1:PORT]` serves MCP on stdio (docs/mcp.md):
+  the same commands as tools, headless or bridged to the running app.
 - Build with `CARGO_TARGET_DIR=<repo>/target`. Parallel agents: separate target dirs, one
   worktree each.
 

@@ -2,28 +2,24 @@
 //!
 //! The mark is a hexahedral-meshed cube in isometric view whose faces carry a banded colour
 //! fringe (blue to red, hottest at the cube's front corner) as a stress or temperature result
-//! would. Streamlines coloured by flow speed in the same bands, with arrowheads, sweep in: two
-//! run into the top face and narrow into its mesh lines (the flow becomes the structure), one
-//! wraps around the cube. The faces are
-//! separated by transparent gaps instead of painted edge lines, so the backdrop shows through
-//! them in every appearance. All geometry is computed here, turned into VectorCraft commands and
+//! would. The faces are separated by transparent gaps instead of painted edge lines, so the
+//! backdrop shows through them in every appearance. All geometry is computed here, turned into VectorCraft commands and
 //! run headlessly with `vectorcraft-cli run` (`VECTORCRAFT_CLI`, else `vectorcraft-cli` on the
 //! PATH), which saves each document's editable `.vectorcraft` source and exports its SVG (and PNG).
 //!
 //! Outputs, all under `assets/app-icon/` (see its README.md):
 //! - `icon.vectorcraft`, `icon.svg`, `icon.png`: the full icon on its backdrop, 1024 × 1024.
 //! - `icon-small.vectorcraft`, `icon-small.svg`, `icon-small.png`: simplified artwork for 16–32 px
-//!   (no mesh or floor grid, faces edge to edge, one bold streamline with an arrowhead).
+//!   (no mesh or floor grid, faces edge to edge).
 //! - `icon.iconset/` (sips), `icon.icns` (iconutil) and `icon.ico` (ImageMagick).
 //! - `FieldCraft.icon/`: an Icon Composer document with separate floor-grid (Default and Dark),
-//!   flow (behind and in front) and cube layers (the mesh shares the cube's: Icon Composer allows
-//!   four groups); their editable sources are `layers/*.vectorcraft`.
+//!   and cube layers (the mesh shares the cube's); their editable sources are `layers/*.vectorcraft`.
 //! - `Assets.car`: Apple's actool compilation of `FieldCraft.icon`, when Xcode 26 or later is
 //!   installed (otherwise the step is skipped with a note and the checked-in catalog stays).
 //!
 //! macOS only (sips, iconutil); ImageMagick (`magick`) writes the Windows icon.
 
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::FRAC_PI_2;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -35,7 +31,7 @@ type P3 = [f64; 3];
 /// Canvas side in pixels; every document is one square artboard.
 const CANVAS: f64 = 1024.0;
 /// Pixels per model unit, and the screen point the model origin projects to.
-const SCALE: f64 = 286.0;
+const SCALE: f64 = 300.0;
 const CENTRE: P2 = [512.0, 500.0];
 const COS30: f64 = 0.866_025_403_784_438_6;
 
@@ -55,17 +51,13 @@ const BAND_RADII: [f64; 6] = [1.28, 1.07, 0.87, 0.67, 0.47, 0.27];
 /// The macOS icon grid: the backdrop's square, inset 100 px on a 1024 canvas.
 const BACKDROP: [f64; 2] = [100.0, 924.0];
 
-/// The streamlines' halo colour (the same in both appearances: it keeps the fringe-coloured
-/// cores readable on the light backdrop and over the cube).
-const FLOW_HALO: &str = "#0b2236";
-
 #[derive(Clone, Copy, PartialEq)]
 enum Appearance {
     Light,
     Dark,
 }
 
-/// How much of the mark is drawn: the full mesh, flow and floor grid, or the small-size artwork.
+/// How much of the mark is drawn: the full mesh and floor grid, or the small-size artwork.
 #[derive(Clone, Copy, PartialEq)]
 enum Detail {
     Full,
@@ -308,144 +300,6 @@ fn mesh_d() -> String {
     segs.iter().map(|&(a, b)| polyline(&[project(a), project(b)], false)).collect::<Vec<_>>().join(" ")
 }
 
-/// A streamline's path: a swept curve around the cube's vertical axis, or a feed that sweeps in
-/// from the lower left, climbs over the left face and runs into the top face's mesh line
-/// `x = c`, carrying on along it as the hex edge.
-enum Path3 {
-    /// Radius `r`, height `z0 + tilt · sin(θ − 45°)`, from angle `from` to `to` (degrees,
-    /// decreasing: the flow passes in front of the cube from screen left to right).
-    Swirl { r: f64, z0: f64, tilt: f64, from: f64, to: f64 },
-    /// In the plane `x = c`: a cubic from `start` (y, z) to the top face's front-left edge,
-    /// arriving level so it runs straight on into the mesh line.
-    Feed { c: f64, start: P2, bend: P2 },
-}
-
-struct Stream {
-    path: Path3,
-    /// Widest core, in pixels on the 1024 canvas.
-    width: f64,
-    /// Where the arrowheads sit, as fractions of the path.
-    arrows: &'static [f64],
-}
-
-const STREAMS: [Stream; 3] = [
-    Stream { path: Path3::Feed { c: -0.25, start: [1.25, -0.7], bend: [0.95, -0.6] }, width: 17.0, arrows: &[0.45] },
-    Stream { path: Path3::Feed { c: 0.25, start: [1.05, -0.6], bend: [0.9, -0.45] }, width: 17.0, arrows: &[0.5] },
-    Stream { path: Path3::Swirl { r: 0.98, z0: -0.08, tilt: 0.22, from: 215.0, to: -60.0 }, width: 17.0, arrows: &[0.3, 1.0] },
-];
-
-/// The small-size artwork's one streamline.
-const SMALL_STREAM: Stream = Stream { path: Path3::Swirl { r: 1.0, z0: -0.12, tilt: 0.14, from: 190.0, to: -40.0 }, width: 44.0, arrows: &[1.0] };
-
-/// Samples along each streamline.
-const STREAM_SAMPLES: usize = 160;
-
-/// The fringe band of the flow speed at fraction `t` along a streamline: slow (blue) at its
-/// tail, fastest (red) where it reaches the cube or its head.
-fn speed_band(t: f64) -> usize {
-    ((t * FRINGE.len() as f64) as usize).min(FRINGE.len() - 1)
-}
-
-impl Path3 {
-    fn at(&self, t: f64) -> P3 {
-        match *self {
-            Path3::Swirl { r, z0, tilt, from, to } => {
-                let a = (from + (to - from) * t).to_radians();
-                [r * a.cos(), r * a.sin(), z0 + tilt * (a - PI / 4.0).sin()]
-            }
-            Path3::Feed { c, start, bend } => {
-                let (p0, p1, p2, p3) = (start, bend, [A + 0.35, A], [A, A]);
-                let u = 1.0 - t;
-                let b = |k: usize| u * u * u * p0[k] + 3.0 * u * u * t * p1[k] + 3.0 * u * t * t * p2[k] + t * t * t * p3[k];
-                [c, b(0), b(1)]
-            }
-        }
-    }
-
-    /// The mesh line a feed runs on into, across the top face (none for a swirl).
-    fn continuation(&self) -> Option<(P3, P3)> {
-        match *self {
-            Path3::Swirl { .. } => None,
-            Path3::Feed { c, .. } => Some(([c, A, A], [c, -A, A])),
-        }
-    }
-}
-
-/// A filled shape of a streamline: its path data and colour (`None` for the halo colour).
-type Piece = (String, Option<&'static str>);
-
-/// A streamline drawn as tapered ribbons: the halo (`grow` pixels wider each side) and the core
-/// split into speed bands, then the arrowheads. Returns (behind the cube, in front of it).
-fn stream_pieces(s: &Stream, grow: f64) -> (Vec<Piece>, Vec<Piece>) {
-    let n = STREAM_SAMPLES;
-    let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
-    let pts3: Vec<P3> = ts.iter().map(|&t| s.path.at(t)).collect();
-    let pts: Vec<P2> = pts3.iter().map(|&p| project(p)).collect();
-    // A tail that grows to full width over the first third.
-    let half: Vec<f64> = ts.iter().map(|&t| s.width / 2.0 * (t / 0.3).min(1.0).powf(0.6) + grow).collect();
-    let dir = |i: usize| {
-        let v = sub(pts[(i + 1).min(n)], pts[i.saturating_sub(1)]);
-        let len = v[0].hypot(v[1]).max(1e-9);
-        [v[0] / len, v[1] / len]
-    };
-    let ribbon = |lo: usize, hi: usize| {
-        let side = |i: usize, k: f64| {
-            let d = dir(i);
-            [pts[i][0] - d[1] * half[i] * k, pts[i][1] + d[0] * half[i] * k]
-        };
-        let mut poly: Vec<P2> = (lo..=hi).map(|i| side(i, 1.0)).collect();
-        poly.extend((lo..=hi).rev().map(|i| side(i, -1.0)));
-        polyline(&poly, true)
-    };
-    let colour = |i: usize| if grow > 0.0 { None } else { Some(FRINGE[speed_band(ts[i])]) };
-    let front = |i: usize| pts3[i][0] + pts3[i][1] > 0.0;
-    let (mut behind, mut ahead) = (Vec::new(), Vec::new());
-    // Runs of one side of the cube and one colour; neighbours share their boundary sample, so
-    // they meet without a seam.
-    let mut lo = 0;
-    for i in 1..=n {
-        if i == n || front(i) != front(lo) || colour(i) != colour(lo) {
-            let piece = (ribbon(lo, i), colour(lo));
-            if front(lo) {
-                ahead.push(piece)
-            } else {
-                behind.push(piece)
-            }
-            lo = i;
-        }
-    }
-    // A feed carries on along its mesh line, narrowing to the mesh's stroke: the flow becomes
-    // the hex edge.
-    if let Some((a, b)) = s.path.continuation() {
-        {
-            let (p, q) = (project(a), project(b));
-            let v = sub(q, p);
-            let len = v[0].hypot(v[1]).max(1e-9);
-            let m = [-v[1] / len, v[0] / len];
-            let (w0, w1) = (half[n], 0.6 + grow * 0.6);
-            let poly = [
-                [p[0] + m[0] * w0, p[1] + m[1] * w0],
-                [q[0] + m[0] * w1, q[1] + m[1] * w1],
-                [q[0] - m[0] * w1, q[1] - m[1] * w1],
-                [p[0] - m[0] * w0, p[1] - m[1] * w0],
-            ];
-            ahead.push((polyline(&poly, true), colour(n)));
-        }
-    }
-    for &f in s.arrows {
-        let i = ((f * n as f64).round() as usize).min(n);
-        let (d, p, w) = (dir(i), pts[i], s.width);
-        let g = grow * 1.6;
-        let tip = [p[0] + d[0] * (1.5 * w + g), p[1] + d[1] * (1.5 * w + g)];
-        let back = [p[0] - d[0] * (0.7 * w + g), p[1] - d[1] * (0.7 * w + g)];
-        let wing = 1.25 * w + g;
-        let poly = [tip, [back[0] - d[1] * wing, back[1] + d[0] * wing], [back[0] + d[1] * wing, back[1] - d[0] * wing]];
-        let piece = (polyline(&poly, true), colour(i));
-        if front(i) { ahead.push(piece) } else { behind.push(piece) }
-    }
-    (behind, ahead)
-}
-
 /// Clip a segment to the axis-aligned square [lo, hi]² (Liang–Barsky).
 fn clip_to_square(a: P2, b: P2, lo: f64, hi: f64) -> Option<(P2, P2)> {
     let d = sub(b, a);
@@ -556,28 +410,6 @@ fn mesh_layer() -> Result<Layer, String> {
     Ok(Layer { name: "Mesh", shapes: vec![Shape::stroked("hexahedral mesh", mesh_d(), stroke, 0.45)], clip: Some(clip) })
 }
 
-/// The streamlines' runs behind the cube (`front == false`) or in front of it.
-fn flow_layer(detail: Detail, front: bool) -> Layer {
-    let streams: Vec<&Stream> = match detail {
-        Detail::Full => STREAMS.iter().collect(),
-        Detail::Small => vec![&SMALL_STREAM],
-    };
-    let mut shapes = Vec::new();
-    for (k, s) in streams.into_iter().enumerate() {
-        let pick = |(behind, ahead): (Vec<Piece>, Vec<Piece>)| if front { ahead } else { behind };
-        let halo = pick(stream_pieces(s, (s.width * 0.18).max(3.0)));
-        if halo.is_empty() {
-            continue;
-        }
-        let d = halo.into_iter().map(|p| p.0).collect::<Vec<_>>().join(" ");
-        shapes.push(Shape::filled(&format!("streamline {} halo", k + 1), d, colour(FLOW_HALO)));
-        for (j, (d, c)) in pick(stream_pieces(s, 0.0)).into_iter().enumerate() {
-            shapes.push(Shape::filled(&format!("streamline {} part {}", k + 1, j + 1), d, colour(c.unwrap_or(FLOW_HALO))));
-        }
-    }
-    Layer { name: if front { "Flow in front" } else { "Flow behind" }, shapes, clip: None }
-}
-
 fn floor_layer(appearance: Appearance) -> Layer {
     let colour = match appearance {
         Appearance::Light => "#8aa0b4",
@@ -608,12 +440,10 @@ fn composite(detail: Detail, appearance: Appearance) -> Result<Doc, String> {
     if detail == Detail::Full {
         layers.push(floor_layer(appearance));
     }
-    layers.push(flow_layer(detail, false));
     layers.extend(part_layers(detail)?);
     if detail == Detail::Full {
         layers.push(mesh_layer()?);
     }
-    layers.push(flow_layer(detail, true));
     let title = match (detail, appearance) {
         (Detail::Full, Appearance::Light) => "FieldCraft application icon",
         (Detail::Full, Appearance::Dark) => "FieldCraft application icon (dark preview)",
@@ -723,9 +553,7 @@ fn icon_json() -> Value {
     json!({
         "fill": "system-light",
         "groups": [
-            group("04 Flow front", plain("04-flow-front"), false),
-            group("03 Part", plain("03-part"), true),
-            group("02 Flow behind", plain("02-flow-behind"), false),
+            group("02 Part", plain("02-part"), true),
             group("01 Floor", json!({"image-name-specializations": [{"value": "01-floor.svg"}, {"appearance": "dark", "value": "01-floor-dark.svg"}],
                 "name": "01-floor", "fill": "none", "position": position,
                 "glass-specializations": [{"value": false}, {"appearance": "tinted", "value": true}]}), false),
@@ -757,16 +585,14 @@ pub fn run(root: &Path) -> Result<(), String> {
     vectorcraft(&composite(Detail::Small, Appearance::Dark)?, &work.join("icon-small-dark.vectorcraft"), &[work.join("icon-small-dark.png")])?;
 
     // Icon Composer layers: the system supplies the backdrop.
-    // Icon Composer allows four groups, so the mesh shares the cube's.
+    // The mesh shares the cube's Icon Composer group.
     let single = |title, layer| Doc { title, layers: vec![layer] };
     let mut part_with_mesh = part_layers(Detail::Full)?;
     part_with_mesh.push(mesh_layer()?);
     let layer_docs = [
         ("01-floor", single("FieldCraft icon floor grid", floor_layer(Appearance::Light))),
         ("01-floor-dark", single("FieldCraft icon floor grid (Dark)", floor_layer(Appearance::Dark))),
-        ("02-flow-behind", single("FieldCraft icon flow behind the cube", flow_layer(Detail::Full, false))),
-        ("03-part", Doc { title: "FieldCraft icon cube", layers: part_with_mesh }),
-        ("04-flow-front", single("FieldCraft icon flow in front of the cube", flow_layer(Detail::Full, true))),
+        ("02-part", Doc { title: "FieldCraft icon cube", layers: part_with_mesh }),
     ];
     for (name, doc) in &layer_docs {
         vectorcraft(doc, &layers.join(format!("{name}.vectorcraft")), &[assets.join(format!("{name}.svg"))])?;
@@ -851,18 +677,6 @@ mod tests {
     }
 
     #[test]
-    fn streamlines_pass_where_they_should() {
-        for s in &STREAMS {
-            let (behind, ahead) = stream_pieces(s, 0.0);
-            assert!(!ahead.is_empty());
-            // Only the swirl goes round the back; a feed stays in front and ends on the mesh.
-            assert_eq!(behind.is_empty(), s.path.continuation().is_some());
-        }
-        assert_eq!(speed_band(0.0), 0);
-        assert_eq!(speed_band(1.0), FRINGE.len() - 1);
-    }
-
-    #[test]
     fn segments_clip_to_the_square() {
         assert_eq!(clip_to_square([-5.0, 5.0], [15.0, 5.0], 0.0, 10.0), Some(([0.0, 5.0], [10.0, 5.0])));
         assert_eq!(clip_to_square([-5.0, -5.0], [-1.0, 20.0], 0.0, 10.0), None);
@@ -874,8 +688,8 @@ mod tests {
         let steps = commands(&doc, Path::new("/tmp/icon.vectorcraft"));
         assert_eq!(steps.first().map(|s| s.0), Some("file.new"));
         assert_eq!(steps.last().map(|s| s.0), Some("document.save"));
-        // Floor, flow behind, three faces, mesh, flow in front.
-        assert_eq!(steps.iter().filter(|s| s.0 == "layer.new").count(), 7);
+        // Floor, three faces, mesh.
+        assert_eq!(steps.iter().filter(|s| s.0 == "layer.new").count(), 5);
         // The floor grid is clipped to the backdrop, each face's fringe and the mesh to the faces.
         assert_eq!(steps.iter().filter(|s| s.0 == "layer.clippingMask.toggle").count(), 5);
     }

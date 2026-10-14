@@ -1,0 +1,16 @@
+name: Feature request
+description: A capability FieldCraft should have
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need and why
+      description: The analysis or workflow you are trying to do.
+    validations:
+      required: true
+  - type: textarea
+    id: reference
+    attributes:
+      label: References
+      description: Papers, textbooks or published benchmarks that define the behaviour. Do not paste text, files or results from commercial CAE products.

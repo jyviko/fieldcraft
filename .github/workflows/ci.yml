@@ -1,8 +1,17 @@
 name: CI
 
-# CI runs once per merge, on main (AGENTS.md, "Workflow for every change"): pull requests are
-# checked locally on the crates they touch and merged; a red main is fixed forward.
+# CI runs once per merge, on main (AGENTS.md, "Workflow for every change"): the core team's pull
+# requests are checked locally on the crates they touch and merged; a red main is fixed forward.
+# Pull requests from forks (outside contributors) run the full gate, once the maintainer approves
+# the run, so the review sees it.
 on:
+  pull_request:
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - 'docs/features.md'
+      - 'docs/oracle.md'
   push:
     branches: [main]
     # A merge that only touches prose starts no run. The generated pages are checked by the jobs
@@ -26,7 +35,7 @@ permissions:
 # once, at the tip. Nightly and manual runs are grouped apart and never cancelled by a merge.
 concurrency:
   group: ci-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,6 +43,7 @@ env:
 jobs:
   ci:
     name: cargo xtask ci
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -50,6 +60,7 @@ jobs:
   heavy:
     # The heavy verification and corpus tests (#[ignore]d) and the doc tests.
     name: cargo xtask test --heavy
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -65,6 +76,7 @@ jobs:
     # its fixture, and docs/oracle.md must be the table the cases produce. Cases marked `slow`
     # run here too while the whole set stays within a few minutes; `--quick` skips them.
     name: cargo xtask oracle
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -80,6 +92,7 @@ jobs:
 
   advisories:
     name: Dependency advisories and sources
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

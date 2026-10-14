@@ -1,0 +1,21 @@
+name: Bug report
+description: Something FieldCraft does wrong, or a crash
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what FieldCraft did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The commands, script, `.fieldcraft` or `.solidcraft` file that shows it. For a crash, attach the crash report folder (`fieldcraft-cli crashes`).
+  - type: input
+    id: version
+    attributes:
+      label: Version and platform
+      placeholder: "v0.1.0, macOS 15 arm64"

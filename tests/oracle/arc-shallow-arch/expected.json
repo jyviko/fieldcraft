@@ -1,0 +1,46 @@
+{
+ "title": "Snap-through of a shallow arch by arc length",
+ "kind": "theory",
+ "source": "One-mode closed form of a shallow sinusoidal arch y₀ = a sin(πx/L) on pins at a fixed span under q₀ sin(πx/L): q₀ = EI k⁴ [c + (a − c)(2ac − c²)/(4r²)], k = π/L, limit points at c = a ∓ r √((a²/r² − 4)/3) (S. P. Timoshenko, J. M. Gere, Theory of Elastic Stability, 2nd ed., McGraw-Hill 1961, §7.6; Y. C. Fung, A. Kaplan, NACA TN 2840, 1952): L = 100, h = 1, unit width, E = 10⁴, ν = 0, a/r = 3.5; the load is scaled to the upper limit load, so the peak load factor is 1 and the valley 0.211035",
+ "quantities": [
+  {
+   "id": "peak",
+   "quantity": "upper limit load factor (snap-through)",
+   "measure": {
+    "from": "solve",
+    "pointer": "/critical_points/0/load_factor"
+   },
+   "value": 1.0,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "40 × 2 × 1 hex20 against shallow Euler–Bernoulli arch theory, the load piecewise constant per element, and the limit load picked from converged states (second order in the arc)"
+  },
+  {
+   "id": "valley",
+   "quantity": "lower limit load factor",
+   "measure": {
+    "from": "solve",
+    "pointer": "/critical_points/1/load_factor"
+   },
+   "value": 0.21103504613969407,
+   "tolerance": {
+    "absolute": 0.02
+   },
+   "reason": "as the peak; the valley is a fifth of the peak load and a small difference of the bending and axial terms, so its tolerance is stated as 2 % of the peak load"
+  },
+  {
+   "id": "negative",
+   "quantity": "negative eigenvalues of the tangent past the upper limit point",
+   "measure": {
+    "from": "solve",
+    "pointer": "/critical_points/0/negative_after"
+   },
+   "value": 1,
+   "tolerance": {
+    "exact": true
+   },
+   "reason": "the inertia of the LDLᵀ factor: exactly one unstable direction between the limit points"
+  }
+ ]
+}

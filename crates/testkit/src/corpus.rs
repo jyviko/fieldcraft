@@ -224,15 +224,18 @@ pub fn parts() -> Result<Vec<Part>> {
     Ok(parts)
 }
 
-/// Build a part: run its recipe (or generate the shape) and open the design.
-pub fn load(part: &Part) -> Result<Design> {
-    let geometry = |source| Error::Geometry { part: part.name.clone(), source };
-    let bytes = match &part.source {
+/// A part's design as `.solidcraft` bytes: its recipe run (or its shape generated).
+pub fn design_bytes(part: &Part) -> Result<Vec<u8>> {
+    match &part.source {
         Source::Recipe(script) => script_design(script),
         Source::Analytic(shape) => shape.design(),
     }
-    .map_err(geometry)?;
-    open_design(&bytes).map_err(geometry)
+    .map_err(|source| Error::Geometry { part: part.name.clone(), source })
+}
+
+/// Build a part: run its recipe (or generate the shape) and open the design.
+pub fn load(part: &Part) -> Result<Design> {
+    open_design(&design_bytes(part)?).map_err(|source| Error::Geometry { part: part.name.clone(), source })
 }
 
 #[cfg(test)]

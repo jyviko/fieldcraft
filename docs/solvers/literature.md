@@ -1186,3 +1186,28 @@ update are written from (cited again in the module docs):
   transcribed finite-strain values), R. D. Cook, J. Struct. Div. ASCE 100(ST9):1851–1863, 1974,
   and J. C. Simo, F. Armero, IJNME 33:1413–1449, 1992; tube inflation, R. S. Rivlin, Phil. Trans. R. Soc. A
   242:173–195, 1949, and R. W. Ogden, *Non-Linear Elastic Deformations*, Dover 1997.
+
+## Part N: Implicit plasticity (finite and small strain), as implemented
+
+- Multiplicative J2 plasticity with a Hencky elastic energy and the exponential return map in
+  the principal logarithmic strains, which keeps the classical radial return of the
+  infinitesimal theory: J. C. Simo, *Algorithms for static and dynamic multiplicative plasticity
+  that preserve the classical return mapping schemes of the infinitesimal theory*, CMAME
+  99(1):61–112, 1992, DOI [10.1016/0045-7825(92)90123-2](https://doi.org/10.1016/0045-7825(92)90123-2);
+  J. C. Simo, T. J. R. Hughes, *Computational Inelasticity*, Springer 1998, ch. 9.
+- The radial return (shared with explicit dynamics) and its consistent tangent
+  K I⊗I + 2Gθ ℙ − 2Gθ̄ n⊗n: Simo & Hughes 1998, §3.3, Box 3.2 (A4.1); J. C. Simo, R. L. Taylor,
+  *Consistent tangent operators for rate-independent elastoplasticity*, CMAME 48(1):101–118,
+  1985, DOI [10.1016/0045-7825(85)90070-2](https://doi.org/10.1016/0045-7825(85)90070-2).
+- The derivative of the matrix logarithm by divided differences (Daleckii–Krein), smooth through
+  equal stretches: R. Bhatia, *Matrix Analysis*, Springer 1997, §V.3.
+- Kinematic hardening at finite strain (refused for now; the route when it comes): additive
+  plasticity in the Lagrangian logarithmic strain space, C. Miehe, N. Apel, M. Lambrecht, CMAME
+  191(47–48):5383–5425, 2002, DOI [10.1016/S0045-7825(02)00438-3](https://doi.org/10.1016/S0045-7825(02)00438-3).
+- Prager's linear kinematic hardening: W. Prager, *The theory of plasticity: a survey of recent
+  achievements*, Proc. Inst. Mech. Eng. 169:41–57, 1955.
+- Verification references: the thick cylinder's plastic zone and collapse pressure, R. Hill,
+  *The Mathematical Theory of Plasticity*, Oxford 1950, ch. V; the cantilever's plastic hinge,
+  B. G. Neal, *The Plastic Methods of Structural Analysis*, 3rd ed., Chapman & Hall 1977, and the
+  continuum's velocity fields, W. Prager, P. G. Hodge, *Theory of Perfectly Plastic Solids*,
+  Wiley 1951.

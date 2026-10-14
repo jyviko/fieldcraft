@@ -1,0 +1,17 @@
+[
+ {"command": "mesh.block", "params": {"body": "Beam", "kind": "hex20", "corners": [[0, 0, -5.0], [200.0, 0, -5.0], [200.0, 10.0, -5.0], [0, 10.0, -5.0], [0, 0, 5.0], [200.0, 0, 5.0], [200.0, 10.0, 5.0], [0, 10.0, 5.0]], "divisions": [20, 2, 4], "faces": {"6": "root", "4": "tip"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Beam"}]}},
+ {"command": "model.set.create", "params": {"name": "root", "geometry": [{"body": "Beam", "face": "root"}]}},
+ {"command": "model.set.create", "params": {"name": "tip", "geometry": [{"body": "Beam", "face": "tip"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 200000.0, "poisson": 0.3}, "plastic": {"type": "bilinear", "yield_stress": 250.0}}},
+ {"command": "model.section.create", "params": {"name": "beam", "set": "all", "material": "Steel", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "plane", "type": "symmetry", "target": {"set": "root"}, "plane": "x"}},
+ {"command": "model.reference_point.create", "params": {"name": "Root", "xyz": [0, 5.0, 0]}},
+ {"command": "model.coupling.create", "params": {"name": "support", "reference_point": "Root", "set": "root", "kind": "distributing"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "hold", "type": "displacement", "target": {"reference_point": "Root"}, "values": [null, 0, 0, 0, null, null]}},
+ {"command": "model.reference_point.create", "params": {"name": "Tip", "xyz": [200.0, 5.0, 0]}},
+ {"command": "model.coupling.create", "params": {"name": "end", "reference_point": "Tip", "set": "tip", "kind": "distributing"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "push", "type": "displacement", "target": {"reference_point": "Tip"}, "values": [null, null, -15.0, null, null, null]}},
+ {"command": "model.step.create", "params": {"name": "Collapse", "procedure": {"type": "nonlinear_static", "nonlinear_geometry": false}, "boundary_conditions": ["plane", "hold", "push"], "loads": []}},
+ {"command": "solve.nonlinear", "params": {"step": "Collapse"}, "id": "solve"}
+]

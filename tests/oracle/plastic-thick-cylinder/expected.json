@@ -1,14 +1,43 @@
 {
- "title": "Elastic–perfectly plastic thick cylinder: collapse pressure",
+ "title": "Elastic–perfectly plastic thick cylinder: plastic zone and collapse pressure",
  "kind": "theory",
- "source": "Hill, The Mathematical Theory of Plasticity, Oxford 1950, ch. V §2: plane strain von Mises collapse pressure p = (2/√3)σ_y ln(b/a)",
- "status": "pending",
- "requires": "implicit (static) J2 plasticity: explicit J2 is in, a collapse load needs the static solver",
+ "source": "Hill, The Mathematical Theory of Plasticity, Oxford 1950, ch. V §2: a von Mises cylinder in plane strain, elastically incompressible, with the plastic zone a ≤ r ≤ c under the pressure p = k (2 ln(c/a) + 1 − c²/b²), k = σ_y/√3, and the bore displacement u_a = k c²/(2 G a); collapse when c = b at p = 2k ln(b/a)",
  "quantities": [
   {
-   "id": "p_collapse",
-   "quantity": "collapse pressure for a = 10, b = 20, σ_y = 250",
-   "value": 200.0944
+   "id": "u_bore",
+   "quantity": "bore displacement at the pressure that takes the plastic zone to c = 15 (a = 10, b = 20, σ_y = 250)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.02435534068380524,
+   "tolerance": {
+    "relative": 0.002
+   },
+   "reason": "20 reduced quad8 elements through the wall resolve the logarithmic plastic field and ν = 0.4999 stands in for Hill's incompressible elasticity (0.009 % apart); u_a ∝ c², so 0.2 % on u_a is 0.1 % on the plastic radius"
+  },
+  {
+   "id": "collapse_force",
+   "quantity": "radial force on the bore (per radian times 2π, height 1) at a bore displacement of 0.3, 24 times the first yield's: the collapse pressure 2k ln 2 = 200.094 times 2πa",
+   "measure": {
+    "from": "collapse",
+    "pointer": "/reaction_total/0"
+   },
+   "value": 12572.299154203694,
+   "tolerance": {
+    "relative": 0.001
+   },
+   "reason": "once the wall is plastic through, perfect plasticity holds the force at the collapse value (σ_θ − σ_r = 2k everywhere, σ_z the mean of the others as plastic flow dominates); the band admits the quadrature of the logarithmic field"
   }
  ]
 }

@@ -1,0 +1,13 @@
+{
+  "note": "FieldCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "plastic_strain": {
+      "band": 1.9678217821795454e-10,
+      "value": 0.19678217821795452
+    },
+    "sigma": {
+      "band": 6.427365391418857e-7,
+      "value": 642.7365390754569
+    }
+  }
+}

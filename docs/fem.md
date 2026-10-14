@@ -172,6 +172,22 @@ converges, so a cut-back increment leaves no trace. The materials:
 | Elastic (isotropic or orthotropic), no option | St Venant–Kirchhoff: S = D E, E = ½(FᵀF − I). Right for large rotations with small strains; it softens without bound in large compression. |
 | Isotropic elastic with `"hyperelastic": {"type": "neo_hookean"}` | Compressible neo-Hookean with the isochoric–volumetric split, W = μ/2 (Ī₁ − 3) + κ/2 (J − 1)², μ and κ from E and ν (C₁₀ = μ/2, D₁ = 2/κ). Its small-strain limit is the linear material, which linear steps use. |
 
+| Isotropic elastic with `"plastic"` (bilinear isotropic or kinematic, table, Johnson–Cook) | J2 plasticity (`fieldcraft_fem::elastoplastic`): at finite strain Simo's multiplicative model (CMAME 99, 1992) with a Hencky elastic energy, τ = K ln J I + 2G dev ½ ln bₑ, the history Cₚ⁻¹ and the equivalent plastic strain, integrated by the exponential return map on the principal logarithmic strains; at small strain the additive radial return with the back stress. Both call `J2::radial_return`, the update of explicit dynamics, and its consistent tangent `J2::tangent`. |
+
+**Plasticity's tangent.** With Cₚ⁻¹ frozen over an iteration, L_v τ = 𝔻ᵉᵖ : ½ (∂ ln b/∂b) : (d b + b d) − (d τ + τ d), 𝔻ᵉᵖ the algorithmic tangent of the return
+(K I⊗I + 2Gθ ℙ − 2Gθ̄ n⊗n, Simo & Hughes 1998 Box 3.2) and the derivative of the logarithm the
+Daleckii–Krein divided differences θ_AB = artanh(r)/r, r = (λ²_A − λ²_B)/(λ²_A + λ²_B), in the
+principal frame of the trial bₑ: smooth through equal stretches, so uniaxial and undeformed
+states need no special case. The tangent is symmetric (isotropic hardening) and checked against
+central differences of the stress and of every element's forces from a plastic history. Hybrid
+elements take the deviatoric return and the volume K/2 (ln J)². Refused by name in nonlinear
+steps: kinematic hardening at finite strain (a back stress is not coaxial with bₑ, which the
+principal-frame return needs; it works with small strain), the Johnson–Cook strain-rate term (a
+static step has no time; C = 0 is the rate-independent law), and incompatible-mode elements of a
+plastic material. Damage, erosion and adiabatic heating act in explicit dynamics only (a warning
+says so). A hardening slope below −3G leaves the point without a tangent: the increment cuts
+back and the step stops at the minimum increment, naming the element.
+
 "Isotropic elastic" keeps meaning the same thing everywhere: the neo-Hookean model is chosen
 only by the explicit option, and explicit dynamics refuses a hyperelastic material by name.
 
@@ -190,9 +206,11 @@ differences of its forces.
 | plane stress | refused (σ_zz = 0 needs a local iteration for the thickness) |
 | trusses, shells, beams | refused (large rotations of structural elements come later in M15) |
 
-Without nonlinear geometry (`"nonlinear_geometry": false`) the elements are the linear ones:
-every material is elastic today, so such a step is the linear solution reached by Newton (the
-path the next materials, plasticity first, take with small strains).
+Without nonlinear geometry (`"nonlinear_geometry": false`) an elastic element is the linear one
+(K u), and an element of a plastic material takes the same loops with small strain
+(`Kinematics::Small`: ε = sym ∇u, the reference gradients, f = ∫ Bᵀσ dV, K = ∫ Bᵀ𝔻B dV with the
+consistent tangent, no geometric stiffness; hybrid elements project 1 + tr ε and K tr ε), so an
+elastic model is still the linear solution reached by Newton.
 
 **Follower pressure** (`fieldcraft_fem::face::follower_pressure`, `follower_edge_pressure`):
 fᵢ = −p ∫ Nᵢ (x,ξ × x,η) dξ dη on the current face, with its load stiffness
@@ -207,6 +225,23 @@ the rate of convergence of open loaded surfaces; it is revisited with the symmet
 (LDLᵀ) factorization that arc-length and Taylor–Hood need. Without nonlinear geometry a pressure
 is a dead load.
 
+**Load path.** A step's `load_path`, `[[fraction, factor], …]` from `[0, 0]` to fraction 1, makes
+the load factor piecewise linear in the step fraction (without one it equals the fraction), so
+loads and prescribed displacements can come down or reverse within a step: cyclic loading.
+Increments end at every point of the path, and the extrapolated predictor scales with the change
+of the load factor, so it turns with the path. LS-DYNA writes the path as the step's curve;
+Abaqus refuses it by name for now (it would be an amplitude on every load and boundary
+condition).
+
+**Predictors.** An increment starts from the linear extrapolation of the last one; with
+path-dependent materials an increment without one (the first, after a turn of the path to zero
+change) starts from the tangent predictor: one solve with the converged state's tangent for the
+change of the loads and of the prescribed displacements, so a prescribed motion is spread into the
+interior before the material sees it (started from the boundary's jump alone, the elements next
+to it would flow plastically far beyond the solution). Its work is then the energy criterion's
+reference. A first tangent that is not positive definite is a cutback when the undeformed
+model's tangent is (the strain of the increment, not a model that can move freely).
+
 **Newton–Raphson** with the consistent tangent refactored every iteration, an optional line
 search (off by default: on large elastic rotations the full step converges in fewer
 iterations), and convergence when the force residual (∞-norm over the largest force seen), the
@@ -219,8 +254,10 @@ tangent is not positive definite, or the iterations run out; the step stops with
 and the reason at the minimum increment, the increment cap, or `Limits::max_newton_iterations`.
 
 **Results**: the final displacements and reactions, the **Cauchy stress** and the
-**logarithmic strain** (ln V, engineering shears) at the integration points and averaged at the
-nodes, every increment's load factor, iterations and residuals, and a displacement frame per
+**logarithmic strain** (ln V, engineering shears; the small strain without nonlinear geometry) at
+the integration points and averaged at the nodes, the **equivalent plastic strain** at the
+integration points of plastic elements (`solve.probe` with `elements`, the largest in the step
+summary), every increment's load factor, iterations and residuals, and a displacement frame per
 converged increment (`results.frame`, the slider in the results panel).
 
 **Couplings** stay the linear constraints of the linear solver (small rotations of the
@@ -229,9 +266,11 @@ centrifugal loads are refused by name in nonlinear steps.
 
 **Decks**: Abaqus `*STEP, NLGEOM=YES|NO, INC=` with `*STATIC` (initial, period 1, minimum,
 maximum) and `*CONTROLS, PARAMETERS=LINE SEARCH`; the neo-Hookean option as `*HYPERELASTIC, NEO
-HOOKE`. LS-DYNA: the ramped implicit run with full Newton (`ilimit` 1, `maxref`) and
+HOOKE`; plasticity as for explicit dynamics (`*PLASTIC`); a load path, and a plastic deck of
+several general steps (Abaqus carries the plastic state from one to the next, every model step
+starts undeformed), are refused. LS-DYNA: the ramped implicit run with full Newton (`ilimit` 1, `maxref`) and
 `*CONTROL_IMPLICIT_AUTO`; hyperelastic materials in nonlinear steps and steps without nonlinear
-geometry are refused. Nastran refuses nonlinear steps (SOL 400) by name. Iteration caps and
+geometry are refused; a load path is the step's curve. Nastran refuses nonlinear steps (SOL 400) by name. Iteration caps and
 tolerances are left to each solver's own controls, whose norms differ from ours.
 
 **Verification** (`crates/solver/tests/nonlinear.rs`, `crates/fem/src/{constitutive,finite,face}.rs`,
@@ -242,4 +281,16 @@ test on a distorted mesh (all solids, hybrid ones included); a 90° rigid rotati
 the elastica (Bisshopp–Drucker) at P L²/(E I) = 1, 2, 5, 10 with hex20 (0.2–0.5 %); the inflation of a thick neo-Hookean tube by a follower pressure (Rivlin's closed form);
 Newton's quadratic convergence; the linear limit; a finite-strain Cook's membrane is pending
 its transcribed reference; and the failures (an element inverted by
-crushing stops at the minimum increment, naming it; the caps; what is refused).
+crushing stops at the minimum increment, naming it; the caps; what is refused). Plasticity
+(`crates/solver/tests/plasticity.rs`, `crates/fem/src/elastoplastic.rs`, `tests/oracle/`
+`nl-j2-uniaxial`, `j2-bauschinger`, `plastic-thick-cylinder`, `plastic-hinge-cantilever`): the
+consistent tangents against central differences from a plastic history (material point and
+every element, finite and small strain, full and hybrid); uniaxial tension to a logarithmic
+strain of 0.2 in every element kind, hybrid ones included (Kirchhoff stress exact to 10⁻⁷, and
+0.13 % from explicit dynamics' hypoelastic Cauchy stress, the elastic volume change between the
+two laws); the Bauschinger effect on a load path back to zero strain (exact); Hill's thick
+cylinder, the bore displacement at a plastic radius of 1.5a (0.009 %) and the collapse pressure
+(2·10⁻⁸); a cantilever's collapse 3.1 % above beam theory's hinge, converged under refinement;
+Newton's order with the consistent tangent 1.9 (small strain) and 2.3 (finite strain) in a
+plastic cantilever; and the refusals and the softening material that stops at the minimum
+increment.

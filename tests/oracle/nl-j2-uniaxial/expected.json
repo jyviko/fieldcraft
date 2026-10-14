@@ -1,0 +1,45 @@
+{
+ "title": "Uniaxial tension of a J2 bilinear-hardening cube to large strain (implicit, finite strain)",
+ "kind": "theory",
+ "source": "J2 plasticity with linear isotropic hardening in uniaxial stress (Simo and Hughes, Computational Inelasticity, Springer 1998, §2.3) in the logarithmic strain, which Simo's exponential return map (CMAME 99:61–112, 1992) integrates exactly on a proportional path: Kirchhoff stress τ = σ_y + E_t (ε − σ_y/E), Cauchy stress σ = τ/J with ln J = τ/(3K) (Hencky's volume law)",
+ "quantities": [
+  {
+   "id": "sigma",
+   "quantity": "axial Cauchy stress at a logarithmic strain of 0.2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/stress/0/0"
+   },
+   "value": 642.7365391418857,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation the element represents exactly, reached on a proportional path: the tolerance only admits the Newton tolerance and rounding"
+  },
+  {
+   "id": "plastic_strain",
+   "quantity": "equivalent plastic strain",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/plastic_strain/0"
+   },
+   "value": 0.19678217821782182,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "ε_p = (τ − σ_y)/H, as for the stress"
+  }
+ ]
+}

@@ -1,0 +1,20 @@
+{
+ "title": "Plastic collapse of a cantilever: the fully plastic moment at the root",
+ "kind": "theory",
+ "source": "Limit analysis (B. G. Neal, The Plastic Methods of Structural Analysis, 3rd ed., Chapman & Hall 1977, ch. 1–2): beam theory's plastic hinge at the root, the fully plastic moment M_p = σ_y b h²/4 of a rectangular section, collapses a cantilever of length L at P_c = M_p/L = 312.5 (b = h = 10, L = 200, σ_y = 250); a bound for the solid, whose collapse lies above it (W. Prager, P. G. Hodge, Theory of Perfectly Plastic Solids, Wiley 1951: a continuum mechanism allows no normal velocity jump, which the beam's hinge rotation is)",
+ "quantities": [
+  {
+   "id": "collapse_force",
+   "quantity": "tip force at a tip deflection of 15 (4.5 times the first yield's)",
+   "measure": {
+    "from": "solve",
+    "pointer": "/reference_points/1/reaction/2"
+   },
+   "value": -312.5,
+   "tolerance": {
+    "relative": 0.05
+   },
+   "reason": "the solid's collapse lies above beam theory's hinge: refined through the depth (4 to 8 elements) and along the length (40 to 160) the force settles 3.1 % above M_p/L (322.3), so the band is that bound's gap; the root is a symmetry plane (no rotation, free lateral contraction) held on average through a coupling, the tip pushed through another; reduced hex20, 20 × 2 × 4"
+  }
+ ]
+}

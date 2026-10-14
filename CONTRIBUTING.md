@@ -18,7 +18,8 @@ Issues labelled **in progress** are being worked on by the core team; please don
 
 ## Making the change
 
-1. Branch from `main`, keep a pull request to one topic.
+1. Branch from `develop` (the trunk; `main` holds released code only) and open the pull request
+   against `develop`. Keep it to one topic.
 2. Before pushing: `cargo fmt --all`, and `cargo clippy -p <crate> --all-targets -- -D warnings`
    and `cargo test -p <crate>` for the crates you touched. CI runs the full gate on your pull
    request once the maintainer approves the run.
@@ -30,6 +31,7 @@ Issues labelled **in progress** are being worked on by the core team; please don
 
 By contributing you agree your work is licensed under MIT OR Apache-2.0.
 
-`main` is protected: changes land only through pull requests that the maintainer has reviewed,
+`develop` and `main` are protected: changes land on `develop` only through pull requests that the
+maintainer has reviewed,
 as rebase merges (keep each commit building and passing its tests). Be kind: see the
 [code of conduct](CODE_OF_CONDUCT.md).

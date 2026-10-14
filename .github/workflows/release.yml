@@ -1,11 +1,12 @@
 # Release builds (docs/releasing.md), after SolidCraft's and VectorCraft's release.yml
 # (MIT OR Apache-2.0; see ATTRIBUTION.md).
 #
-# A push to `release` (fast-forwarded from main) builds every package and creates or updates the
+# A push to `main` (fast-forwarded from a verified `develop` commit; main holds released code only)
+# builds every package and creates or updates the
 # DRAFT GitHub Release "FieldCraft v<version>", with SHA256SUMS.txt and generated notes. The
 # version is [workspace.package] version in Cargo.toml; a suffix (0.2.0-rc.1) makes a
 # pre-release. A person verifies the draft and publishes it; this workflow never publishes,
-# and pushes to main or tags never start it.
+# and pushes to develop or tags never start it.
 #
 #   macOS universal (arm64 + x86_64)   .dmg with FieldCraft.app, the CLI as a .zip   packaging/macos
 #   Linux x86_64 (glibc 2.35+)         .tar.gz and .AppImage                          packaging/linux
@@ -15,17 +16,17 @@
 # otherwise (the release notes say which). Linux and Windows builds are not signed.
 #
 # Dry run: `gh workflow run release.yml --ref <branch>` builds everything and uploads the
-# `release-assets` artifact without creating a release. `-f draft=true` on `release` retries
+# `release-assets` artifact without creating a release. `-f draft=true` on `main` retries
 # the draft.
 name: Release
 
 on:
   push:
-    branches: [release]
+    branches: [main]
   workflow_dispatch:
     inputs:
       draft:
-        description: "Create/update the draft release (release branch only; off: build artifacts only)"
+        description: "Create/update the draft release (main only; off: build artifacts only)"
         type: boolean
         default: false
 
@@ -60,8 +61,8 @@ jobs:
             echo "::error::Cargo.toml must contain a version like 1.2.3 or 1.2.3-rc.1, not '$VERSION'"
             exit 1
           fi
-          if [ "$REQUEST_DRAFT" = true ] && [ "$GITHUB_REF" != refs/heads/release ]; then
-            echo "::error::Draft releases are built from the release branch only"
+          if [ "$REQUEST_DRAFT" = true ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Draft releases are built from main only"
             exit 1
           fi
           case "$VERSION" in *-*) pre=true ;; *) pre=false ;; esac
@@ -86,7 +87,7 @@ jobs:
         with:
           key: release-macos-universal
           # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
-          save-if: ${{ github.ref == 'refs/heads/release' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Import the signing certificate (skipped without APPLE_CERTIFICATE)
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -129,7 +130,7 @@ jobs:
         with:
           key: release-linux-x86_64
           # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
-          save-if: ${{ github.ref == 'refs/heads/release' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build and package (tar.gz, AppImage)
         run: packaging/linux/package.sh
       - name: Check the packages
@@ -167,7 +168,7 @@ jobs:
         with:
           key: release-windows-x64
           # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
-          save-if: ${{ github.ref == 'refs/heads/release' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build and package (zip)
         shell: pwsh
         run: ./packaging/windows/package.ps1

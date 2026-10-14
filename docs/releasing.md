@@ -1,9 +1,9 @@
 # Releasing FieldCraft
 
-Releases are deliberate. Development lands on `main`; pushing the chosen commit to the `release`
-branch builds every package and creates a **draft** GitHub Release; a maintainer verifies the
-draft and publishes it. Pushes to `main` and tags never start a release, and nothing bumps the
-version automatically. The workflow is `.github/workflows/release.yml`; the packaging scripts
+Releases are deliberate. Development lands on `develop`, the trunk; `main` holds released code
+only. Fast-forwarding `main` to the chosen, verified `develop` commit builds every package and
+creates a **draft** GitHub Release; a maintainer verifies the draft and publishes it. Pushes to
+`develop` and tags never start a release, and nothing bumps the version automatically. The workflow is `.github/workflows/release.yml`; the packaging scripts
 are in `packaging/` and run the same way on a developer machine.
 
 ## What a release contains
@@ -57,22 +57,21 @@ certificate is added.
    notes); `-rc.N` for a release candidate. `1.0` is the owner's decision.
 2. Set `[workspace.package] version` in the root `Cargo.toml` and run
    `cargo update --workspace --offline`, which changes only the workspace crates' versions in
-   `Cargo.lock`. Land it on `main` through a pull request like any change, and let CI on `main`
-   pass. Note the commit to release.
+   `Cargo.lock`. Land it on `develop` through a pull request like any change, and let CI on
+   `develop` pass. Note the commit to release.
 
 ## Build the draft
 
 ```sh
 git fetch origin
-git switch release                 # the first time: git switch -c release origin/main
-git merge --ff-only origin/main
-git push origin release
+git push origin <commit>:main      # fast-forward main to the verified develop commit
 ```
 
-Only fast-forward `release` and never force-push it. The run builds the three platforms; when
+`main` holds released code only: it moves only by fast-forwarding to a verified `develop`
+commit (a maintainer push; the branch is protected), never by merges, rewrites or force-pushes. The run builds the three platforms; when
 all succeed, the last job checks that every file is there, writes `SHA256SUMS.txt` and the notes,
 and creates the draft `FieldCraft v<version>` targeting the pushed commit. Pushing
-`release` again with the same version rebuilds and replaces the draft's files (its notes are
+`main` again with the same version rebuilds and replaces the draft's files (its notes are
 kept). The job refuses a version whose tag exists or whose release is already published: bump
 the version instead.
 
@@ -98,6 +97,6 @@ Publishing is a maintainer's call; an agent preparing a release stops at the dra
 
 `gh workflow run release.yml -R jyviko/fieldcraft --ref <branch>` builds every package and
 uploads them with the notes as the `release-assets` artifact of the run, without creating a
-release. `-f draft=true` creates or updates the draft, and is accepted on `release` only.
+release. `-f draft=true` creates or updates the draft, and is accepted on `main` only.
 Locally, `packaging/macos/package.sh --arch aarch64` (or `x86_64`, `universal`) and
 `packaging/linux/package.sh` write to `dist/release/`.

@@ -1,7 +1,8 @@
 name: CI
 
-# CI runs once per merge, on main (AGENTS.md, "Workflow for every change"): the core team's pull
-# requests are checked locally on the crates they touch and merged; a red main is fixed forward.
+# CI runs once per merge on `develop`, the trunk (AGENTS.md, "Workflow for every change"): the core
+# team's pull requests are checked locally on the crates they touch and merged; a red trunk is
+# fixed forward. `main` holds released code only (docs/releasing.md).
 # Pull requests from forks (outside contributors) run the full gate, once the maintainer approves
 # the run, so the review sees it.
 on:
@@ -13,7 +14,7 @@ on:
       - 'docs/features.md'
       - 'docs/oracle.md'
   push:
-    branches: [main]
+    branches: [develop]
     # A merge that only touches prose starts no run. The generated pages are checked by the jobs
     # (features.md by `cargo xtask ci`, oracle.md by the oracle job), so they still count.
     # (Later patterns override earlier ones.)
@@ -24,7 +25,7 @@ on:
       - 'docs/features.md'
       - 'docs/oracle.md'
   schedule:
-    # Nightly: the heavy tests on main.
+    # Nightly, on the default branch (develop): the heavy tests.
     - cron: '23 3 * * *'
   workflow_dispatch:
 
@@ -54,7 +55,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
       - run: cargo xtask ci
 
   heavy:
@@ -68,7 +69,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
       - run: cargo xtask test --heavy
 
   oracle:
@@ -85,7 +86,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: oracle
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
       - run: cargo xtask oracle
       - name: docs/oracle.md is current
         run: git diff --exit-code docs/oracle.md

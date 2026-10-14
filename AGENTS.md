@@ -99,7 +99,7 @@ People trust FieldCraft with their models; a crash loses their work. **This outr
   1. Work in your own worktree on a branch, with your own `CARGO_TARGET_DIR`. While you work:
      `cargo check` and the tests of the crates you touch (`cargo test -p <crate>`). Commit after
      each working step (a layer that compiles with its tests passing), not one big commit per PR.
-     Every commit lands on `main` as it is, so each one must build and pass its tests and say
+     Every commit lands on `develop` as it is, so each one must build and pass its tests and say
      what it does: `git bisect` walks them one by one.
   2. When the change is done: review it once with `/simplify`, then `cargo fmt --all` and
      `cargo clippy -p <crate> --all-targets -- -D warnings` for each crate you touched, once.
@@ -108,11 +108,12 @@ People trust FieldCraft with their models; a crash loses their work. **This outr
      oracle cases or solver numerics change (`cargo xtask oracle`).
   3. Fold every fix into the commit it fixes, never a separate "fmt", "clippy", "review fixes" or
      "regenerate features.md" commit: `git commit --fixup <sha>`, then
-     `git rebase -i --autosquash origin/main` (`GIT_SEQUENCE_EDITOR=true` keeps it
+     `git rebase -i --autosquash origin/develop` (`GIT_SEQUENCE_EDITOR=true` keeps it
      non-interactive). A regenerated page goes into the commit that changed what it lists.
-  4. Rebase onto the latest `origin/main` (never merge `main` into a branch), rerun the tests of
-     the touched crates, push, open the PR and merge it with a rebase merge, which keeps `main`
-     linear and every commit bisectable. `main` is protected (CODEOWNERS review, linear history,
+  4. Branch from and rebase onto the latest `origin/develop`, the trunk (never merge `develop` into
+     a branch), rerun the tests of
+     the touched crates, push, open the PR and merge it with a rebase merge, which keeps `develop`
+     linear and every commit bisectable. `develop` and `main` are protected (CODEOWNERS review, linear history,
      rebase merges only); the core team merges as the maintainer with
      `gh pr merge <N> --rebase --admin --delete-branch`, run as its own command. Outside
      contributors' pull requests wait for the maintainer's review (CONTRIBUTING.md). Never squash.
@@ -120,20 +121,21 @@ People trust FieldCraft with their models; a crash loses their work. **This outr
   5. Never run the full gate locally: no `cargo xtask ci`, no `cargo clippy --workspace`, no
      `cargo xtask wasm` or `oracle` unless step 2 calls for it. Never watch CI. GitHub CI runs
      `cargo xtask ci` (fmt, assets, licences, layers, clippy -D warnings, tests, wasm), the
-     oracle, the heavy tests and the advisories once per merge on `main`; the coordinator
+     oracle, the heavy tests and the advisories once per merge on `develop`; the coordinator
      watches it and sends a failure back to the change that caused it, which is fixed forward
      at once.
-- **Keep the main gate fast** (under ~3 minutes on CI). A test that takes more than a few seconds
+- **Keep the trunk gate fast** (under ~3 minutes on CI). A test that takes more than a few seconds
   (convergence studies, the whole corpus, cross-checks between solvers) is
   `#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]`, with a fast representative
-  test left in the main gate. The `heavy` CI job runs `cargo xtask test --heavy` (every ignored
-  test, benchmarks included, and the doc tests) on every merge to `main`, nightly and on
+  test left in the trunk gate. The `heavy` CI job runs `cargo xtask test --heavy` (every ignored
+  test, benchmarks included, and the doc tests) on every merge to `develop`, nightly and on
   demand (`gh workflow run CI --ref <branch>`). Hostile-input tests run commands on sessions with small
   work caps (`Session::limits`) so refusals are instant; never lower the production caps for a
   test.
 - **Publishing**: `origin` is github.com/jyviko/fieldcraft. Changes land through pull requests
   as the workflow above describes; the coordinator reads every merged diff and sends findings
-  back as fix-forward work. Never force-push `main`. Never commit `plan/`, `.agent-files/`,
+  back as fix-forward work. Never force-push `develop` or `main`; `main` holds released code and moves only by
+  fast-forward at a release (docs/releasing.md). Never commit `plan/`, `.agent-files/`,
   `worktrees/` or `target*/`; check `git ls-files` before pushing.
 
 ## Running

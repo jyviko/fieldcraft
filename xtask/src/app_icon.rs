@@ -2,7 +2,9 @@
 //!
 //! The mark is a hexahedral-meshed cube in isometric view whose faces carry a banded colour
 //! fringe (blue to red, hottest at the cube's front corner) as a stress or temperature result
-//! would, with flow streamlines wrapping around it: structures and fluids. The faces are
+//! would. Streamlines coloured by flow speed in the same bands, with arrowheads, sweep in: two
+//! run into the top face and narrow into its mesh lines (the flow becomes the structure), one
+//! wraps around the cube. The faces are
 //! separated by transparent gaps instead of painted edge lines, so the backdrop shows through
 //! them in every appearance. All geometry is computed here, turned into VectorCraft commands and
 //! run headlessly with `vectorcraft-cli run` (`VECTORCRAFT_CLI`, else `vectorcraft-cli` on the
@@ -11,7 +13,7 @@
 //! Outputs, all under `assets/app-icon/` (see its README.md):
 //! - `icon.vectorcraft`, `icon.svg`, `icon.png`: the full icon on its backdrop, 1024 × 1024.
 //! - `icon-small.vectorcraft`, `icon-small.svg`, `icon-small.png`: simplified artwork for 16–32 px
-//!   (no mesh or floor grid, faces edge to edge, one bolder streamline).
+//!   (no mesh or floor grid, faces edge to edge, one bold streamline with an arrowhead).
 //! - `icon.iconset/` (sips), `icon.icns` (iconutil) and `icon.ico` (ImageMagick).
 //! - `FieldCraft.icon/`: an Icon Composer document with separate floor-grid (Default and Dark),
 //!   flow (behind and in front) and cube layers (the mesh shares the cube's: Icon Composer allows
@@ -53,9 +55,8 @@ const BAND_RADII: [f64; 6] = [1.28, 1.07, 0.87, 0.67, 0.47, 0.27];
 /// The macOS icon grid: the backdrop's square, inset 100 px on a 1024 canvas.
 const BACKDROP: [f64; 2] = [100.0, 924.0];
 
-/// The streamlines' core and halo colours (the same in both appearances: the dark halo keeps the
-/// light core readable on the light backdrop and on the fringe's yellow).
-const FLOW_CORE: &str = "#ffffff";
+/// The streamlines' halo colour (the same in both appearances: it keeps the fringe-coloured
+/// cores readable on the light backdrop and over the cube).
 const FLOW_HALO: &str = "#0b2236";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -307,71 +308,140 @@ fn mesh_d() -> String {
     segs.iter().map(|&(a, b)| polyline(&[project(a), project(b)], false)).collect::<Vec<_>>().join(" ")
 }
 
-/// A streamline: a swept curve around the cube's vertical axis at radius `r`, its height
-/// `z0 + tilt · sin(θ − 45°)`, from angle `from` to `to` (degrees, decreasing: the flow passes
-/// in front of the cube from screen left to right), `width` pixels at its widest.
+/// A streamline's path: a swept curve around the cube's vertical axis, or a feed that sweeps in
+/// from the lower left, climbs over the left face and runs into the top face's mesh line
+/// `x = c`, carrying on along it as the hex edge.
+enum Path3 {
+    /// Radius `r`, height `z0 + tilt · sin(θ − 45°)`, from angle `from` to `to` (degrees,
+    /// decreasing: the flow passes in front of the cube from screen left to right).
+    Swirl { r: f64, z0: f64, tilt: f64, from: f64, to: f64 },
+    /// In the plane `x = c`: a cubic from `start` (y, z) to the top face's front-left edge,
+    /// arriving level so it runs straight on into the mesh line.
+    Feed { c: f64, start: P2, bend: P2 },
+}
+
 struct Stream {
-    r: f64,
-    z0: f64,
-    tilt: f64,
-    from: f64,
-    to: f64,
+    path: Path3,
+    /// Widest core, in pixels on the 1024 canvas.
     width: f64,
+    /// Where the arrowheads sit, as fractions of the path.
+    arrows: &'static [f64],
 }
 
 const STREAMS: [Stream; 3] = [
-    Stream { r: 0.86, z0: 0.34, tilt: 0.2, from: 195.0, to: -40.0, width: 15.0 },
-    Stream { r: 0.98, z0: 0.0, tilt: 0.24, from: 215.0, to: -75.0, width: 19.0 },
-    Stream { r: 0.88, z0: -0.33, tilt: 0.16, from: 160.0, to: -100.0, width: 15.0 },
+    Stream { path: Path3::Feed { c: -0.25, start: [1.25, -0.7], bend: [0.95, -0.6] }, width: 17.0, arrows: &[0.45] },
+    Stream { path: Path3::Feed { c: 0.25, start: [1.05, -0.6], bend: [0.9, -0.45] }, width: 17.0, arrows: &[0.5] },
+    Stream { path: Path3::Swirl { r: 0.98, z0: -0.08, tilt: 0.22, from: 215.0, to: -60.0 }, width: 17.0, arrows: &[0.3, 1.0] },
 ];
 
-/// Samples along each streamline.
-const STREAM_SAMPLES: usize = 180;
+/// The small-size artwork's one streamline.
+const SMALL_STREAM: Stream = Stream { path: Path3::Swirl { r: 1.0, z0: -0.12, tilt: 0.14, from: 190.0, to: -40.0 }, width: 44.0, arrows: &[1.0] };
 
-/// A streamline's tapered outline, split into the runs behind the cube and in front of it: the
-/// filled shapes at half-width `w/2 + grow` (`grow` widens the halo). Returns (behind, in front).
-fn stream_runs(s: &Stream, width: f64, grow: f64) -> (Vec<String>, Vec<String>) {
+/// Samples along each streamline.
+const STREAM_SAMPLES: usize = 160;
+
+/// The fringe band of the flow speed at fraction `t` along a streamline: slow (blue) at its
+/// tail, fastest (red) where it reaches the cube or its head.
+fn speed_band(t: f64) -> usize {
+    ((t * FRINGE.len() as f64) as usize).min(FRINGE.len() - 1)
+}
+
+impl Path3 {
+    fn at(&self, t: f64) -> P3 {
+        match *self {
+            Path3::Swirl { r, z0, tilt, from, to } => {
+                let a = (from + (to - from) * t).to_radians();
+                [r * a.cos(), r * a.sin(), z0 + tilt * (a - PI / 4.0).sin()]
+            }
+            Path3::Feed { c, start, bend } => {
+                let (p0, p1, p2, p3) = (start, bend, [A + 0.35, A], [A, A]);
+                let u = 1.0 - t;
+                let b = |k: usize| u * u * u * p0[k] + 3.0 * u * u * t * p1[k] + 3.0 * u * t * t * p2[k] + t * t * t * p3[k];
+                [c, b(0), b(1)]
+            }
+        }
+    }
+
+    /// The mesh line a feed runs on into, across the top face (none for a swirl).
+    fn continuation(&self) -> Option<(P3, P3)> {
+        match *self {
+            Path3::Swirl { .. } => None,
+            Path3::Feed { c, .. } => Some(([c, A, A], [c, -A, A])),
+        }
+    }
+}
+
+/// A filled shape of a streamline: its path data and colour (`None` for the halo colour).
+type Piece = (String, Option<&'static str>);
+
+/// A streamline drawn as tapered ribbons: the halo (`grow` pixels wider each side) and the core
+/// split into speed bands, then the arrowheads. Returns (behind the cube, in front of it).
+fn stream_pieces(s: &Stream, grow: f64) -> (Vec<Piece>, Vec<Piece>) {
     let n = STREAM_SAMPLES;
-    let pts3: Vec<P3> = (0..=n)
-        .map(|i| {
-            let t = (s.from + (s.to - s.from) * i as f64 / n as f64).to_radians();
-            [s.r * t.cos(), s.r * t.sin(), s.z0 + s.tilt * (t - PI / 4.0).sin()]
-        })
-        .collect();
+    let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+    let pts3: Vec<P3> = ts.iter().map(|&t| s.path.at(t)).collect();
     let pts: Vec<P2> = pts3.iter().map(|&p| project(p)).collect();
-    let half: Vec<f64> = (0..=n).map(|i| width / 2.0 * (PI * i as f64 / n as f64).sin().powf(0.55) + grow).collect();
-    let normal = |i: usize| {
-        let (a, b) = (pts[i.saturating_sub(1)], pts[(i + 1).min(n)]);
-        let v = sub(b, a);
+    // A tail that grows to full width over the first third.
+    let half: Vec<f64> = ts.iter().map(|&t| s.width / 2.0 * (t / 0.3).min(1.0).powf(0.6) + grow).collect();
+    let dir = |i: usize| {
+        let v = sub(pts[(i + 1).min(n)], pts[i.saturating_sub(1)]);
         let len = v[0].hypot(v[1]).max(1e-9);
-        [-v[1] / len, v[0] / len]
+        [v[0] / len, v[1] / len]
     };
-    let shape = |lo: usize, hi: usize| {
-        let mut poly = Vec::new();
-        for i in lo..=hi {
-            let m = normal(i);
-            poly.push([pts[i][0] + m[0] * half[i], pts[i][1] + m[1] * half[i]]);
-        }
-        for i in (lo..=hi).rev() {
-            let m = normal(i);
-            poly.push([pts[i][0] - m[0] * half[i], pts[i][1] - m[1] * half[i]]);
-        }
+    let ribbon = |lo: usize, hi: usize| {
+        let side = |i: usize, k: f64| {
+            let d = dir(i);
+            [pts[i][0] - d[1] * half[i] * k, pts[i][1] + d[0] * half[i] * k]
+        };
+        let mut poly: Vec<P2> = (lo..=hi).map(|i| side(i, 1.0)).collect();
+        poly.extend((lo..=hi).rev().map(|i| side(i, -1.0)));
         polyline(&poly, true)
     };
+    let colour = |i: usize| if grow > 0.0 { None } else { Some(FRINGE[speed_band(ts[i])]) };
     let front = |i: usize| pts3[i][0] + pts3[i][1] > 0.0;
     let (mut behind, mut ahead) = (Vec::new(), Vec::new());
+    // Runs of one side of the cube and one colour; neighbours share their boundary sample, so
+    // they meet without a seam.
     let mut lo = 0;
     for i in 1..=n {
-        if i == n || front(i) != front(lo) {
-            // Neighbouring runs share their boundary sample, so they meet without a seam.
-            let hi = i;
+        if i == n || front(i) != front(lo) || colour(i) != colour(lo) {
+            let piece = (ribbon(lo, i), colour(lo));
             if front(lo) {
-                ahead.push(shape(lo, hi))
+                ahead.push(piece)
             } else {
-                behind.push(shape(lo, hi))
+                behind.push(piece)
             }
             lo = i;
         }
+    }
+    // A feed carries on along its mesh line, narrowing to the mesh's stroke: the flow becomes
+    // the hex edge.
+    if let Some((a, b)) = s.path.continuation() {
+        {
+            let (p, q) = (project(a), project(b));
+            let v = sub(q, p);
+            let len = v[0].hypot(v[1]).max(1e-9);
+            let m = [-v[1] / len, v[0] / len];
+            let (w0, w1) = (half[n], 0.6 + grow * 0.6);
+            let poly = [
+                [p[0] + m[0] * w0, p[1] + m[1] * w0],
+                [q[0] + m[0] * w1, q[1] + m[1] * w1],
+                [q[0] - m[0] * w1, q[1] - m[1] * w1],
+                [p[0] - m[0] * w0, p[1] - m[1] * w0],
+            ];
+            ahead.push((polyline(&poly, true), colour(n)));
+        }
+    }
+    for &f in s.arrows {
+        let i = ((f * n as f64).round() as usize).min(n);
+        let (d, p, w) = (dir(i), pts[i], s.width);
+        let g = grow * 1.6;
+        let tip = [p[0] + d[0] * (1.5 * w + g), p[1] + d[1] * (1.5 * w + g)];
+        let back = [p[0] - d[0] * (0.7 * w + g), p[1] - d[1] * (0.7 * w + g)];
+        let wing = 1.25 * w + g;
+        let poly = [tip, [back[0] - d[1] * wing, back[1] + d[0] * wing], [back[0] + d[1] * wing, back[1] - d[0] * wing]];
+        let piece = (polyline(&poly, true), colour(i));
+        if front(i) { ahead.push(piece) } else { behind.push(piece) }
     }
     (behind, ahead)
 }
@@ -488,22 +558,22 @@ fn mesh_layer() -> Result<Layer, String> {
 
 /// The streamlines' runs behind the cube (`front == false`) or in front of it.
 fn flow_layer(detail: Detail, front: bool) -> Layer {
-    let streams: Vec<(&Stream, f64)> = match detail {
-        Detail::Full => STREAMS.iter().map(|s| (s, s.width)).collect(),
-        Detail::Small => vec![(&STREAMS[1], 48.0)],
+    let streams: Vec<&Stream> = match detail {
+        Detail::Full => STREAMS.iter().collect(),
+        Detail::Small => vec![&SMALL_STREAM],
     };
     let mut shapes = Vec::new();
-    for (k, (s, width)) in streams.into_iter().enumerate() {
-        let pick = |(behind, ahead): (Vec<String>, Vec<String>)| if front { ahead } else { behind };
-        let halo = pick(stream_runs(s, width, width * 0.22)).join(" ");
-        let core = pick(stream_runs(s, width, 0.0)).join(" ");
-        if core.is_empty() {
+    for (k, s) in streams.into_iter().enumerate() {
+        let pick = |(behind, ahead): (Vec<Piece>, Vec<Piece>)| if front { ahead } else { behind };
+        let halo = pick(stream_pieces(s, (s.width * 0.18).max(3.0)));
+        if halo.is_empty() {
             continue;
         }
-        let mut h = Shape::filled(&format!("streamline {} halo", k + 1), halo, colour(FLOW_HALO));
-        h.opacity = 0.4;
-        shapes.push(h);
-        shapes.push(Shape::filled(&format!("streamline {}", k + 1), core, colour(FLOW_CORE)));
+        let d = halo.into_iter().map(|p| p.0).collect::<Vec<_>>().join(" ");
+        shapes.push(Shape::filled(&format!("streamline {} halo", k + 1), d, colour(FLOW_HALO)));
+        for (j, (d, c)) in pick(stream_pieces(s, 0.0)).into_iter().enumerate() {
+            shapes.push(Shape::filled(&format!("streamline {} part {}", k + 1, j + 1), d, colour(c.unwrap_or(FLOW_HALO))));
+        }
     }
     Layer { name: if front { "Flow in front" } else { "Flow behind" }, shapes, clip: None }
 }
@@ -781,11 +851,15 @@ mod tests {
     }
 
     #[test]
-    fn streamlines_pass_behind_and_in_front() {
+    fn streamlines_pass_where_they_should() {
         for s in &STREAMS {
-            let (behind, ahead) = stream_runs(s, s.width, 0.0);
-            assert!(!behind.is_empty() && !ahead.is_empty());
+            let (behind, ahead) = stream_pieces(s, 0.0);
+            assert!(!ahead.is_empty());
+            // Only the swirl goes round the back; a feed stays in front and ends on the mesh.
+            assert_eq!(behind.is_empty(), s.path.continuation().is_some());
         }
+        assert_eq!(speed_band(0.0), 0);
+        assert_eq!(speed_band(1.0), FRINGE.len() - 1);
     }
 
     #[test]

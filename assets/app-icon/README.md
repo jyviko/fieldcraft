@@ -2,7 +2,9 @@
 
 FieldCraft's mark is a cube in isometric view, covered by a structured hexahedral mesh, whose
 faces carry a banded colour fringe (blue to red, hottest at the front corner) as a stress or
-temperature result would, with three tapered flow streamlines wrapping around it. Its faces are separated by
+temperature result would. Streamlines coloured by flow speed in the same bands, with arrowheads,
+sweep in from the lower left: two run into the top face and narrow into its mesh lines, so the
+flow becomes the structure, and one wraps around the cube. Its faces are separated by
 transparent gaps rather than painted edge lines, so the backdrop shows through them in every
 appearance. It is original artwork, attributed in `ATTRIBUTION.md`, and shares the Craft
 family's layout (rounded-square backdrop, isometric floor grid, lit top faces).
@@ -15,7 +17,7 @@ hand. It runs on macOS (sips, iconutil, `xcrun actool`) with ImageMagick (`magic
 | File | What it is |
 |---|---|
 | `icon.vectorcraft`, `icon.svg`, `icon.png` | The full icon on its backdrop, 1024 × 1024 |
-| `icon-small.vectorcraft`, `icon-small.svg`, `icon-small.png` | Small-size artwork used at 16–32 px: the fringe cube and one bolder streamline, no mesh or floor grid, faces edge to edge |
+| `icon-small.vectorcraft`, `icon-small.svg`, `icon-small.png` | Small-size artwork used at 16–32 px: the fringe cube and one bold coloured streamline with an arrowhead, no mesh or floor grid, faces edge to edge |
 | `icon.iconset/`, `icon.icns` | macOS iconset (sips) and its iconutil compilation |
 | `icon.ico` | Windows icon, 16–256 px |
 | `FieldCraft.icon/` | Icon Composer document: floor grid (Default and Dark), flow behind, cube (faces and mesh) and flow in front layers, each scaled to 90% |

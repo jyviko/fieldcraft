@@ -41,28 +41,75 @@ commands (files, undo, `model.info`) leave the ribbon where it is.
 
 | Method | Params | Notes |
 |---|---|---|
-| `ui.inspect` | — | view settings (`ui`), camera, viewport rect (points), renderer (`gpu`/`cpu`) and adapter, open command form, status bar, node and element counts, the results display (`results`: what the `results.*` commands reply: view, `stale`, contour range, modes), the probed node (`probe`), `busy` (the background job: a file opening, a solve), `prompt` (`{"unsaved": path}`, `"recover"`, `"samples"`), `recent` (recent files), `selected` (the browser's selected definition), `nav` (the left-drag mode), `layout` (each region of the window drawn last frame as `[x, y, w, h]` in points: `app_bar`, `ribbon`, `workspace_switcher`, `document_tab`, `app_bar:<action>`, `browser`, `viewport`, `nav_bar`, `axis_view`, `context`, `command_line`, `timeline`, `toolbar_dropdown`, `palette`), version |
+| `ui.inspect` | — | view settings (`ui`), camera, viewport rect (points), renderer (`gpu`/`cpu`) and adapter, open command form, status bar, node and element counts, the results display (`results`: what the `results.*` commands reply: view, `stale`, contour range, modes), the probed node (`probe`), `busy` (the background job: a file opening, a solve), `prompt` (`{"unsaved": path}`, `"recover"`, `"samples"`), `recent` (recent files), `selected` (the browser's selected definition), `nav` (the left-drag mode), `layout` (each region of the window drawn last frame as `[x, y, w, h]` in points: `app_bar`, `ribbon`, `workspace_switcher`, `document_tab`, `app_bar:<action>`, `browser`, `viewport`, `nav_bar`, `axis_view`, `selection_bar`, `context`, `command_line`, `timeline`, `toolbar_dropdown`, `palette`), version |
 | `ui.set` | any view setting: `style` (`shaded_edges`, `shaded`, `wireframe`), `show_nodes`, `show_geometry`, `show_mesh`, `show_loads` (boundary condition and load symbols), `show_interactions` (reference points, couplings, rigid walls), `perspective`, `dark`, `show_tree` (the browser), `show_timeline`, `workspace` (`prepare`, `model`, `analysis`, `results`), `tab` (the toolbar tab: `geometry`, `mesh`, `properties`, `assembly`, `steps`, `loads`, `interactions`, `solve`, `results`, `tools`; a tab of another workspace brings that workspace), `palette` (the command search open), `menu` (the open menu: `file`, `help`, `workspace`, `view`, `more`, or a panel's drop-down as `<tab>/<panel>` such as `mesh/Tet`; `null` closes it) | an unknown setting or value is an error; returns the settings |
 | `ui.view` | `view`: `front`, `back`, `left`, `right`, `top`, `bottom`, `iso`, `home` (iso and fit), `fit` | returns the camera |
 | `ui.camera` | `yaw`, `pitch` (degrees), `distance?` (model units) | turns the camera to any orientation about its target: `yaw` about Z (0 looks along +Y, the front view; −45 is the iso view's, −90 the right view's), `pitch` the elevation above the XY plane; `distance` moves the eye (the zoom of an orthographic view). Angles must be finite and the distance above 0: the yaw is wrapped, the pitch clamped to ±90 and the distance to 0.001–10⁹; anything else is an error. A sequence of calls orbits smoothly. Returns the camera (`ui.inspect`'s, angles in radians) |
 | `ui.toolbar` | — | the ribbon: `workspace`, `workspaces`, `tab`, `tabs` (the workspace's), `menu` (the open menu), `panels` (each panel label's `menu` key and `rect`), and every catalogue entry (docs/features.md) with `id`, `label`, `tab`, `panel`, `command` (null while coming soon), `more` (its related commands), `coming_soon` (the milestone, or null), `fit` — `full` (a button), `collapsed` (its panel is one button), `more` (its panel is in the » menu) or `menu` (in its panel's drop-down) — and `rect` (screen points, last frame, on the shown tab; for `menu` entries the row while the drop-down is open) |
 | `ui.start` | `command`: a command or toolbar entry id | like a click on the toolbar, a drop-down row or a search result: a command without parameters runs, one with parameters opens its form in the context panel; an entry that is coming soon is an error naming its milestone. Never opens a native file picker: file entries (open, save as, write deck) open their command's form |
 | `ui.select` | `kind` (`set`, `material`, `section`, `step`, `boundary_condition`, `load`, `reference_point`, `coupling`, `fluid_domain`), `name`; nothing to deselect | selects a definition as a browser click does; its properties (with Edit and Delete) show in the context panel |
+| `ui.select` (viewport) | any of `filter`, `box_mode`, `mode`, `clear`, `at`, `box`, `geometry`, `nodes`, `elements`, `faces` (and no `kind`) | changes the viewport's selection (see [Selection](#selection)); returns `ui.selection`'s reply |
+| `ui.selection` | — | the viewport's selection: `filter`, `box_mode` (box selection on), `count`, `capped`, `summary`, `items`, `params` (the selection as a set's members), `hover` (what a click would pick under the pointer) |
 | `ui.prompt` | `answer`: for `unsaved` `save`, `discard` or `cancel`; for `recover` `recover` (with `id` from `file.recovery.list`) or `close`; for `samples` `open` (with `name`) or `close` | answers the window's question (`ui.inspect`'s `prompt`) |
-| `ui.dialog` | `params?` (JSON object, fills the form), `run?`, `cancel?` | drives the open command form; `run` returns the command's result and closes the form on success |
-| `ui.click` | `x`, `y` (screen points), `button?`: `left`/`right`/`middle`, `shift?`, `ctrl?`, `alt?`, `double?` | real pointer input; a click on a results plot probes the nearest node of the face under it (`solve.probe`; `ui.inspect` shows the values) |
+| `ui.dialog` | `params?` (JSON object, fills the form), `use_selection?`, `run?`, `cancel?` | drives the open command form, in that order; `use_selection` is the form's Target row (see [Selection](#selection)); `run` returns the command's result and closes the form on success |
+| `ui.click` | `x`, `y` (screen points), `button?`: `left`/`right`/`middle`, `shift?`, `ctrl?`, `alt?`, `double?` | real pointer input; in the viewport a click selects what is under it (Shift adds, Ctrl/Cmd adds or removes, a click on nothing clears the selection), and a click on a results plot also probes the nearest node of the face under it (`solve.probe`; `ui.inspect` shows the values) |
 | `ui.move` | `x`, `y` | |
-| `ui.drag` | `x0`, `y0`, `x1`, `y1`, `button?`, `shift?`, `ctrl?`, `steps?` (1–200) | press, move, release: in the viewport a left drag orbits, a right or middle drag (or Shift + left) pans |
+| `ui.drag` | `x0`, `y0`, `x1`, `y1`, `button?`, `shift?`, `ctrl?`, `steps?` (1–200) | press, move, release: in the viewport a left drag orbits (with box selection on, it selects the visible nodes, element faces or elements in the box), a right or middle drag (or Shift + left) pans |
 | `ui.scroll` | `x`, `y`, `delta?` (wheel lines, −100–100; positive zooms in) | zooms at the point |
-| `ui.key` | `key` (egui key name, `Enter`, `Escape`…), `cmd?`, `shift?` | `F` over the viewport frames the model |
+| `ui.key` | `key` (egui key name, `Enter`, `Escape`…), `cmd?`, `shift?` | `F` over the viewport frames the model; `Escape` clears the selection (and then cancels an open form) |
 | `ui.text` | `text` | typed text (into the focused field) |
 | `ui.worldToScreen` | `points`: `[[x, y, z]…]` (at most 1000) | screen points in the viewport drawn last frame (null when not on screen) |
 | `ui.resize` | `width`, `height` | window inner size in points |
 | `ui.fullscreen` | `on?` (default true) | into or out of full screen; on macOS the title bar's left group moves into the traffic lights' room while there are none |
 | `ui.screenshot` | `path?` | PNG of the window, taken a few frames later; waits for a presented frame; when none comes within 8 seconds (a hidden window, a locked screen) it answers with `ui.capture`'s offscreen picture (`"offscreen": true`). Without `path`: `fieldcraft-shot.png` in the temporary folder |
 | `ui.capture` | `path?`, `width?`, `height?` (points; default the window's), `scale?` (pixels per point, 0.5–4; default the window's) | PNG of the whole window (title bar, ribbon, open menus and search, panels, forms and the viewport) drawn offscreen, without fade-in animations: the UI pass runs in a separate egui context and is rasterised on the CPU, so it works with the window hidden, minimised or the screen locked. At most 8192 pixels a side and 16 megapixels. Without `path`: `fieldcraft-shot.png` in the temporary folder |
-| `ui.render` | `path`, `width?` (default 1280), `height?` (default 800): whole pixels, each 1–8192 and at most 16 megapixels in all | CPU render of the model with the current camera and view settings (no window or GPU needed). A size out of range, or a scene over 20 million primitives, is an error |
+| `ui.render` | `path`, `width?` (default 1280), `height?` (default 800): whole pixels, each 1–8192 and at most 16 megapixels in all | CPU render of the model with the current camera, view settings and selection highlight (no window or GPU needed). A size out of range, or a scene over 20 million primitives, is an error |
 | `app.quit` | — | closes the window |
+
+## Selection
+
+The viewport's selection belongs to the window, not the model: there is no engine command for
+it, and nothing about it is saved or journalled. What is selected is kept in the model's
+persistent terms, so it reads as a set definition: geometry by name (`{"body", "face"}`, or
+`edge`, `vertex`, or the body alone; a face picked on the mesh is named through the mesh's
+geometry tags, so it stays selected through a remesh) and the mesh by label (`nodes`,
+`elements`, element `faces` as `{"element", "face"}`). Labels the model no longer has drop out
+after an edit.
+
+`ui.select` on the viewport takes, in this order:
+
+- `filter`: what a pick selects: `faces`, `edges`, `vertices`, `bodies` (geometry), `nodes`,
+  `element_faces`, `elements` (the mesh). The selection bar at the top of the viewport shows it.
+- `box_mode`: `true` or `false` turns box selection on or off (a left drag draws the box).
+- `mode`: how the items change the selection: `replace` (default), `add`, `remove`, `toggle`.
+- `clear: true`: empty the selection first.
+- `geometry`, `nodes`, `elements`, `faces`: items by name and label, as `model.set.create`
+  takes them (at most 100 000 in each list; labels from 1).
+- `at`: `[x, y]` in window points: pick there as a click does, with the filter (nothing under
+  the point selects nothing; with `replace` it clears the selection).
+- `box`: `[x0, y0, x1, y1]` in window points: the visible nodes, element faces or elements
+  inside the box (other filters refuse a box). Faces in front hide what is behind them.
+
+A selection holds at most 100 000 items; past that it is cut and `capped` is true. Picking
+runs on the CPU against the triangles the viewport draws (on the GPU too), with a watertight
+ray–triangle test: the nearest face wins, nodes, vertices and edges are the nearest on screen
+within a few pixels that are not hidden, and ties go to the lower index, so the same pick
+gives the same answer every time.
+
+Command forms that apply to part of the model have a Target row with Use selection
+(`ui.dialog {"use_selection": true}`): `model.set.create` and `model.set.edit` take the selection
+as members; `model.boundary_condition.*`, `model.load.*`, `model.section.*` and
+`model.coupling.*` get a set made from it (`model.set.create`, named after the definition:
+`Clamp-set`, then `Clamp-set-2`…) in `target: {"set"}` or `set`. A right click in the viewport
+offers Create set from selection, which opens `model.set.create`'s form filled in.
+
+```text
+{"id":1,"method":"ui.view","params":{"view":"right"}}
+{"id":2,"method":"ui.select","params":{"filter":"element_faces","box":[300,120,1100,700]}}
+→ {"id":2,"ok":true,"result":{"count":8,"params":{"faces":[{"element":20,"face":4},…]},…}}
+{"id":3,"method":"ui.start","params":{"command":"model.set.create"}}
+{"id":4,"method":"ui.dialog","params":{"params":{"name":"end"},"use_selection":true,"run":true}}
+```
 
 ## Files
 

@@ -85,6 +85,76 @@ fn render_dim(p: &Value, key: &str, default: usize) -> Result<usize, String> {
     }
 }
 
+/// The keys that make `ui.select` change the viewport's selection (without them it selects a
+/// definition in the browser, `{kind, name}`).
+pub const VIEWPORT_SELECT: [&str; 10] = ["filter", "box_mode", "mode", "clear", "at", "box", "geometry", "nodes", "elements", "faces"];
+
+/// The viewport's selection: the filter, the items, their set members and the hover.
+pub fn selection_json(app: &ModelApp) -> Value {
+    let s = &app.pick.selection;
+    json!({
+        "filter": app.pick.filter,
+        "box_mode": app.pick.box_mode,
+        "count": s.len(),
+        "capped": s.capped(),
+        "summary": s.summary(),
+        "items": s.items().iter().map(crate::selection::Item::to_json).collect::<Vec<_>>(),
+        "params": s.params(),
+        "hover": app.pick.hover.as_ref().map(crate::selection::Item::to_json),
+    })
+}
+
+/// The window points in `v`, a list of `n` numbers (two per point).
+fn points<const N: usize>(v: &Value, key: &str, what: &str) -> Result<[f32; N], String> {
+    let bad = || format!("`{key}` must be {what} in window points");
+    let list = v.as_array().filter(|a| a.len() == N).ok_or_else(bad)?;
+    let mut out = [0.0; N];
+    for (slot, x) in out.iter_mut().zip(list) {
+        *slot = x.as_f64().filter(|x| x.is_finite() && x.abs() <= 1e6).ok_or_else(bad)? as f32;
+    }
+    Ok(out)
+}
+
+/// `ui.select` on the viewport: set the filter and box mode, then pick by name and label
+/// (`geometry`, `nodes`, `elements`, `faces`), at a point (`at`) or in a box (`box`), changing
+/// the selection by `mode`; `clear` empties it first.
+fn select(app: &mut ModelApp, p: &Value) -> Result<Value, String> {
+    use crate::selection::{Filter, Mode, items_from_params};
+    if let Some(f) = p.get("filter") {
+        app.pick.filter = serde_json::from_value::<Filter>(f.clone())
+            .map_err(|_| format!("`filter` must be one of {}", Filter::ALL.map(|f| json!(f).as_str().unwrap_or_default().to_string()).join(", ")))?;
+    }
+    if let Some(on) = p.get("box_mode") {
+        app.pick.box_mode = on.as_bool().ok_or("`box_mode` must be true or false")?;
+    }
+    let mode = match p.get("mode") {
+        None => Mode::Replace,
+        Some(m) => serde_json::from_value::<Mode>(m.clone()).map_err(|_| "`mode` must be replace, add, remove or toggle".to_string())?,
+    };
+    let at = p.get("at").map(|v| points::<2>(v, "at", "a point [x, y]")).transpose()?;
+    let corners = p.get("box").map(|v| points::<4>(v, "box", "[x0, y0, x1, y1]")).transpose()?;
+    if corners.is_some() && !app.pick.filter.boxes() {
+        return Err(format!("box selection picks nodes, element faces or elements, not {}", app.pick.filter.label().to_lowercase()));
+    }
+    if (at.is_some() || corners.is_some()) && app.viewport.rect.is_none() {
+        return Err("the viewport has not been drawn yet".into());
+    }
+    let items = items_from_params(p)?;
+    if p.get("clear").and_then(Value::as_bool) == Some(true) {
+        app.clear_selection();
+    }
+    if !items.is_empty() {
+        app.select(items, mode);
+    }
+    if let Some([x, y]) = at {
+        app.select_at(egui::pos2(x, y), mode);
+    }
+    if let Some([x0, y0, x1, y1]) = corners {
+        app.select_box(egui::pos2(x0, y0), egui::pos2(x1, y1), mode);
+    }
+    Ok(selection_json(app))
+}
+
 pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -131,6 +201,8 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "version": crate::VERSION,
         })),
         "ui.toolbar" => ok(crate::toolbar::describe(app)),
+        "ui.select" if p.get("kind").is_none() && VIEWPORT_SELECT.iter().any(|k| p.get(*k).is_some()) => wrap(select(app, p)),
+        "ui.selection" => ok(selection_json(app)),
         "ui.select" => {
             // Select a definition as a browser click does (its properties show on the right).
             let kind = p.get("kind").cloned().and_then(|k| serde_json::from_value::<crate::browser::Def>(k).ok());
@@ -208,6 +280,12 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             }
             if let (Some(d), Some(params)) = (app.dialog.as_mut(), p.get("params")) {
                 d.text = serde_json::to_string_pretty(params).unwrap_or_default();
+            }
+            // The form's Target row: the viewport's selection into the parameters.
+            if b("use_selection")
+                && let Err(e) = app.use_selection_in_dialog()
+            {
+                return err(e);
             }
             if b("run") {
                 return wrap(app.run_dialog());
@@ -454,6 +532,122 @@ mod tests {
         assert_eq!(call(&mut app, "no.method", json!({}))["ok"], false);
     }
 
+    /// One frame of the whole window (1400 × 900 points), with the control channel's synthetic
+    /// input, as the desktop app runs it.
+    fn frame(app: &mut ModelApp, ctx: &egui::Context) {
+        let mut raw =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))), ..Default::default() };
+        app.raw_input_hook(&mut raw);
+        let mut out = ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        out.textures_delta.clear();
+    }
+
+    fn call_in(app: &mut ModelApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
+        let (req, _rx) = ControlRequest::new(method, params);
+        match handle(app, ctx, &req) {
+            Outcome::Done(v) => v,
+            Outcome::Screenshot { .. } => json!({"screenshot": true}),
+        }
+    }
+
+    /// The cantilever's free end (x = 100), looked at from +x: picked by a simulated click and
+    /// by `ui.select`, made into a set through the set form's Target row, and resolved.
+    #[test]
+    fn the_cantilevers_end_is_picked_and_made_a_set_over_the_control_channel() {
+        let mut app = ModelApp::new(Session::default());
+        app.open_sample("cantilever");
+        let ctx = egui::Context::default();
+        assert_eq!(call_in(&mut app, &ctx, "ui.view", json!({"view": "right"}))["ok"], true);
+        app.fit_view();
+        frame(&mut app, &ctx);
+        let viewport = app.viewport.rect.unwrap();
+        // A click on the end cell at y ∈ [0, 5], z ∈ [5, 10]: element 1 + 19 + 0·20 + 1·40, face 4.
+        let at = crate::viewport::to_screen(&app, fieldcraft_render::Vec3::new(100.0, 2.5, 7.5)).unwrap();
+        assert_eq!(call_in(&mut app, &ctx, "ui.select", json!({"filter": "element_faces"}))["result"]["count"], 0);
+        call_in(&mut app, &ctx, "ui.click", json!({"x": at.x, "y": at.y}));
+        for _ in 0..4 {
+            frame(&mut app, &ctx);
+        }
+        let r = call_in(&mut app, &ctx, "ui.selection", json!({}));
+        assert_eq!(r["result"]["items"], json!([{"element": 60, "face": 4}]), "{r}");
+        // What is under the pointer is the hover.
+        assert_eq!(r["result"]["hover"], json!({"element": 60, "face": 4}));
+        // The same pick by `ui.select {at}`, added to with Cmd (toggle) removes it again.
+        let r = call_in(&mut app, &ctx, "ui.select", json!({"at": [at.x, at.y], "mode": "toggle"}));
+        assert_eq!(r["result"]["count"], 0, "{r}");
+        // A box over the whole viewport holds the end's eight element faces (the rest are hidden).
+        let corners = [viewport.left(), viewport.top(), viewport.right(), viewport.bottom()];
+        let r = call_in(&mut app, &ctx, "ui.select", json!({"box": corners}));
+        assert_eq!(r["result"]["count"], 8, "{r}");
+        assert!(r["result"]["items"].as_array().unwrap().iter().all(|f| f["face"] == 4));
+        // The set form's Target row takes them; the set resolves to the end's faces and nodes.
+        call_in(&mut app, &ctx, "ui.start", json!({"command": "model.set.create"}));
+        let r = call_in(&mut app, &ctx, "ui.dialog", json!({"params": {"name": "end"}, "use_selection": true, "run": true}));
+        assert_eq!(r["ok"], true, "{r}");
+        let r = call_in(&mut app, &ctx, "engine.execute", json!({"command": "model.set.resolve", "params": {"name": "end"}}));
+        assert_eq!((r["result"]["faces"]["count"].as_u64(), r["result"]["nodes"]["count"].as_u64()), (Some(8), Some(15)), "{r}");
+        // A boundary condition's Target row makes a set of its own and names it.
+        call_in(&mut app, &ctx, "ui.start", json!({"command": "model.boundary_condition.create"}));
+        let r = call_in(&mut app, &ctx, "ui.dialog", json!({"params": {"name": "Hold", "type": "fixed"}, "use_selection": true, "run": true}));
+        assert_eq!(r["ok"], true, "{r}");
+        let bc = serde_json::to_value(app.session.model.boundary_conditions().get("Hold").unwrap()).unwrap();
+        assert_eq!(bc["target"], json!({"set": "Hold-set"}), "{bc}");
+        assert_eq!(app.session.model.resolve_set("Hold-set").unwrap().faces.len(), 8);
+        // Nodes in the box: the end's 3 × 5, none of those behind it.
+        let r = call_in(&mut app, &ctx, "ui.select", json!({"filter": "nodes", "box": corners}));
+        assert_eq!(r["result"]["count"], 15, "{r}");
+        // Escape clears the selection.
+        call_in(&mut app, &ctx, "ui.key", json!({"key": "Escape"}));
+        frame(&mut app, &ctx);
+        assert_eq!(call_in(&mut app, &ctx, "ui.selection", json!({}))["result"]["count"], 0);
+    }
+
+    #[test]
+    fn hostile_selections_are_refused_or_capped() {
+        let mut app = ModelApp::new(Session::default());
+        let ctx = egui::Context::default();
+        // Before the viewport is drawn, a point has nothing to pick on.
+        assert_eq!(call_in(&mut app, &ctx, "ui.select", json!({"at": [10, 10]}))["ok"], false);
+        // An empty scene picks nothing anywhere.
+        frame(&mut app, &ctx);
+        for filter in ["faces", "edges", "vertices", "bodies", "nodes", "element_faces", "elements"] {
+            let r = call_in(&mut app, &ctx, "ui.select", json!({"filter": filter, "at": [700, 450]}));
+            assert_eq!(r["result"]["count"], 0, "{filter}: {r}");
+        }
+        for bad in [
+            json!({"filter": "atoms"}),
+            json!({"mode": "xor", "nodes": [1]}),
+            json!({"at": [1e300, 5]}),
+            json!({"at": "here"}),
+            json!({"at": [1, 2, 3]}),
+            json!({"box": [0, 0, 1]}),
+            json!({"box": [0, f64::MAX, 1, 1]}),
+            json!({"filter": "faces", "box": [0, 0, 100, 100]}),
+            json!({"nodes": [0]}),
+            json!({"faces": [{"element": 1}]}),
+            json!({"geometry": [{"body": "B", "face": ""}]}),
+            json!({"elements": vec![1; crate::selection::MAX_SELECTION + 1]}),
+        ] {
+            let r = call_in(&mut app, &ctx, "ui.select", bad.clone());
+            assert_eq!(r["ok"], false, "{bad}: {r}");
+        }
+        // A huge selection is capped and says so.
+        let all: Vec<u32> = (1..=crate::selection::MAX_SELECTION as u32).collect();
+        call_in(&mut app, &ctx, "ui.select", json!({"nodes": all}));
+        let r = call_in(&mut app, &ctx, "ui.select", json!({"elements": [1, 2], "mode": "add"}));
+        assert_eq!((r["result"]["count"].as_u64(), r["result"]["capped"].as_bool()), (Some(crate::selection::MAX_SELECTION as u64), Some(true)));
+        // The form's Target row: no form, a command without a target.
+        assert_eq!(call_in(&mut app, &ctx, "ui.dialog", json!({"use_selection": true}))["ok"], false);
+        call_in(&mut app, &ctx, "ui.start", json!({"command": "mesh.node.add"}));
+        assert_eq!(call_in(&mut app, &ctx, "ui.dialog", json!({"use_selection": true}))["ok"], false);
+        // `ui.select` with a definition still selects in the browser; `clear` empties the viewport's.
+        assert_eq!(call_in(&mut app, &ctx, "ui.select", json!({"clear": true}))["result"]["count"], 0);
+        frame(&mut app, &ctx);
+    }
+
     #[test]
     fn the_command_form_is_driven_after_ui_start() {
         let mut app = ModelApp::new(Session::default());
@@ -533,6 +727,7 @@ mod tests {
             "ui.toolbar",
             "ui.prompt",
             "ui.select",
+            "ui.selection",
             "ui.fullscreen",
         ] {
             for p in &hostile {

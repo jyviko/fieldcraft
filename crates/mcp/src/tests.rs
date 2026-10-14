@@ -78,6 +78,8 @@ fn initialize_lists_tools_and_resources() {
         "probe",
         "reactions",
         "screenshot",
+        "select",
+        "selection",
         "undo",
         "redo",
     ] {
@@ -181,6 +183,9 @@ fn hostile_tool_arguments_are_tool_errors() {
         ("screenshot", json!({"camera": {"yaw": 0, "pitch": 0}, "view": "top"})),
         ("batch", json!({"commands": [{"command": "model.info"}, {"params": {}}, {"command": "model.info"}]})),
         ("batch", json!({"commands": vec![json!({"command": "model.info"}); crate::tools::MAX_STEPS + 1]})),
+        ("select", json!({"filter": "faces"})),
+        ("select", json!({})),
+        ("selection", json!({})),
         ("undo", json!({})),
         ("redo", json!({})),
     ] {

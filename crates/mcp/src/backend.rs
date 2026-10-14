@@ -1,6 +1,6 @@
 //! Where tool calls end up: an in-process headless session, or a running app's control channel
 //! (docs/control-protocol.md: `engine.execute`, `engine.commands`, `ui.view`, `ui.camera`,
-//! `ui.render`, `ui.capture`).
+//! `ui.render`, `ui.capture`, `ui.select`, `ui.selection`).
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -43,6 +43,8 @@ pub trait Backend {
     fn commands(&mut self) -> Result<Value, String>;
     /// A PNG of the model, or of the app's window when one is attached.
     fn picture(&mut self, request: &PictureRequest) -> Result<Picture, String>;
+    /// A request to the app's window (`ui.select`, `ui.selection`): an error without one.
+    fn window(&mut self, method: &str, params: Value) -> Result<Value, String>;
     /// The folders file access is confined to (checked by the server for the files it writes
     /// itself).
     fn roots(&self) -> &Roots;
@@ -122,6 +124,10 @@ impl Backend for Headless {
             "sampled_symbols": shown.sampled,
         });
         Ok(Picture { png, info })
+    }
+
+    fn window(&mut self, method: &str, _params: Value) -> Result<Value, String> {
+        Err(format!("{method} needs the app's window: start the server with --connect to a running FieldCraft"))
     }
 
     fn roots(&self) -> &Roots {
@@ -265,6 +271,10 @@ impl Backend for Remote {
         });
         let _ = std::fs::remove_file(&path);
         read
+    }
+
+    fn window(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.call(method, params)
     }
 
     fn roots(&self) -> &Roots {

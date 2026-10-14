@@ -290,6 +290,41 @@ pub fn tool_definitions() -> Vec<Value> {
             true,
             false,
         ),
+        tool(
+            "select",
+            "Select in the viewport",
+            "Change the app window's viewport selection (needs --connect; ui.select): `filter` (faces, edges, vertices, \
+             bodies, nodes, element_faces, elements), `mode` (replace, add, remove, toggle), `clear`, items by name and \
+             label as model.set.create takes them (`geometry`, `nodes`, `elements`, `faces`), a pick at a window point \
+             `at` [x, y] or the visible items in a box `box` [x0, y0, x1, y1]. Returns the selection; its `params` are \
+             a set's members.",
+            obj(
+                json!({
+                    "filter": {"type": "string", "enum": ["faces", "edges", "vertices", "bodies", "nodes", "element_faces", "elements"]},
+                    "box_mode": {"type": "boolean", "description": "Box selection on or off in the window"},
+                    "mode": {"type": "string", "enum": ["replace", "add", "remove", "toggle"]},
+                    "clear": {"type": "boolean", "description": "Empty the selection first"},
+                    "geometry": {"type": "array", "items": {"type": "object"}, "description": "[{body, face|edge|vertex}]"},
+                    "nodes": {"type": "array", "items": {"type": "integer"}},
+                    "elements": {"type": "array", "items": {"type": "integer"}},
+                    "faces": {"type": "array", "items": {"type": "object"}, "description": "[{element, face}]"},
+                    "at": {"type": "array", "items": {"type": "number"}, "description": "Window point [x, y] to pick at"},
+                    "box": {"type": "array", "items": {"type": "number"}, "description": "Window box [x0, y0, x1, y1]"},
+                }),
+                &[],
+            ),
+            false,
+            false,
+        ),
+        tool(
+            "selection",
+            "Read the viewport selection",
+            "The app window's viewport selection (needs --connect; ui.selection): filter, items, `params` (the \
+             selection as a set's members, ready for model.set.create) and what is under the pointer.",
+            obj(json!({}), &[]),
+            true,
+            false,
+        ),
         tool("undo", "Undo", "Take back the last command that changed the model.", obj(json!({}), &[]), false, false),
         tool("redo", "Redo", "Run the last undone change again.", obj(json!({}), &[]), false, false),
     ]
@@ -440,6 +475,14 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Map<String, Value>) -> Result<V
         "show_results" => show_results(b, a),
         "probe" => b.execute("solve.probe", pick(a, &["step", "nodes", "elements", "points", "forces", "mode", "frame"])),
         "reactions" => b.execute("results.reactions", pick(a, &["step", "sets", "about"])),
+        "select" => {
+            let p = pick(a, &["filter", "box_mode", "mode", "clear", "geometry", "nodes", "elements", "faces", "at", "box"]);
+            if p.as_object().is_none_or(|o| o.is_empty()) {
+                return Err("select: give `filter`, `mode`, `clear`, items, `at` or `box`".into());
+            }
+            b.window("ui.select", p)
+        }
+        "selection" => b.window("ui.selection", json!({})),
         "undo" => b.execute("edit.undo", json!({})),
         "redo" => b.execute("edit.redo", json!({})),
         other => Err(format!("unknown tool `{}`", other.chars().take(100).collect::<String>())),

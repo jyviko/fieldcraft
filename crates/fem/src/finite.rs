@@ -194,7 +194,12 @@ fn add_point(force: &mut [f64], k: Option<&mut Matrix>, gradients: &[[f64; 3]], 
     if !geometric {
         return;
     }
-    let tau = crate::rotation::tensor(&r.stress);
+    add_geometric(k, gradients, &r.stress, w);
+}
+
+/// K_ab += w (∇N_a · τ ∇N_b) I, the geometric (initial-stress) term.
+fn add_geometric(k: &mut Matrix, gradients: &[[f64; 3]], stress: &[f64; 6], w: f64) {
+    let tau = crate::rotation::tensor(stress);
     let n = k.n;
     for (a, ga) in gradients.iter().enumerate() {
         let tg: [f64; 3] = std::array::from_fn(|i| (0..3).map(|jj| tau[i][jj] * ga[jj]).sum());
@@ -455,6 +460,58 @@ impl Solid<'_> {
                 Ok(PointStress { xyz: p.x0, strain, stress: r.stress.map(|v| v / p.j) })
             })
             .collect()
+    }
+}
+
+impl Solid<'_> {
+    /// The initial-stress (geometric) stiffness of a stress state given at the stiffness
+    /// integration points: K_σ,ab = ∫ (∇N_a · σ ∇N_b) I dV over the reference element, the
+    /// geometric term of the tangent with the reference gradients (linear buckling: Bathe 2014,
+    /// §6.8.2; the same term as [`Solid::nonlinear`]'s at u = 0 with τ = σ).
+    pub fn geometric_stiffness(&self, stress: &[[f64; 6]]) -> Result<Matrix> {
+        let points = self.rule().points();
+        if stress.len() != points.len() {
+            return Err(Error::Invalid(format!("{} stresses for {} integration points", stress.len(), points.len())));
+        }
+        let n = self.ty.nodes;
+        let mut k = Matrix::zeros(3 * n);
+        for (p, s) in points.iter().zip(stress) {
+            if s.iter().any(|v| !v.is_finite()) {
+                return Err(Error::Invalid("stresses must be finite".into()));
+            }
+            let g = self.gradients(p.xi)?;
+            add_geometric(&mut k, g.dx.get(..n).unwrap_or_default(), s, g.det * p.weight);
+        }
+        Ok(k)
+    }
+}
+
+impl Plane<'_> {
+    /// The initial-stress stiffness of a 2D element (u, v per node) for the stresses of
+    /// [`Plane::stresses_with`] at its stiffness points: the in-plane term and, axisymmetric,
+    /// the hoop stress's σ_θθ N_a N_b / r² on the radial motion.
+    pub fn geometric_stiffness(&self, stress: &[[f64; 6]]) -> Result<Matrix> {
+        let rule = self.rule().points();
+        if stress.len() != rule.len() {
+            return Err(Error::Invalid(format!("{} stresses for {} integration points", stress.len(), rule.len())));
+        }
+        let n = self.ty.nodes;
+        let mut k = Matrix::zeros(2 * n);
+        for (p, s) in rule.iter().zip(stress) {
+            if s.iter().any(|v| !v.is_finite()) {
+                return Err(Error::Invalid("stresses must be finite".into()));
+            }
+            let at = self.at(p)?;
+            let cols = at.g.get(..n).unwrap_or_default();
+            for (a, ga) in cols.iter().enumerate() {
+                for (b, gb) in cols.iter().enumerate() {
+                    let v = ga[0] * gb[0] * s[0] + ga[1] * gb[1] * s[1] + (ga[0] * gb[1] + ga[1] * gb[0]) * s[3];
+                    k.add(2 * a, 2 * b, at.dv * (v + s[2] * ga[2] * gb[2]));
+                    k.add(2 * a + 1, 2 * b + 1, at.dv * v);
+                }
+            }
+        }
+        Ok(k)
     }
 }
 
@@ -957,5 +1014,33 @@ mod tests {
         }
         let stress = Plane::new(ElementKind::Quad4, &quad8[..4], Formulation::Full, Theory::PlaneStress { thickness: 1.0 }).unwrap();
         assert!(matches!(stress.finite_strain(&svk, &[[0.0; 2]; 4], &[], &mut [], true), Err(Error::NotSupported(_))));
+    }
+
+    /// uᵀ K_σ u = ∫ σ_xx (∂u_y/∂x)² dV = σ_xx V for u_y = x under a uniform σ_xx, in a distorted
+    /// hex20 and a plane strain quad8, and K_σ annihilates rigid translations.
+    #[test]
+    fn geometric_stiffness_of_a_uniform_stress() {
+        let sigma = 2.5;
+        let hex: Vec<[f64; 3]> = crate::basis::Basis::Hex20
+            .nodes()
+            .iter()
+            .map(|p| [1.0 + 0.6 * p[0] + 0.05 * p[1] * p[2], 0.8 * p[1], 0.7 * p[2] + 0.03 * p[0]])
+            .collect();
+        let solid = Solid::new(ElementKind::Hex20, &hex, Formulation::Full).unwrap();
+        let points = solid.rule().points().len();
+        let k = solid.geometric_stiffness(&vec![[sigma, 0.0, 0.0, 0.0, 0.0, 0.0]; points]).unwrap();
+        let u: Vec<f64> = hex.iter().flat_map(|x| [0.0, x[0], 0.0]).collect();
+        let energy: f64 = (0..u.len()).map(|i| u[i] * (0..u.len()).map(|j| k.get(i, j) * u[j]).sum::<f64>()).sum();
+        assert!((energy - sigma * solid.volume().unwrap()).abs() < 1e-12, "{energy}");
+        let t: Vec<f64> = hex.iter().flat_map(|_| [0.3, -0.2, 1.0]).collect();
+        assert!(k.mul_vec(&t).iter().all(|v| v.abs() < 1e-12));
+        assert!(solid.geometric_stiffness(&[[sigma, 0.0, 0.0, 0.0, 0.0, 0.0]]).is_err());
+        let quad: Vec<[f64; 3]> = crate::basis::Basis::Quad8.nodes().iter().map(|p| [1.0 + 0.5 * p[0] + 0.04 * p[1], 0.6 * p[1], 0.0]).collect();
+        let plane =
+            crate::plane::Plane::new(ElementKind::Quad8, &quad, Formulation::Full, crate::plane::Theory::PlaneStrain { thickness: 0.3 }).unwrap();
+        let k = plane.geometric_stiffness(&vec![[sigma, 0.0, 0.0, 0.0, 0.0, 0.0]; plane.rule().points().len()]).unwrap();
+        let u: Vec<f64> = quad.iter().flat_map(|x| [0.0, x[0]]).collect();
+        let energy: f64 = (0..u.len()).map(|i| u[i] * (0..u.len()).map(|j| k.get(i, j) * u[j]).sum::<f64>()).sum();
+        assert!((energy - sigma * plane.volume().unwrap()).abs() < 1e-12, "{energy}");
     }
 }

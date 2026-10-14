@@ -15,7 +15,7 @@ thiserror = { workspace = true }
 [dev-dependencies]
 # Test oracles only (never linked into FieldCraft): exact rationals, and georust's port of
 # Shewchuk's public-domain predicates.c as a differential reference.
-num-bigint = "0.4"
+num-bigint = "0.5"
 num-rational = { version = "0.4", default-features = false, features = ["num-bigint", "std"] }
 num-traits = "0.2"
 robust = "1.2"

@@ -540,10 +540,12 @@ impl ModelApp {
         true
     }
 
-    /// Files dropped on the window open in turn; a hovered drop shows where it goes.
+    /// Files dropped on the window (and by the control channel's `ui.drop`) open in turn; a
+    /// hovered drop shows where it goes.
     pub(crate) fn dropped_files(&mut self, ctx: &egui::Context) {
-        let dropped: Vec<String> = ctx
+        let mut dropped: Vec<String> = ctx
             .input(|i| i.raw.dropped_files.iter().filter_map(|f| Some(f.path().to_string_lossy().to_string()).filter(|p| !p.is_empty())).collect());
+        dropped.append(&mut self.synthetic_drops);
         // A model first: it replaces the session, then designs and meshes go into it.
         let (models, rest): (Vec<String>, Vec<String>) = dropped.into_iter().partition(|p| Kind::of(p) == Some(Kind::Model));
         for p in models.into_iter().take(1).chain(rest) {

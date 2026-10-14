@@ -58,6 +58,7 @@ commands (files, undo, `model.info`) leave the ribbon where it is.
 | `ui.scroll` | `x`, `y`, `delta?` (wheel lines, −100–100; positive zooms in) | zooms at the point |
 | `ui.key` | `key` (egui key name, `Enter`, `Escape`…), `cmd?`, `shift?` | `F` over the viewport frames the model; `Escape` clears the selection (and then cancels an open form) |
 | `ui.text` | `text` | typed text (into the focused field) |
+| `ui.drop` | `paths`: 1–16 file paths | drops the files on the window: the next frame opens them as a drop from the file manager does, and as a file picked in the Open dialog does (a `.fieldcraft` model, a `.solidcraft` design, a `.3mf` tagged mesh; `ui.inspect`'s `busy` while they open). The native picker cannot be driven over the channel; this is the same route |
 | `ui.worldToScreen` | `points`: `[[x, y, z]…]` (at most 1000) | screen points in the viewport drawn last frame (null when not on screen) |
 | `ui.resize` | `width`, `height` | window inner size in points |
 | `ui.fullscreen` | `on?` (default true) | into or out of full screen; on macOS the title bar's left group moves into the traffic lights' room while there are none |

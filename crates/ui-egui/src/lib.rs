@@ -289,6 +289,9 @@ pub struct ModelApp {
     /// Input injected by the control channel, fed to egui one pointer event per frame.
     pub synthetic: Vec<egui::Event>,
     synthetic_mods: egui::Modifiers,
+    /// Files dropped on the window by the control channel (`ui.drop`): the next frame takes them
+    /// with the window system's drops.
+    pub synthetic_drops: Vec<String>,
     control_rx: Option<Receiver<ControlRequest>>,
     shots: Vec<Shot>,
     shot_token: u64,
@@ -363,6 +366,7 @@ impl ModelApp {
             styled: None,
             synthetic: Vec::new(),
             synthetic_mods: egui::Modifiers::default(),
+            synthetic_drops: Vec::new(),
             control_rx: None,
             shots: Vec::new(),
             shot_token: 0,

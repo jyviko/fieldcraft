@@ -16,6 +16,9 @@ use crate::{ModelApp, UiState};
 
 /// `ui.render`'s image size when none is given.
 const RENDER_DEFAULT: [usize; 2] = [1280, 800];
+/// Most files one `ui.drop` drops, and the longest path it takes.
+const MAX_DROP: usize = 16;
+const MAX_DROP_PATH: usize = 4096;
 
 pub struct ControlRequest {
     pub method: String,
@@ -379,6 +382,20 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             app.synthetic.push(egui::Event::Text(s("text").unwrap_or("").to_string()));
             ok(Value::Null)
         }
+        "ui.drop" => {
+            // Files dropped on the window: the next frame takes them with the window system's
+            // drops, and they open as a picked file opens (the native picker cannot be driven).
+            let paths: Option<Vec<String>> =
+                p.get("paths").and_then(Value::as_array).and_then(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect());
+            match paths {
+                Some(paths) if !paths.is_empty() && paths.len() <= MAX_DROP && paths.iter().all(|p| !p.is_empty() && p.len() <= MAX_DROP_PATH) => {
+                    let n = paths.len();
+                    app.synthetic_drops.extend(paths);
+                    ok(json!({"dropped": n}))
+                }
+                _ => err(format!("`paths` must be a list of 1 to {MAX_DROP} file paths")),
+            }
+        }
         "ui.worldToScreen" => {
             let pts: Vec<Value> = p
                 .get("points")
@@ -658,6 +675,29 @@ mod tests {
         assert!(app.dialog.is_none() && app.session.model.node(3).is_some());
     }
 
+    /// `ui.drop` stands in for the window system: the next frame opens the files as a drop does.
+    #[test]
+    fn dropped_files_open_as_a_drop_does() {
+        let dir = std::env::temp_dir().join(format!("fieldcraft-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let design = dir.join("plate.solidcraft");
+        std::fs::write(&design, fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap()).unwrap();
+        let mut app = ModelApp::new(Session::default());
+        let r = call(&mut app, "ui.drop", json!({"paths": [design.to_string_lossy()]}));
+        assert_eq!(r["result"]["dropped"], 1, "{r}");
+        assert!(app.session.design.is_none(), "nothing opens before the next frame");
+        app.logic(&egui::Context::default());
+        assert_eq!(app.busy(), Some("Opening plate.solidcraft"));
+        app.wait_loaded();
+        assert_eq!(app.session.design.as_ref().map(|d| d.bodies.len()), Some(1));
+        assert_eq!(app.status.as_ref().map(|s| s.text.as_str()), Some("Opened plate.solidcraft"));
+        for bad in [json!({}), json!({"paths": []}), json!({"paths": [""]}), json!({"paths": [3]}), json!({"paths": vec!["a.solidcraft"; 17]})] {
+            assert_eq!(call(&mut app, "ui.drop", bad.clone())["ok"], false, "{bad}");
+        }
+        assert!(app.synthetic_drops.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn ui_render_writes_a_png_of_the_model() {
         let mut app = ModelApp::new(Session::default());
@@ -729,6 +769,7 @@ mod tests {
             "ui.select",
             "ui.selection",
             "ui.fullscreen",
+            "ui.drop",
         ] {
             for p in &hostile {
                 let _ = call(&mut app, method, p.clone());

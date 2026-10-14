@@ -6,10 +6,13 @@
 //! boundaries while the model has no element faces, then as boundaries only; elements in their
 //! kind's colour with their edges; a results view ([`crate::results::ResultsView`]) draws the
 //! deformed shape (automatic or chosen scale) with its contour bands. Animation is not drawn: a
-//! picture shows the full deformation (a mode at its positive shape).
+//! picture shows the full deformation (a mode at its positive shape). The analysis setup's
+//! symbols ([`fieldcraft_render::glyphs`]) are drawn over the model as the viewport draws them,
+//! muted over a results plot.
 
 use fieldcraft_model::ElementKind;
 use fieldcraft_render::contour::{Bands, band_color, split_triangle};
+use fieldcraft_render::glyphs::{GlyphColors, GlyphShow, Glyphs};
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Orientation, Rgb, Scene, SceneLine, SceneTri, Vec3};
 use serde_json::Value;
 
@@ -33,6 +36,8 @@ pub struct Palette {
     pub no_result: Rgb,
     /// The contour colour scale, low to high.
     pub contour: [Rgb; 5],
+    /// The analysis setup's symbols.
+    pub glyphs: GlyphColors,
 }
 
 impl Palette {
@@ -49,6 +54,13 @@ impl Palette {
         geometry_edge: Rgb(0x2a, 0x30, 0x3a),
         no_result: Rgb(0x9a, 0xa0, 0xaa),
         contour: [Rgb(0x2b, 0x4f, 0xd8), Rgb(0x2f, 0xb8, 0xe0), Rgb(0x3c, 0xc8, 0x64), Rgb(0xf0, 0xd2, 0x3c), Rgb(0xe0, 0x40, 0x2e)],
+        glyphs: GlyphColors {
+            constraint: Rgb(0x00, 0x8a, 0xa8),
+            load: Rgb(0xd0, 0x24, 0x24),
+            interaction: Rgb(0x9a, 0x30, 0xc0),
+            thermal: Rgb(0xe8, 0x4c, 0x00),
+            label: Rgb(0x26, 0x2a, 0x32),
+        },
     };
 
     fn element(&self, kind: ElementKind) -> Rgb {
@@ -86,6 +98,8 @@ pub struct Shown {
     pub contour: Option<(String, (u32, f64), (u32, f64))>,
     /// Bodies that could not be tessellated for display.
     pub failed: Vec<String>,
+    /// Definitions whose symbols are a sample (`Clamp: 400 of 12000 nodes`).
+    pub sampled: Vec<String>,
 }
 
 /// The model's display data with the open design's bodies and the imported surfaces.
@@ -123,11 +137,14 @@ fn model_scene(d: &DisplayMesh, p: &Palette) -> Scene {
 /// The scene of the session: the model, or the results view's plot, and what it shows.
 pub fn scene(s: &Session, p: &Palette) -> (Scene, Aabb3, Shown) {
     let (base, failed) = display(s);
-    let mut shown = Shown { failed, ..Shown::default() };
+    let glyphs = Glyphs::from_model(&s.model);
+    let mut shown = Shown { failed, sampled: glyphs.notes.clone(), ..Shown::default() };
     let plot = s.results_view.as_ref().and_then(|v| s.latest_result(&v.step).map(|(r, _)| (v, r)));
     let Some((view, result)) = plot else {
-        let bounds = base.bounds;
-        return (model_scene(&base, p), bounds, shown);
+        let mut bounds = base.bounds;
+        let mut scene = model_scene(&base, p);
+        bounds.union(glyphs.draw(|label| base.node_position(label), GlyphShow::ALL, &p.glyphs, &mut scene));
+        return (scene, bounds, shown);
     };
     shown.step = Some(view.step.clone());
     let pick = view.pick();
@@ -169,9 +186,10 @@ pub fn scene(s: &Session, p: &Palette) -> (Scene, Aabb3, Shown) {
             });
         }
     }
+    let symbols = glyphs.draw(|label| drawn.node_position(label), GlyphShow::ALL, &p.glyphs.over_results(p.background.1), &mut scene);
     let mut bounds = base.bounds;
-    bounds.add(drawn.bounds.min);
-    bounds.add(drawn.bounds.max);
+    bounds.union(drawn.bounds);
+    bounds.union(symbols);
     (scene, bounds, shown)
 }
 
@@ -221,6 +239,10 @@ mod tests {
         s.run_script(&crate::sample::cantilever()).unwrap();
         let (model, shown) = render_png(&s, &iso, 64, 48, &Palette::LIGHT).unwrap();
         assert_eq!(shown, Shown::default());
+        // The clamp's cones and the push's arrows are drawn in their colours.
+        let (scene, ..) = super::scene(&s, &Palette::LIGHT);
+        assert!(scene.tris.iter().any(|t| t.color == Palette::LIGHT.glyphs.constraint));
+        assert!(scene.lines.iter().any(|l| l.color == Palette::LIGHT.glyphs.load));
         s.execute("solve.static", &json!({})).unwrap();
         let (plot, shown) = render_png(&s, &iso, 64, 48, &Palette::LIGHT).unwrap();
         assert_ne!(model, plot);
@@ -229,6 +251,11 @@ mod tests {
         assert_eq!(field, "von_mises");
         assert!(max.1 > min.1);
         assert!(render_png(&s, &Orientation::of(StandardView::Top), 0, 48, &Palette::LIGHT).is_err());
+        // Over the plot the symbols are muted.
+        let (scene, ..) = super::scene(&s, &Palette::LIGHT);
+        let muted = Palette::LIGHT.glyphs.over_results(Palette::LIGHT.background.1);
+        assert!(scene.tris.iter().any(|t| t.color == muted.constraint));
+        assert!(!scene.tris.iter().any(|t| t.color == Palette::LIGHT.glyphs.constraint));
     }
 
     #[test]

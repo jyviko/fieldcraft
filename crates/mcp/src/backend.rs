@@ -119,6 +119,7 @@ impl Backend for Headless {
             "height": h,
             "results": shown.step.map(|step| json!({"step": step, "scale": shown.scale, "contour": contour})),
             "undrawn_bodies": shown.failed,
+            "sampled_symbols": shown.sampled,
         });
         Ok(Picture { png, info })
     }

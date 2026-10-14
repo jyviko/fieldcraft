@@ -1119,3 +1119,25 @@ update are written from (cited again in the module docs):
   and undeformed length of a flat-ended projectile). Published experimental Taylor-bar lengths
   (Wilkins & Guinan 1973) are not used: that needs the owner's sign-off for a tagged benchmark
   suite.
+
+## Part K: Heat transfer and thermal stress, as implemented
+
+- **Conduction.** Galerkin form of ρc Ṫ = ∇·(k∇T) + Q with surface flux and convection:
+  O. C. Zienkiewicz, R. L. Taylor, J. Z. Zhu, *The Finite Element Method: Its Basis and
+  Fundamentals*, 7th ed., Butterworth-Heinemann 2013, §3.2; T. J. R. Hughes, *The Finite Element
+  Method*, Dover 2000, ch. 1. Kernels in `modelcraft_fem::heat`, solver in `modelcraft_solver::heat`.
+- **Time integration.** The generalized trapezoidal (θ) family, unconditionally stable for
+  θ ≥ ½ (Hughes 2000, §8.2): backward Euler (θ = 1, the default) and Crank–Nicolson (θ = ½).
+- **Thermal strain.** Initial-strain load ∫ Bᵀ D ε_th dV and stress D(ε − ε_th)
+  (Zienkiewicz, Taylor & Zhu 2013, §6.2.3); incompatible modes condensed with the same load.
+- **Coupled temperature–displacement.** One-way coupling (temperature strains the solid) solved
+  in turn, which is the exact monolithic solution of linear quasi-static thermoelasticity
+  without thermoelastic dissipation (B. A. Boley, J. H. Weiner, *Theory of Thermal Stresses*,
+  Wiley 1960, ch. 1).
+- **Verification** (`crates/solver/tests/thermal.rs`, analytic): steady slab conduction, a slab
+  with a heat source and convection or flux (quadratic profile), radial conduction through a
+  thick cylinder (T ∝ ln r), the semi-infinite solid T = erfc(x / 2√(κt)) (H. S. Carslaw,
+  J. C. Jaeger, *Conduction of Heat in Solids*, 2nd ed., Oxford 1959, §2.4), free and
+  constrained thermal expansion (σ = −EαΔT), the bimetal strip (S. Timoshenko, *Analysis of
+  bi-metal thermostats*, J. Opt. Soc. Am. 11(3):233–255, 1925), and the coupled step against
+  the heat step followed by the static step.

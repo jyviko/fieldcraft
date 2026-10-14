@@ -50,18 +50,20 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub use bcs::{BoundaryCondition, Dofs, Symmetry, Target};
+pub use bcs::{BoundaryCondition, Dofs, Symmetry, TEMPERATURE_DOF, Target};
 pub use check::{Diagnostic, Resolved, ResolvedSet, Severity};
 pub use constraints::{Coupling, CouplingKind, ReferencePoint};
 pub use discrete::{Direction, Mass, PointMass, ResolvedDirection, ResolvedMass, ResolvedSpring, Spring};
 pub use fluids::{BoxFace, BoxFaces, FaceCondition, FluidBoundary, FluidDomain, Profile, SurfaceBoundary, SurfaceCondition};
 pub use geometry::{Classification, Entity, GeometryRef};
 pub use loads::{Distribution, Load, centrifugal_acceleration};
-pub use materials::{Damage, Elastic, Erosion, Fluid, Hardening, HardeningPoint, Material, Plastic};
+pub use materials::{Damage, Directional, Elastic, Erosion, Fluid, Hardening, HardeningPoint, Material, Plastic, Thermal};
 pub use mesh::{Element, ElementEdge, ElementFace, ElementKind, Node, check_coordinates};
 pub use sections::{BeamProfile, Extent, Formulation, Integration, Section, SectionKind};
 pub use sets::Set;
-pub use steps::{BulkViscosity, ExplicitDynamic, Hourglass, HourglassKind, InitialVelocity, OutputVariable, Procedure, RigidWall, Step, StressRate};
+pub use steps::{
+    BulkViscosity, ExplicitDynamic, Hourglass, HourglassKind, InitialVelocity, OutputVariable, Procedure, RigidWall, Step, StressRate, Transient,
+};
 pub use units::UnitSystem;
 
 /// The largest node or element label. Nastran's GRID and element ids stop at 99 999 999 (eight

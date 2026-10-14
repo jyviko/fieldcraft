@@ -115,6 +115,23 @@ pub(crate) fn unsupported(format: &'static str, items: BTreeSet<String>) -> Resu
     if items.is_empty() { Ok(()) } else { Err(Error::Unsupported { format, what: items.into_iter().collect::<Vec<_>>().join("; ") }) }
 }
 
+/// Heat transfer in a model, which no writer expresses yet: heat transfer and coupled
+/// temperature–displacement steps, temperature boundary conditions, heat loads and temperature
+/// fields. Thermal material properties alone are left out of the decks (nothing uses them).
+pub(crate) fn thermal_items(model: &Model) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for step in model.steps().iter().filter(|s| s.procedure.is_thermal()) {
+        out.insert(format!("step `{}`: {} steps (not written to decks yet)", step.name, step.procedure.name()));
+    }
+    for name in model.boundary_conditions().iter().filter(|(_, b)| b.is_thermal()).map(|(n, _)| n) {
+        out.insert(format!("boundary condition `{name}`: prescribed temperatures (not written to decks yet)"));
+    }
+    for (name, load) in model.loads().iter().filter(|(_, l)| l.is_thermal() || matches!(l, Load::Temperature { .. })) {
+        out.insert(format!("load `{name}`: {} loads (not written to decks yet)", load.kind()));
+    }
+    out
+}
+
 /// The concentrated loads of a set of active loads: the resolved nodal values of every force,
 /// traction (degrees of freedom 1–3) and moment (4–6), summed per node and degree of freedom so
 /// loads sharing a node add up; zero sums are left out.

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::bcs::Target;
-use crate::{Error, Model, Result, context, finite, insert_new, not_in_use, remove_existing, replace_existing, require};
+use crate::{Error, Model, Result, context, finite, insert_new, not_in_use, positive, remove_existing, replace_existing, require};
 
 /// How a force or moment on a set is shared among the set's nodes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -70,6 +70,17 @@ pub enum Load {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         set: Option<String>,
     },
+    /// Heat flux per area into the set's element faces (positive heats the body).
+    SurfaceFlux { set: String, flux: f64 },
+    /// Convection from the set's element faces to a surrounding medium at `sink` temperature:
+    /// heat flux h (T_sink − T) into the body, with film coefficient `film` (h).
+    Convection { set: String, film: f64, sink: f64 },
+    /// Heat generated per volume in the set's elements.
+    HeatSource { set: String, power: f64 },
+    /// A temperature field at the target's nodes in a stress step: it strains the material
+    /// thermally (ε = α (T − T_ref)); nodes it does not reach stay at their material's reference
+    /// temperature.
+    Temperature { target: Target, value: f64 },
 }
 
 /// The centrifugal acceleration ω² r at `x` of a rotation at `angular_velocity` about the axis
@@ -94,14 +105,29 @@ impl Load {
             Load::Gravity { .. } => "gravity",
             Load::BodyForce { .. } => "body_force",
             Load::Centrifugal { .. } => "centrifugal",
+            Load::SurfaceFlux { .. } => "surface_flux",
+            Load::Convection { .. } => "convection",
+            Load::HeatSource { .. } => "heat_source",
+            Load::Temperature { .. } => "temperature",
         }
+    }
+
+    /// Whether it is a heat transfer load (flux, convection, heat source), active in heat
+    /// transfer and coupled temperature–displacement steps.
+    pub fn is_thermal(&self) -> bool {
+        matches!(self, Load::SurfaceFlux { .. } | Load::Convection { .. } | Load::HeatSource { .. })
     }
 
     /// The set the load acts on, if any.
     pub fn set(&self) -> Option<&str> {
         match self {
-            Load::Force { target, .. } | Load::Moment { target, .. } => target.set(),
-            Load::Pressure { set, .. } | Load::BodyForce { set, .. } | Load::Traction { set, .. } => Some(set),
+            Load::Force { target, .. } | Load::Moment { target, .. } | Load::Temperature { target, .. } => target.set(),
+            Load::Pressure { set, .. }
+            | Load::BodyForce { set, .. }
+            | Load::Traction { set, .. }
+            | Load::SurfaceFlux { set, .. }
+            | Load::Convection { set, .. }
+            | Load::HeatSource { set, .. } => Some(set),
             Load::Gravity { set, .. } | Load::Centrifugal { set, .. } => set.as_deref(),
         }
     }
@@ -109,7 +135,7 @@ impl Load {
     /// The reference point the load acts on, if any.
     pub fn reference_point(&self) -> Option<&str> {
         match self {
-            Load::Force { target, .. } | Load::Moment { target, .. } => target.reference_point(),
+            Load::Force { target, .. } | Load::Moment { target, .. } | Load::Temperature { target, .. } => target.reference_point(),
             _ => None,
         }
     }
@@ -134,6 +160,24 @@ impl Load {
                 }
                 if axis.iter().all(|c| *c == 0.0) {
                     return Err(Error::Invalid("a centrifugal load's axis direction must not be zero".into()));
+                }
+                return Ok(());
+            }
+            Load::SurfaceFlux { flux: v, .. } | Load::HeatSource { power: v, .. } => {
+                if finite(self.kind(), *v)? == 0.0 {
+                    return Err(Error::Invalid(format!("a {} must not be zero", self.kind())));
+                }
+                return Ok(());
+            }
+            Load::Convection { film, sink, .. } => {
+                positive("film coefficient", *film)?;
+                finite("sink temperature", *sink)?;
+                return Ok(());
+            }
+            Load::Temperature { target, value } => {
+                finite("temperature", *value)?;
+                if let Target::ReferencePoint(r) = target {
+                    return Err(Error::Invalid(format!("reference points have no temperature (`{r}`); apply it to a set")));
                 }
                 return Ok(());
             }
@@ -183,5 +227,25 @@ impl Model {
         let users = self.steps.iter().filter(|s| s.loads.contains(name)).map(|s| format!("step `{}`", s.name)).collect();
         not_in_use("load", name, users)?;
         remove_existing(&mut self.loads, "load", name).map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heat_loads_validate() {
+        let set = || "s".to_string();
+        assert!(Load::SurfaceFlux { set: set(), flux: 2.0 }.validate().is_ok());
+        assert!(Load::SurfaceFlux { set: set(), flux: 0.0 }.validate().is_err());
+        assert!(Load::HeatSource { set: set(), power: f64::NAN }.validate().is_err());
+        assert!(Load::Convection { set: set(), film: 0.0, sink: 1.0 }.validate().is_err());
+        assert!(Load::Convection { set: set(), film: 1.0, sink: f64::INFINITY }.validate().is_err());
+        assert!(Load::Temperature { target: Target::ReferencePoint("RP".into()), value: 1.0 }.validate().is_err());
+        assert!(Load::Temperature { target: Target::Set(set()), value: -40.0 }.validate().is_ok());
+        let l = Load::Convection { set: set(), film: 10.0, sink: 20.0 };
+        assert!(l.is_thermal() && l.set() == Some("s") && l.kind() == "convection");
+        assert!(!Load::Temperature { target: Target::Set(set()), value: 1.0 }.is_thermal());
     }
 }

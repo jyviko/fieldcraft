@@ -327,6 +327,7 @@ impl<'m> Deck<'m> {
         self.plan_discrete()?;
         self.plan_constraints()?;
         self.plan_loads()?;
+        self.problems.extend(crate::thermal_items(self.model));
         for sub in &mut self.subcases {
             if matches!(sub.step.procedure, Procedure::Frequency { .. }) {
                 sub.method = Some(next_id(&mut self.next_sid)?);
@@ -705,6 +706,8 @@ impl<'m> Deck<'m> {
                     OutputVariable::ReactionForce => "SPCFORCES",
                     OutputVariable::Stress => "STRESS",
                     OutputVariable::Strain => "STRAIN",
+                    // Heat transfer steps are refused (thermal_items).
+                    OutputVariable::Temperature | OutputVariable::HeatFlux => continue,
                 };
                 let _ = writeln!(out, "  {request} = ALL");
             }
@@ -928,7 +931,7 @@ impl<'m> Deck<'m> {
                     let a = angular_velocity / (2.0 * std::f64::consts::PI);
                     entry(Card::new("RFORCE").int(*sid).blank().blank().real(a).reals(*axis), out, &mut first)?
                 }
-                Load::BodyForce { .. } => {}
+                Load::BodyForce { .. } | Load::SurfaceFlux { .. } | Load::Convection { .. } | Load::HeatSource { .. } | Load::Temperature { .. } => {}
             }
         }
         for (sid, loads) in &self.combinations {

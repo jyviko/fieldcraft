@@ -121,7 +121,7 @@ shown greyed with the roadmap milestone that brings them (ROADMAP.md).
 | Decks | Nastran Deck — Write Nastran bulk data (SOL 101, 103) | ready | `deck.write {"format":"nastran"}` |
 | Decks | LS-DYNA Deck — Write an LS-DYNA keyword file | ready | `deck.write {"format":"lsdyna"}` |
 | Decks | Read Deck — Read a deck, keeping keywords ModelCraft does not know | coming soon (M9) |  |
-| Implicit | Static — Linear static solve of a step with ModelCraft's own solver | ready | `solve.static` |
+| Implicit | Static — Linear static (or coupled temperature–displacement) solve of a step with ModelCraft's own solver; heat transfer in the drop-down | ready | `solve.static`, `solve.heat` |
 | Implicit | Frequency — Natural frequencies and mode shapes of a frequency step | ready | `solve.frequency` |
 | Explicit | Explicit — Transient dynamics of an explicit step by central differences (contact and erosion coming in M10) | ready | `solve.explicit` |
 | Explicit | Blast & Impact — EOS-driven fluids with fluid–structure contact (ALE or SPH) | coming soon (M14) |  |

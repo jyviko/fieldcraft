@@ -27,6 +27,7 @@ pub mod cholesky;
 pub mod constraints;
 pub mod discrete;
 pub mod eigen;
+pub mod heat;
 pub mod ordering;
 pub mod sparse;
 pub mod system;
@@ -35,6 +36,7 @@ pub use analysis::{
     ElementStress, FrequencyOptions, FrequencyResult, Location, MassKind, Mode, PointResult, StaticResult, Stats, StepResult, solve_frequency,
     solve_static,
 };
+pub use heat::{HeatResult, solve_heat};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {

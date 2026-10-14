@@ -9,7 +9,7 @@
 
 use modelcraft_explicit::{ExplicitResult, Frame};
 use modelcraft_model::Model;
-use modelcraft_solver::{FrequencyResult, StaticResult};
+use modelcraft_solver::{FrequencyResult, HeatResult, StaticResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -22,6 +22,7 @@ pub enum Kind<'a> {
     Explicit(&'a ExplicitResult),
     /// Per cell, not per node: no nodal fields to display yet.
     Fluid(&'a modelcraft_lbm::FluidResult),
+    Heat(&'a HeatResult),
 }
 
 impl StepResult {
@@ -29,6 +30,7 @@ impl StepResult {
         match self {
             StepResult::Implicit(modelcraft_solver::StepResult::Static(r)) => Kind::Static(r),
             StepResult::Implicit(modelcraft_solver::StepResult::Frequency(r)) => Kind::Frequency(r),
+            StepResult::Implicit(modelcraft_solver::StepResult::Heat(r)) => Kind::Heat(r),
             StepResult::Explicit(r) => Kind::Explicit(r),
             StepResult::Fluid(r) => Kind::Fluid(r),
         }
@@ -41,6 +43,16 @@ impl StepResult {
 pub struct Pick {
     pub mode: usize,
     pub frame: Option<usize>,
+}
+
+/// The temperature frame of a heat result `pick` asks for.
+pub fn heat_frame(r: &HeatResult, pick: Pick) -> Result<(f64, &[f64])> {
+    let last = r.frames.len().checked_sub(1).ok_or_else(|| EngineError::Params(format!("step `{}` has no temperatures", r.step)))?;
+    let k = pick.frame.unwrap_or(last);
+    match (r.times.get(k), r.frames.get(k)) {
+        (Some(t), Some(f)) => Ok((*t, f)),
+        _ => Err(EngineError::Params(format!("step `{}` has frames 0 to {last}; there is no frame {k}", r.step))),
+    }
 }
 
 /// The field frame of an explicit result `pick` asks for.
@@ -71,10 +83,14 @@ pub enum Field {
     StressXy,
     StressXz,
     StressYz,
+    /// Temperature (heat transfer and coupled steps).
+    Temperature,
+    /// Heat flux magnitude (heat transfer steps, at the end of the step).
+    HeatFlux,
 }
 
 impl Field {
-    pub const ALL: [Field; 15] = [
+    pub const ALL: [Field; 17] = [
         Field::Displacement,
         Field::DisplacementX,
         Field::DisplacementY,
@@ -90,6 +106,8 @@ impl Field {
         Field::StressXy,
         Field::StressXz,
         Field::StressYz,
+        Field::Temperature,
+        Field::HeatFlux,
     ];
 
     /// The id commands take (`von_mises`…).
@@ -110,6 +128,8 @@ impl Field {
             Field::StressXy => "stress_xy",
             Field::StressXz => "stress_xz",
             Field::StressYz => "stress_yz",
+            Field::Temperature => "temperature",
+            Field::HeatFlux => "heat_flux",
         }
     }
 
@@ -130,6 +150,8 @@ impl Field {
             Field::StressXy => "Stress XY",
             Field::StressXz => "Stress XZ",
             Field::StressYz => "Stress YZ",
+            Field::Temperature => "Temperature",
+            Field::HeatFlux => "Heat flux magnitude",
         }
     }
 
@@ -139,20 +161,46 @@ impl Field {
 
     /// Whether it is a stress.
     pub fn is_stress(self) -> bool {
-        !matches!(self, Field::Displacement | Field::DisplacementX | Field::DisplacementY | Field::DisplacementZ | Field::Velocity)
+        !matches!(
+            self,
+            Field::Displacement
+                | Field::DisplacementX
+                | Field::DisplacementY
+                | Field::DisplacementZ
+                | Field::Velocity
+                | Field::Temperature
+                | Field::HeatFlux
+        )
+    }
+
+    /// Whether it is a heat transfer quantity.
+    pub fn is_thermal(self) -> bool {
+        matches!(self, Field::Temperature | Field::HeatFlux)
     }
 
     /// The fields a result has: displacements everywhere, stresses for static steps and explicit
     /// frames that kept them (mode shapes have no stress scale), velocity for explicit frames.
     pub fn available(r: &StepResult) -> impl Iterator<Item = Field> + '_ {
-        let (stress, velocity) = match r.kind() {
-            Kind::Static(_) => (true, false),
-            Kind::Frequency(_) => (false, false),
-            Kind::Explicit(e) => e.frames.last().map_or((false, false), |f| (!f.stress.is_empty(), !f.velocity.is_empty())),
+        let (stress, velocity, temperature, flux) = match r.kind() {
+            Kind::Static(s) => (true, false, s.temperature.is_some(), false),
+            Kind::Frequency(_) => (false, false, false, false),
+            Kind::Explicit(e) => {
+                e.frames.last().map_or((false, false, false, false), |f| (!f.stress.is_empty(), !f.velocity.is_empty(), false, false))
+            }
             // Cell fields have their own display (M12 streamlines); no nodal field.
-            Kind::Fluid(_) => return None.into_iter().flatten(),
+            Kind::Fluid(_) => return Vec::new().into_iter(),
+            Kind::Heat(_) => return Field::ALL.into_iter().filter(|f| f.is_thermal()).collect::<Vec<_>>().into_iter(),
         };
-        Some(Field::ALL.into_iter().filter(move |f| if *f == Field::Velocity { velocity } else { stress || !f.is_stress() })).into_iter().flatten()
+        Field::ALL
+            .into_iter()
+            .filter(move |f| match f {
+                Field::Velocity => velocity,
+                Field::Temperature => temperature,
+                Field::HeatFlux => flux,
+                f => stress || !f.is_stress(),
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 }
 
@@ -190,11 +238,18 @@ impl ResultsView {
     /// (and an explicit step that kept stresses), the first mode with displacement contours for
     /// a frequency step; an explicit step at its last frame, to true scale.
     pub fn for_result(r: &StepResult) -> ResultsView {
-        let contour = if Field::available(r).any(|f| f == Field::VonMises) { Field::VonMises } else { Field::Displacement };
+        let heat = matches!(r.kind(), Kind::Heat(_));
+        let contour = if heat {
+            Field::Temperature
+        } else if Field::available(r).any(|f| f == Field::VonMises) {
+            Field::VonMises
+        } else {
+            Field::Displacement
+        };
         let scale = matches!(r.kind(), Kind::Explicit(_)).then_some(1.0);
         ResultsView {
             step: r.step().to_string(),
-            deformed: true,
+            deformed: !heat,
             scale,
             contour: Some(contour),
             bands: DEFAULT_BANDS,
@@ -228,6 +283,7 @@ pub fn displacements(r: &StepResult, pick: Pick) -> Result<&[[f64; 3]]> {
             Ok(&f.displacement)
         }
         Kind::Fluid(f) => Err(EngineError::Params(format!("step `{}` is a fluid step: its fields are per cell (solve.probe)", f.step))),
+        Kind::Heat(h) => Err(EngineError::Params(format!("step `{}` is heat transfer and has no displacements", h.step))),
     }
 }
 
@@ -239,7 +295,7 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
     let stresses = || -> Result<std::borrow::Cow<'_, [[f64; 6]]>> {
         match r.kind() {
             Kind::Static(s) => Ok(std::borrow::Cow::Borrowed(s.stress.as_slice())),
-            Kind::Frequency(_) | Kind::Fluid(_) => Err(unavailable()),
+            Kind::Frequency(_) | Kind::Fluid(_) | Kind::Heat(_) => Err(unavailable()),
             Kind::Explicit(e) => {
                 let f = frame(e, pick)?;
                 if f.stress.is_empty() {
@@ -261,7 +317,16 @@ pub fn field_values(model: &Model, r: &StepResult, field: Field, pick: Pick) -> 
                 let f = frame(e, pick)?;
                 if f.velocity.is_empty() { Err(unavailable()) } else { Ok(f.velocity.iter().map(|v| magnitude(*v)).collect()) }
             }
-            Kind::Static(_) | Kind::Frequency(_) | Kind::Fluid(_) => Err(unavailable()),
+            Kind::Static(_) | Kind::Frequency(_) | Kind::Fluid(_) | Kind::Heat(_) => Err(unavailable()),
+        },
+        Field::Temperature => match r.kind() {
+            Kind::Heat(h) => Ok(heat_frame(h, pick)?.1.to_vec()),
+            Kind::Static(StaticResult { temperature: Some(t), .. }) => Ok(t.clone()),
+            _ => Err(unavailable()),
+        },
+        Field::HeatFlux => match r.kind() {
+            Kind::Heat(h) => Ok(h.flux.iter().map(|v| magnitude(*v)).collect()),
+            _ => Err(unavailable()),
         },
         Field::VonMises => each(&modelcraft_fem::von_mises),
         Field::MaxPrincipal => principal(0),
@@ -347,6 +412,12 @@ impl Session {
             Kind::Fluid(f) => {
                 out["frames"] = f.frames.iter().map(|f| f.time).collect();
             }
+            Kind::Heat(h) => {
+                out["frames"] = json!(h.times);
+                if let Ok((t, _)) = heat_frame(h, v.pick()) {
+                    out["time"] = json!(t);
+                }
+            }
             Kind::Static(_) => {}
         }
         out
@@ -390,7 +461,7 @@ mod tests {
         }
         let (modes, _) = s.latest_result("Modes").unwrap();
         assert_eq!(Field::available(modes).count(), 4);
-        assert_eq!(Field::available(bend).count(), Field::ALL.len() - 1, "all but velocity");
+        assert_eq!(Field::available(bend).count(), Field::ALL.len() - 3, "all but velocity and the thermal fields");
         assert!(field_values(&s.model, modes, Field::VonMises, Pick { mode: 1, frame: None }).is_err());
         assert!(field_values(&s.model, modes, Field::Displacement, Pick { mode: 9, frame: None }).is_err());
         assert_eq!(field_values(&s.model, modes, Field::Displacement, Pick { mode: 2, frame: None }).unwrap().len(), modes.nodes().len());

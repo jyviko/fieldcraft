@@ -202,7 +202,7 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
     let used: BTreeSet<&str> = model.sections().values().map(|s| s.material.as_str()).collect();
     let materials: BTreeMap<&str, u32> = used.into_iter().enumerate().map(|(i, m)| Ok((m, id(i)?))).collect::<Result<_>>()?;
     // Everything LS-DYNA cannot express, reported at once.
-    let mut refused = BTreeSet::new();
+    let mut refused = crate::thermal_items(model);
     let mut parts = Vec::new();
     let mut hourglasses: BTreeMap<Hourglass, u32> = BTreeMap::new();
     for (name, sec) in model.sections() {
@@ -311,6 +311,8 @@ fn plan<'a>(model: &'a Model, r: &Resolved) -> Result<Plan<'a>> {
                 Load::BodyForce { .. } => {
                     refused.insert(format!("load `{l}`: a body force per unit volume (LS-DYNA's body loads are accelerations; use gravity)"));
                 }
+                // In thermal_items.
+                Load::SurfaceFlux { .. } | Load::Convection { .. } | Load::HeatSource { .. } | Load::Temperature { .. } => {}
             }
         }
     }
@@ -818,8 +820,8 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
                 d.card([Field::Blank, Field::Blank, Field::Blank, Field::Blank, Field::from(1)]);
             }
         }
-        Procedure::ExplicitDynamic(_) => {
-            return Err(Error::Unsupported { format: FORMAT, what: format!("step `{}`: explicit dynamic steps", step.name) });
+        Procedure::ExplicitDynamic(_) | Procedure::HeatTransfer { .. } | Procedure::CoupledTemperatureDisplacement {} => {
+            return Err(Error::Unsupported { format: FORMAT, what: format!("step `{}`: {} steps", step.name, step.procedure.name()) });
         }
     }
     d.line("*CONTROL_TERMINATION");
@@ -872,6 +874,9 @@ fn write_step(d: &mut Deck, model: &Model, r: &Resolved, plan: &Plan, step: &Ste
                 }
                 Load::BodyForce { .. } => return Err(broken(format!("load `{name}`: a body force"))),
                 Load::Centrifugal { .. } => return Err(broken(format!("load `{name}`: a centrifugal load"))),
+                Load::SurfaceFlux { .. } | Load::Convection { .. } | Load::HeatSource { .. } | Load::Temperature { .. } => {
+                    return Err(broken(format!("load `{name}`: a {} load", load.kind())));
+                }
             }
         }
         // The other concentrated loads node by node, summed where they share a node.

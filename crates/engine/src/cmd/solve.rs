@@ -5,7 +5,9 @@ use modelcraft_explicit::{ExplicitResult, solve_explicit};
 use modelcraft_lbm::{FluidResult, Obstacle};
 use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 use modelcraft_model::FluidDomain;
-use modelcraft_solver::{FrequencyOptions, Limits, Location, MassKind, StaticResult, StepResult as ImplicitResult, solve_frequency, solve_static};
+use modelcraft_solver::{
+    FrequencyOptions, Limits, Location, MassKind, StaticResult, StepResult as ImplicitResult, solve_frequency, solve_heat, solve_static,
+};
 use serde_json::{Value, json};
 
 use super::{labels, opt, points, req};
@@ -22,9 +24,17 @@ pub const RUN: CommandSpec = CommandSpec {
 pub const STATIC: CommandSpec = CommandSpec {
     id: "solve.static",
     label: "Solve Static Step",
-    params: r#"{"step": "Load", "max_dofs": 6000000, "max_factor_entries": 400000000} — solves a linear static step (the only static step when `step` is left out) and keeps the result in the session; the caps may only be lowered"#,
+    params: r#"{"step": "Load", "max_dofs": 6000000, "max_factor_entries": 400000000} — solves a linear static or coupled temperature–displacement step (the only one when `step` is left out) and keeps the result in the session; the caps may only be lowered"#,
     kind: CommandKind::Model,
     run: run_static,
+};
+
+pub const HEAT: CommandSpec = CommandSpec {
+    id: "solve.heat",
+    label: "Solve Heat Transfer Step",
+    params: r#"{"step": "Heat", "max_dofs": 6000000, "max_factor_entries": 400000000} — steady or transient heat conduction of a heat transfer step (the only one when `step` is left out): temperatures, heat flux and the heat flow at prescribed temperatures, kept in the session; the caps may only be lowered"#,
+    kind: CommandKind::Model,
+    run: run_heat,
 };
 
 pub const FREQUENCY: CommandSpec = CommandSpec {
@@ -97,8 +107,9 @@ fn limits(p: &Value) -> Result<Limits> {
     })
 }
 
-fn largest(values: impl Iterator<Item = (u32, f64)>) -> Value {
-    match values.fold(None, |best: Option<(u32, f64)>, (l, v)| if best.is_none_or(|(_, b)| v > b) { Some((l, v)) } else { best }) {
+/// The node with the value that `better` prefers, as `{"node", "value"}`.
+fn extreme(values: impl Iterator<Item = (u32, f64)>, better: fn(f64, f64) -> bool) -> Value {
+    match values.fold(None, |best: Option<(u32, f64)>, (l, v)| if best.is_none_or(|(_, b)| better(v, b)) { Some((l, v)) } else { best }) {
         Some((node, value)) => json!({"node": node, "value": value}),
         None => Value::Null,
     }
@@ -113,7 +124,8 @@ fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
         .iter()
         .map(|st| {
             let solve: Solve = match st.procedure {
-                Procedure::Static {} => run_static,
+                Procedure::Static {} | Procedure::CoupledTemperatureDisplacement {} => run_static,
+                Procedure::HeatTransfer { .. } => run_heat,
                 Procedure::Frequency { .. } => run_frequency,
                 Procedure::ExplicitDynamic(_) => run_explicit,
                 Procedure::Fluid { .. } => run_fluid,
@@ -130,6 +142,14 @@ fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
         done.push(json!({"step": name, "procedure": procedure, "summary": summary}));
     }
     Ok(json!({"steps": done}))
+}
+
+fn largest(values: impl Iterator<Item = (u32, f64)>) -> Value {
+    extreme(values, |v, b| v > b)
+}
+
+fn smallest(values: impl Iterator<Item = (u32, f64)>) -> Value {
+    extreme(values, |v, b| v < b)
 }
 
 fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
@@ -152,9 +172,32 @@ fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
             "displacement": p.displacement,
             "reaction": p.reaction,
         })).collect::<Vec<_>>(),
+        "max_temperature": r.temperature.as_ref().map(|t| largest(r.nodes.iter().copied().zip(t.iter().copied()))),
         "warnings": r.warnings,
     });
     s.store_result(StepResult::Implicit(ImplicitResult::Static(r)));
+    Ok(summary)
+}
+
+fn run_heat(s: &mut Session, p: &Value) -> Result<Value> {
+    let limits = limits(p)?;
+    let step = opt::<String>(p, "step")?;
+    let r = solve_heat(&s.model, step.as_deref(), &limits)?;
+    let t = r.temperature();
+    let summary = json!({
+        "step": r.step,
+        "dofs": r.stats.dofs,
+        "equations": r.stats.equations,
+        "factor_entries": r.stats.factor_entries,
+        "frames": r.frames.len(),
+        "end_time": r.times.last(),
+        "min_temperature": smallest(r.nodes.iter().copied().zip(t.iter().copied())),
+        "max_temperature": largest(r.nodes.iter().copied().zip(t.iter().copied())),
+        "heat_supplied": r.applied_total,
+        "heat_removed": r.reaction_total,
+        "warnings": r.warnings,
+    });
+    s.store_result(StepResult::Implicit(ImplicitResult::Heat(r)));
     Ok(summary)
 }
 
@@ -452,6 +495,7 @@ fn probe_implicit(result: &ImplicitResult, step: &str, nodes: &[u32], p: &Value)
                         "reaction_moment": r.reaction_moment.get(i),
                         "stress": r.stress.get(i),
                         "von_mises": r.von_mises.get(i),
+                        "temperature": r.temperature.as_ref().and_then(|t| t.get(i)),
                     }),
                 })
             })
@@ -476,6 +520,17 @@ fn probe_implicit(result: &ImplicitResult, step: &str, nodes: &[u32], p: &Value)
                     })
                 })
                 .collect::<Result<_>>()?
+        }
+        ImplicitResult::Heat(r) => {
+            let (time, t) = crate::results::heat_frame(r, crate::results::Pick { mode: 1, frame: opt::<usize>(p, "frame")? })?;
+            let out = nodes
+                .iter()
+                .map(|&l| {
+                    let i = r.nodes.binary_search(&l).map_err(|_| EngineError::Params(format!("node {l} has no temperature (it belongs to no solid element)")))?;
+                    Ok(json!({"node": l, "temperature": t.get(i), "heat_flux": r.flux.get(i), "reaction": r.reaction.get(i)}))
+                })
+                .collect::<Result<Vec<Value>>>()?;
+            return Ok(json!({"step": step, "time": time, "nodes": out}));
         }
     };
     let mut response = json!({"step": step, "nodes": out});
@@ -1171,5 +1226,41 @@ pub(crate) mod tests {
         ] {
             assert!(s.execute("solve.probe", &p).is_err(), "{p}");
         }
+    }
+
+    #[test]
+    fn solve_heat_and_probe_temperatures() {
+        // The cantilever bar as a conductor: 0 at the root, 100 at the tip, linear between.
+        let mut s = Session::default();
+        cantilever(&mut s);
+        let script = json!([
+            {"command": "model.material.edit", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000, "poisson": 0}, "density": 1, "thermal": {"conductivity": 2, "specific_heat": 3, "expansion": 1e-5}}},
+            {"command": "model.boundary_condition.create", "params": {"name": "cold", "type": "temperature", "target": {"set": "root"}, "value": 0}},
+            {"command": "model.boundary_condition.create", "params": {"name": "hot", "type": "temperature", "target": {"set": "tip"}, "value": 100}},
+            {"command": "model.step.create", "params": {"name": "Heat", "procedure": {"type": "heat_transfer"}, "boundary_conditions": ["cold", "hot"]}},
+            {"command": "model.step.create", "params": {"name": "Warm", "procedure": {"type": "heat_transfer", "transient": {"end_time": 10, "increment": 1}}, "boundary_conditions": ["cold", "hot"]}},
+        ]);
+        s.run_script(&script).unwrap();
+        let r = s.execute("solve.heat", &json!({"step": "Heat"})).unwrap();
+        assert!((r["max_temperature"]["value"].as_f64().unwrap() - 100.0).abs() < 1e-9, "{r}");
+        assert!(r["min_temperature"]["value"].as_f64().unwrap().abs() < 1e-9, "{r}");
+        let probe = s.execute("solve.probe", &json!({"step": "Heat", "nodes": [6]})).unwrap();
+        assert!((probe["nodes"][0]["temperature"].as_f64().unwrap() - 50.0).abs() < 1e-9, "{probe}");
+        assert!((probe["nodes"][0]["heat_flux"][0].as_f64().unwrap() + 20.0).abs() < 1e-9, "{probe}");
+        let w = s.execute("solve.heat", &json!({"step": "Warm"})).unwrap();
+        assert_eq!(w["frames"], 11, "{w}");
+        let early = s.execute("solve.probe", &json!({"step": "Warm", "nodes": [6], "frame": 1})).unwrap();
+        assert_eq!(early["time"], 1.0);
+        assert!(s.execute("solve.probe", &json!({"step": "Warm", "nodes": [6], "frame": 99})).is_err());
+        assert!(s.execute("solve.probe", &json!({"step": "Warm", "nodes": [999]})).is_err());
+        assert!(s.execute("solve.heat", &json!({"step": "Bend"})).is_err(), "not a heat step");
+        assert!(s.execute("solve.heat", &json!({"step": "Heat", "max_dofs": 0})).is_err());
+        // The results display shows temperatures, undeformed.
+        let view = crate::results::ResultsView::for_result(&s.latest_result("Heat").unwrap().0.clone());
+        assert_eq!((view.contour, view.deformed), (Some(crate::results::Field::Temperature), false));
+        let (heat, _) = s.latest_result("Heat").unwrap();
+        let fields: Vec<_> = crate::results::Field::available(heat).collect();
+        assert_eq!(fields, vec![crate::results::Field::Temperature, crate::results::Field::HeatFlux]);
+        assert!(crate::results::displacements(heat, crate::results::Pick::default()).is_err());
     }
 }

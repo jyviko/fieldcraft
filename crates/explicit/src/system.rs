@@ -355,6 +355,9 @@ impl System {
             if let Target::ReferencePoint(rp) = bc.target() {
                 return Err(Error::NotSupported(format!("boundary conditions on reference points (`{name}` on `{rp}`)")));
             }
+            if bc.is_thermal() {
+                return Err(Error::NotSupported(format!("temperature boundary conditions (`{name}`) in explicit dynamics")));
+            }
             for &label in resolved.target_nodes(bc.target()) {
                 let Some(node) = self.node(label) else { continue };
                 for kind in self.layout.kinds(node).iter() {
@@ -393,6 +396,9 @@ impl System {
                 }
                 Load::Moment { .. } => {
                     return Err(Error::NotSupported(format!("moments (`{name}`): solid nodes have no rotations")));
+                }
+                Load::SurfaceFlux { .. } | Load::Convection { .. } | Load::HeatSource { .. } | Load::Temperature { .. } => {
+                    return Err(Error::NotSupported(format!("{} loads (`{name}`) in explicit dynamics", load.kind())));
                 }
                 Load::Force { .. } | Load::Traction { .. } => {
                     for (label, v) in resolved.nodal_loads.get(name).map(Vec::as_slice).unwrap_or_default() {

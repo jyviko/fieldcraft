@@ -195,6 +195,26 @@ struct Gradients {
     det: f64,
 }
 
+/// A thermal strain field over an element: the expansion coefficients along X, Y, Z and the
+/// nodal temperature changes T − T_ref.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThermalStrain {
+    pub alpha: [f64; 3],
+    pub delta: Vec<f64>,
+}
+
+impl ThermalStrain {
+    fn check(&self, nodes: usize) -> Result<()> {
+        if self.delta.len() != nodes {
+            return Err(Error::Invalid(format!("{} temperatures for a {nodes}-node element", self.delta.len())));
+        }
+        if self.alpha.iter().chain(&self.delta).any(|v| !v.is_finite()) {
+            return Err(Error::Invalid("temperatures and expansion coefficients must be finite".into()));
+        }
+        Ok(())
+    }
+}
+
 /// A solid element: its type, its node coordinates and its formulation.
 #[derive(Debug, Clone, Copy)]
 pub struct Solid<'a> {
@@ -423,16 +443,83 @@ impl<'a> Solid<'a> {
         Ok(f)
     }
 
+    /// The thermal strain α ΔT at a point with shape values `n` (xx, yy, zz; no shear).
+    fn thermal_strain(thermal: &ThermalStrain, n: &[f64]) -> [f64; 6] {
+        let dt: f64 = n.iter().zip(&thermal.delta).map(|(a, b)| a * b).sum();
+        [thermal.alpha[0] * dt, thermal.alpha[1] * dt, thermal.alpha[2] * dt, 0.0, 0.0, 0.0]
+    }
+
+    /// The equivalent nodal forces of a thermal strain, ∫ Bᵀ D ε_th dV, with the stiffness rule
+    /// (the initial-strain load of Zienkiewicz, Taylor & Zhu 2013, §6.2.3); incompatible modes
+    /// are condensed out as in the stiffness, f = f_u − K_ua K_aa⁻¹ f_a.
+    pub fn thermal_load(&self, d: &Elasticity, thermal: &ThermalStrain) -> Result<Vec<[f64; 3]>> {
+        thermal.check(self.ty.nodes)?;
+        if self.formulation == Formulation::IncompatibleModes {
+            let IncompatibleParts { kua, kaa, j0, .. } = self.incompatible_parts(d, false)?;
+            let (mut f, mut fa) = self.thermal_forces(d, thermal, Some(&j0))?;
+            Cholesky::new(&kaa)?.solve(&mut fa);
+            for (i, fi) in f.iter_mut().flatten().enumerate() {
+                *fi -= (0..INCOMPATIBLE_DOFS).map(|a| kua.get(i * INCOMPATIBLE_DOFS + a).copied().unwrap_or(0.0) * fa[a]).sum::<f64>();
+            }
+            return Ok(f);
+        }
+        Ok(self.thermal_forces(d, thermal, None)?.0)
+    }
+
+    /// ∫ Bᵀ D ε_th dV on the nodes and, with the centre Jacobian `j0`, on the incompatible modes.
+    fn thermal_forces(
+        &self,
+        d: &Elasticity,
+        thermal: &ThermalStrain,
+        j0: Option<&([[f64; 3]; 3], f64)>,
+    ) -> Result<(Vec<[f64; 3]>, [f64; INCOMPATIBLE_DOFS])> {
+        let mut f = vec![[0.0; 3]; self.ty.nodes];
+        let mut fa = [0.0; INCOMPATIBLE_DOFS];
+        let add = |out: &mut [f64], g: &[f64; 3], sig: &[f64; 6], w: f64| {
+            let b = b_block(g);
+            for (c, o) in out.iter_mut().enumerate() {
+                *o += w * (0..6).map(|s| b[s][c] * sig[s]).sum::<f64>();
+            }
+        };
+        for p in self.rule().points() {
+            let g = self.gradients(p.xi)?;
+            let w = g.det * p.weight;
+            let sig = stress(d, &Self::thermal_strain(thermal, g.shape.values()));
+            for (fi, gi) in f.iter_mut().zip(g.dx.get(..self.ty.nodes).unwrap_or_default()) {
+                add(fi, gi, &sig, w);
+            }
+            if let Some(j0) = j0 {
+                for (k, gk) in self.incompatible_gradients(p.xi, g.det, j0).iter().enumerate() {
+                    add(fa.get_mut(3 * k..3 * k + 3).unwrap_or_default(), gk, &sig, w);
+                }
+            }
+        }
+        Ok((f, fa))
+    }
+
     /// Strain and stress at every integration point for the nodal displacements `u`.
     pub fn stresses(&self, d: &Elasticity, u: &[[f64; 3]]) -> Result<Vec<PointStress>> {
+        self.stresses_with(d, u, None)
+    }
+
+    /// Strain and stress at every integration point for the nodal displacements `u` and, if
+    /// given, a thermal strain: the stress is D (ε − ε_th), the strain reported the total ε.
+    pub fn stresses_with(&self, d: &Elasticity, u: &[[f64; 3]], thermal: Option<&ThermalStrain>) -> Result<Vec<PointStress>> {
         if u.len() != self.ty.nodes {
             return Err(Error::Invalid(format!("{} displacements for a {}-node element", u.len(), self.ty.nodes)));
         }
-        // Incompatible modes: recover the internal amplitudes α = −K_aa⁻¹ K_au u.
+        if let Some(t) = thermal {
+            t.check(self.ty.nodes)?;
+        }
+        // Incompatible modes: recover the internal amplitudes from K_aa α + K_au u = f_a (the
+        // thermal load on the modes; zero without one).
         let alpha = if self.formulation == Formulation::IncompatibleModes {
             let IncompatibleParts { kua, kaa, j0, .. } = self.incompatible_parts(d, false)?;
             let flat: Vec<f64> = u.iter().flatten().copied().collect();
-            let mut rhs = [0.0; INCOMPATIBLE_DOFS];
+            let mut rhs = match thermal {
+                Some(t) => self.thermal_forces(d, t, Some(&j0))?.1,
+                None => [0.0; INCOMPATIBLE_DOFS],
+            };
             for (i, ui) in flat.iter().enumerate() {
                 for (a, r) in rhs.iter_mut().enumerate() {
                     *r -= kua.get(i * INCOMPATIBLE_DOFS + a).copied().unwrap_or(0.0) * ui;
@@ -471,7 +558,14 @@ impl<'a> Solid<'a> {
                     xyz[k] += n * x[k];
                 }
             }
-            out.push(PointStress { xyz, strain, stress: stress(d, &strain) });
+            let sigma = match thermal {
+                Some(t) => {
+                    let eth = Self::thermal_strain(t, g.shape.values());
+                    stress(d, &[0, 1, 2, 3, 4, 5].map(|k| strain[k] - eth[k]))
+                }
+                None => stress(d, &strain),
+            };
+            out.push(PointStress { xyz, strain, stress: sigma });
         }
         Ok(out)
     }

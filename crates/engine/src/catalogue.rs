@@ -418,7 +418,14 @@ pub static CATALOGUE: &[Capability] = &[
     deck("deck.write.nastran", "Nastran Deck", "nastran", "Write Nastran bulk data (SOL 101, 103)"),
     deck("deck.write.lsdyna", "LS-DYNA Deck", "lsdyna", "Write an LS-DYNA keyword file"),
     soon("deck.read", "Read Deck", Solve, "Decks", "M9", "Read a deck, keeping keywords ModelCraft does not know"),
-    ready("solve.static", "Static", Solve, "Implicit", "Linear static solve of a step with ModelCraft's own solver"),
+    ready_more(
+        "solve.static",
+        "Static",
+        Solve,
+        "Implicit",
+        "Linear static (or coupled temperature–displacement) solve of a step with ModelCraft's own solver; heat transfer in the drop-down",
+        &["solve.heat"],
+    ),
     ready("solve.frequency", "Frequency", Solve, "Implicit", "Natural frequencies and mode shapes of a frequency step"),
     ready(
         "solve.explicit",

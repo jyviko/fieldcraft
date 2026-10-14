@@ -208,3 +208,33 @@ fn section_formulations() {
     assert!(Formulation::from_section(ElementKind::Tet4, &hybrid).is_err());
     assert!(Formulation::from_section(ElementKind::Quad4, &full).is_err());
 }
+
+#[test]
+fn uniform_thermal_strain_is_free_expansion_and_its_load_balances_it() {
+    // A uniform ΔT with orthotropic α: the free expansion u = diag(α ΔT) x is stress-free, and
+    // the thermal load equals K u for it (the element is in equilibrium with no other load).
+    let d = orthotropic([1000.0, 800.0, 600.0], [0.3, 0.25, 0.2], [400.0, 300.0, 350.0]).unwrap();
+    let alpha = [1.2e-5, 2.0e-5, 0.7e-5];
+    for (kind, f) in CASES {
+        let xyz = distorted(kind, true);
+        let solid = Solid::new(kind, &xyz, f).unwrap();
+        let th = crate::ThermalStrain { alpha, delta: vec![80.0; xyz.len()] };
+        let u: Vec<[f64; 3]> = xyz.iter().map(|x| [0, 1, 2].map(|k| alpha[k] * 80.0 * x[k])).collect();
+        for p in solid.stresses_with(&d, &u, Some(&th)).unwrap() {
+            assert!(p.stress.iter().all(|s| s.abs() < 1e-9), "{kind:?} {f:?}: {:?}", p.stress);
+            for k in 0..3 {
+                assert!((p.strain[k] - alpha[k] * 80.0).abs() < 1e-12);
+            }
+        }
+        let load = solid.thermal_load(&d, &th).unwrap();
+        let ku = solid.stiffness(&d).unwrap().mul_vec(&u.iter().flatten().copied().collect::<Vec<_>>());
+        let scale = ku.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        for (a, b) in load.iter().flatten().zip(&ku) {
+            assert!((a - b).abs() < 1e-9 * scale, "{kind:?} {f:?}: {a} vs {b}");
+        }
+        // Without a thermal strain the two stress paths agree bit for bit.
+        assert_eq!(solid.stresses_with(&d, &u, None).unwrap(), solid.stresses(&d, &u).unwrap());
+        assert!(solid.thermal_load(&d, &crate::ThermalStrain { alpha, delta: vec![1.0; 2] }).is_err());
+        assert!(solid.thermal_load(&d, &crate::ThermalStrain { alpha: [f64::NAN; 3], delta: vec![1.0; xyz.len()] }).is_err());
+    }
+}

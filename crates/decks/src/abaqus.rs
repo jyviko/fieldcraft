@@ -294,6 +294,7 @@ fn check_expressible(model: &Model) -> Result<()> {
             ));
         }
     }
+    bad.extend(crate::thermal_items(model));
     for (name, c) in model.couplings() {
         if c.kind == CouplingKind::Distributing && !(1..=3).all(|d| c.dofs.contains(d)) {
             bad.insert(format!("coupling `{name}`: an Abaqus distributing coupling always couples translations 1-3"));
@@ -911,6 +912,8 @@ impl Deck {
                     };
                     self.line(&format!("{target}, {s}"));
                 }
+                // Refused up front (check_expressible).
+                BoundaryCondition::Temperature { .. } => {}
                 BoundaryCondition::Displacement { values, .. } => {
                     for (dof, v) in (1u8..).zip(values) {
                         if let Some(v) = v {
@@ -1068,8 +1071,8 @@ impl Deck {
                         self.comment("loads have no effect on natural frequencies and are not written");
                     }
                 }
-                Procedure::ExplicitDynamic(_) => {
-                    return Err(Error::Unsupported { format: FORMAT, what: format!("step `{}`: explicit dynamic steps", step.name) });
+                Procedure::ExplicitDynamic(_) | Procedure::HeatTransfer { .. } | Procedure::CoupledTemperatureDisplacement {} => {
+                    return Err(Error::Unsupported { format: FORMAT, what: format!("step `{}`: {} steps", step.name, step.procedure.name()) });
                 }
             }
             self.output(step);

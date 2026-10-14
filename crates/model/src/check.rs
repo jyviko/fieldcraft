@@ -169,6 +169,8 @@ impl Model {
         let mut d = Diagnostics::default();
         let mut resolved = Resolved::default();
         let units = self.units;
+        // Whether a step needs elasticity (every step but pure heat transfer).
+        let structural = self.steps.is_empty() || self.steps.iter().any(|s| s.procedure.is_structural());
 
         // A model of fluid steps alone needs no mesh: its domains carry their own grid; one of
         // point masses, springs and dashpots alone is its own mesh.
@@ -289,7 +291,7 @@ impl Model {
             for (other, labels) in taken {
                 d.error(&subject, format!("elements {} are also in section `{other}`", first_labels(&labels)));
             }
-            if self.materials.get(&sec.material).is_some_and(|m| m.elastic.is_none()) {
+            if structural && self.materials.get(&sec.material).is_some_and(|m| m.elastic.is_none()) {
                 d.error(&subject, format!("material `{}` has no elastic constants", sec.material));
             }
         }
@@ -307,7 +309,13 @@ impl Model {
                 let why = match s.procedure {
                     Procedure::Frequency { .. } => "extracts frequencies",
                     Procedure::ExplicitDynamic(_) => "is dynamic",
-                    Procedure::Static {} | Procedure::Fluid { .. } => return None,
+                    Procedure::HeatTransfer { transient: Some(_) } => "is transient heat transfer",
+                    Procedure::Static {}
+                    | Procedure::Fluid { .. }
+                    | Procedure::HeatTransfer { transient: None }
+                    | Procedure::CoupledTemperatureDisplacement {} => {
+                        return None;
+                    }
                 };
                 Some(format!("step `{}` {why}", s.name))
             })
@@ -323,6 +331,33 @@ impl Model {
             for m in used {
                 if self.materials.get(m).is_some_and(|m| m.density.is_none()) {
                     d.error(format!("material `{m}`"), format!("has no density, and {why}"));
+                }
+            }
+        }
+
+        // Heat transfer needs conductivities (and heat capacities when transient); thermal strain
+        // needs expansion coefficients.
+        let used: BTreeSet<&str> = self.sections.values().map(|s| s.material.as_str()).collect();
+        let thermal = |m: &str| self.materials.get(m).and_then(|m| m.thermal);
+        for s in self.steps.iter().filter(|s| s.procedure.is_thermal()) {
+            for &m in &used {
+                let t = thermal(m);
+                if t.and_then(|t| t.conductivity).is_none() {
+                    d.error(format!("material `{m}`"), format!("has no conductivity, and step `{}` conducts heat", s.name));
+                }
+                if matches!(s.procedure, Procedure::HeatTransfer { transient: Some(_) }) && t.and_then(|t| t.specific_heat).is_none() {
+                    d.error(format!("material `{m}`"), format!("has no specific heat, and step `{}` is transient heat transfer", s.name));
+                }
+            }
+        }
+        let strains_thermally = self.steps.iter().any(|s| {
+            matches!(s.procedure, Procedure::CoupledTemperatureDisplacement {})
+                || s.loads.iter().any(|l| matches!(self.loads.get(l), Some(Load::Temperature { .. })))
+        });
+        if strains_thermally {
+            for &m in &used {
+                if thermal(m).and_then(|t| t.expansion).is_none() {
+                    d.warning(format!("material `{m}`"), "has no expansion coefficient, so temperatures do not strain it");
                 }
             }
         }
@@ -447,9 +482,24 @@ impl Model {
                 }
                 // The fluid domain holds its own conditions; nothing structural applies.
                 Procedure::Fluid { .. } => continue,
+                Procedure::HeatTransfer { .. } | Procedure::CoupledTemperatureDisplacement {} => {
+                    let bcs = s.boundary_conditions.iter().filter_map(|b| self.boundary_conditions.get(b));
+                    let loads: Vec<&Load> = s.loads.iter().filter_map(|l| self.loads.get(l)).collect();
+                    let held = bcs.clone().any(BoundaryCondition::is_thermal) || loads.iter().any(|l| matches!(l, Load::Convection { .. }));
+                    if !held && matches!(s.procedure, Procedure::HeatTransfer { transient: None } | Procedure::CoupledTemperatureDisplacement {}) {
+                        d.warning(&subject, "no temperature boundary condition or convection is active, so the temperature level is undetermined");
+                    }
+                }
             }
-            // A free body is a natural case of transient dynamics (flight, impact).
-            if s.boundary_conditions.is_empty() && !s.procedure.is_dynamic() {
+            for l in s.loads.iter().filter(|l| self.loads.get(*l).is_some_and(|l| l.is_thermal() && !s.procedure.is_thermal())) {
+                d.warning(&subject, format!("heat load `{l}` has no effect in a {} step", s.procedure.name()));
+            }
+            // A free body is a natural case of transient dynamics (flight, impact); heat transfer
+            // has no rigid motion.
+            if s.procedure.is_structural()
+                && s.boundary_conditions.iter().filter_map(|b| self.boundary_conditions.get(b)).all(BoundaryCondition::is_thermal)
+                && !s.procedure.is_dynamic()
+            {
                 d.warning(&subject, "no boundary condition is active, so the model is free to move as a rigid body");
             }
         }
@@ -708,6 +758,8 @@ impl Model {
             Load::Force { vector, .. } | Load::Traction { vector, .. } | Load::BodyForce { vector, .. } => vector[2] == 0.0,
             Load::Gravity { acceleration, .. } => acceleration[2] == 0.0,
             Load::Moment { .. } | Load::Pressure { .. } => true,
+            // Scalars.
+            Load::SurfaceFlux { .. } | Load::Convection { .. } | Load::HeatSource { .. } | Load::Temperature { .. } => true,
             Load::Centrifugal { point, axis, .. } => {
                 let ok = if extent == Some(Extent::Revolved) {
                     axis[0] == 0.0 && axis[2] == 0.0 && point[0] == 0.0 && point[2] == 0.0

@@ -90,6 +90,7 @@ pub static ALL: &[CommandSpec] = &[
     solve::RUN,
     solve::STATIC,
     solve::FREQUENCY,
+    solve::HEAT,
     solve::EXPLICIT,
     solve::HISTORY,
     solve::FLUID,

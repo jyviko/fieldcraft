@@ -1,4 +1,5 @@
-//! Materials: linear elasticity, mass density, fluid behaviour, and the inelastic behaviours of
+//! Materials: linear elasticity, mass density, fluid behaviour, thermal properties (conductivity,
+//! specific heat, expansion), and the inelastic behaviours of
 //! explicit dynamics: von Mises (J2) plasticity with a bilinear, tabulated or Johnson–Cook flow stress,
 //! Johnson–Cook damage, and element erosion criteria.
 //!
@@ -237,6 +238,67 @@ impl Plastic {
     }
 }
 
+/// A property given per material axis: one value for every direction, or three along the
+/// material axes 1, 2, 3 (the global X, Y, Z until material orientations land).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Directional {
+    Isotropic(f64),
+    Orthotropic([f64; 3]),
+}
+
+impl Directional {
+    /// The values along the three axes.
+    pub fn axes(self) -> [f64; 3] {
+        match self {
+            Directional::Isotropic(v) => [v; 3],
+            Directional::Orthotropic(v) => v,
+        }
+    }
+}
+
+/// Heat conduction and thermal expansion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Thermal {
+    /// Conductivity k (power per length per temperature): q = −k ∇T.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conductivity: Option<Directional>,
+    /// Specific heat c (energy per mass per temperature); with the density, the heat capacity
+    /// of transient heat transfer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specific_heat: Option<f64>,
+    /// Linear expansion coefficient α (strain per temperature): ε_th = α (T − T_ref).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expansion: Option<Directional>,
+    /// The temperature at which thermal strain is zero.
+    #[serde(default)]
+    pub reference_temperature: f64,
+}
+
+impl Thermal {
+    pub fn validate(&self) -> Result<()> {
+        if let Some(k) = self.conductivity {
+            for v in k.axes() {
+                positive("conductivity", v)?;
+            }
+        }
+        if let Some(c) = self.specific_heat {
+            positive("specific heat", c)?;
+        }
+        if let Some(a) = self.expansion {
+            for v in a.axes() {
+                finite("expansion coefficient", v)?;
+            }
+        }
+        finite("reference temperature", self.reference_temperature)?;
+        if self.conductivity.is_none() && self.specific_heat.is_none() && self.expansion.is_none() {
+            return Err(Error::Invalid("thermal properties need a conductivity, a specific heat or an expansion coefficient".into()));
+        }
+        Ok(())
+    }
+}
+
 /// Damage that accumulates with plastic strain; a material point fails when it reaches 1.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -270,7 +332,7 @@ pub struct Erosion {
 pub struct Material {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elastic: Option<Elastic>,
-    /// Mass per volume, needed by frequency steps and gravity.
+    /// Mass per volume, needed by frequency steps, gravity and transient heat transfer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub density: Option<f64>,
     /// How it flows, for fluid domains (needs a density).
@@ -286,12 +348,14 @@ pub struct Material {
     /// Erosion criteria (explicit dynamics).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub erosion: Option<Erosion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal: Option<Thermal>,
 }
 
 impl Material {
     pub fn validate(&self) -> Result<()> {
-        if self.elastic.is_none() && self.density.is_none() && self.fluid.is_none() {
-            return Err(Error::Invalid("a material needs elastic constants, a density or fluid behaviour".into()));
+        if self.elastic.is_none() && self.density.is_none() && self.fluid.is_none() && self.thermal.is_none() {
+            return Err(Error::Invalid("a material needs elastic constants, a density, fluid behaviour or thermal properties".into()));
         }
         if let Some(f) = &self.fluid {
             positive("viscosity", f.viscosity())?;
@@ -331,6 +395,9 @@ impl Material {
             if self.plastic.is_none() {
                 return Err(Error::Invalid("a plastic-strain erosion criterion needs plasticity".into()));
             }
+        }
+        if let Some(t) = &self.thermal {
+            t.validate()?;
         }
         Ok(())
     }
@@ -475,5 +542,33 @@ mod tests {
         assert!(serde_json::from_str::<Material>(r#"{"density":1,"plastic":{"type":"bilinear","yield_stress":1,"oops":2}}"#).is_err());
         let text = serde_json::to_string(&Material { plastic: Some(jc()), damage: Some(damage), ..steel() }).unwrap();
         assert_eq!(serde_json::from_str::<Material>(&text).unwrap(), Material { plastic: Some(jc()), damage: Some(damage), ..steel() });
+    }
+
+    #[test]
+    fn thermal_properties() {
+        let m: Material = serde_json::from_value(serde_json::json!({
+            "thermal": {"conductivity": [1, 2, 3], "specific_heat": 460, "expansion": 1.2e-5, "reference_temperature": 20}
+        }))
+        .unwrap();
+        let t = m.thermal.unwrap();
+        assert_eq!(t.conductivity.unwrap().axes(), [1.0, 2.0, 3.0]);
+        assert_eq!(t.expansion.unwrap().axes(), [1.2e-5; 3]);
+        assert!(m.validate().is_ok(), "a heat-only material needs no elasticity");
+        let back: Material = serde_json::from_value(serde_json::to_value(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+        for bad in [
+            Thermal::default(),
+            Thermal { conductivity: Some(Directional::Isotropic(0.0)), ..Thermal::default() },
+            Thermal { conductivity: Some(Directional::Orthotropic([1.0, -1.0, 1.0])), ..Thermal::default() },
+            Thermal { specific_heat: Some(f64::NAN), ..Thermal::default() },
+            Thermal { expansion: Some(Directional::Isotropic(f64::INFINITY)), ..Thermal::default() },
+            Thermal { expansion: Some(Directional::Isotropic(1e-5)), reference_temperature: f64::NAN, ..Thermal::default() },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+        assert!(serde_json::from_value::<Material>(serde_json::json!({"thermal": {"conductivity": [1, 2]}})).is_err());
+        assert!(serde_json::from_value::<Material>(serde_json::json!({"thermal": {"heat": 1}})).is_err());
+        // Negative expansion (invar-like behaviour of some composites) is allowed.
+        assert!(Thermal { expansion: Some(Directional::Isotropic(-1e-6)), ..Thermal::default() }.validate().is_ok());
     }
 }

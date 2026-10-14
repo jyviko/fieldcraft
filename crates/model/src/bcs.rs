@@ -142,20 +142,28 @@ pub enum BoundaryCondition {
     Displacement { target: Target, values: [Option<f64>; 6] },
     /// Mirror symmetry about a plane through the nodes.
     Symmetry { target: Target, plane: Symmetry },
+    /// A prescribed temperature (degree of freedom [`TEMPERATURE_DOF`]) at the target's nodes,
+    /// in heat transfer and coupled temperature–displacement steps.
+    Temperature { target: Target, value: f64 },
 }
+
+/// The model's number of the temperature degree of freedom (the deck formats' convention).
+pub const TEMPERATURE_DOF: u8 = 11;
 
 impl BoundaryCondition {
     pub fn target(&self) -> &Target {
         match self {
-            BoundaryCondition::Fixed { target } | BoundaryCondition::Displacement { target, .. } | BoundaryCondition::Symmetry { target, .. } => {
-                target
-            }
+            BoundaryCondition::Fixed { target }
+            | BoundaryCondition::Displacement { target, .. }
+            | BoundaryCondition::Symmetry { target, .. }
+            | BoundaryCondition::Temperature { target, .. } => target,
         }
     }
 
-    /// The constrained degrees of freedom.
+    /// The constrained structural degrees of freedom (1–6); none for a temperature.
     pub fn dofs(&self) -> Dofs {
         match self {
+            BoundaryCondition::Temperature { .. } => Dofs::none(),
             BoundaryCondition::Fixed { .. } => Dofs::all(),
             BoundaryCondition::Displacement { values, .. } => {
                 Dofs(values.iter().enumerate().filter(|(_, v)| v.is_some()).fold(0, |m, (i, _)| m | (1 << i)))
@@ -164,15 +172,28 @@ impl BoundaryCondition {
         }
     }
 
-    /// The prescribed value of a constrained degree of freedom (1–6); `None` when it is free.
+    /// Whether it prescribes temperatures (rather than motion).
+    pub fn is_thermal(&self) -> bool {
+        matches!(self, BoundaryCondition::Temperature { .. })
+    }
+
+    /// The prescribed value of a constrained degree of freedom (1–6, or [`TEMPERATURE_DOF`]);
+    /// `None` when it is free.
     pub fn value(&self, dof: u8) -> Option<f64> {
         match self {
+            BoundaryCondition::Temperature { value, .. } => (dof == TEMPERATURE_DOF).then_some(*value),
             BoundaryCondition::Displacement { values, .. } => values.get(usize::from(dof).checked_sub(1)?).copied().flatten(),
             _ => self.dofs().contains(dof).then_some(0.0),
         }
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let BoundaryCondition::Temperature { target, value } = self {
+            finite("temperature", *value)?;
+            if let Target::ReferencePoint(r) = target {
+                return Err(Error::Invalid(format!("reference points have no temperature (`{r}`); prescribe it on a set")));
+            }
+        }
         if let BoundaryCondition::Displacement { values, .. } = self {
             for (i, v) in values.iter().enumerate() {
                 if let Some(v) = v {
@@ -241,6 +262,11 @@ mod tests {
         assert_eq!(BoundaryCondition::Fixed { target: t.clone() }.value(6), Some(0.0));
         assert!(BoundaryCondition::Displacement { target: t.clone(), values: [None; 6] }.validate().is_err());
         assert!(BoundaryCondition::Displacement { target: t, values: [Some(f64::NAN), None, None, None, None, None] }.validate().is_err());
+        let hot = BoundaryCondition::Temperature { target: Target::Set("s".into()), value: 80.0 };
+        assert_eq!((hot.value(TEMPERATURE_DOF), hot.value(1), hot.dofs().list()), (Some(80.0), None, vec![]));
+        assert!(hot.is_thermal());
+        assert!(BoundaryCondition::Temperature { target: Target::Set("s".into()), value: f64::INFINITY }.validate().is_err());
+        assert!(BoundaryCondition::Temperature { target: Target::ReferencePoint("RP".into()), value: 1.0 }.validate().is_err());
         let json = serde_json::json!({"type": "symmetry", "target": {"reference_point": "RP"}, "plane": "z"});
         let parsed: BoundaryCondition = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(serde_json::to_value(&parsed).unwrap(), json);

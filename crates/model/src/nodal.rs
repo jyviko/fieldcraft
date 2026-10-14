@@ -97,8 +97,9 @@ fn rule(corners: usize) -> Vec<(f64, f64, f64)> {
 
 /// Visit the quadrature points of a face (node coordinates in the face's node order): the shape
 /// function values and the weighted normal (∂x/∂ξ × ∂x/∂η) w, whose length is the point's share of
-/// the area and whose direction is the face's right-hand normal.
-fn integrate_face(xyz: &[[f64; 3]], mut visit: impl FnMut(&[f64], [f64; 3])) -> Result<()> {
+/// the area and whose direction is the face's right-hand normal. Every surface load (pressure,
+/// traction, heat flux, convection) integrates with it, so they share one rule.
+pub fn integrate_face(xyz: &[[f64; 3]], mut visit: impl FnMut(&[f64], [f64; 3])) -> Result<()> {
     if xyz.iter().flatten().any(|c| !c.is_finite()) {
         return Err(Error::Invalid("face coordinates must be finite".into()));
     }

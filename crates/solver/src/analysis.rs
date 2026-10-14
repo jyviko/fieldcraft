@@ -14,7 +14,10 @@ use crate::constraints::{Budget, Reduction, coupling_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
 use crate::ordering::nested_dissection;
 use crate::sparse::{Csr, NodeGraph, add_block, add_diagonal, add_scalar};
-use crate::system::{Mesh, Structural, StructuralKernel, inelastic_warnings, loads, prescribed, structural_body_forces, translation_block};
+use crate::system::{
+    Mesh, Structural, StructuralKernel, add_thermal_loads, inelastic_warnings, loads, prescribed, structural_body_forces, temperature_loads,
+    translation_block,
+};
 use crate::{Error, Limits, Result};
 
 /// Size and effort of a solution.
@@ -99,6 +102,8 @@ pub struct StaticResult {
     pub reaction_total: [f64; 3],
     pub stats: Stats,
     pub warnings: Vec<String>,
+    /// The temperatures of a coupled temperature–displacement step, per node.
+    pub temperature: Option<Vec<f64>>,
 }
 
 /// One natural mode.
@@ -293,17 +298,43 @@ fn budget(limits: &Limits, mesh: &Mesh, graph: &NodeGraph, matrices: usize) -> B
 }
 
 /// Solve a linear static step: the step named `step`, or the model's only static step.
+///
+/// A coupled temperature–displacement step is solved here too: its steady temperatures first
+/// ([`crate::heat`]), then the equilibrium with their thermal strains. The coupling is one-way
+/// (temperature strains the solid; deformation does not heat it), which is the whole of linear
+/// quasi-static thermoelasticity without thermoelastic dissipation, so solving the two in turn
+/// is the monolithic solution exactly.
 pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Result<StaticResult> {
     let resolved = model.resolve()?;
-    let step = model.select_step(step, |p| matches!(p, Procedure::Static {}), "static")?;
+    let step = model.select_step(
+        step,
+        |p| matches!(p, Procedure::Static {} | Procedure::CoupledTemperatureDisplacement {}),
+        "static or coupled temperature–displacement",
+    )?;
     let mesh = Mesh::new(model, &resolved, limits.max_dofs)?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).chain(mesh.warnings.iter().cloned()).collect();
     warnings.extend(inelastic_warnings(model));
+    // The temperature field: the coupled step's own heat solution, or the step's temperature
+    // loads.
+    let (field, temperature) = match step.procedure {
+        Procedure::CoupledTemperatureDisplacement {} => {
+            let (labels, t) = crate::heat::temperatures(model, &resolved, step, limits)?;
+            let at = |l: &u32| labels.binary_search(l).ok().and_then(|i| t.get(i)).copied();
+            (Some(mesh.labels.iter().map(at).collect::<Vec<_>>()), Some(mesh.labels.iter().map(|l| at(l).unwrap_or(0.0)).collect()))
+        }
+        _ => (temperature_loads(model, &resolved, &mesh, step)?, None),
+    };
+    if field.is_some() && !mesh.structural.is_empty() {
+        warnings.push("shells and beams take no thermal strain yet; the temperatures strain the solid, 2D and truss elements only".into());
+    }
     let (graph, order) = pattern(&mesh);
     ignored_dashpots(&mesh, &mut warnings);
     let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
     let red = reduction(&setup, true, &order, budget(limits, &mesh, &graph, 1), &mut warnings)?;
-    let f = loads(model, &resolved, &mesh, step, &red.active)?;
+    let mut f = loads(model, &resolved, &mesh, step, &red.active)?;
+    if let Some(field) = &field {
+        add_thermal_loads(&mut f, &mesh, field)?;
+    }
     let k = assemble(&mesh, &graph, None)?.k;
     if red.neq() == 0 {
         return Err(Error::Invalid("every degree of freedom is prescribed; there is nothing to solve".into()));
@@ -343,7 +374,8 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         let kernel = e.kernel()?;
         let at = |err| Error::element(e.label, err);
         let ue: Vec<[f64; 3]> = e.nodes.iter().map(|n| displacement.get(*n).copied().unwrap_or_default()).collect();
-        let points = kernel.stresses(&e.d, &ue).map_err(at)?;
+        let thermal = field.as_deref().and_then(|t| e.thermal_strain(t));
+        let points = kernel.stresses_with(&e.d, &ue, thermal.as_ref()).map_err(at)?;
         let values: Vec<[f64; 6]> = points.iter().map(|p| p.stress).collect();
         let (ty, rule) = (kernel.ty(), kernel.rule());
         let cached = extrapolations.iter().position(|(t, r, _)| std::ptr::eq(*t, ty) && *r == rule);
@@ -432,6 +464,7 @@ pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Resul
         reaction_total,
         stats: Stats { dofs: mesh.dofs(), equations: red.neq(), factor_entries: chol.entries(), lanczos_vectors: 0 },
         warnings,
+        temperature,
     })
 }
 
@@ -585,6 +618,7 @@ pub enum Location {
 pub enum StepResult {
     Static(StaticResult),
     Frequency(FrequencyResult),
+    Heat(crate::heat::HeatResult),
 }
 
 impl StepResult {
@@ -592,6 +626,7 @@ impl StepResult {
         match self {
             StepResult::Static(r) => &r.step,
             StepResult::Frequency(r) => &r.step,
+            StepResult::Heat(r) => &r.step,
         }
     }
 
@@ -599,6 +634,7 @@ impl StepResult {
         match self {
             StepResult::Static(r) => &r.nodes,
             StepResult::Frequency(r) => &r.nodes,
+            StepResult::Heat(r) => &r.nodes,
         }
     }
 
@@ -611,6 +647,7 @@ impl StepResult {
         match self {
             StepResult::Static(r) => r.reference_points.iter().position(|p| p.label == label),
             StepResult::Frequency(r) => r.reference_points.iter().position(|p| p.1 == label),
+            StepResult::Heat(_) => None,
         }
         .map(Location::Point)
     }

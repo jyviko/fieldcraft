@@ -9,7 +9,7 @@
 
 use modelcraft_fem::beam::{Beam, BeamSection};
 use modelcraft_fem::dense::Matrix;
-use modelcraft_fem::element::{Formulation, Solid};
+use modelcraft_fem::element::{Formulation, Solid, ThermalStrain};
 use modelcraft_fem::plane::{Plane, Theory};
 use modelcraft_fem::shell::{Shell, ShellSection};
 use modelcraft_fem::truss::{Truss, young_modulus};
@@ -35,6 +35,9 @@ pub struct Elem {
     pub density: Option<f64>,
     /// The 2D theory of an element of a 2D section; `None` for solids.
     pub theory: Option<Theory>,
+    /// The expansion coefficients along X, Y, Z and the reference temperature, when the
+    /// material expands.
+    pub expansion: Option<([f64; 3], f64)>,
 }
 
 /// An element's kernel: a solid or a 2D element.
@@ -90,11 +93,21 @@ impl Kernel<'_> {
         }
     }
 
-    /// Integration-point stresses for nodal displacements given as 3-vectors.
-    pub fn stresses(&self, d: &Elasticity, u: &[[f64; 3]]) -> modelcraft_fem::Result<Vec<PointStress>> {
+    /// Integration-point stresses for nodal displacements given as 3-vectors, with a thermal
+    /// strain when given (solids so far).
+    pub fn stresses_with(&self, d: &Elasticity, u: &[[f64; 3]], thermal: Option<&ThermalStrain>) -> modelcraft_fem::Result<Vec<PointStress>> {
+        match (self, thermal) {
+            (Kernel::Solid(s), _) => s.stresses_with(d, u, thermal),
+            (Kernel::Plane(p), None) => p.stresses(d, &u.iter().map(|v| [v[0], v[1]]).collect::<Vec<_>>()),
+            (Kernel::Plane(_), Some(_)) => Err(modelcraft_fem::Error::NotSupported("thermal strain in 2D elements".into())),
+        }
+    }
+
+    /// The equivalent nodal forces of a thermal strain, as 3-vectors (solids so far).
+    pub fn thermal_load(&self, d: &Elasticity, thermal: &ThermalStrain) -> modelcraft_fem::Result<Vec<[f64; 3]>> {
         match self {
-            Kernel::Solid(s) => s.stresses(d, u),
-            Kernel::Plane(p) => p.stresses(d, &u.iter().map(|v| [v[0], v[1]]).collect::<Vec<_>>()),
+            Kernel::Solid(s) => s.thermal_load(d, thermal),
+            Kernel::Plane(_) => Err(modelcraft_fem::Error::NotSupported("thermal strain in 2D elements".into())),
         }
     }
 
@@ -120,6 +133,14 @@ impl Elem {
             Some(t) => Plane::new(self.kind, &self.xyz, self.formulation, t).map(Kernel::Plane),
         };
         k.map_err(|e| Error::element(self.label, e))
+    }
+
+    /// The element's thermal strain in a temperature field (nodes the field leaves out are at
+    /// the reference temperature); `None` when the material does not expand or nothing changes.
+    pub fn thermal_strain(&self, field: &[Option<f64>]) -> Option<ThermalStrain> {
+        let (alpha, reference) = self.expansion?;
+        let delta: Vec<f64> = self.nodes.iter().map(|n| field.get(*n).copied().flatten().map_or(0.0, |t| t - reference)).collect();
+        delta.iter().any(|d| *d != 0.0).then_some(ThermalStrain { alpha, delta })
     }
 }
 
@@ -406,7 +427,8 @@ impl Mesh {
                     Some(_) => plane::formulation(el.kind, &section.formulation).map(|f| (f, ElementDofs::new(DofSet::PLANE))),
                 }
                 .map_err(|e| Error::element(label, e))?;
-                elements.push((label, el.kind, el.nodes.clone(), formulation, d, material.density, theory, dofs));
+                let expansion = material.thermal.and_then(|t| t.expansion.map(|a| (a.axes(), t.reference_temperature)));
+                elements.push((label, el.kind, el.nodes.clone(), formulation, d, material.density, theory, dofs, expansion));
             }
         }
         if let (Some(_), Some(name)) = (planar, model.couplings().keys().next()) {
@@ -472,10 +494,10 @@ impl Mesh {
             warnings,
             discrete: crate::discrete::Discrete::default(),
         };
-        for (label, kind, nodes, formulation, d, density, theory, _) in elements {
+        for (label, kind, nodes, formulation, d, density, theory, _, expansion) in elements {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
             let exyz: Vec<[f64; 3]> = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
-            mesh.elements.push(Elem { label, kind, nodes: idx, xyz: exyz, formulation, d, density, theory });
+            mesh.elements.push(Elem { label, kind, nodes: idx, xyz: exyz, formulation, d, density, theory, expansion });
         }
         for (label, kind, nodes, young, area, density) in trusses {
             let idx: Vec<usize> = nodes.iter().filter_map(|n| mesh.node(*n)).collect();
@@ -713,6 +735,9 @@ pub fn loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step, activ
                     mesh.discrete.add_gravity(&mut f, *acceleration, mesh);
                 }
             }
+            // Heat loads act in heat transfer; temperature fields through their thermal strain
+            // (add_thermal_loads).
+            Load::SurfaceFlux { .. } | Load::Convection { .. } | Load::HeatSource { .. } | Load::Temperature { .. } => {}
             Load::BodyForce { set, vector } => {
                 for label in resolved.sets.get(set).map(|r| r.elements.as_slice()).unwrap_or_default() {
                     if let Some(t) = mesh.truss(*label) {
@@ -774,6 +799,45 @@ fn structural_body(f: &mut [f64], mesh: &Mesh, e: &Structural, b: [f64; 3]) -> R
     for (d, v) in dofs.iter().zip(&forces) {
         if let Some(x) = f.get_mut(*d) {
             *x += v;
+        }
+    }
+    Ok(())
+}
+
+/// The temperature field of a static step's temperature loads, per mesh node; `None` when the
+/// step has none.
+pub fn temperature_loads(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &Step) -> Result<Option<Vec<Option<f64>>>> {
+    let mut field: Option<Vec<Option<f64>>> = None;
+    for name in &step.loads {
+        let Some(Load::Temperature { target, value }) = model.load(name) else { continue };
+        let field = field.get_or_insert_with(|| vec![None; mesh.labels.len()]);
+        for &label in resolved.target_nodes(target) {
+            let Some(n) = mesh.node(label) else { continue };
+            hold(field.get_mut(n), *value, |old| format!("node {label} is given both {old} and {value} (temperature load `{name}` and another)"))?;
+        }
+    }
+    Ok(field)
+}
+
+/// Set a node's value, refusing a different one already there (`conflict` names both).
+pub(crate) fn hold(slot: Option<&mut Option<f64>>, value: f64, conflict: impl FnOnce(f64) -> String) -> Result<()> {
+    let slot = slot.ok_or_else(|| Error::Internal("node index".into()))?;
+    match *slot {
+        Some(old) if old != value => Err(Error::Invalid(conflict(old))),
+        _ => {
+            *slot = Some(value);
+            Ok(())
+        }
+    }
+}
+
+/// Add the equivalent nodal forces of the thermal strains of a temperature field.
+pub fn add_thermal_loads(f: &mut [f64], mesh: &Mesh, field: &[Option<f64>]) -> Result<()> {
+    for e in &mesh.elements {
+        let Some(th) = e.thermal_strain(field) else { continue };
+        let forces = e.kernel()?.thermal_load(&e.d, &th).map_err(|err| Error::element(e.label, err))?;
+        for (node, v) in e.nodes.iter().zip(forces) {
+            add(f, &translations(mesh, *node)?, v);
         }
     }
     Ok(())

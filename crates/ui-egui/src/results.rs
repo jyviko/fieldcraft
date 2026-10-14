@@ -69,16 +69,19 @@ impl Plot {
     pub fn mode(&self) -> Option<(usize, f64)> {
         match self.result.kind() {
             Kind::Frequency(f) => f.modes.get(self.pick.mode.checked_sub(1)?).map(|m| (self.pick.mode, m.frequency)),
-            Kind::Static(_) | Kind::Explicit(_) | Kind::Fluid(_) => None,
+            Kind::Static(_) | Kind::Explicit(_) | Kind::Fluid(_) | Kind::Heat(_) => None,
         }
     }
 
-    /// An explicit step's field frame shown, its time and the number of frames.
+    /// An explicit or transient heat step's frame shown, its time and the number of frames.
     pub fn frame(&self) -> Option<(usize, f64, usize)> {
-        let Kind::Explicit(e) = self.result.kind() else { return None };
-        let n = e.frames.len();
+        let (n, time): (usize, &dyn Fn(usize) -> Option<f64>) = match self.result.kind() {
+            Kind::Explicit(e) => (e.frames.len(), &|k| e.frames.get(k).map(|f| f.time)),
+            Kind::Heat(h) if h.times.len() > 1 => (h.times.len(), &|k| h.times.get(k).copied()),
+            _ => return None,
+        };
         let k = self.pick.frame.unwrap_or(n.checked_sub(1)?);
-        Some((k, e.frames.get(k)?.time, n))
+        Some((k, time(k)?, n))
     }
 
     /// The node's position in the plot, if it is drawn.
@@ -107,7 +110,7 @@ pub fn swing(result: &StepResult, frame: Option<u64>) -> f64 {
     match result.kind() {
         Kind::Frequency(_) => a.sin(),
         Kind::Static(_) => 0.5 * (1.0 - a.cos()),
-        Kind::Explicit(_) | Kind::Fluid(_) => 1.0,
+        Kind::Explicit(_) | Kind::Fluid(_) | Kind::Heat(_) => 1.0,
     }
 }
 

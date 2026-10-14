@@ -22,6 +22,8 @@
 //! - [`beam`]: two-node Timoshenko beams with profile section properties;
 //! - [`frame`]: local axes of shells and beams and the rotation of their matrices;
 //! - [`face`]: consistent nodal forces of pressure on element faces;
+//! - [`heat`]: heat conduction (conductivity, capacity, sources, surface flux and convection,
+//!   heat flux); thermal strain loads and stresses are in [`element`];
 //! - [`uniform`]: uniform-strain (one-point) hexahedron and tetrahedron kinematics, hourglass
 //!   shape vectors and element frequency bounds for explicit dynamics;
 //! - [`rotation`]: incrementally objective stress updates (Hughes–Winget Jaumann, Flanagan–Taylor
@@ -47,6 +49,7 @@ pub mod dof;
 pub mod element;
 pub mod face;
 pub mod frame;
+pub mod heat;
 pub mod jet;
 pub mod material;
 pub mod plane;
@@ -60,7 +63,7 @@ pub mod uniform;
 
 pub use basis::Basis;
 pub use dof::{DofKind, DofLayout, DofSet, ElementDofs};
-pub use element::{ELEMENT_TYPES, ElementType, Family, Formulation, PointStress, Solid, element_type};
+pub use element::{ELEMENT_TYPES, ElementType, Family, Formulation, PointStress, Solid, ThermalStrain, element_type};
 pub use material::{Elasticity, elasticity, principal, von_mises};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

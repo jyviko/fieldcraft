@@ -76,6 +76,62 @@ pub enum Procedure {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         magic: Option<f64>,
     },
+    /// Heat conduction: the steady temperature field, or its history over time when `transient`
+    /// is given. Temperature boundary conditions and heat loads (flux, convection, sources)
+    /// act; mechanical ones are ignored.
+    HeatTransfer {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transient: Option<Transient>,
+    },
+    /// Steady heat conduction and the static equilibrium of the thermal strains it causes,
+    /// together: every boundary condition and load of the step acts.
+    CoupledTemperatureDisplacement {},
+}
+
+/// Most time increments of a transient heat transfer step.
+pub const MAX_HEAT_INCREMENTS: f64 = 100_000.0;
+
+/// Time integration of a transient heat transfer step: the generalized trapezoidal (θ) method
+/// with fixed increments, from a uniform initial temperature.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Transient {
+    pub end_time: f64,
+    pub increment: f64,
+    /// 1 is backward Euler (the default), ½ Crank–Nicolson; θ ≥ ½ is unconditionally stable.
+    #[serde(default = "default_theta")]
+    pub theta: f64,
+    #[serde(default)]
+    pub initial_temperature: f64,
+}
+
+fn default_theta() -> f64 {
+    1.0
+}
+
+impl Transient {
+    /// Backward Euler from 0.
+    pub fn new(end_time: f64, increment: f64) -> Transient {
+        Transient { end_time, increment, theta: default_theta(), initial_temperature: 0.0 }
+    }
+
+    /// The number of increments (the last one may be shorter).
+    pub fn increments(&self) -> usize {
+        (self.end_time / self.increment - 1e-9).ceil().max(1.0) as usize
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let end = positive("end time", self.end_time)?;
+        let dt = positive("time increment", self.increment)?;
+        if end / dt > MAX_HEAT_INCREMENTS {
+            return Err(Error::Invalid(format!("a transient heat step takes at most {MAX_HEAT_INCREMENTS} increments, got {}", end / dt)));
+        }
+        if !(0.5..=1.0).contains(&self.theta) {
+            return Err(Error::Invalid(format!("θ is in [0.5, 1] (unconditionally stable), got {}", self.theta)));
+        }
+        finite("initial temperature", self.initial_temperature)?;
+        Ok(())
+    }
 }
 
 /// The settings of an explicit dynamic step.
@@ -336,6 +392,8 @@ impl Procedure {
             Procedure::Static {} => "static",
             Procedure::Frequency { .. } => "frequency",
             Procedure::ExplicitDynamic(_) => "explicit_dynamic",
+            Procedure::HeatTransfer { .. } => "heat_transfer",
+            Procedure::CoupledTemperatureDisplacement {} => "coupled_temperature_displacement",
             Procedure::Fluid { .. } => "fluid",
         }
     }
@@ -344,8 +402,19 @@ impl Procedure {
     pub fn fluid_domain(&self) -> Option<&str> {
         match self {
             Procedure::Fluid { domain, .. } => Some(domain),
-            Procedure::Static {} | Procedure::Frequency { .. } | Procedure::ExplicitDynamic(_) => None,
+            _ => None,
         }
+    }
+
+    /// Whether the procedure solves for the motion of the solids (not pure heat transfer or
+    /// fluid flow).
+    pub fn is_structural(&self) -> bool {
+        !matches!(self, Procedure::HeatTransfer { .. } | Procedure::Fluid { .. })
+    }
+
+    /// Whether the procedure solves for temperatures.
+    pub fn is_thermal(&self) -> bool {
+        matches!(self, Procedure::HeatTransfer { .. } | Procedure::CoupledTemperatureDisplacement {})
     }
 
     /// Whether the procedure is transient dynamics (it needs mass; a free body is legitimate).
@@ -357,7 +426,7 @@ impl Procedure {
     pub fn sets(&self) -> impl Iterator<Item = &str> {
         let explicit = match self {
             Procedure::ExplicitDynamic(e) => Some(e),
-            Procedure::Static {} | Procedure::Frequency { .. } | Procedure::Fluid { .. } => None,
+            _ => None,
         };
         explicit.into_iter().flat_map(ExplicitDynamic::sets)
     }
@@ -387,6 +456,9 @@ impl Procedure {
                 return Err(Error::Invalid(format!("the two-relaxation-time parameter Λ must be above 0 and at most 1, got {m}")));
             }
         }
+        if let Procedure::HeatTransfer { transient: Some(t) } = self {
+            return t.validate();
+        }
         if let Procedure::Frequency { modes, min_hz, max_hz } = *self {
             if !(1..=MAX_MODES).contains(&modes) {
                 return Err(Error::Invalid(format!("a frequency step extracts 1 to {MAX_MODES} modes, got {modes}")));
@@ -413,6 +485,10 @@ impl Procedure {
             Procedure::ExplicitDynamic(_) => [OutputVariable::Displacement, OutputVariable::Stress].into_iter().collect(),
             // Velocity, pressure and wall forces, always.
             Procedure::Fluid { .. } => BTreeSet::new(),
+            Procedure::HeatTransfer { .. } => [OutputVariable::Temperature, OutputVariable::HeatFlux].into_iter().collect(),
+            Procedure::CoupledTemperatureDisplacement {} => {
+                OutputVariable::ALL.into_iter().chain([OutputVariable::Temperature, OutputVariable::HeatFlux]).collect()
+            }
         }
     }
 }
@@ -427,9 +503,14 @@ pub enum OutputVariable {
     ReactionForce,
     Stress,
     Strain,
+    /// Nodal temperatures (heat transfer).
+    Temperature,
+    /// Heat flux at the integration points (heat transfer).
+    HeatFlux,
 }
 
 impl OutputVariable {
+    /// The structural variables.
     pub const ALL: [OutputVariable; 4] =
         [OutputVariable::Displacement, OutputVariable::ReactionForce, OutputVariable::Stress, OutputVariable::Strain];
 }
@@ -670,5 +751,31 @@ mod tests {
             assert!(Procedure::ExplicitDynamic(b.clone()).validate().is_err(), "{b:?}");
         }
         assert!(serde_json::from_value::<Procedure>(serde_json::json!({"type": "explicit_dynamic", "end_time": 1, "dt": 2})).is_err());
+    }
+
+    #[test]
+    fn heat_transfer_procedures() {
+        let steady: Procedure = serde_json::from_value(serde_json::json!({"type": "heat_transfer"})).unwrap();
+        assert_eq!(steady, Procedure::HeatTransfer { transient: None });
+        assert!(steady.is_thermal() && steady.validate().is_ok());
+        assert_eq!(steady.default_output(), [OutputVariable::Temperature, OutputVariable::HeatFlux].into_iter().collect());
+        let t: Procedure =
+            serde_json::from_value(serde_json::json!({"type": "heat_transfer", "transient": {"end_time": 10, "increment": 0.3}})).unwrap();
+        let Procedure::HeatTransfer { transient: Some(tr) } = t else { panic!() };
+        assert_eq!((tr.theta, tr.initial_temperature, tr.increments()), (1.0, 0.0, 34));
+        assert_eq!(Transient::new(1.0, 0.25).increments(), 4);
+        for bad in [
+            Transient { theta: 0.4, ..Transient::new(1.0, 0.1) },
+            Transient { theta: f64::NAN, ..Transient::new(1.0, 0.1) },
+            Transient::new(1.0, 0.0),
+            Transient::new(-1.0, 0.1),
+            Transient::new(1e300, 1e-300),
+            Transient { initial_temperature: f64::INFINITY, ..Transient::new(1.0, 0.1) },
+        ] {
+            assert!(Procedure::HeatTransfer { transient: Some(bad) }.validate().is_err(), "{bad:?}");
+        }
+        let coupled: Procedure = serde_json::from_value(serde_json::json!({"type": "coupled_temperature_displacement"})).unwrap();
+        assert!(coupled.is_thermal() && coupled.default_output().contains(&OutputVariable::Stress));
+        assert_eq!(coupled.name(), "coupled_temperature_displacement");
     }
 }

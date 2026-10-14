@@ -630,6 +630,43 @@ mod tests {
         assert_eq!(call_in(&mut app, &ctx, "ui.selection", json!({}))["result"]["count"], 0);
     }
 
+    /// Text typed into one form never lands in the next one (#219): Young's modulus is focused
+    /// and typed into, Plasticity opens straight over it, and its yield stress stays empty, both
+    /// when the text arrives in the same frame as the switch and when it is typed afterwards.
+    #[test]
+    fn typing_never_crosses_into_the_next_form() {
+        let ctx = egui::Context::default();
+        for same_frame in [true, false] {
+            let mut app = ModelApp::new(Session::default());
+            call_in(&mut app, &ctx, "ui.start", json!({"command": "model.material.create"}));
+            for _ in 0..2 {
+                frame(&mut app, &ctx);
+            }
+            let opening = app.dialog.as_ref().unwrap().opening;
+            let form = egui::Id::new(("fc_form", "model.material.create", opening));
+            let young = ctx.read_response(egui::Id::new(("fc_form", form, "elastic/young"))).expect("the Young's modulus field").rect.center();
+            call_in(&mut app, &ctx, "ui.click", json!({"x": young.x, "y": young.y}));
+            for _ in 0..3 {
+                frame(&mut app, &ctx);
+            }
+            assert!(ctx.memory(|m| m.focused()).is_some(), "the click focuses Young's modulus");
+            if !same_frame {
+                call_in(&mut app, &ctx, "ui.start", json!({"command": "model.material.plasticity"}));
+            }
+            call_in(&mut app, &ctx, "ui.text", json!({"text": "210000"}));
+            if same_frame {
+                call_in(&mut app, &ctx, "ui.start", json!({"command": "model.material.plasticity"}));
+            }
+            for _ in 0..3 {
+                frame(&mut app, &ctx);
+            }
+            let d = app.dialog.as_ref().unwrap();
+            assert_eq!(d.command, "model.material.plasticity");
+            assert!(!d.text.contains("210000"), "same frame {same_frame}: {}", d.text);
+            assert!(ctx.memory(|m| m.focused()).is_none(), "the new form does not inherit the focus");
+        }
+    }
+
     #[test]
     fn hostile_selections_are_refused_or_capped() {
         let mut app = ModelApp::new(Session::default());

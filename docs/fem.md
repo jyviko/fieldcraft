@@ -544,6 +544,30 @@ with small sliding and 3% with finite sliding, where the block turns a little, a
 slipping; `tests/oracle/nl-friction-sliding-blocks`); initial overclosure adjusted and
 refused; bit-for-bit results on one and four threads; the refusals.
 
+## Ties (non-matching meshes)
+
+**Model** (`fieldcraft_model::tie`): a tie names a `main` and a `secondary` surface (sets of
+element faces) and an optional position tolerance; commands `interaction.tie|tie.edit|tie.delete`.
+Abaqus writes `*TIE, ADJUST=NO` (secondary surface first, `POSITION TOLERANCE` when given),
+LS-DYNA `*CONTACT_TIED_SURFACE_TO_SURFACE` between segment sets; Nastran refuses ties by name.
+
+**Constraints** (`fieldcraft_solver::tie`): dual mortar. Each secondary face's dual shape
+functions ψ_a = Σ_b A_ab N_b, A = D M⁻¹ (M_ab = ∫ N_a N_b, D = diag ∫ N_a), are biorthogonal to its
+own, so the secondary mortar matrix is diagonal and each secondary node becomes the weighted
+average of the main nodes under it, u_A = Σ_J (M_AJ/Σ_K M_AK) u_J with M_AJ = ∫ ψ_A N_J over the
+overlaps of the reference configuration (`fieldcraft_fem::mortar`). The rows go to the constraint
+elimination like a coupling's, the secondary node the intended dependent, in linear static,
+frequency, buckling and nonlinear steps (small-displacement constraints). Dividing by the sum
+keeps rigid motions exact at a surface's edge where a face is only partly covered. Main faces
+count when the secondary face overlaps them along its normal with a mean gap within the position
+tolerance (default half the main element's thickness); uncovered secondary nodes stay free with a
+warning. Heat transfer and explicit dynamics refuse ties by name.
+
+**Verification** (`crates/solver/tests/contact.rs`, `tests/oracle/tie-patch`): a linear field
+across non-matching hex8/tet4 meshes reproduced to round-off (to 10⁻⁶ on distorted quadrilateral
+faces, where the overlap integration is accurate to its degree) in linear and nonlinear static
+steps; uniaxial tension across a tie, σ_zz = Eε in every element to 10⁻⁹.
+
 ## Hyperelastic materials in explicit dynamics
 
 Hyperelastic materials (neo-Hookean, Mooney–Rivlin, Yeoh) use the shared finite-strain material

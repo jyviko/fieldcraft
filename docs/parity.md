@@ -54,7 +54,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Model | Reference points, kinematic and distributing coupling | M3 | | done |
 | Model | Steps: linear static, frequency; output presets | M3 | | done |
 | Model | Steps: nonlinear static, explicit dynamics, heat transfer; amplitudes | M7–M8, M15 | | started (nonlinear static with or without nonlinear geometry, increments, tolerances and a load path (cyclic loading), written to Abaqus `*STEP, NLGEOM` and LS-DYNA implicit (the load path as LS-DYNA's curve; refused by Abaqus for now), refused by Nastran; explicit dynamics; heat transfer; amplitudes per load planned) |
-| Interaction | Tie between non-matching meshes | M7 | | planned |
+| Interaction | Tie between non-matching meshes | M7 | | done (`interaction.tie`: dual mortar constraints in the implicit analyses, the tie patch test; Abaqus `*TIE`, LS-DYNA tied contact) |
 | Interaction | Contact (general and pairs), friction, automatic pair detection | M7, M10 | | started (explicit: pairs, general and self contact, segment to segment with a penalty that keeps the time increment, Coulomb friction with exponential decay, friction on rigid walls, `interaction.contact.find`, Abaqus and LS-DYNA contact keywords; implicit: mortar contact pairs in nonlinear static steps by an augmented Lagrangian with Coulomb friction, self contact next) |
 | Interaction | Springs and dashpots (ground or two-point; DOF, vector or line), point masses with rotary inertia | M4 | | done (implicit; explicit translational; all three decks with what each cannot take reported) |
 | Interaction | Bolt pretension, connectors | M7 | | planned |

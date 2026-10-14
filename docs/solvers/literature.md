@@ -1329,6 +1329,11 @@ written from (cited again in the module docs); docs/fem.md describes the formula
   deformations*, CMAME 193:4891–4913, 2004; C. A. Coulomb's law, *Théorie des machines simples*,
   1785. The tangent is symmetrised like the follower pressure's (the non-symmetric coupling to
   the pressure is left out; the residual is exact).
+- Ties by dual mortar constraints: B. I. Wohlmuth, *A mortar finite element method using dual
+  spaces for the Lagrange multiplier*, SIAM J. Numer. Anal. 38(3):989–1012, 2000; A. Popp, B. I.
+  Wohlmuth, M. W. Gee, W. A. Wall, *Dual quadratic mortar finite element methods for 3D finite
+  deformation contact*, SIAM J. Sci. Comput. 34(4):B421–B446, 2012; mesh tying in solid
+  mechanics, M. A. Puso, *A 3D mortar method for solid mechanics*, IJNME 59:315–336, 2004.
 - The active set inside Newton (the max() of the regularised pressure, a semismooth Newton
   method): P. Alart, A. Curnier, *A mixed formulation for frictional contact problems prone to
   Newton like solution methods*, CMAME 92:353–375, 1991; Popp et al. 2009.

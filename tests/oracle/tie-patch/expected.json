@@ -1,0 +1,144 @@
+{
+ "title": "Tie patch test: two blocks with non-matching meshes tied together in uniaxial tension",
+ "kind": "theory",
+ "source": "The patch test for mesh tying: a tie across non-matching meshes must transmit a constant stress exactly; B. I. Wohlmuth, A mortar finite element method using dual spaces for the Lagrange multiplier, SIAM J. Numer. Anal. 38(3):989–1012, 2000; M. A. Puso, A 3D mortar method for solid mechanics, IJNME 59:315–336, 2004. Uniaxial stress between frictionless symmetry planes is uniform in both blocks",
+ "quantities": [
+  {
+   "id": "szz_10",
+   "quantity": "σ_zz of the lower block's corner element under the tie (element 10)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      10
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2"
+   },
+   "value": 10.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "uniaxial stress E ε = 1000 × 0.01 is the exact discrete solution: the dual mortar conditions hold for the linear field on both meshes"
+  },
+  {
+   "id": "szz_14",
+   "quantity": "σ_zz of the lower block's centre element under the tie (element 14)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      14
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2"
+   },
+   "value": 10.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "uniaxial stress E ε = 1000 × 0.01 is the exact discrete solution: the dual mortar conditions hold for the linear field on both meshes"
+  },
+  {
+   "id": "szz_1",
+   "quantity": "σ_zz of the lower block's bottom corner element (element 1)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2"
+   },
+   "value": 10.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "uniaxial stress E ε = 1000 × 0.01 is the exact discrete solution: the dual mortar conditions hold for the linear field on both meshes"
+  },
+  {
+   "id": "szz_19",
+   "quantity": "σ_zz of the upper block's corner element over the tie (element 19)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      19
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2"
+   },
+   "value": 10.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "uniaxial stress E ε = 1000 × 0.01 is the exact discrete solution: the dual mortar conditions hold for the linear field on both meshes"
+  },
+  {
+   "id": "szz_26",
+   "quantity": "σ_zz of the upper block's top far corner element (element 26)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      26
+     ]
+    },
+    "pointer": "/elements/0/stress/0/2"
+   },
+   "value": 10.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "uniaxial stress E ε = 1000 × 0.01 is the exact discrete solution: the dual mortar conditions hold for the linear field on both meshes"
+  },
+  {
+   "id": "sxx_14",
+   "quantity": "σ_xx of element 14 (uniaxial stress: 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      14
+     ]
+    },
+    "pointer": "/elements/0/stress/0/0"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 1e-09
+   },
+   "reason": "the tie must not hold the lateral contraction of either mesh"
+  },
+  {
+   "id": "uz_interface",
+   "quantity": "u_z at the tied secondary node (0.5, 0.5, 1)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "at": [
+      [
+       0.5,
+       0.5,
+       1.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": 0.01,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "the tied node follows the uniform strain field"
+  }
+ ]
+}

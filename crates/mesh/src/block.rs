@@ -2,11 +2,12 @@
 //! optionally, curved edges (circular and elliptical arcs).
 //!
 //! The lattice follows the transfinite interpolation shared with the structured hex mesher
-//! ([`crate::quad::transfinite_grid`] for the faces, Gordon and Hall 1973;
-//! [`crate::quad::transfinite_volume`] for the interior, Gordon and Thiel 1982): the edge curves
-//! at their (graded) parameters, each face the Coons patch of its four edges, the volume blended
-//! from the faces. It reproduces every edge exactly and gives the trilinear map for straight
-//! edges. A 2D patch is the Coons patch of its four edges.
+//! ([`crate::quad::transfinite_faces`], Gordon and Hall 1973, for the faces;
+//! [`crate::quad::transfinite_volume`], Gordon and Thiel 1982, for the interior): the edge curves
+//! at their (graded) parameters, each face the Coons patch of its four edges and the volume
+//! blended from the faces, both by the same lattice parameters. It reproduces every edge exactly
+//! and gives the trilinear map for straight edges. A 2D patch is the Coons patch of its four
+//! edges.
 //!
 //! Elements: hex8 and hex20 per cell; tet4 and tet10 by Kuhn's split of each cell into six
 //! tetrahedra along its main diagonal (conforming between the cells of a block); wedge6 by
@@ -19,7 +20,7 @@
 
 use modelcraft_model::{ElementKind, MAX_COORD};
 
-use crate::quad::{transfinite_grid, transfinite_volume};
+use crate::quad::{lattice_index, transfinite_faces, transfinite_grid_blended, transfinite_volume};
 use crate::quality::{Validity, element_validity, planar_quad_validity};
 use crate::vec3::{P, cross, dot, norm, sub};
 use crate::{Error, Result};
@@ -162,9 +163,11 @@ impl Path {
 
     fn point(&self, s: f64) -> P {
         match *self {
+            // The ends are the corners exactly (not to rounding): shared faces and the
+            // transfinite grids, which need equal corners, rely on it.
+            Path::Line { from, .. } | Path::Ellipse { ends: [from, _], .. } if s == 0.0 => from,
+            Path::Line { to, .. } | Path::Ellipse { ends: [_, to], .. } if s == 1.0 => to,
             Path::Line { from, to } => add_scaled(from, s, sub(to, from)),
-            Path::Ellipse { ends: [from, _], .. } if s == 0.0 => from,
-            Path::Ellipse { ends: [_, to], .. } if s == 1.0 => to,
             Path::Ellipse { center, a, b, start, sweep, .. } => {
                 let t = start + s * sweep;
                 add_scaled(add_scaled(center, t.cos(), a), t.sin(), b)
@@ -203,52 +206,20 @@ fn parameters(n: usize, bias: f64, order: usize) -> Vec<f64> {
 /// grids of their edges ([`transfinite_grid`]) and the interior by the trivariate interpolation of
 /// the faces ([`transfinite_volume`]), blended by the lattice parameters.
 fn lattice_points(paths: &[Path; 12], params: &[Vec<f64>; 3]) -> Result<Vec<P>> {
-    let size = [0, 1, 2].map(|d| params[d].len());
-    let idx = |c: [usize; 3]| (c[2] * size[1] + c[1]) * size[0] + c[0];
-    let last = size.map(|s| s - 1);
-    let mut x: Vec<Option<P>> = vec![None; size.iter().product()];
+    let n = [0, 1, 2].map(|d| params[d].len() - 1);
+    let mut x: Vec<Option<P>> = vec![None; params.iter().map(Vec::len).product()];
     for (k, [from, _]) in EDGES.iter().enumerate() {
         let along = k / 4;
         for (q, &t) in params[along].iter().enumerate() {
-            let mut c = CORNERS[*from];
-            for d in 0..3 {
-                c[d] = if d == along { q } else { c[d] * last[d] };
-            }
-            if let Some(slot) = x.get_mut(idx(c)) {
+            let c = [0, 1, 2].map(|d| if d == along { q } else { CORNERS[*from][d] * n[d] });
+            if let Some(slot) = x.get_mut(lattice_index(n, c)) {
                 slot.get_or_insert(paths[k].point(t));
             }
         }
     }
-    for d in 0..3 {
-        let (da, db) = match d {
-            0 => (1, 2),
-            1 => (0, 2),
-            _ => (0, 1),
-        };
-        for side in [0, last[d]] {
-            let at = |a: usize, b: usize| {
-                let mut c = [0; 3];
-                c[d] = side;
-                c[da] = a;
-                c[db] = b;
-                c
-            };
-            let line = |f: &dyn Fn(usize) -> [usize; 3], n: usize| -> Result<Vec<P>> {
-                (0..=n).map(|q| x.get(idx(f(q))).copied().flatten().ok_or_else(|| Error::Failed("a block edge node is missing".into()))).collect()
-            };
-            let (na, nb) = (last[da], last[db]);
-            let grid =
-                transfinite_grid(&line(&|a| at(a, 0), na)?, &line(&|b| at(na, b), nb)?, &line(&|a| at(a, nb), na)?, &line(&|b| at(0, b), nb)?)?;
-            for b in 0..=nb {
-                for a in 0..=na {
-                    if let (Some(slot), Some(p)) = (x.get_mut(idx(at(a, b))), grid.get(b * (na + 1) + a)) {
-                        slot.get_or_insert(*p);
-                    }
-                }
-            }
-        }
-    }
-    transfinite_volume(&mut x, last, [&params[0], &params[1], &params[2]])?;
+    let blend = [params[0].as_slice(), params[1].as_slice(), params[2].as_slice()];
+    transfinite_faces(&mut x, n, Some(blend), |_, _, _| Ok(()))?;
+    transfinite_volume(&mut x, n, blend)?;
     x.into_iter().map(|p| p.ok_or_else(|| Error::Failed("a block lattice node is missing".into()))).collect()
 }
 
@@ -520,7 +491,7 @@ pub fn patch(b: &Patch) -> Result<BlockMesh> {
     }
     // Bottom (1→2), right (2→3), top (4→3), left (1→4): the Coons patch of the four sides.
     let [bottom, top, left, right] = &sides;
-    let grid = transfinite_grid(bottom, right, top, left)?;
+    let grid = transfinite_grid_blended(bottom, right, top, left, &params[0], &params[1])?;
     let at = |i: usize, j: usize| -> P {
         let mut x = grid.get(j * params[0].len() + i).copied().unwrap_or([f64::NAN; 3]);
         x[2] = 0.0;

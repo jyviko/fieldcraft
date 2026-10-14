@@ -479,7 +479,6 @@ fn show(x: Option<f64>) -> String {
     x.map(number).unwrap_or_else(|| "—".into())
 }
 
-/// The error against the reference: relative where the reference is not zero.
 /// Below this fraction of its absolute tolerance, a quantity whose reference is zero is shown as
 /// zero: it is rounding noise, and its digits change with any reordering of the arithmetic
 /// (docs/oracle.md must not).

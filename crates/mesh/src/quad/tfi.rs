@@ -47,6 +47,33 @@ fn params<const D: usize>(side: &[[f64; D]], name: &str) -> Result<Vec<f64>> {
 /// left[0]`, `bottom[nu] = right[0]`, `top[0] = left[nv]`, `top[nu] = right[nv]`). Side nodes are
 /// copied exactly into the grid.
 pub fn transfinite_grid<const D: usize>(bottom: &[[f64; D]], right: &[[f64; D]], top: &[[f64; D]], left: &[[f64; D]]) -> Result<Vec<[f64; D]>> {
+    grid(bottom, right, top, left, None)
+}
+
+/// [`transfinite_grid`] blended by given parameters (`u` along bottom and top, `v` along left and
+/// right, each from 0 to 1) instead of the sides' arc lengths: the Coons patch of a map whose
+/// sides are parametrised by them (a graded mapped block's lattice).
+pub fn transfinite_grid_blended<const D: usize>(
+    bottom: &[[f64; D]],
+    right: &[[f64; D]],
+    top: &[[f64; D]],
+    left: &[[f64; D]],
+    u: &[f64],
+    v: &[f64],
+) -> Result<Vec<[f64; D]>> {
+    if u.len() != bottom.len() || v.len() != left.len() {
+        return Err(Error::Invalid("one blending parameter per side node is needed".into()));
+    }
+    grid(bottom, right, top, left, Some((u, v)))
+}
+
+fn grid<const D: usize>(
+    bottom: &[[f64; D]],
+    right: &[[f64; D]],
+    top: &[[f64; D]],
+    left: &[[f64; D]],
+    blend: Option<(&[f64], &[f64])>,
+) -> Result<Vec<[f64; D]>> {
     let (nu, nv) = (bottom.len().saturating_sub(1), left.len().saturating_sub(1));
     if nu == 0 || nv == 0 || top.len() != bottom.len() || right.len() != left.len() {
         return Err(Error::Invalid(format!(
@@ -68,7 +95,10 @@ pub fn transfinite_grid<const D: usize>(bottom: &[[f64; D]], right: &[[f64; D]],
     if corner(left, false) != Some(p00) || corner(right, false) != Some(p10) || corner(left, true) != Some(p01) || corner(right, true) != Some(p11) {
         return Err(Error::Invalid("the sides of a mapped region must share their corner points".into()));
     }
-    let (ub, ut, vl, vr) = (params(bottom, "bottom")?, params(top, "top")?, params(left, "left")?, params(right, "right")?);
+    let (ub, ut, vl, vr) = match blend {
+        Some((u, v)) => (u.to_vec(), u.to_vec(), v.to_vec(), v.to_vec()),
+        None => (params(bottom, "bottom")?, params(top, "top")?, params(left, "left")?, params(right, "right")?),
+    };
     let mut grid = Vec::with_capacity(count);
     for j in 0..=nv {
         for i in 0..=nu {
@@ -107,6 +137,63 @@ pub fn transfinite_grid<const D: usize>(bottom: &[[f64; D]], right: &[[f64; D]],
     Ok(grid)
 }
 
+/// The index of lattice node `c = [i, j, k]` in a block lattice of `n[d] + 1` nodes per direction:
+/// `(k·(n[1] + 1) + j)·(n[0] + 1) + i`.
+pub fn lattice_index(n: [usize; 3], c: [usize; 3]) -> usize {
+    (c[2] * (n[1] + 1) + c[1]) * (n[0] + 1) + c[0]
+}
+
+/// Fill the six faces of a block lattice ([`lattice_index`]) whose twelve edges are set: each face
+/// is the transfinite grid of its four edges, blended by `blend` (one parameter list per
+/// direction) or, without it, by the edges' arc lengths. `finish(d, side, grid)` sees each face's
+/// grid before its interior nodes are stored (face `d = side · n[d]`, the grid running along the
+/// other two directions in increasing order, the lower one fastest): a mesher can project them
+/// onto its geometry. Edge nodes already set are kept.
+pub fn transfinite_faces(
+    x: &mut [Option<[f64; 3]>],
+    n: [usize; 3],
+    blend: Option<[&[f64]; 3]>,
+    mut finish: impl FnMut(usize, usize, &mut [[f64; 3]]) -> Result<()>,
+) -> Result<()> {
+    for d in 0..3 {
+        let (da, db) = match d {
+            0 => (1, 2),
+            1 => (0, 2),
+            _ => (0, 1),
+        };
+        let (na, nb) = (n[da], n[db]);
+        for side in 0..2 {
+            let at = |a: usize, b: usize| {
+                let mut c = [0; 3];
+                c[d] = side * n[d];
+                c[da] = a;
+                c[db] = b;
+                lattice_index(n, c)
+            };
+            let line = |x: &[Option<[f64; 3]>], f: &dyn Fn(usize) -> usize, m: usize| -> Result<Vec<[f64; 3]>> {
+                (0..=m)
+                    .map(|q| x.get(f(q)).copied().flatten().ok_or_else(|| Error::Failed("transfinite faces: an edge node is missing".into())))
+                    .collect()
+            };
+            let (bottom, top) = (line(x, &|a| at(a, 0), na)?, line(x, &|a| at(a, nb), na)?);
+            let (left, right) = (line(x, &|b| at(0, b), nb)?, line(x, &|b| at(na, b), nb)?);
+            let mut grid = match blend {
+                Some(p) => transfinite_grid_blended(&bottom, &right, &top, &left, p[da], p[db])?,
+                None => transfinite_grid(&bottom, &right, &top, &left)?,
+            };
+            finish(d, side, &mut grid)?;
+            for b in 1..nb {
+                for a in 1..na {
+                    if let (Some(slot), Some(p)) = (x.get_mut(at(a, b)), grid.get(b * (na + 1) + a)) {
+                        *slot = Some(*p);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The trivariate transfinite interpolation of a block's interior from its boundary (W. J.
 /// Gordon, L. C. Thiel, *Transfinite mappings and their application to grid generation*, Applied
 /// Mathematics and Computation 10–11:171–233, 1982): faces blended linearly, minus edges blended
@@ -120,7 +207,7 @@ pub fn transfinite_volume(x: &mut [Option<[f64; 3]>], n: [usize; 3], blend: [&[f
     if total != Some(x.len()) || (0..3).any(|d| blend[d].len() != n[d] + 1) {
         return Err(Error::Invalid("a transfinite volume needs a full lattice and one blending parameter per index".into()));
     }
-    let idx = |i: usize, j: usize, k: usize| (k * (nj + 1) + j) * (ni + 1) + i;
+    let idx = |i: usize, j: usize, k: usize| lattice_index(n, [i, j, k]);
     let get = |x: &[Option<[f64; 3]>], i: usize, j: usize, k: usize| -> Result<[f64; 3]> {
         x.get(idx(i, j, k)).copied().flatten().ok_or_else(|| Error::Failed("transfinite volume: a boundary node is missing".into()))
     };

@@ -75,7 +75,7 @@ mod smooth;
 pub mod tfi;
 
 pub use domain::{MAX_BOUNDARY_POINTS, MAX_LOOPS};
-pub use tfi::{MAX_GRID_NODES, transfinite_grid, transfinite_volume};
+pub use tfi::{MAX_GRID_NODES, lattice_index, transfinite_faces, transfinite_grid, transfinite_grid_blended, transfinite_volume};
 
 use crate::predicates::{Point2, Sign, snap_to_domain};
 use crate::quality::{planar_corner, quad_axes, turns_left};

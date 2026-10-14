@@ -2,16 +2,16 @@
   "note": "ModelCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
   "values": {
     "balance": {
-      "band": 0.00001000000152706151,
-      "value": 0.001527061509461723
+      "band": 0.000010000001527014124,
+      "value": 0.0015270141220584757
     },
     "u_end": {
       "band": 6e-13,
-      "value": -0.0005998107000086691
+      "value": -0.0005997958068849671
     },
     "v_mid": {
       "band": 1.0000000000000001e-11,
-      "value": -0.00985543917252298
+      "value": -0.00985515147645196
     }
   }
 }

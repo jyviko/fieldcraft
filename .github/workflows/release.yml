@@ -171,17 +171,19 @@ jobs:
         run: |
           # The oldest supported Ubuntu (the build's glibc) and a current Fedora. Recommended and
           # weak dependencies (GPU drivers) are skipped to keep it quick; the hard ones must resolve.
+          # Both images leave out documentation when installing (dpkg path-exclude, dnf nodocs), so
+          # the licences are checked in the package's file list rather than on disk.
           docker run --rm -v "$PWD/dist/release:/dist:ro" ubuntu:22.04 bash -euxc '
             apt-get update -qq
             DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends /dist/*.deb
             fieldcraft-cli --version
             fieldcraft --version
-            test -f /usr/share/doc/fieldcraft/THIRD-PARTY-LICENSES.txt'
+            dpkg -L fieldcraft | grep -Fx /usr/share/doc/fieldcraft/THIRD-PARTY-LICENSES.txt'
           docker run --rm -v "$PWD/dist/release:/dist:ro" fedora:44 bash -euxc '
             dnf install -y -q --setopt=install_weak_deps=False /dist/*.rpm
             fieldcraft-cli --version
             fieldcraft --version
-            test -f /usr/share/doc/fieldcraft/THIRD-PARTY-LICENSES.txt
+            rpm -ql fieldcraft | grep -Fx /usr/share/doc/fieldcraft/THIRD-PARTY-LICENSES.txt
             dnf install -y -q rpmlint
             rpmlint /dist/*.rpm || true'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

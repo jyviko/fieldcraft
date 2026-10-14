@@ -5,7 +5,7 @@ use modelcraft_explicit::{ExplicitResult, solve_explicit};
 use modelcraft_lbm::{FluidResult, Obstacle};
 use modelcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 use modelcraft_model::FluidDomain;
-use modelcraft_solver::{FrequencyOptions, Limits, Location, MassKind, StepResult as ImplicitResult, solve_frequency, solve_static};
+use modelcraft_solver::{FrequencyOptions, Limits, Location, MassKind, StaticResult, StepResult as ImplicitResult, solve_frequency, solve_static};
 use serde_json::{Value, json};
 
 use super::{labels, opt, points, req};
@@ -54,7 +54,7 @@ pub const FLUID: CommandSpec = CommandSpec {
 pub const PROBE: CommandSpec = CommandSpec {
     id: "solve.probe",
     label: "Probe Results",
-    params: r#"{"step": "Load", "nodes": [1, 2], "mode": 1, "frame": 0} — the stored result at nodes: displacement, reaction, stress and von Mises (static), the shape of mode `mode` (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` (or at the nodes nearest to points: "at": [[x, y, z], ...], lowest label on a tie, each entry then giving its `xyz` and `distance`) and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
+    params: r#"{"step": "Load", "nodes": [1, 2], "mode": 1, "frame": 0} — the stored result at nodes: displacement, rotation, reaction, reaction moment, stress and von Mises (static, with `elements` each element's results: solid, 2D and truss nodal stresses, shell section forces (N, M, Q per length in the element's axes) and bottom, middle and top stresses, beam end forces (N, V_y, V_z, T, M_y, M_z in its axes)), the shape of mode `mode` with its rotations (frequency, from 1), or displacement and velocity in field frame `frame` (explicit, from 0; the last by default) at `nodes` (or at the nodes nearest to points: "at": [[x, y, z], ...], lowest label on a tie, each entry then giving its `xyz` and `distance`) and, with `elements` (explicit), each element's stress, von Mises stress, strain, equivalent plastic strain, damage, temperature and whether it has eroded; a coupled reference point's label gives its six displacements (translations, rotations) and reactions (forces, moments). Fluid steps: {"step": "Flow", "points": [[x, y, z]], "frame": 10 (default the last)} gives velocity and pressure in the cells at the points; {"step": "Flow", "forces": ["x_min", "F2:top", "Body1/F2:top"]} gives those walls' force histories"#,
     kind: CommandKind::Model,
     run: probe,
 };
@@ -355,7 +355,7 @@ fn probe(s: &mut Session, p: &Value) -> Result<Value> {
             let found = nearest_nodes(&s.model, result.nodes(), &at)?;
             (found.iter().map(|(l, _, _)| *l).collect(), Some(found))
         }
-        (None, None) if matches!(result.as_ref(), StepResult::Explicit(_)) => (Vec::new(), None),
+        (None, None) if matches!(result.as_ref(), StepResult::Explicit(_)) || p.get("elements").is_some() => (Vec::new(), None),
         _ => return Err(EngineError::Params("give either `nodes` or `at`".into())),
     };
     let mut out = match result.as_ref() {
@@ -393,6 +393,7 @@ fn nearest_nodes(model: &modelcraft_model::Model, with_result: &[u32], at: &[[f6
 
 /// The result of an implicit step at nodes.
 fn probe_implicit(result: &ImplicitResult, step: &str, nodes: &[u32], p: &Value) -> Result<Value> {
+    let elements = if p.get("elements").is_some() { labels(p, "elements", MAX_PROBE)? } else { Vec::new() };
     let locate = |label: u32| {
         result
             .locate(label)
@@ -410,7 +411,9 @@ fn probe_implicit(result: &ImplicitResult, step: &str, nodes: &[u32], p: &Value)
                     Location::Node(i) => json!({
                         "node": l,
                         "displacement": r.displacement.get(i),
+                        "rotation": r.rotation.get(i),
                         "reaction": r.reaction.get(i),
+                        "reaction_moment": r.reaction_moment.get(i),
                         "stress": r.stress.get(i),
                         "von_mises": r.von_mises.get(i),
                     }),
@@ -418,6 +421,9 @@ fn probe_implicit(result: &ImplicitResult, step: &str, nodes: &[u32], p: &Value)
             })
             .collect::<Result<_>>()?,
         ImplicitResult::Frequency(r) => {
+            if !elements.is_empty() {
+                return Err(EngineError::Params("element results are kept for static and explicit steps".into()));
+            }
             let mode = opt::<usize>(p, "mode")?.unwrap_or(1);
             let m = mode
                 .checked_sub(1)
@@ -430,13 +436,43 @@ fn probe_implicit(result: &ImplicitResult, step: &str, nodes: &[u32], p: &Value)
                         Location::Point(k) => {
                             json!({"node": l, "reference_point": r.reference_points.get(k).map(|p| &p.0), "shape": m.point_shape.get(k)})
                         }
-                        Location::Node(i) => json!({"node": l, "shape": m.shape.get(i)}),
+                        Location::Node(i) => json!({"node": l, "shape": m.shape.get(i), "rotation": m.rotation.get(i)}),
                     })
                 })
                 .collect::<Result<_>>()?
         }
     };
-    Ok(json!({"step": step, "nodes": out}))
+    let mut response = json!({"step": step, "nodes": out});
+    if let ImplicitResult::Static(r) = result
+        && !elements.is_empty()
+    {
+        let found: Vec<Value> = elements
+            .iter()
+            .map(|&l| element_result(r, l).ok_or_else(|| EngineError::Params(format!("element {l} has no result in step `{step}`"))))
+            .collect::<Result<_>>()?;
+        response["elements"] = Value::Array(found);
+    }
+    Ok(response)
+}
+
+/// The entry of a label-sorted result list.
+fn by_label<T>(list: &[T], label: u32, key: impl Fn(&T) -> u32) -> Option<&T> {
+    list.binary_search_by_key(&label, key).ok().and_then(|i| list.get(i))
+}
+
+/// The stored results of one element of a static step.
+fn element_result(r: &StaticResult, label: u32) -> Option<Value> {
+    if let Some(e) = by_label(&r.elements, label, |e| e.label) {
+        return Some(json!({"element": label, "kind": e.kind.name(), "stress": e.nodal}));
+    }
+    if let Some(e) = by_label(&r.shells, label, |e| e.label) {
+        let s = &e.stress;
+        return Some(
+            json!({"element": label, "kind": e.kind.name(), "axes": s.axes, "forces": s.forces, "bottom": s.bottom, "middle": s.middle, "top": s.top}),
+        );
+    }
+    let e = by_label(&r.beams, label, |e| e.label)?;
+    Some(json!({"element": label, "kind": e.kind.name(), "axes": e.forces.axes, "ends": e.forces.ends}))
 }
 
 /// Displacement and velocity at nodes, and element results, in one field frame of an explicit
@@ -1025,5 +1061,54 @@ pub(crate) mod tests {
         assert!((r["modes"][0]["frequency"].as_f64().unwrap() - 20.0 / (2.0 * std::f64::consts::PI)).abs() < 1e-12);
         s.execute("model.spring.delete", &json!({"name": "c"})).unwrap();
         assert!(s.model.springs().len() == 1 && s.model.mass("m").is_some());
+    }
+    #[test]
+    fn solve_and_probe_shells_and_beams() {
+        // A cantilever strip of two quad4 shells clamped at x = 0, stiffened along its tip edge
+        // by a beam; a downward force at a tip corner.
+        let mut s = Session::default();
+        let mut script = Vec::new();
+        for (label, xyz) in [(1, [0, 0, 0]), (2, [10, 0, 0]), (3, [20, 0, 0]), (4, [0, 5, 0]), (5, [10, 5, 0]), (6, [20, 5, 0])] {
+            script.push(json!({"command": "mesh.node.add", "params": {"label": label, "xyz": xyz}}));
+        }
+        script.extend([
+            json!({"command": "mesh.element.add", "params": {"label": 1, "kind": "quad4", "nodes": [1, 2, 5, 4]}}),
+            json!({"command": "mesh.element.add", "params": {"label": 2, "kind": "quad4", "nodes": [2, 3, 6, 5]}}),
+            json!({"command": "mesh.element.add", "params": {"label": 3, "kind": "beam2", "nodes": [3, 6]}}),
+            json!({"command": "model.set.create", "params": {"name": "plate", "elements": [1, 2]}}),
+            json!({"command": "model.set.create", "params": {"name": "stiffener", "elements": [3]}}),
+            json!({"command": "model.set.create", "params": {"name": "root", "nodes": [1, 4]}}),
+            json!({"command": "model.set.create", "params": {"name": "corner", "nodes": [3]}}),
+            json!({"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}, "density": 7.85e-9}}),
+            json!({"command": "model.section.create", "params": {"name": "skin", "set": "plate", "material": "Steel", "kind": {"type": "shell", "thickness": 1}}}),
+            json!({"command": "model.section.create", "params": {"name": "rib", "set": "stiffener", "material": "Steel", "kind": {"type": "beam", "profile": {"type": "rectangle", "width": 1, "height": 2}, "orientation": [1, 0, 0]}}}),
+            json!({"command": "model.boundary_condition.create", "params": {"name": "clamp", "type": "fixed", "target": {"set": "root"}}}),
+            json!({"command": "model.load.create", "params": {"name": "push", "type": "force", "target": {"set": "corner"}, "vector": [0, 0, -1]}}),
+            json!({"command": "model.step.create", "params": {"name": "Bend", "procedure": {"type": "static"}, "boundary_conditions": ["clamp"], "loads": ["push"]}}),
+            json!({"command": "model.step.create", "params": {"name": "Modes", "procedure": {"type": "frequency", "modes": 3}, "boundary_conditions": ["clamp"]}}),
+        ]);
+        s.run_script(&Value::Array(script)).unwrap();
+        let r = s.execute("solve.static", &json!({"step": "Bend"})).unwrap();
+        assert!((r["reaction_total"][2].as_f64().unwrap() - 1.0).abs() < 1e-9, "{r}");
+        let probe = s.execute("solve.probe", &json!({"step": "Bend", "nodes": [3, 1], "elements": [1, 3]})).unwrap();
+        assert!(probe["nodes"][0]["displacement"][2].as_f64().unwrap() < 0.0, "{probe}");
+        assert!(probe["nodes"][0]["rotation"][0].as_f64().unwrap() != 0.0, "{probe}");
+        assert!(probe["nodes"][1]["reaction_moment"].is_array(), "{probe}");
+        assert_eq!(probe["elements"][0]["forces"].as_array().unwrap().len(), 4, "{probe}");
+        assert_eq!(probe["elements"][1]["ends"].as_array().unwrap().len(), 2, "{probe}");
+        let only = s.execute("solve.probe", &json!({"step": "Bend", "elements": [2]})).unwrap();
+        assert_eq!(only["nodes"].as_array().unwrap().len(), 0, "{only}");
+        s.execute("solve.frequency", &json!({"step": "Modes"})).unwrap();
+        let shape = s.execute("solve.probe", &json!({"step": "Modes", "nodes": [3], "mode": 1})).unwrap();
+        assert!(shape["nodes"][0]["rotation"].is_array(), "{shape}");
+        for p in [
+            json!({"step": "Bend", "elements": [99]}),
+            json!({"step": "Bend", "elements": [0]}),
+            json!({"step": "Bend", "elements": "1"}),
+            json!({"step": "Bend", "elements": vec![1; 20_000]}),
+            json!({"step": "Modes", "nodes": [3], "elements": [1]}),
+        ] {
+            assert!(s.execute("solve.probe", &p).is_err(), "{p}");
+        }
     }
 }

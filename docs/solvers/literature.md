@@ -1003,6 +1003,24 @@ the module docs):
   Cook et al. 2002, §2.2 and §2.10; HRZ lumping as above. Verified against the method of joints
   (statically determinate trusses), the three-bar truss, the hanging bar, √(k/m), the two-mass
   chain and the torsional pendulum √(k_t/J).
+- Shells: E. N. Dvorkin, K.-J. Bathe, *A continuum mechanics based four-node shell element for
+  general nonlinear analysis*, Engineering Computations 1(1):77–88, 1984 (MITC4 shear tying);
+  K.-J. Bathe, E. N. Dvorkin, IJNME 21(2):367–383, 1985 (the flat-plate form); P.-S. Lee,
+  K.-J. Bathe, *Development of MITC isotropic triangular shell finite elements*, Computers &
+  Structures 82(11–13):945–962, 2004 (MITC3); T. J. R. Hughes, F. Brezzi, *On drilling degrees of
+  freedom*, CMAME 72(1):105–121, 1989 (drilling penalty); facet shells, O. C. Zienkiewicz,
+  R. L. Taylor, D. D. Fox, *The Finite Element Method for Solid and Structural Mechanics*, 7th
+  ed., 2014, ch. 9–10.
+- Beams: J. S. Przemieniecki, *Theory of Matrix Structural Analysis*, McGraw-Hill 1968, §5.6;
+  Z. Friedman, J. B. Kosmatka, Computers & Structures 47(3):473–481, 1993 (interdependent
+  Timoshenko interpolation); G. R. Cowper, J. Appl. Mech. 33(2):335–340, 1966 (shear
+  coefficients); S. P. Timoshenko, J. N. Goodier, *Theory of Elasticity*, 3rd ed., 1970, §109
+  (torsion of a rectangle); W. D. Pilkey, *Analysis and Design of Elastic Beams*, Wiley 2002
+  (thin-walled shear areas and torsion).
+- Shell benchmarks (published values, tagged, not the analytic gate): Scordelis–Lo roof 0.3024
+  (MacNeal & Harder 1985); pinched cylinder 1.8248 · 10⁻⁵ (T. Belytschko, H. Stolarski, W. K.
+  Liu, N. Carpenter, J. S.-J. Ong, CMAME 51(1–3):221–258, 1985). Plate: S. Timoshenko,
+  S. Woinowsky-Krieger, *Theory of Plates and Shells*, 2nd ed., 1959, §30 (Navier).
 - Verification: R. H. MacNeal, R. L. Harder, *A proposed standard set of problems to test finite
   element accuracy*, Finite Elem. Anal. Des. 1(1):3–20, 1985 (patch tests); Lamé, Kirsch,
   Timoshenko and Euler–Bernoulli closed forms; Saint-Venant's principle (tension through a

@@ -150,13 +150,20 @@ module docs; ADR 0001 records why the linear algebra is our own.
    the unknowns their nodes are given (`discrete::needs`, `discrete::dof_of`); dashpots are
    ignored with a warning (no velocities in static and frequency steps). Every reference point a
    coupling or a discrete element uses gets six degrees of freedom (translations, rotations) after
-   the mesh's. Shells
-   and beams return "not supported yet". The step's boundary conditions prescribe translations
-   (rotations do not exist on solid nodes) and a coupled point's six directions; its loads become
-   a load vector: forces and tractions from `Resolved::nodal_loads`, forces and moments on coupled
-   reference points, pressure as consistent face loads, gravity and body forces through the
-   element shape functions.
-2. **Assembly** on the node graph (3 × 3 blocks for solids, 2 × 2 in 2D models, elements in label order, so sums are
+   the mesh's. Shell sections make quad4 (MITC4) and tri3 (MITC3) flat shells with a drilling
+   rotation (`modelcraft_fem::shell`; quad8 and tri6 shells are "not supported yet"), beam
+   sections two-node Timoshenko beams with the profile's section properties and the section's
+   orientation vector (`modelcraft_fem::beam`); both declare `ElementDofs::new(DofSet::STRUCTURAL)`
+   (`system::Structural`), so their nodes carry translations and rotations and the solids and
+   trusses sharing those nodes add into the translations. Shells and beams need isotropic
+   materials until material orientations exist, and are 3D only. The step's boundary conditions
+   prescribe the kinds a node carries (rotations of solid-only nodes are ignored) and a coupled
+   point's six directions; its loads become a load vector: forces, moments and tractions from
+   `Resolved::nodal_loads`, forces and moments on coupled reference points, pressure as
+   consistent face loads (shell faces too), gravity and body forces through the element shape
+   functions (consistent forces and moments on shells and beams).
+2. **Assembly** on the node graph (one dense block per node pair: 3 × 3 for solids, 2 × 2 in 2D
+   models, up to 6 × 6 at shell and beam nodes; elements in label order, so sums are
    reproducible bit for bit).
 3. **Ordering and elimination** (`constraints`). Nested dissection of the nodes by coordinate
    bisection. Couplings become linear constraint rows: kinematic = rigid link of each coupled
@@ -170,8 +177,10 @@ module docs; ADR 0001 records why the linear algebra is our own.
    numbers are those of plain elimination, bit for bit.
 4. **Static solution.** Up-looking sparse Cholesky (the factor size is computed and capped before
    any value), reactions T_pᵀ (K u − f) (at nodes and at prescribed reference points, forces and
-   moments), integration-point stresses extrapolated to the nodes and averaged, von Mises. A zero
-   pivot names the node or reference point and direction that can move freely.
+   moments), integration-point stresses extrapolated to the nodes and averaged, von Mises. Shells
+   report section forces and bottom, middle and top stresses at their nodes (their top surface
+   joins the nodal average), beams their end section forces; nodes report rotations and reaction
+   moments. A zero pivot names the node or reference point and direction that can move freely.
 5. **Frequency.** Shift-invert block Lanczos (block 6, full reorthogonalization) on
    K − σM, σ = 0 for a supported structure and slightly negative for a free one, so rigid-body
    modes come out at zero; mass-normalized shapes, participation factors and effective masses.
@@ -196,6 +205,12 @@ a kinematically coupled point (twist and shear stress). `crates/solver/tests/one
 forces of determinate trusses (a plane Pratt truss, a space tripod) against the method of joints,
 the three-bar truss, a rod3 constant-stress patch and a bar hanging under its weight, spring–mass,
 skew springs, the two-mass chain, a bar with a tip mass and the torsional pendulum.
+`crates/solver/tests/structural.rs`: membrane and bending patch tests of quad4 and tri3 shells
+in a tilted plane, the simply supported plate under pressure against Navier's series (deflection
+and first frequency), cantilever beams against Timoshenko (exact) and Euler–Bernoulli
+frequencies, a portal frame against slope-deflection, solids continued by rods and skinned by
+shells. `crates/solver/tests/benchmarks.rs` (published reference values, tagged with their
+source, separate from the analytic gate): the Scordelis–Lo roof and the pinched cylinder.
 
 ## Explicit solver
 

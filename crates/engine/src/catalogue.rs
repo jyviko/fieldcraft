@@ -366,7 +366,7 @@ pub static CATALOGUE: &[Capability] = &[
         "Probe",
         Results,
         "Query",
-        "Displacement, reaction and stress at nodes, a mode shape, or an explicit field frame (or click the model)",
+        "Displacement, rotation, reaction and stress at nodes, element section forces, a mode shape, or an explicit field frame (or click the model)",
         &["solve.history"],
     ),
     ready("results.reactions", "Reactions", Results, "Query", "Reaction force and moment sums per set"),

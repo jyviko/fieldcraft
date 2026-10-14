@@ -39,6 +39,12 @@ Lookups: `node(label)` / `slot(label)` (a slot is a position: mesh nodes `0..nod
 `point_slot(k)`), `dof(slot, kind)`, `range(slot)`, `kinds(slot)`, `locate(dof) -> (slot,
 kind)`, `element_dofs(slots, kinds)`, `describe(dof)`, `stride()` (uniform layouts).
 
+Trusses declare `modelcraft_fem::truss::DOFS` (translations, on `Basis::Line2`/`Line3`).
+Point masses, springs and dashpots are not mesh elements: the implicit solver asks the layout
+for what each needs at its nodes (`modelcraft_solver::discrete::needs`: translations for a mass
+or a translational spring, rotations for an inertia or a torsional spring; a reference point
+they use is a point with six) and finds its unknowns with `discrete::dof_of`.
+
 Solvers: `modelcraft_solver::system::Mesh::layout` numbers the implicit system (mesh nodes,
 then six per coupled reference point); assembly (`sparse::add_block(k, layout, slots, kinds,
 data)`, `add_scalar`, `add_diagonal`) works for any mix of kinds per node, so a solid sharing

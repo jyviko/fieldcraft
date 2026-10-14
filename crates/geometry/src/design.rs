@@ -2,9 +2,8 @@
 //! with SolidCraft, and hand back its bodies with persistent face names.
 //!
 //! The design is rebuilt from its authoritative inputs (sketches, features, parameters); cached
-//! display meshes in the file are never used. [`open_design`] takes bytes; [`open_design_file`]
-//! reads a path through SolidCraft's file access, which in the browser is the in-memory files the
-//! web host loaded.
+//! display meshes in the file are never used. [`open_design`] takes the file's bytes (reading
+//! files is `fieldcraft_io::fs`'s job, which in the browser holds the page's files).
 
 use solidcraft_doc::{Document, Model, naming};
 use solidcraft_kernel::{KernelError, guard};
@@ -43,11 +42,6 @@ impl Design {
 pub fn open_design(bytes: &[u8]) -> Result<Design> {
     let doc = guard("read design", || solidcraft_io::read_design(bytes).map_err(|e| KernelError::Invalid(format!("not a readable design: {e}"))))?;
     rebuild(&doc)
-}
-
-/// Read a design file (a regular file of at most [`MAX_DESIGN_BYTES`]) and rebuild it.
-pub fn open_design_file(path: &str) -> Result<Design> {
-    open_design(&crate::read_file(path, MAX_DESIGN_BYTES)?)
 }
 
 /// Rebuild an in-memory document (the design half of [`open_design`]).
@@ -165,8 +159,5 @@ mod tests {
             assert!(open_design(bytes).is_err(), "{bytes:?}");
         }
         assert!(open_design(&vec![b' '; MAX_DESIGN_BYTES + 1]).is_err());
-        for path in ["", "/", "/dev/zero", "/no/such/design.solidcraft"] {
-            assert!(open_design_file(path).is_err(), "{path}");
-        }
     }
 }

@@ -22,7 +22,7 @@ pub mod sample;
 #[cfg(feature = "scripts")]
 mod script;
 
-pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design, open_design_file};
+pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design};
 pub mod tagged_mesh;
 #[cfg(feature = "scripts")]
 pub use script::{MAX_SCRIPT_BYTES, script_design};
@@ -45,14 +45,6 @@ impl From<KernelError> for Error {
             other => Error::Failed(other.to_string()),
         }
     }
-}
-
-/// Read a regular file of at most `max_bytes` through SolidCraft's file access (in the browser,
-/// the in-memory files the web host loaded). Opening a design or a 3MF package from these bytes
-/// ([`open_design`], [`tagged_mesh::read_3mf`]) lets the caller record a hash of exactly what it
-/// opened.
-pub fn read_file(path: &str, max_bytes: usize) -> Result<Vec<u8>> {
-    solidcraft_io::vfs::read(path, max_bytes).map_err(|e| Error::Invalid(format!("cannot read `{path}`: {e}")))
 }
 
 /// SolidCraft's linear modelling tolerance (mm): points closer than this are the same point.

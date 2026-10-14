@@ -89,6 +89,12 @@ fn open_sample(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(reply)
 }
 
+/// A file of at most `max` bytes, through FieldCraft's file edge ([`fieldcraft_io::fs`]: the disk,
+/// or the page's files in the browser).
+pub(crate) fn read_file(path: &str, max: u64) -> Result<Vec<u8>> {
+    Ok(fieldcraft_io::fs::read_capped(Path::new(path), max)?)
+}
+
 /// `path` made absolute against the working folder (as given where there is none).
 pub(crate) fn absolute(path: &str) -> String {
     std::path::absolute(path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string())
@@ -119,7 +125,7 @@ fn reopen<T>(
     stored: &SourceFile,
     base: Option<&Path>,
     roots: &Roots,
-    max: usize,
+    max: u64,
     open: impl FnOnce(&[u8]) -> fieldcraft_geometry::Result<T>,
     warnings: &mut Vec<String>,
 ) -> (Option<T>, SourceFile) {
@@ -132,7 +138,7 @@ fn reopen<T>(
             return (None, kept);
         }
     };
-    let bytes = match fieldcraft_geometry::read_file(&checked, max) {
+    let bytes = match read_file(&checked, max) {
         Ok(b) => b,
         Err(e) => {
             warnings.push(format!("{what} `{path}` was not opened ({e}); the model opens without it"));
@@ -173,13 +179,13 @@ impl Session {
         let mut sources = Geometry::default();
         let mut design: Option<Arc<Design>> = None;
         if let Some(stored) = &file.geometry.design {
-            let (opened, source) = reopen("design", stored, base, roots, MAX_DESIGN_BYTES, open_design, &mut warnings);
+            let (opened, source) = reopen("design", stored, base, roots, MAX_DESIGN_BYTES as u64, open_design, &mut warnings);
             design = opened.map(Arc::new);
             sources.design = Some(source);
         }
         let mut surfaces = Vec::new();
         for stored in &file.geometry.meshes {
-            let (opened, source) = reopen("mesh", stored, base, roots, tagged_mesh::MAX_FILE_BYTES, tagged_mesh::read_3mf, &mut warnings);
+            let (opened, source) = reopen("mesh", stored, base, roots, tagged_mesh::MAX_FILE_BYTES as u64, tagged_mesh::read_3mf, &mut warnings);
             surfaces.extend(opened.into_iter().flatten().map(Arc::new));
             sources.meshes.push(source);
         }
@@ -226,8 +232,7 @@ fn load(s: &mut Session, bytes: &[u8], path: Option<String>, saved: bool) -> Res
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = absolute(&file_param(s, p, "path", Access::Read)?);
-    let max = usize::try_from(fieldcraft_io::MAX_FILE_BYTES).unwrap_or(usize::MAX);
-    let bytes = fieldcraft_geometry::read_file(&path, max)?;
+    let bytes = read_file(&path, fieldcraft_io::MAX_FILE_BYTES)?;
     load(s, &bytes, Some(path.clone()), true).map_err(|e| EngineError::Params(format!("{path}: {e}")))
 }
 

@@ -1,0 +1,83 @@
+# Linux on other architectures, weekly and on demand: CI and the release build x86_64 Linux,
+# macOS and Windows only.
+# - arm64: a native runner builds the shipped binaries (release profile) and runs the CLI and
+#   engine tests.
+# - riscv64: cross-built with Ubuntu's GNU toolchain and linked; the CLI then runs under QEMU.
+#   The GUI needs no target system libraries at link time (Wayland, X11 and GL are opened at run
+#   time), so only the cross C toolchain and libc are installed.
+# The RISC-V job is adapted from SolidCraft's CI (see ATTRIBUTION.md).
+name: Linux arm64 and riscv64
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arch-check-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  arm64:
+    name: Linux arm64 (native)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: arm64
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - name: Build fieldcraft and fieldcraft-cli (release)
+        run: cargo build --locked --release -p fieldcraft -p fieldcraft-cli
+      - name: Run the binaries
+        run: |
+          file target/release/fieldcraft target/release/fieldcraft-cli
+          target/release/fieldcraft --version
+          target/release/fieldcraft-cli --version
+          target/release/fieldcraft-cli commands >/dev/null
+      - name: CLI and engine tests
+        run: cargo test --locked --profile ci -p fieldcraft-cli -p fieldcraft-engine
+
+  riscv64:
+    name: Linux riscv64 (cross)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET: riscv64gc-unknown-linux-gnu
+      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64 -L /usr/riscv64-linux-gnu
+      CC_riscv64gc_unknown_linux_gnu: riscv64-linux-gnu-gcc
+      CXX_riscv64gc_unknown_linux_gnu: riscv64-linux-gnu-g++
+      AR_riscv64gc_unknown_linux_gnu: riscv64-linux-gnu-ar
+      PKG_CONFIG_ALLOW_CROSS: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv64gc-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: riscv64
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - name: Install the cross toolchain and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross qemu-user
+      - name: Build fieldcraft and fieldcraft-cli
+        run: cargo build --locked --profile ci --target "$TARGET" -p fieldcraft -p fieldcraft-cli
+      - name: Run the CLI under QEMU
+        run: |
+          bin="target/$TARGET/ci"
+          file "$bin/fieldcraft" "$bin/fieldcraft-cli"
+          qemu-riscv64 -L /usr/riscv64-linux-gnu "$bin/fieldcraft-cli" --version
+          qemu-riscv64 -L /usr/riscv64-linux-gnu "$bin/fieldcraft-cli" commands >/dev/null
+          qemu-riscv64 -L /usr/riscv64-linux-gnu "$bin/fieldcraft" --version

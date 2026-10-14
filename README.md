@@ -98,12 +98,18 @@ Ready-to-solve samples: open one from **File ▸ Samples** (or the start screen)
 with `fieldcraft --sample NAME`, and press **Solve**. Each opens and solves within half a minute and is checked
 against a closed form or a reference solution ([docs/examples.md](docs/examples.md)).
 
-| | | |
-|---|---|---|
-| ![Drop test](docs/media/examples/drop-test.png) | ![Rubber seal](docs/media/examples/rubber-seal.png) | ![Heated bracket](docs/media/examples/heated-bracket.png) |
-| **Drop test** (`drop-test`): an aluminium bracket dropped 2 m onto a tilted floor; explicit dynamics, the strike's stress waves | **Rubber seal** (`rubber-seal`): a Mooney–Rivlin gasket ring squeezed 25 %; nonlinear static, large strain | **Heated bracket** (`heated-bracket`): a clamped steel bracket heated at one end; steady heat and thermal stress |
-| ![Hex-meshed bracket](docs/media/examples/bracket-hex.png) | *No picture yet: the viewport does not draw flow results (M12).* | ![Bicycle crank arm](docs/media/examples/crank-arm.png) |
-| **Hex-meshed bracket** (`bracket-hex`): the bracket split into 30 cells, meshed all-hex (hex20), von Mises | **Flow past a bracket** (`flow-past`): air past an L-bracket on the floor; lattice Boltzmann flow, the drag and the force on each face | **Bicycle crank arm** (`crank-arm`): an aluminium crank swept all-hex (hex20), a rider's weight on the pedal; root bending within 0.3 % of M/Z |
+<table>
+<tr>
+<td width="33%" valign="top"><img src="docs/media/examples/drop-test.png" alt="Drop test" width="100%"><br><b>Drop test</b> (<code>drop-test</code>): an aluminium bracket dropped 2 m onto a tilted floor; explicit dynamics, the strike's stress waves</td>
+<td width="33%" valign="top"><img src="docs/media/examples/rubber-seal.png" alt="Rubber seal" width="100%"><br><b>Rubber seal</b> (<code>rubber-seal</code>): a Mooney–Rivlin gasket ring squeezed 25 %; nonlinear static, large strain</td>
+<td width="33%" valign="top"><img src="docs/media/examples/heated-bracket.png" alt="Heated bracket" width="100%"><br><b>Heated bracket</b> (<code>heated-bracket</code>): a clamped steel bracket heated at one end; steady heat and thermal stress</td>
+</tr>
+<tr>
+<td width="33%" valign="top"><img src="docs/media/examples/bracket-hex.png" alt="Hex-meshed bracket" width="100%"><br><b>Hex-meshed bracket</b> (<code>bracket-hex</code>): the bracket split into 30 cells, meshed all-hex (hex20), von Mises</td>
+<td width="33%" valign="top"><img src="docs/media/examples/crank-arm.png" alt="Bicycle crank arm" width="100%"><br><b>Bicycle crank arm</b> (<code>crank-arm</code>): an aluminium crank swept all-hex (hex20), a rider's weight on the pedal; root bending within 0.3 % of M/Z</td>
+<td width="33%" valign="top"><i>No picture yet: the viewport does not draw flow results (M12).</i><br><b>Flow past a bracket</b> (<code>flow-past</code>): air past an L-bracket on the floor; lattice Boltzmann flow, the drag and the force on each face</td>
+</tr>
+</table>
 
 ## Build
 

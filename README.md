@@ -31,10 +31,12 @@ theory with shear 0.177 mm).
 [![Download for macOS](https://img.shields.io/badge/macOS-Download-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/jyviko/fieldcraft/releases/latest)
 [![Download for Windows](https://img.shields.io/badge/Windows-Download-0078D6?style=for-the-badge)](https://github.com/jyviko/fieldcraft/releases/latest)
 [![Download for Linux](https://img.shields.io/badge/Linux-Download-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/jyviko/fieldcraft/releases/latest)
+[![Try it in your browser](https://img.shields.io/badge/Browser-Try%20it-2ea44f?style=for-the-badge&logo=webassembly&logoColor=white)](https://jyviko.github.io/fieldcraft/)
 
 - **macOS:** open the `.dmg` and drag FieldCraft into Applications (Apple silicon and Intel).
 - **Windows:** unzip and run `fieldcraft.exe`.
 - **Linux:** the `.AppImage` (allow it to run as a program), or the `.tar.gz`.
+- **Browser:** [try it at jyviko.github.io/fieldcraft](https://jyviko.github.io/fieldcraft/), no install.
 - **Command line:** `fieldcraft-cli` ships in every package; AI agents connect to it over MCP
   ([docs/mcp.md](docs/mcp.md)).
 

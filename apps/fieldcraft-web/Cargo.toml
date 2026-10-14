@@ -1,0 +1,34 @@
+[package]
+name = "fieldcraft-web"
+description = "FieldCraft in the browser (eframe web runner, WebGPU with WebGL2 fallback)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "fieldcraft-web"
+path = "src/main.rs"
+
+[dependencies]
+fieldcraft-engine = { workspace = true }
+fieldcraft-ui-egui = { workspace = true }
+fieldcraft-io = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
+# `file-handle-inner`: a picked file's size, checked before it is read.
+rfd = { workspace = true, features = ["file-handle-inner"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "DomTokenList", "CssStyleDeclaration", "Event", "EventTarget", "BeforeUnloadEvent", "Storage"] }
+# Autosaves kept in the browser's local storage, which holds text.
+base64 = "0.22"

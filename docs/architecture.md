@@ -34,7 +34,7 @@ crates in strictly lower layers.
 | L6 | `fieldcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts; every file a command names checked against the session's roots (`Session::file_access`); headless pictures of the session (`view`: model, geometry, deformed shape and contours on the CPU rasterizer). | started |
 | L7 | `fieldcraft-ui-egui`, `fieldcraft-mcp` | Desktop UI in the Craft family's layout (title bar with quick actions, workspace ribbon from the catalogue, browser, viewport with navigation bar and orientation gizmo, context panel, command search and command line, journal timeline; native file pickers as host services, background opening and solving; results display with legend and probe; offscreen capture of the whole window) and control channel requests (docs/control-protocol.md); MCP server over stdio (docs/mcp.md): tools over engine commands, a headless session or the running app through its control channel, read and write roots. | ui, mcp started |
 | testkit | `fieldcraft-testkit` | Test tooling, a dev-dependency only: the meshing test corpus (`tests/corpus/*/recipe.json`, analytic shapes) and its runner (`cargo xtask corpus`). | started |
-| apps | `fieldcraft`, `fieldcraft-cli`, `fieldcraft-web` | Desktop, command line, browser. | desktop, cli started |
+| apps | `fieldcraft`, `fieldcraft-cli`, `fieldcraft-web` | Desktop, command line, browser (docs/web.md). | started |
 
 Rules beyond the layer order:
 - Nothing below L7 uses egui, eframe, winit, wgpu or rfd.

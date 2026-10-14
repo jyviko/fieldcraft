@@ -43,7 +43,7 @@ commands:
                   against their references and fixtures; write docs/oracle.md after a full run;
                   --bless freezes a passing case's results in its fixture.json; --quick skips
                   cases marked slow (release build)
-  wasm            cargo check every library crate for wasm32-unknown-unknown
+  wasm            cargo check every library crate and the web app for wasm32-unknown-unknown
   ci              fmt --check, assets, licences --check, layers, clippy -D warnings, then the tests
                   (not the heavy ones) with the wasm check alongside (stops at the first failing
                   step)
@@ -160,7 +160,8 @@ fn cmd_layers() -> Result<(), String> {
     }
 }
 
-/// Never break wasm: every layered crate (everything below the apps) must build for the browser.
+/// Never break wasm: every layered crate (everything below the apps) and the web app must build
+/// for the browser.
 fn cmd_wasm() -> Result<(), String> {
     let (c, n) = wasm_check()?;
     run(c, &format!("cargo check --target wasm32-unknown-unknown ({n} crates)"))?;
@@ -168,12 +169,21 @@ fn cmd_wasm() -> Result<(), String> {
     Ok(())
 }
 
+/// The app that runs in the browser (apps/fieldcraft-web), checked with the layered crates.
+const WEB_APP: &str = "fieldcraft-web";
+
 /// The wasm check and how many crates it covers. It uses the ci profile so the host build
 /// scripts and proc macros built for clippy and the tests are reused.
 fn wasm_check() -> Result<(Command, usize), String> {
     let crates = layers::from_metadata(&metadata()?)?;
-    let set: Vec<String> =
-        crates.iter().filter(|c| matches!(layers::classify(&c.name), Some(layers::Class::Layer(_)))).map(|c| c.name.clone()).collect();
+    let set: Vec<String> = crates
+        .iter()
+        .filter(|c| c.name == WEB_APP || matches!(layers::classify(&c.name), Some(layers::Class::Layer(_))))
+        .map(|c| c.name.clone())
+        .collect();
+    if !set.iter().any(|c| c == WEB_APP) {
+        return Err(format!("wasm: the web app `{WEB_APP}` is not in the workspace"));
+    }
     let mut c = cargo();
     c.args(["check", "--target", "wasm32-unknown-unknown", "--profile", "ci"]);
     for p in &set {

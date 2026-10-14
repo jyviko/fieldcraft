@@ -179,6 +179,11 @@ pub struct Loading {
     form: Option<&'static str>,
     /// The finished session copy and the command's reply.
     rx: Receiver<(Box<Session>, Result<Value, String>)>,
+    /// The work, while it waits to run on the window thread (the web, which has no threads).
+    pending: Option<Work>,
+    /// Whether the window has drawn the job's progress: on the web the work runs (and the page
+    /// stops drawing) only once the user has seen that it runs.
+    shown: bool,
 }
 
 /// What waits for an answer about unsaved changes.
@@ -231,27 +236,45 @@ fn with_extension(path: String, ext: &str) -> String {
 
 /// Run `work` off the window thread (inline on the web, which has no threads).
 fn off_thread(name: String, work: impl FnOnce() + Send + 'static) {
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = std::thread::Builder::new().name(name.clone()).spawn(work) {
-        // The work went with the closure: a job then reports that it could not start.
-        log::warn!("{name}: no worker thread: {e}");
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = name;
+    if let Some(work) = start(name, Box::new(work)) {
         work();
     }
 }
 
-/// Run `command` on `session` off the window thread.
-fn spawn(session: Session, command: &'static str, params: Value) -> Receiver<(Box<Session>, Result<Value, String>)> {
+/// A background job's work.
+type Work = Box<dyn FnOnce() + Send>;
+
+/// Start `work` on a worker thread. The web has no threads: the work comes back, to run on the
+/// window thread once the window has shown that it runs ([`Loading::shown`]).
+fn start(name: String, work: Work) -> Option<Work> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Err(e) = std::thread::Builder::new().name(name.clone()).spawn(work) {
+            // The work went with the closure: a job then reports that it could not start.
+            log::warn!("{name}: no worker thread: {e}");
+        }
+        None
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = name;
+        Some(work)
+    }
+}
+
+/// Run `command` on `session` off the window thread: the reply's receiver, and the work when it
+/// waits to run on the window thread (the web).
+fn spawn(session: Session, command: &'static str, params: Value) -> (Receiver<(Box<Session>, Result<Value, String>)>, Option<Work>) {
     let (tx, rx) = std::sync::mpsc::channel();
-    off_thread(format!("fieldcraft {command}"), move || {
-        let mut s = session;
-        let r = s.execute(command, &params).map_err(|e| e.to_string());
-        let _ = tx.send((Box::new(s), r));
-    });
-    rx
+    let work = start(
+        format!("fieldcraft {command}"),
+        Box::new(move || {
+            let mut s = session;
+            let r = s.execute(command, &params).map_err(|e| e.to_string());
+            let _ = tx.send((Box::new(s), r));
+        }),
+    );
+    (rx, work)
 }
 
 impl ModelApp {
@@ -281,10 +304,10 @@ impl ModelApp {
             return false;
         }
         let base = if fresh { Session::default() } else { self.session.clone() };
-        let rx = spawn(base, command, params);
+        let (rx, pending) = spawn(base, command, params);
         self.set_status(format!("{title}…"), false);
         let fit = fresh || recent.is_some();
-        self.loading = Some(Loading { title, done, recent, fit, form: None, rx });
+        self.loading = Some(Loading { title, done, recent, fit, form: None, rx, pending, shown: false });
         true
     }
 
@@ -406,7 +429,13 @@ impl ModelApp {
 
     /// Take in a finished background job (called every frame); `true` while one is running.
     pub fn poll_loading(&mut self) -> bool {
-        let Some(l) = &self.loading else { return false };
+        let Some(l) = &mut self.loading else { return false };
+        if l.pending.is_some() && !l.shown {
+            return true;
+        }
+        if let Some(work) = l.pending.take() {
+            work();
+        }
         let outcome = match l.rx.try_recv() {
             Ok(done) => Some(done),
             Err(TryRecvError::Empty) => return true,
@@ -616,6 +645,9 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                 });
             },
         );
+        if let Some(l) = app.loading.as_mut() {
+            l.shown = true;
+        }
         if cancel {
             app.cancel_loading();
         }

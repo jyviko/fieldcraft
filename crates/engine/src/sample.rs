@@ -68,6 +68,13 @@ pub const SAMPLES: &[Sample] = &[
         design: None,
         script: |_| rubber_seal(),
     },
+    Sample {
+        name: "flow-past",
+        label: "Flow Past a Bracket",
+        about: "Air flowing past an L-bracket on the floor: lattice Boltzmann flow and the force on each face",
+        design: Some(UPRIGHT_BRACKET),
+        script: |_| flow_past(),
+    },
 ];
 
 /// The sample called `name`.
@@ -333,6 +340,33 @@ pub fn rubber_seal() -> Value {
     Value::Array(steps)
 }
 
+/// The flow sample's free-stream speed, mm/s.
+pub const FLOW_SPEED: f64 = 25.0;
+/// Air at 20 °C: density (t/mm³) and dynamic viscosity (MPa s).
+const AIR: [f64; 2] = [1.2e-12, 1.8e-11];
+
+/// Air at [`FLOW_SPEED`] past [`UPRIGHT_BRACKET`] standing on the floor, the upright's back face
+/// to the wind: a 240 × 120 × 100 mm box of 2.5 mm cells (184 320), a uniform inlet at x_min, an
+/// outlet at zero pressure at x_max, a no-slip floor and slip walls at the sides and top. Reynolds
+/// number ρ U h / μ = 83 on the upright's 50 mm height: laminar, a steady wake. Step `Flow` (16 s,
+/// about 6.7 flow-throughs; ten frames) reports the force on each named face of the bracket.
+pub fn flow_past() -> Value {
+    let [density, viscosity] = AIR;
+    json!([
+        {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
+        {"command": "model.material.create", "params": {"name": "Air", "density": density, "fluid": {"type": "newtonian", "viscosity": viscosity}}},
+        {"command": "model.fluid_domain.create", "params": {
+            "name": "Wind", "material": "Air", "min": [-60, -40, 0], "max": [180, 80, 100], "spacing": 2.5,
+            "faces": {
+                "x_min": {"type": "velocity", "velocity": [FLOW_SPEED, 0, 0]}, "x_max": {"type": "pressure", "pressure": 0},
+                "y_min": {"type": "slip"}, "y_max": {"type": "slip"}, "z_min": {"type": "wall"}, "z_max": {"type": "slip"}
+            },
+            "obstacles": ["Bracket"], "initial_velocity": [FLOW_SPEED, 0, 0]
+        }},
+        {"command": "model.step.create", "params": {"name": "Flow", "procedure": {"type": "fluid", "domain": "Wind", "end_time": 16, "frames": 10}}},
+    ])
+}
+
 /// Six times the signed volume of the tetrahedron `p[0..4]` (positive when p3 lies on the side
 /// p0 → p1 → p2 turns counter-clockwise around).
 fn signed_volume(p: &[[f64; 3]]) -> f64 {
@@ -446,6 +480,29 @@ mod tests {
         assert!((free - closed).abs() < 0.03 * closed.abs(), "frictionless {free} N against {closed} N");
         let stiffer = bonded / free;
         assert!(stiffer > 1.05 && stiffer < 2.5, "bonded {bonded} N, frictionless {free} N");
+    }
+
+    #[test]
+    fn the_flow_sample_opens_ready_to_solve() {
+        let s = open("flow-past");
+        assert_eq!(s.model.fluid_domains().len(), 1);
+    }
+
+    /// The drag on the bracket, as a coefficient on the upright's frontal area (40 × 50 mm), is
+    /// that of a bluff plate standing on a wall at a Reynolds number of 83, raised by the 17 %
+    /// blockage of the box: between 1 and 3.5 (a flat plate broadside to the flow is about 1.2 at
+    /// high Reynolds number and rises as it falls). The lattice conserves mass.
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn the_flow_past_the_bracket_has_a_bluff_body_drag() {
+        let mut s = open("flow-past");
+        let r = s.execute("solve.run", &json!({})).unwrap();
+        let r = &r["steps"][0]["summary"];
+        let drag: f64 = r["forces"].as_array().unwrap().iter().filter(|f| f["body"] == "Bracket").map(|f| f["mean"][0].as_f64().unwrap()).sum();
+        let [density, _] = AIR;
+        let cd = drag / (0.5 * density * FLOW_SPEED * FLOW_SPEED * 40.0 * 50.0);
+        assert!(cd > 1.0 && cd < 3.5, "Cd {cd}: {r}");
+        assert!(r["mass"]["relative_change"].as_f64().unwrap().abs() < 0.01, "{r}");
     }
 
     #[test]

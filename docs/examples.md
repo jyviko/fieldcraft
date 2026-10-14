@@ -46,3 +46,24 @@ P = 2 (λ − λ⁻²)(C10 + C01/λ) per original area: 3 430 N against 3 466 N 
 the bulge makes it stiffer (shape factor 0.5): 6 518 N, held between 1.05 and 2.5 times the
 frictionless force. The groove and the plates are prescribed displacements today; with implicit
 contact (#161) the ring will be pressed by contact against a groove.
+
+## Flow past a bracket (`flow-past`)
+
+Air (ρ = 1.2 kg/m³, μ = 1.8 × 10⁻⁵ Pa s) at 25 mm/s past the same L-bracket standing on the
+floor, the upright's back to the wind. A 240 × 120 × 100 mm box of 2.5 mm cells (184 320),
+uniform inlet, outlet at zero pressure, a no-slip floor and slip walls at the sides and top;
+D3Q19 lattice Boltzmann (TRT) for 16 s, about 6.7 flow-throughs, ten frames. Reynolds number
+83 on the upright's 50 mm height: laminar, a steady wake. About 10 s.
+
+**Look at:** the step's report (`solve.fluid`, or Results after Solve): the force on every
+named face of the bracket and on each side of the box, final and time-averaged, and the mass
+history; `solve.probe` with `points` gives the velocity and pressure in any cell, and with
+`forces` each face's force history.
+
+**Check:** the drag on the bracket, as a coefficient on the upright's frontal area
+(40 × 50 mm), is 2.3 — a bluff plate standing on a wall at low Reynolds number in a box it
+blocks by 17 %, held between 1 and 3.5 (a flat plate broadside to the flow is about 1.2 at high
+Reynolds number and rises as it falls); the lattice's mass changes by less than 1 %.
+
+There is no picture yet: the viewport does not draw flow results (velocity slices and
+streamlines are planned in M12), so this example is numbers only for now.

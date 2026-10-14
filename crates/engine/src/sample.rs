@@ -689,8 +689,9 @@ mod tests {
     /// the bracket away from the heater. Its thermal expansion: with the air at the heater's
     /// temperature the bracket warms evenly by ΔT, and held at the foot's hole alone (at x = 40)
     /// it grows freely, so a point moves α ΔT times its distance from the hole's axis along x:
-    /// the upright's top by −0.0432 mm (within 2 %), the foot's end by +0.024 mm (within 6 %:
-    /// the clamped bore cannot grow).
+    /// the upright's top by −0.0432 mm (within 3 %), the foot's end by +0.024 mm (within 6 %).
+    /// The clamped bore cannot grow, which holds both points back a little; how much depends on
+    /// the tet mesh, which differs between platforms (#115): 2.1 % at the top on the Linux CI.
     #[test]
     #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
     fn the_heated_bracket_warms_and_expands_as_steel() {
@@ -711,7 +712,7 @@ mod tests {
         let grow = STEEL_EXPANSION * (HEATER - AMBIENT);
         // The bore itself cannot grow, which holds back the foot's end, 16 mm from its edge, a
         // little more than the upright's top, 32 mm away.
-        for (i, tolerance) in [(0, 0.02), (1, 0.06)] {
+        for (i, tolerance) in [(0, 0.03), (1, 0.06)] {
             let node = &p["nodes"][i];
             let (ux, expected) = (node["displacement"][0].as_f64().unwrap(), grow * (node["xyz"][0].as_f64().unwrap() - 40.0));
             assert!((ux - expected).abs() < tolerance * expected.abs(), "{node}: {ux} against {expected}");

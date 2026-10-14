@@ -55,6 +55,8 @@ pub struct DisplayNode {
 pub struct SurfaceTri {
     pub p: [Vec3; 3],
     pub normal: Vec3,
+    /// Which surface (body) it belongs to: the order [`DisplayMesh::add_surface`] got them in.
+    pub body: u32,
 }
 
 /// Display data for a model and its geometry.
@@ -72,6 +74,8 @@ pub struct DisplayMesh {
     pub surface_tris: Vec<SurfaceTri>,
     /// Geometry edges: where two faces meet, and open boundaries.
     pub surface_edges: Vec<[Vec3; 2]>,
+    /// Geometry surfaces (bodies) added.
+    pub bodies: u32,
     pub bounds: Aabb3,
 }
 
@@ -225,7 +229,7 @@ impl DisplayMesh {
             for p in [a, b, c] {
                 self.bounds.add(p);
             }
-            self.surface_tris.push(SurfaceTri { p: [a, b, c], normal });
+            self.surface_tris.push(SurfaceTri { p: [a, b, c], normal, body: self.bodies });
             let face = tri_face.get(t).copied().unwrap_or(u32::MAX);
             let [v0, v1, v2] = [vertex(i0), vertex(i1), vertex(i2)];
             for (u, v) in [(v0, v1), (v1, v2), (v2, v0)] {
@@ -241,6 +245,17 @@ impl DisplayMesh {
                 self.surface_edges.push([a, b]);
             }
         }
+        self.bodies = self.bodies.saturating_add(1);
+    }
+
+    /// The colour of a geometry triangle: `single` when there is one body, else body `k`'s
+    /// colour from `palette` (cycling), so the bodies of a design, such as the cells of a
+    /// partitioned part, tell apart.
+    pub fn body_color<C: Copy>(&self, tri: &SurfaceTri, single: C, palette: &[C]) -> C {
+        if self.bodies <= 1 || palette.is_empty() {
+            return single;
+        }
+        palette.get(tri.body as usize % palette.len()).copied().unwrap_or(single)
     }
 
     /// Where node `label` is drawn, if it is (nodes are kept in label order).
@@ -401,6 +416,13 @@ mod tests {
         welded.add_surface(&soup, &[[0, 1, 2], [3, 4, 5]], &[0, 0]);
         assert_eq!(welded.surface_edges.len(), 4);
         let mut hostile = DisplayMesh::default();
+        let mut two = DisplayMesh::default();
+        two.add_surface(&p, &[[0, 1, 2]], &[0]);
+        two.add_surface(&p, &[[0, 2, 3]], &[0]);
+        assert_eq!(two.bodies, 2);
+        let colors: Vec<u8> = two.surface_tris.iter().map(|t| two.body_color(t, 0u8, &[7, 8])).collect();
+        assert_eq!(colors, vec![7, 8]);
+        assert_eq!(one_face.body_color(&one_face.surface_tris[0], 0u8, &[7, 8]), 0);
         hostile.add_surface(&[[f64::NAN, 0., 0.], [1., 0., 0.], [0., 1., 0.]], &[[0, 1, 2], [u32::MAX, 0, 1]], &[]);
         assert!(hostile.surface_tris.is_empty() && hostile.surface_edges.is_empty());
     }

@@ -79,7 +79,11 @@ pub fn build(display: &DisplayMesh, style: Style, show: Show, t: &Tokens) -> Sce
             s.tris = display.tris.iter().map(|d| SceneTri { p: d.p, normal: d.normal, color: rgb(t.element(d.kind)) }).collect();
         }
         if !mesh_faces && show.geometry {
-            s.tris.extend(display.surface_tris.iter().map(|d| SceneTri { p: d.p, normal: d.normal, color: rgb(t.geometry) }));
+            s.tris.extend(display.surface_tris.iter().map(|d| SceneTri {
+                p: d.p,
+                normal: d.normal,
+                color: rgb(display.body_color(d, t.geometry, &t.bodies)),
+            }));
         }
     }
     if style != Style::Shaded && show.mesh {

@@ -32,6 +32,8 @@ pub struct Palette {
     pub mesh_edge: Rgb,
     pub geometry: Rgb,
     pub geometry_edge: Rgb,
+    /// The bodies of a design with several, in turn.
+    pub bodies: [Rgb; 8],
     /// Faces of nodes without a value in a contour plot.
     pub no_result: Rgb,
     /// The contour colour scale, low to high.
@@ -52,6 +54,16 @@ impl Palette {
         mesh_edge: Rgb(0x1e, 0x23, 0x2a),
         geometry: Rgb(0xb4, 0xba, 0xc4),
         geometry_edge: Rgb(0x2a, 0x30, 0x3a),
+        bodies: [
+            Rgb(0x8f, 0xb4, 0xd9),
+            Rgb(0xe0, 0xa4, 0x6c),
+            Rgb(0x8c, 0xc4, 0x8a),
+            Rgb(0xd6, 0x8c, 0x96),
+            Rgb(0xb0, 0x9c, 0xd8),
+            Rgb(0xd8, 0xc8, 0x70),
+            Rgb(0x7c, 0xc4, 0xc0),
+            Rgb(0xc0, 0xa0, 0x84),
+        ],
         no_result: Rgb(0x9a, 0xa0, 0xaa),
         contour: [Rgb(0x2b, 0x4f, 0xd8), Rgb(0x2f, 0xb8, 0xe0), Rgb(0x3c, 0xc8, 0x64), Rgb(0xf0, 0xd2, 0x3c), Rgb(0xe0, 0x40, 0x2e)],
         glyphs: GlyphColors {
@@ -125,7 +137,7 @@ fn model_scene(d: &DisplayMesh, p: &Palette) -> Scene {
     s.tris = d.tris.iter().map(|t| SceneTri { p: t.p, normal: t.normal, color: p.element(t.kind) }).collect();
     let faces_drawn = d.tris.is_empty();
     if faces_drawn {
-        s.tris.extend(d.surface_tris.iter().map(|t| SceneTri { p: t.p, normal: t.normal, color: p.geometry }));
+        s.tris.extend(d.surface_tris.iter().map(|t| SceneTri { p: t.p, normal: t.normal, color: d.body_color(t, p.geometry, &p.bodies) }));
     }
     s.lines = d.edges.iter().map(|e| SceneLine { a: e.p[0], b: e.p[1], color: p.mesh_edge, width: EDGE_WIDTH }).collect();
     let edge = if faces_drawn { p.mesh_edge } else { p.geometry_edge };

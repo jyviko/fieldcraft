@@ -66,6 +66,8 @@ pub struct Tokens {
     pub geometry: Color32,
     /// Their face boundaries.
     pub geometry_edge: Color32,
+    /// The bodies of a design with several (the cells of a partitioned part), in turn.
+    pub bodies: [Color32; 8],
     // ---- results ----
     /// The contour colour scale, low to high (the same in both themes).
     pub contour: [Color32; 5],
@@ -137,6 +139,16 @@ impl Tokens {
             node: Color32::from_rgb(0xb4, 0x3c, 0x8c),
             geometry: Color32::from_rgb(176, 186, 198),
             geometry_edge: Color32::from_rgb(40, 44, 52),
+            bodies: [
+                Color32::from_rgb(0x8f, 0xb4, 0xd9),
+                Color32::from_rgb(0xe0, 0xa4, 0x6c),
+                Color32::from_rgb(0x8c, 0xc4, 0x8a),
+                Color32::from_rgb(0xd6, 0x8c, 0x96),
+                Color32::from_rgb(0xb0, 0x9c, 0xd8),
+                Color32::from_rgb(0xd8, 0xc8, 0x70),
+                Color32::from_rgb(0x7c, 0xc4, 0xc0),
+                Color32::from_rgb(0xc0, 0xa0, 0x84),
+            ],
             contour: CONTOUR,
             no_result: Color32::from_rgb(0x9a, 0xa0, 0xaa),
             glyph_constraint: Color32::from_rgb(0x00, 0x8a, 0xa8),
@@ -188,6 +200,16 @@ impl Tokens {
         t.node = Color32::from_rgb(0xf2, 0xe6, 0x6e);
         t.geometry = Color32::from_rgb(152, 156, 162);
         t.geometry_edge = Color32::from_rgb(16, 16, 18);
+        t.bodies = [
+            Color32::from_rgb(0x6c, 0x92, 0xb8),
+            Color32::from_rgb(0xbc, 0x84, 0x50),
+            Color32::from_rgb(0x6c, 0xa2, 0x6a),
+            Color32::from_rgb(0xb4, 0x6e, 0x78),
+            Color32::from_rgb(0x90, 0x7e, 0xb6),
+            Color32::from_rgb(0xb6, 0xa6, 0x54),
+            Color32::from_rgb(0x5c, 0xa2, 0x9e),
+            Color32::from_rgb(0xa0, 0x82, 0x66),
+        ];
         t.no_result = Color32::from_rgb(0x70, 0x76, 0x80);
         t.glyph_constraint = Color32::from_rgb(0x3c, 0xdc, 0xf0);
         t.glyph_load = Color32::from_rgb(0xff, 0x5a, 0x4c);

@@ -191,6 +191,7 @@ fn pipe(k: usize) -> (f64, f64) {
 }
 
 #[test]
+#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
 fn pipe_poiseuille_on_a_staircase_wall_converges() {
     let runs: Vec<(f64, f64)> = [4, 8, 16].iter().map(|&k| pipe(k)).collect();
     let l2: Vec<f64> = runs.iter().map(|r| r.0).collect();
@@ -261,6 +262,7 @@ fn sphere_drag(r: f64, l: usize, steps: u64) -> (f64, f64) {
 }
 
 #[test]
+#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
 fn stokes_drag_of_a_sphere_array_matches_hasimoto() {
     let coarse = sphere_drag(3.0, 16, 1500);
     let fine = sphere_drag(6.0, 32, 3000);
@@ -272,6 +274,7 @@ fn stokes_drag_of_a_sphere_array_matches_hasimoto() {
 }
 
 #[test]
+#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
 fn channel_with_a_parabolic_inlet_and_a_pressure_outlet_develops_poiseuille_flow() {
     // Plates 1 apart, 6 long; inlet peak 0.1; outlet at gauge pressure 0.
     let (h, l, nu, umax, n) = (1.0, 3.0, 0.05, 0.1, 16);

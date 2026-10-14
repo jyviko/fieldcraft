@@ -46,7 +46,7 @@ jobs:
           code=false
           while IFS= read -r f; do
             case "$f" in
-              docs/features.md) code=true ;;
+              docs/features.md|docs/oracle.md) code=true ;;
               *.md|docs/*) ;;
               "") ;;
               *) code=true ;;
@@ -93,6 +93,8 @@ jobs:
     # its fixture, and docs/oracle.md must be the table the cases produce. Cases marked `slow`
     # run here too while the whole set stays within a few minutes; `--quick` skips them.
     name: cargo xtask oracle
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:

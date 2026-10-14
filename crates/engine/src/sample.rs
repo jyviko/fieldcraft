@@ -75,6 +75,13 @@ pub const SAMPLES: &[Sample] = &[
         design: Some(UPRIGHT_BRACKET),
         script: |_| flow_past(),
     },
+    Sample {
+        name: "heated-bracket",
+        label: "Heated Bracket",
+        about: "A steel bracket clamped at its holes and heated at one end: steady heat conduction and the thermal stress",
+        design: Some(FILLETED_BRACKET),
+        script: |_| heated_bracket(),
+    },
 ];
 
 /// The sample called `name`.
@@ -367,6 +374,47 @@ pub fn flow_past() -> Value {
     ])
 }
 
+/// The corpus filleted bracket (`tests/corpus/filleted-bracket`): an 8 mm L-bracket, foot along
+/// x (60 mm) and upright along y (50 mm), extruded 40 mm along z, an R6 fillet, an 8 mm hole
+/// through each leg (`F4` through the foot at x = 40, `F5` through the upright at y = 32).
+pub const FILLETED_BRACKET: &str = include_str!("../../../tests/corpus/filleted-bracket/recipe.json");
+
+/// The heated bracket: the heater's and the surrounding air's temperatures (°C, also the stress
+/// free temperature), and steel's expansion coefficient (1/K).
+pub const HEATER: f64 = 120.0;
+pub const AMBIENT: f64 = 20.0;
+pub const STEEL_EXPANSION: f64 = 1.2e-5;
+
+/// [`FILLETED_BRACKET`] in steel (k = 50 W/(m K), α = 12 × 10⁻⁶/K, stress free at 20 °C), tet10
+/// elements of 4 mm: its upright's end (`F2:side:l5`, set `hot`) held at [`HEATER`], the rest of
+/// its outside (set `skin`) cooled by still air at [`AMBIENT`] (h = 10 W/(m² K)), both hole bores
+/// clamped (set `holes`). Step `Heat` (coupled temperature–displacement, steady): the
+/// temperature field and the stress of the expansion the clamps hold back. In mm, t, s, N, MPa:
+/// k in mW/(mm K), h in mW/(mm² K).
+pub fn heated_bracket() -> Value {
+    let face = |f: &str| json!({"body": "Bracket", "face": f});
+    let skin: Vec<Value> = ["F2:start", "F2:top", "F2:side:l1", "F2:side:l2", "F2:side:l3", "F2:side:l4", "F2:side:l6", "F3:blend:F2:side:l3|F2:side:l4"]
+        .into_iter()
+        .map(face)
+        .collect();
+    let holes: Vec<Value> = ["F4:bore:side:0", "F4:bore:side:1", "F5:bore:side:0", "F5:bore:side:1"].into_iter().map(face).collect();
+    json!([
+        {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
+        {"command": "mesh.tet.generate", "params": {"body": "Bracket", "size": 4, "order": "quadratic", "tolerance": 0.05}},
+        {"command": "model.set.create", "params": {"name": "bracket", "geometry": [{"body": "Bracket"}]}},
+        {"command": "model.set.create", "params": {"name": "holes", "geometry": holes}},
+        {"command": "model.set.create", "params": {"name": "hot", "geometry": [face("F2:side:l5")]}},
+        {"command": "model.set.create", "params": {"name": "skin", "geometry": skin}},
+        {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}, "density": 7.85e-9,
+            "thermal": {"conductivity": 50, "specific_heat": 4.6e8, "expansion": STEEL_EXPANSION, "reference_temperature": AMBIENT}}},
+        {"command": "model.section.create", "params": {"name": "Bracket", "set": "bracket", "material": "Steel", "kind": {"type": "solid"}}},
+        {"command": "model.boundary_condition.create", "params": {"name": "Clamp", "type": "fixed", "target": {"set": "holes"}}},
+        {"command": "model.boundary_condition.create", "params": {"name": "Heater", "type": "temperature", "target": {"set": "hot"}, "value": HEATER}},
+        {"command": "model.load.create", "params": {"name": "Air", "type": "convection", "set": "skin", "film": 0.01, "sink": AMBIENT}},
+        {"command": "model.step.create", "params": {"name": "Heat", "procedure": {"type": "coupled_temperature_displacement"}, "boundary_conditions": ["Clamp", "Heater"], "loads": ["Air"]}},
+    ])
+}
+
 /// Six times the signed volume of the tetrahedron `p[0..4]` (positive when p3 lies on the side
 /// p0 → p1 → p2 turns counter-clockwise around).
 fn signed_volume(p: &[[f64; 3]]) -> f64 {
@@ -503,6 +551,39 @@ mod tests {
         let cd = drag / (0.5 * density * FLOW_SPEED * FLOW_SPEED * 40.0 * 50.0);
         assert!(cd > 1.0 && cd < 3.5, "Cd {cd}: {r}");
         assert!(r["mass"]["relative_change"].as_f64().unwrap().abs() < 0.01, "{r}");
+    }
+
+    /// The heated bracket's temperatures lie between the air's and the heater's, falling along
+    /// the bracket away from the heater. Its thermal expansion: with the air at the heater's
+    /// temperature the bracket warms evenly by ΔT, and held at the foot's hole alone (at x = 40)
+    /// it grows freely, so a point moves α ΔT times its distance from the hole's axis along x:
+    /// the upright's top by −0.0432 mm (within 2 %), the foot's end by +0.024 mm (within 6 %:
+    /// the clamped bore cannot grow).
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn the_heated_bracket_warms_and_expands_as_steel() {
+        let mut s = open("heated-bracket");
+        let r = s.execute("solve.run", &json!({})).unwrap();
+        let r = &r["steps"][0]["summary"];
+        assert!((r["max_temperature"]["value"].as_f64().unwrap() - HEATER).abs() < 1e-9, "{r}");
+        let probe = |s: &mut Session| s.execute("solve.probe", &json!({"step": "Heat", "at": [[4.0, 50.0, 20.0], [60.0, 4.0, 20.0]]})).unwrap();
+        let p = probe(&mut s);
+        let (upright, foot) = (p["nodes"][0]["temperature"].as_f64().unwrap(), p["nodes"][1]["temperature"].as_f64().unwrap());
+        assert!(upright > foot && foot > AMBIENT && upright <= HEATER, "{upright} {foot}");
+        let foot_hole = json!([{"body": "Bracket", "face": "F4:bore:side:0"}, {"body": "Bracket", "face": "F4:bore:side:1"}]);
+        s.execute("model.set.create", &json!({"name": "foot_hole", "geometry": foot_hole})).unwrap();
+        s.execute("model.boundary_condition.edit", &json!({"name": "Clamp", "type": "fixed", "target": {"set": "foot_hole"}})).unwrap();
+        s.execute("model.load.edit", &json!({"name": "Air", "type": "convection", "set": "skin", "film": 0.01, "sink": HEATER})).unwrap();
+        s.execute("solve.static", &json!({})).unwrap();
+        let p = probe(&mut s);
+        let grow = STEEL_EXPANSION * (HEATER - AMBIENT);
+        // The bore itself cannot grow, which holds back the foot's end, 16 mm from its edge, a
+        // little more than the upright's top, 32 mm away.
+        for (i, tolerance) in [(0, 0.02), (1, 0.06)] {
+            let node = &p["nodes"][i];
+            let (ux, expected) = (node["displacement"][0].as_f64().unwrap(), grow * (node["xyz"][0].as_f64().unwrap() - 40.0));
+            assert!((ux - expected).abs() < tolerance * expected.abs(), "{node}: {ux} against {expected}");
+        }
     }
 
     #[test]

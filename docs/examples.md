@@ -67,3 +67,27 @@ Reynolds number and rises as it falls); the lattice's mass changes by less than 
 
 There is no picture yet: the viewport does not draw flow results (velocity slices and
 streamlines are planned in M12), so this example is numbers only for now.
+
+## Heated bracket (`heated-bracket`)
+
+![The steel bracket's temperature, 120 °C at the heated end of the upright falling to 95 °C at the foot](media/examples/heated-bracket.png)
+
+The corpus filleted bracket (`tests/corpus/filleted-bracket`: an 8 mm L-bracket, R6 fillet, a
+hole through each leg) in steel, both hole bores clamped. The end of the upright is held at
+120 °C by a heater; the rest of its outside loses heat to still air at 20 °C
+(h = 10 W/(m² K)); steel conducts with k = 50 W/(m K), expands with α = 12 × 10⁻⁶/K and is
+stress free at 20 °C. One coupled temperature–displacement step (steady) on 23 641 tet10
+elements: about 8 s to open (meshing) and 13 s to solve.
+
+**Look at:** Contours ▸ Temperature: the upright stays within a few degrees of the heater and
+the foot falls to 95 °C, a steady balance between conduction and the air. Contours ▸ Von Mises
+shows the stress of the growth the clamps hold back: tens of MPa through the legs, peaking at the
+edges of the clamped bores, where a rigid clamp is a stress singularity (about 1 GPa there, a
+figure that grows as the mesh is refined: read the stress a little away from the bore).
+
+**Check:** the temperatures lie between the air's and the heater's and fall away from the heater.
+For the expansion, the test puts the air at the heater's temperature, so the bracket warms
+evenly by ΔT = 100 K, and clamps the foot's hole alone: the bracket then grows freely about it,
+and a point moves α ΔT times its distance from the hole's axis. The upright's top moves −0.0432
+mm along x (within 2 %); the foot's end, 16 mm from the clamped bore, which cannot grow, moves
+0.0228 mm against 0.024 mm (within 6 %).

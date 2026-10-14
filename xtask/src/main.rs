@@ -36,7 +36,8 @@ commands:
                   tests, and the benchmarks) and the doc tests alongside: the CI heavy job
   corpus [--part NAME] [--no-write]
                   build every meshing test corpus part (tests/corpus, analytic shapes), tessellate
-                  and mesh it, and write the results to docs/meshing/corpus.md (release build)
+                  and mesh it, and write the results to docs/meshing/corpus.md (release build);
+                  --part NAME --design PATH writes that part's .solidcraft design instead
   oracle [--case NAME]... [--bless NAME|all]... [--quick] [--no-write]
                   run the verification and validation cases (tests/oracle, docs/verification.md)
                   against their references and fixtures; write docs/oracle.md after a full run;

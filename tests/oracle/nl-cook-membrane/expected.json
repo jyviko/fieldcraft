@@ -1,0 +1,14 @@
+{
+ "title": "Cook's membrane, nearly incompressible neo-Hookean, large load (plane strain)",
+ "kind": "benchmark",
+ "source": "R. D. Cook, Improved two-dimensional finite element, J. Struct. Div. ASCE 100(ST9):1851–1863, 1974 (the tapered panel (0, 0), (48, 44), (48, 60), (0, 44), clamped on x = 0, shear on x = 48); finite-strain versions with a neo-Hookean material are published by J. C. Simo, F. Armero, IJNME 33:1413–1449, 1992; the values to compare with are to be transcribed from the paper",
+ "status": "pending",
+ "requires": "the published finite-strain reference value, transcribed from the paper with its load and material constants",
+ "quantities": [
+  {
+   "id": "vC",
+   "quantity": "vertical displacement of the top corner C (48, 60)",
+   "value": null
+  }
+ ]
+}

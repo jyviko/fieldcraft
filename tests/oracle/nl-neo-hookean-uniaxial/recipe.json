@@ -1,0 +1,16 @@
+[
+ {"command": "mesh.block", "params": {"body": "Cube", "kind": "hex20", "corners": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], "divisions": [2, 2, 2], "faces": {"6": "x0", "3": "y0", "1": "z0", "4": "x1"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Cube"}]}},
+ {"command": "model.set.create", "params": {"name": "x0", "geometry": [{"body": "Cube", "face": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "y0", "geometry": [{"body": "Cube", "face": "y0"}]}},
+ {"command": "model.set.create", "params": {"name": "z0", "geometry": [{"body": "Cube", "face": "z0"}]}},
+ {"command": "model.set.create", "params": {"name": "x1", "geometry": [{"body": "Cube", "face": "x1"}]}},
+ {"command": "model.material.create", "params": {"name": "Rubber", "elastic": {"type": "isotropic", "young": 10.0, "poisson": 0.3}, "hyperelastic": {"type": "neo_hookean"}}},
+ {"command": "model.section.create", "params": {"name": "cube", "set": "all", "material": "Rubber", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sx", "type": "symmetry", "target": {"set": "x0"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sy", "type": "symmetry", "target": {"set": "y0"}, "plane": "y"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sz", "type": "symmetry", "target": {"set": "z0"}, "plane": "z"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "pull", "type": "displacement", "target": {"set": "x1"}, "values": [1.0, null, null, null, null, null]}},
+ {"command": "model.step.create", "params": {"name": "Stretch", "procedure": {"type": "nonlinear_static"}, "boundary_conditions": ["sx", "sy", "sz", "pull"], "loads": []}},
+ {"command": "solve.nonlinear", "params": {"step": "Stretch"}, "id": "solve"}
+]

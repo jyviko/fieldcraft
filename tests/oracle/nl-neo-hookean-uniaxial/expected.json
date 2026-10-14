@@ -1,0 +1,53 @@
+{
+ "title": "Uniaxial stretch of a neo-Hookean block to twice its length",
+ "kind": "theory",
+ "source": "Closed form of the compressible neo-Hookean model W = μ/2 (Ī₁ − 3) + κ/2 (J − 1)² in uniaxial stress (G. A. Holzapfel, Nonlinear Solid Mechanics, Wiley 2000, §6.5, eq. 6.148 with the volumetric term of §6.4): σ_yy = μ J^(−5/3)(l² − Ī/3) + κ(J − 1) = 0 fixes the lateral stretch l, then σ_xx = μ J^(−5/3)(λ² − l²)",
+ "quantities": [
+  {
+   "id": "sigma",
+   "quantity": "axial Cauchy stress at the corner (1, 1, 1), stretch λ = 2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Stretch",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 8.060135422196785,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation every element represents exactly: the tolerance only admits rounding and the Newton tolerance"
+  },
+  {
+   "id": "lateral",
+   "quantity": "lateral displacement u_y at the corner (1, 1, 1), l − 1",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Stretch",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/1"
+   },
+   "value": -0.1868562805727787,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation every element represents exactly: the tolerance only admits rounding and the Newton tolerance"
+  }
+ ]
+}

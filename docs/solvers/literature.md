@@ -1158,3 +1158,31 @@ update are written from (cited again in the module docs):
   ν = 0.4999 (exact), Lamé's thick cylinder in plane strain at ν = 0.4999 (hex20 1e-5,
   tet10 1e-3, hex8 3e-3 relative error in the bore displacement, where the displacement hex8
   is 80 % too stiff). Cook's membrane is a published benchmark, not part of the analytic gate.
+
+## Part M: Nonlinear static analysis (finite strain), as implemented
+
+- Total Lagrangian formulation written with spatial quantities (Kirchhoff stress, spatial
+  tangent, current gradients): J. Bonet, R. D. Wood, *Nonlinear Continuum Mechanics for Finite
+  Element Analysis*, 2nd ed., Cambridge 2008, ch. 5–9; G. A. Holzapfel, *Nonlinear Solid
+  Mechanics*, Wiley 2000, §6.6 (the isochoric–volumetric split and its tangents); K.-J. Bathe,
+  *Finite Element Procedures*, 2nd ed., 2014, §6.3; T. Belytschko, W. K. Liu, B. Moran,
+  K. Elkhodary, *Nonlinear Finite Elements for Continua and Structures*, 2nd ed., Wiley 2014,
+  ch. 4–6.
+- Decoupled neo-Hookean energy: P. J. Flory, Trans. Faraday Soc. 57:829–838, 1961.
+- Mixed u–p at finite strain: J. C. Simo, R. L. Taylor, K. S. Pister, CMAME 51:177–208, 1985;
+  mean dilatation: J. C. Nagtegaal, D. M. Parks, J. R. Rice, CMAME 4:153–177, 1974.
+- Enhanced assumed strain at finite strain (why incompatible modes are refused for now): J. C.
+  Simo, F. Armero, IJNME 33:1413–1449, 1992; their hourglassing in compression: P. Wriggers,
+  S. Reese, CMAME 135:201–209, 1996.
+- Follower pressure and its load stiffness: K. Schweizerhof, E. Ramm, Comput. Struct.
+  18(6):1099–1114, 1984.
+- Newton–Raphson, line search and convergence criteria: M. A. Crisfield, *Non-linear Finite
+  Element Analysis of Solids and Structures*, vol. 1, Wiley 1991, ch. 9; K.-J. Bathe,
+  A. P. Cimento, CMAME 22:59–85, 1980.
+- Symmetric eigen-decomposition for the logarithmic strain: G. H. Golub, C. F. Van Loan,
+  *Matrix Computations*, 4th ed., Johns Hopkins 2013, §8.5 (cyclic Jacobi).
+- Verification references: the elastica, K. E. Bisshopp, D. C. Drucker, Q. Appl. Math.
+  3(3):272–275, 1945, with K. Mattiasson, IJNME 17(1):145–153, 1981; Cook's membrane (pending its
+  transcribed finite-strain values), R. D. Cook, J. Struct. Div. ASCE 100(ST9):1851–1863, 1974,
+  and J. C. Simo, F. Armero, IJNME 33:1413–1449, 1992; tube inflation, R. S. Rivlin, Phil. Trans. R. Soc. A
+  242:173–195, 1949, and R. W. Ogden, *Non-Linear Elastic Deformations*, Dover 1997.

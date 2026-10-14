@@ -1,0 +1,21 @@
+{
+  "note": "FieldCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "ux": {
+      "band": 1.2149180525904365e-11,
+      "value": -0.011149180525904363
+    },
+    "uy": {
+      "band": 7.959051161172887e-11,
+      "value": 0.07859051161172881
+    },
+    "uz": {
+      "band": 6.84413310858248e-11,
+      "value": -0.0674413310858248
+    },
+    "von_mises": {
+      "band": 1e-8,
+      "value": 4.868377314671631e-13
+    }
+  }
+}

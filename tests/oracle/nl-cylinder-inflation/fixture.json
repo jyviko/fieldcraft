@@ -1,0 +1,13 @@
+{
+  "note": "FieldCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "ua": {
+      "band": 5.003966508393597e-9,
+      "value": 5.003966508393597
+    },
+    "ub": {
+      "band": 2.917320022569369e-9,
+      "value": 2.9173200225693687
+    }
+  }
+}

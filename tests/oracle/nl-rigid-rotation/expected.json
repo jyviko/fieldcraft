@@ -1,0 +1,83 @@
+{
+ "title": "A quarter turn strains and stresses nothing (objectivity)",
+ "kind": "theory",
+ "source": "Objectivity of the total Lagrangian formulation and of the hyperelastic stress: a rigid motion x = R X + c gives C = I and σ = 0 whatever the rotation (Bonet & Wood 2008, §3.4 and §5.2; T. Belytschko, W. K. Liu, B. Moran, Nonlinear Finite Elements for Continua and Structures, 2nd ed., Wiley 2014, §5.5)",
+ "quantities": [
+  {
+   "id": "ux",
+   "quantity": "u_x at inner node 22: the rotation's",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Turn",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": -0.011149180525904245,
+   "tolerance": {
+    "absolute": 1e-09
+   },
+   "reason": "the inner nodes follow the rigid rotation exactly"
+  },
+  {
+   "id": "uy",
+   "quantity": "u_y at inner node 22: the rotation's",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Turn",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/displacement/1"
+   },
+   "value": 0.07859051161172886,
+   "tolerance": {
+    "absolute": 1e-09
+   },
+   "reason": "the inner nodes follow the rigid rotation exactly"
+  },
+  {
+   "id": "uz",
+   "quantity": "u_z at inner node 22: the rotation's",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Turn",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": -0.06744133108582467,
+   "tolerance": {
+    "absolute": 1e-09
+   },
+   "reason": "the inner nodes follow the rigid rotation exactly"
+  },
+  {
+   "id": "von_mises",
+   "quantity": "von Mises stress at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Turn",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/von_mises"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 1e-08
+   },
+   "reason": "zero up to rounding of stresses of order E = 1000: a 90° turn leaves no strain"
+  }
+ ]
+}

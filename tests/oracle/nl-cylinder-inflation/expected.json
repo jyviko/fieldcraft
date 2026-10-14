@@ -1,0 +1,53 @@
+{
+ "title": "Inflation of a thick neo-Hookean cylinder by a follower pressure (plane strain)",
+ "kind": "theory",
+ "source": "Finite inflation of an incompressible neo-Hookean thick-walled tube in plane strain: r² = R² + a² − A², σ_θ − σ_r = μ (λ² − λ⁻²) with λ = r/R, integrated through the wall: p = (μ/2)[(ln λ_a² − λ_a⁻²) − (ln λ_b² − λ_b⁻²)] (R. S. Rivlin, Large elastic deformations of isotropic materials VI, Phil. Trans. R. Soc. A 242:173–195, 1949; R. W. Ogden, Non-Linear Elastic Deformations, Dover 1997, §5.3.2)",
+ "quantities": [
+  {
+   "id": "ua",
+   "quantity": "radial displacement of the bore (10, 0, 0) at the pressure that inflates it to a = 15",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Inflate",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 5.0,
+   "tolerance": {
+    "relative": 0.005
+   },
+   "reason": "the closed form is incompressible and our material nearly so (κ/μ = 1000, a volume change of order p/κ ≈ 4·10⁻⁴); hybrid hex20, 6 × 16, follow the wall's strain gradient well inside"
+  },
+  {
+   "id": "ub",
+   "quantity": "radial displacement of the outer wall (20, 0, 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Inflate",
+     "at": [
+      [
+       20.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 2.9128784747791983,
+   "tolerance": {
+    "relative": 0.005
+   },
+   "reason": "as at the bore"
+  }
+ ]
+}

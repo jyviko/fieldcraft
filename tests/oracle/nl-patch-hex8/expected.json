@@ -1,0 +1,178 @@
+{
+ "title": "Nonlinear patch test, hex8: a homogeneous finite deformation of a distorted mesh",
+ "kind": "theory",
+ "source": "The patch test (B. M. Irons, A. Razzaque, in A. K. Aziz (ed.), The Mathematical Foundations of the Finite Element Method, Academic Press 1972, 557–587) at finite strain: a boundary moved by x = F X makes F the solution everywhere (J. Bonet, R. D. Wood, Nonlinear Continuum Mechanics for Finite Element Analysis, 2nd ed., Cambridge 2008, §8); the neo-Hookean Cauchy stress σ = μ J^(−5/3) dev b + κ (J − 1) I of that F",
+ "quantities": [
+  {
+   "id": "ux",
+   "quantity": "u_x at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Deform",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.13583340405268285,
+   "tolerance": {
+    "relative": 1e-08
+   },
+   "reason": "a patch test is passed exactly: the tolerance admits rounding and the Newton tolerance"
+  },
+  {
+   "id": "uy",
+   "quantity": "u_y at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Deform",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/displacement/1"
+   },
+   "value": 0.0003487491373645457,
+   "tolerance": {
+    "relative": 1e-08
+   },
+   "reason": "a patch test is passed exactly: the tolerance admits rounding and the Newton tolerance"
+  },
+  {
+   "id": "uz",
+   "quantity": "u_z at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Deform",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": -0.002398508020922785,
+   "tolerance": {
+    "relative": 1e-08
+   },
+   "reason": "a patch test is passed exactly: the tolerance admits rounding and the Newton tolerance"
+  },
+  {
+   "id": "sxx",
+   "quantity": "Cauchy σ_xx at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Deform",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 42.29617970634737,
+   "tolerance": {
+    "relative": 1e-07
+   },
+   "reason": "a patch test is passed exactly: the tolerance admits rounding and the Newton tolerance"
+  },
+  {
+   "id": "syy",
+   "quantity": "Cauchy σ_yy at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Deform",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 23.501008557686546,
+   "tolerance": {
+    "relative": 1e-07
+   },
+   "reason": "a patch test is passed exactly: the tolerance admits rounding and the Newton tolerance"
+  },
+  {
+   "id": "szz",
+   "quantity": "Cauchy σ_zz at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Deform",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/stress/2"
+   },
+   "value": 31.452811735966126,
+   "tolerance": {
+    "relative": 1e-07
+   },
+   "reason": "a patch test is passed exactly: the tolerance admits rounding and the Newton tolerance"
+  },
+  {
+   "id": "sxy",
+   "quantity": "Cauchy σ_xy at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Deform",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/stress/3"
+   },
+   "value": -0.8897122437235885,
+   "tolerance": {
+    "relative": 1e-07
+   },
+   "reason": "a patch test is passed exactly: the tolerance admits rounding and the Newton tolerance"
+  },
+  {
+   "id": "sxz",
+   "quantity": "Cauchy σ_xz at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Deform",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/stress/4"
+   },
+   "value": -1.8906385179126266,
+   "tolerance": {
+    "relative": 1e-07
+   },
+   "reason": "a patch test is passed exactly: the tolerance admits rounding and the Newton tolerance"
+  },
+  {
+   "id": "syz",
+   "quantity": "Cauchy σ_yz at inner node 22",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Deform",
+     "nodes": [
+      22
+     ]
+    },
+    "pointer": "/nodes/0/stress/5"
+   },
+   "value": 1.9462455331453503,
+   "tolerance": {
+    "relative": 1e-07
+   },
+   "reason": "a patch test is passed exactly: the tolerance admits rounding and the Newton tolerance"
+  }
+ ]
+}

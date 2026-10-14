@@ -1,0 +1,199 @@
+{
+ "title": "Large-deflection cantilever under a dead tip load against the elastica (solids)",
+ "kind": "theory",
+ "source": "The elastica of a cantilever under a vertical end load: K. E. Bisshopp, D. C. Drucker, Large deflection of cantilever beams, Quarterly of Applied Mathematics 3(3):272–275, 1945 (elliptic-integral solution); values computed by integrating θ″ = −(P/EI) cos θ by shooting (our own RK4, 20000 steps), agreeing with the table of K. Mattiasson, Numerical results from large deflection beam and frame problems analysed by means of elliptic integrals, IJNME 17(1):145–153, 1981, to all six digits",
+ "quantities": [
+  {
+   "id": "v1",
+   "quantity": "tip deflection δ_v/L at P L²/(E I) = 1",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "K1",
+     "at": [
+      [
+       10.0,
+       0,
+       0.25
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2",
+    "scale": -0.1
+   },
+   "value": 0.301721,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "hex20, 40 × 2 through the depth, L/h = 20: shear deformation (0.6 (h/L)² ≈ 0.15 % of the deflection) and the clamp's local restraint, both absent from the elastica"
+  },
+  {
+   "id": "u1",
+   "quantity": "tip shortening δ_h/L at P L²/(E I) = 1",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "K1",
+     "at": [
+      [
+       10.0,
+       0,
+       0.25
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0",
+    "scale": -0.1
+   },
+   "value": 0.056433,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "as δ_v; the shortening is the smaller, second-order quantity, so its relative error is about twice the deflection's"
+  },
+  {
+   "id": "v2",
+   "quantity": "tip deflection δ_v/L at P L²/(E I) = 2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "K2",
+     "at": [
+      [
+       10.0,
+       0,
+       0.25
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2",
+    "scale": -0.1
+   },
+   "value": 0.493457,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "hex20, 40 × 2 through the depth, L/h = 20: shear deformation (0.6 (h/L)² ≈ 0.15 % of the deflection) and the clamp's local restraint, both absent from the elastica"
+  },
+  {
+   "id": "u2",
+   "quantity": "tip shortening δ_h/L at P L²/(E I) = 2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "K2",
+     "at": [
+      [
+       10.0,
+       0,
+       0.25
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0",
+    "scale": -0.1
+   },
+   "value": 0.160642,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "as δ_v; the shortening is the smaller, second-order quantity, so its relative error is about twice the deflection's"
+  },
+  {
+   "id": "v5",
+   "quantity": "tip deflection δ_v/L at P L²/(E I) = 5",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "K5",
+     "at": [
+      [
+       10.0,
+       0,
+       0.25
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2",
+    "scale": -0.1
+   },
+   "value": 0.713792,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "hex20, 40 × 2 through the depth, L/h = 20: shear deformation (0.6 (h/L)² ≈ 0.15 % of the deflection) and the clamp's local restraint, both absent from the elastica"
+  },
+  {
+   "id": "u5",
+   "quantity": "tip shortening δ_h/L at P L²/(E I) = 5",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "K5",
+     "at": [
+      [
+       10.0,
+       0,
+       0.25
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0",
+    "scale": -0.1
+   },
+   "value": 0.387628,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "as δ_v; the shortening is the smaller, second-order quantity, so its relative error is about twice the deflection's"
+  },
+  {
+   "id": "v10",
+   "quantity": "tip deflection δ_v/L at P L²/(E I) = 10",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "K10",
+     "at": [
+      [
+       10.0,
+       0,
+       0.25
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2",
+    "scale": -0.1
+   },
+   "value": 0.810609,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "hex20, 40 × 2 through the depth, L/h = 20: shear deformation (0.6 (h/L)² ≈ 0.15 % of the deflection) and the clamp's local restraint, both absent from the elastica"
+  },
+  {
+   "id": "u10",
+   "quantity": "tip shortening δ_h/L at P L²/(E I) = 10",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "K10",
+     "at": [
+      [
+       10.0,
+       0,
+       0.25
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0",
+    "scale": -0.1
+   },
+   "value": 0.554996,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "as δ_v; the shortening is the smaller, second-order quantity, so its relative error is about twice the deflection's"
+  }
+ ]
+}

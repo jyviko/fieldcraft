@@ -1,0 +1,21 @@
+[
+ {"command": "mesh.block", "params": {"body": "Beam", "kind": "hex20", "corners": [[0, 0, 0], [10.0, 0, 0], [10.0, 1.0, 0], [0, 1.0, 0], [0, 0, 0.5], [10.0, 0, 0.5], [10.0, 1.0, 0.5], [0, 1.0, 0.5]], "divisions": [40, 1, 2], "faces": {"6": "root", "4": "tip"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Beam"}]}},
+ {"command": "model.set.create", "params": {"name": "root", "geometry": [{"body": "Beam", "face": "root"}]}},
+ {"command": "model.set.create", "params": {"name": "tip", "geometry": [{"body": "Beam", "face": "tip"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 10000.0, "poisson": 0.0}}},
+ {"command": "model.section.create", "params": {"name": "beam", "set": "all", "material": "Steel", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "clamp", "type": "fixed", "target": {"set": "root"}}},
+ {"command": "model.load.create", "params": {"name": "P1", "type": "force", "target": {"set": "tip"}, "vector": [0, 0, -1.0416666666666667]}},
+ {"command": "model.step.create", "params": {"name": "K1", "procedure": {"type": "nonlinear_static"}, "boundary_conditions": ["clamp"], "loads": ["P1"]}},
+ {"command": "model.load.create", "params": {"name": "P2", "type": "force", "target": {"set": "tip"}, "vector": [0, 0, -2.0833333333333335]}},
+ {"command": "model.step.create", "params": {"name": "K2", "procedure": {"type": "nonlinear_static"}, "boundary_conditions": ["clamp"], "loads": ["P2"]}},
+ {"command": "model.load.create", "params": {"name": "P5", "type": "force", "target": {"set": "tip"}, "vector": [0, 0, -5.208333333333334]}},
+ {"command": "model.step.create", "params": {"name": "K5", "procedure": {"type": "nonlinear_static"}, "boundary_conditions": ["clamp"], "loads": ["P5"]}},
+ {"command": "model.load.create", "params": {"name": "P10", "type": "force", "target": {"set": "tip"}, "vector": [0, 0, -10.416666666666668]}},
+ {"command": "model.step.create", "params": {"name": "K10", "procedure": {"type": "nonlinear_static"}, "boundary_conditions": ["clamp"], "loads": ["P10"]}},
+ {"command": "solve.nonlinear", "params": {"step": "K1"}, "id": "solve1"},
+ {"command": "solve.nonlinear", "params": {"step": "K2"}, "id": "solve2"},
+ {"command": "solve.nonlinear", "params": {"step": "K5"}, "id": "solve5"},
+ {"command": "solve.nonlinear", "params": {"step": "K10"}, "id": "solve10"}
+]

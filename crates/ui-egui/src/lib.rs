@@ -377,8 +377,8 @@ impl ModelApp {
         self.begin(id, true)
     }
 
-    /// `ui.start` from the control channel: as a click, but never a native file picker (file
-    /// entries open their command's form).
+    /// `ui.start` from the control channel: as a click, but never a native file picker (entries
+    /// that need one open their command's form).
     pub fn start_programmatic(&mut self, id: &str) -> Result<(), String> {
         self.begin(id, false)
     }
@@ -396,7 +396,7 @@ impl ModelApp {
             None => (id, json!({})),
         };
         let spec = modelcraft_engine::find_command(command).ok_or_else(|| format!("unknown command `{command}`"))?;
-        if interactive && self.file_action(spec.id, &preset) {
+        if self.file_action(spec.id, &preset, interactive) {
             self.dialog = None;
             return Ok(());
         }

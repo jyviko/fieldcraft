@@ -117,7 +117,7 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
 - `cargo run -p modelcraft-cli -- commands` lists every command with its parameters.
 - `cargo run -p modelcraft-cli -- run script.json` runs a script (a JSON array of
   `{"command", "params"}`) and prints the model summary.
-- `cargo run --release -p modelcraft -- --sample --control PORT` opens the desktop app with the
+- `cargo run --release -p modelcraft -- --sample [cantilever|impact] --control PORT` opens the desktop app with a
   sample model and a control channel on `127.0.0.1:PORT` (docs/control-protocol.md). For UI work,
   look at the result: `ui.capture {path}` (the whole window drawn offscreen; works with the
   screen locked), `ui.screenshot {path}` (a presented frame) or `ui.render {path}` (the model

@@ -69,7 +69,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, Level::Title, |ui| {
         ui.label(RichText::new(spec.label.to_uppercase()).strong().size(12.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            cancel = ui.small_button("✕").on_hover_text("Cancel (Esc)").clicked();
+            cancel = ui.small_button("×").on_hover_text("Cancel (Esc)").clicked();
         });
     });
     ui.add_space(4.0);
@@ -109,7 +109,7 @@ fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name
         ui.label(RichText::new(kind.label().to_uppercase()).strong().size(12.0));
         ui.label(RichText::new(name).size(12.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            deselect = ui.small_button("✕").on_hover_text("Deselect").clicked();
+            deselect = ui.small_button("×").on_hover_text("Deselect").clicked();
         });
     });
     ui.add_space(4.0);

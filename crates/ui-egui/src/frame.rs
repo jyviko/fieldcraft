@@ -107,6 +107,39 @@ fn popup<R>(
     shown.map(|r| r.response.rect)
 }
 
+/// A menu row's width and height.
+pub const MENU_W: f32 = 240.0;
+const MENU_ROW_H: f32 = 24.0;
+
+/// A menu row: its label, and its shortcut (or a note) at the right; dimmed and inert when
+/// disabled. Painted like the toolbar's drop-down rows.
+pub fn menu_row(ui: &mut Ui, t: &crate::theme::Tokens, label: &str, right: Option<&str>, enabled: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(MENU_W, MENU_ROW_H), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
+    if resp.hovered() && enabled {
+        ui.painter().rect_filled(rect, 3.0, t.hover);
+    }
+    let font = egui::FontId::proportional(13.0);
+    let clip = rect.shrink2(vec2(8.0, 0.0));
+    ui.painter().with_clip_rect(clip).text(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        if enabled { t.text } else { t.text_dim },
+    );
+    if let Some(r) = right {
+        ui.painter().text(egui::pos2(rect.right() - 10.0, rect.center().y), Align2::RIGHT_CENTER, r, egui::FontId::proportional(12.0), t.text_dim);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp
+}
+
+/// A menu section's small heading.
+pub fn menu_heading(ui: &mut Ui, t: &crate::theme::Tokens, text: &str) {
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(text).size(11.0).color(t.text_dim));
+}
+
 #[cfg(test)]
 mod tests {
     /// Windows are made in this file only, so none can skip the width limits.

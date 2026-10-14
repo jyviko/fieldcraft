@@ -492,24 +492,27 @@ impl ModelApp {
     }
 
     /// What a click on a file entry does, when it is one: open, save, write a deck or recover
-    /// through the host's pickers. `false` for every other command.
-    pub(crate) fn file_action(&mut self, command: &str, preset: &Value) -> bool {
+    /// (through the host's pickers when `pickers`), choose a sample, or solve in the background.
+    /// `false` for every other command, and for picker entries without pickers (their form
+    /// opens instead).
+    pub(crate) fn file_action(&mut self, command: &str, preset: &Value, pickers: bool) -> bool {
+        let can_save = pickers && self.services.pick_save.is_some();
         match command {
-            "file.save" => {
+            "file.save" if self.session.path.is_some() || can_save => {
                 self.save();
             }
-            "file.save_as" => {
+            "file.save_as" if can_save => {
                 self.save_as();
             }
             "file.recover" | "file.recovery.list" => self.prompt = Some(Prompt::Recover),
             "file.sample" => self.prompt = Some(Prompt::Samples),
             "solve.run" => self.solve_all(),
-            "deck.write" if self.services.pick_save.is_some() => match preset.get("format").and_then(Value::as_str) {
+            "deck.write" if can_save => match preset.get("format").and_then(Value::as_str) {
                 Some(f) => self.write_deck(f),
                 None => return false,
             },
             other => match kind_of_command(other) {
-                Some(kind) if self.services.pick_open.is_some() => self.open_dialog(Some(kind)),
+                Some(kind) if pickers && self.services.pick_open.is_some() => self.open_dialog(Some(kind)),
                 _ => return false,
             },
         }
@@ -650,17 +653,17 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
 
 /// One row per sample: its name, what it shows and an Open button; `open` gets the one clicked.
 pub fn sample_rows(ui: &mut egui::Ui, t: &crate::theme::Tokens, open: &mut Option<&'static str>) {
+    let width = ui.available_width().clamp(280.0, 420.0);
     for sample in modelcraft_engine::sample::SAMPLES {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
+                ui.set_width(width - 70.0);
                 ui.label(egui::RichText::new(sample.label).strong());
-                ui.label(egui::RichText::new(sample.about).small().color(t.text_dim));
+                ui.add(egui::Label::new(egui::RichText::new(sample.about).small().color(t.text_dim)).wrap());
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Open").clicked() {
-                    *open = Some(sample.name);
-                }
-            });
+            if ui.button("Open").clicked() {
+                *open = Some(sample.name);
+            }
         });
         ui.add_space(4.0);
     }
@@ -679,69 +682,63 @@ impl ModelApp {
     }
 }
 
-/// The File menu's rows: open, save, decks, recover, recent files. Shared by the title bar's
-/// File menu (and anything else that lists them).
+/// The File menu's rows: open, recent files, save, decks, samples, recover. The title bar's
+/// File menu.
 pub fn file_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
-    let cmd = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
-    if ui
-        .add(egui::Button::new("Open…").shortcut_text(format!("{cmd}+O")))
-        .on_hover_text("Open a model, a SolidCraft design or a tagged mesh")
+    let t = crate::theme::Tokens::get(app.ui.dark);
+    let key = |k: &str| crate::appbar::shortcut(k);
+    let row = |ui: &mut egui::Ui, label: &str, right: Option<&str>| crate::frame::menu_row(ui, &t, label, right, true).clicked();
+    let mut act: Option<Box<dyn FnOnce(&mut ModelApp)>> = None;
+    if row(ui, "Open…", Some(&key("O"))) {
+        act = Some(Box::new(|app| app.open_dialog(None)));
+    }
+    if row(ui, "Samples…", None) {
+        act = Some(Box::new(|app| app.prompt = Some(Prompt::Samples)));
+    }
+    if !app.recent.paths.is_empty() {
+        crate::frame::menu_heading(ui, &t, "RECENT");
+        for p in app.recent.paths.iter().take(6) {
+            let name = file_name(p);
+            if crate::frame::menu_row(ui, &t, &name, None, true).on_hover_text(p).clicked() {
+                let p = p.clone();
+                act = Some(Box::new(move |app| app.open_path(&p)));
+            }
+        }
+    }
+    ui.separator();
+    if row(ui, "Save", Some(&key("S"))) {
+        act = Some(Box::new(|app| {
+            app.save();
+        }));
+    }
+    if row(ui, "Save As…", Some(&key("Shift+S"))) {
+        act = Some(Box::new(|app| {
+            app.save_as();
+        }));
+    }
+    ui.separator();
+    crate::frame::menu_heading(ui, &t, "WRITE DECK");
+    for c in modelcraft_engine::catalogue::CATALOGUE.iter().filter(|c| c.panel == "Decks") {
+        let format = c.preset().get("format").and_then(Value::as_str).map(str::to_string);
+        let soon = c.milestone().map(|m| format!("soon · {m}"));
+        let enabled = format.is_some() && soon.is_none();
+        if crate::frame::menu_row(ui, &t, &format!("{}…", c.label), soon.as_deref(), enabled).on_hover_text(c.tip).clicked()
+            && let Some(f) = format
+        {
+            act = Some(Box::new(move |app| app.write_deck(&f)));
+        }
+    }
+    ui.separator();
+    if crate::frame::menu_row(ui, &t, "Recover…", None, true)
+        .on_hover_text("Models autosaved by an app that crashed or closed with unsaved changes")
         .clicked()
     {
-        ui.close();
-        app.open_dialog(None);
+        act = Some(Box::new(|app| app.prompt = Some(Prompt::Recover)));
     }
-    ui.menu_button("Open Recent", |ui| {
-        if app.recent.paths.is_empty() {
-            ui.label(egui::RichText::new("No recent files").weak());
-        }
-        let mut open = None;
-        for p in &app.recent.paths {
-            if ui.button(file_name(p)).on_hover_text(p).clicked() {
-                open = Some(p.clone());
-            }
-        }
-        if !app.recent.paths.is_empty() {
-            ui.separator();
-            if ui.button("Clear Recent").clicked() {
-                app.recent.clear();
-                ui.close();
-            }
-        }
-        if let Some(p) = open {
-            ui.close();
-            app.open_path(&p);
-        }
-    });
-    ui.separator();
-    if ui.add(egui::Button::new("Save").shortcut_text(format!("{cmd}+S"))).clicked() {
+    if let Some(f) = act {
+        app.ui.menu = None;
         ui.close();
-        app.save();
-    }
-    if ui.add(egui::Button::new("Save As…").shortcut_text(format!("{cmd}+Shift+S"))).clicked() {
-        ui.close();
-        app.save_as();
-    }
-    ui.separator();
-    ui.menu_button("Write Deck", |ui| {
-        for c in modelcraft_engine::catalogue::CATALOGUE.iter().filter(|c| c.panel == "Decks") {
-            let format = c.preset().get("format").and_then(Value::as_str).map(str::to_string);
-            match (format, c.milestone()) {
-                (Some(f), None) => {
-                    if ui.button(format!("{}…", c.label)).on_hover_text(c.tip).clicked() {
-                        ui.close();
-                        app.write_deck(&f);
-                    }
-                }
-                (_, m) => {
-                    ui.add_enabled(false, egui::Button::new(format!("{} — coming soon ({})", c.label, m.unwrap_or("later"))));
-                }
-            }
-        }
-    });
-    if ui.button("Recover…").on_hover_text("Models autosaved by an app that crashed or closed with unsaved changes").clicked() {
-        ui.close();
-        app.prompt = Some(Prompt::Recover);
+        f(app);
     }
 }
 
@@ -935,7 +932,13 @@ mod tests {
     fn programmatic_starts_never_open_a_picker() {
         let mut app = ModelApp::new(Session::default());
         app.services.pick_open = Some(Box::new(|_: &[Filter]| -> Option<String> { panic!("a picker opened") }));
+        app.services.pick_save = Some(Box::new(|_: &str, _: &[Filter]| -> Option<String> { panic!("a picker opened") }));
         app.start_programmatic("file.open").unwrap();
         assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("file.open"));
+        app.start_programmatic("deck.write.abaqus").unwrap();
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("deck.write"));
+        // In-window choices are not pickers: they behave as a click.
+        app.start_programmatic("file.sample").unwrap();
+        assert_eq!(app.prompt, Some(Prompt::Samples));
     }
 }

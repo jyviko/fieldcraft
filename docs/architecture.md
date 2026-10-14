@@ -31,7 +31,7 @@ crates in strictly lower layers.
 | L4 | `modelcraft-doc` | The document: geometry, mesh, model, results, history. | planned |
 | L5 | `modelcraft-io` | `.modelcraft` files (docs/formats/modelcraft.md): text model definition, binary mesh, geometry references with content hashes, the journal; atomic saves; autosave storage for crash recovery. Bytes in, bytes out; the file system only in `fs` and `recovery`. Result files later. | started |
 | L6 | `modelcraft-engine` | Commands (`CommandSpec`), `Session::execute` with rollback and the panic guard, scripts. | started |
-| L7 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI (egui + wgpu viewport, model tree, commands, status bar, results display with legend, panel and probe, offscreen capture of the whole window) and control channel requests (docs/control-protocol.md); MCP server. | ui started |
+| L7 | `modelcraft-ui-egui`, `modelcraft-mcp` | Desktop UI in the Craft family's layout (title bar with quick actions, workspace ribbon from the catalogue, browser, viewport with navigation bar and orientation gizmo, context panel, command search and command line, journal timeline; native file pickers as host services, background opening and solving; results display with legend and probe; offscreen capture of the whole window) and control channel requests (docs/control-protocol.md); MCP server. | ui started |
 | testkit | `modelcraft-testkit` | Test tooling, a dev-dependency only: the meshing test corpus (`tests/corpus/*/recipe.json`, analytic shapes) and its runner (`cargo xtask corpus`). | started |
 | apps | `modelcraft`, `modelcraft-cli`, `modelcraft-web` | Desktop, command line, browser. | desktop, cli started |
 

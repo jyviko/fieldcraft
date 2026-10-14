@@ -294,7 +294,7 @@ fn workspace_switcher(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, r: Rect
     crate::frame::menu(app, ui, "workspace", ws, |app, ui| {
         let t = Tokens::get(app.ui.dark);
         for w in Workspace::ALL {
-            let (rect, resp) = ui.allocate_exact_size(vec2(300.0, 40.0), Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(vec2(360.0, 40.0), Sense::click());
             if resp.hovered() || w == app.ui.workspace {
                 ui.painter().rect_filled(rect, 3.0, if w == app.ui.workspace { t.accent_soft } else { t.hover });
             }

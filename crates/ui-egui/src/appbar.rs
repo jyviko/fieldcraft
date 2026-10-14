@@ -242,6 +242,7 @@ pub fn shortcut(key: &str) -> String {
 /// Help: the samples (ready to solve), how to navigate, keys, and the version.
 fn help_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
+    ui.set_max_width(340.0);
     ui.label(egui::RichText::new("SAMPLES").size(11.0).color(t.text_dim));
     let mut open = None;
     crate::files::sample_rows(ui, &t, &mut open);

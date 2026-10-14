@@ -54,7 +54,10 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
     let font = FontId::proportional(12.0);
     let line_h = 16.0;
     let bands = plot.contour.as_ref().map_or(0, |l| l.bands.count) as f32;
-    let width = 250.0;
+    // As wide as its longest line (and the range labels beside the swatches).
+    let widest = lines.iter().map(|(text, _)| painter.layout_no_wrap(text.clone(), font.clone(), t.overlay_text).size().x).fold(0.0_f32, f32::max);
+    let title_w = painter.layout_no_wrap(title.clone(), FontId::proportional(14.0), t.overlay_text).size().x;
+    let width = (widest.max(title_w) + 20.0).max(170.0);
     // Padding and title, the lines, then the swatches with the range lines under them.
     let height = 36.0 + line_h * lines.len() as f32 + if bands > 0.0 { 16.0 + bands * SWATCH.y + 2.0 * line_h } else { 0.0 };
     let frame = Rect::from_min_size(origin, vec2(width, height));

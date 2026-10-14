@@ -1,0 +1,53 @@
+{
+ "title": "Plate with a circular hole in tension, 2D plane stress (Kirsch)",
+ "kind": "theory",
+ "source": "Kirsch, Zeitschrift des VDI 42 (1898) 797–807; Timoshenko and Goodier, Theory of Elasticity, 3rd ed., 1970, §35",
+ "quantities": [
+  {
+   "id": "kt",
+   "quantity": "σ_xx at the top of the hole (0, 1) over the remote stress",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Tension",
+     "at": [
+      [
+       0,
+       1.0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 3.0,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "the reference is the infinite plate; the finite plate (W = 60a, loaded ends 30a away) raises the peak by a few tenths of a percent, and the stress extrapolated to the hole surface adds up to about 1%"
+  },
+  {
+   "id": "side",
+   "quantity": "σ_yy at the side of the hole (1, 0) over the remote stress",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Tension",
+     "at": [
+      [
+       1.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": -1.0,
+   "tolerance": {
+    "relative": 0.03
+   },
+   "reason": "infinite-plate value −S; finite width and extrapolation as for Kt, on a smaller value"
+  }
+ ]
+}

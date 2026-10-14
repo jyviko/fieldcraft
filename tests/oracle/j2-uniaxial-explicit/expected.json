@@ -1,0 +1,45 @@
+{
+ "title": "Uniaxial tension of a J2 bilinear-hardening cube to large strain (explicit)",
+ "kind": "theory",
+ "source": "von Mises plasticity with linear isotropic hardening under uniaxial stress (Simo and Hughes, Computational Inelasticity, Springer 1998, §2.3); logarithmic strain for a hypoelastic–plastic law under coaxial stretching",
+ "quantities": [
+  {
+   "id": "sigma",
+   "quantity": "axial Cauchy stress at a logarithmic strain of 0.2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/stress/0"
+   },
+   "value": 643.5643564356436,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "uniaxial J2 with linear hardening: σ = σ_y + E_t (ε − σ_y/E) in logarithmic strain; the stretch takes 10⁴ wave transits, so inertia and the ringing of the start (ρcv ≈ 0.1% of σ) stay well under 1%"
+  },
+  {
+   "id": "plastic_strain",
+   "quantity": "equivalent plastic strain",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pull",
+     "elements": [
+      1
+     ]
+    },
+    "pointer": "/elements/0/plastic_strain"
+   },
+   "value": 0.1967821782178218,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "ε_p = ε − σ/E, as for the stress"
+  }
+ ]
+}

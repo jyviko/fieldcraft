@@ -1,0 +1,53 @@
+{
+ "title": "Long rotating solid cylinder, axisymmetric",
+ "kind": "theory",
+ "source": "Timoshenko and Goodier, Theory of Elasticity, 3rd ed., McGraw-Hill 1970, §32 (long rotating cylinder, ε_z = 0)",
+ "quantities": [
+  {
+   "id": "radial_axis",
+   "quantity": "radial stress σ_r on the axis (r = 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Spin",
+     "at": [
+      [
+       0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 0.3857142857142857,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "stress extrapolated to the axis, where σ_r = σ_θ: under 1% with sixteen quadratic elements across"
+  },
+  {
+   "id": "hoop_rim",
+   "quantity": "hoop stress σ_θ at the surface (r = 1)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Spin",
+     "at": [
+      [
+       1.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/2"
+   },
+   "value": 0.12857142857142853,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "stress extrapolated to the surface: under 1%"
+  }
+ ]
+}

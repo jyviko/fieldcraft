@@ -3,7 +3,7 @@
  "kind": "experiment",
  "source": "Wilkins and Guinan, 'Impact of cylinders on a rigid boundary', Journal of Applied Physics 44 (1973) 1200–1206 (final length and mushroom diameter vs impact speed)",
  "status": "pending",
- "requires": "large-deformation plasticity and contact (M10 X2/X3)",
+ "requires": "the measured final shapes, to be transcribed from the paper (explicit Johnson–Cook plasticity is in)",
  "quantities": [
   {
    "id": "final_length",

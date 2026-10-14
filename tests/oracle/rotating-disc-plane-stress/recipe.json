@@ -1,0 +1,13 @@
+[
+ {"command": "mesh.block", "params": {"body": "Disc", "kind": "quad8", "corners": [[20.0, 0, 0], [100.0, 0, 0], [0, 100.0, 0], [0, 20.0, 0]], "divisions": [16, 32], "bias": [4, 1], "edges": [{"corners": [2, 3], "arc": {"center": [0, 0, 0]}}, {"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [1, 2], "name": "y0"}, {"corners": [3, 4], "name": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Disc", "face": "area"}]}},
+ {"command": "model.set.create", "params": {"name": "x0", "geometry": [{"body": "Disc", "edge": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "y0", "geometry": [{"body": "Disc", "edge": "y0"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000.0, "poisson": 0.3}, "density": 7.85e-09}},
+ {"command": "model.section.create", "params": {"name": "disc", "set": "all", "material": "Steel", "kind": {"type": "plane_stress", "thickness": 5.0}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sx", "type": "symmetry", "target": {"set": "x0"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sy", "type": "symmetry", "target": {"set": "y0"}, "plane": "y"}},
+ {"command": "model.load.create", "params": {"name": "spin", "type": "centrifugal", "angular_velocity": 1000.0, "point": [0, 0, 0], "axis": [0, 0, 1]}},
+ {"command": "model.step.create", "params": {"name": "Spin", "procedure": {"type": "static"}, "boundary_conditions": ["sx", "sy"], "loads": ["spin"]}},
+ {"command": "solve.static", "params": {}, "id": "solve"}
+]

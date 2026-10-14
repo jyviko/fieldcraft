@@ -1,0 +1,14 @@
+[
+ {"command": "mesh.block", "params": {"body": "Membrane", "kind": "quad8", "corners": [[2, 0, 0], [3.25, 0, 0], [0, 2.75, 0], [0, 1, 0]], "divisions": [24, 48], "bias": [4, 1], "edges": [{"corners": [1, 4], "ellipse": {"center": [0, 0, 0], "axes": [[2, 0, 0], [0, 1, 0]]}}, {"corners": [2, 3], "ellipse": {"center": [0, 0, 0], "axes": [[3.25, 0, 0], [0, 2.75, 0]]}, "name": "BC"}, {"corners": [1, 2], "name": "CD"}, {"corners": [3, 4], "name": "AB"}]}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Membrane", "face": "area"}]}},
+ {"command": "model.set.create", "params": {"name": "AB", "geometry": [{"body": "Membrane", "edge": "AB"}]}},
+ {"command": "model.set.create", "params": {"name": "CD", "geometry": [{"body": "Membrane", "edge": "CD"}]}},
+ {"command": "model.set.create", "params": {"name": "BC", "geometry": [{"body": "Membrane", "edge": "BC"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000.0, "poisson": 0.3}}},
+ {"command": "model.section.create", "params": {"name": "membrane", "set": "all", "material": "Steel", "kind": {"type": "plane_stress", "thickness": 0.1}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "ab", "type": "symmetry", "target": {"set": "AB"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "cd", "type": "symmetry", "target": {"set": "CD"}, "plane": "y"}},
+ {"command": "model.load.create", "params": {"name": "p", "type": "pressure", "set": "BC", "magnitude": -10.0}},
+ {"command": "model.step.create", "params": {"name": "Load", "procedure": {"type": "static"}, "boundary_conditions": ["ab", "cd"], "loads": ["p"]}},
+ {"command": "solve.static", "params": {}, "id": "solve"}
+]

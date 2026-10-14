@@ -3,7 +3,7 @@
  "kind": "theory",
  "source": "Hill, The Mathematical Theory of Plasticity, Oxford 1950, ch. V §2: plane strain von Mises collapse pressure p = (2/√3)σ_y ln(b/a)",
  "status": "pending",
- "requires": "J2 plasticity (M8/M10 X2)",
+ "requires": "implicit (static) J2 plasticity: explicit J2 is in, a collapse load needs the static solver",
  "quantities": [
   {
    "id": "p_collapse",

@@ -1,0 +1,17 @@
+{
+  "note": "ModelCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "hoop_bore": {
+      "band": 6.5312e-8,
+      "value": 65.18766671256753
+    },
+    "hoop_rim": {
+      "band": 1.6352371809556562e-8,
+      "value": 16.352371809556562
+    },
+    "radial_max": {
+      "band": 2.0724e-8,
+      "value": 20.682642297503843
+    }
+  }
+}

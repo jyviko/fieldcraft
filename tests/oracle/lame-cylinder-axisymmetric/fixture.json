@@ -1,0 +1,21 @@
+{
+  "note": "ModelCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "axial": {
+      "band": 2.0083926981151736e-8,
+      "value": 20.083926981151734
+    },
+    "hoop_a": {
+      "band": 1.6666666666666668e-7,
+      "value": 165.98051836613928
+    },
+    "ur_a": {
+      "band": 9.07936507936508e-12,
+      "value": 0.009079327300818625
+    },
+    "ur_b": {
+      "band": 5.777777777777779e-12,
+      "value": 0.005777758888504408
+    }
+  }
+}

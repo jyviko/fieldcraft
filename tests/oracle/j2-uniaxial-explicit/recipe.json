@@ -1,0 +1,16 @@
+[
+ {"command": "mesh.block", "params": {"body": "Cube", "kind": "hex8", "corners": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], "divisions": [1, 1, 1], "faces": {"6": "x0", "3": "y0", "1": "z0", "4": "x1"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Cube"}]}},
+ {"command": "model.set.create", "params": {"name": "x0", "geometry": [{"body": "Cube", "face": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "y0", "geometry": [{"body": "Cube", "face": "y0"}]}},
+ {"command": "model.set.create", "params": {"name": "z0", "geometry": [{"body": "Cube", "face": "z0"}]}},
+ {"command": "model.set.create", "params": {"name": "x1", "geometry": [{"body": "Cube", "face": "x1"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 200000.0, "poisson": 0.3}, "density": 7.8e-09, "plastic": {"type": "bilinear", "yield_stress": 250.0, "hardening_modulus": 2000.0}}},
+ {"command": "model.section.create", "params": {"name": "cube", "set": "all", "material": "Steel", "kind": {"type": "solid"}, "formulation": {"integration": "reduced"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sx", "type": "symmetry", "target": {"set": "x0"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sy", "type": "symmetry", "target": {"set": "y0"}, "plane": "y"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sz", "type": "symmetry", "target": {"set": "z0"}, "plane": "z"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "pull", "type": "displacement", "target": {"set": "x1"}, "values": [0.22140275816016985, null, null, null, null, null]}},
+ {"command": "model.step.create", "params": {"name": "Pull", "procedure": {"type": "explicit_dynamic", "end_time": 0.01}, "boundary_conditions": ["sx", "sy", "sz", "pull"], "loads": []}},
+ {"command": "solve.explicit", "params": {"step": "Pull"}, "id": "solve"}
+]

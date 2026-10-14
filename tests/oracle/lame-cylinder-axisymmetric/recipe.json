@@ -1,0 +1,12 @@
+[
+ {"command": "mesh.block", "params": {"body": "Pipe", "kind": "quad8", "corners": [[10.0, 0, 0], [20.0, 0, 0], [20.0, 1, 0], [10.0, 1, 0]], "divisions": [8, 1], "bias": [1, 1], "edges": [{"corners": [1, 4], "name": "bore"}, {"corners": [1, 2], "name": "bottom"}, {"corners": [3, 4], "name": "top"}]}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Pipe", "face": "area"}]}},
+ {"command": "model.set.create", "params": {"name": "bore", "geometry": [{"body": "Pipe", "edge": "bore"}]}},
+ {"command": "model.set.create", "params": {"name": "ends", "geometry": [{"body": "Pipe", "edge": "bottom"}, {"body": "Pipe", "edge": "top"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000.0, "poisson": 0.3}}},
+ {"command": "model.section.create", "params": {"name": "pipe", "set": "all", "material": "Steel", "kind": {"type": "axisymmetric"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "ends", "type": "symmetry", "target": {"set": "ends"}, "plane": "y"}},
+ {"command": "model.load.create", "params": {"name": "p", "type": "pressure", "set": "bore", "magnitude": 100.0}},
+ {"command": "model.step.create", "params": {"name": "Pressure", "procedure": {"type": "static"}, "boundary_conditions": ["ends"], "loads": ["p"]}},
+ {"command": "solve.static", "params": {}, "id": "solve"}
+]

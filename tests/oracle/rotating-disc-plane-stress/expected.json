@@ -1,0 +1,76 @@
+{
+ "title": "Rotating disc with a central hole, plane stress",
+ "kind": "theory",
+ "source": "Timoshenko and Goodier, Theory of Elasticity, 3rd ed., McGraw-Hill 1970, §32 (rotating disc of uniform thickness with a hole)",
+ "quantities": [
+  {
+   "id": "hoop_bore",
+   "quantity": "hoop stress σ_θ = σ_yy at the bore (20, 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Spin",
+     "at": [
+      [
+       20.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 65.312,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "stress extrapolated to the bore surface, where the a²b²/r² term is steepest: 16 radial quadratic elements graded towards the bore leave about 0.2% (8 uniform: −2.4%; 32 graded: −0.05%)"
+  },
+  {
+   "id": "radial_max",
+   "quantity": "radial stress σ_r = σ_xx at r = √(ab), its maximum",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Spin",
+     "at": [
+      [
+       44.721359549995796,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 20.724,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "the nearest node to √(ab) is within half an element of it, where σ_r is stationary (an error of order (h/r)², under 0.5%), and nodal averaging adds a few tenths of a percent"
+  },
+  {
+   "id": "hoop_rim",
+   "quantity": "hoop stress σ_θ = σ_yy at the rim (100, 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Spin",
+     "at": [
+      [
+       100.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 16.328,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "as at the bore"
+  }
+ ]
+}

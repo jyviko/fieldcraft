@@ -1,0 +1,76 @@
+{
+ "title": "Thick-walled cylinder under internal pressure, 2D plane strain (Lamé)",
+ "kind": "theory",
+ "source": "Lamé's solution, Timoshenko and Goodier, Theory of Elasticity, 3rd ed., McGraw-Hill 1970, §28",
+ "quantities": [
+  {
+   "id": "ur_a",
+   "quantity": "radial displacement at the bore (10, 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.00907936507936508,
+   "tolerance": {
+    "relative": 0.001
+   },
+   "reason": "quadratic elements on 8 radial divisions resolve u_r = A r + B/r to well under 0.1%"
+  },
+  {
+   "id": "hoop_a",
+   "quantity": "hoop stress σ_θ = σ_yy at the bore (10, 0)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 166.66666666666666,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "stress extrapolated to the bore surface and averaged over two elements: about 0.5%"
+  },
+  {
+   "id": "szz",
+   "quantity": "axial stress σ_zz = 2νA at the bore (plane strain)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/2"
+   },
+   "value": 20.0,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "σ_zz = ν(σ_r + σ_θ) follows the in-plane stresses, extrapolated as they are"
+  }
+ ]
+}

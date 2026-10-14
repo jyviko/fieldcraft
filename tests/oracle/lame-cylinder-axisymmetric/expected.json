@@ -1,0 +1,99 @@
+{
+ "title": "Thick-walled cylinder under internal pressure, axisymmetric (Lamé)",
+ "kind": "theory",
+ "source": "Lamé's solution, Timoshenko and Goodier, Theory of Elasticity, 3rd ed., McGraw-Hill 1970, §28",
+ "quantities": [
+  {
+   "id": "ur_a",
+   "quantity": "radial displacement at the bore (r = 10)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.00907936507936508,
+   "tolerance": {
+    "relative": 0.001
+   },
+   "reason": "quadratic elements on 8 radial divisions resolve u_r = A r + B/r to well under 0.1%"
+  },
+  {
+   "id": "ur_b",
+   "quantity": "radial displacement outside (r = 20)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       20.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.005777777777777778,
+   "tolerance": {
+    "relative": 0.001
+   },
+   "reason": "as at the bore"
+  },
+  {
+   "id": "hoop_a",
+   "quantity": "hoop stress σ_θ at the bore (stress component 3 of an axisymmetric element)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/2"
+   },
+   "value": 166.66666666666666,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "stress extrapolated to the bore surface: about 0.5%"
+  },
+  {
+   "id": "axial",
+   "quantity": "axial stress σ_z = 2νA at the bore (held ends)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Pressure",
+     "at": [
+      [
+       10.0,
+       0,
+       0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 20.0,
+   "tolerance": {
+    "relative": 0.01
+   },
+   "reason": "as for the hoop stress"
+  }
+ ]
+}

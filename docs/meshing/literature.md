@@ -531,6 +531,53 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
   with conforming templates and no dualization.
 - **Use.** Lets us refine a coarse aligned hex mesh, for example polycube output, as well as an octree.
 - **Code.** `cg3hci/Gen-Adapt-Ref-for-Hexmeshing` is **MIT**: READ OK.
+- **Finding (2026-10).** The reference pipeline chooses transition vertices with an integer linear
+  program (Gurobi) and installs CinoLib's schemes by heuristics that are retried with other
+  parameters when they fail; neither was adopted (see B1.10).
+
+**B1.7 Schneiders, Algorithms for quadrilateral and hexahedral mesh generation (VKI lecture notes,
+2000), §5.** **Verdict: built on (the transition templates of `fieldcraft-mesh::octree`).**
+- **Link.** https://www.robertschneiders.de/papers/vki.pdf (author's copy).
+- **Method.** 3-refinement driven by nodal marks: an element is split by the template of its
+  marked corners, and faces split by their own marks only, so the refinement is conforming.
+- **Limit (stated there).** The 2D templates of the original set make some 3D mark patterns
+  impossible: a hexahedron with seven marked corners has 51 boundary quads, an odd number, so no
+  hexahedral mesh of it exists (Mitchell's parity condition). Concave refined regions therefore
+  need their concave cells refined. The fix is a modified edge rule (an edge with a marked end
+  splits in three) with buffer layers in the face templates.
+
+**B1.8 Ito, Shih, Soni 2009, Octree-based reasonable-quality hexahedral mesh generation using a
+new set of refinement templates.** **Verdict: reference.**
+- **Citation.** IJNME 77(13):1809–1833, 2009. Templates for concave edges of the refined region
+  (paper not obtained; cited after Tong and Zhang 2025).
+
+**B1.9 Tong, Halilaj, Zhang 2024, HybridOctree_Hex.** **Verdict: reference (buffer-zone rule adopted).**
+- **Citation.** H. Tong, E. Halilaj, Y. J. Zhang, *HybridOctree_Hex: Hybrid octree-based adaptive
+  all-hexahedral mesh generation with Jacobian control*, arXiv 2401.05984, 2024.
+- **Method.** Dual of a strongly balanced, paired octree with five templates (a 13-hexahedron
+  frustum per transition face plus four transition-edge templates); a core cleared at the
+  boundary so that the normals of the quads around each core boundary vertex lie in one
+  half-space, then a buffer layer projected onto the surface and optimised.
+- **Code.** `CMU-CBML/HybridOctree_Hex` is **BSD-3-Clause**: READ OK (hard-coded template
+  geometry, not adopted).
+
+**B1.10 Tong, Zhang 2025, MCHex.** **Verdict: reference (next boundary stage to evaluate).**
+- **Citation.** H. Tong, Y. J. Zhang, *MCHex: Marching cubes based adaptive hexahedral mesh
+  generation with guaranteed positive Jacobian*, arXiv 2511.02064, 2025.
+- **Method.** The same 3-refinement templates (B1.7); the boundary cells are cut by marching
+  cubes on a signed distance field, every cut cell's pieces are 3-regular polyhedra, and their
+  midpoint subdivision gives hexahedra with a proven positive Jacobian (Bernstein coefficients) and
+  a boundary that is pillowed by construction; 17 of the 31 cube cases are refined locally first.
+- **Limits (stated there).** Sharp edges and corners are lost (marching cubes smooths them), and
+  the convex-only transitions over-refine. ModelCraft keeps the core-padding-pillow boundary with
+  feature capture for CAD parts; MCHex's cut cells are the candidate for organic shapes.
+
+**Implemented (`fieldcraft-mesh::octree`, `mesh.hex.octree`, 2026-10).** B1.7 templates on a
+27-tree refined by curvature, thickness and narrow faces; a core cleared by the B1.9 rule; the
+feature map of B1.4 (patches first); padding plus a pillow per patch (B1.4 §3.4); the B6.4 energy
+with a fitting term (B1.4 §3.5); the certified check of B6.6 with local repair. The dual schemes
+of B1.5 were not adopted (B1.6 finding); concave refined regions are closed by refinement (B1.7
+limit), so curvature refines one level only.
 
 ---
 

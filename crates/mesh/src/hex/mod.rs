@@ -37,7 +37,7 @@
 mod arrangement;
 mod brep;
 mod cells;
-mod geom;
+pub(crate) mod geom;
 mod interval;
 mod layered;
 mod mapped;
@@ -583,7 +583,7 @@ fn finish(cells: &Cells, raw: Raw, method: HexMethod) -> Result<HexMesh> {
 
 /// `∫ x n_x dA` over a quad4 or quad8 face (outward normal): its contribution to the enclosed
 /// volume. The 3 × 3 Gauss rule integrates it exactly (degree at most 5 per direction).
-fn face_flux(face: &[P]) -> f64 {
+pub(crate) fn face_flux(face: &[P]) -> f64 {
     const G: [(f64, f64); 3] = [(-0.774_596_669_241_483_4, 5.0 / 9.0), (0.0, 8.0 / 9.0), (0.774_596_669_241_483_4, 5.0 / 9.0)];
     let mut sum = 0.0;
     for (r, wr) in G {

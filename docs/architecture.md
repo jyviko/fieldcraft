@@ -68,12 +68,21 @@ Rules beyond the layer order:
    its B-rep face tag survives. Then constrained Delaunay refinement to a
    size field, ODT smoothing interleaved as in Tournois et al. 2009, and the Klingner–Shewchuk 2007
    improvement schedule against slivers.
-4. **Hexahedral meshing (the core).** Octree/grid dual all-hex first, the one family that meshes
-   any input validly (Livesu et al. 2021 dual schemes, Pitzalis et al. 2021 refinement, Gao et al.
-   2019 feature projection and padding, Garanzha et al. 2021 untangling). Then hex-dominant by tet
+4. **Hexahedral meshing (the core).** Grid-based all-hex first, the one family that meshes any
+   input validly. `fieldcraft-mesh::octree` (command `mesh.hex.octree`): a 27-tree over the part,
+   refined by curvature, thickness and narrow faces, balanced and cut by the 3-refinement
+   node-marking templates (Schneiders 1996, Ito et al. 2009) into a conforming grid; the core of
+   grid elements inside the part (exact inside test) is cleaned to a manifold boundary; the part's
+   patches, sharp curves and corners are mapped onto it (Gao et al. 2019); one padding layer and a
+   pillow under each patch carry the boundary and capture every sharp curve; the foldover-free
+   energy (Garanzha et al. 2021) with a growing fitting term moves the boundary onto the geometry
+   while every element stays valid; the worst elements are improved, and every element is proven
+   valid by the certified Bernstein Jacobian check (Johnen et al. 2013; Marschner et al. 2020)
+   before the boundary quads are tagged with their B-rep faces. Where a stage fails the grid is
+   refined there and the mesh rebuilt. The dual schemes of Livesu et al. 2021 (fewer elements,
+   concave transitions) are the next upgrade of the transitions. Then hex-dominant by tet
    recombination (Pellerin et al. 2018), then polycube (DualCube labelling) for blocky parts;
-   frame-field/integer-grid-map methods stay research. Validity uses a certified trilinear Jacobian
-   check (Marschner et al. 2020), not corner Jacobians alone.
+   frame-field/integer-grid-map methods stay research.
 5. **Structured hex and face meshing.** Faces get all-quad meshes on shared, prescribed edge
    nodes (`fieldcraft-mesh::quad`): transfinite interpolation for four-sided faces (Gordon and
    Hall 1973), and for free faces a half-resolution constrained Delaunay triangulation,

@@ -14,6 +14,7 @@ use fieldcraft_parallel as parallel;
 use crate::cholesky::{Factor, FactorError, UpperColumns};
 use crate::constraints::{Budget, Reduction, coupling_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
+use crate::ldlt::{Kind, Symmetric};
 use crate::ordering::nested_dissection;
 use crate::sparse::{Csr, NodeGraph, add_block, add_diagonal, add_scalar};
 use crate::system::{
@@ -248,6 +249,12 @@ fn assemble(mesh: &Mesh, graph: &NodeGraph, mass: Option<MassKind>) -> Result<As
 /// Factor a free-dof matrix; a singular pivot is reported as the free-dof column it hit.
 pub(crate) fn factor_raw(a: &Csr, limits: &Limits) -> std::result::Result<Factor, FactorError> {
     Factor::new(&UpperColumns::from_symmetric(a), limits.max_factor_entries)
+}
+
+/// Factor a free-dof matrix by Cholesky, LDLᵀ, or Cholesky with LDLᵀ when it is not positive
+/// definite ([`Kind`]).
+pub(crate) fn factor_symmetric(a: &Csr, limits: &Limits, kind: Kind) -> std::result::Result<Symmetric, FactorError> {
+    Symmetric::new(&UpperColumns::from_symmetric(a), limits.max_factor_entries, kind)
 }
 
 /// A factorization failure in the user's terms: the node (or reference point) and direction of

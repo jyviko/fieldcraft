@@ -274,8 +274,17 @@ first iteration's) are all below their tolerances, or the residual is round-off.
 starts from the linear extrapolation of the last one. Automatic incrementation grows an
 increment by half after two fast ones (≤ 4 iterations), shrinks it after a slow one (> 8), and
 cuts it to a quarter when an element inverts, the residual is not finite or grows twice, the
-tangent is not positive definite, or the iterations run out; the step stops with the load factor
+tangent is singular, or the iterations run out; the step stops with the load factor
 and the reason at the minimum increment, the increment cap, or `Limits::max_newton_iterations`.
+
+**Indefinite tangents.** A tangent that is not positive definite (a strained nearly
+incompressible mixed element, an unstable material, a state past a limit or bifurcation point)
+is factored by LDLᵀ and Newton goes on; each iteration records the tangent's negative
+eigenvalues, and the summary warns when a converged state keeps some (an unstable equilibrium
+under load control). This lifts the old limit on hybrid elements near ν = ½ under prescribed
+displacement (at ν = 0.4999 every increment used to be cut back to the cap). Only the first
+tangent of a model that can move freely is an error. The tangent predictor of path-dependent
+materials keeps Cholesky and is skipped when the tangent is indefinite.
 
 **Results**: the final displacements and reactions, the **Cauchy stress** and the
 **logarithmic strain** (ln V, engineering shears; the small strain without nonlinear geometry) at

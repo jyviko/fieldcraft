@@ -36,11 +36,20 @@
 //! increments in a row that converge in at most four iterations let the next grow by half (up
 //! to `max_increment`), one that needs more than eight shrinks it by a quarter. An increment is
 //! cut back to a quarter of its size when it fails: an element inverts, the residual is not
-//! finite, the residual grows in two successive iterations, the tangent is not positive definite
-//! (a limit point or an unstable material), or it does not converge in `max_iterations`. The
+//! finite, the residual grows in two successive iterations, the tangent is singular, or it does
+//! not converge in `max_iterations`. The
 //! step fails cleanly, naming the load factor and the last reason, when an increment falls below
 //! `min_increment`, when it has taken `max_increments` increments, or when the Newton iterations
 //! of the whole step reach [`crate::Limits::max_newton_iterations`].
+//!
+//! **Indefinite tangents.** A tangent that is not positive definite — a strained mixed element
+//! of a nearly incompressible material, an unstable material, a state past a limit or
+//! bifurcation point — is factored by the symmetric indefinite LDLᵀ ([`crate::ldlt`]) and Newton
+//! goes on: the residual decides convergence, and every iteration records the tangent's negative
+//! eigenvalues (its inertia), which the step summary reports when a converged state keeps some
+//! (an unstable equilibrium reached under load control). Only the first tangent of a model that
+//! can move without straining is an error (the undeformed model's Cholesky factor names where);
+//! a singular tangent later is a cutback.
 //!
 //! **Follower pressure** and the Cholesky factorization: the load stiffness of a pressure on the
 //! deformed surface is not symmetric (Schweizerhof & Ramm 1984); its skew part is left out of the
@@ -93,12 +102,14 @@ use fieldcraft_model::{BoundaryCondition, Extent, Hardening, Load, Model, Nonlin
 use fieldcraft_parallel as parallel;
 use serde::Serialize;
 
+use crate::analysis::factor_symmetric;
 use crate::analysis::{
     ElementStress, GRAIN, PointResult, ROUND, Setup, StaticResult, Stats, budget, factor_error, factor_raw, ignored_dashpots, pattern, reduction,
     split,
 };
 use crate::cholesky::FactorError;
 use crate::constraints::Reduction;
+use crate::ldlt::{Kind, Symmetric};
 use crate::sparse::{Csr, add_block};
 use crate::system::{Mesh, add_element_thermal_loads, loads, temperature_loads, translations};
 use crate::{Error, Limits, Result};
@@ -114,6 +125,14 @@ pub struct Iteration {
     pub energy: f64,
     /// The line search's step along the correction (1: the full Newton step).
     pub line_search: f64,
+    /// Negative eigenvalues of the tangent the correction was solved with (an indefinite
+    /// tangent is factored by LDLᵀ, [`crate::ldlt`]).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub negative_pivots: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// One increment (converged, or cut back).
@@ -435,8 +454,8 @@ struct Run<'a> {
     committed: Vec<Vec<f64>>,
     /// Whether a material keeps history (the tangent predictor and its convergence rules).
     path_dependent: bool,
-    /// Whether the undeformed model's tangent factors, once asked.
-    undeformed_stable: Option<bool>,
+    /// How the undeformed model's tangent factors (Cholesky), once asked.
+    undeformed: Option<std::result::Result<(), FactorError>>,
 }
 
 /// The outcome of a converged increment.
@@ -460,19 +479,50 @@ impl Run<'_> {
         Ok(self.problem.evaluate(&self.problem.red.expand_scaled(q, lambda), lambda, tangent, &self.committed)?)
     }
 
-    /// Whether the tangent of the undeformed, unloaded model is positive definite: a first
-    /// tangent that is not, at a state the first increment has already strained, is then the
-    /// material or the geometry (a cutback), not a model that can move freely (an error).
-    fn undeformed_is_stable(&mut self) -> std::result::Result<bool, Failure> {
-        if let Some(stable) = self.undeformed_stable {
-            return Ok(stable);
+    /// How the tangent of the undeformed, unloaded model factors (Cholesky): a first tangent
+    /// that is not positive definite, at a state the first increment has already strained, is
+    /// then the material or the geometry, not a model that can move freely (this error).
+    fn undeformed(&mut self) -> std::result::Result<std::result::Result<(), FactorError>, Failure> {
+        if let Some(u) = &self.undeformed {
+            return Ok(u.clone());
         }
         let mut e = self.problem.evaluate(&vec![0.0; self.problem.mesh.dofs()], 0.0, true, &self.committed)?;
         let k = e.tangent.take().ok_or_else(|| Failure::Fatal(Error::Internal("tangent".into())))?;
         let [kff] = self.problem.red.reduce([&k])?;
-        let stable = factor_raw(&kff, self.limits).is_ok();
-        self.undeformed_stable = Some(stable);
-        Ok(stable)
+        let u = factor_raw(&kff, self.limits).map(|_| ());
+        self.undeformed = Some(u.clone());
+        Ok(u)
+    }
+
+    /// Factor a tangent: Cholesky, or LDLᵀ when it is not positive definite (an indefinite
+    /// tangent: a strained mixed element, an unstable material, a state past a limit or
+    /// bifurcation point; Newton proceeds on it and the result counts its negative pivots). A
+    /// model that can move freely is an error at its first tangent; a singular tangent later
+    /// is a cutback.
+    fn factor(&mut self, kff: &Csr, first: bool) -> std::result::Result<Symmetric, Failure> {
+        let free_motion = |run: &mut Self| -> std::result::Result<Option<Error>, Failure> {
+            if !first {
+                return Ok(None);
+            }
+            Ok(match run.undeformed()? {
+                Err(e @ (FactorError::NotPositiveDefinite { .. } | FactorError::Singular { .. })) => {
+                    Some(factor_error(e, run.problem.mesh, run.problem.red))
+                }
+                _ => None,
+            })
+        };
+        match factor_symmetric(kff, self.limits, Kind::Auto) {
+            Ok(f @ Symmetric::Cholesky(_)) => Ok(f),
+            Ok(f) => match free_motion(self)? {
+                Some(e) => Err(Failure::Fatal(e)),
+                None => Ok(f),
+            },
+            Err(FactorError::NotPositiveDefinite { .. } | FactorError::Singular { .. }) => match free_motion(self)? {
+                Some(e) => Err(Failure::Fatal(e)),
+                None => Err(Failure::Cutback("the tangent stiffness is singular (a limit point or bifurcation, or an unstable material)".into())),
+            },
+            Err(e) => Err(Failure::Fatal(factor_error(e, self.problem.mesh, self.problem.red))),
+        }
     }
 
     /// The tangent predictor of an increment from the converged `q0` at load factor `from` to
@@ -553,19 +603,11 @@ impl Run<'_> {
                 self.force_floor = Some(1e-8 * mean * self.length);
             }
             drop(k);
-            let chol = match factor_raw(&kff, self.limits) {
-                Ok(c) => c,
-                Err(FactorError::NotPositiveDefinite { .. }) if !first || self.undeformed_is_stable()? => {
-                    return Err(Failure::Cutback(
-                        "the tangent stiffness is not positive definite (a limit point, a bifurcation or an unstable material)".into(),
-                    ));
-                }
-                Err(e) => return Err(Failure::Fatal(factor_error(e, self.problem.mesh, red))),
-            };
-            self.factor_entries = chol.entries();
+            let factor = self.factor(&kff, first)?;
+            self.factor_entries = factor.entries();
             drop(kff);
             let mut dq = r.clone();
-            chol.solve(&mut dq)?;
+            factor.solve(&mut dq)?;
             if dq.iter().any(|v| !v.is_finite()) {
                 return Err(Failure::Cutback("the Newton correction is not finite".into()));
             }
@@ -585,6 +627,7 @@ impl Run<'_> {
                 displacement: s * norm_inf(&dq) / reference,
                 energy: if first > 0.0 { energy / first } else { 0.0 },
                 line_search: s,
+                negative_pivots: factor.inertia().negative,
             };
             iterations.push(it);
             if !it.force.is_finite() {
@@ -882,7 +925,7 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
         factor_entries: 0,
         committed,
         path_dependent,
-        undeformed_stable: None,
+        undeformed: None,
     };
 
     let mut history = History::default();
@@ -985,6 +1028,17 @@ pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Re
         Some(e) => e,
         None => problem.evaluate(&u, lambda, false, &run.committed)?,
     };
+    if let Some((at, negative)) = history
+        .increments
+        .iter()
+        .filter(|i| i.converged)
+        .filter_map(|i| i.iterations.last().map(|it| (i.load_factor, it.negative_pivots)))
+        .find(|(_, n)| *n > 0)
+    {
+        warnings.push(format!(
+            "the converged tangent had {negative} negative eigenvalue(s) from load factor {at:.6} on: an unstable equilibrium under load control (past a limit or bifurcation point, or an unstable material)"
+        ));
+    }
     if let Some(a) = problem.follower_asymmetry(&u, lambda)?
         && a > 1e-6
     {

@@ -514,3 +514,34 @@ fn mooney_rivlin_and_yeoh_in_the_homogeneous_modes() {
         }
     }
 }
+
+/// Nearly incompressible hybrid blocks (ν = 0.4999) stretched to λ = 2 by a prescribed
+/// displacement: the first states of an increment strain the boundary elements alone, so their
+/// mixed tangents are indefinite; Newton goes on with the LDLᵀ factor and converges to the
+/// compressible neo-Hookean closed form.
+#[test]
+fn nearly_incompressible_hybrids_under_prescribed_displacement() {
+    let (e, nu, lam) = (3.0, 0.4999, 2.0);
+    let (mu, kappa) = (e / (2.0 * (1.0 + nu)), e / (3.0 * (1.0 - 2.0 * nu)));
+    let (l, sigma) = neo_hookean_uniaxial(mu, kappa, lam);
+    let mut indefinite = 0;
+    for (kind, n) in [(ElementKind::Hex8, 3), (ElementKind::Hex20, 2), (ElementKind::Tet10, 2)] {
+        let mut g = grid([n, n, n], kind, |x| x);
+        g.define(iso(e, nu), None, Formulation { hybrid: true, ..Formulation::default() }, nonlinear());
+        neo_hookean(&mut g, e, nu);
+        g.symmetry("x0", Symmetry::X, |x| near(x[0], 0.0));
+        g.symmetry("y0", Symmetry::Y, |x| near(x[1], 0.0));
+        g.symmetry("z0", Symmetry::Z, |x| near(x[2], 0.0));
+        g.node_set("x1", |x| near(x[0], 1.0));
+        g.bc("pull", BoundaryCondition::Displacement { target: Target::Set("x1".into()), values: [Some(lam - 1.0), None, None, None, None, None] });
+        let r = solve(&g);
+        let corner = g.nodes_where(|x| near(x[0], 1.0) && near(x[1], 1.0) && near(x[2], 1.0))[0];
+        assert!((r.displacement[at(&r, corner)][1] - (l - 1.0)).abs() < 1e-7, "{kind:?}: {:?}", r.displacement[at(&r, corner)]);
+        for s in &r.stress {
+            assert!((s[0] - sigma).abs() < 1e-5 * sigma, "{kind:?}: {s:?} vs {sigma}");
+        }
+        let h = r.nonlinear.as_ref().unwrap();
+        indefinite += h.increments.iter().flat_map(|i| &i.iterations).filter(|i| i.negative_pivots > 0).count();
+    }
+    assert!(indefinite > 0, "the LDLᵀ path was exercised");
+}

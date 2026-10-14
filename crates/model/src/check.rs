@@ -404,6 +404,22 @@ impl Model {
             }
         }
 
+        // Ties: their surfaces are element faces of solids too.
+        for (name, t) in &self.ties {
+            for set in [&t.main, &t.secondary] {
+                let faces = &set_of(set).faces;
+                let solid = |f: &crate::ElementFace| self.elements.get(&f.element).is_some_and(|e| e.kind.dimension() == 3);
+                if faces.is_empty() {
+                    d.error(format!("tie `{name}`"), format!("set `{set}` has no element faces (a tie surface is a set of faces)"));
+                } else if !faces.iter().all(solid) {
+                    d.error(
+                        format!("tie `{name}`"),
+                        format!("set `{set}` has faces of elements that are not solids (ties bond the faces of solid elements so far)"),
+                    );
+                }
+            }
+        }
+
         // Nodes with rotational degrees of freedom: those of shells and beams, and reference points
         // (worked out only when a boundary condition or load needs it).
         let rotational = std::cell::OnceCell::new();

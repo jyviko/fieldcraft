@@ -45,6 +45,7 @@ pub mod nodal;
 pub mod sections;
 pub mod sets;
 pub mod steps;
+pub mod tie;
 pub mod units;
 
 use std::collections::BTreeMap;
@@ -71,6 +72,7 @@ pub use steps::{
     MAX_LOAD_PATH_POINTS, MAX_NONLINEAR_INCREMENTS, MAX_NONLINEAR_ITERATIONS, MassScaling, NonlinearStatic, OutputVariable, Procedure, RigidWall,
     Step, StressRate, Tolerances, Transient,
 };
+pub use tie::Tie;
 pub use units::UnitSystem;
 
 /// The largest node or element label. Nastran's GRID and element ids stop at 99 999 999 (eight
@@ -128,6 +130,8 @@ pub struct Model {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     contacts: BTreeMap<String, Contact>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    ties: BTreeMap<String, Tie>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     masses: BTreeMap<String, PointMass>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     springs: BTreeMap<String, Spring>,
@@ -163,6 +167,8 @@ struct ModelData {
     couplings: BTreeMap<String, Coupling>,
     #[serde(default)]
     contacts: BTreeMap<String, Contact>,
+    #[serde(default)]
+    ties: BTreeMap<String, Tie>,
     #[serde(default)]
     masses: BTreeMap<String, PointMass>,
     #[serde(default)]
@@ -224,6 +230,9 @@ impl TryFrom<ModelData> for Model {
         }
         for (n, v) in d.contacts {
             m.add_contact(&n, v)?;
+        }
+        for (n, v) in d.ties {
+            m.add_tie(&n, v)?;
         }
         for (n, v) in d.masses {
             m.add_mass(&n, v)?;
@@ -341,6 +350,7 @@ impl Model {
             reference_points: self.reference_points.clone(),
             couplings: self.couplings.clone(),
             contacts: self.contacts.clone(),
+            ties: self.ties.clone(),
             masses: self.masses.clone(),
             springs: self.springs.clone(),
             boundary_conditions: self.boundary_conditions.clone(),
@@ -351,7 +361,7 @@ impl Model {
     }
 
     /// Counts of each kind of definition, for summaries.
-    pub fn definition_counts(&self) -> [(&'static str, usize); 12] {
+    pub fn definition_counts(&self) -> [(&'static str, usize); 13] {
         [
             ("sets", self.sets.len()),
             ("materials", self.materials.len()),
@@ -359,6 +369,7 @@ impl Model {
             ("reference_points", self.reference_points.len()),
             ("couplings", self.couplings.len()),
             ("contacts", self.contacts.len()),
+            ("ties", self.ties.len()),
             ("masses", self.masses.len()),
             ("springs", self.springs.len()),
             ("boundary_conditions", self.boundary_conditions.len()),

@@ -123,6 +123,7 @@ impl Model {
         users.extend(self.sections.iter().filter(|(_, s)| s.set == set).map(|(n, _)| format!("section `{n}`")));
         users.extend(self.couplings.iter().filter(|(_, c)| c.set == set).map(|(n, _)| format!("coupling `{n}`")));
         users.extend(self.contact_users(set));
+        users.extend(self.tie_users(set));
         users.extend(self.discrete_users(|t| t.set() == Some(set)));
         users
             .extend(self.boundary_conditions.iter().filter(|(_, b)| b.target().set() == Some(set)).map(|(n, _)| format!("boundary condition `{n}`")));

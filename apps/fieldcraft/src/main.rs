@@ -22,6 +22,9 @@ const DEPTH_BITS: u8 = 24;
 /// The window draws its own caption buttons where the OS ones would sit apart from the app bar.
 const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
 const MSAA: u16 = 4;
+/// The reverse-DNS application id: the Wayland app_id / X11 class, matched to the packaged
+/// `.desktop` entry (packaging/linux), and the macOS bundle id (packaging/macos/Info.plist.in).
+const APP_ID: &str = "io.github.jyviko.fieldcraft";
 
 /// The window and Dock icon: the 256 px export of the application icon (assets/app-icon).
 const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/icon.iconset/icon_128x128@2x.png");
@@ -148,6 +151,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("FieldCraft")
+            .with_app_id(APP_ID)
             .with_icon(app_icon())
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([960.0, 600.0])

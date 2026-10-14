@@ -18,3 +18,7 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+[build-dependencies]
+# The Windows executable's icon resource (build.rs).
+embed-resource = "3.0.12"

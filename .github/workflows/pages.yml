@@ -1,0 +1,84 @@
+# The web app (apps/fieldcraft-web, docs/web.md) on GitHub Pages: https://jyviko.github.io/fieldcraft/
+# After SolidCraft's pages.yml (MIT OR Apache-2.0; see ATTRIBUTION.md).
+#
+# A push to `main` (a release; main holds released code only) builds the app with Trunk (release,
+# wasm-opt) and deploys it. A merge to `develop` that touches code builds it without deploying, so a
+# broken web build shows up before the release. A manual run builds the branch it runs on and
+# deploys only from `main`. Needs Settings › Pages › Source = GitHub Actions, and `main` allowed
+# by the github-pages environment's deployment branches.
+name: Pages
+
+on:
+  push:
+    branches: [main, develop]
+    # As ci.yml: a merge that only touches prose builds nothing.
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push waits its turn instead of cancelling a deploy part way.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TRUNK_VERSION: v0.21.14
+  TRUNK_SHA256: f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: web
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - name: Install Trunk
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSfL -o trunk.tar.gz "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${TRUNK_SHA256}  trunk.tar.gz" | sha256sum -c -
+          tar -xzf trunk.tar.gz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build the web app
+        working-directory: apps/fieldcraft-web
+        run: trunk build --release --public-url /fieldcraft/
+      - name: Bundle size
+        run: |
+          {
+            echo "### Web app bundle"
+            echo '| file | bytes | gzip |'
+            echo '|---|---:|---:|'
+            for f in dist/web/*.wasm dist/web/*.js; do
+              echo "| $(basename "$f") | $(stat -c %s "$f") | $(gzip -9 -c "$f" | wc -c) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: dist/web
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

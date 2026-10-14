@@ -1,0 +1,16 @@
+[
+ {"command": "mesh.block", "params": {"body": "Lower", "kind": "hex8", "corners": [[0, 0, 0], [2, 0, 0], [2, 1, 0], [0, 1, 0], [0, 0, 1], [2, 0, 1], [2, 1, 1], [0, 1, 1]], "divisions": [6, 3, 2], "faces": {"1": "bottom", "2": "top"}}},
+ {"command": "mesh.block", "params": {"body": "Upper", "kind": "hex8", "corners": [[0.5, 0, 1], [1.5, 0, 1], [1.5, 1, 1], [0.5, 1, 1], [0.5, 0, 2], [1.5, 0, 2], [1.5, 1, 2], [0.5, 1, 2]], "divisions": [2, 2, 2], "faces": {"1": "bottom", "2": "top"}, "merge": 0}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Lower"}, {"body": "Upper"}]}},
+ {"command": "model.set.create", "params": {"name": "lower_top", "geometry": [{"body": "Lower", "face": "top"}]}},
+ {"command": "model.set.create", "params": {"name": "upper_bottom", "geometry": [{"body": "Upper", "face": "bottom"}]}},
+ {"command": "model.set.create", "params": {"name": "base", "geometry": [{"body": "Lower", "face": "bottom"}]}},
+ {"command": "model.set.create", "params": {"name": "top", "geometry": [{"body": "Upper", "face": "top"}]}},
+ {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.3}}},
+ {"command": "model.section.create", "params": {"name": "all", "set": "all", "material": "Mat", "kind": {"type": "solid"}}},
+ {"command": "interaction.contact.pair", "params": {"name": "interface", "main": "lower_top", "secondary": "upper_bottom", "friction": {"static": 0.3, "kinetic": 0.2, "decay": 1.0}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "base", "type": "fixed", "target": {"set": "base"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "slide", "type": "displacement", "target": {"set": "top"}, "values": [0.1, 0, -0.02, null, null, null]}},
+ {"command": "model.step.create", "params": {"name": "Slide", "procedure": {"type": "nonlinear_static", "nonlinear_geometry": false, "initial_increment": 0.25}, "boundary_conditions": ["base", "slide"], "loads": []}},
+ {"command": "solve.nonlinear", "params": {"step": "Slide"}, "id": "slide"}
+]

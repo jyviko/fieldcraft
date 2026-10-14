@@ -1,0 +1,61 @@
+{
+ "title": "Coulomb friction: a block pressed on another and slid (implicit mortar contact)",
+ "kind": "theory",
+ "source": "Coulomb's law of dry friction: a sliding interface carries μ_k times the normal force against the slip (C. A. Coulomb, Théorie des machines simples, Mém. Math. Phys. Acad. Sci. 10:161–332, 1785; P. Wriggers, Computational Contact Mechanics, 2nd ed., Springer 2006, §5.2)",
+ "quantities": [
+  {
+   "id": "kinetic",
+   "quantity": "the tangential over the normal force across the sliding interface",
+   "measure": {
+    "from": "slide",
+    "pointer": "/contacts/0/force/0",
+    "over": {
+     "from": "slide",
+     "pointer": "/contacts/0/force/2",
+     "scale": -1.0
+    }
+   },
+   "value": 0.2,
+   "tolerance": {
+    "relative": 0.001
+   },
+   "reason": "once the interface slips its friction is μ_k N exactly (the return map puts every slipping node's traction on the cone); the force opposes the upper block's motion"
+  },
+  {
+   "id": "balance",
+   "quantity": "the tangential contact force on the upper block over the sideways reaction at its top (they balance)",
+   "measure": {
+    "from": "slide",
+    "pointer": "/contacts/0/force/0",
+    "over": {
+     "command": "results.reactions",
+     "params": {
+      "step": "Slide",
+      "sets": [
+       "top"
+      ]
+     },
+     "pointer": "/sets/0/force/0"
+    }
+   },
+   "value": -1.0,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "the friction carries the whole sideways load"
+  },
+  {
+   "id": "slipping",
+   "quantity": "the secondary nodes that slip (all 9)",
+   "measure": {
+    "from": "slide",
+    "pointer": "/contacts/0/slipping_nodes"
+   },
+   "value": 9.0,
+   "tolerance": {
+    "exact": true
+   },
+   "reason": "a sideways demand far beyond μ N slips the whole interface"
+  }
+ ]
+}

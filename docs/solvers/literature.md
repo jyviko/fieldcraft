@@ -1322,6 +1322,13 @@ written from (cited again in the module docs); docs/fem.md describes the formula
   Laursen, *An augmented Lagrangian treatment of contact problems involving friction*, Comput.
   Struct. 42(1):97–116, 1992; P. Wriggers, *Computational Contact Mechanics*, 2nd ed., Springer
   2006, ch. 6 and 10; T. A. Laursen, *Computational Contact and Impact Mechanics*, Springer 2003.
+- Friction: the regularised Coulomb return map at the nodes, J. C. Simo, T. A. Laursen 1992 and
+  P. Wriggers 2006, §5.2 (as in Part Q), on the mortar slip in its rate form (the weighted
+  relative motion projected on the tangent plane), T. W. McDevitt, T. A. Laursen 2000 and M. A.
+  Puso, T. A. Laursen, *A mortar segment-to-segment frictional contact method for large
+  deformations*, CMAME 193:4891–4913, 2004; C. A. Coulomb's law, *Théorie des machines simples*,
+  1785. The tangent is symmetrised like the follower pressure's (the non-symmetric coupling to
+  the pressure is left out; the residual is exact).
 - The active set inside Newton (the max() of the regularised pressure, a semismooth Newton
   method): P. Alart, A. Curnier, *A mixed formulation for frictional contact problems prone to
   Newton like solution methods*, CMAME 92:353–375, 1991; Popp et al. 2009.

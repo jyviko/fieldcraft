@@ -501,16 +501,35 @@ With nonlinear geometry the pairs are searched (bucket grid of the main faces' b
 their depth limit) and integrated on the current configuration at every evaluation; a pair deeper
 than half the main element's thickness has passed through and is left out.
 
+**Friction**: Coulomb's law at the closed secondary nodes by a return map (Wriggers 2006, §5.2;
+Simo & Laursen 1992). The node's weighted tangential slip since the last converged increment is
+w_A = B_A Δx with B_A = [∫ Φ_A N_i P, −∫ Φ_A N_j P] (P = I − n n; the rate form of the mortar slip,
+McDevitt & Laursen 2000), ĝ_T = w_A / A_A; the trial traction t* = P t_n − ε_A ĝ_T sticks when
+|t*| ≤ μ p_A and otherwise returns to the cone, t = μ p_A t*/|t*|, with the static coefficient for
+a node that stuck in the last increment and the kinetic one for one that slipped (a static step
+has no slip rate for the exponential decay). The traction does the virtual work t · B_A δx, so a
+slipping interface carries exactly μ times its normal force. The tangent is symmetrised: it
+keeps (ε_A/A_A) Bᵀ B in stick and (ε_A μ p_A/(A_A |t*|)) Bᵀ (I − t̂ t̂) B in slip and leaves out
+the coupling to the pressure (μ t̂ ⊗ ∂p_A/∂x) and the change of B with the geometry, so the
+factorization stays the symmetric one, like the follower pressure's; the residual is exact, so
+only the rate of convergence suffers while nodes slip. Tractions and slip states are committed
+when an increment converges. If an increment's active set chatters (a node touching with no
+pressure, at the edge of a contact that lifts under friction), the increment is cut back and the
+nodes open by less than 10⁻³ of their element's thickness keep their penalty in the tangent for
+the rest of the step.
+
 **Initial overclosure**: nodes whose gap starts negative are reported; `adjust` takes the overlap
 out of their weighted gap (an offset: strain-free, nodes are not moved), `refuse` stops naming
 the node and the depth.
 
 **Output**: per secondary node the pressure (its normal contact force over the area it carries,
 ∫ Φ_A over the overlaps, which is smoother than the multipliers at the contact's edge), the
-multiplier, the gap ĝ and the status (open, closed); per contact the force on the secondary
+multiplier, the gap ĝ, the status (open, closed; with friction stick or slip), and with friction
+the shear traction and the slip over the last increment; per contact the force on the secondary
 surface, the normal force Σ p_A ∫Φ_A, the deepest penetration and the augmentations.
 `solve.nonlinear` summarises each contact, `solve.probe` gives a secondary node's `contact`
-entries, and the results display draws `contact_pressure`, `contact_gap` and `contact_status`.
+entries, and the results display draws `contact_pressure`, `contact_gap`, `contact_status`,
+`contact_shear` and `contact_slip`.
 
 **Verification** (`crates/solver/tests/contact.rs`, `tests/oracle/nl-contact-patch`,
 `tests/oracle/nl-hertz-cylinder`): the contact patch test on non-matching hex8 and tet4 meshes
@@ -519,7 +538,10 @@ finite sliding, where the gaps the augmentation leaves enter through their geome
 Hertz's line contact, plane strain (peak pressure within 0.3%, the pressure at two nodes within
 3% and 6%, the vertical stress under the contact within 2%, the half-width bracketed); Hertz's
 sphere on a flat, a quarter model (peak pressure within 4%, contact radius bracketed; heavy);
-Newton's quadratic rate near the solution with finite sliding; initial overclosure adjusted and
+Newton's quadratic rate near the solution with finite sliding; Coulomb friction between pressed
+blocks (stick well below the cone with the forces of glued blocks, slip on it carrying μ N to 0.1%
+with small sliding and 3% with finite sliding, where the block turns a little, and μ_k N once
+slipping; `tests/oracle/nl-friction-sliding-blocks`); initial overclosure adjusted and
 refused; bit-for-bit results on one and four threads; the refusals.
 
 ## Hyperelastic materials in explicit dynamics

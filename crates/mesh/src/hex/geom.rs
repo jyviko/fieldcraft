@@ -115,6 +115,29 @@ impl Surface {
         };
         q.iter().all(|x| x.is_finite()).then_some(q)
     }
+
+    /// The unit normal of the surface at its point closest to `p`, up to sign, or `None` where
+    /// the closest point is not unique.
+    pub(crate) fn normal(&self, p: P) -> Option<P> {
+        match *self {
+            Surface::Plane { normal, .. } => unit(normal),
+            Surface::Cylinder { origin, axis, .. } => {
+                let w = sub(p, origin);
+                unit(sub(w, scale(axis, dot(w, axis))))
+            }
+            Surface::Cone { apex, axis, half_angle } => {
+                let w = sub(p, apex);
+                let radial = unit(sub(w, scale(axis, dot(w, axis))))?;
+                unit(sub(scale(radial, half_angle.cos()), scale(axis, half_angle.sin())))
+            }
+            Surface::Sphere { center, .. } => unit(sub(p, center)),
+            Surface::Torus { center, axis, major, .. } => {
+                let w = sub(p, center);
+                let ring = add(center, scale(unit(sub(w, scale(axis, dot(w, axis))))?, major));
+                unit(sub(p, ring))
+            }
+        }
+    }
 }
 
 /// The closest point to `p` on triangle `abc`.
@@ -274,8 +297,18 @@ impl<'a> TriangleTree<'a> {
 
     /// The closest triangle to `p` among those `accept` admits (by triangle index).
     pub(crate) fn closest(&self, p: P, accept: &dyn Fn(u32) -> bool) -> Option<Hit> {
+        self.search(p, f64::INFINITY, accept)
+    }
+
+    /// [`TriangleTree::closest`] among the triangles within distance `r` of `p` (the search
+    /// skips everything farther).
+    pub(crate) fn closest_within(&self, p: P, r: f64, accept: &dyn Fn(u32) -> bool) -> Option<Hit> {
+        self.search(p, r * r, accept).filter(|h| h.dist <= r)
+    }
+
+    fn search(&self, p: P, limit2: f64, accept: &dyn Fn(u32) -> bool) -> Option<Hit> {
         let mut best: Option<Hit> = None;
-        let mut best2 = f64::INFINITY;
+        let mut best2 = limit2;
         let mut stack = vec![0usize];
         let mut visits = 0usize;
         while let Some(id) = stack.pop() {

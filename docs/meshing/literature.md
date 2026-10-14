@@ -880,7 +880,7 @@ input points), Steiner points kept half the local spacing from the boundary.
 
 ### B8. Mapped and swept hexahedral meshing (implemented in `fieldcraft-mesh::hex`)
 
-`mesh.hex.generate` (and `mesh.hex.sweep`, `mesh.hex.mapped`). Every method below is implemented from
+`mesh.hex.generate` (and `mesh.hex.sweep`, `mesh.hex.mapped`, `mesh.hex.blocks`). Every method below is implemented from
 its paper; no code was read. DOIs marked "checked" were confirmed on 2026-10-13 through a repository
 record or the publisher; the others are cited by venue only.
 
@@ -932,7 +932,17 @@ record or the publisher; the others are cited by venue only.
   Applied Mathematics and Computation 10–11:171–233, 1982.
 - **Use.** Interior nodes of a logical cube from its six face grids (`hex::mapped`).
 
-**B8.8 Support.** Generalized winding number for the inside test (A. Jacobson, L. Kavan, O. Sorkine-Hornung,
+**B8.8 Multi-block meshing of partitioned parts.** **Verdict: BUILD ON (conforming cells).**
+- **Citations.** J. F. Thompson, B. K. Soni, N. P. Weatherill (eds.). *Handbook of Grid Generation.* CRC Press,
+  1999, ch. 3 (transfinite and algebraic grids) and ch. 13 (multiblock grids). A. Sheffer, M. Bercovier,
+  T. Blacker, J. Clements. *Virtual topology operators for meshing.* IJCGA 10(3):309–331, 2000.
+- **Use.** `hex::cells` (`mesh.hex.blocks`): cells that meet face to face, each a logical cube after smoothly
+  meeting faces are joined into composite faces (virtual topology); vertices, edges and faces shared by
+  identity; interval assignment over all cells (B8.5); each edge divided once, each face's transfinite grid
+  made once and used by both cells; edges that leave a curved face graded from the spacing along it with a
+  growth of 1.2 per element; interiors by B8.7. The merged mesh is checked for free internal faces.
+
+**B8.9 Support.** Generalized winding number for the inside test (A. Jacobson, L. Kavan, O. Sorkine-Hornung,
 *Robust inside-outside segmentation using generalized winding numbers*, ACM TOG 32(4):33, 2013; solid angle
 of a triangle: Van Oosterom and Strackee 1983); closest point on a triangle (C. Ericson, *Real-Time
 Collision Detection*, 2005, §5.1.5).

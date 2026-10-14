@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 
+use super::brep::Brep;
 use super::interval::Intervals;
 use super::{Ctx, Raw, project_to_face, project_to_faces};
 use crate::quad::{lattice_index, transfinite_faces, transfinite_volume};
@@ -20,10 +21,30 @@ use crate::vec3::{P, det, sub};
 use crate::{Error, Result};
 
 /// The most nodes of a mapped block.
-const MAX_NODES: usize = 1 << 26;
+pub(crate) const MAX_NODES: usize = 1 << 26;
 
-pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
-    let brep = ctx.brep;
+/// A logical cube found in a B-rep: its corners, its edges by logical direction and its faces.
+pub(crate) struct Cube {
+    /// The surface vertex at each corner, `corner[i][j][k]`, right-handed.
+    pub corner: [[[u32; 2]; 2]; 2],
+    /// The four edges along each logical direction `d`, oriented from the low corner to the high
+    /// one, at the other two coordinates `(s, t) ∈ {0, 1}²` in the order (0, 0), (0, 1), (1, 0),
+    /// (1, 1).
+    pub groups: [[(usize, bool); 4]; 3],
+    /// The B-rep face (index into `faces`) on each side of each direction: `faces[d][side]`.
+    pub faces: [[usize; 2]; 3],
+}
+
+impl Cube {
+    /// The corner at logical coordinates `(i, j, k)` (each 0 or 1).
+    pub(crate) fn at(&self, i: usize, j: usize, k: usize) -> u32 {
+        self.corner[i & 1][j & 1][k & 1]
+    }
+}
+
+/// Recognize a logical cube: six faces with one loop of four edges each, three edges at each of
+/// eight corners. Anything else is [`Error::Unsupported`] with the reason.
+pub(crate) fn recognize(brep: &Brep) -> Result<Cube> {
     if brep.faces.len() != 6 || brep.edges.len() != 12 {
         return Err(Error::Unsupported(format!("not a logical cube: {} faces and {} edges (6 and 12 needed)", brep.faces.len(), brep.edges.len())));
     }
@@ -61,7 +82,6 @@ pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
     };
     let c111 = common(c110, c101, a).filter(|&x| neighbours(c011).contains(&x));
     let Some(c111) = c111 else { return Err(Error::Unsupported("not a logical cube: the corner graph is not a cube".into())) };
-    // corner[i][j][k]
     let corner = [[[c000, c], [b, c011]], [[a, c101], [c110, c111]]];
     let at = |i: usize, j: usize, k: usize| -> u32 { corner[i][j][k] };
     let mut distinct: Vec<u32> = corner.iter().flatten().flatten().copied().collect();
@@ -74,20 +94,65 @@ pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
     let edge_between = |u: u32, v: u32| -> Option<(usize, bool)> {
         adj.get(&u)?.iter().find(|x| x.0 == v).map(|x| (x.1, brep.edges.get(x.1).is_some_and(|e| e.first() == u)))
     };
-    // The four edges along each direction, from the low corner to the high one.
-    let mut groups: [Vec<(usize, bool)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let mut groups = [[(0usize, true); 4]; 3];
     for (d, group) in groups.iter_mut().enumerate() {
-        for s in 0..2 {
-            for t in 0..2 {
-                let (lo, hi) = match d {
-                    0 => (at(0, s, t), at(1, s, t)),
-                    1 => (at(s, 0, t), at(s, 1, t)),
-                    _ => (at(s, t, 0), at(s, t, 1)),
-                };
-                group.push(edge_between(lo, hi).ok_or_else(|| Error::Unsupported("not a logical cube: a corner pair has no edge".into()))?);
-            }
+        for (m, slot) in group.iter_mut().enumerate() {
+            let (s, t) = (m / 2, m % 2);
+            let (lo, hi) = match d {
+                0 => (at(0, s, t), at(1, s, t)),
+                1 => (at(s, 0, t), at(s, 1, t)),
+                _ => (at(s, t, 0), at(s, t, 1)),
+            };
+            *slot = edge_between(lo, hi).ok_or_else(|| Error::Unsupported("not a logical cube: a corner pair has no edge".into()))?;
         }
     }
+    // The face bounded by the four edges of each side.
+    let mut faces = [[0usize; 2]; 3];
+    for (d, row) in faces.iter_mut().enumerate() {
+        for (side, slot) in row.iter_mut().enumerate() {
+            let ring = face_ring(d, side).map(|[i, j, k]| at(i, j, k));
+            let mut bounding: Vec<usize> = (0..4).filter_map(|m| edge_between(ring[m], ring[(m + 1) % 4]).map(|x| x.0)).collect();
+            bounding.sort_unstable();
+            *slot = brep
+                .faces
+                .iter()
+                .position(|f| {
+                    let mut es: Vec<usize> = f.loops.iter().flatten().map(|x| x.0).collect();
+                    es.sort_unstable();
+                    es == bounding
+                })
+                .ok_or_else(|| Error::Unsupported("not a logical cube: a side's four edges bound no face".into()))?;
+        }
+    }
+    Ok(Cube { corner, groups, faces })
+}
+
+/// The corners of side `side` of direction `d` in the order (0, 0), (1, 0), (1, 1), (0, 1) of its
+/// two other directions (lower first).
+pub(crate) fn face_ring(d: usize, side: usize) -> [[usize; 3]; 4] {
+    let (da, db) = other(d);
+    [(0, 0), (1, 0), (1, 1), (0, 1)].map(|(a, b)| {
+        let mut c = [0usize; 3];
+        c[d] = side;
+        c[da] = a;
+        c[db] = b;
+        c
+    })
+}
+
+/// The two directions other than `d`, lower first.
+pub(crate) fn other(d: usize) -> (usize, usize) {
+    match d {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    }
+}
+
+pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
+    let brep = ctx.brep;
+    let cube = recognize(brep)?;
+    let groups = cube.groups;
     let mut ia = Intervals::default();
     for e in 0..brep.edges.len() {
         ia.var(ideal_divisions(ctx.field, &brep.edge_points(e, true))?, 1);
@@ -99,7 +164,7 @@ pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
         }
     }
     let counts = ia.solve()?;
-    let count = |g: &Vec<(usize, bool)>| g.first().and_then(|x| counts.get(x.0)).copied().unwrap_or(1);
+    let count = |g: &[(usize, bool); 4]| g.first().and_then(|x| counts.get(x.0)).copied().unwrap_or(1);
     let (ni, nj, nk) = (count(&groups[0]), count(&groups[1]), count(&groups[2]));
     let total = (ni + 1).checked_mul(nj + 1).and_then(|x| x.checked_mul(nk + 1)).filter(|&x| x <= MAX_NODES);
     let total = total.ok_or_else(|| Error::Limit(format!("a {ni} × {nj} × {nk} block exceeds {MAX_NODES} nodes")))?;
@@ -135,26 +200,8 @@ pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
     // Faces: grids from their edges, projected onto the B-rep face their four edges bound.
     let n = [ni, nj, nk];
     transfinite_faces(&mut x, n, None, |d, side, grid| {
-        let (da, db) = match d {
-            0 => (1, 2),
-            1 => (0, 2),
-            _ => (0, 1),
-        };
-        let logical = |a: usize, b: usize| {
-            let mut c = [0usize; 3];
-            c[d] = side;
-            c[da] = a;
-            c[db] = b;
-            at(c[0], c[1], c[2])
-        };
-        let ring = [logical(0, 0), logical(1, 0), logical(1, 1), logical(0, 1)];
-        let mut bounding: Vec<usize> = (0..4).filter_map(|m| edge_between(ring[m], ring[(m + 1) % 4]).map(|x| x.0)).collect();
-        bounding.sort_unstable();
-        let face = brep.faces.iter().position(|f| {
-            let mut es: Vec<usize> = f.loops.iter().flatten().map(|x| x.0).collect();
-            es.sort_unstable();
-            es == bounding
-        });
+        let (da, db) = other(d);
+        let face = cube.faces.get(d).and_then(|r| r.get(side)).copied();
         let (na, nb) = (n[da], n[db]);
         for b in 1..nb {
             for a in 1..na {

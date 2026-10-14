@@ -6,7 +6,16 @@
 //! The hex meshers reason on this topology the way B-rep sweepers do (Blacker, *The Cooper
 //! tool*, Proc. 5th International Meshing Roundtable, 1996): which faces are sources, targets and
 //! linking faces, and which edges bound them.
+//!
+//! **Virtual topology.** [`Brep::composite`] joins faces that meet smoothly along all of their
+//! common boundary (the two halves of a cylinder the kernel splits at a seam, a plane running
+//! tangentially into a fillet, coplanar pieces) into one composite face, so their seam is no edge
+//! of the mesher's topology: the composite surfaces of virtual topology (A. Sheffer, M. Bercovier,
+//! T. Blacker, J. Clements, *Virtual topology operators for meshing*, IJCGA 10(3):309–331, 2000).
+//! A composite face keeps an analytic surface when every member lies on the first member's;
+//! otherwise nodes go onto its triangles.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use super::geom::{Surface, add, dist, scale, unit};
@@ -59,6 +68,9 @@ impl Edge {
 
 pub(crate) struct Brep<'a> {
     pub surface: &'a BoundarySurface,
+    /// The face tag of each triangle: the surface's own tags, or for composite faces the smallest
+    /// tag of the composite.
+    tags: Cow<'a, [u32]>,
     pub faces: Vec<Face>,
     pub edges: Vec<Edge>,
     /// Whether each surface vertex is a B-rep vertex.
@@ -72,9 +84,29 @@ pub(crate) struct Brep<'a> {
 /// Relative geometric tolerance (of the bounding-box diagonal).
 pub(crate) const RELATIVE_EPS: f64 = 1e-7;
 
+/// Largest angle (radians) between the surface normals of two faces along their common boundary
+/// for them to join into a composite face: 1°.
+const SMOOTH_ANGLE: f64 = 0.017_453_292_519_943_295;
+/// Distance from a member's vertices to the first member's analytic surface (relative to the
+/// bounding-box diagonal) within which a composite face keeps that surface.
+const RELATIVE_ON_SURFACE: f64 = 1e-6;
+
 impl<'a> Brep<'a> {
     /// Recover the topology. `surfaces[tag]` is the analytic surface of B-rep face `tag`, if any.
     pub(crate) fn new(surface: &'a BoundarySurface, surfaces: &[Option<Surface>]) -> Result<Self> {
+        Self::build(surface, surfaces, Cow::Borrowed(surface.tri_face()), false)
+    }
+
+    /// [`Brep::new`] with smoothly meeting faces joined into composite faces (virtual topology).
+    pub(crate) fn composite(surface: &'a BoundarySurface, surfaces: &[Option<Surface>]) -> Result<Self> {
+        let tags = composite_tags(surface, surfaces);
+        Self::build(surface, surfaces, Cow::Owned(tags), true)
+    }
+
+    fn build(surface: &'a BoundarySurface, surfaces: &[Option<Surface>], tags: Cow<'a, [u32]>, composite: bool) -> Result<Self> {
+        if tags.len() != surface.triangles().len() {
+            return Err(Error::Failed("a face tag per triangle is needed".into()));
+        }
         let pts = surface.points();
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
@@ -91,7 +123,7 @@ impl<'a> Brep<'a> {
         let eps = RELATIVE_EPS * diagonal;
         // Faces in tag order.
         let mut by_tag: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-        for (t, &f) in surface.tri_face().iter().enumerate() {
+        for (t, &f) in tags.iter().enumerate() {
             by_tag.entry(f).or_default().push(t as u32);
         }
         let index: BTreeMap<u32, usize> = by_tag.keys().enumerate().map(|(i, &f)| (f, i)).collect();
@@ -109,12 +141,13 @@ impl<'a> Brep<'a> {
             }
             verts.sort_unstable();
             verts.dedup();
-            let analytic = surfaces.get(id as usize).copied().flatten().and_then(|s| s.checked());
+            let analytic =
+                if composite { composite_surface(surface, surfaces, tris, RELATIVE_ON_SURFACE * diagonal) } else { own_surface(surfaces, id) };
             let normal = unit(nsum).unwrap_or([0.0; 3]);
             let plane = planarity(pts, &verts, normal, analytic, eps);
             faces.push(Face { id, triangles: tris.clone(), vertices: verts, area, surface: analytic, plane, loops: Vec::new() });
         }
-        let face_of = |t: u32| surface.tri_face().get(t as usize).and_then(|f| index.get(f)).copied();
+        let face_of = |t: u32| tags.get(t as usize).and_then(|f| index.get(f)).copied();
         // Oriented boundary segments: `from → to` with face `left` traversing it.
         struct Seg {
             from: u32,
@@ -128,6 +161,10 @@ impl<'a> Brep<'a> {
             let (Some(left), Some(right)) = (face_of(fe.triangles[0]), face_of(fe.triangles[1])) else {
                 return Err(Error::Failed("feature edge without faces".into()));
             };
+            // The seam inside a composite face is no edge.
+            if left == right {
+                continue;
+            }
             // Orient each segment as the lower-indexed face traverses it, so that the segments of
             // one edge chain head to tail.
             let [lo, hi] = fe.vertices;
@@ -236,7 +273,7 @@ impl<'a> Brep<'a> {
                 face.loops = loops;
             }
         }
-        Ok(Brep { surface, faces, edges, is_vertex, edge_triangles, diagonal })
+        Ok(Brep { surface, tags, faces, edges, is_vertex, edge_triangles, diagonal })
     }
 
     pub(crate) fn point(&self, v: u32) -> P {
@@ -276,8 +313,13 @@ impl<'a> Brep<'a> {
 
     /// The faces that use the triangle's tag (index into `faces`).
     pub(crate) fn face_of_triangle(&self, t: u32) -> Option<usize> {
-        let tag = *self.surface.tri_face().get(t as usize)?;
+        let tag = *self.tags.get(t as usize)?;
         self.faces.binary_search_by_key(&tag, |f| f.id).ok()
+    }
+
+    /// The face tag of triangle `t` in this topology (a composite face's tag for its members).
+    pub(crate) fn tag(&self, t: u32) -> Option<u32> {
+        self.tags.get(t as usize).copied()
     }
 }
 
@@ -299,4 +341,74 @@ fn planarity(pts: &[P], verts: &[u32], normal: P, analytic: Option<Surface>, eps
     // An analytic plane is trusted within a looser bound: its vertices lie on it to the kernel's
     // tolerance, not to ours.
     (flat || matches!(analytic, Some(Surface::Plane { .. }))).then_some((point, n))
+}
+
+/// The analytic surface of face `tag` from the geometry, checked.
+fn own_surface(surfaces: &[Option<Surface>], tag: u32) -> Option<Surface> {
+    surfaces.get(tag as usize).copied().flatten().and_then(|s| s.checked())
+}
+
+/// The analytic surface of a composite face (its triangles `tris`): the first member's, when the
+/// vertices of every member lie on it within `tol`.
+fn composite_surface(surface: &BoundarySurface, surfaces: &[Option<Surface>], tris: &[u32], tol: f64) -> Option<Surface> {
+    let tri_face = surface.tri_face();
+    let first = tris.iter().filter_map(|&t| tri_face.get(t as usize)).min()?;
+    let s = own_surface(surfaces, *first)?;
+    let pts = surface.points();
+    let on = |v: u32| pts.get(v as usize).is_some_and(|&p| s.project(p).is_some_and(|q| dist(p, q) <= tol));
+    tris.iter().all(|&t| surface.triangles().get(t as usize).is_some_and(|tri| tri.iter().all(|&v| on(v)))).then_some(s)
+}
+
+/// Face tags with smoothly meeting faces joined: two faces join when, at every boundary segment
+/// between them, their analytic surfaces' normals are within [`SMOOTH_ANGLE`] of parallel and the
+/// two triangles there face the same side. Each composite face takes its smallest member tag.
+fn composite_tags(surface: &BoundarySurface, surfaces: &[Option<Surface>]) -> Vec<u32> {
+    let tri_face = surface.tri_face();
+    let pts = surface.points();
+    let point = |v: u32| pts.get(v as usize).copied().unwrap_or([0.0; 3]);
+    let tri_normal = |t: u32| {
+        surface.triangles().get(t as usize).and_then(|tri| {
+            let [a, b, c] = tri.map(point);
+            unit(cross(sub(b, a), sub(c, a)))
+        })
+    };
+    let cos_min = SMOOTH_ANGLE.cos();
+    // Per pair of faces (low tag, high tag): whether every segment between them is smooth.
+    let mut pairs: BTreeMap<(u32, u32), bool> = BTreeMap::new();
+    for fe in surface.feature_edges().iter().filter(|e| e.kind == FeatureKind::FaceBoundary) {
+        let (Some(&a), Some(&b)) = (tri_face.get(fe.triangles[0] as usize), tri_face.get(fe.triangles[1] as usize)) else { continue };
+        if a == b {
+            continue;
+        }
+        let m = scale(add(point(fe.vertices[0]), point(fe.vertices[1])), 0.5);
+        let normals = (own_surface(surfaces, a).and_then(|s| s.normal(m)), own_surface(surfaces, b).and_then(|s| s.normal(m)));
+        let same_side = match (tri_normal(fe.triangles[0]), tri_normal(fe.triangles[1])) {
+            (Some(x), Some(y)) => dot(x, y) > 0.0,
+            _ => false,
+        };
+        let smooth = same_side && matches!(normals, (Some(x), Some(y)) if dot(x, y).abs() >= cos_min);
+        let entry = pairs.entry((a.min(b), a.max(b))).or_insert(true);
+        *entry = *entry && smooth;
+    }
+    // Union–find over tags, the root always the smaller tag.
+    let mut parent: BTreeMap<u32, u32> = BTreeMap::new();
+    fn root(parent: &BTreeMap<u32, u32>, mut x: u32) -> u32 {
+        // Each step goes to a smaller tag, so this ends.
+        while let Some(&p) = parent.get(&x) {
+            if p == x {
+                break;
+            }
+            x = p;
+        }
+        x
+    }
+    for (&(a, b), &smooth) in &pairs {
+        if smooth {
+            let (ra, rb) = (root(&parent, a), root(&parent, b));
+            if ra != rb {
+                parent.insert(ra.max(rb), ra.min(rb));
+            }
+        }
+    }
+    tri_face.iter().map(|&f| root(&parent, f)).collect()
 }

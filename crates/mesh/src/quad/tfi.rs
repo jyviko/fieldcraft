@@ -21,7 +21,7 @@ fn dist<const D: usize>(a: &[f64; D], b: &[f64; D]) -> f64 {
 }
 
 /// Normalized cumulative arc length of a side, from 0 to 1.
-fn params<const D: usize>(side: &[[f64; D]], name: &str) -> Result<Vec<f64>> {
+pub(crate) fn params<const D: usize>(side: &[[f64; D]], name: &str) -> Result<Vec<f64>> {
     let mut acc = Vec::with_capacity(side.len());
     let mut s = 0.0;
     acc.push(0.0);

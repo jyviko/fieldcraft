@@ -292,3 +292,191 @@ fn unsweepable_bodies_say_why_and_hostile_input_is_an_error() {
     let m = hex_mesh(&s, &garbage, &UniformSize(1.0), &HexOptions::default()).unwrap();
     assert_eq!(m.element_count(), 24);
 }
+
+// ---- Conforming cells ----
+
+/// A prism over a counter-clockwise polygon from z0 to z1 whose side from vertex k to k + 1 gets
+/// tag `side_tags[k]` (bottom 0, top 1); quads of one tag make one face.
+fn tagged_prism(poly: &[[f64; 2]], side_tags: &[u32], z0: f64, z1: f64) -> BoundarySurface {
+    let n = poly.len();
+    let mut pts: Vec<[f64; 3]> = poly.iter().map(|p| [p[0], p[1], z0]).collect();
+    pts.extend(poly.iter().map(|p| [p[0], p[1], z1]));
+    let mut tris = Vec::new();
+    let mut tags = Vec::new();
+    for t in ears(&pts, &(0..n as u32).rev().collect::<Vec<_>>()) {
+        tris.push(t);
+        tags.push(0);
+    }
+    for t in ears(&pts, &(n as u32..2 * n as u32).collect::<Vec<_>>()) {
+        tris.push(t);
+        tags.push(1);
+    }
+    for (k, &tag) in side_tags.iter().enumerate().take(n) {
+        let (a, b) = (k as u32, ((k + 1) % n) as u32);
+        let (c, d) = (b + n as u32, a + n as u32);
+        tris.push([a, b, c]);
+        tris.push([a, c, d]);
+        tags.extend([tag, tag]);
+    }
+    BoundarySurface::new(&pts, &tris, &tags, &SurfaceOptions::default()).unwrap()
+}
+
+fn cells_of<'a>(surfaces: &'a [BoundarySurface], faces: &'a [Vec<Option<Surface>>]) -> Vec<Cell<'a>> {
+    surfaces.iter().zip(faces).map(|(surface, faces)| Cell { name: "cell", surface, faces }).collect()
+}
+
+/// Boxes `[x0, x1] × [y0, y1] × [0, h]` as prisms (faces 0 bottom, 1 top, 2..6 the sides).
+fn boxes(spans: &[([f64; 2], [f64; 2])], h: f64) -> Vec<BoundarySurface> {
+    spans.iter().map(|(x, y)| prism(&[[x[0], y[0]], [x[1], y[0]], [x[1], y[1]], [x[0], y[1]]], 0.0, h)).collect()
+}
+
+/// Every node of the mesh at a distinct position: the cells' nodes were merged.
+fn distinct_positions(m: &HexMesh) -> bool {
+    let mut keys: Vec<[u64; 3]> = m.nodes.iter().map(|p| p.map(|x| (x + 0.0).to_bits())).collect();
+    keys.sort_unstable();
+    keys.windows(2).all(|w| w[0] != w[1])
+}
+
+#[test]
+fn boxes_side_by_side_conform() {
+    // Two boxes sharing x = 2, then a 2 × 2 arrangement whose middle edge four cells share.
+    let pairs = boxes(&[([0.0, 2.0], [0.0, 1.0]), ([2.0, 3.0], [0.0, 1.0])], 1.0);
+    let none = vec![Vec::new(); 2];
+    let m = hex_mesh_cells(&cells_of(&pairs, &none), &UniformSize(0.5), &HexOptions::default()).unwrap();
+    assert_eq!(m.interfaces, 1);
+    assert_eq!(m.blocks.iter().map(|b| b[0] * b[1] * b[2]).sum::<usize>(), m.mesh.element_count());
+    assert_eq!(m.mesh.element_count(), 6 * 2 * 2);
+    // One structured grid: 7 × 3 × 3 nodes, none duplicated on the interface.
+    assert_eq!(m.mesh.nodes.len(), 7 * 3 * 3);
+    assert!(distinct_positions(&m.mesh));
+    assert!((m.mesh.report.volume - 3.0).abs() < 1e-12);
+    assert!(m.mesh.report.gate.passed());
+    // The boundary is the outside only: 2·(6·2 + 6·2 + 2·2) quads.
+    assert_eq!(m.mesh.boundary.len(), 56);
+    assert_eq!(m.element_cell.iter().filter(|&&c| c == 0).count(), 16);
+
+    let grid = boxes(&[([0.0, 1.0], [0.0, 1.0]), ([1.0, 2.0], [0.0, 1.0]), ([0.0, 1.0], [1.0, 2.0]), ([1.0, 2.0], [1.0, 2.0])], 1.0);
+    let none = vec![Vec::new(); 4];
+    let a = hex_mesh_cells(&cells_of(&grid, &none), &UniformSize(0.25), &HexOptions::default()).unwrap();
+    assert_eq!(a.interfaces, 4);
+    assert_eq!(a.mesh.nodes.len(), 9 * 9 * 5);
+    assert!(distinct_positions(&a.mesh));
+    // Deterministic, and hex20 shares its mid-edge nodes across the interfaces too.
+    let b = hex_mesh_cells(&cells_of(&grid, &none), &UniformSize(0.25), &HexOptions::default()).unwrap();
+    assert_eq!(a, b);
+    let q = hex_mesh_cells(&cells_of(&grid, &none), &UniformSize(0.25), &HexOptions { quadratic: true, ..HexOptions::default() }).unwrap();
+    assert_eq!(q.mesh.kind, ElementKind::Hex20);
+    // Corner nodes plus one node per lattice edge: 9·9·5 + (8·9·5)·2 + 9·9·4.
+    assert_eq!(q.mesh.nodes.len(), 405 + 720 + 324);
+    assert!(distinct_positions(&q.mesh));
+}
+
+#[test]
+fn cells_that_do_not_meet_face_to_face_are_refused() {
+    // One box against two half-height boxes: its face at x = 1 meets two faces (a T-junction).
+    let t = vec![
+        prism(&[[0.0, 0.0], [1.0, 0.0], [1.0, 2.0], [0.0, 2.0]], 0.0, 1.0),
+        prism(&[[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]], 0.0, 1.0),
+        prism(&[[1.0, 1.0], [2.0, 1.0], [2.0, 2.0], [1.0, 2.0]], 0.0, 1.0),
+    ];
+    let none = vec![Vec::new(); 3];
+    match hex_mesh_cells(&cells_of(&t, &none), &UniformSize(0.5), &HexOptions::default()) {
+        Err(Error::Failed(why)) => assert!(why.contains("interface") || why.contains("conform"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    // A cell that is no logical cube says which.
+    let l = vec![prism(&[[0.0, 0.0], [6.0, 0.0], [6.0, 2.0], [2.0, 2.0], [2.0, 6.0], [0.0, 6.0]], 0.0, 2.0)];
+    match hex_mesh_cells(&cells_of(&l, &[Vec::new()]), &UniformSize(1.0), &HexOptions::default()) {
+        Err(Error::Unsupported(why)) => assert!(why.starts_with("cell `cell`: not a logical cube"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn hostile_cell_input_is_an_error() {
+    let two = boxes(&[([0.0, 1.0], [0.0, 1.0]), ([1.0, 2.0], [0.0, 1.0])], 1.0);
+    let none = vec![Vec::new(); 2];
+    let cells = cells_of(&two, &none);
+    assert!(hex_mesh_cells(&[], &UniformSize(1.0), &HexOptions::default()).is_err());
+    for method in [HexMethod::Sweep, HexMethod::Extrude, HexMethod::Revolve, HexMethod::Swept] {
+        assert!(matches!(hex_mesh_cells(&cells, &UniformSize(1.0), &HexOptions { method, ..HexOptions::default() }), Err(Error::Invalid(_))));
+    }
+    let bad_sizes: [&dyn crate::size::SizeField; 3] = [&UniformSize(f64::NAN), &UniformSize(0.0), &UniformSize(-1.0)];
+    for f in bad_sizes {
+        assert!(hex_mesh_cells(&cells, f, &HexOptions::default()).is_err());
+    }
+    assert!(matches!(hex_mesh_cells(&cells, &UniformSize(1e-4), &HexOptions::default()), Err(Error::Limit(_))));
+    assert!(matches!(hex_mesh_cells(&cells, &UniformSize(0.1), &HexOptions { max_elements: 100, ..HexOptions::default() }), Err(Error::Limit(_))));
+    assert!(hex_mesh_cells(&cells, &UniformSize(1.0), &HexOptions { chordal_tolerance: -1.0, ..HexOptions::default() }).is_err());
+    // The same cell twice: two cells on the same side of every face.
+    let same = [two[0].clone(), two[0].clone()];
+    assert!(hex_mesh_cells(&cells_of(&same, &none), &UniformSize(0.5), &HexOptions::default()).is_err());
+    // Garbage analytic surfaces are not trusted.
+    let garbage = vec![vec![Some(Surface::Cylinder { origin: [f64::NAN; 3], axis: [0.0; 3], radius: -1.0 }); 6]; 2];
+    let m = hex_mesh_cells(&cells_of(&two, &garbage), &UniformSize(0.5), &HexOptions::default()).unwrap();
+    assert_eq!(m.mesh.element_count(), 16);
+}
+
+/// The four cells of an O-grid round a hole of radius 1 in the square [−2, 2]², height `h`: each
+/// cell the hole's quarter between two diagonals and a side of the square. The hole's quarter is
+/// one face (tag 5) or two halves of the cylinder (tags 5 and 6: virtual topology joins them).
+fn o_grid(h: f64, arc_segments: usize, split_arcs: bool) -> (Vec<BoundarySurface>, Vec<Vec<Option<Surface>>>) {
+    use std::f64::consts::FRAC_PI_4;
+    let mut surfaces = Vec::new();
+    let mut faces = Vec::new();
+    for q in 0..4 {
+        let turn = q as f64 * 2.0 * FRAC_PI_4;
+        let rot = |p: [f64; 2]| [p[0] * turn.cos() - p[1] * turn.sin(), p[0] * turn.sin() + p[1] * turn.cos()];
+        let mut poly = vec![rot([FRAC_PI_4.cos(), -FRAC_PI_4.sin()]), rot([2.0, -2.0]), rot([2.0, 2.0])];
+        let mut tags = vec![2, 3, 4];
+        for k in 0..arc_segments {
+            let t = FRAC_PI_4 - 2.0 * FRAC_PI_4 * k as f64 / arc_segments as f64;
+            poly.push(rot([t.cos(), t.sin()]));
+            tags.push(if split_arcs && 2 * k >= arc_segments { 6 } else { 5 });
+        }
+        // Exact corners where the cells meet.
+        let snap = |p: [f64; 2]| p.map(|x| if (x.abs() - 2.0).abs() < 1e-12 { 2.0 * x.signum() } else { x });
+        let poly: Vec<[f64; 2]> = poly.into_iter().map(snap).collect();
+        surfaces.push(tagged_prism(&poly, &tags, 0.0, h));
+        let cyl = Some(Surface::Cylinder { origin: [0.0; 3], axis: [0.0, 0.0, 1.0], radius: 1.0 });
+        faces.push(vec![None, None, None, None, None, cyl, cyl]);
+    }
+    (surfaces, faces)
+}
+
+#[test]
+fn an_o_grid_round_a_hole_conforms_with_graded_radial_lines() {
+    for split_arcs in [false, true] {
+        let (surfaces, faces) = o_grid(0.5, 24, split_arcs);
+        let opts = HexOptions { chordal_tolerance: 1.0 - (std::f64::consts::PI / 48.0).cos(), ..HexOptions::default() };
+        let m = hex_mesh_cells(&cells_of(&surfaces, &faces), &UniformSize(0.5), &opts).unwrap();
+        assert_eq!(m.interfaces, 4, "{split_arcs}");
+        assert!(m.mesh.report.gate.passed());
+        assert!(m.mesh.report.min_scaled_jacobian > 0.3, "{}", m.mesh.report.min_scaled_jacobian);
+        assert!(distinct_positions(&m.mesh));
+        // A ring of quads round the hole: every block is (around) × (radial) × (through).
+        let sorted = |b: [usize; 3]| {
+            let mut b = b;
+            b.sort_unstable();
+            b
+        };
+        assert!(m.blocks.iter().all(|&b| sorted(b) == sorted(m.blocks[0])), "{:?}", m.blocks);
+        let per_block = m.blocks[0].iter().product::<usize>();
+        assert_eq!(m.mesh.element_count(), 4 * per_block);
+        // Nodes on the hole lie on it.
+        let hole: Vec<u32> = if split_arcs { vec![5, 6] } else { vec![5] };
+        assert!(on_radius(&m.mesh, &hole, 1.0), "{split_arcs}");
+        let on_hole = m.mesh.boundary.iter().filter(|b| hole.contains(&b.brep_face)).count();
+        assert!(on_hole > 0);
+        // Radial grading: the first spacing off the hole is smaller than the last at the square.
+        let radii: std::collections::BTreeSet<u64> =
+            m.mesh.nodes.iter().filter(|p| p[2] == 0.0 && p[1].abs() < 1e-12 && p[0] > 0.0).map(|p| p[0].to_bits()).collect();
+        let r: Vec<f64> = radii.into_iter().map(f64::from_bits).collect();
+        assert!(r.len() >= 3, "{r:?}");
+        let first = r[1] - r[0];
+        let last = r[r.len() - 1] - r[r.len() - 2];
+        assert!(first < 0.75 * last, "{r:?}");
+        // Spacing grows by at most the growth rate plus the rounding of the count.
+        assert!(r.windows(3).all(|w| (w[2] - w[1]) <= 1.35 * (w[1] - w[0])), "{r:?}");
+    }
+}

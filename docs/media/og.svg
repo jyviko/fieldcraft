@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- FieldCraft social preview (1280 x 640). Original artwork; the cube is the app icon's
+     02-part layer (assets/app-icon/FieldCraft.icon/Assets/02-part.svg, cargo xtask app-icon).
+     Text is set in Inter (crates/ui-egui/fonts, OFL). Render with that font visible to fontconfig:
+     rsvg-convert -w 1280 -h 640 og.svg -o og.png -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="640" viewBox="0 0 1280 640">
+  <title>FieldCraft: Open-source CAE built in Rust</title>
+  <defs>
+    <pattern id="og-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0 L0 0 L0 32" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="1"/>
+    </pattern>
+    <radialGradient id="og-glow" cx="300" cy="320" r="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2f86e0" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#2f86e0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="#161b22"/>
+  <rect width="1280" height="640" fill="url(#og-grid)"/>
+  <rect width="1280" height="640" fill="url(#og-glow)"/>
+  <svg x="60" y="70" width="500" height="500" viewBox="200 160 624 680">
+      <defs>
+        <clipPath id="clip-path-1">
+          <path d="M512 200 L764.81 345.96 L512 491.92 L259.19 345.96 Z"/>
+        </clipPath>
+        <clipPath id="clip-path-2">
+          <path d="M252.19 358.08 L505 504.04 L505 795.96 L252.19 650 Z"/>
+        </clipPath>
+        <clipPath id="clip-path-3">
+          <path d="M771.81 650 L519 795.96 L519 504.04 L771.81 358.08 Z"/>
+        </clipPath>
+        <clipPath id="clip-path-4">
+          <path d="M512 200 L764.81 345.96 L512 491.92 L259.19 345.96 Z M252.19 358.08 L505 504.04 L505 795.96 L252.19 650 Z M771.81 650 L519 795.96 L519 504.04 L771.81 358.08 Z"/>
+        </clipPath>
+      </defs>
+      <title>FieldCraft icon cube</title>
+      <g id="Top_face" data-name="Top face" clip-path="url(#clip-path-1)">
+        <path id="top" d="M512 200 L764.81 345.96 L512 491.92 L259.19 345.96 Z" fill="#2c4fbf"/>
+        <path id="top_band_1" data-name="top band 1" d="M844.55 692 C660.89 798.04 363.11 798.04 179.45 692 C-4.22 585.96 -4.22 414.04 179.45 308 C363.11 201.96 660.89 201.96 844.55 308 C1028.22 414.04 1028.22 585.96 844.55 692 Z" fill="#2f86e0"/>
+        <path id="top_band_2" data-name="top band 2" d="M789.99 660.5 C636.46 749.14 387.54 749.14 234.01 660.5 C80.47 571.86 80.47 428.14 234.01 339.5 C387.54 250.86 636.46 250.86 789.99 339.5 C943.53 428.14 943.53 571.86 789.99 660.5 Z" fill="#22bcd8"/>
+        <path id="top_band_3" data-name="top band 3" d="M738.03 630.5 C613.2 702.57 410.8 702.57 285.97 630.5 C161.13 558.43 161.13 441.57 285.97 369.5 C410.8 297.43 613.2 297.43 738.03 369.5 C862.87 441.57 862.87 558.43 738.03 630.5 Z" fill="#3fc584"/>
+        <path id="top_band_4" data-name="top band 4" d="M686.07 600.5 C589.93 656 434.07 656 337.93 600.5 C241.79 545 241.79 455 337.93 399.5 C434.07 344 589.93 344 686.07 399.5 C782.21 455 782.21 545 686.07 600.5 Z" fill="#f0d13a"/>
+        <path id="top_band_5" data-name="top band 5" d="M634.11 570.5 C566.67 609.44 457.33 609.44 389.89 570.5 C322.45 531.56 322.45 468.44 389.89 429.5 C457.33 390.56 566.67 390.56 634.11 429.5 C701.55 468.44 701.55 531.56 634.11 570.5 Z" fill="#f28a2b"/>
+        <path id="top_band_6" data-name="top band 6" d="M582.15 540.5 C543.41 562.87 480.59 562.87 441.85 540.5 C403.11 518.13 403.11 481.87 441.85 459.5 C480.59 437.13 543.41 437.13 582.15 459.5 C620.89 481.87 620.89 518.13 582.15 540.5 Z" fill="#de3b2f"/>
+        <path id="top_shade" data-name="top shade" d="M512 200 L764.81 345.96 L512 491.92 L259.19 345.96 Z" fill="#ffffff" opacity="0.1"/>
+      </g>
+      <g id="Left_face" data-name="Left face" clip-path="url(#clip-path-2)">
+        <path id="left" d="M252.19 358.08 L505 504.04 L505 795.96 L252.19 650 Z" fill="#2c4fbf"/>
+        <path id="left_band_1" data-name="left band 1" d="M844.55 692 C844.55 479.92 695.66 222.04 512 116 C328.34 9.96 179.45 95.92 179.45 308 C179.45 520.08 328.34 777.96 512 884 C695.66 990.04 844.55 904.08 844.55 692 Z" fill="#2f86e0"/>
+        <path id="left_band_2" data-name="left band 2" d="M789.99 660.5 C789.99 483.22 665.53 267.64 512 179 C358.47 90.36 234.01 162.22 234.01 339.5 C234.01 516.78 358.47 732.36 512 821 C665.53 909.64 789.99 837.78 789.99 660.5 Z" fill="#22bcd8"/>
+        <path id="left_band_3" data-name="left band 3" d="M738.03 630.5 C738.03 486.35 636.83 311.07 512 239 C387.17 166.93 285.97 225.35 285.97 369.5 C285.97 513.65 387.17 688.93 512 761 C636.83 833.07 738.03 774.65 738.03 630.5 Z" fill="#3fc584"/>
+        <path id="left_band_4" data-name="left band 4" d="M686.07 600.5 C686.07 489.49 608.14 354.5 512 299 C415.86 243.5 337.93 288.49 337.93 399.5 C337.93 510.51 415.86 645.5 512 701 C608.14 756.5 686.07 711.51 686.07 600.5 Z" fill="#f0d13a"/>
+        <path id="left_band_5" data-name="left band 5" d="M634.11 570.5 C634.11 492.63 579.44 397.94 512 359 C444.56 320.06 389.89 351.63 389.89 429.5 C389.89 507.37 444.56 602.06 512 641 C579.44 679.94 634.11 648.37 634.11 570.5 Z" fill="#f28a2b"/>
+        <path id="left_band_6" data-name="left band 6" d="M582.15 540.5 C582.15 495.76 550.74 441.37 512 419 C473.26 396.63 441.85 414.76 441.85 459.5 C441.85 504.24 473.26 558.63 512 581 C550.74 603.37 582.15 585.24 582.15 540.5 Z" fill="#de3b2f"/>
+        <path id="left_shade" data-name="left shade" d="M252.19 358.08 L505 504.04 L505 795.96 L252.19 650 Z" fill="#000000" opacity="0.12"/>
+      </g>
+      <g id="Right_face" data-name="Right face" clip-path="url(#clip-path-3)">
+        <path id="right" d="M771.81 650 L519 795.96 L519 504.04 L771.81 358.08 Z" fill="#2c4fbf"/>
+        <path id="right_band_1" data-name="right band 1" d="M179.45 692 C179.45 479.92 328.34 222.04 512 116 C695.66 9.96 844.55 95.92 844.55 308 C844.55 520.08 695.66 777.96 512 884 C328.34 990.04 179.45 904.08 179.45 692 Z" fill="#2f86e0"/>
+        <path id="right_band_2" data-name="right band 2" d="M234.01 660.5 C234.01 483.22 358.47 267.64 512 179 C665.53 90.36 789.99 162.22 789.99 339.5 C789.99 516.78 665.53 732.36 512 821 C358.47 909.64 234.01 837.78 234.01 660.5 Z" fill="#22bcd8"/>
+        <path id="right_band_3" data-name="right band 3" d="M285.97 630.5 C285.97 486.35 387.17 311.07 512 239 C636.83 166.93 738.03 225.35 738.03 369.5 C738.03 513.65 636.83 688.93 512 761 C387.17 833.07 285.97 774.65 285.97 630.5 Z" fill="#3fc584"/>
+        <path id="right_band_4" data-name="right band 4" d="M337.93 600.5 C337.93 489.49 415.86 354.5 512 299 C608.14 243.5 686.07 288.49 686.07 399.5 C686.07 510.51 608.14 645.5 512 701 C415.86 756.5 337.93 711.51 337.93 600.5 Z" fill="#f0d13a"/>
+        <path id="right_band_5" data-name="right band 5" d="M389.89 570.5 C389.89 492.63 444.56 397.94 512 359 C579.44 320.06 634.11 351.63 634.11 429.5 C634.11 507.37 579.44 602.06 512 641 C444.56 679.94 389.89 648.37 389.89 570.5 Z" fill="#f28a2b"/>
+        <path id="right_band_6" data-name="right band 6" d="M441.85 540.5 C441.85 495.76 473.26 441.37 512 419 C550.74 396.63 582.15 414.76 582.15 459.5 C582.15 504.24 550.74 558.63 512 581 C473.26 603.37 441.85 585.24 441.85 540.5 Z" fill="#de3b2f"/>
+        <path id="right_shade" data-name="right shade" d="M771.81 650 L519 795.96 L519 504.04 L771.81 358.08 Z" fill="#000000" opacity="0.3"/>
+      </g>
+      <g id="Mesh" clip-path="url(#clip-path-4)">
+        <path id="hexahedral_mesh" data-name="hexahedral mesh" d="M576.95 237.5 L317.14 387.5 M447.05 237.5 L706.86 387.5 M317.14 687.5 L317.14 387.5 M252.19 575 L512 725 M706.86 687.5 L706.86 387.5 M771.81 575 L512 725 M641.9 275 L382.1 425 M382.1 275 L641.9 425 M382.1 725 L382.1 425 M252.19 500 L512 650 M641.9 725 L641.9 425 M771.81 500 L512 650 M706.86 312.5 L447.05 462.5 M317.14 312.5 L576.95 462.5 M447.05 762.5 L447.05 462.5 M252.19 425 L512 575 M576.95 762.5 L576.95 462.5 M771.81 425 L512 575" fill="none" stroke="#0b2236" stroke-width="3.5" stroke-linejoin="round" opacity="0.45"/>
+      </g>
+  </svg>
+  <g font-family="Inter" font-weight="600">
+    <text x="600" y="300" font-size="104" fill="#ffffff" letter-spacing="-2">FieldCraft</text>
+    <text x="604" y="372" font-size="40" fill="#79c0ff">Open-source CAE built in Rust</text>
+    <text x="605" y="430" font-size="27" fill="#8b949e">Structures · Heat · Fluids · MCP for AI agents</text>
+  </g>
+</svg>

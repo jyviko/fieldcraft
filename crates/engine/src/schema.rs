@@ -118,6 +118,11 @@ pub enum Collection {
     SolvedStep,
     /// A body of the open design.
     Body,
+    /// A datum plane or axis.
+    Datum,
+    /// A datum plane.
+    DatumPlane,
+    Partition,
 }
 
 impl Collection {
@@ -138,6 +143,9 @@ impl Collection {
             Collection::Step => "step",
             Collection::SolvedStep => "solved step",
             Collection::Body => "body",
+            Collection::Datum => "datum",
+            Collection::DatumPlane => "datum plane",
+            Collection::Partition => "partition",
         }
     }
 }
@@ -162,6 +170,9 @@ impl Session {
             Collection::Step => Box::new(m.steps().iter().map(|s| s.name.as_str())),
             Collection::SolvedStep => Box::new(self.solved_steps()),
             Collection::Body => Box::new(self.design.iter().flat_map(|d| d.bodies.iter().map(|b| b.name.as_str()))),
+            Collection::Datum => Box::new(m.datums().keys().map(String::as_str)),
+            Collection::DatumPlane => Box::new(m.datums().iter().filter(|(_, d)| d.plane().is_some()).map(|(n, _)| n.as_str())),
+            Collection::Partition => Box::new(m.partitions().iter().map(|p| p.name.as_str())),
         };
         names.take(MAX_NAMES).map(str::to_string).collect()
     }

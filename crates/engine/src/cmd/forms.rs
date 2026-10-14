@@ -803,6 +803,54 @@ pub const OPEN_DESIGN: &[Field] = &[
     path("path", "Design", false).req(),
     choice("model", "Model", &[("keep", "Keep the current model"), ("new", "Start a new model")]).def("\"keep\""),
 ];
+const POINT: Dim = D::Millimetre;
+pub const DATUM_PLANE: &[Field] = &[
+    NAME,
+    variants(
+        "by",
+        "Definition",
+        &[
+            variant(
+                "offset",
+                "Principal plane",
+                &[
+                    choice("plane", "Plane", &[("yz", "YZ (normal X)"), ("zx", "ZX (normal Y)"), ("xy", "XY (normal Z)")]).req(),
+                    num("offset", "Offset", POINT).def("0"),
+                ],
+            ),
+            variant(
+                "three_points",
+                "Three points",
+                &[xyz("a", "Point A", POINT).req(), xyz("b", "Point B", POINT).req(), xyz("c", "Point C", POINT).req()],
+            ),
+            variant("point_normal", "Point and normal", &[xyz("point", "Point", POINT).req(), xyz("normal", "Normal", D::None).req()]),
+        ],
+    )
+    .req()
+    .def(r#"{"type": "offset"}"#),
+];
+pub const DATUM_AXIS: &[Field] = &[
+    NAME,
+    variants(
+        "by",
+        "Definition",
+        &[
+            variant(
+                "principal",
+                "Principal axis",
+                &[choice("axis", "Axis", &[("x", "X"), ("y", "Y"), ("z", "Z")]).req(), xyz("through", "Through", POINT).hint("the origin")],
+            ),
+            variant("two_points", "Two points", &[xyz("a", "Point A", POINT).req(), xyz("b", "Point B", POINT).req()]),
+            variant("point_direction", "Point and direction", &[xyz("point", "Point", POINT).req(), xyz("direction", "Direction", D::None).req()]),
+        ],
+    )
+    .req()
+    .def(r#"{"type": "principal"}"#),
+];
+pub const DATUM_DELETE: &[Field] = existing!("Datum", C::Datum);
+pub const PARTITION: &[Field] =
+    &[NAME, reference("datum", "Datum plane", C::DatumPlane).req(), references("bodies", "Bodies", C::Body).hint("every body the plane divides")];
+pub const PARTITION_DELETE: &[Field] = existing!("Partition", C::Partition);
 pub const TESSELLATE: &[Field] = &[reference("body", "Body", C::Body).req(), TOLERANCE];
 pub const IMPORT_MESH: &[Field] = &[path("path", "3MF file", false).req()];
 pub const FILE_OPEN: &[Field] = &[path("path", "Model", false).req()];

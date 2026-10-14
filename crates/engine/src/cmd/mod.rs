@@ -2,6 +2,7 @@
 
 mod block;
 mod contact;
+pub(crate) mod datum;
 pub(crate) mod deck;
 pub(crate) mod define;
 mod edit;
@@ -32,6 +33,11 @@ pub static ALL: &[CommandSpec] = &[
     geometry::BODIES,
     geometry::TESSELLATE,
     geometry::IMPORT_MESH,
+    datum::DATUM_PLANE,
+    datum::DATUM_AXIS,
+    datum::DATUM_DELETE,
+    datum::PARTITION,
+    datum::PARTITION_DELETE,
     mesh::NODE_ADD,
     mesh::NODE_REMOVE,
     mesh::ELEMENT_ADD,

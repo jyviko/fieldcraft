@@ -64,7 +64,9 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = super::file_param(s, p, "path", Access::Read)?;
     let bytes = super::file::read_file(&path, MAX_DESIGN_BYTES as u64)?;
     let source = SourceFile::of(super::file::absolute(&path), &bytes)?;
-    let design = open_design(&bytes)?;
+    let opened = open_design(&bytes)?;
+    // The model's partitions cut the design again (a new model has none).
+    let design = if new_model { opened } else { super::datum::partitioned(&opened, &s.model)? };
     let mut fit = fit(s, &design);
     if new_model {
         let mut model = Model::default();

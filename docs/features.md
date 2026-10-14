@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-60 ready, 44 coming soon.
+62 ready, 42 coming soon.
 
 ## Geometry
 
@@ -17,8 +17,8 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Inspect | Bodies — List the open design's bodies, volumes and named faces | ready | `geometry.bodies` |
 | Inspect | Tessellate — Tessellate a body into a face-tagged boundary surface | ready | `geometry.tessellate` |
 | Inspect | Check Surface — Weld, closed, manifold, orientation and self-intersection checks; feature edges | ready | `mesh.surface.check` |
-| Prepare | Partition — Split bodies and faces as SolidCraft features | coming soon (M5) |  |
-| Prepare | Datum Plane — Construction planes for partitions | coming soon (M5) |  |
+| Prepare | Datum Plane — Datum planes (principal plane and offset, three points, point and normal) and axes | ready | `geometry.datum`, `geometry.datum.axis`, `geometry.datum.delete` |
+| Prepare | Partition — Cut bodies into cells by a datum plane; the two faces of each cut are paired by name | ready | `geometry.partition`, `geometry.partition.delete` |
 | Prepare | Midsurface — Extract midsurfaces of thin parts for shell meshes | coming soon (M8) |  |
 
 ## Mesh

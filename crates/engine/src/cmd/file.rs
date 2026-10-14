@@ -199,7 +199,16 @@ impl Session {
         let mut design: Option<Arc<Design>> = None;
         if let Some(stored) = &file.geometry.design {
             let (opened, source) = reopen("design", stored, base, roots, MAX_DESIGN_BYTES as u64, open_design, &mut warnings);
-            design = opened.map(Arc::new);
+            design = opened.and_then(|d| match super::datum::partitioned(&d, &file.model) {
+                Ok(cut) => Some(Arc::new(cut)),
+                Err(e) => {
+                    warnings.push(format!("the design's partitions could not be applied ({e}); the model opens without the design"));
+                    None
+                }
+            });
+            if let Some(d) = &design {
+                warnings.extend(d.errors.iter().filter(|e| e.feature.starts_with("partition ")).map(|e| format!("{}: {}", e.feature, e.message)));
+            }
             sources.design = Some(source);
         }
         let mut surfaces = Vec::new();

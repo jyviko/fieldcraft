@@ -24,6 +24,12 @@ pub enum Requirement {
     Design,
     /// Geometry to mesh: an open design or an imported surface.
     Geometry,
+    /// A datum plane or axis.
+    Datum,
+    /// A datum plane (what a partition cuts by).
+    DatumPlane,
+    /// A partition of the design.
+    Partition,
     /// At least one mesh node.
     Nodes,
     /// At least one element.
@@ -64,6 +70,9 @@ impl Requirement {
         match self {
             Requirement::Design => s.design.is_some(),
             Requirement::Geometry => s.design.is_some() || !s.surfaces.is_empty(),
+            Requirement::Datum => !m.datums().is_empty(),
+            Requirement::DatumPlane => m.datums().values().any(|d| d.plane().is_some()),
+            Requirement::Partition => !m.partitions().is_empty(),
             Requirement::Nodes => !m.nodes().is_empty(),
             Requirement::Mesh => has_elements,
             Requirement::Analysable => {
@@ -98,6 +107,9 @@ impl Requirement {
         match self {
             Requirement::Design => "an open design",
             Requirement::Geometry => "geometry (an open design or an imported surface)",
+            Requirement::Datum => "a datum plane or axis",
+            Requirement::DatumPlane => "a datum plane",
+            Requirement::Partition => "a partition",
             Requirement::Nodes => "mesh nodes",
             Requirement::Mesh | Requirement::Analysable => "a mesh",
             Requirement::ElementMaterial | Requirement::Material => "a material",
@@ -123,6 +135,8 @@ impl Requirement {
     pub fn provider(self) -> &'static str {
         match self {
             Requirement::Design | Requirement::Geometry => "geometry.open",
+            Requirement::Datum | Requirement::DatumPlane => "geometry.datum",
+            Requirement::Partition => "geometry.partition",
             Requirement::Nodes => "mesh.node.add",
             Requirement::Mesh | Requirement::Analysable => "mesh.tet.generate",
             Requirement::ElementMaterial | Requirement::Material => "model.material.create",

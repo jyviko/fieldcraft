@@ -99,15 +99,22 @@ People trust ModelCraft with their models; a crash loses their work. **This outr
   1. Work in your own worktree on a branch, with your own `CARGO_TARGET_DIR`. While you work:
      `cargo check` and the tests of the crates you touch (`cargo test -p <crate>`). Commit after
      each working step (a layer that compiles with its tests passing), not one big commit per PR.
+     Every commit lands on `main` as it is, so each one must build and pass its tests and say
+     what it does: `git bisect` walks them one by one.
   2. When the change is done: review it once with `/simplify`, then `cargo fmt --all` and
      `cargo clippy -p <crate> --all-targets -- -D warnings` for each crate you touched, once.
      Regenerate what your change affects: `docs/features.md` when commands change
      (`cargo run -p modelcraft-cli -- features > docs/features.md`), `docs/oracle.md` when
      oracle cases or solver numerics change (`cargo xtask oracle`).
-  3. Rebase onto the latest `origin/main` (never merge `main` into a branch), rerun the tests of
-     the touched crates, push, open the PR and merge it yourself:
-     `gh pr merge <N> --squash --delete-branch`, run as its own command.
-  4. Never run the full gate locally: no `cargo xtask ci`, no `cargo clippy --workspace`, no
+  3. Fold every fix into the commit it fixes, never a separate "fmt", "clippy", "review fixes" or
+     "regenerate features.md" commit: `git commit --fixup <sha>`, then
+     `git rebase -i --autosquash origin/main` (`GIT_SEQUENCE_EDITOR=true` keeps it
+     non-interactive). A regenerated page goes into the commit that changed what it lists.
+  4. Rebase onto the latest `origin/main` (never merge `main` into a branch), rerun the tests of
+     the touched crates, push, open the PR and merge it yourself with a rebase merge, which keeps
+     `main` linear and every commit bisectable: `gh pr merge <N> --rebase --delete-branch`, run as
+     its own command. Never squash. Then remove your worktree and delete your local branch.
+  5. Never run the full gate locally: no `cargo xtask ci`, no `cargo clippy --workspace`, no
      `cargo xtask wasm` or `oracle` unless step 2 calls for it. Never watch CI. GitHub CI runs
      `cargo xtask ci` (fmt, assets, licences, layers, clippy -D warnings, tests, wasm), the
      oracle, the heavy tests and the advisories once per merge on `main`; the coordinator

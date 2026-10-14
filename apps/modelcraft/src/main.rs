@@ -150,8 +150,14 @@ fn main() -> eframe::Result {
             .with_title("ModelCraft")
             .with_icon(app_icon())
             .with_inner_size([1400.0, 900.0])
-            .with_min_inner_size([800.0, 500.0])
-            .with_drag_and_drop(true),
+            .with_min_inner_size([960.0, 600.0])
+            .with_drag_and_drop(true)
+            // The app bar is the title bar (as in the other Craft apps): on macOS under the
+            // traffic lights, elsewhere with its own caption buttons and resize zones.
+            .with_decorations(!CUSTOM_TITLEBAR)
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false),
         depth_buffer: DEPTH_BITS,
         multisampling: MSAA,
         ..Default::default()

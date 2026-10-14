@@ -32,6 +32,7 @@ pub enum Def {
     Load,
     ReferencePoint,
     Coupling,
+    FluidDomain,
 }
 
 impl Def {
@@ -46,6 +47,7 @@ impl Def {
             Def::Load => "load",
             Def::ReferencePoint => "reference_point",
             Def::Coupling => "coupling",
+            Def::FluidDomain => "fluid_domain",
         }
     }
 
@@ -59,6 +61,7 @@ impl Def {
             Def::Load => "Load",
             Def::ReferencePoint => "Reference Point",
             Def::Coupling => "Coupling",
+            Def::FluidDomain => "Fluid Domain",
         }
     }
 
@@ -73,6 +76,7 @@ impl Def {
             Def::Load => "model.load.create",
             Def::ReferencePoint => "model.reference_point.create",
             Def::Coupling => "model.coupling.create",
+            Def::FluidDomain => "model.fluid_domain.create",
         }
     }
 
@@ -92,6 +96,7 @@ impl Def {
             Def::Load => m.loads().keys().cloned().collect(),
             Def::ReferencePoint => m.reference_points().keys().cloned().collect(),
             Def::Coupling => m.couplings().keys().cloned().collect(),
+            Def::FluidDomain => m.fluid_domains().keys().cloned().collect(),
         }
     }
 }
@@ -107,6 +112,7 @@ pub fn definition(m: &Model, kind: Def, name: &str) -> Option<Value> {
         Def::Load => serde_json::to_value(m.loads().get(name)?),
         Def::ReferencePoint => serde_json::to_value(m.reference_points().get(name)?),
         Def::Coupling => serde_json::to_value(m.couplings().get(name)?),
+        Def::FluidDomain => serde_json::to_value(m.fluid_domain(name)?),
     }
     .ok()?;
     let mut v = if v.is_object() { v } else { json!({"value": v}) };
@@ -386,13 +392,14 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         }
     }
     // Definitions.
-    let groups: [(&str, &str, &[Def]); 6] = [
+    let groups: [(&str, &str, &[Def]); 7] = [
         ("sets", "Sets", &[Def::Set]),
         ("materials", "Materials", &[Def::Material]),
         ("sections", "Sections", &[Def::Section]),
         ("steps", "Steps", &[Def::Step]),
         ("loads", "Loads & BCs", &[Def::BoundaryCondition, Def::Load]),
         ("interactions", "Interactions", &[Def::ReferencePoint, Def::Coupling]),
+        ("fluids", "Fluid Domains", &[Def::FluidDomain]),
     ];
     for (key, label, kinds) in groups {
         let items: Vec<(Def, String)> = kinds.iter().flat_map(|k| k.names(&app.session.model).into_iter().map(move |n| (*k, n))).collect();
@@ -484,7 +491,17 @@ mod tests {
         assert_eq!(steel["name"], "Steel");
         assert!(steel.get("elastic").is_some(), "{steel}");
         assert!(definition(m, Def::Load, "nope").is_none());
-        for kind in [Def::Set, Def::Material, Def::Section, Def::Step, Def::BoundaryCondition, Def::Load, Def::ReferencePoint, Def::Coupling] {
+        for kind in [
+            Def::Set,
+            Def::Material,
+            Def::Section,
+            Def::Step,
+            Def::BoundaryCondition,
+            Def::Load,
+            Def::ReferencePoint,
+            Def::Coupling,
+            Def::FluidDomain,
+        ] {
             for verb in ["create", "edit", "delete"] {
                 assert!(modelcraft_engine::find_command(&kind.command(verb)).is_some(), "{kind:?} {verb}");
             }

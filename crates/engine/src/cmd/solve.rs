@@ -14,7 +14,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session, StepResult};
 pub const RUN: CommandSpec = CommandSpec {
     id: "solve.run",
     label: "Solve All Steps",
-    params: r#"{} — solves every step in order with its procedure's solver (solve.static, solve.frequency, solve.explicit with their default caps) and keeps the results; stops at the first step that fails, naming it"#,
+    params: r#"{} — solves every step in order with its procedure's solver (solve.static, solve.frequency, solve.explicit, solve.fluid with their default caps) and keeps the results; stops at the first step that fails, naming it"#,
     kind: CommandKind::Model,
     run: run_all,
 };
@@ -115,6 +115,7 @@ fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
                 Procedure::Static {} => "static",
                 Procedure::Frequency { .. } => "frequency",
                 Procedure::ExplicitDynamic(_) => "explicit",
+                Procedure::Fluid { .. } => "fluid",
             };
             (st.name.clone(), kind)
         })
@@ -128,6 +129,7 @@ fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
         let r = match kind {
             "static" => run_static(s, &p),
             "frequency" => run_frequency(s, &p),
+            "fluid" => run_fluid(s, &p),
             _ => run_explicit(s, &p),
         };
         let summary = r.map_err(|e| EngineError::Params(format!("step `{name}`: {e}")))?;

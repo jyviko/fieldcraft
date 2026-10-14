@@ -32,21 +32,30 @@ fn button_style(t: &Tokens) -> IconButtonStyle {
     }
 }
 
-/// ModelCraft's mark, drawn in code: a tetrahedral element, two faces in the accent's shades with
-/// light edges and its nodes.
+/// ModelCraft's mark: the application icon's bracket (`assets/app-icon/icon-small.svg`) drawn in
+/// code from the SVG's own coordinates, without its tile, each face in the middle of its gradient.
 fn mark(p: &egui::Painter, c: egui::Pos2) {
-    let at = |x: f32, y: f32| c + vec2(x, y);
-    let (apex, left, right, front) = (at(0.0, -9.5), at(-9.0, 4.0), at(9.0, 4.0), at(1.5, 9.5));
-    let (light, dark) = (Color32::from_rgb(96, 158, 236), Color32::from_rgb(55, 108, 197));
-    p.add(egui::Shape::convex_polygon(vec![apex, left, front], light, Stroke::NONE));
-    p.add(egui::Shape::convex_polygon(vec![apex, front, right], dark, Stroke::NONE));
-    let edge = Stroke::new(1.2, Color32::WHITE);
-    p.add(egui::Shape::closed_line(vec![apex, left, front, right], edge));
-    p.line_segment([apex, front], edge);
-    p.line_segment([left, right], Stroke::new(0.8, Color32::from_white_alpha(110)));
-    for n in [apex, left, right, front] {
-        p.circle_filled(n, 1.6, Color32::WHITE);
-    }
+    // The bracket spans y 141–883 in the SVG; draw it 22 points tall around its centre.
+    let s = 22.0 / 742.0;
+    let at = |x: f32, y: f32| c + vec2((x - 512.0) * s, (y - 512.0) * s);
+    let face = |col: Color32, pts: &[(f32, f32)]| {
+        p.add(egui::Shape::convex_polygon(pts.iter().map(|&(x, y)| at(x, y)).collect(), col, Stroke::NONE));
+    };
+    let (top, front, end) = (Color32::from_rgb(0x69, 0xd4, 0xc2), Color32::from_rgb(0x19, 0xa0, 0x8d), Color32::from_rgb(0x0d, 0x66, 0x5d));
+    face(top, &[(512.0, 141.0), (833.3, 326.5), (730.48, 385.86), (409.19, 200.36)]);
+    face(front, &[(409.19, 200.36), (730.48, 385.86), (730.48, 638.14), (409.19, 452.64)]);
+    face(top, &[(409.19, 452.64), (730.48, 638.14), (512.0, 764.28), (190.7, 578.78)]);
+    face(front, &[(190.7, 578.78), (512.0, 764.28), (512.0, 883.0), (190.7, 697.5)]);
+    face(end, &[(730.48, 385.86), (833.3, 326.5), (833.3, 697.5), (730.48, 638.14)]);
+    face(end, &[(730.48, 638.14), (833.3, 697.5), (512.0, 883.0), (512.0, 764.28)]);
+    // The bolt hole.
+    let hole: Vec<egui::Pos2> = (0..24)
+        .map(|k| {
+            let a = k as f32 / 24.0 * std::f32::consts::TAU;
+            at(460.6 + 86.0 * a.cos(), 608.5 + 49.5 * a.sin())
+        })
+        .collect();
+    p.add(egui::Shape::convex_polygon(hole, Color32::from_rgb(0x08, 0x46, 0x3f), Stroke::NONE));
 }
 
 pub fn app_bar(app: &mut ModelApp, ui: &mut egui::Ui) {

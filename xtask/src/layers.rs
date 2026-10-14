@@ -37,6 +37,8 @@ impl Class {
 pub const TABLE: &[(&str, Class)] = &[
     // L0: the solver-neutral model.
     ("model", Class::Layer(0)),
+    // L0, no workspace dependencies: deterministic thread pool helpers for the solvers.
+    ("parallel", Class::Standalone),
     // L1: geometry and math kernels.
     ("geometry", Class::Layer(1)),
     ("mesh", Class::Layer(1)),

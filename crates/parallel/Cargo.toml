@@ -1,0 +1,13 @@
+[package]
+name = "modelcraft-parallel"
+description = "ModelCraft's deterministic data parallelism: fixed work partitions on a thread pool, results independent of the thread count"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# The browser build runs everything on the calling thread (same results, no threads).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.12"

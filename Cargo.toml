@@ -13,6 +13,7 @@ repository = "https://github.com/jyviko/modelcraft"
 [workspace.dependencies]
 # internal
 modelcraft-model = { path = "crates/model" }
+modelcraft-parallel = { path = "crates/parallel" }
 modelcraft-geometry = { path = "crates/geometry" }
 modelcraft-mesh = { path = "crates/mesh" }
 modelcraft-decks = { path = "crates/decks" }

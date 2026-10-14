@@ -65,7 +65,9 @@ cargo xtask oracle --quick              # skip cases marked "slow"
 - `fixture.json` holds each passing quantity's accepted `value` and its `band`
   (10⁻⁹ of the larger of value and reference, plus 10⁻³ of an absolute tolerance; a quantity whose
   reference is zero, which is rounding noise, keeps its absolute tolerance as its band; an
-  ill-conditioned quantity may set a wider `fixture_relative` with a `fixture_reason`): the result is
+  ill-conditioned quantity may set a wider `fixture_relative` with a `fixture_reason`; a quantity
+  that depends on a mesh generated from geometry, which is not bit-identical across platforms, sets
+  `"fixture": false` with a `fixture_reason` and is gated by its reference tolerance alone): the result is
   deterministic, the band only absorbs last-digit differences of the system maths library.
 
 The run fails when a quantity misses its reference (unless it is a `known_failure`, which is

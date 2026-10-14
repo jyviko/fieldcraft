@@ -19,7 +19,9 @@
    "tolerance": {
     "relative": 0.03
    },
-   "reason": "the four-level study gives 213.3, 210.6, 214.3, 213.3 MPa (2k to 13.5k elements): the bending stress is converged across the fillet, and the peak nodal value moves only with which of the fillet's tessellation lines (fixed angles, through every level) carries the largest node, by under 2%"
+   "reason": "the four-level study gives 213.3, 210.6, 214.3, 213.3 MPa (2k to 13.5k elements): the bending stress is converged across the fillet, and the peak nodal value moves only with which of the fillet's tessellation lines (fixed angles, through every level) carries the largest node, by under 2%",
+   "fixture": false,
+   "fixture_reason": "the peak depends on the tet mesh generated from SolidCraft's tessellation, which is not bit-identical across platforms (212.4 MPa on Linux CI against 213.3 on macOS for the same recipe; issue #115): the 3% reference tolerance gates it until meshing is reproducible across platforms"
   },
   {
    "id": "reaction",

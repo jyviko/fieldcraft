@@ -94,6 +94,10 @@ pub struct Quantity {
     /// The fixture band's relative part, when the quantity is more sensitive to rounding than
     /// [`FIXTURE_RELATIVE`] allows (an ill-conditioned problem); `fixture_reason` says why.
     pub fixture_relative: f64,
+    /// Whether the result is frozen in `fixture.json`. A quantity that depends on a mesh the
+    /// mesher generates from geometry (`"fixture": false`, with a `fixture_reason`) is not: the
+    /// mesh is not bit-identical across platforms, so only its reference tolerance gates it.
+    pub frozen: bool,
 }
 
 /// One case's `expected.json`.
@@ -153,6 +157,17 @@ impl Expected {
             if quantities.iter().any(|x: &Quantity| x.id == id) {
                 return Err(format!("quantity `{id}` is listed twice"));
             }
+            let frozen = match q.get("fixture") {
+                None => true,
+                Some(Value::Bool(f)) => *f,
+                Some(_) => return Err(context("`fixture` must be true or false".into())),
+            };
+            if !frozen {
+                text(q, "fixture_reason").map_err(|_| context("`\"fixture\": false` needs a `fixture_reason`".into()))?;
+                if q.get("fixture_relative").is_some() {
+                    return Err(context("`fixture_relative` has no meaning with `\"fixture\": false`".into()));
+                }
+            }
             let fixture_relative = match q.get("fixture_relative") {
                 None => FIXTURE_RELATIVE,
                 Some(r) => {
@@ -163,6 +178,7 @@ impl Expected {
             };
             quantities.push(Quantity {
                 fixture_relative,
+                frozen,
                 description: text(q, "quantity").map_err(context)?,
                 known_failure: q.get("known_failure").and_then(Value::as_str).map(str::to_string),
                 id,
@@ -319,6 +335,7 @@ pub fn judge(q: &Quantity, ours: &Result<f64, String>, frozen: Option<&Frozen>) 
         (false, Some(_)) => Verdict::Known,
     };
     let fixture = match frozen {
+        _ if !q.frozen => FixtureCheck::NotKept,
         Some(f) if (ours - f.value).abs() <= f.band => FixtureCheck::Matches,
         Some(f) => FixtureCheck::Moved { frozen: f.value },
         None if verdict == Verdict::Pass => FixtureCheck::Missing,
@@ -392,7 +409,7 @@ pub fn run(root: &Path, options: &Options) -> Result<(), String> {
                 problems.push(format!("{case}: not blessed, it does not pass against expected.json"));
             } else {
                 let mut values = serde_json::Map::new();
-                for r in case_rows.iter_mut().filter(|r| r.verdict == Verdict::Pass) {
+                for r in case_rows.iter_mut().filter(|r| r.verdict == Verdict::Pass && r.quantity.frozen) {
                     if let (Some(ours), Some(reference)) = (r.ours, r.quantity.reference) {
                         values.insert(
                             r.quantity.id.clone(),
@@ -513,6 +530,18 @@ fn ours_text(r: &Row) -> String {
     }
 }
 
+/// docs/oracle.md's result column. A quantity that is not frozen depends on a generated mesh
+/// that differs by platform, so the page names that instead of one platform's number (the run's
+/// console prints the value).
+fn page_ours(r: &Row) -> String {
+    if r.quantity.frozen { ours_text(r) } else { "mesh-dependent".into() }
+}
+
+/// docs/oracle.md's error column; see [`page_ours`].
+fn page_error(r: &Row) -> String {
+    if r.quantity.frozen { error_of(r) } else { format!("within {}", r.quantity.tolerance.describe()) }
+}
+
 /// The error against the reference: relative where the reference is not zero. Errors inside the
 /// fixture band are rounding and are shown as a bound.
 fn error_of(r: &Row) -> String {
@@ -615,8 +644,8 @@ benchmark, {} experiment; {} pending cases wait for capabilities still being bui
                     "| [{case}](../tests/oracle/{case}/) | {} | {} | {} | {} | {} | {} | {} |",
                     cell(&r.quantity.description),
                     show(r.quantity.reference),
-                    ours_text(r),
-                    error_of(r),
+                    page_ours(r),
+                    page_error(r),
                     r.quantity.tolerance.describe(),
                     cell(&result),
                     page_fixture_text(&r.fixture),
@@ -668,7 +697,19 @@ mod tests {
             reason: "r".into(),
             known_failure: known.map(str::to_string),
             fixture_relative: FIXTURE_RELATIVE,
+            frozen: true,
         }
+    }
+
+    /// A quantity of a generated mesh is gated by its tolerance only: a stored fixture is ignored
+    /// and blessing skips it.
+    #[test]
+    fn unfrozen_quantities_skip_the_fixture() {
+        let t = Tolerance { relative: 0.03, absolute: 0.0 };
+        let q = Quantity { frozen: false, ..quantity(213.0, t, None) };
+        let old = Frozen { value: 213.3, band: 2e-7 };
+        assert_eq!(judge(&q, &Ok(212.4), Some(&old)), (Verdict::Pass, FixtureCheck::NotKept));
+        assert_eq!(judge(&q, &Ok(200.0), Some(&old)).0, Verdict::Fail, "the tolerance still gates it");
     }
 
     #[test]

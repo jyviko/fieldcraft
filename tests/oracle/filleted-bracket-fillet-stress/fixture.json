@@ -1,12 +1,8 @@
 {
   "note": "FieldCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
   "values": {
-    "fillet_peak": {
-      "band": 2.1330693756948646e-7,
-      "value": 213.30693756948645
-    },
     "reaction": {
-      "band": 2.0000000000001007e-6,
+      "band": 2.0000000000001007e-06,
       "value": -2000.0000000001007
     }
   }

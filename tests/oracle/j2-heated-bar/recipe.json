@@ -1,0 +1,17 @@
+[
+ {"command": "mesh.block", "params": {"body": "Bar", "kind": "hex8", "corners": [[0, 0, 0], [4, 0, 0], [4, 1, 0], [0, 1, 0], [0, 0, 1], [4, 0, 1], [4, 1, 1], [0, 1, 1]], "divisions": [4, 1, 1], "faces": {"6": "x0", "3": "y0", "1": "z0", "4": "x1"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Bar"}]}},
+ {"command": "model.set.create", "params": {"name": "x0", "geometry": [{"body": "Bar", "face": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "y0", "geometry": [{"body": "Bar", "face": "y0"}]}},
+ {"command": "model.set.create", "params": {"name": "z0", "geometry": [{"body": "Bar", "face": "z0"}]}},
+ {"command": "model.set.create", "params": {"name": "x1", "geometry": [{"body": "Bar", "face": "x1"}]}},
+ {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 200000.0, "poisson": 0.3}, "plastic": {"type": "bilinear", "yield_stress": 250.0, "hardening_modulus": 2000.0}, "thermal": {"expansion": 1.2e-05, "reference_temperature": 20.0}}},
+ {"command": "model.section.create", "params": {"name": "bar", "set": "all", "material": "Steel", "kind": {"type": "solid"}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sx0", "type": "symmetry", "target": {"set": "x0"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sy0", "type": "symmetry", "target": {"set": "y0"}, "plane": "y"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sz0", "type": "symmetry", "target": {"set": "z0"}, "plane": "z"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sx1", "type": "symmetry", "target": {"set": "x1"}, "plane": "x"}},
+ {"command": "model.load.create", "params": {"name": "heat", "type": "temperature", "target": {"set": "all"}, "value": 320.0}},
+ {"command": "model.step.create", "params": {"name": "Heat", "procedure": {"type": "nonlinear_static", "nonlinear_geometry": false}, "boundary_conditions": ["sx0", "sy0", "sz0", "sx1"], "loads": ["heat"]}},
+ {"command": "solve.nonlinear", "params": {"step": "Heat"}, "id": "solve"}
+]

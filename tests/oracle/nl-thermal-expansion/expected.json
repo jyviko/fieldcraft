@@ -1,0 +1,76 @@
+{
+ "title": "Free and fully constrained thermal expansion at finite strain",
+ "kind": "theory",
+ "source": "The multiplicative split F = F_m F_θ with F_θ = (1 + α ΔT) I (V. A. Lubarda, Appl. Mech. Rev. 57(2):95–108, 2004): a free body follows F = F_θ stress-free; held on every face, F = I and F_m = ϑ⁻¹ I, so the compressible neo-Hookean material carries the pressure of its volume ratio, σ = κ (ϑ⁻³ − 1)",
+ "quantities": [
+  {
+   "id": "free_u",
+   "quantity": "displacement of the corner (1, 1, 1) along x, free, α ΔT = 0.2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Free",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/0"
+   },
+   "value": 0.2,
+   "tolerance": {
+    "relative": 1e-08
+   },
+   "reason": "a homogeneous stretch every element represents exactly"
+  },
+  {
+   "id": "free_stress",
+   "quantity": "stress of the free body (σ_xx at the corner)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Free",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 0.0,
+   "tolerance": {
+    "absolute": 1e-08
+   },
+   "reason": "rounding only"
+  },
+  {
+   "id": "held_stress",
+   "quantity": "stress of the held block, σ_xx (hydrostatic)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Held",
+     "at": [
+      [
+       0.5,
+       0.5,
+       0.5
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": -3.5108024691358017,
+   "tolerance": {
+    "relative": 1e-08
+   },
+   "reason": "a homogeneous state; E = 10, ν = 0.3 (κ = 8.3333), ϑ = 1.2"
+  }
+ ]
+}

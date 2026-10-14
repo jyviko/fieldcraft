@@ -1,0 +1,25 @@
+{
+  "note": "FieldCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "equibiaxial": {
+      "band": 2.8427348183579755e-9,
+      "value": 2.8427348183579753
+    },
+    "shear_xx": {
+      "band": 3.5261249603786212e-9,
+      "value": 3.526124960378621
+    },
+    "shear_yy": {
+      "band": 1.5066811779077142e-9,
+      "value": 1.5066811778673217
+    },
+    "uniaxial": {
+      "band": 2.736633402109491e-9,
+      "value": 2.736633402109491
+    },
+    "uniaxial_lateral": {
+      "band": 2.8647206688145424e-10,
+      "value": -0.2864720668814542
+    }
+  }
+}

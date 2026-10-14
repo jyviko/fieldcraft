@@ -1,0 +1,45 @@
+{
+ "title": "A steel bar held at its ends and heated past yield (small strain)",
+ "kind": "theory",
+ "source": "Uniaxial J2 plasticity with linear hardening (Simo and Hughes, Computational Inelasticity, Springer 1998, §2.3) with the additive thermal strain: the bar's total axial strain is held at zero, so its mechanical strain is −α ΔT and σ = −(σ_y + E_t (α ΔT − σ_y/E)) once α ΔT exceeds σ_y/E",
+ "quantities": [
+  {
+   "id": "sigma",
+   "quantity": "axial stress, ΔT = 300 (α ΔT = 3.6·10⁻³, 2.9 times the yield strain)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Heat",
+     "elements": [
+      2
+     ]
+    },
+    "pointer": "/elements/0/stress/0/0"
+   },
+   "value": -254.65346534653466,
+   "tolerance": {
+    "relative": 1e-08
+   },
+   "reason": "a homogeneous uniaxial state the elements represent exactly"
+  },
+  {
+   "id": "plastic_strain",
+   "quantity": "equivalent plastic strain",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Heat",
+     "elements": [
+      2
+     ]
+    },
+    "pointer": "/elements/0/plastic_strain/0"
+   },
+   "value": 0.0023267326732673297,
+   "tolerance": {
+    "relative": 1e-07
+   },
+   "reason": "(|σ| − σ_y)/H, as for the stress"
+  }
+ ]
+}

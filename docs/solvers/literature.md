@@ -1211,3 +1211,20 @@ update are written from (cited again in the module docs):
   B. G. Neal, *The Plastic Methods of Structural Analysis*, 3rd ed., Chapman & Hall 1977, and the
   continuum's velocity fields, W. Prager, P. G. Hodge, *Theory of Perfectly Plastic Solids*,
   Wiley 1951.
+
+## Part O: Polynomial hyperelasticity and thermal strain in nonlinear steps, as implemented
+
+- Decoupled invariant-based hyperelasticity, the fictitious stress and elasticity and their
+  projection: G. A. Holzapfel, *Nonlinear Solid Mechanics*, Wiley 2000, §6.4–6.6 (eqs. 6.168,
+  6.193).
+- Mooney–Rivlin: M. Mooney, *A theory of large elastic deformation*, J. Appl. Phys.
+  11(9):582–592, 1940; R. S. Rivlin, *Large elastic deformations of isotropic materials IV*,
+  Phil. Trans. R. Soc. A 241:379–397, 1948. Yeoh: O. H. Yeoh, *Some forms of the strain energy
+  function for rubber*, Rubber Chem. Technol. 66(5):754–771, 1993.
+- The homogeneous modes of rubber testing: L. R. G. Treloar, *The Physics of Rubber
+  Elasticity*, 3rd ed., Oxford 1975, ch. 10; the inflation and extension of a tube: R. S. Rivlin,
+  Phil. Trans. R. Soc. A 242:173–195, 1949, and R. W. Ogden, *Non-Linear Elastic Deformations*,
+  Dover 1997, §5.3.
+- Thermal strain by the multiplicative split F = F_m F_θ: V. A. Lubarda, *Constitutive
+  theories based on the multiplicative decomposition of deformation gradient: thermoelasticity,
+  elastoplasticity, and biomechanics*, Appl. Mech. Rev. 57(2):95–108, 2004.

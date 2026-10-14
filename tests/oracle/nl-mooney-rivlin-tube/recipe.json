@@ -1,0 +1,18 @@
+[
+ {"command": "mesh.block", "params": {"body": "Pipe", "kind": "hex20", "corners": [[10.0, 0, 0], [20.0, 0, 0], [0, 20.0, 0], [0, 10.0, 0], [10.0, 0, 1], [20.0, 0, 1], [0, 20.0, 1], [0, 10.0, 1]], "divisions": [6, 16, 1], "edges": [{"corners": [2, 3], "arc": {"center": [0, 0, 0]}}, {"corners": [1, 4], "arc": {"center": [0, 0, 0]}}, {"corners": [6, 7], "arc": {"center": [0, 0, 1]}}, {"corners": [5, 8], "arc": {"center": [0, 0, 1]}}], "faces": {"6": "bore", "3": "y0", "5": "x0", "1": "z0", "2": "z1"}}},
+ {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Pipe"}]}},
+ {"command": "model.set.create", "params": {"name": "bore", "geometry": [{"body": "Pipe", "face": "bore"}]}},
+ {"command": "model.set.create", "params": {"name": "x0", "geometry": [{"body": "Pipe", "face": "x0"}]}},
+ {"command": "model.set.create", "params": {"name": "y0", "geometry": [{"body": "Pipe", "face": "y0"}]}},
+ {"command": "model.set.create", "params": {"name": "z0", "geometry": [{"body": "Pipe", "face": "z0"}]}},
+ {"command": "model.set.create", "params": {"name": "z1", "geometry": [{"body": "Pipe", "face": "z1"}]}},
+ {"command": "model.material.create", "params": {"name": "Rubber", "elastic": {"type": "isotropic", "young": 3.0, "poisson": 0.4995}, "hyperelastic": {"type": "mooney_rivlin", "c01": 0.2}}},
+ {"command": "model.section.create", "params": {"name": "pipe", "set": "all", "material": "Rubber", "kind": {"type": "solid"}, "formulation": {"hybrid": true}}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sx", "type": "symmetry", "target": {"set": "x0"}, "plane": "x"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sy", "type": "symmetry", "target": {"set": "y0"}, "plane": "y"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "sz0", "type": "symmetry", "target": {"set": "z0"}, "plane": "z"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "stretch", "type": "displacement", "target": {"set": "z1"}, "values": [null, null, 0.5, null, null, null]}},
+ {"command": "model.load.create", "params": {"name": "p", "type": "pressure", "set": "bore", "magnitude": 0.5408503415684837}},
+ {"command": "model.step.create", "params": {"name": "Inflate", "procedure": {"type": "nonlinear_static"}, "boundary_conditions": ["sx", "sy", "sz0", "stretch"], "loads": ["p"]}},
+ {"command": "solve.nonlinear", "params": {"step": "Inflate"}, "id": "solve"}
+]

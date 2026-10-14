@@ -1,0 +1,53 @@
+{
+ "title": "Yeoh block in uniaxial tension",
+ "kind": "theory",
+ "source": "Uniaxial tension of the decoupled compressible Yeoh energy W = C₁₀ (Ī₁ − 3) + C₂₀ (Ī₁ − 3)² + C₃₀ (Ī₁ − 3)³ + κ/2 (J − 1)² (O. H. Yeoh, Rubber Chem. Technol. 66(5):754–771, 1993): σ = (λ/J) ∂W/∂λ with the lateral stretch found so σ_yy = 0 (bisection; E = 3, ν = 0.49, C₁₀ = μ/2, C₂₀ = −0.02, C₃₀ = 0.004)",
+ "quantities": [
+  {
+   "id": "sigma",
+   "quantity": "axial Cauchy stress, stretch λ = 2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Uniaxial",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 3.174263919393508,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation the hybrid hex20 represents exactly: the tolerance admits the Newton tolerance and rounding"
+  },
+  {
+   "id": "lateral",
+   "quantity": "lateral displacement at (1, 1, 1): l − 1",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Uniaxial",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/1"
+   },
+   "value": -0.2854505757255106,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation the hybrid hex20 represents exactly: the tolerance admits the Newton tolerance and rounding"
+  }
+ ]
+}

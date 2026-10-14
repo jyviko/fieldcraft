@@ -171,6 +171,7 @@ converges, so a cut-back increment leaves no trace. The materials:
 |---|---|
 | Elastic (isotropic or orthotropic), no option | St Venant–Kirchhoff: S = D E, E = ½(FᵀF − I). Right for large rotations with small strains; it softens without bound in large compression. |
 | Isotropic elastic with `"hyperelastic": {"type": "neo_hookean"}` | Compressible neo-Hookean with the isochoric–volumetric split, W = μ/2 (Ī₁ − 3) + κ/2 (J − 1)², μ and κ from E and ν (C₁₀ = μ/2, D₁ = 2/κ). Its small-strain limit is the linear material, which linear steps use. |
+| Isotropic elastic with `{"type": "mooney_rivlin", "c01": …}` or `{"type": "yeoh", "c20": …, "c30": …}` | Decoupled polynomials W̄ = C₁₀ (Ī₁ − 3) + C₀₁ (Ī₂ − 3) + C₂₀ (Ī₁ − 3)² + C₃₀ (Ī₁ − 3)³ with the same volume κ/2 (J − 1)²: Mooney–Rivlin with C₁₀ = μ/2 − C₀₁ (0 ≤ C₀₁ ≤ μ/2), Yeoh with C₁₀ = μ/2, so 2(C₁₀ + C₀₁) is the elastic μ and the small-strain material stays the elastic one. Stress and tangent from the fictitious τ̄ and c̄ (Holzapfel 2000, eqs. 6.168, 6.193). Abaqus `*HYPERELASTIC, MOONEY-RIVLIN` / `YEOH`; LS-DYNA refuses them by name. |
 
 | Isotropic elastic with `"plastic"` (bilinear isotropic or kinematic, table, Johnson–Cook) | J2 plasticity (`fieldcraft_fem::elastoplastic`): at finite strain Simo's multiplicative model (CMAME 99, 1992) with a Hencky elastic energy, τ = K ln J I + 2G dev ½ ln bₑ, the history Cₚ⁻¹ and the equivalent plastic strain, integrated by the exponential return map on the principal logarithmic strains; at small strain the additive radial return with the back stress. Both call `J2::radial_return`, the update of explicit dynamics, and its consistent tangent `J2::tangent`. |
 
@@ -261,8 +262,20 @@ summary), every increment's load factor, iterations and residuals, and a displac
 converged increment (`results.frame`, the slider in the results panel).
 
 **Couplings** stay the linear constraints of the linear solver (small rotations of the
-reference points), with a warning; springs act along their fixed directions. Temperature and
-centrifugal loads are refused by name in nonlinear steps.
+reference points), with a warning; springs act along their fixed directions. Centrifugal loads
+are refused by name in nonlinear steps.
+
+**Thermal strain.** A nonlinear step's temperatures are its temperature loads, or the steady
+conduction of its temperature boundary conditions and heat loads solved first (one-way, as the
+linear coupled temperature–displacement step); they ramp with the load factor from each
+material's reference temperature. With nonlinear geometry F = F_m F_θ, F_θ = diag(1 + αᵢ ΔT) at
+each integration point (V. A. Lubarda, Appl. Mech. Rev. 57:95–108, 2004): the material sees F_m,
+the loops run on the expanded volume J_θ dV₀ (mixed elements project det F_m), and the reported
+strain is the total logarithmic one; the linear stretch 1 + α ΔT keeps α the engineering
+coefficient, so a free body grows by exactly α ΔT. Without nonlinear geometry the split is
+additive (ε_m = ε − α ΔT), and elastic elements on their linear stiffness take the equivalent
+nodal forces as a dead load. Johnson–Cook plasticity softens at the point's temperature. The
+expansion is constant in temperature (the model has no temperature-dependent coefficient yet).
 
 **Decks**: Abaqus `*STEP, NLGEOM=YES|NO, INC=` with `*STATIC` (initial, period 1, minimum,
 maximum) and `*CONTROLS, PARAMETERS=LINE SEARCH`; the neo-Hookean option as `*HYPERELASTIC, NEO
@@ -293,4 +306,12 @@ cylinder, the bore displacement at a plastic radius of 1.5a (0.009 %) and the co
 (2·10⁻⁸); a cantilever's collapse 3.1 % above beam theory's hinge, converged under refinement;
 Newton's order with the consistent tangent 1.9 (small strain) and 2.3 (finite strain) in a
 plastic cantilever; and the refusals and the softening material that stops at the minimum
-increment.
+increment. Mooney–Rivlin and Yeoh (`nl-mooney-rivlin-modes`, `nl-yeoh-uniaxial`,
+`nl-mooney-rivlin-tube`): tangents by central differences (material point and hybrid
+elements), Treloar's uniaxial, equibiaxial and pure-shear modes against the compressible closed
+form (exact), and a tube inflated by a follower pressure while stretched axially to λ_z = 1.5
+(Rivlin's incompressible solution, 0.6 % at ν = 0.4995). Thermal strain (`nl-thermal-expansion`,
+`j2-heated-bar`, `crates/solver/tests/nonlinear_thermal.rs`): free expansion and a fully held
+block at a thermal stretch of 1.2 (exact, full and hybrid), a bar held at its ends heated past
+yield (exact), the linear limit against the linear and coupled solvers, and tangents with a
+temperature field.

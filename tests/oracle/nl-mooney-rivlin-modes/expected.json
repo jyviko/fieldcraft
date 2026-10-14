@@ -1,0 +1,122 @@
+{
+ "title": "Mooney–Rivlin block in uniaxial, equibiaxial and pure-shear tension",
+ "kind": "theory",
+ "source": "Treloar's homogeneous modes of rubber testing (L. R. G. Treloar, The Physics of Rubber Elasticity, 3rd ed., Oxford 1975, ch. 10) for the decoupled compressible energy W = C₁₀ (Ī₁ − 3) + C₀₁ (Ī₂ − 3) + κ/2 (J − 1)²: principal Cauchy stresses σᵢ = (λᵢ/J) ∂W/∂λᵢ with the free stretch found so the free faces carry no stress (bisection; E = 3, ν = 0.49, C₀₁ = 0.2, C₁₀ = μ/2 − C₀₁)",
+ "quantities": [
+  {
+   "id": "uniaxial",
+   "quantity": "axial Cauchy stress, uniaxial stretch λ = 2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Uniaxial",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 2.736633402084229,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation the hybrid hex20 represents exactly: the tolerance admits the Newton tolerance and rounding"
+  },
+  {
+   "id": "uniaxial_lateral",
+   "quantity": "lateral displacement at (1, 1, 1), uniaxial: l − 1",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Uniaxial",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/1"
+   },
+   "value": -0.28647206688129256,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation the hybrid hex20 represents exactly: the tolerance admits the Newton tolerance and rounding"
+  },
+  {
+   "id": "equibiaxial",
+   "quantity": "in-plane Cauchy stress, equibiaxial stretch λ = 1.5",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Equibiaxial",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 2.842734818108988,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation the hybrid hex20 represents exactly: the tolerance admits the Newton tolerance and rounding"
+  },
+  {
+   "id": "shear_xx",
+   "quantity": "Cauchy stress along the stretch, pure shear λ = 2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Shear",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/0"
+   },
+   "value": 3.526124960232999,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation the hybrid hex20 represents exactly: the tolerance admits the Newton tolerance and rounding"
+  },
+  {
+   "id": "shear_yy",
+   "quantity": "Cauchy stress across, in the held direction, pure shear λ = 2",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Shear",
+     "at": [
+      [
+       1,
+       1,
+       1
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/stress/1"
+   },
+   "value": 1.506681177907714,
+   "tolerance": {
+    "relative": 1e-06
+   },
+   "reason": "a homogeneous deformation the hybrid hex20 represents exactly: the tolerance admits the Newton tolerance and rounding"
+  }
+ ]
+}

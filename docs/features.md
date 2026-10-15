@@ -17,10 +17,10 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Inspect | Bodies — List the open design's bodies, volumes and named faces, edges and vertices | ready | `geometry.bodies`, `geometry.centre` |
 | Inspect | Tessellate — Tessellate a body into a face-tagged boundary surface | ready | `geometry.tessellate` |
 | Inspect | Check Surface — Weld, closed, manifold, orientation and self-intersection checks; feature edges | ready | `mesh.surface.check` |
-| Prepare | Datum Plane — A datum plane: principal plane and offset, three points or datum points, point and normal, normal to an axis | ready | `geometry.datum`, (`geometry.datum.edit`), (`geometry.datum.delete`) |
+| Prepare | Datum Plane — A datum plane: principal plane and offset, three points or datum points, point and normal, normal to an axis | ready | `geometry.datum`, (`geometry.datum.edit`), (`geometry.datum.delete`), (`geometry.datum.suppress`) |
 | Prepare | Datum Axis — A datum axis: principal axis, two points or datum points, point and direction | ready | `geometry.datum.axis`, (`geometry.datum.axis.edit`) |
 | Prepare | Datum Point — A datum point: coordinates, a mesh vertex, along an edge, a face's centre, an axis through a plane | ready | `geometry.datum.point`, (`geometry.datum.point.edit`) |
-| Prepare | Partition — Cut bodies into cells by a datum plane; the two faces of each cut are paired by name | ready | `geometry.partition`, (`geometry.partition.delete`) |
+| Prepare | Partition — Cut bodies into cells by a datum plane; the two faces of each cut are paired by name | ready | `geometry.partition`, (`geometry.partition.delete`), (`geometry.partition.suppress`) |
 | Prepare | Midsurface — Extract midsurfaces of thin parts for shell meshes | coming soon (M8) |  |
 
 ## Mesh

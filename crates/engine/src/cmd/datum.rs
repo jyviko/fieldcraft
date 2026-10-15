@@ -101,6 +101,26 @@ pub const PARTITION: CommandSpec = CommandSpec {
     run: partition,
 };
 
+pub const DATUM_SUPPRESS: CommandSpec = CommandSpec {
+    id: "geometry.datum.suppress",
+    label: "Suppress Datum",
+    params: r#"{"name": "Mid", "suppressed"?: true} — keeps the datum but leaves it out of the model (false brings it back): it cannot be an input to another datum, a partition, a mirror or a symmetry while suppressed, and the partitions that cut by it stop cutting (the design is cut again without them)"#,
+    form: Some(super::forms::DATUM_SUPPRESS),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Datum],
+    run: datum_suppress,
+};
+
+pub const PARTITION_SUPPRESS: CommandSpec = CommandSpec {
+    id: "geometry.partition.suppress",
+    label: "Suppress Partition",
+    params: r#"{"name": "Half", "suppressed"?: true} — keeps the partition but leaves it out (false brings it back): the design is cut again without it, so its cells merge back into the bodies they came from"#,
+    form: Some(super::forms::PARTITION_SUPPRESS),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Partition],
+    run: partition_suppress,
+};
+
 pub const PARTITION_DELETE: CommandSpec = CommandSpec {
     id: "geometry.partition.delete",
     label: "Delete Partition",
@@ -214,18 +234,20 @@ fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 
 /// The coordinates of datum point `name`.
 fn datum_point_at(m: &Model, name: &str) -> Result<[f64; 3]> {
-    match m.datum(name) {
-        Some(d) => d.point().ok_or_else(|| EngineError::Params(format!("datum `{name}` is a datum {}, not a point", d.kind()))),
-        None => Err(EngineError::Params(format!("no datum point `{name}`"))),
-    }
+    let d = m.usable_datum(name)?;
+    d.point().ok_or_else(|| EngineError::Params(format!("datum `{name}` is a datum {}, not a point", d.kind())))
 }
 
 /// The point and unit direction of datum axis `name`.
 fn datum_axis_of(m: &Model, name: &str) -> Result<([f64; 3], [f64; 3])> {
-    match m.datum(name) {
-        Some(d) => d.axis().ok_or_else(|| EngineError::Params(format!("datum `{name}` is a datum {}, not an axis", d.kind()))),
-        None => Err(EngineError::Params(format!("no datum axis `{name}`"))),
-    }
+    let d = m.usable_datum(name)?;
+    d.axis().ok_or_else(|| EngineError::Params(format!("datum `{name}` is a datum {}, not an axis", d.kind())))
+}
+
+/// The point and unit normal of datum plane `name`.
+pub(crate) fn datum_plane_of(m: &Model, name: &str) -> Result<([f64; 3], [f64; 3])> {
+    let d = m.usable_datum(name)?;
+    d.plane().ok_or_else(|| EngineError::Params(format!("datum `{name}` is a datum {}, not a plane", d.kind())))
 }
 
 /// A plane through three points; collinear points are refused relative to their spread.
@@ -330,10 +352,7 @@ fn point_datum(s: &Session, by: PointBy) -> Result<Datum> {
         PointBy::FaceCentre { body, face } => shape(&body)?.face_centre(&face)?,
         PointBy::AxisPlane { axis, plane } => {
             let (p, d) = datum_axis_of(&s.model, &axis)?;
-            let (q, n) = match s.model.datum(&plane) {
-                Some(x) => x.plane().ok_or_else(|| EngineError::Params(format!("datum `{plane}` is a datum {}, not a plane", x.kind())))?,
-                None => return Err(EngineError::Params(format!("no datum plane `{plane}`"))),
-            };
+            let (q, n) = datum_plane_of(&s.model, &plane)?;
             let along = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
             let across = along(d, n);
             // Unit vectors: the sine of the angle between the axis and the plane.
@@ -445,6 +464,7 @@ fn cuts(model: &Model) -> Vec<Cut> {
     model
         .partitions()
         .iter()
+        .filter(|p| model.partition_cuts(p))
         .filter_map(|p| {
             let (point, normal) = model.datum(&p.datum)?.plane()?;
             Some(Cut { name: p.name.clone(), point, normal, bodies: p.bodies.clone() })
@@ -470,7 +490,8 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
     let name = super::name(p)?.to_string();
     let datum: String = super::req(p, "datum")?;
     let bodies: Vec<String> = super::opt(p, "bodies")?.unwrap_or_default();
-    s.model.add_partition(Partition { name: name.clone(), datum: datum.clone(), bodies })?;
+    datum_plane_of(&s.model, &datum)?;
+    s.model.add_partition(Partition { name: name.clone(), datum: datum.clone(), bodies, suppressed: false })?;
     recut(s)?;
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
     let feature = format!("partition {name}");
@@ -497,6 +518,24 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
         "cut_faces": faces,
         "bodies": bodies,
     }))
+}
+
+fn datum_suppress(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = super::name(p)?;
+    let suppressed = super::opt(p, "suppressed")?.unwrap_or(true);
+    s.model.set_datum_suppressed(name, suppressed)?;
+    recut(s)?;
+    let bodies: Vec<String> = s.design.iter().flat_map(|d| d.bodies.iter().map(|b| b.name.clone())).collect();
+    Ok(json!({"name": name, "suppressed": suppressed, "bodies": bodies}))
+}
+
+fn partition_suppress(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = super::name(p)?;
+    let suppressed = super::opt(p, "suppressed")?.unwrap_or(true);
+    s.model.set_partition_suppressed(name, suppressed)?;
+    recut(s)?;
+    let bodies: Vec<String> = s.design.iter().flat_map(|d| d.bodies.iter().map(|b| b.name.clone())).collect();
+    Ok(json!({"name": name, "suppressed": suppressed, "bodies": bodies}))
 }
 
 fn partition_delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -573,6 +612,31 @@ pub(crate) mod tests {
         }
         assert!(s.model.datums().is_empty());
         assert!(s.journal.is_empty());
+    }
+
+    /// Suppressing a partition merges its cells back; suppressing its datum does too and stops
+    /// the datum being an input; unsuppressing cuts again; each is one undo step (#291).
+    #[test]
+    fn suppressed_partitions_and_datums_leave_the_design_uncut() {
+        let (mut s, dir) = plate();
+        s.execute("geometry.datum", &json!({"name": "Mid", "by": {"type": "offset", "plane": "yz", "offset": 15}})).unwrap();
+        s.execute("geometry.partition", &json!({"name": "Half", "datum": "Mid"})).unwrap();
+        let count = |s: &Session| s.design.as_ref().map_or(0, |d| d.bodies.len());
+        assert_eq!(count(&s), 2);
+        let r = s.execute("geometry.partition.suppress", &json!({"name": "Half"})).unwrap();
+        assert_eq!((r["suppressed"].as_bool(), count(&s)), (Some(true), 1));
+        s.execute("geometry.partition.suppress", &json!({"name": "Half", "suppressed": false})).unwrap();
+        assert_eq!(count(&s), 2);
+        s.execute("geometry.datum.suppress", &json!({"name": "Mid"})).unwrap();
+        assert_eq!(count(&s), 1);
+        let e = s.execute("geometry.partition", &json!({"name": "Again", "datum": "Mid"})).unwrap_err().to_string();
+        assert!(e.contains("suppressed"), "{e}");
+        let e = s.execute("geometry.datum.point", &json!({"name": "P", "by": {"type": "axis_plane", "axis": "Mid", "plane": "Mid"}}));
+        assert!(e.is_err());
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(count(&s), 2, "undo cuts again");
+        assert!(s.execute("geometry.datum.suppress", &json!({"name": "Nope"})).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

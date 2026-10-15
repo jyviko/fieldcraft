@@ -52,7 +52,7 @@ pub mod steps;
 pub mod tie;
 pub mod units;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -152,6 +152,9 @@ pub struct Model {
     /// In the order they cut.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     partitions: Vec<Partition>,
+    /// Datums kept but left out of the model ([`Model::datum_suppressed`]).
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    suppressed_datums: BTreeSet<String>,
     /// Edge seeds, sorted by edge.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     seeds: Vec<Seed>,
@@ -199,6 +202,8 @@ struct ModelData {
     datums: BTreeMap<String, Datum>,
     #[serde(default)]
     partitions: Vec<Partition>,
+    #[serde(default)]
+    suppressed_datums: BTreeSet<String>,
     #[serde(default)]
     seeds: Vec<Seed>,
 }
@@ -274,6 +279,9 @@ impl TryFrom<ModelData> for Model {
         }
         for (n, v) in d.datums {
             m.add_datum(&n, v)?;
+        }
+        for n in d.suppressed_datums {
+            m.set_datum_suppressed(&n, true)?;
         }
         for p in d.partitions {
             m.add_partition(p)?;
@@ -408,6 +416,7 @@ impl Model {
             steps: self.steps.clone(),
             datums: self.datums.clone(),
             partitions: self.partitions.clone(),
+            suppressed_datums: self.suppressed_datums.clone(),
             seeds: self.seeds.clone(),
         }
     }

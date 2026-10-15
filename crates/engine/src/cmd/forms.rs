@@ -834,6 +834,16 @@ pub const STEP_ACTIVATE: &[Field] = &[
     flag("active", "Active").help("On: they act in the step. Off: they are switched off from it on.").def("true"),
 ];
 
+pub const DATUM_SUPPRESS: &[Field] = &[
+    reference("name", "Datum", C::Datum).help("The datum to keep but leave out of the model.").req(),
+    flag("suppressed", "Suppressed").help("On: left out (its partitions stop cutting). Off: back in the model.").def("true"),
+];
+
+pub const PARTITION_SUPPRESS: &[Field] = &[
+    reference("name", "Partition", C::Partition).help("The partition to keep but leave out: its cells merge back.").req(),
+    flag("suppressed", "Suppressed").help("On: the design is cut without it. Off: it cuts again.").def("true"),
+];
+
 pub const RENAME: &[Field] = &[
     choice(
         "kind",

@@ -184,8 +184,8 @@ impl Session {
         for (c, _) in self.journal.get(mesher + 1..).unwrap_or_default() {
             let what = match c.as_str() {
                 "mesh.seed.edge" | "mesh.seed.clear" => "Seeds",
-                "geometry.partition" | "geometry.partition.delete" => "Partitions",
-                "geometry.datum.edit" => "Datum planes",
+                "geometry.partition" | "geometry.partition.delete" | "geometry.partition.suppress" => "Partitions",
+                "geometry.datum.edit" | "geometry.datum.suppress" => "Datum planes",
                 _ => continue,
             };
             if !changed.contains(&what) {

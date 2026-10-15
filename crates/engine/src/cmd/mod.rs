@@ -57,6 +57,8 @@ pub static ALL: &[CommandSpec] = &[
     view::ISOLATE,
     view::SHOW_ALL,
     datum::PARTITION,
+    datum::DATUM_SUPPRESS,
+    datum::PARTITION_SUPPRESS,
     datum::PARTITION_DELETE,
     mesh::NODE_ADD,
     mesh::NODE_REMOVE,

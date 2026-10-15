@@ -226,6 +226,9 @@ impl Model {
                 for p in &mut self.partitions {
                     swap(&mut p.datum, from, to);
                 }
+                if self.suppressed_datums.remove(from) {
+                    self.suppressed_datums.insert(to.to_string());
+                }
             }
             Kind::Section | Kind::Coupling | Kind::Contact | Kind::Tie | Kind::PointMass | Kind::Spring => {}
         }
@@ -294,7 +297,7 @@ mod tests {
         m.set_load_active("go", "p", true).unwrap();
         m.set_load_active("go", "f", true).unwrap();
         m.add_datum("d", Datum::Plane { point: [0.0; 3], normal: [0.0, 0.0, 1.0] }).unwrap();
-        m.add_partition(Partition { name: "half".into(), datum: "d".into(), bodies: Vec::new() }).unwrap();
+        m.add_partition(Partition { name: "half".into(), datum: "d".into(), bodies: Vec::new(), suppressed: false }).unwrap();
         m
     }
 

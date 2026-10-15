@@ -29,11 +29,7 @@ const ON_PLANE: f64 = 1e-6;
 fn symmetry(s: &mut Session, p: &Value) -> Result<Value> {
     let name = super::name(p)?.to_string();
     let datum: String = super::req(p, "datum")?;
-    let (point, normal) = s
-        .model
-        .datum(&datum)
-        .and_then(|d| d.plane())
-        .ok_or_else(|| EngineError::Params(format!("no datum plane `{}`", datum.chars().take(64).collect::<String>())))?;
+    let (point, normal) = super::datum::datum_plane_of(&s.model, &datum)?;
     let axis = (0..3).find(|&k| (normal[k].abs() - 1.0).abs() < 1e-9).ok_or_else(|| {
         EngineError::Params(format!("not supported yet: symmetry about a plane not normal to X, Y or Z (datum `{datum}` has normal {normal:?})"))
     })?;

@@ -261,7 +261,7 @@ pub static CATALOGUE: &[Capability] = &[
         Geometry,
         "Prepare",
         "A datum plane: principal plane and offset, three points or datum points, point and normal, normal to an axis",
-        &["geometry.datum.edit", "geometry.datum.delete"],
+        &["geometry.datum.edit", "geometry.datum.delete", "geometry.datum.suppress"],
     ),
     covering(
         "geometry.datum.axis",
@@ -285,7 +285,7 @@ pub static CATALOGUE: &[Capability] = &[
         Geometry,
         "Prepare",
         "Cut bodies into cells by a datum plane; the two faces of each cut are paired by name",
-        &["geometry.partition.delete"],
+        &["geometry.partition.delete", "geometry.partition.suppress"],
     ),
     soon("geometry.midsurface", "Midsurface", Geometry, "Prepare", "M8", "Extract midsurfaces of thin parts for shell meshes"),
     // ---- Mesh ----

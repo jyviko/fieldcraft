@@ -42,11 +42,7 @@ fn not_a_plane() -> EngineError {
 /// The plane: a datum plane by name, or a point and a normal.
 fn plane(s: &Session, p: &Value) -> Result<([f64; 3], [f64; 3])> {
     match p.get("plane") {
-        Some(Value::String(name)) => s
-            .model
-            .datum(name)
-            .and_then(|d| d.plane())
-            .ok_or_else(|| EngineError::Params(format!("no datum plane `{}`", name.chars().take(64).collect::<String>()))),
+        Some(Value::String(name)) => super::datum::datum_plane_of(&s.model, name),
         Some(v @ Value::Object(_)) => match (super::xyz(v, "point"), super::xyz(v, "normal")) {
             (Ok(point), Ok(normal)) => Ok((point, normal)),
             _ => Err(not_a_plane()),

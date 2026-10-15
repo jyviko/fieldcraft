@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::geometry::MAX_GEOMETRY_NAME_LEN;
-use crate::{Error, Model, Result, check_name, context, insert_new, not_in_use, remove_existing, replace_existing};
+use crate::{Error, Model, Result, check_name, context, insert_new, not_in_use, remove_existing, replace_existing, require};
 
 /// Most partitions a model holds.
 pub const MAX_PARTITIONS: usize = 256;
@@ -99,6 +99,9 @@ pub struct Partition {
     /// empty: every body the plane divides.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bodies: Vec<String>,
+    /// Kept in the model but left out of it: the design is cut without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub suppressed: bool,
 }
 
 impl Model {
@@ -126,7 +129,46 @@ impl Model {
 
     pub fn remove_datum(&mut self, name: &str) -> Result<()> {
         not_in_use("datum", name, self.datum_users(name))?;
-        remove_existing(&mut self.datums, "datum", name).map(|_| ())
+        remove_existing(&mut self.datums, "datum", name)?;
+        self.suppressed_datums.remove(name);
+        Ok(())
+    }
+
+    /// Whether datum `name` is suppressed: kept, but not usable as an input and not cutting.
+    pub fn datum_suppressed(&self, name: &str) -> bool {
+        self.suppressed_datums.contains(name)
+    }
+
+    /// Suppress datum `name` (or bring it back).
+    pub fn set_datum_suppressed(&mut self, name: &str, suppressed: bool) -> Result<()> {
+        require(&self.datums, "datum", name)?;
+        if suppressed {
+            self.suppressed_datums.insert(name.to_string());
+        } else {
+            self.suppressed_datums.remove(name);
+        }
+        Ok(())
+    }
+
+    /// Datum `name` as an input to another definition: refused while it is suppressed.
+    pub fn usable_datum(&self, name: &str) -> Result<&Datum> {
+        let d = self.datums.get(name).ok_or_else(|| Error::NotFound(format!("datum `{name}`")))?;
+        if self.datum_suppressed(name) {
+            return Err(Error::Invalid(format!("datum `{name}` is suppressed: unsuppress it to use it")));
+        }
+        Ok(d)
+    }
+
+    /// Suppress partition `name` (or bring it back): the design is cut without it.
+    pub fn set_partition_suppressed(&mut self, name: &str, suppressed: bool) -> Result<()> {
+        let p = self.partitions.iter_mut().find(|p| p.name == name).ok_or_else(|| Error::NotFound(format!("partition `{name}`")))?;
+        p.suppressed = suppressed;
+        Ok(())
+    }
+
+    /// Whether partition `p` cuts: neither it nor its datum is suppressed.
+    pub fn partition_cuts(&self, p: &Partition) -> bool {
+        !p.suppressed && !self.datum_suppressed(&p.datum)
     }
 
     /// The definitions that refer to a datum (the partitions that cut by it), as `kind \`name\``
@@ -187,6 +229,33 @@ mod tests {
         Datum::Plane { point: [0.0, 0.0, z], normal: [0.0, 0.0, 2.0] }
     }
 
+    /// A suppressed datum is kept but not usable, and stops its partitions cutting; a suppressed
+    /// partition stops cutting; both are saved (#291).
+    #[test]
+    fn suppressed_datums_and_partitions_are_kept_but_left_out() {
+        let mut m = Model::default();
+        m.add_datum("Mid", plane(5.0)).unwrap();
+        m.add_datum("Low", plane(1.0)).unwrap();
+        let p = |name: &str, datum: &str| Partition { name: name.into(), datum: datum.into(), bodies: vec![], suppressed: false };
+        m.add_partition(p("Half", "Mid")).unwrap();
+        m.add_partition(p("Base", "Low")).unwrap();
+        assert!(m.partitions().iter().all(|p| m.partition_cuts(p)));
+        m.set_datum_suppressed("Mid", true).unwrap();
+        m.set_partition_suppressed("Base", true).unwrap();
+        assert!(m.partitions().iter().all(|p| !m.partition_cuts(p)));
+        assert!(m.usable_datum("Mid").unwrap_err().to_string().contains("suppressed"));
+        assert!(m.usable_datum("Low").is_ok() && m.datum("Mid").is_some());
+        assert!(m.set_datum_suppressed("Nope", true).is_err() && m.set_partition_suppressed("Nope", true).is_err());
+        let json = serde_json::to_string(&m).unwrap();
+        let back: Model = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, m);
+        assert!(back.datum_suppressed("Mid") && back.partitions().iter().any(|p| p.suppressed));
+        m.set_datum_suppressed("Mid", false).unwrap();
+        assert!(m.usable_datum("Mid").is_ok());
+        let plain = serde_json::to_string(&Model::default()).unwrap();
+        assert!(!plain.contains("suppressed"), "nothing suppressed, nothing written");
+    }
+
     #[test]
     fn datums_are_normalised_and_partitions_refer_to_planes() {
         let mut m = Model::default();
@@ -196,7 +265,7 @@ mod tests {
         let Some(Datum::Axis { direction, .. }) = m.datum("Axis") else { panic!() };
         assert!((direction[0] - 0.5f64.sqrt()).abs() < 1e-15);
 
-        let p = |name: &str, datum: &str| Partition { name: name.into(), datum: datum.into(), bodies: vec![] };
+        let p = |name: &str, datum: &str| Partition { name: name.into(), datum: datum.into(), bodies: vec![], suppressed: false };
         m.add_partition(p("Half", "Mid")).unwrap();
         assert!(m.add_partition(p("Half", "Mid")).is_err());
         assert!(m.add_partition(p("Bad", "Axis")).is_err());

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>mesh.block</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M4 6 L16 3 L20 15 L8 19 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M8 5 L12.33 16.33 M12 4 L16.67 17.67 M5.33 10.33 L17.33 7 M6.67 14.67 L18.67 11" fill="none" stroke="#4f9ce8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-66 ready, 41 coming soon.
+68 ready, 41 coming soon.
 
 ## Geometry
 
@@ -37,6 +37,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Structured Hex | Quad Faces — All-quad meshes of faces on shared edge nodes | coming soon (M5) |  |
 | Structured Hex | Hex Mesh — Structured hex mesh of a body: automatic, or extruded, swept, revolved or mapped (the Method drop-down) | ready | `mesh.hex.generate`, (`mesh.hex.sweep`), (`mesh.hex.mapped`) |
 | Structured Hex | Partitioned Mesh — One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions | ready | `mesh.cells`, (`mesh.hex.blocks`) |
+| Structured Hex | Mesh Block — A mapped block of hex, wedge or quad elements between corner points | ready | `mesh.block` |
 | Structured Hex | Decompose — Find sweepable and mappable regions of 3D parts (extruded cross-sections are already cut into blocks by Hex Mesh) | coming soon (M5) |  |
 | Structured Hex | Transition — Conforming tet–hex interfaces with pyramids | coming soon (M5) |  |
 | Automatic Hex | Octree Hex — Unstructured all-hex mesh of any part: adaptive grid, boundary layers on every sharp edge, untangled and proven valid | ready | `mesh.hex.octree` |
@@ -46,7 +47,8 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Improve | Untangle — Repair inverted elements | coming soon (M6) |  |
 | Improve | Layers — Boundary padding and layers through thin walls | coming soon (M6) |  |
 | Edit | Node — Add a node | ready | `mesh.node.add`, `mesh.node.remove` |
-| Edit | Element — Add an element on existing nodes, or a mapped block of them | ready | `mesh.element.add`, `mesh.element.remove`, `mesh.block`, `mesh.mirror` |
+| Edit | Element — Add an element on existing nodes | ready | `mesh.element.add`, `mesh.element.remove` |
+| Edit | Mirror Mesh — Mirror a body's mesh across a plane, joined on the plane (mesh half a symmetric part) | ready | `mesh.mirror` |
 | Edit | Merge Nodes — Merge coincident nodes | coming soon (M6) |  |
 | Edit | Remesh Region — Remesh a region in place; split and collapse elements | coming soon (M6) |  |
 | Edit | Orphan Mesh — Import a mesh without geometry | coming soon (M6) |  |

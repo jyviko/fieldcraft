@@ -445,6 +445,8 @@ fn boundary_volume(points: &[[f64; 3]], tets: &[[u32; 4]], boundary: &[TaggedFac
     enclosed_volume(points, &triangles)
 }
 
+use fieldcraft_model::progress;
+
 /// Run the quality pipeline on a constrained Delaunay tetrahedralization of `surface` (see the
 /// module docs). `analytic[face]` is the exact surface of a B-rep face when known.
 pub fn quality_mesh(surface: &BoundarySurface, cdt: &TetMesh, analytic: Vec<Option<AnalyticSurface>>, o: &QualityOptions) -> Result<QualityMesh> {
@@ -486,7 +488,9 @@ pub fn quality_mesh(surface: &BoundarySurface, cdt: &TetMesh, analytic: Vec<Opti
     report.collapsed = refine::coarsen(&mut cx, &ctx, 0.6, 1.4, 0.05, 6)?;
     seed_curves(&mut cx, &ctx, &o.seeds, global)?;
     let ropt = RefineOptions { radius_edge: o.radius_edge, ..RefineOptions::default() };
-    for _ in 0..o.rounds {
+    progress::stage("Refinement round", Some(o.rounds as f64), "");
+    for round in 0..o.rounds {
+        progress::count((round + 1) as f64);
         let stats = refine::refine(&mut cx, &ctx, &ropt)?;
         let quiet = stats.interior + stats.boundary == 0;
         let stopped = stats.stopped.clone();
@@ -510,6 +514,7 @@ pub fn quality_mesh(surface: &BoundarySurface, cdt: &TetMesh, analytic: Vec<Opti
     }
     // Put the boundary vertices on the exact surfaces (the tessellation is within its chordal
     // tolerance of them).
+    progress::stage("Snapping to the geometry", None, "");
     report.unsnapped = snap_to_geometry(&mut cx, &exact, true)?;
     let c = cx.compact()?;
     let boundary: Vec<TaggedFace> = c.boundary.iter().map(|&(tet, k, face)| TaggedFace { tet, opposite: k as u8, face }).collect();

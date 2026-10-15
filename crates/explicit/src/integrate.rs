@@ -23,6 +23,9 @@
 //! The run starts from u = 0 and the initial velocities with the half increment
 //! v^{½} = v^0 + ½Δt^{½} a^0.
 
+/// Increments between progress reports (each takes a lock).
+const PROGRESS_EVERY: u64 = 64;
+
 use fieldcraft_model::{ExplicitDynamic, Model, OutputVariable, Procedure, Step};
 
 use crate::contact::{Evaluation, Interface};
@@ -356,7 +359,11 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     let mut v_now = v0;
     let mut completed = true;
     let mut v_new = vec![0.0; n];
+    fieldcraft_model::progress::stage("Time", Some(end), "");
     loop {
+        if increments.is_multiple_of(PROGRESS_EVERY) {
+            fieldcraft_model::progress::count(t);
+        }
         if increments >= max_increments {
             completed = false;
             warnings.push(format!("stopped at time {t:.6e} after {increments} increments (the cap); the step ends at {end:.6e}"));

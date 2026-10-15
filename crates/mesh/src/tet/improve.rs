@@ -458,6 +458,8 @@ pub fn improve(cx: &mut TetComplex, ctx: &Context, o: &ImproveOptions) -> Result
             break;
         }
         stats.passes += 1;
+        fieldcraft_model::progress::stage("Improvement pass", Some(o.max_passes as f64), "");
+        fieldcraft_model::progress::count(stats.passes as f64);
         let before = match carried.take() {
             Some(b) => b,
             None => indicators(cx)?,

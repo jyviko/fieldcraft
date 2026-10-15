@@ -381,7 +381,9 @@ fn run(model: &Model, resolved: &Resolved, step: &Step, limits: &Limits) -> Resu
             let mut previous = t.clone();
             let (mut frames, mut times) = (vec![t.clone()], vec![0.0]);
             let mut rhs = vec![0.0; n];
+            fieldcraft_model::progress::stage("Time increment", Some(steps as f64), "");
             for i in 1..=steps {
+                fieldcraft_model::progress::count((i - 1) as f64);
                 b.mul(&t, &mut rhs);
                 for (r, fj) in rhs.iter_mut().zip(&f) {
                     *r += dt * fj;

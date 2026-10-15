@@ -252,7 +252,9 @@ pub(super) fn mesh_body(
             None => s.design.as_deref().and_then(|d| d.body(&input.name)).map(analytic_surfaces).unwrap_or_default(),
             Some(_) => Vec::new(),
         };
+        fieldcraft_model::progress::stage(&format!("{}: boundary", input.name), None, "");
         let surface = BoundarySurface::new(&input.mesh.positions, &input.mesh.triangles, &input.mesh.tri_face, &surface_options(p, &input.mesh)?)?;
+        fieldcraft_model::progress::stage(&format!("{}: Delaunay", input.name), None, "");
         let tets = tetrahedralize(&surface, cdt)?;
         let mesh = if quality {
             let options = QualityOptions { seeds: input.seeds.clone(), ..options.clone() };

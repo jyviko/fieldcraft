@@ -1231,7 +1231,9 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
         // The last converged increment's free motion and the change of the load factor over it.
         let mut previous: Option<(Vec<f64>, f64)> = None;
         let max_increments = usize::try_from(settings.max_increments).unwrap_or(usize::MAX);
+        fieldcraft_model::progress::stage("Load factor", Some(1.0), "");
         while t < 1.0 {
+            fieldcraft_model::progress::count(lambda);
             if history.increments.len() >= max_increments {
                 return Err(Error::Limit(format!(
                     "step `{}`: {} increments reached the step's cap at load factor {lambda:.6} (raise max_increments)",

@@ -135,8 +135,12 @@ pub fn run(setup: &Setup, flow: &mut Flow, limits: &Limits) -> Result<FluidResul
     let mut history_times = Vec::new();
     let mut forces: Vec<Vec<[f64; 3]>> = vec![Vec::new(); flow.groups().len()];
     let mut next_frame = 1u64;
+    fieldcraft_model::progress::stage("Fluid steps", Some(total as f64), "");
     for k in 1..=total {
         flow.step()?;
+        if k % 64 == 0 {
+            fieldcraft_model::progress::count(k as f64);
+        }
         if k % every == 0 || k == total {
             history_times.push(k as f64 * setup.time_step);
             for (h, f) in forces.iter_mut().zip(flow.forces()) {

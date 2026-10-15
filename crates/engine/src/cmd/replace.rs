@@ -153,7 +153,7 @@ pub fn replacement(s: &Session, command: &str, params: &Value) -> Option<Replace
 }
 
 /// `n` with thousands separators: 7274 → "7,274".
-fn thousands(n: usize) -> String {
+pub fn thousands(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.chars().enumerate() {

@@ -168,6 +168,12 @@ fn extreme(values: impl Iterator<Item = (u32, f64)>, better: fn(f64, f64) -> boo
     }
 }
 
+/// [`parallel::with_threads`], the caller's progress reporter carried onto the pool's thread.
+fn with_threads<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
+    let progress = fieldcraft_model::progress::current();
+    parallel::with_threads(threads, move || fieldcraft_model::progress::scoped(progress, f))
+}
+
 fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
     use fieldcraft_model::Procedure;
     type Solve = fn(&mut Session, &Value) -> Result<Value>;
@@ -192,7 +198,9 @@ fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
         return Err(EngineError::Params("the model has no steps to solve: add one (model.step.create)".into()));
     }
     let mut done = Vec::new();
-    for (name, procedure, solve) in steps {
+    let count = steps.len();
+    for (index, (name, procedure, solve)) in steps.into_iter().enumerate() {
+        fieldcraft_model::progress::step(&name, index + 1, count);
         let summary = solve(s, &json!({"step": name})).map_err(|e| EngineError::Params(format!("step `{name}`: {e}")))?;
         done.push(json!({"step": name, "procedure": procedure, "summary": summary}));
     }
@@ -211,7 +219,7 @@ fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
     let limits = limits(p)?;
     let step = opt::<String>(p, "step")?;
     let model = &s.model;
-    let r = parallel::with_threads(threads(s, p)?, || solve_static(model, step.as_deref(), &limits))?;
+    let r = with_threads(threads(s, p)?, || solve_static(model, step.as_deref(), &limits))?;
 
     let summary = json!({
         "step": r.step,
@@ -239,7 +247,7 @@ fn run_nonlinear(s: &mut Session, p: &Value) -> Result<Value> {
     let limits = limits(p)?;
     let step = opt::<String>(p, "step")?;
     let model = &s.model;
-    let r = parallel::with_threads(threads(s, p)?, || solve_nonlinear(model, step.as_deref(), &limits))?;
+    let r = with_threads(threads(s, p)?, || solve_nonlinear(model, step.as_deref(), &limits))?;
     let history = r.nonlinear.as_ref();
     let summary = json!({
         "step": r.step,
@@ -282,7 +290,7 @@ fn run_heat(s: &mut Session, p: &Value) -> Result<Value> {
     let limits = limits(p)?;
     let step = opt::<String>(p, "step")?;
     let model = &s.model;
-    let r = parallel::with_threads(threads(s, p)?, || solve_heat(model, step.as_deref(), &limits))?;
+    let r = with_threads(threads(s, p)?, || solve_heat(model, step.as_deref(), &limits))?;
     let t = r.temperature();
     let summary = json!({
         "step": r.step,
@@ -307,7 +315,7 @@ fn run_frequency(s: &mut Session, p: &Value) -> Result<Value> {
     let mass = opt::<MassKind>(p, "mass")?.unwrap_or_default();
     let shift = opt::<f64>(p, "shift")?;
     let model = &s.model;
-    let r = parallel::with_threads(threads(s, p)?, || solve_frequency(model, step.as_deref(), &FrequencyOptions { mass, shift }, &limits))?;
+    let r = with_threads(threads(s, p)?, || solve_frequency(model, step.as_deref(), &FrequencyOptions { mass, shift }, &limits))?;
     let summary = json!({
         "step": r.step,
         "dofs": r.stats.dofs,
@@ -330,7 +338,7 @@ fn run_buckle(s: &mut Session, p: &Value) -> Result<Value> {
     let limits = limits(p)?;
     let step = opt::<String>(p, "step")?;
     let model = &s.model;
-    let r = parallel::with_threads(threads(s, p)?, || solve_buckle(model, step.as_deref(), &limits))?;
+    let r = with_threads(threads(s, p)?, || solve_buckle(model, step.as_deref(), &limits))?;
     let summary = json!({
         "step": r.step,
         "dofs": r.stats.dofs,
@@ -354,7 +362,7 @@ fn run_explicit(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let step = opt::<String>(p, "step")?;
     let model = &s.model;
-    let r = parallel::with_threads(threads(s, p)?, || solve_explicit(model, step.as_deref(), &limits))?;
+    let r = with_threads(threads(s, p)?, || solve_explicit(model, step.as_deref(), &limits))?;
     let summary = explicit_summary(&r);
     s.store_result(StepResult::Explicit(r));
     Ok(summary)
@@ -459,7 +467,7 @@ fn run_fluid(s: &mut Session, p: &Value) -> Result<Value> {
     let (_, domain) = fieldcraft_lbm::fluid_step(&s.model, step.as_deref())?;
     let obstacles = obstacles(s, domain)?;
     let model = &s.model;
-    let r = parallel::with_threads(threads(s, p)?, || fieldcraft_lbm::solve_fluid(model, step.as_deref(), &obstacles, &limits))?;
+    let r = with_threads(threads(s, p)?, || fieldcraft_lbm::solve_fluid(model, step.as_deref(), &obstacles, &limits))?;
     let summary = fluid_summary(&r);
     s.store_result(StepResult::Fluid(r));
     Ok(summary)

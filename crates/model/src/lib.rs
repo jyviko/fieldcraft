@@ -44,6 +44,7 @@ pub mod materials;
 mod mesh;
 pub mod nodal;
 pub mod sections;
+pub mod seeds;
 pub mod sets;
 pub mod steps;
 pub mod tie;
@@ -68,6 +69,7 @@ pub use mesh::{
     tet4_jacobian,
 };
 pub use sections::{BeamProfile, Extent, Formulation, Integration, Section, SectionKind};
+pub use seeds::{Bias, BiasToward, Divisions, Seed, SeedConstraint};
 pub use sets::Set;
 pub use steps::{
     ArcConstraint, ArcLength, BulkViscosity, DisplacementLimit, ExplicitDynamic, Hourglass, HourglassKind, Imperfection, InitialVelocity,
@@ -148,6 +150,9 @@ pub struct Model {
     /// In the order they cut.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     partitions: Vec<Partition>,
+    /// Edge seeds, sorted by edge.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    seeds: Vec<Seed>,
 }
 
 /// A [`Model`] as stored, before it is checked.
@@ -192,6 +197,8 @@ struct ModelData {
     datums: BTreeMap<String, Datum>,
     #[serde(default)]
     partitions: Vec<Partition>,
+    #[serde(default)]
+    seeds: Vec<Seed>,
 }
 
 impl TryFrom<ModelData> for Model {
@@ -268,6 +275,9 @@ impl TryFrom<ModelData> for Model {
         }
         for p in d.partitions {
             m.add_partition(p)?;
+        }
+        for s in d.seeds {
+            m.set_seed(s)?;
         }
         Ok(m)
     }
@@ -376,11 +386,12 @@ impl Model {
             steps: self.steps.clone(),
             datums: self.datums.clone(),
             partitions: self.partitions.clone(),
+            seeds: self.seeds.clone(),
         }
     }
 
     /// Counts of each kind of definition, for summaries.
-    pub fn definition_counts(&self) -> [(&'static str, usize); 15] {
+    pub fn definition_counts(&self) -> [(&'static str, usize); 16] {
         [
             ("sets", self.sets.len()),
             ("materials", self.materials.len()),
@@ -397,6 +408,7 @@ impl Model {
             ("steps", self.steps.len()),
             ("datums", self.datums.len()),
             ("partitions", self.partitions.len()),
+            ("seeds", self.seeds.len()),
         ]
     }
 }

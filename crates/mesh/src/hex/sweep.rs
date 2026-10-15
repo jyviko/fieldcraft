@@ -251,13 +251,34 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
     let loop_vars: Vec<Vec<usize>> = source.loops.iter().map(|lp| vars(lp)).collect();
     region::constrain(&mut ia, &loop_vars, scheme);
     let counts = ia.solve()?;
+    // A biased seed along the sweep carries its layers to every side edge of its stage: a
+    // linking face's right side runs up as its left side runs down, and the first side of each
+    // stage runs up on every ring.
+    let mut ties: Vec<[(usize, bool); 2]> = Vec::new();
+    for stages in &topo.rings {
+        for ring in stages {
+            for l in ring {
+                ties.push([l.right, (l.left.0, !l.left.1)]);
+            }
+        }
+    }
+    if let Some(first) = topo.rings.first() {
+        for other in topo.rings.iter().skip(1).filter(|o| o.len() == first.len()) {
+            for (a, b) in first.iter().zip(other) {
+                if let (Some(a), Some(b)) = (a.first(), b.first()) {
+                    ties.push([a.right, b.right]);
+                }
+            }
+        }
+    }
+    let carried = ctx.carried(&ties);
     // Edge nodes: B-rep vertices once, interiors on both faces of the edge.
     let mut nodes = Nodes { xyz: Vec::new() };
     let mut vertex_node: BTreeMap<u32, u32> = BTreeMap::new();
     let mut edge_nodes: Vec<Vec<u32>> = Vec::with_capacity(brep.edges.len());
     for (e, edge) in brep.edges.iter().enumerate() {
         let n = counts.get(e).copied().unwrap_or(1);
-        let pts = ctx.divide_edge(e, true, n)?;
+        let pts = ctx.divide_edge(e, true, n, &carried)?;
         let last = pts.len().saturating_sub(1);
         let mut ids = Vec::with_capacity(pts.len());
         for (k, p) in pts.iter().enumerate() {

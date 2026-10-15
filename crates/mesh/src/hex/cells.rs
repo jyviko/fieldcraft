@@ -327,12 +327,17 @@ impl Topology {
                 ctxs.get(c).and_then(|x| x.seed_of(be)).map(|(seed, rev)| (seed, rev == fwd))
             })
             .collect();
+        // A biased seed's spacing carries to the unseeded edges parallel to it, through every
+        // cell they bound, oriented along each cell's direction (#257); the counts come from the
+        // edges' own seeds alone.
+        let carried = crate::seeds::carry(&seeds, |s: &&EdgeSeed| s.bias.is_some(), &self.parallel_ties());
         let first = self.solve(&goals, &seeds)?;
         // Ends of edges that leave a curved face: the spacing along that face there.
         let ends = self.graded_ends(ctxs, cubes, &first);
         let mut graded = goals;
         let mut divisions = Vec::with_capacity(polylines.len());
-        for (((poly, ends), goal), seed) in polylines.into_iter().zip(ends).zip(graded.iter_mut()).zip(&seeds) {
+        let spacing: Vec<Option<(&EdgeSeed, bool)>> = seeds.iter().zip(carried).map(|(own, carried)| own.or(carried)).collect();
+        for (((poly, ends), goal), seed) in polylines.into_iter().zip(ends).zip(graded.iter_mut()).zip(&spacing) {
             // A seeded edge keeps the seed's spacing, not a grading.
             let ends = if seed.is_some() { [None, None] } else { ends };
             let poly = if ends.iter().any(Option::is_some) {
@@ -348,6 +353,28 @@ impl Topology {
             d.count = n;
         }
         Ok(divisions)
+    }
+
+    /// The four edges along each direction of every cell, tied pairwise, each traversed from the
+    /// cell's low corner to its high one.
+    fn parallel_ties(&self) -> Vec<[crate::seeds::Use; 2]> {
+        let mut ties = Vec::new();
+        for (groups, ids) in self.cell_edges.iter().zip(&self.corners) {
+            for (d, g) in groups.iter().enumerate() {
+                let uses: Vec<crate::seeds::Use> = g
+                    .iter()
+                    .enumerate()
+                    .map(|(m, &e)| {
+                        let (lo, _) = edge_ends(ids, d, m);
+                        (e, self.edges.get(e).is_some_and(|x| x.a == lo))
+                    })
+                    .collect();
+                if let Some((&first, rest)) = uses.split_first() {
+                    ties.extend(rest.iter().map(|&u| [first, u]));
+                }
+            }
+        }
+        ties
     }
 
     fn solve(&self, goals: &[f64], seeds: &[Option<(&EdgeSeed, bool)>]) -> Result<Vec<usize>> {

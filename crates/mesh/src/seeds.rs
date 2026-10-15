@@ -154,6 +154,59 @@ pub(crate) fn place(poly: &[P], fractions: &[f64]) -> Result<Vec<P>> {
         .collect()
 }
 
+/// A use of a curve: its index and whether it is traversed from its start.
+pub(crate) type Use = (usize, bool);
+
+/// The spacing of biased seeds carried to the curves interval assignment ties to them (#257).
+///
+/// `own[c]` is curve `c`'s seed (any identity `T`) and whether the curve runs against it; each
+/// tie says two curve uses run side by side with the same count (opposite sides of a mapped face
+/// or a sweep's linking face, both traversed the same way along it). A biased seed's spacing
+/// spreads along the ties to every curve without a seed of its own, which it reaches through
+/// unseeded curves only; the curve takes the seed, oriented as the tie gives, so its nodes are
+/// placed as the seeded curve's are. Seeds are spread in curve order and the first one to reach a
+/// curve keeps it. Returns the carried seed of each unseeded curve (`None` elsewhere).
+pub(crate) fn carry<T: Clone>(own: &[Option<(T, bool)>], biased: impl Fn(&T) -> bool, ties: &[[Use; 2]]) -> Vec<Option<(T, bool)>> {
+    let n = own.len();
+    let mut next: Vec<Vec<(usize, bool, bool)>> = vec![Vec::new(); n];
+    for &[(a, fa), (b, fb)] in ties {
+        if a == b || a >= n || b >= n {
+            continue;
+        }
+        // Traversed as tied, `a` runs forwards iff `fa`; `b`'s orientation follows from `a`'s.
+        if let Some(l) = next.get_mut(a) {
+            l.push((b, fa, fb));
+        }
+        if let Some(l) = next.get_mut(b) {
+            l.push((a, fb, fa));
+        }
+    }
+    let mut out: Vec<Option<(T, bool)>> = vec![None; n];
+    for (start, seed) in own.iter().enumerate() {
+        let Some((seed, rev)) = seed else { continue };
+        if !biased(seed) {
+            continue;
+        }
+        let mut stack = vec![(start, *rev)];
+        while let Some((c, rev_c)) = stack.pop() {
+            for &(d, fc, fd) in next.get(c).map(Vec::as_slice).unwrap_or(&[]) {
+                if own.get(d).is_some_and(Option::is_some) || out.get(d).is_some_and(Option::is_some) {
+                    continue;
+                }
+                // Traversed as tied, `c` runs against the seed iff it runs forwards and against
+                // it, or backwards and with it; `d` runs the same way as `c`.
+                let against = rev_c == fc;
+                let rev_d = if against { fd } else { !fd };
+                if let Some(slot) = out.get_mut(d) {
+                    *slot = Some((seed.clone(), rev_d));
+                }
+                stack.push((d, rev_d));
+            }
+        }
+    }
+    out
+}
+
 /// The element size a seed asks for at each of its nodes (the mean length of the elements on
 /// either side), for size fields.
 pub fn node_sizes(seed: &EdgeSeed) -> Vec<(P, f64)> {
@@ -210,5 +263,20 @@ mod tests {
         let h = node_sizes(&s);
         assert_eq!(h.len(), 4);
         assert!((h[0].1 - 10.0 * f[1]).abs() < 1e-9);
+    }
+
+    /// A biased seed's spacing carries along the ties to unseeded curves, oriented as each tie
+    /// says, and stops at a curve with a seed of its own (#257).
+    #[test]
+    fn biased_spacing_carries_along_ties() {
+        // 0 runs against its seed; 0 forwards beside 1 backwards; 1 forwards beside 2 forwards;
+        // 3 has its own seed and 4 lies beyond it.
+        let own = vec![Some((0, true)), None, None, Some((1, false)), None, None];
+        let ties = [[(0, true), (1, false)], [(1, true), (2, true)], [(2, true), (3, true)], [(3, true), (4, true)]];
+        let biased = [true, true];
+        let c = carry(&own, |&i: &usize| biased[i], &ties);
+        assert_eq!(c, vec![None, Some((0, false)), Some((0, false)), None, Some((1, false)), None]);
+        // Unbiased seeds keep to their own curve.
+        assert!(carry(&own, |_: &usize| false, &ties).iter().all(Option::is_none));
     }
 }

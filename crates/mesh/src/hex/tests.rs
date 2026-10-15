@@ -618,3 +618,43 @@ fn a_seed_on_a_shared_edge_holds_in_every_cell() {
     // Small at both ends, symmetric.
     assert!((z[1] - z[0] - (z[6] - z[5])).abs() < 1e-9 && z[3] - z[2] > z[1] - z[0], "{z:?}");
 }
+
+/// A biased seed on one edge carries its spacing to the edges interval assignment ties to it
+/// (#257): the parallel edges of a mapped block, the opposite curves of an extruded
+/// cross-section's mapped region, the side edges of a sweep's linking faces, and the parallel
+/// edges of every cell they reach. The grid stays a grid: every node lies on one of the seed's
+/// planes.
+#[test]
+fn a_biased_seed_grades_the_edges_tied_to_it() {
+    use fieldcraft_model::{Bias, BiasToward, SeedConstraint};
+    let s = prism(&[[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], 0.0, 3.0);
+    let bias = Some(Bias { ratio: 3.0, toward: BiasToward::Start });
+    let all = |_: [f64; 3]| true;
+    // Along x on the front bottom edge, small at x = 4 (the seed runs from 4 to 0).
+    let x_seed = seed("x", vec![[4.0, 0.0, 0.0], [0.0, 0.0, 0.0]], 6, bias, SeedConstraint::Exact);
+    for method in [HexMethod::Mapped, HexMethod::Extrude] {
+        let m = hex_mesh(&s, &[], &UniformSize(1.0), &HexOptions { method, seeds: vec![x_seed.clone()], ..HexOptions::default() }).unwrap();
+        let x = along(&m, 0, all);
+        assert_eq!(x.len(), 7, "{method:?} {x:?}");
+        assert!(x[6] - x[5] < x[1] - x[0], "{method:?} {x:?}");
+    }
+    // Through the thickness at x = y = 0, small at z = 0: the block mapped, and an L swept
+    // (up z, the one way it sweeps).
+    let l = prism(&[[0.0, 0.0], [6.0, 0.0], [6.0, 2.0], [2.0, 2.0], [2.0, 6.0], [0.0, 6.0]], 0.0, 3.0);
+    let z_seed = seed("z", vec![[0.0, 0.0, 0.0], [0.0, 0.0, 3.0]], 6, bias, SeedConstraint::Exact);
+    for (body, method) in [(&s, HexMethod::Mapped), (&l, HexMethod::Sweep)] {
+        let m = hex_mesh(body, &[], &UniformSize(1.0), &HexOptions { method, seeds: vec![z_seed.clone()], ..HexOptions::default() }).unwrap();
+        let z = along(&m, 2, all);
+        assert_eq!(z.len(), 7, "{method:?} {z:?}");
+        assert!(z[1] - z[0] < z[6] - z[5], "{method:?} {z:?}");
+    }
+    // Two cells: a seed on the far side of the first carries through their interface to the
+    // far side of the second.
+    let pairs = boxes(&[([0.0, 2.0], [0.0, 1.0]), ([2.0, 3.0], [0.0, 1.0])], 1.0);
+    let none = vec![Vec::new(); 2];
+    let opts = HexOptions { seeds: vec![seed("z", vec![[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]], 6, bias, SeedConstraint::Exact)], ..HexOptions::default() };
+    let m = hex_mesh_cells(&cells_of(&pairs, &none), &UniformSize(0.5), &opts).unwrap();
+    let z = along(&m.mesh, 2, all);
+    assert_eq!(z.len(), 7, "{z:?}");
+    assert!(z[1] - z[0] < z[6] - z[5], "{z:?}");
+}

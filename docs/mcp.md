@@ -161,7 +161,9 @@ edges of partition cells matching counts.
    both hold (opposite sides of a mapped face, the layers between two levels); the tet mesher
    divides the edge at the seed's nodes and grades its size field from them (its reply's
    `seeds` gives the mesh edges along each). A seed on an edge two partition cells share holds
-   in both, so their meshes still conform.
+   in both, so their meshes still conform. A biased seed's spacing carries to the unseeded edges
+   tied to it (the parallel edges of a mapped block or cell, the opposite side of a mapped face,
+   the other side edges of a sweep), so one biased edge grades the whole layer stack.
 4. `mesh.seed.list` lists the seeds and the edges they reach (`stale` when the design has no such
    edge); `mesh.seed.clear {edges?}` removes them. Seeds are saved with the model.
 

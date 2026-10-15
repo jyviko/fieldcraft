@@ -37,7 +37,7 @@ use super::brep::{Brep, Face};
 use super::decompose;
 use super::geom::{Inside, Surface, add, dist, scale, unit};
 use super::interval::Intervals;
-use super::region::Scheme;
+use super::region::{self, Scheme};
 use super::section;
 use super::{Ctx, Raw};
 use crate::predicates::Sign;
@@ -453,6 +453,17 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
         }
     }
     let counts = ia.solve()?;
+    // A biased seed's spacing carries across the cross-section's mapped regions to the opposite
+    // curves without seeds of their own (#257).
+    let ties: Vec<[crate::seeds::Use; 2]> = arr
+        .regions
+        .iter()
+        .zip(&schemes)
+        .filter_map(|(region, &scheme)| region.loops.first().map(|lp| region::opposite_ties(lp, scheme)))
+        .flatten()
+        .collect();
+    let carried = crate::seeds::carry(&seeds.curves, |s: &&EdgeSeed| s.bias.is_some(), &ties);
+    let spacing: Vec<Option<(&EdgeSeed, bool)>> = seeds.curves.iter().zip(carried).map(|(own, carried)| own.or(carried)).collect();
     let r_max = arr.points.iter().map(|q| q[1].abs()).fold(0.0, f64::max);
     let mut layers = Vec::with_capacity(intervals.len());
     for &(lo, hi) in intervals.iter() {
@@ -475,7 +486,7 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
     }
     // The cross-section's nodes (curve interiors projected onto analytic walls) and quadrilaterals.
     let place = |c: usize, n: usize| -> Result<Vec<Q>> {
-        let pts3 = match seeds.curves.get(c).copied().flatten() {
+        let pts3 = match spacing.get(c).copied().flatten() {
             Some((seed, rev)) => crate::seeds::place(&curve3d(c), &seed.fractions(n, rev))?,
             None => divide_polyline(ctx.field, &curve3d(c), n)?,
         };

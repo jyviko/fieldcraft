@@ -171,9 +171,13 @@ pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
     if ni * nj * nk > ctx.opts.max_elements {
         return Err(Error::Limit(format!("the mesh would have {} hexahedra; the limit is {}", ni * nj * nk, ctx.opts.max_elements)));
     }
+    // A biased seed's spacing carries to the unseeded edges parallel to it: the four edges of a
+    // direction, all low corner to high.
+    let ties: Vec<[(usize, bool); 2]> = groups.iter().flat_map(|g| g.iter().skip(1).map(move |&u| [g[0], u])).collect();
+    let carried = ctx.carried(&ties);
     // Edge node positions, low corner to high.
     let edge_pts = |(e, fwd): (usize, bool), n: usize| -> Result<Vec<P>> {
-        let pts = ctx.divide_edge(e, fwd, n)?;
+        let pts = ctx.divide_edge(e, fwd, n, &carried)?;
         let faces = brep.edges.get(e).map(|x| x.faces.to_vec()).unwrap_or_default();
         let last = pts.len().saturating_sub(1);
         Ok(pts.iter().enumerate().map(|(k, q)| if k == 0 || k == last { *q } else { project_to_faces(ctx, &faces, *q) }).collect())

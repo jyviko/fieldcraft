@@ -219,13 +219,23 @@ impl<'a> Ctx<'a> {
     }
 
     /// `n + 1` points along B-rep edge `e` (traversed forwards or not): at the seed's spacing
-    /// when it has one, else evenly in the size field.
-    pub(crate) fn divide_edge(&self, e: usize, forward: bool, n: usize) -> Result<Vec<P>> {
+    /// when it has one, or the spacing `carried` to it from a biased seed on an edge it is tied
+    /// to ([`Ctx::carried`]), else evenly in the size field.
+    pub(crate) fn divide_edge(&self, e: usize, forward: bool, n: usize, carried: &[Option<(usize, bool)>]) -> Result<Vec<P>> {
         let pts = self.brep.edge_points(e, forward);
-        match self.seed_of(e) {
+        let carried = carried.get(e).copied().flatten().and_then(|(i, rev)| Some((self.opts.seeds.get(i)?, rev)));
+        match self.seed_of(e).or(carried) {
             Some((seed, rev)) => crate::seeds::place(&pts, &seed.fractions(n, rev == forward)),
             None => crate::size::divide_polyline(self.field, &pts, n),
         }
+    }
+
+    /// The seeds carried along `ties` (uses of B-rep edges divided alike) from biased seeds to
+    /// unseeded edges ([`crate::seeds::carry`]), by index into the seeds.
+    pub(crate) fn carried(&self, ties: &[[crate::seeds::Use; 2]]) -> Vec<Option<(usize, bool)>> {
+        let mut own = self.edge_seeds.clone();
+        own.resize(self.brep.edges.len(), None);
+        crate::seeds::carry(&own, |&i| self.opts.seeds.get(i).is_some_and(|s| s.bias.is_some()), ties)
     }
 }
 

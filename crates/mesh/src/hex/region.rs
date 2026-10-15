@@ -109,11 +109,26 @@ pub(crate) fn classify(loops: &[Vec<Vec<Q>>]) -> Scheme {
 
 /// The curve variables of each side of a loop between its corners (positions in increasing
 /// order); the last side wraps round to the first corner.
-fn loop_sides<const N: usize>(lp: &[usize], c: [usize; N]) -> [Vec<usize>; N] {
+fn loop_sides<T: Copy, const N: usize>(lp: &[T], c: [usize; N]) -> [Vec<T>; N] {
     std::array::from_fn(|k| {
         let (a, b) = (c[k], c.get(k + 1).copied().unwrap_or(c[0] + lp.len()));
         (a..b).filter_map(|i| lp.get(i % lp.len()).copied()).collect()
     })
+}
+
+/// The opposite sides of a mapped loop that are one curve each, as uses traversed the same way
+/// (the loop runs along one side and back along the other), for carrying a biased seed's
+/// spacing across ([`crate::seeds::carry`]).
+pub(crate) fn opposite_ties(lp: &[(usize, bool)], scheme: Scheme) -> Vec<[crate::seeds::Use; 2]> {
+    let Scheme::Mapped(c) = scheme else { return Vec::new() };
+    let [s0, s1, s2, s3] = loop_sides(lp, c);
+    [(s0, s2), (s1, s3)]
+        .into_iter()
+        .filter_map(|(a, b)| match (a.as_slice(), b.as_slice()) {
+            ([a], [(b, fwd)]) => Some([*a, (*b, !fwd)]),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Add the scheme's constraints on the loops' curve variables.

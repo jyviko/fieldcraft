@@ -35,6 +35,7 @@ pub mod frame;
 pub mod gpu;
 pub mod icons;
 pub mod palette;
+pub mod reply;
 pub mod results;
 pub mod results_panel;
 pub mod scene;
@@ -285,6 +286,8 @@ pub struct ModelApp {
     pub probe: Option<Probe>,
     /// The reaction sums asked for last in the results panel.
     pub reactions: Option<Value>,
+    /// The last command reply with more to it than its status line, shown in the context panel.
+    pub reply: Option<reply::Reply>,
     /// Whether results were shown last frame (the Results tab comes up when they appear).
     results_shown: bool,
     /// Tessellated design bodies with their names, kept while the same design is open.
@@ -371,6 +374,7 @@ impl ModelApp {
             plot: (None, None),
             probe: None,
             reactions: None,
+            reply: None,
             results_shown: false,
             bodies: (None, Vec::new()),
             prepared: (None, results::Prepared::default()),
@@ -451,9 +455,16 @@ impl ModelApp {
         }
         match &r {
             Ok(v) if v.is_null() || changed || display => self.set_status(format!("{label} done"), false),
-            // A reply with a `summary` line shows it instead of its JSON.
-            Ok(v) if let Some(summary) = v.get("summary").and_then(Value::as_str) => self.set_status(format!("{label}: {summary}"), false),
-            Ok(v) => self.set_status(format!("{label}: {v}"), false),
+            // A reply reads as one line; the whole of a rich one shows in the context panel (the
+            // reaction sums have their own place in the results panel).
+            Ok(v) => {
+                let mut line = format!("{label}: {}", reply::summary(id, v));
+                if reply::is_rich(v) && !(id == "results.reactions" && self.plot().is_some()) {
+                    line.push_str(" (details in the panel)");
+                    self.reply = Some(reply::Reply { command: id.to_string(), label: label.to_string(), params: params.clone(), value: v.clone() });
+                }
+                self.set_status(line, false)
+            }
             Err(e) => self.set_status(format!("{label}: {e}"), true),
         }
         r
@@ -644,6 +655,12 @@ impl ModelApp {
     /// The model may have changed: display data and the scene are rebuilt when next drawn.
     pub fn model_changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+        // A reply about the model is read again; any other one is out of date.
+        self.reply = self.reply.take().and_then(|mut r| {
+            reply::LIVE.contains(&r.command.as_str()).then_some(())?;
+            r.value = self.session.execute(&r.command, &r.params).ok()?;
+            Some(r)
+        });
     }
 
     /// The model's display data with its geometry (the open design's bodies, tessellated once
@@ -1245,7 +1262,58 @@ mod tests {
         let err = app.run("mesh.node.add", json!({"label": 0, "xyz": [0, 0, 0]})).unwrap_err();
         assert!(app.status.as_ref().is_some_and(|s| s.error && s.text.starts_with("Add Node:")), "{err}");
         app.run("model.info", json!({})).unwrap();
-        assert!(app.status.as_ref().is_some_and(|s| s.text.contains("\"nodes\":1")));
+        assert!(app.status.as_ref().is_some_and(|s| s.text.starts_with("Model Info: 1 node, 0 elements")), "{:?}", app.status);
+    }
+
+    /// Every command run from the UI reports one readable line, never its JSON, in every state
+    /// tried (empty, a solved sample); a reply with more to it opens in the context panel.
+    #[test]
+    fn every_reply_reads_as_one_line() {
+        let empty = Session::default();
+        let mut solved = ModelApp::new(Session::default());
+        solved.open_sample("cantilever");
+        solved.run("solve.run", json!({})).unwrap();
+        let mut ran = 0;
+        for session in [empty, solved.session.clone()] {
+            // Every command bare, and the queries that need parameters with ones the sample has.
+            let bare = fieldcraft_engine::commands().iter().filter(|c| !c.id.starts_with("file.")).map(|c| (c.id, json!({})));
+            let queries = [
+                ("model.set.resolve", json!({"name": "root"})),
+                ("solve.probe", json!({"step": "Load", "nodes": [1, 2]})),
+                ("solve.probe", json!({"step": "Modes", "set": "tip", "mode": 1})),
+                ("results.reactions", json!({"step": "Load"})),
+            ];
+            for (id, params) in bare.chain(queries) {
+                let mut app = ModelApp::new(session.clone());
+                let r = app.run(id, params);
+                let Some(status) = app.status.clone() else { continue };
+                let text = status.text;
+                assert!(!text.contains('\n'), "{id}: {text}");
+                if r.is_ok() {
+                    ran += 1;
+                    assert!(!text.contains("{\"") && !text.contains("[{") && text.chars().count() <= 200, "{id}: {text}");
+                }
+            }
+        }
+        assert!(ran >= 20, "only {ran} commands ran");
+    }
+
+    /// Check Model and the Step Table open their readable view in the context panel, which
+    /// follows the model as it changes.
+    #[test]
+    fn check_model_opens_its_diagnostics_in_the_panel() {
+        let mut app = ModelApp::new(Session::default());
+        app.run("model.check", json!({})).unwrap();
+        let status = app.status.clone().unwrap();
+        assert_eq!(status.text, "Check Model: 2 errors, 1 warning (details in the panel)");
+        assert!(app.reply.as_ref().is_some_and(|r| r.command == "model.check"));
+        assert!(context::has_context(&mut app));
+        app.run("model.units", json!({"system": "mm-t-s-N-MPa"})).unwrap();
+        assert_eq!(app.reply.as_ref().map(|r| r.value["warnings"].clone()), Some(json!(0)), "the check follows the model");
+        let mut app = ModelApp::new(Session::default());
+        app.open_sample("cantilever");
+        app.run("model.activity", json!({})).unwrap();
+        assert_eq!(app.status.unwrap().text, "Step Table: 2 steps, 1 boundary condition, 1 load (details in the panel)");
     }
 
     /// Commands run from outside the ribbon bring their tab; queries and Tools commands leave it.

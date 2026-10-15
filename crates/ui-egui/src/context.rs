@@ -16,7 +16,7 @@ pub const WIDTH: f32 = 310.0;
 
 /// Whether the panel has anything to show.
 pub fn has_context(app: &mut ModelApp) -> bool {
-    app.dialog.is_some() || app.selected.is_some() || app.plot().is_some()
+    app.dialog.is_some() || app.selected.is_some() || app.reply.is_some() || app.plot().is_some()
 }
 
 pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
@@ -49,6 +49,10 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
                     if close {
                         let _ = app.run("results.clear", json!({}));
                     }
+                    ui.add_space(10.0);
+                }
+                if app.reply.is_some() {
+                    crate::reply::show(app, ui, &t);
                     ui.add_space(10.0);
                 }
                 if let Some((kind, name)) = app.selected.clone() {
@@ -231,7 +235,7 @@ fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name
 
 /// A field's value as short text: numbers and strings as they are, long lists as their length
 /// and first items, other lists and objects as compact JSON (long ones shortened).
-fn value_text(v: &Value) -> String {
+pub(crate) fn value_text(v: &Value) -> String {
     const MAX: usize = 160;
     /// Lists longer than this show their length and first items.
     const LIST: usize = 12;

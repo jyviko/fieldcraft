@@ -26,8 +26,23 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
     probe(app, &plot, &painter, t);
 }
 
-/// The legend, top left under the view buttons.
-fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
+/// What the legend shows and where: its frame, title and text lines.
+struct Legend {
+    frame: Rect,
+    title: String,
+    lines: Vec<(String, Color32)>,
+}
+
+const LEGEND_LINE: f32 = 16.0;
+
+/// Where the legend of `plot` goes in the viewport `rect` (a fit leaves it free).
+pub fn legend_rect(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) -> Rect {
+    legend_layout(plot, painter, rect, t).frame
+}
+
+/// The legend's text and frame: top left, as wide as its longest line and as tall as its lines
+/// and bands.
+fn legend_layout(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) -> Legend {
     let mut lines: Vec<(String, Color32)> = Vec::new();
     let title = match (&plot.contour, plot.mode()) {
         (Some(l), _) => l.field.label().to_string(),
@@ -52,7 +67,7 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
     }
     let origin = rect.left_top() + vec2(12.0, 12.0);
     let font = FontId::proportional(12.0);
-    let line_h = 16.0;
+    let line_h = LEGEND_LINE;
     let bands = plot.contour.as_ref().map_or(0, |l| l.bands.count) as f32;
     // As wide as its longest line (and the range labels beside the swatches).
     let widest = lines.iter().map(|(text, _)| painter.layout_no_wrap(text.clone(), font.clone(), t.overlay_text).size().x).fold(0.0_f32, f32::max);
@@ -60,7 +75,14 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
     let width = (widest.max(title_w) + 20.0).max(170.0);
     // Padding and title, the lines, then the swatches with the range lines under them.
     let height = 36.0 + line_h * lines.len() as f32 + if bands > 0.0 { 16.0 + bands * SWATCH.y + 2.0 * line_h } else { 0.0 };
-    let frame = Rect::from_min_size(origin, vec2(width, height));
+    Legend { frame: Rect::from_min_size(origin, vec2(width, height)), title, lines }
+}
+
+/// The legend, top left under the view buttons.
+fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) {
+    let Legend { frame, title, lines } = legend_layout(plot, painter, rect, t);
+    let origin = frame.min;
+    let (font, line_h) = (FontId::proportional(12.0), LEGEND_LINE);
     painter.rect_filled(frame, 4.0, t.overlay);
     let mut y = origin.y + 8.0;
     painter.text(pos2(origin.x + 10.0, y), Align2::LEFT_TOP, title, FontId::proportional(14.0), t.overlay_text);

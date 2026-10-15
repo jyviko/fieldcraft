@@ -28,6 +28,9 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     let rect = ui.available_rect_before_wrap();
     app.viewport.rect = Some(rect);
     app.place("viewport", rect);
+    let t = Tokens::get(app.ui.dark);
+    app.viewport.overlays = overlays(app, ui, rect, &t);
+    app.apply_reframe();
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let boxing = app.pick.box_mode && app.pick.filter.boxes();
     navigate(app, ui, &response, rect, boxing);
@@ -44,7 +47,6 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
         hover(app, &response);
     }
     context_menu(app, &response);
-    let t = Tokens::get(app.ui.dark);
     let painter = ui.painter_at(rect);
     gradient(&painter, rect, t.viewport_top, t.viewport_bottom);
     if app.viewport.gpu.is_some() {
@@ -67,6 +69,19 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     crate::results_panel::show(app, ui, rect, &t);
     axis_view(app, ui, rect, &t);
     nav_bar(app, ui, rect, &t);
+}
+
+/// Where this frame's overlays go over the viewport `rect`: the results legend, the selection
+/// bar (where it was drawn last), the orientation gizmo and the navigation bar.
+fn overlays(app: &mut ModelApp, ui: &egui::Ui, rect: Rect, t: &Tokens) -> Vec<Rect> {
+    let mut out: Vec<Rect> = [axis_view_rect(rect), nav_bar_rect(rect)].into_iter().filter(|r| rect.contains_rect(*r)).collect();
+    if let Some(plot) = app.plot() {
+        let legend = crate::results_panel::legend_rect(&plot, &ui.painter_at(rect), rect, t);
+        app.place("legend", legend);
+        out.push(legend);
+    }
+    out.extend(ui.ctx().memory(|m| m.area_rect(egui::Id::new(SELECTION_BAR))));
+    out
 }
 
 /// The empty viewport: open a file or a sample (the samples are ready to solve).
@@ -184,9 +199,11 @@ fn context_menu(app: &mut ModelApp, response: &egui::Response) {
     });
 }
 
+const SELECTION_BAR: &str = "fc_selection_bar";
+
 /// The selection bar, top centre: what a click picks, box selection, and what is selected.
 fn selection_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
-    let area = egui::Area::new(egui::Id::new("fc_selection_bar"))
+    let area = egui::Area::new(egui::Id::new(SELECTION_BAR))
         .fixed_pos(pos2(rect.center().x, rect.top() + 10.0))
         .pivot(egui::Align2::CENTER_TOP)
         .constrain_to(rect)
@@ -404,10 +421,14 @@ fn view_along(d: Vec3) -> StandardView {
     best.0
 }
 
+fn axis_view_rect(rect: Rect) -> Rect {
+    Rect::from_center_size(pos2(rect.right() - 68.0, rect.top() + 68.0), Vec2::splat(116.0))
+}
+
 /// The orientation gizmo (top right): the six signed axes in the current view, back to front;
 /// clicking a tip looks along it, the house returns to the home view.
 fn axis_view(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
-    let area = Rect::from_center_size(pos2(rect.right() - 68.0, rect.top() + 68.0), Vec2::splat(116.0));
+    let area = axis_view_rect(rect);
     if !rect.contains_rect(area) {
         return;
     }
@@ -473,11 +494,14 @@ const NAV: [(&str, &str, &str); 7] = [
     ("style", "ui.style", "Visual style and what is shown"),
 ];
 
+fn nav_bar_rect(rect: Rect) -> Rect {
+    Rect::from_center_size(pos2(rect.center().x, rect.bottom() - 22.0), vec2(NAV.len() as f32 * 30.0 + 10.0, 30.0))
+}
+
 /// The navigation bar, bottom centre: navigation modes, fit, home, projection, and the display
 /// menu (style, geometry, mesh, nodes).
 fn nav_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
-    let w = NAV.len() as f32 * 30.0 + 10.0;
-    let bar = Rect::from_center_size(pos2(rect.center().x, rect.bottom() - 22.0), vec2(w, 30.0));
+    let bar = nav_bar_rect(rect);
     if !rect.contains_rect(bar) {
         return;
     }

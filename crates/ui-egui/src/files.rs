@@ -216,8 +216,6 @@ pub struct Loading {
     done: String,
     /// The file it opens, for the recent list.
     recent: Option<String>,
-    /// Whether it brings a different model or new geometry, which the view then frames.
-    fit: bool,
     /// The command form that started it: closed when it succeeds, showing the error when not.
     form: Option<&'static str>,
     /// The finished session copy and the command's reply.
@@ -235,7 +233,6 @@ pub struct Opened {
     reply: Value,
     done: String,
     recent: Option<String>,
-    fit: bool,
     form: Option<&'static str>,
 }
 
@@ -373,8 +370,7 @@ impl ModelApp {
         let base = if fresh { Session::default() } else { self.session.clone() };
         let (rx, pending) = spawn(base, command, params);
         self.set_status(format!("{title}…"), false);
-        let fit = fresh || recent.is_some();
-        self.loading = Some(Loading { title, done, recent, fit, form: None, rx, pending, shown: false });
+        self.loading = Some(Loading { title, done, recent, form: None, rx, pending, shown: false });
         true
     }
 
@@ -456,7 +452,6 @@ impl ModelApp {
         let Some(sample) = fieldcraft_engine::sample::find(name) else { return };
         if self.run("file.sample", json!({"name": sample.name})).is_ok() {
             self.model_changed();
-            self.fit_view();
             let next = if self.session.model.steps().is_empty() { "" } else { " — Solve shows its results" };
             self.set_status(format!("Opened the {} sample{next}", sample.label), false);
         }
@@ -511,7 +506,7 @@ impl ModelApp {
         let Some(l) = self.loading.take() else { return false };
         match outcome {
             Some((session, Ok(reply))) => {
-                let opened = Opened { session, reply, done: l.done, recent: l.recent, fit: l.fit, form: l.form };
+                let opened = Opened { session, reply, done: l.done, recent: l.recent, form: l.form };
                 // A design of another part over a meshed or defined model: ask what to do with
                 // the model before it changes (the job ran with the default, keep).
                 let unrelated = opened.reply.get("related").and_then(Value::as_bool) == Some(false)
@@ -552,9 +547,6 @@ impl ModelApp {
         let old = std::mem::replace(&mut self.session, *o.session);
         off_thread("fieldcraft drop".into(), move || drop(old));
         self.model_changed();
-        if o.fit {
-            self.fit_view();
-        }
         if let Some(p) = &o.recent {
             self.recent.add(p);
         }

@@ -33,6 +33,7 @@ pub mod fields;
 pub mod files;
 pub mod form;
 pub mod frame;
+pub mod framing;
 pub mod gpu;
 pub mod icons;
 pub mod palette;
@@ -253,6 +254,9 @@ pub struct Viewport {
     cpu_failed: Option<u64>,
     /// GPU errors reported by the device (see [`gpu::GpuErrors`]), shown in the status bar.
     pub gpu_errors: gpu::GpuErrors,
+    /// The overlays drawn over the viewport last frame (legend, selection bar, gizmo, navigation
+    /// bar): a fit leaves them free ([`framing::free_part`]).
+    pub overlays: Vec<egui::Rect>,
 }
 
 /// A probed node: its values as lines of text, for the step, mode and frame they were read from.
@@ -320,6 +324,10 @@ pub struct ModelApp {
     pub reply: Option<reply::Reply>,
     /// Whether results were shown last frame (the Results tab comes up when they appear).
     results_shown: bool,
+    /// The framing the viewport does when it next draws ([`framing::Reframe`]).
+    reframe: Option<framing::Reframe>,
+    /// The open document ([`Session::opened`]) the view was framed for.
+    framed_document: Option<u64>,
     /// Tessellated design bodies with their names, kept while the same design is open.
     bodies: (Option<Arc<fieldcraft_geometry::Design>>, Vec<(selection::BodyNames, fieldcraft_geometry::SurfaceMesh)>),
     /// The frame-independent part of the results plot (scale, contour) and what it was built for.
@@ -391,7 +399,7 @@ pub struct ModelApp {
 
 impl ModelApp {
     pub fn new(session: Session) -> ModelApp {
-        let mut app = ModelApp {
+        ModelApp {
             session,
             ui: UiState::default(),
             cam: Camera::default(),
@@ -410,6 +418,8 @@ impl ModelApp {
             reactions: None,
             reply: None,
             results_shown: false,
+            reframe: None,
+            framed_document: None,
             bodies: (None, Vec::new()),
             prepared: (None, results::Prepared::default()),
             scene: (None, Scene::default(), Aabb3::EMPTY),
@@ -446,9 +456,7 @@ impl ModelApp {
             element_counts: None,
             search: None,
             properties: None,
-        };
-        app.fit_view();
-        app
+        }
     }
 
     /// Serve control-channel requests (see [`control`]).
@@ -763,6 +771,7 @@ impl ModelApp {
     /// The model may have changed: display data and the scene are rebuilt when next drawn.
     pub fn model_changed(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+        self.frame_new_document();
         // A reply about the model is read again; any other one is out of date.
         self.reply = self.reply.take().and_then(|mut r| {
             reply::LIVE.contains(&r.command.as_str()).then_some(())?;
@@ -822,7 +831,7 @@ impl ModelApp {
             self.display = (Some(self.revision), d);
             self.glyphs = Glyphs::from_model(&self.session.model);
             if was_empty && !self.display.1.bounds.is_empty() {
-                self.cam.fit(&self.display.1.bounds);
+                self.reframe = framing::Reframe::merge(self.reframe, framing::Reframe::Fit);
             }
         }
         &self.display.1
@@ -891,13 +900,19 @@ impl ModelApp {
             }
             self.scene = (Some(key), s, symbols);
         }
+        self.scene.1.radius = scene::radius(&self.drawn_bounds(), &self.cam);
+        (key, &self.scene.1)
+    }
+
+    /// What the scene built last draws: the model, a results plot's (deformed) shape and the
+    /// setup's symbols.
+    fn drawn_bounds(&self) -> Aabb3 {
         let mut bounds = self.display.1.bounds;
         if let Some(p) = &self.plot.1 {
             bounds.union(p.display.bounds);
         }
         bounds.union(self.scene.2);
-        self.scene.1.radius = scene::radius(&bounds, &self.cam);
-        (key, &self.scene.1)
+        bounds
     }
 
     /// A CPU render of the viewport's scene with the current camera and the selection, as PNG
@@ -1116,20 +1131,77 @@ impl ModelApp {
         Ok(())
     }
 
-    /// Frame the whole model.
+    /// Frame what is drawn in the part of the viewport the overlays leave free (see
+    /// [`framing`]), keeping the direction of view.
     pub fn fit_view(&mut self) {
-        let b = self.display().bounds;
-        self.cam.fit(&b);
+        // A view asked for replaces one still waiting to be done.
+        self.reframe = None;
+        self.scene();
+        let b = self.drawn_bounds();
+        let (aspect, free) = self.free_part();
+        self.cam.fit_in(&b, aspect, free);
+    }
+
+    /// The viewport's aspect and the part of it the overlays leave free, as fractions (the whole
+    /// of a square view before the viewport is first drawn).
+    fn free_part(&self) -> (f64, [f64; 4]) {
+        match self.viewport.rect.filter(|r| r.width() > 1.0 && r.height() > 1.0) {
+            Some(r) => (f64::from(r.width()) / f64::from(r.height()), framing::free_part(r, &self.viewport.overlays)),
+            None => (1.0, fieldcraft_render::FULL_VIEW),
+        }
+    }
+
+    /// Whether every corner of what is drawn shows in the free part of the viewport.
+    fn framed(&mut self) -> bool {
+        let Some(r) = self.viewport.rect.filter(|r| r.width() > 1.0 && r.height() > 1.0) else { return true };
+        self.scene();
+        let b = self.drawn_bounds();
+        if b.is_empty() {
+            return true;
+        }
+        let [x0, y0, x1, y1] = framing::free_part(r, &self.viewport.overlays);
+        let (w, h) = (f64::from(r.width()), f64::from(r.height()));
+        let p = fieldcraft_render::pick::Projector::new(&self.cam, w, h, self.scene.1.radius);
+        b.corners().into_iter().all(|c| p.screen(c).is_some_and(|[x, y, _]| x >= x0 * w && x <= x1 * w && y >= y0 * h && y <= y1 * h))
+    }
+
+    /// Another model, sample or design opened (or the window's first one): a fresh start's home
+    /// view when the viewport next draws.
+    fn frame_new_document(&mut self) {
+        if self.framed_document != Some(self.session.opened()) {
+            self.framed_document = Some(self.session.opened());
+            self.reframe = framing::Reframe::merge(self.reframe, framing::Reframe::Home);
+        }
     }
 
     /// The home view: isometric, the whole model framed.
     pub fn home_view(&mut self) {
         self.set_view(StandardView::Iso);
+    }
+
+    /// Look along a standard view, the whole model framed.
+    pub fn set_view(&mut self, v: StandardView) {
+        self.cam.set_view(v);
         self.fit_view();
     }
 
-    pub fn set_view(&mut self, v: StandardView) {
-        self.cam.set_view(v);
+    /// Do the framing asked for ([`framing::Reframe`]) once there is something to frame; the
+    /// viewport calls it when it knows its size and its overlays, before drawing.
+    pub(crate) fn apply_reframe(&mut self) {
+        let Some(r) = self.reframe else { return };
+        if self.display().bounds.is_empty() {
+            return;
+        }
+        self.reframe = None;
+        match r {
+            framing::Reframe::Home => self.home_view(),
+            framing::Reframe::Fit => self.fit_view(),
+            framing::Reframe::IfOffscreen => {
+                if !self.framed() {
+                    self.fit_view();
+                }
+            }
+        }
     }
 
     /// Per-frame logic before layout: theme, camera projection, control requests, screenshots.
@@ -1153,7 +1225,9 @@ impl ModelApp {
         let shown = self.session.results_view.is_some();
         if shown && !self.results_shown {
             self.ui.select_tab(Tab::Results);
+            self.reframe = framing::Reframe::merge(self.reframe, framing::Reframe::IfOffscreen);
         }
+        self.frame_new_document();
         self.results_shown = shown;
         self.check_selection();
         // A selected definition that is gone (undo, delete) is no longer selected.
@@ -1627,8 +1701,9 @@ mod tests {
         app.run_script(&fieldcraft_engine::sample::script()).unwrap();
         let d = app.display().clone();
         assert!(!d.tris.is_empty() && !d.edges.is_empty());
-        // Fitted: the model's centre is the camera target.
-        assert!(app.cam.target.dist(d.bounds.center()) < 1e-9);
+        // Framed when the viewport first draws.
+        draw(&mut app, &egui::Context::default(), 1280.0, 800.0);
+        assert!(app.framed(), "{:?}", app.cam);
         let png = app.render_png(64, 48).unwrap();
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
     }
@@ -1709,6 +1784,90 @@ mod tests {
         // The model's faces again (without the setup's symbols).
         app.ui.show_loads = false;
         assert_eq!(app.scene().1.tris.len(), faces);
+    }
+
+    /// One frame of the window at `w` × `h` points.
+    fn draw(app: &mut ModelApp, ctx: &egui::Context, w: f32, h: f32) {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))), ..Default::default() };
+        let mut out = ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        out.textures_delta.clear();
+    }
+
+    fn is_iso(cam: &Camera) -> bool {
+        let (yaw, pitch) = StandardView::Iso.angles();
+        (cam.yaw - yaw).abs() < 1e-9 && (cam.pitch - pitch).abs() < 1e-9
+    }
+
+    /// Opening a sample, then another, frames each in the home view; an edit keeps the camera
+    /// (#233, #223).
+    #[test]
+    fn opening_another_sample_frames_it_and_an_edit_keeps_the_camera() {
+        let mut app = ModelApp::new(Session::default());
+        let ctx = egui::Context::default();
+        app.run("file.sample", json!({"name": "crank-arm"})).unwrap();
+        draw(&mut app, &ctx, 1280.0, 800.0);
+        assert!(is_iso(&app.cam) && app.framed(), "{:?}", app.cam);
+        // Looked at from elsewhere, an edit keeps that camera.
+        app.cam.orbit(120.0, -40.0);
+        app.cam.zoom_at(0.2, None);
+        let turned = app.cam;
+        app.run("model.material.create", json!({"name": "Al", "elastic": {"type": "isotropic", "young": 70000, "poisson": 0.33}})).unwrap();
+        draw(&mut app, &ctx, 1280.0, 800.0);
+        assert_eq!(app.cam, turned);
+        // Another sample: a fresh start's home view, all of it in sight.
+        app.run("file.sample", json!({"name": "bracket-hex"})).unwrap();
+        draw(&mut app, &ctx, 1280.0, 800.0);
+        assert!(is_iso(&app.cam) && app.framed(), "{:?}", app.cam);
+    }
+
+    /// After a solve the model is in sight, clear of the legend, at the window sizes people use;
+    /// a fit leaves the legend free with the deformed shape too (#223, #76).
+    #[test]
+    fn results_come_up_framed_clear_of_the_legend() {
+        for (w, h) in [(1280.0, 800.0), (700.0, 1000.0)] {
+            let mut app = ModelApp::new(Session::default());
+            let ctx = egui::Context::default();
+            app.run("file.sample", json!({"name": "crank-arm"})).unwrap();
+            draw(&mut app, &ctx, w, h);
+            // Zoomed in on a corner before solving: the results bring it all back.
+            let corner = app.display().bounds.max;
+            app.cam.zoom_at(0.3, Some(corner));
+            app.run("solve.run", json!({})).unwrap();
+            draw(&mut app, &ctx, w, h);
+            draw(&mut app, &ctx, w, h);
+            let legend = *app.layout.get("legend").expect("the legend is placed");
+            assert!(app.framed(), "{w}×{h}: {:?}", app.cam);
+            app.run("results.deformed", json!({"show": true, "scale": 200})).unwrap();
+            draw(&mut app, &ctx, w, h);
+            app.fit_view();
+            assert!(app.framed(), "{w}×{h} deformed");
+            let view = app.viewport.rect.unwrap();
+            let b = app.drawn_bounds();
+            for (k, c) in b.corners().into_iter().enumerate() {
+                let at = crate::viewport::to_screen(&app, c).unwrap();
+                assert!(!legend.contains(at) && view.contains(at), "{w}×{h}: corner {k} at {at:?}, legend {legend:?}");
+            }
+        }
+    }
+
+    /// Every standard view frames the whole model: the cantilever's front view keeps both ends
+    /// (#147), in orthographic and perspective.
+    #[test]
+    fn standard_views_frame_the_whole_model() {
+        for perspective in [false, true] {
+            let mut app = ModelApp::new(Session::default());
+            app.ui.perspective = perspective;
+            let ctx = egui::Context::default();
+            app.run("file.sample", json!({"name": "cantilever"})).unwrap();
+            draw(&mut app, &ctx, 1280.0, 800.0);
+            for v in StandardView::ALL {
+                app.set_view(v);
+                assert!(app.framed(), "{} view, perspective {perspective}: {:?}", v.label(), app.cam);
+            }
+        }
     }
 
     /// Rendered on the CPU from the front, undeformed, with Z displacement contours: the free end

@@ -27,9 +27,8 @@ commands:
   app-icon        draw the application icon family (assets/app-icon) with VectorCraft, then
                   write the iconset, icns, ico and Icon Composer document (macOS: sips,
                   iconutil, magick; actool for Assets.car when available)
-  licences [--check]
-                  write THIRD-PARTY-LICENSES.txt (the licences of every shipped crate);
-                  --check fails when it is out of date
+  licences        write THIRD-PARTY-LICENSES.txt (the licences of every shipped crate; the
+                  release workflow runs it before packaging, the file is not committed)
   test [--heavy] [CARGO ARGS] [-- TEST ARGS]
                   build the tests with the ci profile, then run every test binary at once;
                   --heavy runs only the ignored tests instead (heavy verification and corpus
@@ -44,7 +43,7 @@ commands:
                   --bless freezes a passing case's results in its fixture.json; --quick skips
                   cases marked slow (release build)
   wasm            cargo check every library crate and the web app for wasm32-unknown-unknown
-  ci              fmt --check, assets, licences --check, layers, clippy -D warnings, then the tests
+  ci              fmt --check, assets, layers, clippy -D warnings, then the tests
                   (not the heavy ones) with the wasm check alongside (stops at the first failing
                   step)
 ";
@@ -57,7 +56,7 @@ fn main() -> ExitCode {
         Some("assets") => assets::run(&root()),
         Some("icons") => icons::run(&root(), &rest),
         Some("app-icon") => app_icon::run(&root()),
-        Some("licences") => licences::run(&root(), rest.contains(&"--check")),
+        Some("licences") => licences::run(&root()),
         Some("test") => {
             let (heavy, rest) = match rest.split_first() {
                 Some((&"--heavy", after)) => (true, after),
@@ -200,7 +199,6 @@ fn cmd_ci() -> Result<(), String> {
     c.args(["fmt", "--all", "--", "--check"]);
     run(c, "cargo fmt --check")?;
     assets::run(&root())?;
-    licences::run(&root(), true)?;
     cmd_layers()?;
     let mut c = cargo();
     c.args(["clippy", "--workspace", "--all-targets", "--profile", "ci", "--", "-D", "warnings"]);

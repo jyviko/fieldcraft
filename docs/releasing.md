@@ -17,6 +17,10 @@ are in `packaging/` and run the same way on a developer machine.
 Plus `SHA256SUMS.txt`, its signature `SHA256SUMS.txt.minisig` (below), and the notes from `.github/release-notes.md` followed by GitHub's
 generated list of changes. Every package carries `README.md`, `LICENSE-MIT`, `LICENSE-APACHE`,
 `NOTICE` and `THIRD-PARTY-LICENSES.txt` (on macOS in `FieldCraft.app/Contents/Resources/Licenses`).
+`THIRD-PARTY-LICENSES.txt` is not committed: each packaging job runs `cargo xtask licences` first,
+which fails when a shipped crate names no licence and carries no licence file, and the release
+attaches the file on its own too. Which licences a dependency may have is `[licenses]` in
+`deny.toml`, which CI checks on every pull request (`cargo deny check licenses`).
 The application id is `io.github.jyviko.fieldcraft`: the macOS bundle id, the Linux `.desktop`
 entry and icon name, and the window's Wayland app_id / X11 class. The icons come from
 `assets/app-icon`: `icon.icns` and `Assets.car` (macOS 26 and later) in the app bundle,

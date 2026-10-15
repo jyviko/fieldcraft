@@ -120,8 +120,8 @@ People trust FieldCraft with their models; a crash loses their work. **This outr
      Then remove your worktree and delete your local branch.
   5. Never run the full gate locally: no `cargo xtask ci`, no `cargo clippy --workspace`, no
      `cargo xtask wasm` or `oracle` unless step 2 calls for it. Never watch CI. GitHub CI runs
-     `cargo xtask ci` (fmt, assets, licences, layers, clippy -D warnings, tests, wasm), the
-     oracle, the heavy tests and the advisories once per merge on `develop`; the coordinator
+     `cargo xtask ci` (fmt, assets, layers, clippy -D warnings, tests, wasm), the
+     oracle, the heavy tests and the dependency licences and advisories once per merge on `develop`; the coordinator
      watches it and sends a failure back to the change that caused it, which is fixed forward
      at once.
 - **Keep the trunk gate fast** (under ~3 minutes on CI). A test that takes more than a few seconds

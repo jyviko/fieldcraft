@@ -114,7 +114,7 @@ against a closed form or a reference solution ([docs/examples.md](docs/examples.
 ## Build
 
 ```sh
-cargo xtask ci                                  # fmt, assets, licences, layers, clippy, tests, wasm
+cargo xtask ci                                  # fmt, assets, layers, clippy, tests, wasm
 cargo xtask test --heavy                        # the heavy (ignored) tests and the doc tests
 cargo run -p fieldcraft-cli -- commands         # every command and its parameters
 cargo run -p fieldcraft-cli -- run script.json  # run a command script
@@ -148,7 +148,8 @@ you review and submit yourself, with your session or model attached only if you 
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. Notices
-are in [NOTICE](NOTICE); third-party licences in [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt).
+are in [NOTICE](NOTICE); third-party licences in
+THIRD-PARTY-LICENSES.txt, which every release package carries (`cargo xtask licences` writes it).
 
 FieldCraft is an independent project, not affiliated with, sponsored or endorsed by Dassault
 Systèmes, MSC Software, Siemens or Ansys. Abaqus, Nastran, MSC Nastran, Simcenter Nastran and

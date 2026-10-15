@@ -1,8 +1,8 @@
-//! `cargo xtask licences [--check]`: THIRD-PARTY-LICENSES.txt, the licences of every crate built
-//! into the shipped programs (fieldcraft, fieldcraft-cli, fieldcraft-web), read from
-//! `cargo metadata` and the crates' own licence files, so a release download can carry them.
-//! `--check` (part of `cargo xtask ci`) fails when the committed file is out of date, e.g. after a
-//! dependency changed.
+//! `cargo xtask licences`: THIRD-PARTY-LICENSES.txt, the licences of every crate built into the
+//! shipped programs (fieldcraft, fieldcraft-cli, fieldcraft-web), read from `cargo metadata` and
+//! the crates' own licence files. The release workflow generates it before packaging, so every
+//! download carries it; it is not committed. Which licences are allowed is cargo-deny's
+//! `[licenses]` policy (deny.toml), checked on every pull request.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
@@ -14,17 +14,9 @@ use crate::cargo;
 pub const FILE: &str = "THIRD-PARTY-LICENSES.txt";
 const ROOTS: &[&str] = &["fieldcraft", "fieldcraft-cli", "fieldcraft-web"];
 
-pub fn run(root: &Path, check: bool) -> Result<(), String> {
+pub fn run(root: &Path) -> Result<(), String> {
     let text = generate()?;
     let path = root.join(FILE);
-    if check {
-        let old = std::fs::read_to_string(&path).unwrap_or_default();
-        if old.replace("\r\n", "\n") != text {
-            return Err(format!("{FILE} is out of date (dependencies changed): run `cargo xtask licences` and commit it"));
-        }
-        println!("licences: {FILE} is up to date");
-        return Ok(());
-    }
     std::fs::write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
     println!("licences: wrote {FILE} ({} KB)", text.len() / 1024);
     Ok(())
@@ -87,6 +79,12 @@ fn generate() -> Result<String, String> {
         });
     }
     crates.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+    // A package must say what its licence is: a release never ships a crate it cannot account for.
+    let unresolved: Vec<String> =
+        crates.iter().filter(|c| c.license.is_empty() && c.files.is_empty()).map(|c| format!("{} {}", c.name, c.version)).collect();
+    if !unresolved.is_empty() {
+        return Err(format!("no licence (Cargo.toml `license` or a licence file) for: {}", unresolved.join(", ")));
+    }
     Ok(render(&crates))
 }
 

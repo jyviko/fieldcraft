@@ -4,7 +4,9 @@
 //! Every node of the solid elements carries one temperature ([`fieldcraft_fem::heat::HEAT_DOFS`]).
 //! The conductivity K (with the convection films) and capacity C are assembled on the node
 //! graph in element label order ([`fieldcraft_fem::heat`]); prescribed temperatures are
-//! eliminated, the free ones numbered by nested dissection and solved by sparse Cholesky.
+//! eliminated with the ties (each secondary node's temperature follows the main nodes' with the
+//! displacement tie's mortar weights, [`crate::tie`]), the free ones numbered by nested
+//! dissection and solved by sparse Cholesky.
 //!
 //! - **Steady**: K T = f.
 //! - **Transient**, the generalized trapezoidal (θ) method with n equal increments Δt over the
@@ -17,14 +19,19 @@
 //! flow at prescribed temperatures is the reaction K T − f (C Ṫ included in transient steps).
 
 use fieldcraft_fem::element::{Extrapolation, extrapolation};
+use fieldcraft_fem::frame::norm;
 use fieldcraft_fem::heat::{Conduction, PointFlux, face_film, face_weights};
-use fieldcraft_fem::{DofLayout, DofSet};
+use fieldcraft_fem::mortar::area_vector;
+use fieldcraft_fem::{DofKind, DofLayout, DofSet};
 use fieldcraft_model::{ElementKind, Load, Model, Procedure, Resolved, SectionKind, Step, TEMPERATURE_DOF};
 
 use crate::cholesky::{Factor, FactorError, UpperColumns};
+use crate::constraints::{Budget, Reduction, Row};
+use crate::contact::thickness;
 use crate::ordering::nested_dissection;
 use crate::sparse::{Csr, NodeGraph, add_block};
 use crate::system::hold;
+use crate::tie::{TieFace, TieNodes, rows_of};
 use crate::{Error, Limits, Result, Stats};
 
 /// Most temperature values a transient result keeps (frames × nodes); frames are thinned
@@ -244,66 +251,7 @@ fn prescribed(model: &Model, resolved: &Resolved, mesh: &HeatMesh, step: &Step) 
     Ok(out)
 }
 
-/// The free temperatures numbered in nested-dissection order.
-struct Equations {
-    /// Per node, its equation or `usize::MAX` when prescribed.
-    eq: Vec<usize>,
-    /// Per equation, its node.
-    node: Vec<usize>,
-}
-
-impl Equations {
-    fn new(mesh: &HeatMesh, graph: &NodeGraph, fixed: &[Option<f64>]) -> Equations {
-        let mut eq = vec![usize::MAX; mesh.labels.len()];
-        let mut node = Vec::new();
-        for n in nested_dissection(&mesh.xyz, &graph.adjacency) {
-            if fixed.get(n).is_some_and(Option::is_none)
-                && let Some(e) = eq.get_mut(n)
-            {
-                *e = node.len();
-                node.push(n);
-            }
-        }
-        Equations { eq, node }
-    }
-
-    /// The free-free block of a node-level matrix, rows and columns in equation order.
-    fn reduce(&self, a: &Csr) -> Csr {
-        let mut ptr = vec![0];
-        let (mut idx, mut val) = (Vec::new(), Vec::new());
-        for &n in &self.node {
-            let (cols, vals) = a.row(n);
-            let mut row: Vec<(usize, f64)> =
-                cols.iter().zip(vals).filter_map(|(c, v)| self.eq.get(*c).filter(|e| **e != usize::MAX).map(|e| (*e, *v))).collect();
-            row.sort_unstable_by_key(|t| t.0);
-            for (c, v) in row {
-                idx.push(c);
-                val.push(v);
-            }
-            ptr.push(idx.len());
-        }
-        Csr { n: self.node.len(), ptr, idx, val }
-    }
-
-    /// Solve for the free temperatures with right-hand side `rhs` (over every node; its free
-    /// rows are used) and write them into `t`, whose prescribed entries are kept.
-    fn solve(&self, chol: &Factor, rhs: &[f64], q: &mut Vec<f64>, t: &mut [f64]) -> Result<()> {
-        q.clear();
-        q.extend(self.node.iter().map(|n| rhs.get(*n).copied().unwrap_or(0.0)));
-        chol.solve(q)?;
-        for (n, v) in self.node.iter().zip(q.iter()) {
-            if let Some(x) = t.get_mut(*n) {
-                *x = *v;
-            }
-        }
-        if t.iter().any(|x| !x.is_finite()) {
-            return Err(Error::Singular("the temperatures are not finite; the model is ill-conditioned".into()));
-        }
-        Ok(())
-    }
-}
-
-fn factor(a: &Csr, limits: &Limits, mesh: &HeatMesh, eqs: &Equations) -> Result<Factor> {
+fn factor(a: &Csr, limits: &Limits, mesh: &HeatMesh, eqs: &Reduction) -> Result<Factor> {
     Factor::new(&UpperColumns::from_symmetric(a), limits.max_factor_entries).map_err(|e| match e {
         FactorError::TooLarge { entries, limit } => {
             Error::Limit(format!("the factorization needs {entries} entries; the limit is {limit} (refine less or raise the limit)"))
@@ -311,7 +259,8 @@ fn factor(a: &Csr, limits: &Limits, mesh: &HeatMesh, eqs: &Equations) -> Result<
         FactorError::OutOfMemory { entries } => Error::Limit(format!("not enough memory for the factorization ({entries} entries)")),
         FactorError::Internal(what) => Error::Internal(what),
         FactorError::NotPositiveDefinite { column } | FactorError::Singular { column } => {
-            let label = eqs.node.get(column).and_then(|n| mesh.labels.get(*n)).copied().unwrap_or(0);
+            let node = eqs.eq_dof.get(column).and_then(|d| mesh.layout.locate(*d)).map(|(slot, _)| slot);
+            let label = node.and_then(|n| mesh.labels.get(n)).copied().unwrap_or(0);
             Error::Singular(format!(
                 "the temperature is undetermined at node {label}: no temperature boundary condition or convection reaches its part of the model"
             ))
@@ -329,16 +278,16 @@ fn mul(a: &Csr, x: &[f64]) -> Vec<f64> {
 /// The temperature history of a heat transfer or coupled step and what produced it.
 struct Solution {
     mesh: HeatMesh,
-    eqs: Equations,
+    eqs: Reduction,
     k: Csr,
     c: Option<Csr>,
     f: Vec<f64>,
-    fixed: Vec<Option<f64>>,
     times: Vec<f64>,
     frames: Vec<Vec<f64>>,
     /// Ṫ over the last increment (zero when steady).
     rate: Vec<f64>,
     factor_entries: usize,
+    warnings: Vec<String>,
 }
 
 impl Solution {
@@ -347,7 +296,49 @@ impl Solution {
     }
 }
 
+/// The faces of set `set` for tie `owner`, refused unless they are linear faces of conducting
+/// solid elements.
+fn tie_faces(model: &Model, resolved: &Resolved, mesh: &HeatMesh, owner: &str, set: &str) -> Result<Vec<TieFace>> {
+    let list = resolved.sets.get(set).map(|s| s.faces.as_slice()).unwrap_or_default();
+    list.iter()
+        .map(|fc| {
+            let at = |what: String| Error::Invalid(format!("{owner}: element {} face {}: {what}", fc.element, fc.face));
+            let labels = model.face_nodes(*fc).ok_or_else(|| at("no such face".into()))?;
+            let el = mesh.element(fc.element).ok_or_else(|| at("the element is not a solid element of the analysis".into()))?;
+            if !(matches!(labels.len(), 3 | 4) && el.kind.dimension() == 3) {
+                return Err(Error::NotSupported(format!(
+                    "{owner} on the faces of {} elements (element {}) in heat transfer; it takes the linear faces of tet4, wedge6 and hex8 elements",
+                    el.kind.name(),
+                    fc.element
+                )));
+            }
+            let nodes: Vec<usize> = labels.iter().map(|l| mesh.node_of(owner, *l)).collect::<Result<_>>()?;
+            let x: Vec<[f64; 3]> = nodes.iter().filter_map(|n| mesh.xyz.get(*n).copied()).collect();
+            let thickness = thickness(el.kind, &el.xyz, &x, area_vector(&x).map_or(0.0, norm));
+            if !(thickness > 0.0 && thickness.is_finite()) {
+                return Err(at("the face has no size".into()));
+            }
+            Ok(TieFace { nodes, thickness })
+        })
+        .collect()
+}
+
+/// The temperature constraint rows of the model's ties: each secondary node's temperature
+/// follows the main nodes' with the displacement tie's mortar weights ([`crate::tie`]).
+fn tie_rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &HeatMesh, warnings: &mut Vec<String>) -> Result<Vec<Row<'m>>> {
+    if model.ties().is_empty() {
+        return Ok(Vec::new());
+    }
+    let nodes = TieNodes { xyz: &mesh.xyz, labels: &mesh.labels, faces: |owner: &str, set: &str| tie_faces(model, resolved, mesh, owner, set) };
+    let dof = |slot: usize, kind: DofKind| mesh.layout.dof(slot, kind).ok_or_else(|| Error::Internal("node temperature".into()));
+    rows_of(model, &nodes, &[DofKind::T], dof, warnings)
+}
+
 /// Solve the step's temperatures (steady unless the step is transient).
+///
+/// The prescribed temperatures and the ties are eliminated by transformation
+/// ([`crate::constraints::Reduction`]): T = T_f q + T_p T̄ (T̄ the prescribed values), with the free temperatures q numbered
+/// by nested dissection. Without ties it is the plain elimination of the prescribed values.
 fn run(model: &Model, resolved: &Resolved, step: &Step, limits: &Limits) -> Result<Solution> {
     let transient = match step.procedure {
         Procedure::HeatTransfer { transient } => transient,
@@ -355,56 +346,67 @@ fn run(model: &Model, resolved: &Resolved, step: &Step, limits: &Limits) -> Resu
     };
     let mesh = HeatMesh::new(model, resolved, limits.max_dofs)?;
     let graph = NodeGraph::new(mesh.labels.len(), mesh.elements.iter().map(|e| e.nodes.as_slice()));
+    let mut warnings = Vec::new();
+    let rows = tie_rows(model, resolved, &mesh, &mut warnings)?;
     let fixed = prescribed(model, resolved, &mesh, step)?;
-    let eqs = Equations::new(&mesh, &graph, &fixed);
-    if eqs.node.is_empty() {
+    let order = nested_dissection(&mesh.xyz, &graph.adjacency);
+    let budget = Budget { max_bytes: limits.max_factor_entries.saturating_mul(8), pattern_entries: graph.entries(&mesh.layout), matrices: 1 };
+    let eqs = Reduction::new(&mesh.layout, std::iter::empty(), &order, &rows, |_| Ok(fixed), budget)?;
+    if eqs.neq() == 0 {
         return Err(Error::Invalid("every temperature is prescribed; there is nothing to solve".into()));
     }
     let HeatSystem { k, c, f } = assemble(model, resolved, &mesh, &graph, step, transient.is_some())?;
     let n = mesh.labels.len();
-    let held: Vec<f64> = fixed.iter().map(|v| v.unwrap_or(0.0)).collect();
-    let mut q = Vec::with_capacity(eqs.node.len());
+    let mut q = Vec::with_capacity(eqs.neq());
+    // The temperatures from the free ones q, checked finite.
+    let expand = |q: &[f64]| -> Result<Vec<f64>> {
+        let t = eqs.expand(q, true);
+        if t.iter().any(|x| !x.is_finite()) {
+            return Err(Error::Singular("the temperatures are not finite; the model is ill-conditioned".into()));
+        }
+        Ok(t)
+    };
     let (times, frames, rate, factor_entries) = match transient.zip(c.as_ref()) {
         Some((tr, c)) => {
             let steps = tr.increments();
             let dt = tr.end_time / steps as f64;
             // (C + θΔt K) Tₙ₊₁ = (C − (1 − θ)Δt K) Tₙ + Δt f, the prescribed values held from the
-            // first increment on (their part A_fp T_p moves to the right-hand side).
+            // first increment on (their part moves to the right-hand side).
             let a = c.add_scaled(tr.theta * dt, &k)?;
             let b = c.add_scaled(-(1.0 - tr.theta) * dt, &k)?;
-            let chol = factor(&eqs.reduce(&a), limits, &mesh, &eqs)?;
-            let a_held = mul(&a, &held);
+            let [reduced] = eqs.reduce([&a])?;
+            let chol = factor(&reduced, limits, &mesh, &eqs)?;
             let every = (steps.saturating_mul(n) / MAX_TEMPERATURE_VALUES.max(1)).saturating_add(1);
             let mut t = vec![tr.initial_temperature; n];
+            let mut previous = t.clone();
             let (mut frames, mut times) = (vec![t.clone()], vec![0.0]);
             let mut rhs = vec![0.0; n];
-            let mut next = held.clone();
             for i in 1..=steps {
-                next.copy_from_slice(&held);
                 b.mul(&t, &mut rhs);
-                for ((r, fj), aj) in rhs.iter_mut().zip(&f).zip(&a_held) {
-                    *r += dt * fj - aj;
+                for (r, fj) in rhs.iter_mut().zip(&f) {
+                    *r += dt * fj;
                 }
-                eqs.solve(&chol, &rhs, &mut q, &mut next)?;
-                std::mem::swap(&mut t, &mut next);
+                q.clear();
+                q.extend(eqs.rhs(&rhs, &a));
+                chol.solve(&mut q)?;
+                previous = std::mem::replace(&mut t, expand(&q)?);
                 if i % every == 0 || i == steps {
                     frames.push(t.clone());
                     times.push(if i == steps { tr.end_time } else { i as f64 * dt });
                 }
             }
-            // After the swap `next` holds the state before the last increment.
-            let rate = t.iter().zip(&next).map(|(a, b)| (a - b) / dt).collect();
+            let rate = t.iter().zip(&previous).map(|(a, b)| (a - b) / dt).collect();
             (times, frames, rate, chol.entries())
         }
         None => {
-            let rhs: Vec<f64> = f.iter().zip(mul(&k, &held)).map(|(a, b)| a - b).collect();
-            let chol = factor(&eqs.reduce(&k), limits, &mesh, &eqs)?;
-            let mut t = held;
-            eqs.solve(&chol, &rhs, &mut q, &mut t)?;
-            (vec![0.0], vec![t], vec![0.0; n], chol.entries())
+            let [reduced] = eqs.reduce([&k])?;
+            let chol = factor(&reduced, limits, &mesh, &eqs)?;
+            q.extend(eqs.rhs(&f, &k));
+            chol.solve(&mut q)?;
+            (vec![0.0], vec![expand(&q)?], vec![0.0; n], chol.entries())
         }
     };
-    Ok(Solution { mesh, eqs, k, c, f, fixed, times, frames, rate, factor_entries })
+    Ok(Solution { mesh, eqs, k, c, f, times, frames, rate, factor_entries, warnings })
 }
 
 /// The steady temperatures of a coupled temperature–displacement step, by node label (sorted).
@@ -414,40 +416,28 @@ pub(crate) fn temperatures(model: &Model, resolved: &Resolved, step: &Step, limi
     Ok((s.mesh.labels, t))
 }
 
-/// Heat transfer does not tie temperatures across a tie yet.
-fn refuse_ties(model: &Model) -> Result<()> {
-    match model.ties().keys().next() {
-        Some(name) => Err(crate::Error::NotSupported(format!("ties (tie `{name}`) in heat transfer"))),
-        None => Ok(()),
-    }
-}
-
 /// The steady temperatures of a step's thermal conditions at the nodes `labels` (sorted), `None`
 /// at the nodes conduction does not reach.
 pub(crate) fn temperatures_at(model: &Model, resolved: &Resolved, step: &Step, limits: &Limits, labels: &[u32]) -> Result<Vec<Option<f64>>> {
-    refuse_ties(model)?;
     let (solved, t) = temperatures(model, resolved, step, limits)?;
     Ok(labels.iter().map(|l| solved.binary_search(l).ok().and_then(|i| t.get(i)).copied()).collect())
 }
 
 /// Solve a heat transfer step: the step named `step`, or the model's only one.
 pub fn solve_heat(model: &Model, step: Option<&str>, limits: &Limits) -> Result<HeatResult> {
-    refuse_ties(model)?;
     let resolved = model.resolve()?;
     let step = model.select_step(step, |p| matches!(p, Procedure::HeatTransfer { .. }), "heat transfer")?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();
-    let s = run(model, &resolved, step, limits)?;
+    let mut s = run(model, &resolved, step, limits)?;
+    warnings.append(&mut s.warnings);
     let t = s.temperature();
-    // Reactions: the heat each prescribed node supplies, K T + C Ṫ − f.
+    // Reactions: the heat each prescribed node supplies, T_pᵀ (K T + C Ṫ − f) (a tied node held
+    // through its main nodes passes its share to them).
     let kt = mul(&s.k, t);
     let ct = s.c.as_ref().map(|c| mul(c, &s.rate));
-    let reaction: Vec<f64> = kt
-        .iter()
-        .zip(&s.f)
-        .zip(&s.fixed)
-        .enumerate()
-        .map(|(i, ((kt, f), fixed))| if fixed.is_some() { kt + ct.as_ref().and_then(|c| c.get(i)).copied().unwrap_or(0.0) - f } else { 0.0 })
-        .collect();
+    let residual: Vec<f64> =
+        kt.iter().zip(&s.f).enumerate().map(|(i, (kt, f))| kt + ct.as_ref().and_then(|c| c.get(i)).copied().unwrap_or(0.0) - f).collect();
+    let reaction = s.eqs.reactions_of(&residual);
     // Heat supplied: fluxes and sources, and convection at the end temperatures, Σ (f − K_film T)
     // = Σ (f − K T) since conduction alone has zero row sums.
     let applied_total: f64 = kt.iter().zip(&s.f).map(|(a, b)| b - a).sum();
@@ -458,7 +448,7 @@ pub fn solve_heat(model: &Model, step: Option<&str>, limits: &Limits) -> Result<
     if s.c.is_none() && scale > 0.0 && (applied_total + reaction_total).abs() > 1e-6 * scale {
         warnings.push(format!("heat supplied and removed differ by {:.3e}", (applied_total + reaction_total).abs()));
     }
-    let stats = Stats { dofs: s.mesh.layout.dofs(), equations: s.eqs.node.len(), factor_entries: s.factor_entries, lanczos_vectors: 0 };
+    let stats = Stats { dofs: s.mesh.layout.dofs(), equations: s.eqs.neq(), factor_entries: s.factor_entries, lanczos_vectors: 0 };
     Ok(HeatResult {
         step: step.name.clone(),
         nodes: s.mesh.labels,

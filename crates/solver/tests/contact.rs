@@ -1,5 +1,6 @@
 //! Contact in nonlinear static steps against closed forms: the contact patch test on
-//! non-matching meshes, Newton's convergence with contact, and what implicit contact refuses.
+//! non-matching meshes, Newton's convergence with contact, and what implicit contact refuses;
+//! ties of non-matching meshes for displacement and for heat.
 //! Run with `--nocapture` to see the iterations.
 
 use std::collections::BTreeMap;
@@ -547,14 +548,164 @@ fn a_tie_passes_the_patch_test() {
 #[test]
 fn what_ties_refuse() {
     let (mut b, _) = tied(ElementKind::Hex8, ElementKind::Hex8, false, Procedure::Static {});
-    b.model.add_step(Step::new("Heat", Procedure::HeatTransfer { transient: None }), None).unwrap();
-    let e = fieldcraft_solver::solve_heat(&b.model, Some("Heat"), &Limits::default()).unwrap_err().to_string();
-    assert!(e.contains("tie `glue`") && e.contains("heat transfer"), "{e}");
-    let (mut b, _) = tied(ElementKind::Hex8, ElementKind::Hex8, false, Procedure::Static {});
     // (Touching surfaces are tied within any tolerance.)
     b.model.replace_tie("glue", Tie { position_tolerance: Some(1e-9), ..Tie::new("lower_top", "upper_bottom") }).unwrap();
     let r = fieldcraft_solver::solve_static(&b.model, Some("Step"), &Limits::default()).unwrap();
     assert!(r.warnings.iter().all(|w| !w.contains("stay free")), "{:?}", r.warnings);
+}
+
+/// Two blocks tied at z = 1, conducting heat: `lower` (`lower_n` cells, graded unless `n`
+/// divides evenly, conductivity `k_lower`) below and `upper` (2 × 2 × 2, `k_upper`) above, the
+/// lower block secondary, in step "Step" of `procedure`. ρc = 1 and α = 1e-5 (reference 0) in
+/// both.
+fn tied_conductor(lower: ElementKind, lower_n: [usize; 3], graded: bool, upper: ElementKind, k: [f64; 2], procedure: Procedure) -> Blocks {
+    let mut b = Blocks::default();
+    let low = b.block(lower, lower_n, |p| if graded { [p[0].powf(1.4), p[1].powf(0.8), p[2]] } else { p });
+    let up = b.block(upper, [2, 2, 2], |p| [p[0], p[1], 1.0 + p[2]]);
+    for (name, elements, k) in [("low", &low, k[0]), ("up", &up, k[1])] {
+        b.model.add_set(name, Set { elements: elements.clone(), ..Set::default() }).unwrap();
+        let thermal = Thermal {
+            conductivity: Some(Directional::Isotropic(k)),
+            specific_heat: Some(1.0),
+            expansion: Some(Directional::Isotropic(1e-5)),
+            ..Thermal::default()
+        };
+        let material = Material {
+            elastic: Some(Elastic::Isotropic { young: 1000.0, poisson: 0.3 }),
+            density: Some(1.0),
+            thermal: Some(thermal),
+            ..Material::default()
+        };
+        b.model.add_material(name, material).unwrap();
+        b.model
+            .add_section(name, Section { set: name.into(), material: name.into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
+            .unwrap();
+    }
+    b.model.add_step(Step::new("Step", procedure), None).unwrap();
+    b.face_set("lower_top", &low, |x| near(x[2], 1.0));
+    b.face_set("upper_bottom", &up, |x| near(x[2], 1.0));
+    b.model.add_tie("glue", Tie::new("upper_bottom", "lower_top")).unwrap();
+    b
+}
+
+/// Hold the nodes satisfying `f` at temperature `value` in step "Step".
+fn hold_temperature(b: &mut Blocks, name: &str, value: f64, f: impl Fn([f64; 3]) -> bool) {
+    b.node_set(name, f);
+    b.model.add_boundary_condition(name, BoundaryCondition::Temperature { target: Target::Set(name.into()), value }).unwrap();
+    b.model.set_boundary_condition_active("Step", name, true).unwrap();
+}
+
+fn temperature(r: &fieldcraft_solver::HeatResult, label: u32) -> f64 {
+    r.temperature()[r.nodes.binary_search(&label).unwrap()]
+}
+
+/// Steady conduction through two tied blocks of non-matching meshes, 20 at z = 0 and 100 at
+/// z = 2: with one conductivity the profile is the linear T = 20 + 40 z everywhere, the interface
+/// nodes included, the flux −k ∂T/∂z in every element and the heat flow k A ΔT / L in at the hot
+/// end and out at the cold one (A = 1); with k₁ below and k₂ above, the series-resistance
+/// solution, linear in each block with the kink at the interface temperature
+/// T_i = (k₁ T₀ + k₂ T₁)/(k₁ + k₂) and the heat flow ΔT/(1/k₁ + 1/k₂).
+#[test]
+fn heat_crosses_a_tie_exactly() {
+    for (lower, upper, n, graded, name) in [
+        (ElementKind::Hex8, ElementKind::Hex8, [2, 2, 2], false, "matching hex8"),
+        (ElementKind::Hex8, ElementKind::Hex8, [3, 3, 2], true, "hex8 on graded hex8"),
+        (ElementKind::Tet4, ElementKind::Hex8, [3, 3, 2], false, "hex8 on tet4"),
+        (ElementKind::Hex8, ElementKind::Tet4, [3, 3, 2], true, "tet4 on graded hex8"),
+        (ElementKind::Tet4, ElementKind::Tet4, [3, 3, 2], false, "tet4 on tet4"),
+    ] {
+        for k in [[45.0, 45.0], [10.0, 40.0]] {
+            let mut b = tied_conductor(lower, n, graded, upper, k, Procedure::HeatTransfer { transient: None });
+            hold_temperature(&mut b, "cold", 20.0, |x| near(x[2], 0.0));
+            hold_temperature(&mut b, "hot", 100.0, |x| near(x[2], 2.0));
+            let r = fieldcraft_solver::solve_heat(&b.model, Some("Step"), &Limits::default()).unwrap();
+            assert!(r.warnings.iter().all(|w| !w.contains("stay free")), "{name}: {:?}", r.warnings);
+            let interface = (k[0] * 20.0 + k[1] * 100.0) / (k[0] + k[1]);
+            let q = 80.0 / (1.0 / k[0] + 1.0 / k[1]);
+            let want = |z: f64| if z <= 1.0 { 20.0 + (interface - 20.0) * z } else { interface + (100.0 - interface) * (z - 1.0) };
+            for (l, x) in &b.xyz {
+                let t = temperature(&r, *l);
+                assert!((t - want(x[2])).abs() < 1e-9 * 100.0, "{name} {k:?}: node {l} at {x:?}: {t} vs {}", want(x[2]));
+            }
+            for e in &r.elements {
+                for p in &e.points {
+                    assert!(
+                        (p.flux[2] + q).abs() < 1e-9 * q && p.flux[0].abs() < 1e-9 * q && p.flux[1].abs() < 1e-9 * q,
+                        "{name} {k:?}: element {} {:?}",
+                        e.label,
+                        p.flux
+                    );
+                }
+            }
+            // The heat flow: in at the hot end, out at the cold one, nothing lost at the tie.
+            let flow = |f: &dyn Fn([f64; 3]) -> bool| -> f64 { b.nodes(f).iter().map(|l| r.reaction[r.nodes.binary_search(l).unwrap()]).sum() };
+            assert!((flow(&|x| near(x[2], 2.0)) - q).abs() < 1e-9 * q, "{name} {k:?}: {}", flow(&|x| near(x[2], 2.0)));
+            assert!((flow(&|x| near(x[2], 0.0)) + q).abs() < 1e-9 * q, "{name} {k:?}: {}", flow(&|x| near(x[2], 0.0)));
+            assert!(r.reaction_total.abs() < 1e-9 * q && r.applied_total.abs() < 1e-9 * q, "{name} {k:?}");
+        }
+    }
+}
+
+/// Transient conduction into a bar of two tied blocks (backward Euler, 0 initially, the top held
+/// at 100 from the start): the single-body bar's history to round-off, with matching meshes and
+/// with a graded 3 × 3 lower block (the field varies along the bar alone, which both hexahedral
+/// meshes represent alike, so the tie is the only difference).
+#[test]
+fn transient_heat_through_a_tie_is_the_single_body_s() {
+    let tr = Procedure::HeatTransfer { transient: Some(Transient { theta: 1.0, ..Transient::new(1.0, 0.05) }) };
+    // The single body: one 2 × 2 × 4 block of the same material.
+    let mut single = Blocks::default();
+    let all = single.block(ElementKind::Hex8, [2, 2, 4], |p| [p[0], p[1], 2.0 * p[2]]);
+    single.model.add_set("all", Set { elements: all, ..Set::default() }).unwrap();
+    let thermal = Thermal { conductivity: Some(Directional::Isotropic(1.0)), specific_heat: Some(1.0), ..Thermal::default() };
+    single.model.add_material("Mat", Material { density: Some(1.0), thermal: Some(thermal), ..Material::default() }).unwrap();
+    single
+        .model
+        .add_section("solid", Section { set: "all".into(), material: "Mat".into(), kind: SectionKind::Solid {}, formulation: Formulation::default() })
+        .unwrap();
+    single.model.add_step(Step::new("Step", tr.clone()), None).unwrap();
+    hold_temperature(&mut single, "hot", 100.0, |x| near(x[2], 2.0));
+    let reference = fieldcraft_solver::solve_heat(&single.model, Some("Step"), &Limits::default()).unwrap();
+    let at = |r: &fieldcraft_solver::HeatResult, xyz: &BTreeMap<u32, [f64; 3]>, z: f64| -> f64 {
+        let nodes: Vec<u32> = xyz.iter().filter(|(_, x)| near(x[2], z)).map(|(l, _)| *l).collect();
+        nodes.iter().map(|l| temperature(r, *l)).sum::<f64>() / nodes.len() as f64
+    };
+    for (n, graded) in [([2, 2, 2], false), ([3, 3, 2], true)] {
+        let mut b = tied_conductor(ElementKind::Hex8, n, graded, ElementKind::Hex8, [1.0, 1.0], tr.clone());
+        hold_temperature(&mut b, "hot", 100.0, |x| near(x[2], 2.0));
+        let r = fieldcraft_solver::solve_heat(&b.model, Some("Step"), &Limits::default()).unwrap();
+        assert_eq!(r.times.len(), reference.times.len());
+        for z in [0.0, 0.5, 1.0, 1.5] {
+            let (a, want) = (at(&r, &b.xyz, z), at(&reference, &single.xyz, z));
+            assert!(want > 1.0, "z {z}: the heat reaches it ({want})");
+            assert!((a - want).abs() < 1e-9 * want, "{n:?} z {z}: {a} vs {want}");
+        }
+    }
+}
+
+/// A coupled temperature–displacement step with a tie, held at a uniform 100 above the reference
+/// 0: the temperature is uniform through the tie and both blocks expand freely, u = α ΔT x, with
+/// no stress.
+#[test]
+fn a_tied_body_expands_freely_under_a_uniform_temperature() {
+    let mut b = tied_conductor(ElementKind::Hex8, [3, 3, 2], true, ElementKind::Tet4, [10.0, 40.0], Procedure::CoupledTemperatureDisplacement {});
+    hold_temperature(&mut b, "cold", 100.0, |x| near(x[2], 0.0));
+    hold_temperature(&mut b, "hot", 100.0, |x| near(x[2], 2.0));
+    // Statically determinate supports: the origin fixed, (1, 0, 0) held in y and z, (0, 1, 0) in z.
+    b.bc("o", [Some(0.0), Some(0.0), Some(0.0)], |x| near(x[0], 0.0) && near(x[1], 0.0) && near(x[2], 0.0));
+    b.bc("a", [None, Some(0.0), Some(0.0)], |x| near(x[0], 1.0) && near(x[1], 0.0) && near(x[2], 0.0));
+    b.bc("c", [None, None, Some(0.0)], |x| near(x[0], 0.0) && near(x[1], 1.0) && near(x[2], 0.0));
+    let r = fieldcraft_solver::solve_static(&b.model, Some("Step"), &Limits::default()).unwrap();
+    let temps = r.temperature.clone().unwrap();
+    assert!(temps.iter().all(|t| (t - 100.0).abs() < 1e-9), "{temps:?}");
+    let strain = 1e-5 * 100.0;
+    for (i, l) in r.nodes.iter().enumerate() {
+        let x = b.xyz[l];
+        for (u, x) in r.displacement[i].iter().zip(x) {
+            assert!((u - strain * x).abs() < 1e-9 * strain, "node {l}: {:?}", r.displacement[i]);
+        }
+    }
+    assert!(r.elements.iter().flat_map(|e| &e.nodal).flatten().all(|s| s.abs() < 1e-6), "stress-free");
 }
 
 /// A C-shaped ring of rubber (an annulus of radii 1 and 1.5 with a 10° opening at +x, one hex8

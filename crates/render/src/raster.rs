@@ -215,6 +215,9 @@ pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Canvas,
 /// Depth (of the 0…1 range) an overlay face may lie behind the scene's and still be drawn: it
 /// covers the faces it repeats.
 const OVERLAY_DEPTH: f32 = 2e-4;
+/// The depth bias of lines and points over faces: of the 0…1 range in orthographic views, and
+/// times eight of the distance to the eye in perspective (the GPU shader's `screen.z`).
+const DEPTH_BIAS: f64 = 2e-4;
 
 /// [`render`] with overlays drawn over the scene (the setup's symbols, a selection highlight):
 /// their faces over the scene's faces they coincide with (a highlight repeats the faces it
@@ -245,9 +248,24 @@ pub fn render_layers(scene: &Scene, overlays: &[&Scene], cam: &Camera, w: usize,
     }
     let proj = Projector::new(cam, sw as f64, sh as f64, scene.radius);
     let project = |p: Vec3| proj.screen(p);
+    // Edges, nodes and overlay faces win the depth test against the faces they lie on by a bias
+    // toward the eye, `s` biases of it. Orthographic depth is linear, so a fixed depth offset
+    // is the same everywhere; perspective depth is not (a fixed offset spans a large distance far
+    // from the near plane, which let hidden edges show through, #282), so the point is moved
+    // toward the eye by a fraction of its distance instead, as the GPU shader does.
+    let eye = cam.eye();
+    let biased = |p: Vec3, s: f64| -> Option<[f64; 3]> {
+        let mut q = project(p)?;
+        if cam.fov > 0.0 {
+            q[2] = project(p + (eye - p) * (DEPTH_BIAS * 8.0 * s))?[2] + DEPTH_BIAS;
+        }
+        Some(q)
+    };
     let view_dir = cam.back();
-    for (t, allowance) in scene.tris.iter().map(|t| (t, 0.0)).chain(overlays.iter().flat_map(|o| &o.tris).map(|t| (t, OVERLAY_DEPTH))) {
-        let (Some(a), Some(b), Some(cc)) = (project(t.p[0]), project(t.p[1]), project(t.p[2])) else { continue };
+    for (t, overlay) in scene.tris.iter().map(|t| (t, false)).chain(overlays.iter().flat_map(|o| &o.tris).map(|t| (t, true))) {
+        let corner = |p: Vec3| if overlay { biased(p, 0.5) } else { project(p) };
+        let (Some(a), Some(b), Some(cc)) = (corner(t.p[0]), corner(t.p[1]), corner(t.p[2])) else { continue };
+        let allowance = if overlay { OVERLAY_DEPTH } else { 0.0 };
         let col = shade(t.normal, view_dir, t.color.f());
         raster_tri(a, b, cc, sw, sh, |x, y, z| {
             if let Some(d) = c.depth.get_mut(y * sw + x)
@@ -260,7 +278,7 @@ pub fn render_layers(scene: &Scene, overlays: &[&Scene], cam: &Camera, w: usize,
     }
     let layers = || std::iter::once(scene).chain(overlays.iter().copied());
     let line = |c: &mut Canvas, l: &SceneLine, depth_test: bool| {
-        let (Some(a), Some(b)) = (project(l.a), project(l.b)) else { return };
+        let (Some(a), Some(b)) = (biased(l.a, 1.0), biased(l.b, 1.0)) else { return };
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
         let steps = if len.is_finite() { (len.ceil() as usize).clamp(1, MAX_LINE_STEPS) } else { return };
         let col = l.color.f();
@@ -274,7 +292,7 @@ pub fn render_layers(scene: &Scene, overlays: &[&Scene], cam: &Camera, w: usize,
         line(&mut c, l, true);
     }
     for p in layers().flat_map(|s| &s.points) {
-        if let Some(q) = project(p.p) {
+        if let Some(q) = biased(p.p, 1.0) {
             dot(&mut c, q, p.size * SS as f64, p.color.f(), false, true);
         }
     }
@@ -466,6 +484,25 @@ mod tests {
         let (x, y, _) = cam.to_screen(Vec3::new(0.0, 0.0, 5.0), 64.0, 64.0, 20.0).unwrap();
         let p = px(&c, x as usize, y as usize);
         assert!(p[2] > 200 && p[0] < 60, "{p:?}");
+    }
+
+    /// In perspective, close to the part (the near plane at its smallest), a line a little
+    /// behind a face stays hidden and one on it shows (#282).
+    #[test]
+    fn perspective_hides_lines_behind_faces() {
+        let mut scene = red_triangle();
+        scene.radius = 40.0;
+        let mut cam = Camera { distance: 30.0, fov: 0.6, ..Default::default() };
+        cam.set_view(StandardView::Front);
+        let px = |c: &Canvas| c.rgba[(32 * c.w + 32) * 4..(32 * c.w + 32) * 4 + 3].to_vec();
+        // Front view looks along +y: y = 1 is behind the face, 3 % of the distance.
+        scene.lines.push(SceneLine { a: Vec3::new(-10.0, 1.0, 0.0), b: Vec3::new(10.0, 1.0, 0.0), color: Rgb(0, 0, 0), width: 3.0 });
+        let behind = render(&scene, &cam, 64, 64).unwrap();
+        assert!(px(&behind)[0] > 150, "hidden: {:?}", px(&behind));
+        scene.lines[0].a.y = 0.0;
+        scene.lines[0].b.y = 0.0;
+        let on = render(&scene, &cam, 64, 64).unwrap();
+        assert!(px(&on)[0] < 60, "on the face: {:?}", px(&on));
     }
 
     /// An overlay face repeating a scene face covers it; one behind another face does not show.

@@ -330,6 +330,9 @@ struct PlotKey {
 
 /// A datum form's datum and what it was worked out for (revision, command, form text).
 type DatumPreview = (Option<(u64, &'static str, String)>, Option<fieldcraft_model::Datum>);
+/// The nodes the open Merge Nodes form would merge (both of each pair), and the revision and form
+/// text they are for.
+type MergePreview = (Option<(u64, String)>, Arc<Vec<u32>>);
 
 /// A screenshot asked for over the control channel.
 struct Shot {
@@ -351,6 +354,7 @@ pub struct ModelApp {
     pub dialog: Option<ParamsDialog>,
     /// The datum the open form defines, and the revision, command and form text it is for.
     preview: std::cell::RefCell<DatumPreview>,
+    merge_preview: std::cell::RefCell<MergePreview>,
     /// Forms opened so far (numbers each [`ParamsDialog::opening`]).
     forms_opened: u64,
     pub viewport: Viewport,
@@ -488,6 +492,7 @@ impl ModelApp {
             status: None,
             dialog: None,
             preview: Default::default(),
+            merge_preview: Default::default(),
             forms_opened: 0,
             viewport: Viewport::default(),
             icons: icons::IconCache::default(),
@@ -622,6 +627,12 @@ impl ModelApp {
             && let Ok(v) = &r
         {
             self.reactions = Some(v.clone());
+        }
+        // What the duplicate check found is selected, so the viewport shows it (#234).
+        if id == "mesh.check.duplicates"
+            && let Ok(v) = &r
+        {
+            self.select_duplicates(v);
         }
         if r.is_ok() && (changed || display) {
             self.follow_stage(id);
@@ -1130,6 +1141,22 @@ impl ModelApp {
         self.pick.names.iter().zip(sides).filter(|(_, s)| s.0 && s.1).map(|(b, _)| b.name.clone()).collect()
     }
 
+    /// The nodes the open Merge Nodes form would merge, both of each pair, drawn before OK.
+    /// Worked out once per form text and model revision (the search covers the whole mesh).
+    pub fn merge_preview(&self) -> Arc<Vec<u32>> {
+        let Some(d) = self.dialog.as_ref().filter(|d| d.command == "mesh.node.merge") else { return Arc::default() };
+        let key = (self.revision, d.text.clone());
+        let mut cache = self.merge_preview.borrow_mut();
+        if cache.0.as_ref() != Some(&key) {
+            let pairs = serde_json::from_str::<Value>(&d.text).ok().and_then(|p| fieldcraft_engine::cmd::node_merge_preview(&self.session, &p));
+            let mut nodes: Vec<u32> = pairs.unwrap_or_default().into_iter().flatten().collect();
+            nodes.sort_unstable();
+            nodes.dedup();
+            *cache = (Some(key), Arc::new(nodes));
+        }
+        cache.1.clone()
+    }
+
     /// The datum the open datum form defines so far, drawn before OK.
     /// Worked out once per form text and model revision (a face centre costs a design query).
     fn datum_preview(&self) -> Option<fieldcraft_model::Datum> {
@@ -1375,7 +1402,8 @@ impl ModelApp {
         let scene = self.scene_key();
         let set = self.selected_set();
         let cut = self.partition_preview();
-        let selected = hash(&|h| (scene, self.pick.generation, &set, &cut).hash(h));
+        let merge = self.merge_preview();
+        let selected = hash(&|h| (scene, self.pick.generation, &set, &cut, &*merge).hash(h));
         let key = hash(&|h| (selected, self.pick.hover_generation).hash(h));
         if self.pick.overlay.0 == Some(key) {
             return (key, self.pick.overlay.1.clone());
@@ -1405,6 +1433,12 @@ impl ModelApp {
                 s.tris.extend(m.tris);
                 s.lines.extend(m.lines);
             }
+            // The nodes the open Merge Nodes form would merge (#234).
+            if !merge.is_empty() {
+                let items: Vec<selection::Item> = merge.iter().map(|&n| selection::Item::Node(n)).collect();
+                let m = self.with_picker(|p| p.items_overlay(&items, theme::rgb(t.pick_hover)));
+                s.points.extend(m.points);
+            }
             self.pick.selected_overlay = (Some(selected), Arc::new(s));
         }
         let mut s = (*self.pick.selected_overlay.1).clone();
@@ -1432,6 +1466,25 @@ impl ModelApp {
             self.selected_mesh = false;
         }
         self.selected = selected;
+    }
+
+    /// Select what `mesh.check.duplicates` reported: the coincident nodes, the repeated elements
+    /// and the faces of cracks.
+    fn select_duplicates(&mut self, v: &Value) {
+        let label = |x: &Value| x.as_u64().and_then(|l| u32::try_from(l).ok());
+        let mut items: Vec<selection::Item> = Vec::new();
+        for pair in v["coincident"].as_array().into_iter().flatten() {
+            items.extend(pair.as_array().into_iter().flatten().take(2).filter_map(label).map(selection::Item::Node));
+        }
+        for group in v["duplicate_elements"].as_array().into_iter().flatten() {
+            items.extend(group.as_array().into_iter().flatten().filter_map(label).map(selection::Item::Element));
+        }
+        items.extend(v["cracks"].as_array().into_iter().flatten().filter_map(|f| serde_json::from_value(f.clone()).ok()).map(selection::Item::Face));
+        if items.is_empty() {
+            self.clear_selection();
+        } else {
+            self.select(items, selection::Mode::Replace);
+        }
     }
 
     /// Select the Mesh node in the browser: how the current mesh was made, on the right.
@@ -2195,6 +2248,30 @@ mod tests {
         app.ui.select_tab(Tab::Properties);
         app.start("model.units").unwrap();
         assert_eq!(app.ui.tab, Tab::Properties);
+    }
+
+    /// Two blocks meshed apart: the Merge Nodes form shows the nodes it would merge before OK,
+    /// and Check Duplicates selects what it finds (#234).
+    #[test]
+    fn node_merge_previews_and_the_duplicate_check_selects() {
+        let mut app = ModelApp::new(Session::default());
+        for (body, x0) in [("A", 0.0), ("B", 1.0)] {
+            let x1 = x0 + 1.0;
+            let c = [[x0, 0., 0.], [x1, 0., 0.], [x1, 1., 0.], [x0, 1., 0.], [x0, 0., 1.], [x1, 0., 1.], [x1, 1., 1.], [x0, 1., 1.]];
+            app.run("mesh.block", json!({"body": body, "kind": "hex8", "corners": c, "divisions": [1, 1, 1], "merge": 0})).unwrap();
+        }
+        assert!(app.merge_preview().is_empty(), "no form open");
+        app.start("mesh.node.merge").unwrap();
+        assert_eq!(app.merge_preview().len(), 8, "four pairs on x = 1");
+        let (_, overlay) = app.overlay();
+        assert!(!overlay.points.is_empty());
+        app.dialog = None;
+        app.run("mesh.check.duplicates", json!({})).unwrap();
+        assert_eq!(app.pick.selection.len(), 8 + 2, "the coincident nodes and the two crack faces");
+        app.run("mesh.node.merge", json!({})).unwrap();
+        assert_eq!(app.session.model.nodes().len(), 12);
+        app.run("mesh.check.duplicates", json!({})).unwrap();
+        assert!(app.pick.selection.is_empty());
     }
 
     /// Mesh Quality reads as a sentence in the status bar, not as its JSON report.

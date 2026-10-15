@@ -188,7 +188,6 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
         pick_save: Some(Box::new(|name: &str, _: &[Filter]| Some(page_path(name)))),
         // The recent list holds the page's files, which go with the page.
         recent_path: None,
-        prefs_path: None,
     }
 }
 

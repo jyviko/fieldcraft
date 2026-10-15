@@ -95,7 +95,6 @@ fn services() -> Services {
         })),
         // Beside the recovery folder in the per-user data folder.
         recent_path: fieldcraft_io::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("recent.json"))),
-        prefs_path: fieldcraft_io::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("prefs.json"))),
     }
 }
 

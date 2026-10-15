@@ -346,8 +346,8 @@ mod tests {
     fn the_display_follows_the_commands_and_is_not_an_edit() {
         let mut s = solved();
         let (journal, revision) = (s.journal.len(), s.revision());
-        // Solving showed the first solved step.
-        assert_eq!(s.results_view.as_ref().map(|v| (v.step.as_str(), v.contour)), Some(("Bend", Some(Field::VonMises))));
+        // Solving showed the first solved step, a static one: contours on the undeformed shape.
+        assert_eq!(s.results_view.as_ref().map(|v| (v.step.as_str(), v.contour, v.deformed)), Some(("Bend", Some(Field::VonMises), false)));
         s.execute("results.clear", &json!({})).unwrap();
         let r = s.execute("results.contour", &json!({"field": "von_mises"})).unwrap();
         assert_eq!(r["view"]["step"], "Bend", "{r}");
@@ -364,7 +364,7 @@ mod tests {
         let r = s.execute("results.modes", &json!({"mode": 3})).unwrap();
         assert_eq!((r["view"]["step"].as_str(), r["view"]["mode"].as_u64()), (Some("Modes"), Some(3)));
         assert_eq!(r["modes"].as_array().map(Vec::len), Some(4));
-        assert_eq!(s.results_view.as_ref().and_then(|v| v.contour), Some(Field::Displacement));
+        assert_eq!(s.results_view.as_ref().map(|v| (v.contour, v.deformed)), Some((Some(Field::Displacement), true)), "a mode shape is deformed");
         assert!(s.execute("results.contour", &json!({"field": "von_mises"})).is_err());
         s.execute("results.contour", &json!({"field": "displacement", "bands": 6})).unwrap();
         s.execute("results.animate", &json!({})).unwrap();

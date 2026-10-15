@@ -266,7 +266,8 @@ mod tests {
         s.execute("solve.static", &json!({})).unwrap();
         let (plot, shown) = render_png(&s, &iso, 64, 48, &Palette::LIGHT).unwrap();
         assert_ne!(model, plot);
-        assert!(shown.scale > 0.0 && shown.step.is_some(), "{shown:?}");
+        // A static step first shows its contours on the undeformed shape.
+        assert!(shown.scale == 0.0 && shown.step.is_some(), "{shown:?}");
         let (field, min, max) = shown.contour.unwrap();
         assert_eq!(field, "von_mises");
         assert!(max.1 > min.1);

@@ -1693,7 +1693,8 @@ mod tests {
         app.start("solve.static").unwrap();
         app.run_dialog().unwrap();
         let view = app.session.results_view.clone().unwrap();
-        assert_eq!((view.step.as_str(), view.contour, view.deformed), ("Load", Some(fieldcraft_engine::results::Field::VonMises), true));
+        // A static step first shows its contours on the undeformed shape (#77).
+        assert_eq!((view.step.as_str(), view.contour, view.deformed), ("Load", Some(fieldcraft_engine::results::Field::VonMises), false));
         app.logic(&egui::Context::default());
         assert_eq!(app.ui.tab, Tab::Results);
         app.run("solve.frequency", json!({})).unwrap();

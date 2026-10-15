@@ -105,7 +105,7 @@ foot's end. Linear static: about 2 s to open (the cells are rebuilt from the scr
 solve.
 
 **Look at:** the mesh (Prepare ▸ Mesh) — mapped blocks meeting face to face with no pyramids or
-tets — and the von Mises contours on the deformed shape: the stress runs round the fillet and
+tets — and the von Mises contours (tick Deformed for the deformed shape): the stress runs round the fillet and
 peaks at 295 MPa at the upright's hole.
 
 **Check:** the tip of the foot moves 0.509 mm down, within 1 % of a 48 016-element tet10

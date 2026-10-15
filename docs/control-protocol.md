@@ -30,7 +30,7 @@ checked and clamped (drag steps, wheel lines, window size); `ui.render` refuses 
 
 Commands never open forms or file pickers when run this way. `fieldcraft-cli commands` prints the
 same registry. `file.sample {name}` opens a sample (`parts`, `cantilever`, `impact`) and
-`solve.run {}` solves every step; the Results workspace comes up when a result appears. The
+`solve.run {}` solves every step; the Results workspace comes up when a result appears (a static step with its contours on the undeformed shape: `results.deformed {}` shows the deformed shape). The
 ribbon follows the commands run here, as it does for scripts, MCP, the command search and the
 browser: a command that changes the model or the results display brings the tab where its
 toolbar entry lives (Mesh for `mesh.*`, Properties, Steps, Loads & BCs… for `model.*`, Solve,

@@ -268,9 +268,11 @@ pub struct ResultsView {
 }
 
 impl ResultsView {
-    /// How a step's result is shown first: deformed, with von Mises contours for a static step
-    /// (and an explicit step that kept stresses), the first mode with displacement contours for
-    /// a frequency step; an explicit step at its last frame, to true scale.
+    /// How a step's result is shown first: a static step undeformed with von Mises contours, so
+    /// they are read on the true geometry (`results.deformed` shows the deformed shape, at the
+    /// automatic scale); a frequency step's first mode deformed with displacement contours (a
+    /// mode shape is a deformation); an explicit step at its last frame, deformed to true scale
+    /// (with von Mises contours when it kept stresses); a heat step undeformed.
     pub fn for_result(r: &StepResult) -> ResultsView {
         let heat = matches!(r.kind(), Kind::Heat(_));
         let contour = if heat {
@@ -283,7 +285,7 @@ impl ResultsView {
         let scale = matches!(r.kind(), Kind::Explicit(_)).then_some(1.0);
         ResultsView {
             step: r.step().to_string(),
-            deformed: !heat,
+            deformed: matches!(r.kind(), Kind::Frequency(_) | Kind::Explicit(_)),
             scale,
             contour: Some(contour),
             bands: DEFAULT_BANDS,

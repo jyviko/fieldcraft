@@ -150,6 +150,11 @@ fn main() -> eframe::Result {
             std::process::exit(2);
         }
     };
+    if args.control.is_some() {
+        // A run driven by automation keeps its autosaves (and recent files and preferences, which
+        // live beside them) in a temporary folder, never the user's.
+        fieldcraft_io::recovery::use_automation_dir();
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("FieldCraft")

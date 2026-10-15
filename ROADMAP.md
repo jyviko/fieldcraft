@@ -54,6 +54,43 @@ pressure) is a degree of freedom of the existing DOF framework, not a separate s
 | Continuous: performance | CPU first, deterministic: results never depend on the thread count (fixed partitions, sums in a fixed order; checked by hashing results on 1, 2 and 7 threads). Supernodal left-looking Cholesky (11–15× faster than the column solver on one thread), parallel element matrices, stresses and Lanczos products, explicit element updates and LBM cell blocks on rayon threads (done — `fieldcraft-parallel`, `threads` on the solve commands, `FIELDCRAFT_THREADS`); parallel forward/back substitution and explicit tet4 assembly; GPU paths later, within a stated tolerance of the CPU | started |
 | Continuous: desktop and agents | Desktop app (viewport, model tree, commands, control channel, the open design drawn, `ui.capture` of the whole window offscreen: done; toolbar of every capability from the catalogue, ready or coming soon with its milestone, icons drawn with VectorCraft, docs/features.md: done; the Craft-family shell — title bar, workspaces and ribbon drop-downs, browser, context panel, command search, journal timeline, light and dark themes — native file pickers with background opening, drag and drop and recent files, samples and one-click Solve, and an examples gallery of ready-to-solve samples, each checked by a test (docs/examples.md): done; MCP server over stdio, headless or bridged to the app, with read and write roots, docs/mcp.md: done; caps labels in Inter SemiBold; the README's analysis video recorded through MCP by `tools/demo-video`: done; support, load, reference-point and coupling symbols in the viewport and headless renders, with their browser toggles: done; symbols as wireframes, one mark per constrained degree of freedom, a constant size on screen with a size setting, highlighted with their selected definition, concentrated loads drawn over the part: done; selection by picking in the viewport — geometry faces, edges, vertices and bodies, mesh nodes, element faces and elements, box selection, hover, a Target row in command forms, `ui.select`/`ui.selection` and MCP `select`: done; a camera parameter for screenshots, a ribbon that follows the command being run: in progress; the browser build — the same app in a web page with browser file pickers, downloads, drops and autosave to browser storage, deployed to GitHub Pages from each release, docs/web.md: done; in-app updates — a daily check of GitHub Releases, Help › Check for Updates and Reinstall, downloads verified against the release key's signature of SHA256SUMS.txt and swapped in after closing, `app.update.check`, `fieldcraft-cli update`, Reload to update in the browser, docs/updates.md: done), command schema as the public API | started |
 
+## 0.6.0: the UI/UX release
+
+What landed for 0.6.0 (milestone 0.6.0 on GitHub):
+
+- **Browser:** status checks in one aligned column, Interactions counting ties, a selected set
+  highlighted in the viewport, seeds selectable, editable and deletable, definitions shown with
+  units instead of raw JSON, one highlighted item per context menu, given names shown as typed,
+  and a setup checklist that does not ask for a load on a displacement-driven model or for a
+  support or load on a free body in explicit dynamics (#315, #335, #336, #352, #356, #361, #366).
+- **Results:** units on every legend, summary, probe and reaction sum; legend ranges that can be
+  clamped; max and min markers in the viewport; an energies plot with axes and the current frame;
+  the deformed shape kept when the field changes; a sensible auto scale for large strains; setup
+  symbols off over contours; heat flow through each convection and flux load; probe and reaction
+  results exported to CSV (#92, #191, #319, #321, #325–#332, #362).
+- **Forms, progress and jobs:** solves and meshers run as jobs with their step, stage, count and
+  elapsed time and a Cancel that interrupts every solver and mesher; the control channel and MCP
+  wait for a long solve; mesher forms report what they made; typed fields for label lists, point
+  lists, multi-choices and number-or-auto, JSON fields with hints, defaults shown as set; forms
+  without orphan sets on Cancel; unknown parameters refused (#169, #316, #322–#324, #337, #339,
+  #340, #353, #357, #367, #371).
+- **Picking and preparation:** vertices pickable, selected edges visible over the mesh, a
+  reference point placed by a pick or a hole's centre, Seed Edges switching the filter to edges,
+  live previews and default names for datums and partitions, readable partition cell names, the
+  Partitioned Mesh form with picks and per-cell methods, a mesh marked out of date when its seeds
+  or partitions change, remeshing from the current mesh's settings (#338, #341–#349, #351).
+- **UI conveniences:** File › New (`file.new`), Help › Crash Reports, the I-beam sample, every
+  sample with a Start-card thumbnail and a gallery capture, node tools (merge, duplicates, free
+  edges, renumber), the mesh quality panel's histograms and worst elements, Mirror Mesh and Mesh
+  Block on the ribbon, Rigid Wall in Interactions, readable journal entries and status messages,
+  a sample's name on its document tab, the web build naming an unknown sample (#113, #143, #144,
+  #200, #234, #300, #333, #334, #348, #350, #354, #355, #359, #360, #365).
+- **Mesh soundness:** tet improvement that no longer crowds one vertex, hex20 extrudes that pass
+  the validity gate where hex8 does, biased seeds carried to the opposite edge of a mapped face,
+  designs with a closed internal void and face names over 256 characters meshed (#197, #257,
+  #311, #364, #374).
+- **Heat:** heat transfer across ties for bonded multi-body thermal models (#358).
+
 ## Next
 
 In progress, in this order of landing:

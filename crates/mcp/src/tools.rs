@@ -24,6 +24,11 @@ const MESHERS: &[(&str, &str, &str)] = &[
         "mesh.cells",
         "one mesh of a partitioned part, each cell with its own method {methods: {cell: method}, default, size, order}; cells joined across partitions (merged or tied)",
     ),
+    (
+        "hex_extrude",
+        "mesh.hex.extrude",
+        "hex layers from a section (faces, a neighbour's mesh or a 2D mesh) up to a target surface {source | source_set, to_surface, sides, direction | normal, layers | size, bias, body}",
+    ),
     ("mirror", "mesh.mirror", "reflect meshed bodies across a datum plane and join them on it {plane, bodies}"),
     ("block", "mesh.block", "structured hex block"),
     (

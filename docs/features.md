@@ -14,7 +14,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 |---|---|---|---|
 | Import | Open Design — Open a SolidCraft design: its bodies with persistent face names | ready | `geometry.open` |
 | Import | Tagged Mesh — Read a face-tagged surface mesh (3MF) | ready | `geometry.import.mesh` |
-| Inspect | Bodies — List the open design's bodies, volumes and named faces, edges and vertices | ready | `geometry.bodies`, `geometry.centre`, `geometry.features` |
+| Inspect | Bodies — List the open design's bodies, volumes and named faces, edges and vertices | ready | `geometry.bodies`, `geometry.centre` |
 | Inspect | Tessellate — Tessellate a body into a face-tagged boundary surface | ready | `geometry.tessellate` |
 | Inspect | Check Surface — Weld, closed, manifold, orientation and self-intersection checks; feature edges | ready | `mesh.surface.check` |
 | Prepare | Datum Plane — A datum plane: principal plane and offset, three points or datum points, point and normal, normal to an axis | ready | `geometry.datum`, (`geometry.datum.edit`), (`geometry.datum.delete`), (`geometry.datum.suppress`) |
@@ -37,7 +37,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Structured Hex | Quad Faces — All-quad meshes of faces on shared edge nodes | coming soon (M5) |  |
 | Structured Hex | Hex Mesh — Structured hex mesh of a body: automatic, or extruded, swept, revolved or mapped (the Method drop-down) | ready | `mesh.hex.generate`, (`mesh.hex.sweep`), (`mesh.hex.mapped`) |
 | Structured Hex | Partitioned Mesh — One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions | ready | `mesh.cells`, (`mesh.hex.blocks`) |
-| Structured Hex | Mesh Plan — A hex-meshing plan from the features that built a body (sweeps, blocks, O-grids, layers, imprints, copies); saved, editable, applied with the structured meshers | ready | `mesh.plan`, `mesh.plan.apply` |
+| Structured Hex | Extrude to Surface — Hex layers from a meshed or planar section up to a curved target surface, following the side faces | ready | `mesh.hex.extrude` |
 | Structured Hex | Mesh Block — A mapped block of hex, wedge or quad elements between corner points; projection blocking (a block topology projected onto the part) | ready | `mesh.block`, `mesh.hex.project` |
 | Structured Hex | Decompose — Find sweepable and mappable regions of 3D parts (extruded cross-sections are already cut into blocks by Hex Mesh) | coming soon (M5) |  |
 | Structured Hex | Transition — Conforming tet–hex interfaces with pyramids | coming soon (M5) |  |

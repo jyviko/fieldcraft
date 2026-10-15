@@ -332,6 +332,13 @@ pub static CATALOGUE: &[Capability] = &[
         "One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions",
         &["mesh.hex.blocks"],
     ),
+    ready(
+        "mesh.hex.extrude",
+        "Extrude to Surface",
+        Mesh,
+        "Structured Hex",
+        "Hex layers from a meshed or planar section up to a curved target surface, following the side faces",
+    ),
     ready_more(
         "mesh.plan",
         "Mesh Plan",

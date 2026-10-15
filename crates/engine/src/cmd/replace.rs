@@ -132,6 +132,7 @@ pub static MESHERS: &[(&str, Targets)] = &[
     ("mesh.cells", listed_or_all),
     ("mesh.plan.apply", super::plan::plan_bodies),
     ("mesh.planar", super::mesh::planar_body),
+    ("mesh.hex.extrude", super::extrude::extrude_body),
     ("mesh.mirror", super::mirror::image_names),
 ];
 
@@ -174,7 +175,7 @@ fn made_kind(command: &str, params: &Value) -> Option<ElementKind> {
             Some(if params.get("order").and_then(Value::as_str) == Some("quadratic") { ElementKind::Tet10 } else { ElementKind::Tet4 })
         }
         "mesh.hex.project" => Some(ElementKind::Hex8),
-        "mesh.hex.generate" | "mesh.hex.sweep" | "mesh.hex.mapped" | "mesh.hex.blocks" | "mesh.plan.apply" => {
+        "mesh.hex.generate" | "mesh.hex.sweep" | "mesh.hex.mapped" | "mesh.hex.blocks" | "mesh.plan.apply" | "mesh.hex.extrude" => {
             Some(if params.get("order").and_then(Value::as_i64) == Some(2) { ElementKind::Hex20 } else { ElementKind::Hex8 })
         }
         _ => None,
@@ -305,6 +306,16 @@ mod tests {
         let tet_other = json!({"command": "mesh.tet.generate", "params": {"body": "Box.2", "size": 5}});
         let hex_box = json!({"command": "mesh.hex.generate", "params": {"body": "Box.1", "size": 2.5}});
         let square = json!([[0, 0], [10, 0], [10, 10], [0, 10]]);
+        // Box.1's bottom and top faces, for the extrusion between them.
+        let (_probe_dir, probe) = two_boxes();
+        let face = |nz: f64| {
+            let b = probe.design.as_deref().and_then(|d| d.body("Box.1")).unwrap();
+            let surfaces = b.face_surfaces().unwrap();
+            let i =
+                surfaces.iter().position(|f| matches!(f, Some(fieldcraft_geometry::FaceSurface::Plane { normal, .. }) if normal[2] == nz)).unwrap();
+            json!({"body": "Box.1", "face": b.faces()[i].name})
+        };
+        let extrude = json!({"source": [face(-1.0)], "to_surface": [face(1.0)], "direction": [0, 0, 1], "layers": 4, "size": 2.5});
         let cases: Vec<(&str, Vec<Value>, Value, &str, &str)> = vec![
             ("mesh.tet.generate", vec![tet_other.clone()], json!({"body": "Box.1", "size": 4}), "Box.1", "Box.2"),
             ("mesh.hex.generate", vec![tet_other.clone()], json!({"body": "Box.1", "size": 2.5}), "Box.1", "Box.2"),
@@ -321,6 +332,7 @@ mod tests {
                 "Box.1",
                 "Box.2",
             ),
+            ("mesh.hex.extrude", vec![tet_other.clone()], extrude, "Box.1", "Box.2"),
             ("mesh.planar", vec![tet_other.clone()], json!({"polygon": square, "size": 2.5, "name": "Box.1"}), "Box.1", "Box.2"),
             // The image's tets (meshed before) are replaced by the mirrored hexahedra.
             (

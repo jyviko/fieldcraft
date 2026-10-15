@@ -1199,6 +1199,33 @@ pub const HEX_OCTREE: &[Field] = &[
     FEATURE_ANGLE,
 ];
 
+/// A face by body and persistent name, a row of a face list.
+const FACE_ROW: &[Field] = &[
+    reference("body", "Body", C::Body).help("A body of the open design.").req(),
+    text("face", "Face").help("A persistent face name of the body (e.g. F3).").req().hint("persistent face name"),
+];
+const fn face_rows(key: &'static str, label: &'static str) -> Field {
+    rows(key, label, FACE_ROW)
+}
+
+pub const HEX_EXTRUDE: &[Field] = &[
+    face_rows("source", "Source")
+        .help("The section: faces already meshed (by this body or a neighbour, whose nodes are shared), or one planar face meshed here. Pick it, then Use as source.")
+        .hint("pick the source face"),
+    reference("source_set", "Source set", C::Set).help("Instead of Source: a set of quadrilaterals (a 2D mesh, or hex element faces)."),
+    face_rows("to_surface", "Target surface")
+        .help("The faces the last layer lies on. Pick them, then Use as target surface.")
+        .req()
+        .hint("pick the target surface"),
+    face_rows("sides", "Side faces").help("The faces the section's sides follow (they need not be straight); straight paths when empty.").hint("straight sides"),
+    xyz("direction", "Direction", D::None).help("The direction every node moves along; along the section's normal toward the target when empty.").hint("the section's normal"),
+    int("layers", "Layers", 1, 10_000).help("The number of element layers; from Size when empty.").hint("from the size"),
+    positive("size", "Size", D::Length).help("Layer thickness, and the element size of a section meshed here.").hint("1/25 of the body"),
+    range("bias", "Bias", D::None, 0.001, 1000.0).help("The last layer's thickness over the first's: below 1 grades toward the target, above 1 toward the source.").def("1"),
+    reference("body", "Body", C::Body).help("The body the elements fill; its mesh is replaced.").hint("the source face's body"),
+    TOLERANCE,
+];
+
 pub const BLOCK: &[Field] = &[
     text("body", "Body").help("Name of the new block body.").req().def("\"Block\""),
     choice(

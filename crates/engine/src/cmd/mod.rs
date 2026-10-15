@@ -8,6 +8,7 @@ pub(crate) mod deck;
 pub(crate) mod define;
 pub mod diagnostics;
 mod edit;
+mod extrude;
 pub(crate) mod file;
 pub(crate) mod forms;
 mod geometry;
@@ -84,6 +85,7 @@ pub static ALL: &[CommandSpec] = &[
     hex::HEX_MAPPED,
     hex::HEX_BLOCKS,
     project::HEX_PROJECT,
+    extrude::HEX_EXTRUDE,
     cells::CELLS,
     plan::PLAN,
     plan::APPLY,

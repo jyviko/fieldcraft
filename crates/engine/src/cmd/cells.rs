@@ -77,7 +77,10 @@ enum Meshed<'a> {
 fn cells(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("default").and_then(Value::as_str) == Some("blocks") {
         if p.get("methods").is_some_and(|m| m.as_object().is_none_or(|o| !o.is_empty())) {
-            return Err(EngineError::param("methods", "must be empty with \"default\": \"blocks\" (every cell a block)"));
+            return Err(EngineError::param(
+                "methods",
+                crate::schema::ProblemKind::Invalid("must be empty with \"default\": \"blocks\" (every cell a block)".into()),
+            ));
         }
         return super::hex::hex_blocks(s, p);
     }

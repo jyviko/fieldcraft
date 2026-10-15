@@ -33,6 +33,9 @@ pub struct Field {
     pub default: Option<&'static str>,
     /// What an empty field means ("every body", "1/25 of the diagonal"), or a short note.
     pub hint: &'static str,
+    /// What the field means, in a sentence or two, with a typical value: the form's tooltip and
+    /// the JSON Schema description. The unit is added from the field's dimension ([`Field::help_text`]).
+    pub help: &'static str,
 }
 
 /// What a field holds.
@@ -213,6 +216,43 @@ pub enum Dim {
 }
 
 impl Dim {
+    /// The dimension's name ("stress", "length"); `None` for [`Dim::None`].
+    pub fn name(self) -> Option<&'static str> {
+        Some(match self {
+            Dim::None => return None,
+            Dim::Length | Dim::Millimetre => "length",
+            Dim::Area => "area",
+            Dim::Stress => "stress",
+            Dim::Density => "density",
+            Dim::Force => "force",
+            Dim::Moment => "moment",
+            Dim::Mass => "mass",
+            Dim::Inertia => "rotary inertia",
+            Dim::Time => "time",
+            Dim::Velocity => "velocity",
+            Dim::Acceleration => "acceleration",
+            Dim::AngularVelocity => "angular velocity",
+            Dim::Stiffness => "stiffness",
+            Dim::Damping => "damping",
+            Dim::Viscosity => "viscosity",
+            Dim::ForcePerVolume => "force per volume",
+            Dim::Power => "power",
+            Dim::HeatFlux => "heat flux",
+            Dim::FilmCoefficient => "film coefficient",
+            Dim::Conductivity => "conductivity",
+            Dim::SpecificHeat => "specific heat",
+            Dim::Expansion => "expansion",
+            Dim::Temperature => "temperature",
+            Dim::Degree => "angle",
+            Dim::Hertz => "frequency",
+        })
+    }
+
+    /// Whether its unit follows the model's unit system (a fixed unit such as degrees does not).
+    pub fn follows_system(self) -> bool {
+        self.name().is_some() && self.unit(UnitSystem::Unspecified).is_none()
+    }
+
     /// Its unit in `system`, or `None` (no unit, or the system is unspecified).
     pub fn unit(self, system: UnitSystem) -> Option<String> {
         let fixed = match self {
@@ -266,7 +306,7 @@ impl Dim {
 // ---- Building fields (const, so schemas are static tables) ----
 
 const fn field(key: &'static str, label: &'static str, kind: Kind) -> Field {
-    Field { key, label, kind, required: false, default: None, hint: "" }
+    Field { key, label, kind, required: false, default: None, hint: "", help: "" }
 }
 
 impl Field {
@@ -282,7 +322,51 @@ impl Field {
     pub const fn hint(self, hint: &'static str) -> Field {
         Field { hint, ..self }
     }
+    /// What it means ([`Field::help`]).
+    pub const fn help(self, help: &'static str) -> Field {
+        Field { help, ..self }
+    }
+
+    /// Its physical dimension, for a number or a vector of numbers.
+    pub fn dim(&self) -> Option<Dim> {
+        match self.kind {
+            Kind::Number { dim, .. } | Kind::Vector { dim, .. } => Some(dim),
+            _ => None,
+        }
+    }
+
+    /// What its value is measured in, as a form shows it: the unit in `system` ("MPa"), or, with
+    /// no unit system, the dimension in brackets ("[stress]"). `None` for a number without a unit.
+    pub fn unit_label(&self, system: UnitSystem) -> Option<String> {
+        let dim = self.dim()?;
+        dim.unit(system).or_else(|| dim.name().map(|n| format!("[{n}]")))
+    }
+
+    /// The help as the form's tooltip shows it: [`Field::help`] and the unit (or, with no unit system, the dimension and where to set the system).
+    pub fn help_text(&self, system: UnitSystem) -> String {
+        let mut out = self.help.to_string();
+        let mut line = |s: String| {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&s);
+        };
+        if let Some(dim) = self.dim() {
+            match (dim.unit(system), dim.name()) {
+                (Some(u), _) => line(format!("Unit: {u}.")),
+                (None, Some(n)) => {
+                    let hint = if system == UnitSystem::Unspecified { format!(" {UNITS_HINT}") } else { String::new() };
+                    line(format!("Unit: a {n} in the model's units.{hint}"))
+                }
+                (None, None) => {}
+            }
+        }
+        out
+    }
 }
+
+/// What a form says when the model has no unit system.
+pub const UNITS_HINT: &str = "Set a unit system: Properties › Units.";
 
 pub const fn num(key: &'static str, label: &'static str, dim: Dim) -> Field {
     field(key, label, Kind::Number { dim, min: None, max: None })
@@ -347,7 +431,7 @@ pub const fn variant(tag: &'static str, label: &'static str, fields: &'static [F
 }
 
 /// The `name` of a new or edited definition.
-pub const NAME: Field = text("name", "Name").req();
+pub const NAME: Field = text("name", "Name").req().help("A name for it, unique among its kind; other definitions refer to it by this name.");
 
 impl Kind {
     /// The variant of `tag`, for [`Kind::Variants`].
@@ -831,8 +915,14 @@ fn field_schema(f: &Field, depth: usize) -> Value {
         _ => json!({}),
     };
     s["title"] = json!(f.label);
-    if !f.hint.is_empty() {
-        s["description"] = json!(f.hint);
+    let description = match (f.help, f.hint) {
+        ("", "") => None,
+        (help, "") => Some(help.to_string()),
+        ("", hint) => Some(hint.to_string()),
+        (help, hint) => Some(format!("{help} Empty or default: {hint}.")),
+    };
+    if let Some(d) = description {
+        s["description"] = json!(d);
     }
     if let Some(d) = parse_default(f) {
         s["default"] = d;

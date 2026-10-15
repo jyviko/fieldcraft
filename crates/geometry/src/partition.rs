@@ -165,11 +165,20 @@ enum Split {
 
 /// Cut one body.
 fn split(body: &Shape, plane: &Plane, n: [f64; 3], cut: &Cut) -> Result<Split> {
-    let parts = match guard("partition", || solidcraft_kernel::split_by_plane(&body.body, plane)) {
+    let sides = match guard("partition", || solidcraft_kernel::split_by_plane(&body.body, plane)) {
         Ok(p) if p.len() >= 2 => p,
         Ok(_) => return Ok(Split::Misses),
         Err(e) => return Ok(Split::Failed(e.to_string())),
     };
+    // Each side may fall apart into pieces that do not touch (#388): every piece is a cell.
+    let mut parts = Vec::with_capacity(sides.len());
+    for side in sides {
+        match guard("partition", || side.lumps()) {
+            Ok(pieces) if !pieces.is_empty() => parts.extend(pieces),
+            Ok(_) => parts.push(side),
+            Err(e) => return Ok(Split::Failed(e.to_string())),
+        }
+    }
     let size = body.size()?;
     let tol = (MATCH_TOLERANCE * size).max(1e-4);
     let parent = Faces::of(body, tol)?;

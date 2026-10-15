@@ -215,6 +215,11 @@ impl Shape {
         Ok(guard("size", || Ok(self.body.size()))?)
     }
 
+    /// The boundary shells of the body: one for a solid in one piece without voids.
+    pub fn shells(&self) -> Result<usize> {
+        Ok(guard("shells", || Ok(self.body.shell_count()))?)
+    }
+
     pub fn measure(&self) -> Result<Measure> {
         let m = guard("measure", || solidcraft_kernel::measure(&self.body))?;
         Ok(Measure {

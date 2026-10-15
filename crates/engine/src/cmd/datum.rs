@@ -817,4 +817,47 @@ pub(crate) mod tests {
         assert_eq!(s.journal.len(), journal);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A session with the design `commands` (a SolidCraft script) open.
+    pub(crate) fn scripted(commands: Value) -> (crate::tests::TempDir, Session) {
+        let bytes = fieldcraft_geometry::script_design(&json!({"commands": commands}).to_string()).unwrap();
+        let (dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        (dir, s)
+    }
+
+    /// Partition the open design by the planes `x = …` / `y = …` / `z = …` (`(axis, offset)`).
+    pub(crate) fn cut_at(s: &mut Session, planes: &[(usize, f64)]) {
+        for (i, &(k, offset)) in planes.iter().enumerate() {
+            let (name, plane) = (format!("C{i}"), ["yz", "zx", "xy"][k]);
+            s.execute("geometry.datum", &json!({"name": name, "by": {"type": "offset", "plane": plane, "offset": offset}})).unwrap();
+            s.execute("geometry.partition", &json!({"name": format!("P{i}"), "datum": name})).unwrap();
+        }
+    }
+
+    /// A box with a plate-shaped void in its middle that touches no side (#388): the planes
+    /// round the void leave a centre column whose material lies above and below the void, two
+    /// pieces that become separate cells only at the last cut.
+    #[test]
+    fn pieces_that_do_not_touch_are_separate_cells() {
+        let (_dir, mut s) = scripted(json!([
+            {"command": "solid.box", "params": {"length": 106, "width": 76, "height": 20, "corner": [0, 0, 0], "body_name": "Air"}},
+            {"command": "solid.box", "params": {"length": 85, "width": 56, "height": 2, "corner": [13, 13, 9], "operation": "cut"}},
+        ]));
+        let whole = s.design.as_ref().unwrap().bodies[0].measure().unwrap().volume;
+        cut_at(&mut s, &[(0, 22.5), (0, 68.5), (1, 22.5), (1, 59.5)]);
+        let design = s.design.clone().unwrap();
+        let shells: Vec<(&str, usize)> = design.bodies.iter().map(|b| (b.name.as_str(), b.shells().unwrap())).collect();
+        assert!(shells.iter().all(|s| s.1 == 1), "{shells:?}");
+        // 3 × 3 columns, the centre one in two pieces.
+        assert_eq!(shells.len(), 10, "{shells:?}");
+        let volume: f64 = design.bodies.iter().map(|b| b.measure().unwrap().volume).sum();
+        assert!((volume - whole).abs() < 1e-6 * whole, "{volume} vs {whole}");
+        let centre: Vec<&str> = shells.iter().map(|s| s.0).filter(|n| n.ends_with('1') || n.ends_with('2')).collect();
+        assert_eq!(centre.len(), 2, "{centre:?}");
+        // Numbered by centroid: the piece below the void first.
+        let z = |n: &str| design.body(n).unwrap().measure().unwrap().centroid[2];
+        assert!(z(centre[0]) < 9.0 && z(centre[1]) > 11.0, "{centre:?}");
+    }
 }

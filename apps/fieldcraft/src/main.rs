@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod control_server;
+mod update;
 mod usage;
 
 use fieldcraft_engine::autosave::{self, Autosaver};
@@ -88,6 +89,10 @@ impl eframe::App for App {
         self.app.usage_closing();
         if let Some(u) = self.usage.take() {
             u.finish();
+        }
+        // An update the user chose to install: swapped in now that the window has closed.
+        if let Some(staged) = self.app.take_staged_update() {
+            update::finish(&staged);
         }
         log::info!("FieldCraft closed");
         crash::end_session();
@@ -252,6 +257,9 @@ fn main() -> eframe::Result {
                 }
                 None => None,
             };
+            // Updates (docs/updates.md): checked at most daily when on, installed only on a click.
+            fieldcraft_engine::enable_update_checks(true);
+            app = app.with_updates(update::host(cc.egui_ctx.clone(), args.control.is_some()));
             app.custom_titlebar = CUSTOM_TITLEBAR;
             app.integrated_titlebar = cfg!(target_os = "macos");
             if let Some(rs) = &cc.wgpu_render_state {

@@ -13,6 +13,7 @@ workspace = true
 fieldcraft-engine = { workspace = true }
 fieldcraft-ui-egui = { workspace = true }
 fieldcraft-io = { workspace = true }
+fieldcraft-update = { workspace = true }
 rfd = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }

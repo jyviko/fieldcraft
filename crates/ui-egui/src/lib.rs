@@ -840,6 +840,7 @@ impl ModelApp {
             let mut symbols = scene::symbols(&mut s, &self.glyphs, |n| drawn.node_position(n), show, self.plot.1.is_some(), &t);
             if show.geometry && self.plot.1.is_none() {
                 symbols.union(scene::datums(&mut s, &self.session.model, &self.display.1.bounds, &t));
+                scene::seeds(&mut s, &self.session.model, &self.pick.names, &self.display.1, &t);
             }
             self.scene = (Some(key), s, symbols);
         }
@@ -1050,6 +1051,9 @@ impl ModelApp {
         let Some(target) = selection::target(command, &params) else { return Err(format!("{command} takes no selection")) };
         let filled = match target {
             selection::Target::Members => selection::with_members(&params, &self.pick.selection),
+            selection::Target::Edges => {
+                selection::with_edges(&params, &self.pick.selection).ok_or("no edge is selected: pick edges with Select: Edges")?
+            }
             selection::Target::Set | selection::Target::TargetSet => {
                 let base = params.get("name").and_then(Value::as_str).map(|n| format!("{n}-set"));
                 let set = self.selection_set(base.as_deref())?;

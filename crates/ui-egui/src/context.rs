@@ -100,6 +100,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             let tip = match target {
                 selection::Target::Members => "The selection becomes the set's members (geometry by name, the mesh by label)",
                 selection::Target::Set | selection::Target::TargetSet => "Makes a set of the selection (model.set.create) and names it here",
+                selection::Target::Edges => "The selected design edges (Select: Edges) become the edges seeded",
             };
             use_selection = ui.add_enabled(selected.is_some(), egui::Button::new("Use selection")).on_hover_text(tip).clicked();
             match &selected {

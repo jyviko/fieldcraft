@@ -115,6 +115,41 @@ pub fn build(display: &DisplayMesh, style: Style, show: Show, t: &Tokens) -> Sce
     s
 }
 
+/// Size of a seed's tick (points).
+const SEED_TICK: f64 = 6.0;
+
+/// Draw the model's edge seeds as ticks at the nodes they put along their edges (the drawn
+/// bodies' B-rep edges, [`DisplayMesh::curves`], named by `names`): the seeded count, spaced by
+/// the bias, so a grading shows as ticks crowding toward an end.
+pub fn seeds(s: &mut Scene, model: &fieldcraft_model::Model, names: &[crate::selection::BodyNames], display: &DisplayMesh, t: &Tokens) {
+    if model.seeds().is_empty() {
+        return;
+    }
+    let color = rgb(t.warm);
+    for run in display.curves.chunk_by(|a, b| a.body == b.body && a.edge == b.edge) {
+        let Some(first) = run.first() else { continue };
+        let Some(edge) = names.get(first.body as usize).and_then(|b| b.edge(first.edge)) else { continue };
+        let Some(seed) = model.seeds().iter().find(|seed| seed.edge.selects(&edge)) else { continue };
+        let lengths: Vec<f64> = run.iter().map(|c| c.a.dist(c.b)).collect();
+        let total: f64 = lengths.iter().sum();
+        if !(total > 0.0 && total.is_finite()) {
+            continue;
+        }
+        // Walk the polyline to each node's arc length.
+        let (mut k, mut walked) = (0, 0.0);
+        for f in seed.spacing(seed.count(total)) {
+            let target = f * total;
+            while k + 1 < run.len() && walked + lengths.get(k).copied().unwrap_or(0.0) < target {
+                walked += lengths.get(k).copied().unwrap_or(0.0);
+                k += 1;
+            }
+            let (Some(c), Some(l)) = (run.get(k), lengths.get(k)) else { continue };
+            let u = if *l > 0.0 { ((target - walked) / l).clamp(0.0, 1.0) } else { 0.0 };
+            s.points.push(ScenePoint { p: c.a + (c.b - c.a) * u, color, size: SEED_TICK });
+        }
+    }
+}
+
 /// The radius around the camera target that holds the bounds (for the clipping planes).
 pub fn radius(b: &Aabb3, cam: &Camera) -> f64 {
     if b.is_empty() { 1.0 } else { (cam.target.dist(b.center()) + b.diagonal() * 0.5).max(1e-3) }
@@ -125,6 +160,26 @@ mod tests {
     use fieldcraft_model::{ElementKind, Model};
 
     use super::*;
+
+    #[test]
+    fn seeds_draw_ticks_at_their_nodes() {
+        use fieldcraft_model::{Bias, BiasToward, Divisions, Entity, GeometryRef, Seed, SeedConstraint};
+        let mut d = DisplayMesh::default();
+        // Two edges of 10 mm; the first in two segments.
+        d.add_curves(&[vec![[0.0; 3], [4.0, 0.0, 0.0], [10.0, 0.0, 0.0]], vec![[0.0; 3], [0.0, 10.0, 0.0]]]);
+        let names = [crate::selection::BodyNames { name: "B".into(), faces: vec![], edges: vec!["a|b".into(), "a|c".into()] }];
+        let mut m = Model::default();
+        let edge = GeometryRef::new("B", Entity::Edge("a|b".into())).unwrap();
+        m.set_seed(Seed::new(edge, Divisions::Count(4), Some(Bias { ratio: 8.0, toward: BiasToward::Start }), SeedConstraint::Exact).unwrap())
+            .unwrap();
+        let mut s = Scene::default();
+        seeds(&mut s, &m, &names, &d, &Tokens::dark());
+        let xs: Vec<f64> = s.points.iter().map(|p| p.p.x).collect();
+        let want = [0.0, 10.0 / 15.0, 30.0 / 15.0, 70.0 / 15.0, 10.0];
+        assert_eq!(xs.len(), 5);
+        assert!(xs.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "{xs:?}");
+        assert!(s.points.iter().all(|p| p.p.y == 0.0), "only the seeded edge has ticks");
+    }
 
     #[test]
     fn styles_choose_faces_edges_and_nodes() {

@@ -279,7 +279,7 @@ impl BodyNames {
     }
 
     /// The reference to B-rep edge `edge` of this body, when it has a name.
-    fn edge(&self, edge: u32) -> Option<GeometryRef> {
+    pub fn edge(&self, edge: u32) -> Option<GeometryRef> {
         GeometryRef::new(self.name.clone(), Entity::Edge(self.edges.get(edge as usize)?.clone())).ok()
     }
 }
@@ -786,6 +786,8 @@ pub enum Target {
     /// A set made from the selection, named in `set` (sections, couplings, surface and body
     /// loads).
     Set,
+    /// The selected geometry edges, as `edges: [{body, edge}]` (edge seeds).
+    Edges,
 }
 
 /// Where command `id`'s form takes the selection, if it does. `params` (the form's current
@@ -793,6 +795,7 @@ pub enum Target {
 pub fn target(id: &str, params: &Value) -> Option<Target> {
     match id {
         "model.set.create" | "model.set.edit" => Some(Target::Members),
+        "mesh.seed.edge" | "mesh.seed.clear" => Some(Target::Edges),
         "model.boundary_condition.create" | "model.boundary_condition.edit" => Some(Target::TargetSet),
         "model.section.create" | "model.section.edit" | "model.coupling.create" | "model.coupling.edit" => Some(Target::Set),
         "model.load.create" | "model.load.edit" => {
@@ -815,6 +818,25 @@ pub fn with_members(params: &Value, selection: &Selection) -> Value {
     Value::Object(out)
 }
 
+/// `params` with the selection's geometry edges as `edges` (replacing any it had); `None` when no
+/// edge is selected.
+pub fn with_edges(params: &Value, selection: &Selection) -> Option<Value> {
+    let edges: Vec<Value> = selection
+        .items()
+        .iter()
+        .filter_map(|i| match i {
+            Item::Geometry(g) if matches!(g.entity, Entity::Edge(_)) => Some(json!(g)),
+            _ => None,
+        })
+        .collect();
+    if edges.is_empty() {
+        return None;
+    }
+    let mut out = params.as_object().cloned().unwrap_or_default();
+    out.insert("edges".into(), Value::Array(edges));
+    Some(Value::Object(out))
+}
+
 /// `params` with the set `set` as the target.
 pub fn with_set(params: &Value, target: Target, set: &str) -> Value {
     let mut out = params.as_object().cloned().unwrap_or_default();
@@ -825,7 +847,7 @@ pub fn with_set(params: &Value, target: Target, set: &str) -> Value {
         Target::Set => {
             out.insert("set".into(), json!(set));
         }
-        Target::Members => {}
+        Target::Members | Target::Edges => {}
     }
     Value::Object(out)
 }

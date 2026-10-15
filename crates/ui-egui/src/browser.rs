@@ -296,6 +296,20 @@ enum Act {
     ShowResult(String),
 }
 
+/// A seed in a few words: `8 exact`, `2.5 min, bias 4 end`.
+fn seed_note(s: &fieldcraft_model::Seed) -> String {
+    let what = match s.divisions {
+        fieldcraft_model::Divisions::Count(n) => format!("{n}"),
+        fieldcraft_model::Divisions::Size(h) => format!("size {h}"),
+    };
+    let bias = s.bias.map(|b| format!(", bias {} {}", b.ratio, json_name(&b.toward))).unwrap_or_default();
+    format!("{what} {}{bias}", s.constraint.name())
+}
+
+fn json_name<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+}
+
 pub fn browser(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
     let mut acts: Vec<Act> = Vec::new();
@@ -484,6 +498,40 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
                 egui::Id::new(("fc_row_kind", kind.name())),
                 &Row { depth: 2, swatch: Some(t.element(kind)), label: kind.name(), note: Some(format!("{n}")), ..Default::default() },
             );
+        }
+        // Edge seeds: a click selects the seeded edge in the viewport.
+        let seeds: Vec<(fieldcraft_model::GeometryRef, String)> = app.session.model.seeds().iter().map(|s| (s.edge.clone(), seed_note(s))).collect();
+        if !seeds.is_empty() {
+            let r = draw_row(
+                app,
+                ui,
+                egui::Id::new("fc_row_seeds"),
+                &Row {
+                    depth: 2,
+                    fold: Some(open(app, "seeds")),
+                    icon: Some("mesh.seed.edge"),
+                    label: "Seeds",
+                    note: Some(format!("{}", seeds.len())),
+                    ..Default::default()
+                },
+            );
+            if r.fold || r.clicked {
+                acts.push(Act::Fold("seeds".into()));
+            }
+            if open(app, "seeds") {
+                for (i, (edge, note)) in seeds.into_iter().enumerate() {
+                    let label = format!("{} · {}", edge.body, edge.entity.name().unwrap_or_default());
+                    let r = draw_row(
+                        app,
+                        ui,
+                        egui::Id::new(("fc_row_seed", i)),
+                        &Row { depth: 3, label: &label, note: Some(note), ..Default::default() },
+                    );
+                    if r.clicked {
+                        app.select([crate::selection::Item::Geometry(edge)], crate::selection::Mode::Replace);
+                    }
+                }
+            }
         }
     }
     // Definitions.

@@ -16,7 +16,7 @@ mod raster;
 mod vec;
 
 pub use camera::{Camera, Mat4, Orientation, StandardView};
-pub use display::{DisplayEdge, DisplayLine, DisplayMesh, DisplayNode, DisplayTri, SurfaceTri};
+pub use display::{DisplayEdge, DisplayLine, DisplayMesh, DisplayNode, DisplayTri, SurfaceCurve, SurfaceTri};
 pub use raster::{
     Canvas, LABEL_OFFSET, MAX_DIM, MAX_PIXELS, MAX_PRIMITIVES, RenderError, Rgb, Scene, SceneLabel, SceneLine, ScenePoint, SceneTri, fit_size, png,
     render, render_layers, render_layers_png, render_png, shade,

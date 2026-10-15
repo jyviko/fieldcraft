@@ -75,6 +75,17 @@ pub struct SurfaceTri {
     pub face: u32,
 }
 
+/// A segment of a geometry surface's B-rep edge (a named design edge), for picking and marking.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceCurve {
+    pub a: Vec3,
+    pub b: Vec3,
+    /// The surface (body) it belongs to, as [`SurfaceTri::body`].
+    pub body: u32,
+    /// The edge's index in that body's tessellation.
+    pub edge: u32,
+}
+
 /// Display data for a model and its geometry.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DisplayMesh {
@@ -90,6 +101,8 @@ pub struct DisplayMesh {
     pub surface_tris: Vec<SurfaceTri>,
     /// Geometry edges: where two faces meet, and open boundaries.
     pub surface_edges: Vec<[Vec3; 2]>,
+    /// The B-rep edges of the geometry surfaces that have them, segment by segment.
+    pub curves: Vec<SurfaceCurve>,
     /// Geometry surfaces (bodies) added.
     pub bodies: u32,
     pub bounds: Aabb3,
@@ -267,6 +280,21 @@ impl DisplayMesh {
         self.bodies = self.bodies.saturating_add(1);
     }
 
+    /// Add the B-rep edges (polylines, by edge index) of the surface [`DisplayMesh::add_surface`]
+    /// adds next, so they are picked as that body's edges; non-finite points are skipped.
+    pub fn add_curves(&mut self, edges: &[Vec<[f64; 3]>]) {
+        let body = self.bodies;
+        for (e, points) in edges.iter().enumerate() {
+            let Ok(edge) = u32::try_from(e) else { break };
+            for w in points.windows(2) {
+                let (a, b) = (Vec3::from(w[0]), Vec3::from(w[1]));
+                if a.is_finite() && b.is_finite() {
+                    self.curves.push(SurfaceCurve { a, b, body, edge });
+                }
+            }
+        }
+    }
+
     /// The colour of a geometry triangle: `single` when there is one body, else body `k`'s
     /// colour from `palette` (cycling), so the bodies of a design, such as the cells of a
     /// partitioned part, tell apart.
@@ -415,7 +443,10 @@ mod tests {
         // triangle, which are skipped.
         let p = [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]];
         let mut d = DisplayMesh::default();
+        // Its B-rep edges: the diagonal (two segments) and a side; a non-finite point is skipped.
+        d.add_curves(&[vec![p[0], [0.5, 0.5, 0.0], p[2]], vec![p[0], p[1]], vec![[f64::NAN; 3], p[1]]]);
         d.add_surface(&p, &[[0, 1, 2], [0, 2, 3], [0, 0, 1], [0, 1, 9]], &[0, 1, 1, 1]);
+        assert_eq!(d.curves.iter().map(|c| (c.body, c.edge)).collect::<Vec<_>>(), vec![(0, 0), (0, 0), (0, 1)]);
         assert_eq!(d.surface_tris.len(), 2);
         // Four open sides and the diagonal between the two faces.
         assert_eq!(d.surface_edges.len(), 5);

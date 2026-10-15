@@ -14,9 +14,10 @@
 //! face. Every choice is the nearest, ties going to the lower index, so a pick is deterministic.
 //!
 //! Geometry is named through the mesh's geometry tags ([`fieldcraft_model::Classification`]) once
-//! the model is meshed, and through the drawn bodies' face names before. Edges and vertices have
-//! names only on a mesh that carries them (block and planar meshes); a design's edges have no
-//! persistent names yet.
+//! the model is meshed, and through the drawn bodies' face names before. A design's edges are
+//! picked on its drawn B-rep edges by their persistent names (`<face>|<face>`, before and after
+//! meshing); other edges and vertices have names only on a mesh that carries them (block and
+//! planar meshes).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -262,17 +263,24 @@ pub fn items_from_params(p: &Value) -> Result<Vec<Item>, String> {
     Ok(items)
 }
 
-/// A drawn geometry surface's names: its body and, by face tag, its faces.
+/// A drawn geometry surface's names: its body and, by face tag, its faces; by edge index, its
+/// B-rep edges ([`DisplayMesh::curves`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BodyNames {
     pub name: String,
     pub faces: Vec<String>,
+    pub edges: Vec<String>,
 }
 
 impl BodyNames {
     /// The reference to face `face` of this body, when it has a name.
     fn face(&self, face: u32) -> Option<GeometryRef> {
         GeometryRef::face(self.name.clone(), self.faces.get(face as usize)?.clone()).ok()
+    }
+
+    /// The reference to B-rep edge `edge` of this body, when it has a name.
+    fn edge(&self, edge: u32) -> Option<GeometryRef> {
+        GeometryRef::new(self.name.clone(), Entity::Edge(self.edges.get(edge as usize)?.clone())).ok()
     }
 }
 
@@ -337,6 +345,16 @@ pub struct Picker<'a> {
     pub elements: bool,
     /// Geometry surfaces are drawn (and picked).
     pub geometry: bool,
+    /// The geometry's B-rep edges are drawn (and picked), over the mesh too.
+    pub curves: bool,
+}
+
+/// The candidate nearest on screen within `radius` whose point passes `visible`: candidates are
+/// (index, screen distance, the point to check); the first of the nearest few that passes wins.
+fn nearest_passing(mut near: Vec<(usize, f64, Vec3)>, radius: f64, visible: impl Fn(Vec3) -> bool) -> Option<usize> {
+    near.retain(|c| c.1 <= radius);
+    near.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    near.into_iter().take(VISIBILITY_CHECKS).find(|c| visible(c.2)).map(|c| c.0)
 }
 
 /// The first drawn face along a ray.
@@ -385,18 +403,42 @@ impl Picker<'_> {
 
     /// Whether `p` is in front: the ray through its pixel reaches it before any drawn face.
     fn visible(&self, proj: &Projector, p: Vec3) -> bool {
+        self.visible_within(proj, p, self.slack())
+    }
+
+    /// Whether `p` is in front, counting it on the first face along its ray within `slack`.
+    fn visible_within(&self, proj: &Projector, p: Vec3, slack: f64) -> bool {
         let Some([x, y, _]) = proj.screen(p) else { return false };
         let (o, d) = proj.ray(x, y);
         let along = (p - o).dot(d);
-        self.surface(o, d).is_none_or(|s| along <= s.t() + self.slack())
+        self.surface(o, d).is_none_or(|s| along <= s.t() + slack)
     }
 
-    /// The candidate nearest on screen to `at` within `radius` that is visible: candidates are
-    /// (index, screen distance, the point to check); the first visible of the nearest few wins.
-    fn nearest_visible(&self, proj: &Projector, mut near: Vec<(usize, f64, Vec3)>, radius: f64) -> Option<usize> {
-        near.retain(|c| c.1 <= radius);
-        near.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
-        near.into_iter().take(VISIBILITY_CHECKS).find(|c| self.visible(proj, c.2)).map(|c| c.0)
+    /// The candidate nearest on screen to `at` within `radius` that is visible ([`nearest_passing`]).
+    fn nearest_visible(&self, proj: &Projector, near: Vec<(usize, f64, Vec3)>, radius: f64) -> Option<usize> {
+        nearest_passing(near, radius, |p| self.visible(proj, p))
+    }
+
+    /// Whether a point of a B-rep edge is in front. The edge's polyline and the drawn faces are
+    /// two approximations of the same curve, which can lie apart by the tessellation's chord
+    /// error: a point still counts as on the first face within a hundredth of the model's size.
+    fn curve_visible(&self, proj: &Projector, p: Vec3) -> bool {
+        self.visible_within(proj, p, self.slack() * 100.0)
+    }
+
+    /// The design edge (a [`DisplayMesh::curves`] segment's) nearest `at` on screen, visible.
+    fn pick_curve(&self, proj: &Projector, at: [f64; 2]) -> Option<GeometryRef> {
+        if !self.curves {
+            return None;
+        }
+        let near = self.display.curves.iter().enumerate().filter_map(|(i, c)| {
+            let (sa, sb) = (proj.screen(c.a)?, proj.screen(c.b)?);
+            let (distance, k) = segment_distance(at, [sa[0], sa[1]], [sb[0], sb[1]]);
+            (distance <= EDGE_RADIUS).then(|| (i, distance, c.a + (c.b - c.a) * k))
+        });
+        let i = nearest_passing(near.collect(), EDGE_RADIUS, |p| self.curve_visible(proj, p))?;
+        let c = self.display.curves.get(i)?;
+        self.names.get(c.body as usize)?.edge(c.edge)
     }
 
     /// The geometry face of an element face triangle or a geometry triangle.
@@ -467,6 +509,11 @@ impl Picker<'_> {
                 self.entity(*tag).cloned().map(Item::Geometry)
             }
             Filter::Edges => {
+                // A design's B-rep edges first: they are what an edge is named by before meshing,
+                // and what seeds and sets refer to after.
+                if let Some(g) = self.pick_curve(proj, at) {
+                    return Some(Item::Geometry(g));
+                }
                 // Element edges and line elements on geometry edges.
                 let mut tagged: Vec<(Vec3, Vec3, u32)> = self
                     .display
@@ -611,6 +658,23 @@ impl Picker<'_> {
             }
         }
         outline(s, first, color);
+        if m.edges && self.curves {
+            // Which edges of each drawn body are marked, worked out once per edge.
+            let marked: Vec<Vec<bool>> = self
+                .names
+                .iter()
+                .map(|body| {
+                    (0..body.edges.len())
+                        .map(|e| body.edge(u32::try_from(e).unwrap_or(u32::MAX)).is_some_and(|g| m.refs.iter().any(|r| r.selects(&g))))
+                        .collect()
+                })
+                .collect();
+            for c in &self.display.curves {
+                if marked.get(c.body as usize).and_then(|b| b.get(c.edge as usize)).copied().unwrap_or(false) {
+                    s.lines.push(SceneLine { a: c.a, b: c.b, color, width: EDGE_WIDTH });
+                }
+            }
+        }
         if m.edges {
             for e in &self.display.edges {
                 if on(self.index.edge_tag.get(&edge_key(e.nodes[0], e.nodes[1])).copied()) {
@@ -845,7 +909,7 @@ mod tests {
             Scene3 { model, display, index }
         }
         fn picker(&self) -> Picker<'_> {
-            Picker { display: &self.display, names: &[], model: &self.model, index: &self.index, elements: true, geometry: false }
+            Picker { display: &self.display, names: &[], model: &self.model, index: &self.index, elements: true, geometry: false, curves: false }
         }
     }
 
@@ -937,11 +1001,13 @@ mod tests {
     fn drawn_geometry_names_its_faces() {
         let mut display = DisplayMesh::default();
         let square = [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]];
+        // Its one B-rep edge: the diagonal between the two faces.
+        display.add_curves(&[vec![square[0], square[2]]]);
         display.add_surface(&square, &[[0, 1, 2], [0, 2, 3]], &[0, 1]);
-        let names = [BodyNames { name: "Plate".into(), faces: vec!["F1:a".into(), "F1:b".into()] }];
+        let names = [BodyNames { name: "Plate".into(), faces: vec!["F1:a".into(), "F1:b".into()], edges: vec!["F1:a|F1:b".into()] }];
         let model = Model::default();
         let index = Index::new(&model, &display);
-        let p = Picker { display: &display, names: &names, model: &model, index: &index, elements: false, geometry: true };
+        let p = Picker { display: &display, names: &names, model: &model, index: &index, elements: false, geometry: true, curves: true };
         let mut cam = Camera::default();
         cam.set_view(StandardView::Top);
         cam.fit(&display.bounds);
@@ -957,6 +1023,17 @@ mod tests {
         let o = p.overlay(&sel, None, Rgb(9, 9, 9), Rgb(0, 0, 0));
         assert_eq!(o.tris.len(), 1);
         assert_eq!(o.tris[0].color, Rgb(9, 9, 9));
+        // The design edge is picked by its persistent name, and drawn wide when selected.
+        let edge = GeometryRef::new("Plate", Entity::Edge("F1:a|F1:b".into())).unwrap();
+        let on = pixel(&proj, Vec3::new(0.5, 0.5, 0.0));
+        assert_eq!(p.pick(&proj, on, Filter::Edges), Some(Item::Geometry(edge.clone())));
+        assert_eq!(p.pick(&proj, at, Filter::Edges), None);
+        sel.apply([Item::Geometry(edge)], Mode::Replace);
+        let o = p.overlay(&sel, None, Rgb(9, 9, 9), Rgb(0, 0, 0));
+        assert_eq!((o.tris.len(), o.lines.len()), (0, 1));
+        // Without the curves drawn, the edge is not picked.
+        let hidden = Picker { curves: false, ..p };
+        assert_eq!(hidden.pick(&proj, on, Filter::Edges), None);
     }
 
     #[test]

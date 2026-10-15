@@ -743,7 +743,11 @@ impl ModelApp {
                     .filter_map(|body| {
                         let tolerance = body.measure().map(|m| display_tolerance(&Aabb3 { min: m.bbox_min.into(), max: m.bbox_max.into() }));
                         let mesh = tolerance.and_then(|t| body.tessellate(t)).map_err(|e| failed.push(format!("{}: {e}", body.name))).ok()?;
-                        let names = selection::BodyNames { name: body.name.clone(), faces: body.faces().iter().map(|f| f.name.clone()).collect() };
+                        let names = selection::BodyNames {
+                            name: body.name.clone(),
+                            faces: body.faces().iter().map(|f| f.name.clone()).collect(),
+                            edges: body.edge_names(&mesh),
+                        };
                         Some((names, mesh))
                     })
                     .collect();
@@ -754,13 +758,18 @@ impl ModelApp {
             }
             self.pick.names.clear();
             for (names, mesh) in &self.bodies.1 {
+                d.add_curves(&mesh.edges);
                 d.add_surface(&mesh.positions, &mesh.triangles, &mesh.tri_face);
                 self.pick.names.push(names.clone());
             }
             // An imported surface's faces are named by their tags.
             for s in &self.session.surfaces {
                 d.add_surface(&s.mesh.positions, &s.mesh.triangles, &s.mesh.tri_face);
-                self.pick.names.push(selection::BodyNames { name: s.name.clone(), faces: (0..s.faces).map(|f| f.to_string()).collect() });
+                self.pick.names.push(selection::BodyNames {
+                    name: s.name.clone(),
+                    faces: (0..s.faces).map(|f| f.to_string()).collect(),
+                    edges: Vec::new(),
+                });
             }
             let was_empty = self.display.1.bounds.is_empty();
             self.display = (Some(self.revision), d);
@@ -876,6 +885,7 @@ impl ModelApp {
             index: &index,
             elements: show_mesh,
             geometry: show_geometry && !mesh_faces,
+            curves: show_geometry,
         };
         f(&picker)
     }

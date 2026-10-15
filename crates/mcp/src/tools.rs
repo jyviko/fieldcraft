@@ -19,6 +19,12 @@ const MESHERS: &[(&str, &str, &str)] = &[
     ("hex_sweep", "mesh.hex.sweep", "swept all-hex mesh"),
     ("hex_mapped", "mesh.hex.mapped", "mapped all-hex mesh"),
     ("hex_blocks", "mesh.hex.blocks", "one conforming all-hex mesh of a design split into six-sided blocks {bodies, size, order}"),
+    (
+        "cells",
+        "mesh.cells",
+        "one mesh of a partitioned part, each cell with its own method {methods: {cell: method}, default, size, order}; cells joined across partitions (merged or tied)",
+    ),
+    ("mirror", "mesh.mirror", "reflect meshed bodies across a datum plane and join them on it {plane, bodies}"),
     ("block", "mesh.block", "structured hex block"),
     ("planar", "mesh.planar", "2D elements of a polygon or a planar face"),
 ];

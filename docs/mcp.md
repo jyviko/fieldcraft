@@ -99,7 +99,7 @@ software on the computer.
 | `open` | `path`, `model?` | By extension: `.fieldcraft` (`file.open`), `.solidcraft` (`geometry.open`), `.3mf` (`geometry.import.mesh`). For a design, `model` is `keep` (default: the mesh and definitions stay, as a reopen after an edit wants) or `new` (a new model with the design); the reply's `related` is false when the design has none of the bodies the model refers to, and `stale` lists the mesh bodies and sets that no longer resolve. |
 | `save` | `path?` | `file.save`: to `path` or the model's own file. |
 | `write_deck` | `format` (abaqus, nastran, lsdyna), `path`, `steps?` | `deck.write`. |
-| `mesh` | `method`, `params?` | Runs the mesher (`tet`: `mesh.tet.generate`; `planar`: `mesh.planar`; the hex and block meshers as they land) and replies with its result, `model.info` and `mesh.quality`. |
+| `mesh` | `method`, `params?` | Runs the mesher (`tet`: `mesh.tet.generate`; `hex`, `hex_sweep`, `hex_mapped`, `hex_blocks`: the structured hex meshers; `cells`: `mesh.cells`, a partitioned part cell by cell; `mirror`: `mesh.mirror`, a meshed half reflected across a plane; `block`: `mesh.block`; `planar`: `mesh.planar`) and replies with its result, `model.info` and `mesh.quality`. |
 | `solve` | `analysis` (static, frequency, explicit, fluid; heat as it lands), `step?`, `options?` | `solve.<analysis>` with the step and the solver's caps and settings. |
 | `show_results` | `step?`, `field?`, `bands?`, `deformed?`, `scale?`, `mode?`, `frame?`, `time?` | The `results.*` commands its arguments ask for (`deformed: false` draws the undeformed mesh; `scale` is a factor, 0 for the undeformed shape so a sequence from 0 swings the deformation out, or `"auto"`); the reply has the contour range (smallest and largest value and their nodes: `field: "displacement"` gives the largest displacement), modes or frames. |
 | `probe` | `step?`, `nodes?`, `elements?`, `points?`, `forces?`, `mode?`, `frame?` | `solve.probe`: stored results at nodes, elements (explicit) or points (fluid). |
@@ -114,6 +114,31 @@ Resources: `fieldcraft://model` (`model.info`) and `fieldcraft://commands` (the 
 Errors: an unknown tool, or arguments that do not match the tool's schema (a missing or unknown
 argument, a wrong type, a value outside an enum), are JSON-RPC `-32602` errors; an engine failure
 is a tool result with `isError: true` and the engine's message.
+
+## Partition, mesh half, mirror
+
+The commands that cut a part into cells and build its mesh from a half, all through `execute`
+and `mesh` (each one's parameters: `list_commands`):
+
+1. `geometry.datum {name, by}`: a datum plane — a principal plane moved along its normal
+   (`{"type": "offset", "plane": "zx", "offset": 0}`), three points, or a point and a normal.
+   `geometry.datum.axis` makes axes.
+2. `geometry.partition {name, datum, bodies?}`: cuts the open design's bodies by the plane into
+   cells `<body>/a` (negative side) and `<body>/b`. The two faces of the cut are
+   `partition:<name>:a` and `partition:<name>:b`; every other face keeps the name of the face it
+   is a piece of. The partition is part of the model: saving and opening it, or opening the
+   design again after an edit, cuts the design again. `inspect_model` lists the cells.
+3. `mesh` with method `hex`, `hex_sweep`, `hex_mapped` or `tet` on one cell (`{"body":
+   "Part/b"}`), or method `cells` for all cells with a method each (`{"methods": {"Part/a":
+   "tet"}, "default": "auto"}`): cells whose faces match on a partition are merged, others are
+   tied (the reply lists each interface).
+4. `mesh` with method `mirror` (`{"plane": "<datum>", "bodies": ["Part/b"]}`): the meshed half
+   reflected across the plane, right-handed, joined on it, its elements and faces tagged as the
+   other half's, so sets by face name (`{body, face}` on either half) reach both.
+5. Or keep the half: `model.boundary_condition.symmetry {name, datum}` holds it on the plane
+   (zero normal displacement), with half the load.
+
+`file.sample {"name": "crank-mirror"}` opens the crank arm built this way (docs/examples.md).
 
 ## Limits
 

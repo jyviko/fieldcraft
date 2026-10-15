@@ -31,8 +31,12 @@ then `execute` the model definition commands (model.set.create {name, geometry: 
 model.material.create, model.section.create, model.boundary_condition.create, model.load.create, model.step.create \
 — list_commands shows each one's parameters); `check_model`; `solve` (static, frequency, explicit, fluid); \
 `show_results` (field: displacement, von_mises…; its reply has the field's range) and `probe` / `reactions` for \
-numbers; `screenshot` to look; `save` or `write_deck` (abaqus, nastran, lsdyna). Failures leave the model unchanged \
-and name what to fix.";
+numbers; `screenshot` to look; `save` or `write_deck` (abaqus, nastran, lsdyna). Partitions: geometry.datum makes a \
+datum plane, geometry.partition cuts the design's bodies into cells by it (cut faces partition:<name>:a|b; kept in \
+the model and applied again when the design opens); `mesh` method cells meshes the cells each with its own method, \
+method mirror reflects a meshed half across a datum plane into one conforming mesh; \
+model.boundary_condition.symmetry holds a half model on its symmetry plane (file.sample crank-mirror shows the \
+partition, half-mesh and mirror sequence). Failures leave the model unchanged and name what to fix.";
 
 pub struct Server {
     backend: Box<dyn Backend>,

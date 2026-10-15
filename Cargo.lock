@@ -1293,6 +1293,7 @@ dependencies = [
  "fieldcraft-engine",
  "fieldcraft-io",
  "fieldcraft-mcp",
+ "fieldcraft-update",
  "serde_json",
 ]
 

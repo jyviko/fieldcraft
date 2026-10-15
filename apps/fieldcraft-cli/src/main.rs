@@ -3,11 +3,13 @@
 //! fieldcraft-cli features
 //! fieldcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
 //! fieldcraft-cli crashes [list [--json] | show <id> | replay <id> | dir | clear [<id>]]
+//! fieldcraft-cli update --check | --install
 //! fieldcraft-cli --version
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 mod crashes;
+mod update;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -36,6 +38,9 @@ usage:
                                        computer (docs/crash-reports.md): list them (--json),
                                        show one, replay one (does the crash happen again?),
                                        print their folder, delete them
+  fieldcraft-cli update --check        is a newer FieldCraft published? (app.update.check; JSON)
+  fieldcraft-cli update --install      download the latest release, verify its signature and
+                                       checksum, and install it over this copy (docs/updates.md)
   fieldcraft-cli --version             print the version
 ";
 
@@ -61,6 +66,7 @@ fn main() -> ExitCode {
         }
         Some("mcp") => mcp(args.get(1..).unwrap_or(&[])),
         Some("crashes") => crashes::run(args.get(1..).unwrap_or(&[])),
+        Some("update") => update::run(args.get(1..).unwrap_or(&[])),
         Some("run") => args.get(1).ok_or_else(|| format!("run needs a script\n\n{USAGE}")).and_then(|p| run(p)),
         Some("-V" | "--version") => {
             println!("fieldcraft-cli {}", env!("CARGO_PKG_VERSION"));

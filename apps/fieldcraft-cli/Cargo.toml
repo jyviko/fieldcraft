@@ -12,4 +12,8 @@ workspace = true
 fieldcraft-engine = { workspace = true }
 fieldcraft-io = { workspace = true }
 fieldcraft-mcp = { workspace = true }
+fieldcraft-update = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+fieldcraft-update = { workspace = true, features = ["mock"] }

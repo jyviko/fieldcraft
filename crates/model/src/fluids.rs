@@ -423,9 +423,13 @@ impl Model {
         replace_existing(&mut self.fluid_domains, "fluid domain", name, domain)
     }
 
+    /// The steps that solve a fluid domain, as `step \`name\`` strings.
+    pub fn fluid_domain_users(&self, name: &str) -> Vec<String> {
+        self.steps.iter().filter(|s| s.procedure.fluid_domain() == Some(name)).map(|s| format!("step `{}`", s.name)).collect()
+    }
+
     pub fn remove_fluid_domain(&mut self, name: &str) -> Result<()> {
-        let users = self.steps.iter().filter(|s| s.procedure.fluid_domain() == Some(name)).map(|s| format!("step `{}`", s.name)).collect();
-        not_in_use("fluid domain", name, users)?;
+        not_in_use("fluid domain", name, self.fluid_domain_users(name))?;
         remove_existing(&mut self.fluid_domains, "fluid domain", name).map(|_| ())
     }
 
@@ -437,7 +441,7 @@ impl Model {
     }
 
     /// The fluid domains that use a material.
-    pub(crate) fn fluid_domain_users(&self, material: &str) -> impl Iterator<Item = &str> {
+    pub(crate) fn fluid_domains_of_material(&self, material: &str) -> impl Iterator<Item = &str> {
         self.fluid_domains.iter().filter(move |(_, d)| d.material == material).map(|(n, _)| n.as_str())
     }
 }

@@ -95,6 +95,12 @@ impl Model {
     }
 
     pub fn remove_reference_point(&mut self, name: &str) -> Result<()> {
+        not_in_use("reference point", name, self.reference_point_users(name))?;
+        remove_existing(&mut self.reference_points, "reference point", name).map(|_| ())
+    }
+
+    /// The definitions that refer to a reference point, as `kind \`name\`` strings.
+    pub fn reference_point_users(&self, name: &str) -> Vec<String> {
         let mut users: Vec<String> =
             self.couplings.iter().filter(|(_, c)| c.reference_point == name).map(|(n, _)| format!("coupling `{n}`")).collect();
         users.extend(
@@ -105,8 +111,7 @@ impl Model {
         );
         users.extend(self.loads.iter().filter(|(_, l)| l.reference_point() == Some(name)).map(|(n, _)| format!("load `{n}`")));
         users.extend(self.discrete_users(|t| t.reference_point() == Some(name)));
-        not_in_use("reference point", name, users)?;
-        remove_existing(&mut self.reference_points, "reference point", name).map(|_| ())
+        users
     }
 
     /// The node label of each reference point in decks.

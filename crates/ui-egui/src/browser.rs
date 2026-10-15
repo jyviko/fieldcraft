@@ -658,8 +658,7 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
             );
         }
         // Datum planes and axes, then the partitions in the order they cut.
-        let datums: Vec<(String, &'static str)> =
-            app.session.model.datums().iter().map(|(n, d)| (n.clone(), if d.plane().is_some() { "plane" } else { "axis" })).collect();
+        let datums: Vec<(String, &'static str)> = app.session.model.datums().iter().map(|(n, d)| (n.clone(), d.kind())).collect();
         for (i, (n, kind)) in datums.iter().enumerate() {
             draw_row(
                 app,

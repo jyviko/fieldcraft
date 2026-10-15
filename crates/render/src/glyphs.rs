@@ -841,11 +841,14 @@ impl Glyphs {
 /// How far a datum plane's square reaches from the model's centre, and a datum axis's line,
 /// as a fraction of the bounding box diagonal.
 const DATUM_REACH: f64 = 0.6;
+/// A datum point's cross: each arm's length, as a fraction of the bounding box diagonal.
+const DATUM_POINT: f64 = 0.02;
 /// Hatch lines across a datum plane's square.
 const DATUM_HATCH: usize = 4;
 
-/// Draw the model's datum planes (an outlined, hatched square around the model, `bounds`) and
-/// axes (a line through the model), each with its name; returns the box around them.
+/// Draw the model's datum planes (an outlined, hatched square around the model, `bounds`), axes
+/// (a line through the model) and points (a small cross), each with its name; returns the box
+/// around them.
 pub fn datums(model: &Model, bounds: &Aabb3, colors: &GlyphColors, scene: &mut Scene) -> Aabb3 {
     let mut d = Draw { scene, bounds: Aabb3::EMPTY, color: colors.datum, width: OUTLINE_WIDTH, on_top: false };
     let (centre, diagonal) = if bounds.is_empty() { (Vec3::ZERO, 1.0) } else { (bounds.center(), bounds.diagonal().max(1e-9)) };
@@ -878,6 +881,14 @@ pub fn datums(model: &Model, bounds: &Aabb3, colors: &GlyphColors, scene: &mut S
                 d.width = SHAFT_WIDTH;
                 d.line(c - a * reach, c + a * reach);
                 d.scene.labels.push(SceneLabel { p: c + a * reach, text: name.clone(), color: colors.datum });
+            }
+            fieldcraft_model::Datum::Point { point } => {
+                let p = Vec3::from(point);
+                let arm = DATUM_POINT * diagonal;
+                for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                    d.line(p - axis * arm, p + axis * arm);
+                }
+                d.scene.labels.push(SceneLabel { p: p + (Vec3::X + Vec3::Y) * arm, text: name.clone(), color: colors.datum });
             }
         }
     }
@@ -1494,18 +1505,22 @@ mod tests {
         let mut m = Model::default();
         m.add_datum("Mid", fieldcraft_model::Datum::Plane { point: [5.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0] }).unwrap();
         m.add_datum("Ax", fieldcraft_model::Datum::Axis { point: [0.0; 3], direction: [0.0, 0.0, 1.0] }).unwrap();
+        m.add_datum("Pt", fieldcraft_model::Datum::Point { point: [1.0, 2.0, 3.0] }).unwrap();
         let mut bounds = Aabb3::EMPTY;
         bounds.add(Vec3::ZERO);
         bounds.add(Vec3::new(10.0, 10.0, 10.0));
         let mut scene = Scene::default();
         let drawn = datums(&m, &bounds, &COLORS, &mut scene);
-        // A square with its hatch (4 + 2 × 3 lines) and the axis line.
-        assert_eq!(scene.lines.len(), 11);
+        // A square with its hatch (4 + 2 × 3 lines), the axis line and the point's three arms,
+        // each crossing at the point.
+        assert_eq!(scene.lines.len(), 14);
+        let p = Vec3::new(1.0, 2.0, 3.0);
+        assert!(scene.lines.iter().rev().take(3).all(|l| ((l.a + l.b) * 0.5).dist(p) < 1e-12));
         let mut names: Vec<&str> = scene.labels.iter().map(|l| l.text.as_str()).collect();
         names.sort_unstable();
-        assert_eq!(names, ["Ax", "Mid"]);
+        assert_eq!(names, ["Ax", "Mid", "Pt"]);
         // The plane's lines lie on x = 5, centred on the model.
-        assert!(scene.lines.iter().skip(1).all(|l| (l.a.x - 5.0).abs() < 1e-12 && (l.b.x - 5.0).abs() < 1e-12));
+        assert!(scene.lines.iter().skip(1).take(10).all(|l| (l.a.x - 5.0).abs() < 1e-12 && (l.b.x - 5.0).abs() < 1e-12));
         assert!(drawn.diagonal() > bounds.diagonal());
     }
 }

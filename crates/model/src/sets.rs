@@ -134,7 +134,7 @@ impl Model {
     }
 
     /// The definitions that refer to a set, as `kind \`name\`` strings.
-    pub(crate) fn set_users(&self, set: &str) -> Vec<String> {
+    pub fn set_users(&self, set: &str) -> Vec<String> {
         let mut users = Vec::new();
         users.extend(self.sections.iter().filter(|(_, s)| s.set == set).map(|(n, _)| format!("section `{n}`")));
         users.extend(self.couplings.iter().filter(|(_, c)| c.set == set).map(|(n, _)| format!("coupling `{n}`")));

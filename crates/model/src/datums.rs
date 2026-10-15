@@ -1,8 +1,9 @@
-//! Datum planes and axes, and the partitions that cut the geometry by datum planes.
+//! Datum planes, axes and points, and the partitions that cut the geometry by datum planes.
 //!
 //! A datum is a construction reference in model coordinates: a plane (a point and its unit
-//! normal) or an axis (a point and its unit direction). Partitions, mirrors and symmetry
-//! conditions name them. A **partition** cuts bodies of the geometry by a datum plane into cells
+//! normal), an axis (a point and its unit direction) or a point. Partitions, mirrors and symmetry
+//! conditions name planes; points are inputs for planes and axes (their coordinates are taken
+//! when those are made). A **partition** cuts bodies of the geometry by a datum plane into cells
 //! (the geometry layer does the cutting); the model keeps the partitions in the order they were
 //! made, because each cuts the cells the ones before it left.
 
@@ -19,7 +20,7 @@ pub const MAX_PARTITION_BODIES: usize = 1000;
 /// Longest body name a partition holds.
 const MAX_BODY_NAME: usize = 256;
 
-/// A datum plane or axis.
+/// A datum plane, axis or point.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Datum {
@@ -27,6 +28,8 @@ pub enum Datum {
     Plane { point: [f64; 3], normal: [f64; 3] },
     /// A point on the axis and its unit direction.
     Axis { point: [f64; 3], direction: [f64; 3] },
+    /// A point.
+    Point { point: [f64; 3] },
 }
 
 impl Datum {
@@ -48,14 +51,40 @@ impl Datum {
         Ok(match self {
             Datum::Plane { point: p, normal } => Datum::Plane { point: point(p)?, normal: unit("normal", normal)? },
             Datum::Axis { point: p, direction } => Datum::Axis { point: point(p)?, direction: unit("direction", direction)? },
+            Datum::Point { point: p } => Datum::Point { point: point(p)? },
         })
     }
 
-    /// The plane's point and unit normal; `None` for an axis.
+    /// The plane's point and unit normal; `None` for an axis or a point.
     pub fn plane(&self) -> Option<([f64; 3], [f64; 3])> {
         match *self {
             Datum::Plane { point, normal } => Some((point, normal)),
-            Datum::Axis { .. } => None,
+            Datum::Axis { .. } | Datum::Point { .. } => None,
+        }
+    }
+
+    /// The axis's point and unit direction; `None` for a plane or a point.
+    pub fn axis(&self) -> Option<([f64; 3], [f64; 3])> {
+        match *self {
+            Datum::Axis { point, direction } => Some((point, direction)),
+            Datum::Plane { .. } | Datum::Point { .. } => None,
+        }
+    }
+
+    /// The point's coordinates; `None` for a plane or an axis.
+    pub fn point(&self) -> Option<[f64; 3]> {
+        match *self {
+            Datum::Point { point } => Some(point),
+            Datum::Plane { .. } | Datum::Axis { .. } => None,
+        }
+    }
+
+    /// `plane`, `axis` or `point`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Datum::Plane { .. } => "plane",
+            Datum::Axis { .. } => "axis",
+            Datum::Point { .. } => "point",
         }
     }
 }
@@ -101,7 +130,9 @@ impl Model {
         remove_existing(&mut self.datums, "datum", name).map(|_| ())
     }
 
-    fn datum_users(&self, name: &str) -> Vec<String> {
+    /// The definitions that refer to a datum (the partitions that cut by it), as `kind \`name\``
+    /// strings.
+    pub fn datum_users(&self, name: &str) -> Vec<String> {
         self.partitions.iter().filter(|p| p.datum == name).map(|p| format!("partition `{}`", p.name)).collect()
     }
 
@@ -123,7 +154,9 @@ impl Model {
         let invalid = |m: String| context("partition", &name, Error::Invalid(m));
         match self.datums.get(&partition.datum) {
             None => return Err(context("partition", &name, Error::NotFound(format!("datum `{}`", partition.datum)))),
-            Some(d) if d.plane().is_none() => return Err(invalid(format!("datum `{}` is an axis; a partition cuts by a plane", partition.datum))),
+            Some(d) if d.plane().is_none() => {
+                return Err(invalid(format!("datum `{}` is a datum {}; a partition cuts by a plane", partition.datum, d.kind())));
+            }
             Some(_) => {}
         }
         if partition.bodies.len() > MAX_PARTITION_BODIES {
@@ -168,6 +201,11 @@ mod tests {
         m.add_partition(p("Half", "Mid")).unwrap();
         assert!(m.add_partition(p("Half", "Mid")).is_err());
         assert!(m.add_partition(p("Bad", "Axis")).is_err());
+        m.add_datum("P", Datum::Point { point: [1.0, 2.0, 3.0] }).unwrap();
+        assert_eq!((m.datum("P").and_then(Datum::point), m.datum("P").map(Datum::kind)), (Some([1.0, 2.0, 3.0]), Some("point")));
+        assert!(m.add_partition(p("Bad", "P")).is_err());
+        assert!(m.add_datum("Q", Datum::Point { point: [f64::NAN, 0.0, 0.0] }).is_err());
+        assert_eq!(m.datum_users("Mid"), ["partition `Half`"]);
         assert!(m.add_partition(p("Bad", "Nope")).is_err());
         assert!(m.add_partition(Partition { bodies: vec!["A".into(), "A".into()], ..p("Bad", "Mid") }).is_err());
         assert!(matches!(m.remove_datum("Mid"), Err(Error::InUse(_))));

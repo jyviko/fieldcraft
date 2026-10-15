@@ -222,10 +222,14 @@ impl Model {
         replace_existing(&mut self.loads, "load", name, load)
     }
 
+    /// The steps that list a load, as `step \`name\`` strings.
+    pub fn load_users(&self, name: &str) -> Vec<String> {
+        self.steps.iter().filter(|s| s.loads.contains(name)).map(|s| format!("step `{}`", s.name)).collect()
+    }
+
     /// Remove a load that no step lists.
     pub fn remove_load(&mut self, name: &str) -> Result<()> {
-        let users = self.steps.iter().filter(|s| s.loads.contains(name)).map(|s| format!("step `{}`", s.name)).collect();
-        not_in_use("load", name, users)?;
+        not_in_use("load", name, self.load_users(name))?;
         remove_existing(&mut self.loads, "load", name).map(|_| ())
     }
 }

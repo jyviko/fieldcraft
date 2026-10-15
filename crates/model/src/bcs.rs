@@ -232,10 +232,14 @@ impl Model {
         replace_existing(&mut self.boundary_conditions, "boundary condition", name, bc)
     }
 
+    /// The steps that list a boundary condition, as `step \`name\`` strings.
+    pub fn boundary_condition_users(&self, name: &str) -> Vec<String> {
+        self.steps.iter().filter(|s| s.boundary_conditions.contains(name)).map(|s| format!("step `{}`", s.name)).collect()
+    }
+
     /// Remove a boundary condition that no step lists.
     pub fn remove_boundary_condition(&mut self, name: &str) -> Result<()> {
-        let users = self.steps.iter().filter(|s| s.boundary_conditions.contains(name)).map(|s| format!("step `{}`", s.name)).collect();
-        not_in_use("boundary condition", name, users)?;
+        not_in_use("boundary condition", name, self.boundary_condition_users(name))?;
         remove_existing(&mut self.boundary_conditions, "boundary condition", name).map(|_| ())
     }
 }

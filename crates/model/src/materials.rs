@@ -511,17 +511,22 @@ impl Model {
     pub fn replace_material(&mut self, name: &str, material: Material) -> Result<()> {
         material.validate().map_err(|e| context("material", name, e))?;
         if material.fluid.is_none()
-            && let Some(d) = self.fluid_domain_users(name).next()
+            && let Some(d) = self.fluid_domains_of_material(name).next()
         {
             return Err(Error::Invalid(format!("material `{name}`: fluid domain `{d}` needs its fluid behaviour")));
         }
         replace_existing(&mut self.materials, "material", name, material)
     }
 
-    pub fn remove_material(&mut self, name: &str) -> Result<()> {
+    /// The definitions that refer to a material, as `kind \`name\`` strings.
+    pub fn material_users(&self, name: &str) -> Vec<String> {
         let mut users: Vec<String> = self.sections.iter().filter(|(_, s)| s.material == name).map(|(n, _)| format!("section `{n}`")).collect();
-        users.extend(self.fluid_domain_users(name).map(|n| format!("fluid domain `{n}`")));
-        not_in_use("material", name, users)?;
+        users.extend(self.fluid_domains_of_material(name).map(|n| format!("fluid domain `{n}`")));
+        users
+    }
+
+    pub fn remove_material(&mut self, name: &str) -> Result<()> {
+        not_in_use("material", name, self.material_users(name))?;
         remove_existing(&mut self.materials, "material", name).map(|_| ())
     }
 }

@@ -113,16 +113,31 @@ pub(crate) fn forget_missing(s: &mut Session) {
 impl Session {
     /// The analysis setup's symbols, without the definitions the view hides.
     pub fn glyphs(&self) -> fieldcraft_render::glyphs::Glyphs {
+        self.glyphs_of(None)
+    }
+
+    /// The symbols of what solved step `step` used, over its results: its own boundary
+    /// conditions and loads (none for a frequency step, which has no loads) and its own initial
+    /// velocities and rigid walls; the interactions as always. Without the view's hidden items.
+    pub fn step_glyphs(&self, step: &str) -> fieldcraft_render::glyphs::Glyphs {
+        self.glyphs_of(Some(step))
+    }
+
+    fn glyphs_of(&self, step: Option<&str>) -> fieldcraft_render::glyphs::Glyphs {
+        use fieldcraft_model::Procedure;
         use fieldcraft_render::glyphs::Definition;
+        let step = step.map(|name| self.model.step(name));
+        let frequency = matches!(step, Some(Some(s)) if matches!(s.procedure, Procedure::Frequency { .. }));
         fieldcraft_render::glyphs::Glyphs::from_model_hiding(&self.model, &|definition, name| {
-            let kind = match definition {
-                Definition::BoundaryCondition => ItemKind::BoundaryCondition,
-                Definition::Load => ItemKind::Load,
-                Definition::ReferencePoint => ItemKind::ReferencePoint,
-                Definition::Coupling => ItemKind::Coupling,
-                Definition::Contact | Definition::Tie | Definition::Step => return false,
+            let (kind, used) = match definition {
+                Definition::BoundaryCondition => (ItemKind::BoundaryCondition, step.map(|s| s.is_some_and(|s| s.boundary_conditions.contains(name)))),
+                Definition::Load => (ItemKind::Load, step.map(|s| !frequency && s.is_some_and(|s| s.loads.contains(name)))),
+                Definition::ReferencePoint => (ItemKind::ReferencePoint, None),
+                Definition::Coupling => (ItemKind::Coupling, None),
+                Definition::Step => return step.is_some_and(|s| s.is_none_or(|s| s.name != name)),
+                Definition::Contact | Definition::Tie => return false,
             };
-            self.view.is_hidden(kind, name)
+            used == Some(false) || self.view.is_hidden(kind, name)
         })
     }
 

@@ -6,7 +6,7 @@
 //! before the first step is the unloaded, unconstrained model; a boundary condition active in
 //! every step can be written at model level by formats that have one.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -834,7 +834,63 @@ impl Step {
     }
 }
 
+/// What solving one step reads from a [`Model`] ([`Model::step_inputs`]), borrowed: two models
+/// whose step inputs serialize the same give the step the same result.
+#[derive(Debug, Serialize)]
+pub struct StepInputs<'a> {
+    nodes: &'a BTreeMap<u32, crate::Node>,
+    elements: &'a BTreeMap<u32, crate::Element>,
+    classification: &'a crate::Classification,
+    units: crate::UnitSystem,
+    sets: BTreeMap<&'a str, &'a crate::Set>,
+    materials: &'a BTreeMap<String, crate::Material>,
+    sections: &'a BTreeMap<String, crate::Section>,
+    reference_points: &'a BTreeMap<String, crate::ReferencePoint>,
+    couplings: &'a BTreeMap<String, crate::Coupling>,
+    contacts: &'a BTreeMap<String, crate::Contact>,
+    ties: &'a BTreeMap<String, crate::Tie>,
+    masses: &'a BTreeMap<String, crate::PointMass>,
+    springs: &'a BTreeMap<String, crate::Spring>,
+    boundary_conditions: BTreeMap<&'a str, &'a crate::BoundaryCondition>,
+    loads: BTreeMap<&'a str, &'a crate::Load>,
+    fluid_domains: &'a BTreeMap<String, crate::FluidDomain>,
+    step: &'a Step,
+}
+
 impl Model {
+    /// What solving step `name` reads: the mesh, the materials, sections, interactions and every
+    /// definition that acts in all steps, the step itself and the boundary conditions, loads and
+    /// sets it uses. Other steps and what only they use are left out (steps are solved each on
+    /// its own), and so are the meshing inputs (datums, partitions, seeds: the mesh they made is
+    /// in). `None` when there is no such step.
+    pub fn step_inputs(&self, name: &str) -> Option<StepInputs<'_>> {
+        let step = self.step(name)?;
+        Some(StepInputs {
+            nodes: &self.nodes,
+            elements: &self.elements,
+            classification: &self.classification,
+            units: self.units,
+            sets: self.sets.iter().filter(|(n, _)| self.step_uses_set(step, n)).map(|(n, s)| (n.as_str(), s)).collect(),
+            materials: &self.materials,
+            sections: &self.sections,
+            reference_points: &self.reference_points,
+            couplings: &self.couplings,
+            contacts: &self.contacts,
+            ties: &self.ties,
+            masses: &self.masses,
+            springs: &self.springs,
+            boundary_conditions: self
+                .boundary_conditions
+                .iter()
+                .filter(|(n, _)| step.boundary_conditions.contains(*n))
+                .map(|(n, b)| (n.as_str(), b))
+                .collect(),
+            loads: self.loads.iter().filter(|(n, _)| step.loads.contains(*n)).map(|(n, l)| (n.as_str(), l)).collect(),
+            fluid_domains: &self.fluid_domains,
+            step,
+        })
+    }
+
     /// The steps in analysis order.
     pub fn steps(&self) -> &[Step] {
         &self.steps

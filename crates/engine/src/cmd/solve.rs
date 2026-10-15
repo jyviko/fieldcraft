@@ -1397,8 +1397,8 @@ pub(crate) mod tests {
         s.execute("model.step.create", &json!({"name": "Long", "procedure": long})).unwrap();
         assert!(s.execute("solve.explicit", &json!({"step": "Long"})).unwrap_err().to_string().contains("increments"));
         assert!(s.execute("model.set.delete", &json!({"name": "all_nodes"})).unwrap_err().to_string().contains("step `Impact`"));
-        // Defining steps edited the model, so the impact result is stale.
-        assert_eq!(s.solved_steps().count(), 0);
+        // Defining other steps left what the impact step reads alone: its result is current.
+        assert_eq!(s.solved_steps().collect::<Vec<_>>(), ["Impact"]);
     }
 
     /// A mass on a spring and a dashpot, defined, solved and written through commands; editing

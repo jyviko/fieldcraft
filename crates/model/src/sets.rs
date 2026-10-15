@@ -135,6 +135,18 @@ impl Model {
 
     /// The definitions that refer to a set, as `kind \`name\`` strings.
     pub fn set_users(&self, set: &str) -> Vec<String> {
+        let mut users = self.set_model_users(set);
+        users
+            .extend(self.boundary_conditions.iter().filter(|(_, b)| b.target().set() == Some(set)).map(|(n, _)| format!("boundary condition `{n}`")));
+        users.extend(self.loads.iter().filter(|(_, l)| l.set() == Some(set)).map(|(n, _)| format!("load `{n}`")));
+        users.extend(self.steps.iter().filter(|s| s.procedure.sets().any(|x| x == set)).map(|s| format!("step `{}`", s.name)));
+        users
+    }
+
+    /// The users of a set that act in every step (sections, couplings, contacts, ties, point
+    /// masses and springs): all but boundary conditions, loads and steps, which act only in the
+    /// steps that list them ([`Model::step_inputs`]).
+    fn set_model_users(&self, set: &str) -> Vec<String> {
         let mut users = Vec::new();
         users.extend(self.sections.iter().filter(|(_, s)| s.set == set).map(|(n, _)| format!("section `{n}`")));
         users.extend(self.couplings.iter().filter(|(_, c)| c.set == set).map(|(n, _)| format!("coupling `{n}`")));
@@ -142,10 +154,15 @@ impl Model {
         users.extend(self.tie_users(set));
         users.extend(self.discrete_users(|t| t.set() == Some(set)));
         users
-            .extend(self.boundary_conditions.iter().filter(|(_, b)| b.target().set() == Some(set)).map(|(n, _)| format!("boundary condition `{n}`")));
-        users.extend(self.loads.iter().filter(|(_, l)| l.set() == Some(set)).map(|(n, _)| format!("load `{n}`")));
-        users.extend(self.steps.iter().filter(|s| s.procedure.sets().any(|x| x == set)).map(|s| format!("step `{}`", s.name)));
-        users
+    }
+
+    /// Whether solving `step` reads set `set`: a definition acting in every step refers to it,
+    /// or one of the step's own boundary conditions and loads, or its procedure.
+    pub(crate) fn step_uses_set(&self, step: &crate::Step, set: &str) -> bool {
+        !self.set_model_users(set).is_empty()
+            || step.boundary_conditions.iter().any(|n| self.boundary_conditions.get(n).is_some_and(|b| b.target().set() == Some(set)))
+            || step.loads.iter().any(|n| self.loads.get(n).is_some_and(|l| l.set() == Some(set)))
+            || step.procedure.sets().any(|x| x == set)
     }
 
     /// Resolve one set against the current mesh. The error names every member that is not on

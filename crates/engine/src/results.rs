@@ -8,11 +8,12 @@
 //! earlier revision is still shown, marked stale ([`Session::latest_result`]).
 
 use fieldcraft_explicit::{ExplicitResult, Frame};
-use fieldcraft_model::Model;
+use fieldcraft_model::{Model, UnitSystem};
 use fieldcraft_solver::{FrequencyResult, HeatResult, StaticResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::schema::Dim;
 use crate::{EngineError, Result, Session, StepResult};
 
 /// A result by its procedure.
@@ -182,6 +183,49 @@ impl Field {
         }
     }
 
+    /// What it measures.
+    pub fn quantity(self) -> Quantity {
+        match self {
+            Field::Displacement | Field::DisplacementX | Field::DisplacementY | Field::DisplacementZ | Field::ContactSlip => Quantity::Length,
+            Field::Velocity => Quantity::Velocity,
+            Field::Temperature => Quantity::Temperature,
+            Field::HeatFlux => Quantity::HeatFlux,
+            Field::ContactGap | Field::ContactStatus => Quantity::None,
+            Field::ContactPressure
+            | Field::ContactShear
+            | Field::VonMises
+            | Field::MaxPrincipal
+            | Field::MidPrincipal
+            | Field::MinPrincipal
+            | Field::StressXx
+            | Field::StressYy
+            | Field::StressZz
+            | Field::StressXy
+            | Field::StressXz
+            | Field::StressYz => Quantity::Stress,
+        }
+    }
+
+    /// Whether `r` holds it as a mode shape: normalised, with no unit.
+    pub fn is_mode_shape(self, r: &StepResult) -> bool {
+        matches!(r.kind(), Kind::Frequency(_)) && self.quantity() == Quantity::Length
+    }
+
+    /// Its unit for result `r` in `system`: none for a mode shape (it is normalised).
+    pub fn unit(self, r: &StepResult, system: UnitSystem) -> Option<String> {
+        if self.is_mode_shape(r) { None } else { self.quantity().unit(system) }
+    }
+
+    /// Its title over result `r`: the label with its unit (`Von Mises stress [MPa]`), or, for
+    /// a mode shape, saying it is normalised.
+    pub fn title(self, r: &StepResult, system: UnitSystem) -> String {
+        if self.is_mode_shape(r) {
+            let label = self.label().trim_end_matches(" magnitude");
+            return format!("{label} (mode shape, normalised)");
+        }
+        with_unit(self.label(), self.unit(r, system).as_deref())
+    }
+
     pub fn parse(id: &str) -> Option<Field> {
         Field::ALL.into_iter().find(|f| f.id() == id)
     }
@@ -238,6 +282,76 @@ impl Field {
     }
 }
 
+/// What a number the results show measures: its unit follows the model's unit system
+/// ([`Quantity::unit`]). The legend, the probe, the reaction sums and the solve summary all name
+/// their units through it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Quantity {
+    /// No unit (a ratio, a code, a normalised value).
+    None,
+    Length,
+    Stress,
+    Force,
+    Moment,
+    Mass,
+    Time,
+    Velocity,
+    Temperature,
+    /// Energy (work): force × length.
+    Energy,
+    /// Heat flow (power): energy per time.
+    HeatFlow,
+    /// Heat flux: heat flow per area.
+    HeatFlux,
+}
+
+impl Quantity {
+    /// Its unit in `system` (`mm`, `MPa`, `N·mm`, `mW`…), or `None` (no unit, or the system is
+    /// unspecified). The model never converts, so this only names the system's own unit; a
+    /// temperature is in whatever scale its values were entered in.
+    pub fn unit(self, system: UnitSystem) -> Option<String> {
+        let dim = match self {
+            Quantity::None => return None,
+            Quantity::Length => Dim::Length,
+            Quantity::Stress => Dim::Stress,
+            Quantity::Force => Dim::Force,
+            Quantity::Moment => Dim::Moment,
+            Quantity::Mass => Dim::Mass,
+            Quantity::Time => Dim::Time,
+            Quantity::Velocity => Dim::Velocity,
+            Quantity::Temperature | Quantity::Energy | Quantity::HeatFlow | Quantity::HeatFlux => {
+                // Named units where the system's force × length (per time) has one.
+                let (energy, power, flux) = match system {
+                    UnitSystem::Unspecified => return None,
+                    UnitSystem::MKgS => ("J", "W", "W/m²"),
+                    UnitSystem::MmTonneS => ("mJ", "mW", "mW/mm²"),
+                    UnitSystem::MmKgMs => ("J", "kW", "kW/mm²"),
+                    UnitSystem::MmGMs => ("mJ", "W", "W/mm²"),
+                    UnitSystem::InLbfS => ("lbf·in", "lbf·in/s", "lbf/(in·s)"),
+                };
+                return Some(
+                    match self {
+                        Quantity::Energy => energy,
+                        Quantity::HeatFlow => power,
+                        Quantity::HeatFlux => flux,
+                        _ => "°C or K",
+                    }
+                    .into(),
+                );
+            }
+        };
+        dim.unit(system)
+    }
+}
+
+/// `label` with `unit` in brackets when there is one: `Von Mises stress [MPa]`.
+pub fn with_unit(label: &str, unit: Option<&str>) -> String {
+    match unit {
+        Some(u) => format!("{label} [{u}]"),
+        None => label.to_string(),
+    }
+}
+
 /// Most contour bands.
 pub const MAX_BANDS: u32 = 24;
 /// Fewest contour bands.
@@ -268,11 +382,12 @@ pub struct ResultsView {
 }
 
 impl ResultsView {
-    /// How a step's result is shown first: a static step undeformed with von Mises contours, so
-    /// they are read on the true geometry (`results.deformed` shows the deformed shape, at the
-    /// automatic scale); a frequency step's first mode deformed with displacement contours (a
-    /// mode shape is a deformation); an explicit step at its last frame, deformed to true scale
-    /// (with von Mises contours when it kept stresses); a heat step undeformed.
+    /// How a step's result is shown first: a linear static step undeformed with von Mises
+    /// contours, so they are read on the true geometry (`results.deformed` shows the deformed
+    /// shape, at the automatic scale); a frequency step's first mode deformed with displacement
+    /// contours (a mode shape is a deformation); an explicit step at its last frame and a
+    /// nonlinear static step at its last increment, deformed to true scale ([`true_scale`];
+    /// with von Mises contours when they kept stresses); a heat step undeformed.
     pub fn for_result(r: &StepResult) -> ResultsView {
         let heat = matches!(r.kind(), Kind::Heat(_));
         let contour = if heat {
@@ -282,11 +397,11 @@ impl ResultsView {
         } else {
             Field::Displacement
         };
-        let scale = matches!(r.kind(), Kind::Explicit(_)).then_some(1.0);
+        let true_scale = true_scale(r);
         ResultsView {
             step: r.step().to_string(),
-            deformed: matches!(r.kind(), Kind::Frequency(_) | Kind::Explicit(_)),
-            scale,
+            deformed: true_scale || matches!(r.kind(), Kind::Frequency(_)),
+            scale: true_scale.then_some(1.0),
             contour: Some(contour),
             bands: DEFAULT_BANDS,
             mode: 1,
@@ -298,6 +413,33 @@ impl ResultsView {
     pub fn pick(&self) -> Pick {
         Pick { mode: self.mode, frame: self.frame }
     }
+}
+
+/// The automatic deformation scale draws the largest displacement this fraction of the model's
+/// size.
+pub const AUTO_FRACTION: f64 = 0.1;
+
+/// Whether a result's deformation is drawn at true scale even when the scale is automatic: an
+/// explicit step's and a nonlinear static step's displacements are already large (finite strain,
+/// contact), and magnifying them draws the part crushed through its neighbours. Linear static,
+/// frequency and buckling results are magnified.
+pub fn true_scale(r: &StepResult) -> bool {
+    match r.kind() {
+        Kind::Explicit(_) => true,
+        Kind::Static(s) => s.nonlinear.is_some(),
+        Kind::Frequency(_) | Kind::Fluid(_) | Kind::Heat(_) => false,
+    }
+}
+
+/// The automatic deformation scale of `r` at `pick` on a model `size` across (its bounding box
+/// diagonal): 1 for a [`true_scale`] result, else the factor that draws the largest
+/// displacement [`AUTO_FRACTION`] of the size; 0 when nothing moves.
+pub fn auto_scale(r: &StepResult, pick: Pick, size: f64) -> f64 {
+    if true_scale(r) {
+        return 1.0;
+    }
+    let largest = displacements(r, pick).map_or(0.0, |u| u.iter().map(|v| magnitude(*v)).filter(|m| m.is_finite()).fold(0.0, f64::max));
+    if largest > 0.0 && size.is_finite() && size > 0.0 { AUTO_FRACTION * size / largest } else { 0.0 }
 }
 
 /// The nodal displacements a result's deformed shape uses: the static displacement, the shape
@@ -458,6 +600,27 @@ pub fn range(labels: &[u32], values: &[f64]) -> Option<((u32, f64), (u32, f64))>
     out
 }
 
+/// A fingerprint of what solving step `step` of `model` reads ([`Model::step_inputs`]), or
+/// `None` when there is no such step.
+pub(crate) fn inputs_fingerprint(model: &Model, step: &str) -> Option<u64> {
+    use std::hash::Hasher;
+    /// Hashes what is written to it.
+    struct HashWriter(std::hash::DefaultHasher);
+    impl std::io::Write for HashWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.write(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let inputs = model.step_inputs(step)?;
+    let mut h = HashWriter(std::hash::DefaultHasher::new());
+    serde_json::to_writer(&mut h, &inputs).ok()?;
+    Some(h.0.finish())
+}
+
 pub fn magnitude(v: [f64; 3]) -> f64 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
@@ -481,7 +644,7 @@ impl Session {
         {
             let ends =
                 range(r.nodes(), &values).map(|((ln, lv), (hn, hv))| json!({"min": {"node": ln, "value": lv}, "max": {"node": hn, "value": hv}}));
-            out["contour"] = json!({"field": f, "label": f.label(), "range": ends});
+            out["contour"] = json!({"field": f, "label": f.label(), "unit": f.unit(r, self.model.units()), "range": ends});
         }
         match r.kind() {
             Kind::Frequency(fr) => {
@@ -572,6 +735,58 @@ mod tests {
         assert!(s.result("Bend").is_none());
         assert_eq!(s.latest_result("Bend").map(|(_, current)| current), Some(false));
         assert_eq!(s.result_steps().collect::<Vec<_>>(), vec![("Bend", false), ("Modes", false)]);
+    }
+
+    /// A step's result goes stale only when something it reads changes (#318); undoing the
+    /// change makes it current again.
+    #[test]
+    fn unrelated_edits_keep_results_current() {
+        let mut s = Session::default();
+        cantilever(&mut s);
+        s.execute("solve.static", &json!({})).unwrap();
+        s.execute("solve.frequency", &json!({})).unwrap();
+        // A set, a boundary condition and a step that neither solved step uses.
+        s.execute("model.set.create", &json!({"name": "extra", "nodes": [1]})).unwrap();
+        s.execute("model.boundary_condition.create", &json!({"name": "X", "type": "fixed", "target": {"set": "extra"}})).unwrap();
+        s.execute("model.step.create", &json!({"name": "Other", "procedure": {"type": "static"}, "boundary_conditions": ["X"]})).unwrap();
+        assert_eq!(s.result_steps().collect::<Vec<_>>(), vec![("Bend", true), ("Modes", true)]);
+        // The load only Bend lists: Bend goes stale, Modes (no loads) stays current.
+        s.execute("model.load.edit", &json!({"name": "push", "type": "force", "target": {"set": "tip"}, "vector": [0, 0, -2]})).unwrap();
+        assert_eq!(s.result_steps().collect::<Vec<_>>(), vec![("Bend", false), ("Modes", true)]);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.result_steps().collect::<Vec<_>>(), vec![("Bend", true), ("Modes", true)]);
+        // The clamp's set, which both use.
+        s.execute("model.set.edit", &json!({"name": "root", "nodes": [1, 12]})).unwrap();
+        assert_eq!(s.result_steps().collect::<Vec<_>>(), vec![("Bend", false), ("Modes", false)]);
+        s.execute("edit.undo", &json!({})).unwrap();
+        // A step's own definition.
+        s.execute("model.step.edit", &json!({"name": "Modes", "procedure": {"type": "frequency", "modes": 3}, "boundary_conditions": ["clamp"]}))
+            .unwrap();
+        assert_eq!(s.result_steps().collect::<Vec<_>>(), vec![("Bend", true), ("Modes", false)]);
+    }
+
+    #[test]
+    fn units_follow_the_unit_system() {
+        let mut s = Session::default();
+        cantilever(&mut s);
+        s.execute("solve.static", &json!({})).unwrap();
+        s.execute("solve.frequency", &json!({})).unwrap();
+        let mm = UnitSystem::MmTonneS;
+        let (bend, _) = s.latest_result("Bend").unwrap();
+        let (modes, _) = s.latest_result("Modes").unwrap();
+        assert_eq!(Field::VonMises.title(bend, mm), "Von Mises stress [MPa]");
+        assert_eq!(Field::Displacement.title(bend, mm), "Displacement magnitude [mm]");
+        assert_eq!(Field::Displacement.title(modes, mm), "Displacement (mode shape, normalised)");
+        assert_eq!(Field::DisplacementZ.title(modes, mm), "Displacement Z (mode shape, normalised)");
+        assert_eq!(Field::VonMises.title(bend, UnitSystem::Unspecified), "Von Mises stress");
+        assert_eq!(Field::ContactStatus.unit(bend, mm), None);
+        let unit = |q: Quantity, u: UnitSystem| q.unit(u);
+        assert_eq!(unit(Quantity::HeatFlow, mm).as_deref(), Some("mW"));
+        assert_eq!(unit(Quantity::Energy, mm).as_deref(), Some("mJ"));
+        assert_eq!(unit(Quantity::Moment, mm).as_deref(), Some("N·mm"));
+        assert_eq!(unit(Quantity::Energy, UnitSystem::MKgS).as_deref(), Some("J"));
+        assert_eq!(unit(Quantity::Temperature, UnitSystem::Unspecified), None);
+        assert_eq!(unit(Quantity::None, mm), None);
     }
 
     #[test]

@@ -8,7 +8,8 @@
 //! deformed shape (automatic or chosen scale) with its contour bands. Animation is not drawn: a
 //! picture shows the full deformation (a mode at its positive shape). The analysis setup's
 //! symbols ([`fieldcraft_render::glyphs`]) are drawn over the model as the viewport draws them,
-//! muted over a results plot, at their default size on screen once the camera is known.
+//! muted over a results plot (and only those its step used), at their default size on screen
+//! once the camera is known.
 
 use fieldcraft_model::ElementKind;
 use fieldcraft_render::contour::{Bands, band_color, split_triangle};
@@ -16,7 +17,7 @@ use fieldcraft_render::glyphs::{self, GlyphColors, GlyphShow, GlyphView, Glyphs}
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Orientation, Rgb, Scene, SceneLine, SceneTri, Vec3};
 use serde_json::Value;
 
-use crate::results::{displacements, field_values, magnitude, range};
+use crate::results::{auto_scale, displacements, field_values, range};
 use crate::{EngineError, Result, Session};
 
 /// The colours of a picture.
@@ -93,8 +94,6 @@ impl Palette {
 const EDGE_WIDTH: f64 = 1.0;
 const GEOMETRY_EDGE_WIDTH: f64 = 1.5;
 const LINE_ELEMENT_WIDTH: f64 = 3.0;
-/// The automatic scale draws the largest displacement this fraction of the model's size.
-const AUTO_FRACTION: f64 = 0.1;
 
 /// The chordal tolerance geometry is tessellated with for display: a thousandth of its size.
 fn display_tolerance(b: &Aabb3) -> f64 {
@@ -182,9 +181,10 @@ impl Picture {
 
 fn picture(s: &Session, p: &Palette) -> Picture {
     let (base, failed) = display(s);
-    let glyphs = s.glyphs();
     let mut shown = Shown { failed, ..Shown::default() };
     let plot = s.results_view.as_ref().and_then(|v| s.latest_result(&v.step).map(|(r, _)| (v, r)));
+    // Over a results plot, the symbols of what its step used.
+    let glyphs = plot.map_or_else(|| s.glyphs(), |(v, _)| s.step_glyphs(&v.step));
     let Some((view, result)) = plot else {
         let mut scene = model_scene(&base, p);
         let bounds = base.bounds;
@@ -196,15 +196,7 @@ fn picture(s: &Session, p: &Palette) -> Picture {
     let pick = view.pick();
     let nodes = result.nodes();
     let u = displacements(result, pick).unwrap_or(&[]);
-    let scale = if !view.deformed {
-        0.0
-    } else if let Some(k) = view.scale {
-        k
-    } else {
-        let largest = u.iter().map(|v| magnitude(*v)).filter(|m| m.is_finite()).fold(0.0, f64::max);
-        let size = base.bounds.diagonal();
-        if largest > 0.0 && size.is_finite() && size > 0.0 { AUTO_FRACTION * size / largest } else { 0.0 }
-    };
+    let scale = if !view.deformed { 0.0 } else { view.scale.unwrap_or_else(|| auto_scale(result, pick, base.bounds.diagonal())) };
     shown.scale = scale;
     let drawn = base.displaced(|label| {
         let i = nodes.binary_search(&label).ok()?;

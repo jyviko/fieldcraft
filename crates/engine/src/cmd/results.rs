@@ -63,7 +63,7 @@ pub const FRAME: CommandSpec = CommandSpec {
 pub const REACTIONS: CommandSpec = CommandSpec {
     id: "results.reactions",
     label: "Reaction Sums",
-    params: r#"{"step": "Load", "sets": ["root"], "about": [0, 0, 0]} — reaction force and moment (about the point) summed over each node set, and over the whole model; `sets` defaults to the sets the step's boundary conditions hold"#,
+    params: r#"{"step": "Load", "sets": ["root"], "about": [0, 0, 0]} — reaction force and moment (about the point) summed over each node set, and over the whole model; `sets` (none or empty) defaults to the sets the step's boundary conditions hold"#,
     form: Some(super::forms::REACTIONS),
     kind: CommandKind::Session,
     requires: &[Requirement::Result],
@@ -281,7 +281,8 @@ fn reactions(s: &mut Session, p: &Value) -> Result<Value> {
             "step `{step}` is not a static step: reactions are kept for static steps (explicit steps keep the constraint force history, solve.history)"
         )));
     };
-    let sets: Vec<String> = match p.get("sets") {
+    // No sets (or an empty list, a form with none ticked): the step's boundary-condition sets.
+    let sets: Vec<String> = match p.get("sets").filter(|v| v.as_array().is_none_or(|a| !a.is_empty())) {
         Some(v) => {
             let list = v
                 .as_array()
@@ -369,6 +370,13 @@ mod tests {
         assert!(s.execute("results.contour", &json!({"field": "von_mises"})).is_err());
         s.execute("results.contour", &json!({"field": "displacement", "bands": 6})).unwrap();
         s.execute("results.animate", &json!({})).unwrap();
+        // Changing the field keeps the deformation, its scale and the animation (#332).
+        s.execute("results.deformed", &json!({"scale": 3})).unwrap();
+        let r = s.execute("results.contour", &json!({"step": "Modes", "field": "displacement_z"})).unwrap();
+        assert_eq!(
+            (r["view"]["deformed"].as_bool(), r["view"]["scale"].as_f64(), r["view"]["animate"].as_bool()),
+            (Some(true), Some(3.0), Some(true))
+        );
         assert!(s.results_view.as_ref().is_some_and(|v| v.animate && v.bands == 6));
         s.execute("results.animate", &json!({"on": false})).unwrap();
         assert!(s.results_view.as_ref().is_some_and(|v| !v.animate));
@@ -398,6 +406,8 @@ mod tests {
         let r = s.execute("results.reactions", &json!({"sets": ["root", "tip"], "about": [10, 0, 0]})).unwrap();
         assert!(r["sets"][0]["moment"][1].as_f64().unwrap().abs() < 1e-6, "{r}");
         assert_eq!(r["sets"][1]["force"][2].as_f64(), Some(0.0));
+        let empty = s.execute("results.reactions", &json!({"sets": []})).unwrap();
+        assert_eq!(empty["sets"][0]["set"], "root", "an empty list sums the step's boundary-condition sets: {empty}");
         assert!(s.execute("results.reactions", &json!({"step": "Modes"})).is_err());
         assert!(s.execute("results.reactions", &json!({"sets": ["nope"]})).is_err());
     }

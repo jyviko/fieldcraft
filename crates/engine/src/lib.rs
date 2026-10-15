@@ -247,6 +247,9 @@ pub struct Session {
     /// The latest result of each solved step, by step name, with the revision it was solved at;
     /// [`Session::result`] hands out only those that describe the current state.
     results: BTreeMap<String, (u64, Arc<StepResult>)>,
+    /// What each solved step read ([`results::inputs_fingerprint`]): an edit that leaves it the
+    /// same keeps the step's result current.
+    result_inputs: BTreeMap<String, u64>,
     /// What the results display shows (`results.*`); `None` shows the model.
     pub results_view: Option<results::ResultsView>,
     /// The default work caps of commands; a file replacing the session keeps them.
@@ -331,6 +334,9 @@ impl Session {
                 cmd::view::forget_missing(self);
             }
         }
+        if self.revision != revision {
+            self.refresh_results();
+        }
         drop(scope);
         crash::command_done(self, journaled, self.revision != revision || self.opened != opened, id, params, &result);
         result
@@ -396,7 +402,25 @@ impl Session {
             }
             Some(_) => {}
         }
-        self.results.insert(result.step().to_string(), (self.revision, Arc::new(result)));
+        let step = result.step().to_string();
+        match results::inputs_fingerprint(&self.model, &step) {
+            Some(f) => self.result_inputs.insert(step.clone(), f),
+            None => self.result_inputs.remove(&step),
+        };
+        self.results.insert(step, (self.revision, Arc::new(result)));
+    }
+
+    /// After the state changed (an edit, undo or redo): a result whose step reads what it read
+    /// when it was solved describes the new state too, so it stays (or is again) current; the
+    /// others go stale.
+    fn refresh_results(&mut self) {
+        let revision = self.revision;
+        for (step, (solved, _)) in self.results.iter_mut().filter(|(_, (r, _))| *r != revision) {
+            let read = self.result_inputs.get(step).copied();
+            if read.is_some() && read == results::inputs_fingerprint(&self.model, step) {
+                *solved = revision;
+            }
+        }
     }
 
     /// The path to use for `access` to the file at `path`, checked against [`Session::file_access`].

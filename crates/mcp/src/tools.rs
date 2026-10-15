@@ -137,7 +137,9 @@ pub fn tool_definitions() -> Vec<Value> {
             "Check the model",
             "The model check (model.check): every error and warning, each naming its item (a set member not on the \
              mesh, an element with no section, a missing density for a frequency step, implausible units…). A model \
-             with errors does not solve or write.",
+             with errors does not solve or write. `progress` is the setup checklist: `next` names the next stage and \
+             the command that does it, `stages` every stage (geometry … results) as done, next, todo, blocked or \
+             optional.",
             obj(json!({}), &[]),
             true,
             false,

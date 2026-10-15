@@ -9,7 +9,9 @@
 //!   face;
 //! - **parity**: `Σ_L x` even on every loop of a face meshed by the free all-quad mesher (a
 //!   multiple of 4 around a disk meshed as an O-grid);
-//! - **minimum sums** `Σ_L x ≥ m`: a loop needs enough points to be meshed.
+//! - **minimum sums** `Σ_L x ≥ m`: a loop needs enough points to be meshed;
+//! - **dominance** `Σ_A x ≥ Σ_B x + d`: a side of a triangle primitive shorter than the other two
+//!   together.
 //!
 //! Mitchell's *incremental interval assignment* (Mitchell, *Incremental interval assignment by
 //! integer linear algebra*, International Meshing Roundtable 2021; Computer-Aided Design 158:103485, 2023) starts from a
@@ -37,6 +39,8 @@ pub(crate) struct Intervals {
     pub multiple: Vec<(Vec<usize>, usize)>,
     /// `Σ vars ≥ min`.
     pub at_least: Vec<(Vec<usize>, usize)>,
+    /// `Σ lhs ≥ Σ rhs + d`.
+    pub exceed: Vec<(Vec<usize>, Vec<usize>, usize)>,
     /// Variables held at their goal (an exact edge seed), with the seed in words; empty or
     /// `None`: free.
     pub fixed: Vec<Option<String>>,
@@ -109,6 +113,7 @@ impl Intervals {
         if !self.equal.iter().all(|(a, b)| check(a) && check(b))
             || !self.multiple.iter().all(|(l, m)| check(l) && *m >= 2)
             || !self.at_least.iter().all(|(l, _)| check(l))
+            || !self.exceed.iter().all(|(a, b, _)| check(a) && check(b))
         {
             return Err(Error::Failed("interval assignment: a constraint names an unknown curve".into()));
         }
@@ -131,7 +136,7 @@ impl Intervals {
             error(i, c + 1) - error(i, c)
         };
         let total: usize = x.iter().sum();
-        let constraints = self.equal.len() + self.multiple.len() + self.at_least.len();
+        let constraints = self.equal.len() + self.multiple.len() + self.at_least.len() + self.exceed.len();
         let max_steps = total.saturating_mul(8).saturating_add(64 * (n + constraints)).saturating_add(1000);
         for _ in 0..max_steps {
             let sum = |v: &[usize], x: &[usize]| v.iter().map(|&i| x.get(i).copied().unwrap_or(0)).sum::<usize>();
@@ -164,6 +169,28 @@ impl Intervals {
                         let free: Vec<usize> = l.iter().copied().filter(|&i| !self.is_fixed(i)).collect();
                         if free.is_empty() {
                             return Err(self.conflict(l, &format!("a face's loop needs at least {m} divisions")));
+                        }
+                        raise = Some(free);
+                        break;
+                    }
+                }
+            }
+            if raise.is_none() {
+                for (a, b, d) in &self.exceed {
+                    let (sa, sb) = (sum(a, &x), sum(b, &x));
+                    if sa < sb.saturating_add(*d) {
+                        let net = |i: usize| a.iter().filter(|&&k| k == i).count() as i64 - b.iter().filter(|&&k| k == i).count() as i64;
+                        let cands: Vec<usize> = a.iter().copied().filter(|&i| net(i) > 0).collect();
+                        if cands.is_empty() {
+                            return Err(Error::Failed("interval assignment: a dominance constraint cannot be met".into()));
+                        }
+                        let free: Vec<usize> = cands.into_iter().filter(|&i| !self.is_fixed(i)).collect();
+                        if free.is_empty() {
+                            let all: Vec<usize> = a.iter().chain(b).copied().collect();
+                            return Err(self.conflict(
+                                &all,
+                                &format!("a side of a three-sided face needs fewer divisions than the other two ({sb} against {sa})"),
+                            ));
                         }
                         raise = Some(free);
                         break;
@@ -288,6 +315,21 @@ mod tests {
         r.multiple.push((vec![a], 2));
         r.seed(a, &seed("A", 3, SeedConstraint::Exact));
         assert!(r.solve().unwrap_err().to_string().contains("multiple of 2"));
+    }
+
+    #[test]
+    fn dominance_raises_the_other_sides() {
+        // A triangle's sides: 6 against 1 + 2 needs the short sides raised to 8 together.
+        let mut p = Intervals::default();
+        let a = p.var(6.0, 1);
+        let b = p.var(1.0, 1);
+        let c = p.var(2.0, 1);
+        p.exceed.push((vec![b, c], vec![a], 2));
+        p.exceed.push((vec![a, c], vec![b], 2));
+        p.exceed.push((vec![a, b], vec![c], 2));
+        let x = p.solve().unwrap();
+        assert_eq!(x[a], 6);
+        assert!(x[b] + x[c] >= 8, "{x:?}");
     }
 
     #[test]

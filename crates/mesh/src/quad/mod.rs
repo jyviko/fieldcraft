@@ -71,7 +71,7 @@ mod cdt;
 mod domain;
 mod free;
 mod guard;
-mod smooth;
+pub(crate) mod smooth;
 pub mod tfi;
 
 pub use domain::{MAX_BOUNDARY_POINTS, MAX_LOOPS};

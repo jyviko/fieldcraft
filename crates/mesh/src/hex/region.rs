@@ -9,6 +9,16 @@
 //!   counts and the ring between them is a periodic structured grid, each radial line joining a
 //!   node of the outer loop to its partner on the inner loop (the rotation that pairs them most
 //!   closely) — the O-grid of a tube's cross-section.
+//! - **Triangle**: one loop with three corners (a fillet's quarter disk, the corner of a
+//!   pocket cut off by a partition): the triangle primitive of midpoint subdivision (Tam and
+//!   Armstrong, *2D finite element mesh generation by medial axis subdivision*, Advances in
+//!   Engineering Software 13(5–6):313–324, 1991; Li, Armstrong, McKeag, *Quad mesh generation for
+//!   k-sided faces and hex mesh generation for trivalent polyhedra*, Finite Elements in Analysis
+//!   and Design 26(4):279–301, 1997): lines from a centre to one node on each side split the
+//!   region into three mapped quadrilateral blocks. Side `k` with `n_k` divisions is split into
+//!   `m_{k-1}` and `m_{k+1}` divisions, the counts of the lines that end on the sides before
+//!   and after it, so `m_k = (n_{k+1} + n_{k+2} − n_k) / 2`: the loop's count is even and each
+//!   side shorter than the other two together.
 //! - **Disk**: one smooth loop (no corners): an O-grid ("butterfly"): a mapped square in the
 //!   middle, its corners halfway from the centroid to the loop's quarter points, and rings of
 //!   quadrilaterals from the square out to the loop. The loop's count is a multiple of four.
@@ -31,10 +41,15 @@ type Q = [f64; 2];
 /// The most nodes the annulus pairing compares (its cost is quadratic in the loop length).
 const MAX_ANNULUS_NODES: usize = 4096;
 
+/// Smoothing sweeps over the interior of a triangle primitive.
+const TRIANGLE_SWEEPS: usize = 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scheme {
     /// Corner positions (curve uses) in the single loop.
     Mapped([usize; 4]),
+    /// Corner positions (curve uses) in the single loop.
+    Triangle([usize; 3]),
     Annulus,
     Disk,
     Free,
@@ -78,7 +93,11 @@ pub(crate) fn classify(loops: &[Vec<Vec<Q>>]) -> Scheme {
             if corners.is_empty() {
                 return Scheme::Disk;
             }
-            corners.try_into().map(Scheme::Mapped).unwrap_or(Scheme::Free)
+            match corners[..] {
+                [a, b, c] => Scheme::Triangle([a, b, c]),
+                [a, b, c, d] => Scheme::Mapped([a, b, c, d]),
+                _ => Scheme::Free,
+            }
         }
         [outer, inner] => {
             let smooth = |lp: &Vec<Vec<Q>>| angles(lp, ccw(lp)).is_some_and(|a| a.iter().all(|&x| x > 0.75 * PI && x < 1.25 * PI));
@@ -88,14 +107,34 @@ pub(crate) fn classify(loops: &[Vec<Vec<Q>>]) -> Scheme {
     }
 }
 
+/// The curve variables of each side of a loop between its corners (positions in increasing
+/// order); the last side wraps round to the first corner.
+fn loop_sides<const N: usize>(lp: &[usize], c: [usize; N]) -> [Vec<usize>; N] {
+    std::array::from_fn(|k| {
+        let (a, b) = (c[k], c.get(k + 1).copied().unwrap_or(c[0] + lp.len()));
+        (a..b).filter_map(|i| lp.get(i % lp.len()).copied()).collect()
+    })
+}
+
 /// Add the scheme's constraints on the loops' curve variables.
 pub(crate) fn constrain(ia: &mut Intervals, loops: &[Vec<usize>], scheme: Scheme) {
     match scheme {
         Scheme::Mapped(c) => {
             let Some(lp) = loops.first() else { return };
-            let side = |a: usize, b: usize| (a..b).filter_map(|k| lp.get(k).copied()).collect::<Vec<_>>();
-            ia.equal.push((side(c[0], c[1]), side(c[2], c[3])));
-            ia.equal.push((side(c[1], c[2]), side(c[3], lp.len()).into_iter().chain(side(0, c[0])).collect()));
+            let [s0, s1, s2, s3] = loop_sides(lp, c);
+            ia.equal.push((s0, s2));
+            ia.equal.push((s1, s3));
+        }
+        Scheme::Triangle(c) => {
+            // Even, and each side at least two divisions shorter than the other two together
+            // (each line from the centre at least one division).
+            let Some(lp) = loops.first() else { return };
+            let sides = loop_sides(lp, c);
+            for k in 0..3 {
+                let others = sides[(k + 1) % 3].iter().chain(&sides[(k + 2) % 3]).copied().collect();
+                ia.exceed.push((others, sides[k].clone(), 2));
+            }
+            ia.multiple.push((lp.clone(), 2));
         }
         Scheme::Annulus => {
             if let (Some(o), Some(i)) = (loops.first(), loops.get(1)) {
@@ -134,6 +173,11 @@ pub(crate) fn mesh(loops: &[Vec<Q>], starts: &[Vec<usize>], scheme: Scheme, size
                 _ => None,
             }
         }
+        Scheme::Triangle(c) => {
+            let s0 = starts.first();
+            let pos = c.map(|k| s0.and_then(|s| s.get(k)).copied().unwrap_or(0));
+            loops.first().map(|b| triangle(b, pos, opts)).transpose()?.flatten()
+        }
         Scheme::Annulus => annulus(loops, size, opts)?,
         Scheme::Disk => disk(loops, size, opts)?,
         Scheme::Free => None,
@@ -142,6 +186,120 @@ pub(crate) fn mesh(loops: &[Vec<Q>], starts: &[Vec<usize>], scheme: Scheme, size
         Some(m) => Ok((m, scheme)),
         None => Ok((free_quad_mesh(loops, size, opts)?, Scheme::Free)),
     }
+}
+
+/// The triangle primitive on one loop with corners at node positions `corners` (in loop order),
+/// or `None` when the side counts allow no split or a block would fold.
+fn triangle(boundary: &[Q], corners: [usize; 3], opts: &QuadOptions) -> Result<Option<QuadMesh>> {
+    let n = boundary.len();
+    if !(6..=MAX_ANNULUS_NODES).contains(&n) || corners.iter().any(|&c| c >= n) {
+        return Ok(None);
+    }
+    // Corners in loop order from the first; side k runs from corner k to corner k + 1.
+    let mut c = corners;
+    c.sort_unstable();
+    let len = |k: usize| -> usize {
+        let (a, b) = (c[k % 3], c[(k + 1) % 3]);
+        (b + n - a) % n
+    };
+    let sides = [len(0), len(1), len(2)];
+    let total: usize = sides.iter().sum();
+    if total != n || !total.is_multiple_of(2) {
+        return Ok(None);
+    }
+    // m[k]: divisions of the line from the centre to side k's split node.
+    let mut m = [0usize; 3];
+    for k in 0..3 {
+        let other = sides[(k + 1) % 3] + sides[(k + 2) % 3];
+        if other <= sides[k] {
+            return Ok(None);
+        }
+        m[k] = (other - sides[k]) / 2;
+    }
+    let count = (0..3).map(|k| m[k] * m[(k + 1) % 3]).sum::<usize>();
+    if count > opts.max_elements {
+        return Err(Error::Limit(format!("the mesh would have {count} quadrilaterals; the limit is {}", opts.max_elements)));
+    }
+    let at = |i: usize| boundary.get(i % n).copied().unwrap_or([0.0; 2]);
+    // Side k is split after m[k + 2] divisions (the line count of the block at corner k).
+    let split: [usize; 3] = std::array::from_fn(|k| (c[k] + m[(k + 2) % 3]) % n);
+    let sp: [Q; 3] = split.map(at);
+    let centre = [(sp[0][0] + sp[1][0] + sp[2][0]) / 3.0, (sp[0][1] + sp[1][1] + sp[2][1]) / 3.0];
+    let mut nodes: Vec<Q> = boundary.to_vec();
+    nodes.push(centre);
+    let centre_id = n as u32;
+    // Line k from the split node of side k to the centre, its interior nodes new.
+    let mut lines: Vec<Vec<u32>> = Vec::with_capacity(3);
+    for k in 0..3 {
+        let mut ids = vec![split[k] as u32];
+        for j in 1..m[k] {
+            let t = j as f64 / m[k] as f64;
+            nodes.push([sp[k][0] + t * (centre[0] - sp[k][0]), sp[k][1] + t * (centre[1] - sp[k][1])]);
+            ids.push(nodes.len() as u32 - 1);
+        }
+        ids.push(centre_id);
+        lines.push(ids);
+    }
+    let ccw = signed_area(boundary) > 0.0;
+    let mut quads = Vec::with_capacity(count);
+    // Block k at corner k: bottom corner k → split k (side k), right line k, top line k − 1
+    // (split k − 1 → centre), left corner k → split k − 1 (side k − 1, backwards).
+    for k in 0..3 {
+        let prev = (k + 2) % 3;
+        let (nu, nv) = (m[prev], m[k]);
+        let bottom: Vec<u32> = (0..=nu).map(|j| ((c[k] + j) % n) as u32).collect();
+        let left: Vec<u32> = (0..=nv).map(|j| ((c[k] + n - j) % n) as u32).collect();
+        let (Some(right), Some(top)) = (lines.get(k), lines.get(prev)) else { return Ok(None) };
+        if !fill_block(&mut nodes, [&bottom, right, top, &left], !ccw, &mut quads)? {
+            return Ok(None);
+        }
+    }
+    // The centre and the lines from it are placed by construction only: smooth them, as the
+    // midpoint-subdivision papers do, keeping every quadrilateral valid.
+    crate::quad::smooth::smooth(&mut nodes, &quads, n, TRIANGLE_SWEEPS)?;
+    Ok(Some(QuadMesh { nodes, quads, boundary_nodes: n, stats: QuadStats::default() }))
+}
+
+/// Fill the block bounded by node sequences `bottom` and `top` (left to right) and `left` and
+/// `right` (bottom to top) with a transfinite grid, pushing its interior nodes and its
+/// quadrilaterals (reversed when `flip`). `false` when a quadrilateral would not be valid.
+fn fill_block(nodes: &mut Vec<Q>, [bottom, right, top, left]: [&[u32]; 4], flip: bool, quads: &mut Vec<[u32; 4]>) -> Result<bool> {
+    let (nu, nv) = (bottom.len().saturating_sub(1), left.len().saturating_sub(1));
+    let at = |nodes: &[Q], i: u32| nodes.get(i as usize).copied().unwrap_or([0.0; 2]);
+    let pts = |ids: &[u32], nodes: &[Q]| ids.iter().map(|&i| at(nodes, i)).collect::<Vec<Q>>();
+    let grid = transfinite_grid(&pts(bottom, nodes), &pts(right, nodes), &pts(top, nodes), &pts(left, nodes))?;
+    let mut id = vec![0u32; (nu + 1) * (nv + 1)];
+    for j in 0..=nv {
+        for i in 0..=nu {
+            let v = if j == 0 {
+                bottom.get(i).copied()
+            } else if j == nv {
+                top.get(i).copied()
+            } else if i == 0 {
+                left.get(j).copied()
+            } else if i == nu {
+                right.get(j).copied()
+            } else {
+                nodes.push(grid.get(j * (nu + 1) + i).copied().unwrap_or([0.0; 2]));
+                Some(nodes.len() as u32 - 1)
+            };
+            if let (Some(slot), Some(v)) = (id.get_mut(j * (nu + 1) + i), v) {
+                *slot = v;
+            }
+        }
+    }
+    let g = |i: usize, j: usize| id.get(j * (nu + 1) + i).copied().unwrap_or(0);
+    for j in 0..nv {
+        for i in 0..nu {
+            let q = [g(i, j), g(i + 1, j), g(i + 1, j + 1), g(i, j + 1)];
+            let q = if flip { [q[0], q[3], q[2], q[1]] } else { q };
+            if planar_quad_validity(&q.map(|v| at(nodes, v)))? != Validity::Valid {
+                return Ok(false);
+            }
+            quads.push(q);
+        }
+    }
+    Ok(true)
 }
 
 /// The O-grid between two loops of equal length, or `None` when it would fold.
@@ -284,37 +442,8 @@ fn disk(loops: &[Vec<Q>], size: &dyn SizeField, opts: &QuadOptions) -> Result<Op
         v
     };
     let (bottom, right, top, left) = (side(0, false), side(1, false), side(2, true), side(3, true));
-    let pts = |ids: &[u32], nodes: &[Q]| ids.iter().map(|&i| at(nodes, i)).collect::<Vec<Q>>();
-    let grid = transfinite_grid(&pts(&bottom, &nodes), &pts(&right, &nodes), &pts(&top, &nodes), &pts(&left, &nodes))?;
-    let mut id = vec![0u32; (q + 1) * (q + 1)];
-    for j in 0..=q {
-        for i in 0..=q {
-            let v = if j == 0 {
-                bottom.get(i).copied()
-            } else if j == q {
-                top.get(i).copied()
-            } else if i == 0 {
-                left.get(j).copied()
-            } else if i == q {
-                right.get(j).copied()
-            } else {
-                nodes.push(grid.get(j * (q + 1) + i).copied().unwrap_or([0.0; 2]));
-                Some(nodes.len() as u32 - 1)
-            };
-            if let (Some(slot), Some(v)) = (id.get_mut(j * (q + 1) + i), v) {
-                *slot = v;
-            }
-        }
-    }
-    let g = |i: usize, j: usize| id.get(j * (q + 1) + i).copied().unwrap_or(0);
-    for j in 0..q {
-        for i in 0..q {
-            let quad = [g(i, j), g(i + 1, j), g(i + 1, j + 1), g(i, j + 1)];
-            if planar_quad_validity(&quad.map(|v| at(&nodes, v)))? != Validity::Valid {
-                return Ok(None);
-            }
-            quads.push(quad);
-        }
+    if !fill_block(&mut nodes, [&bottom, &right, &top, &left], false, &mut quads)? {
+        return Ok(None);
     }
     Ok(Some(QuadMesh { nodes, quads, boundary_nodes: n, stats: QuadStats::default() }))
 }
@@ -383,5 +512,37 @@ mod tests {
             vec![[0.0, 2.0], [0.0, 0.0]],
         ];
         assert_eq!(classify(&[l]), Scheme::Free);
+    }
+
+    /// A fillet's quarter disk (two straight sides and an arc, three corners) gets the triangle
+    /// primitive: three mapped blocks around a centre, every quadrilateral convex, the boundary
+    /// nodes kept and the area filled.
+    #[test]
+    fn quarter_disks_get_the_triangle_primitive() {
+        // Corners at the origin, (5, 0) and (0, 5); sides of 4, 6 and 4 divisions.
+        let mut pts: Vec<Q> = (0..4).map(|k| [5.0 * k as f64 / 4.0, 0.0]).collect();
+        pts.extend((0..6).map(|k| {
+            let t = 0.5 * PI * k as f64 / 6.0;
+            [5.0 * t.cos(), 5.0 * t.sin()]
+        }));
+        pts.extend((0..4).map(|k| [0.0, 5.0 - 5.0 * k as f64 / 4.0]));
+        let polyline = |a: usize, b: usize| (a..=b).map(|k| pts[k % pts.len()]).collect::<Vec<Q>>();
+        let curves = vec![polyline(0, 4), polyline(4, 10), polyline(10, 14)];
+        assert_eq!(classify(&[curves]), Scheme::Triangle([0, 1, 2]));
+        let (m, s) =
+            mesh(std::slice::from_ref(&pts), &[vec![0, 4, 10]], Scheme::Triangle([0, 1, 2]), &UniformSize(1.0), &QuadOptions::default()).unwrap();
+        assert_eq!(s, Scheme::Triangle([0, 1, 2]));
+        assert_eq!(&m.nodes[..14], &pts[..]);
+        // Lines of (6 + 4 − 4) / 2 = 3, (4 + 4 − 6) / 2 = 1 and 3 divisions: 3·1 + 1·3 + 3·3 quads.
+        assert_eq!(m.quads.len(), 15);
+        for q in &m.quads {
+            assert_eq!(planar_quad_validity(&q.map(|i| m.nodes[i as usize])).unwrap(), Validity::Valid);
+        }
+        let area: f64 = m.quads.iter().map(|q| signed_area(&q.map(|i| m.nodes[i as usize]))).sum();
+        assert!((area - signed_area(&pts)).abs() < 1e-9, "{area}");
+        // A side as long as the other two together has no split: the free mesher takes it.
+        let (_, s) =
+            mesh(std::slice::from_ref(&pts), &[vec![0, 1, 2]], Scheme::Triangle([0, 1, 2]), &UniformSize(1.0), &QuadOptions::default()).unwrap();
+        assert_eq!(s, Scheme::Free);
     }
 }

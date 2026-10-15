@@ -991,7 +991,8 @@ record or the publisher; the others are cited by venue only.
   10(4):399–415, 2000). S. A. Mitchell. *Incremental interval assignment by integer linear algebra.*
   International Meshing Roundtable 2021 (Zenodo 5559025); extended in Computer-Aided Design 158:103485, 2023.
 - **Use.** Division counts of all curves together: side equalities of mapped faces and linking faces,
-  even (or multiple-of-four) loop sums, minimum loop sums. `hex::interval` uses incremental repair from the
+  even (or multiple-of-four) loop sums, minimum loop sums, and dominance (`Σ_A ≥ Σ_B + d`: a side of a
+  triangle primitive shorter than the other two together). `hex::interval` uses incremental repair from the
   rounded goals with increments only, chosen by squared relative error; it is bounded and reports an
   infeasible system instead of looping. Mitchell's integer-linear-algebra solver (Hermite normal form plus
   nullspace improvement) is the upgrade if the increment-only scheme proves too coarse.
@@ -1002,6 +1003,19 @@ record or the publisher; the others are cited by venue only.
 - **Use.** Corners by interior angle (≤ 135° end, ≥ 225° reflex); cross-section regions are cut from
   their reflex corners to the boundary, which decomposes rectilinear sections into rectangles (an explicit
   form of submapping's virtual decomposition), then mapped.
+
+**B8.6a Midpoint subdivision: Tam and Armstrong 1991; Li, Armstrong, McKeag 1997.** **Verdict: BUILD ON
+(triangle primitive).**
+- **Citations.** T. K. H. Tam, C. G. Armstrong. *2D finite element mesh generation by medial axis
+  subdivision.* Advances in Engineering Software 13(5–6):313–324, 1991. T. S. Li, C. G. Armstrong,
+  R. M. McKeag. *Quad mesh generation for k-sided faces and hex mesh generation for trivalent polyhedra.*
+  Finite Elements in Analysis and Design 26(4):279–301, 1997.
+- **Use.** A cross-section region with three corners (a fillet's quarter disk, a pocket corner cut off by
+  a partition) is split by lines from a centre to one node on each side into three mapped blocks
+  (`hex::region`, scheme `Triangle`): side `k` of `n_k` divisions splits into the counts of the two lines
+  that end beside it, so each line has `m_k = (n_{k+1} + n_{k+2} − n_k)/2` (an even loop, each side
+  shorter than the other two together). The centre is the mean of the split nodes; the interior is then
+  smoothed (`quad::smooth`) and every quadrilateral checked; a fold falls back to the free mesher.
 
 **B8.7 Gordon and Thiel 1982, trivariate transfinite interpolation.** **Verdict: BUILD ON (mapped blocks).**
 - **Citation.** W. J. Gordon, L. C. Thiel. *Transfinite mappings and their application to grid generation.*

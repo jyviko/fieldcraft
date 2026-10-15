@@ -331,13 +331,22 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
         })
         .collect();
     // The rings may start mid-loop: give the mapped scheme its corners as ring positions.
+    // Corners (curve uses) as ring positions, in order; `None` unless every one is found.
+    let positions = |c: &[usize]| {
+        let s0 = starts.first().cloned().unwrap_or_default();
+        let mut pos: Vec<usize> = c.iter().filter_map(|&k| s0.get(k).copied()).collect();
+        pos.sort_unstable();
+        (pos.len() == c.len()).then_some(pos)
+    };
     let (scheme, starts) = match scheme {
-        region::Scheme::Mapped(c) => {
-            let s0 = starts.first().cloned().unwrap_or_default();
-            let mut pos: Vec<usize> = c.iter().filter_map(|&k| s0.get(k).copied()).collect();
-            pos.sort_unstable();
-            if pos.len() == 4 { (region::Scheme::Mapped([0, 1, 2, 3]), vec![pos]) } else { (region::Scheme::Free, starts) }
-        }
+        region::Scheme::Mapped(c) => match positions(&c) {
+            Some(pos) => (region::Scheme::Mapped([0, 1, 2, 3]), vec![pos]),
+            None => (region::Scheme::Free, starts),
+        },
+        region::Scheme::Triangle(c) => match positions(&c) {
+            Some(pos) => (region::Scheme::Triangle([0, 1, 2]), vec![pos]),
+            None => (region::Scheme::Free, starts),
+        },
         other => (other, starts),
     };
     let (mesh, used_scheme) = region::mesh(&loops2, &starts, scheme, &plane_field, &ctx.opts.quad)?;
@@ -400,6 +409,7 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
         mesh.quads.len(),
         match used_scheme {
             region::Scheme::Mapped(_) => "mapped",
+            region::Scheme::Triangle(_) => "triangle",
             region::Scheme::Annulus => "annulus",
             region::Scheme::Disk => "disk",
             region::Scheme::Free => "free",

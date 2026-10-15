@@ -33,6 +33,24 @@ impl Edge {
     pub fn length(&self) -> f64 {
         self.points.windows(2).map(|w| distance(w[0], w[1])).sum()
     }
+
+    /// The point `fraction` of its length along it from its start (0: the start, 1: the end);
+    /// `None` for a fraction outside 0..=1 or an edge without points.
+    pub fn point_at(&self, fraction: f64) -> Option<[f64; 3]> {
+        if !(0.0..=1.0).contains(&fraction) {
+            return None;
+        }
+        let mut left = fraction * self.length();
+        for w in self.points.windows(2) {
+            let l = distance(w[0], w[1]);
+            if left <= l && l > 0.0 {
+                let t = left / l;
+                return Some([0, 1, 2].map(|k| w[0][k] + t * (w[1][k] - w[0][k])));
+            }
+            left -= l;
+        }
+        self.points.last().copied()
+    }
 }
 
 fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -184,6 +202,19 @@ mod tests {
         let mut n = a.bodies[0].edge_names(&fine);
         n.sort();
         assert_eq!(n, names(&ea));
+    }
+
+    #[test]
+    fn points_along_an_edge() {
+        let e = super::Edge { name: "e".into(), faces: vec![], points: vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]] };
+        assert_eq!(e.point_at(0.0), Some([0.0, 0.0, 0.0]));
+        assert_eq!(e.point_at(0.5), Some([2.0, 0.0, 0.0]));
+        assert_eq!(e.point_at(0.75), Some([2.0, 1.0, 0.0]));
+        assert_eq!(e.point_at(1.0), Some([2.0, 2.0, 0.0]));
+        for bad in [-0.1, 1.5, f64::NAN] {
+            assert_eq!(e.point_at(bad), None);
+        }
+        assert_eq!(super::Edge { points: vec![], ..e }.point_at(0.5), None);
     }
 
     #[test]

@@ -160,6 +160,30 @@ impl Shape {
         self.faces.iter().position(|f| f.name == name).and_then(|i| u32::try_from(i).ok())
     }
 
+    /// The area centroid of the face with this persistent name, from a tessellation fine enough
+    /// to place it (on a curved face the centroid lies off the surface, inside its curvature).
+    pub fn face_centre(&self, name: &str) -> Result<[f64; 3]> {
+        let face = self.face_index(name).ok_or_else(|| Error::Invalid(format!("body `{}` has no face `{name}`", self.name)))?;
+        let mesh = self.tessellate((self.size()? * edges::EDGE_TOLERANCE).max(1e-4))?;
+        let (mut sum, mut area) = ([0.0; 3], 0.0);
+        for (t, _) in mesh.triangles.iter().zip(&mesh.tri_face).filter(|(_, f)| **f == face) {
+            let corner = |i: u32| mesh.positions.get(i as usize).copied();
+            let (Some(a), Some(b), Some(c)) = (corner(t[0]), corner(t[1]), corner(t[2])) else { continue };
+            let (u, v) = ([0, 1, 2].map(|k| b[k] - a[k]), [0, 1, 2].map(|k| c[k] - a[k]));
+            let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            let w = 0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            for (k, s) in sum.iter_mut().enumerate() {
+                *s += w * (a[k] + b[k] + c[k]) / 3.0;
+            }
+            area += w;
+        }
+        if area > 0.0 && area.is_finite() {
+            Ok(sum.map(|s| s / area))
+        } else {
+            Err(Error::Failed(format!("face `{name}` of body `{}` has no area", self.name)))
+        }
+    }
+
     /// The analytic surface of each B-rep face, by face index (the [`SurfaceMesh::tri_face`]
     /// tags): `None` for a free-form face. Meshers project nodes onto these surfaces.
     pub fn face_surfaces(&self) -> Result<Vec<Option<FaceSurface>>> {
@@ -240,6 +264,22 @@ impl SurfaceMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The plate's side face at x = 0 (40 × 30 × 10, the hole well inside) has its centre in its
+    /// middle; an unknown face is an error.
+    #[test]
+    fn a_face_centre_is_its_area_centroid() {
+        let d = open_design(&sample::plate_design(&sample::Plate::default()).unwrap()).unwrap();
+        let body = &d.bodies[0];
+        let surfaces = body.face_surfaces().unwrap();
+        let side = surfaces
+            .iter()
+            .position(|s| matches!(s, Some(FaceSurface::Plane { normal, point }) if normal[0] < -0.5 && point[0].abs() < 1e-9))
+            .unwrap();
+        let c = body.face_centre(&body.faces()[side].name).unwrap();
+        assert!((c[0]).abs() < 1e-9 && (c[1] - 15.0).abs() < 1e-6 && (c[2] - 5.0).abs() < 1e-6, "{c:?}");
+        assert!(body.face_centre("nope").is_err());
+    }
 
     #[test]
     fn block_measures() {

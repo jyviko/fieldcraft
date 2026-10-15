@@ -976,8 +976,9 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
         }
         Some(Prompt::Samples) => {
             let (mut open, mut close) = (None, false);
-            crate::frame::window(ctx, "Samples", crate::frame::Width::Normal).id(egui::Id::new("fc_samples")).show(ctx, |ui| {
-                sample_rows(ui, &t, &mut open);
+            crate::frame::window(ctx, "Samples", crate::frame::Width::Wide).id(egui::Id::new("fc_samples")).show(ctx, |ui| {
+                ui.set_width(crate::frame::WINDOW_WIDE_MAX_W.min(ctx.content_rect().width() - 48.0));
+                crate::samples::grid(ui, &t, (ctx.content_rect().height() * 0.6).max(160.0), &mut open);
                 ui.add_space(6.0);
                 close = ui.button("Close").clicked();
             });
@@ -989,28 +990,6 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
             }
         }
         None => {}
-    }
-}
-
-/// One row per sample: its name, what it shows and an Open button; `open` gets the one clicked.
-pub fn sample_rows(ui: &mut egui::Ui, t: &crate::theme::Tokens, open: &mut Option<&'static str>) {
-    let width = ui.available_width().clamp(280.0, 420.0);
-    egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| sample_list(ui, t, open, width));
-}
-
-fn sample_list(ui: &mut egui::Ui, t: &crate::theme::Tokens, open: &mut Option<&'static str>, width: f32) {
-    for sample in fieldcraft_engine::sample::SAMPLES {
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(width - 70.0);
-                ui.label(egui::RichText::new(sample.label).strong());
-                ui.add(egui::Label::new(egui::RichText::new(sample.about).small().color(t.text_dim)).wrap());
-            });
-            if ui.button("Open").clicked() {
-                *open = Some(sample.name);
-            }
-        });
-        ui.add_space(4.0);
     }
 }
 

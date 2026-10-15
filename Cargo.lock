@@ -1436,6 +1436,7 @@ dependencies = [
  "fieldcraft-model",
  "fieldcraft-render",
  "log",
+ "png",
  "resvg",
  "serde",
  "serde_json",

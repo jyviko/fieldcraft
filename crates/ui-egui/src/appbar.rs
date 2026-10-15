@@ -330,7 +330,7 @@ fn help_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
     ui.set_max_width(340.0);
     crate::frame::menu_heading(ui, &t, "SAMPLES");
     let mut open = None;
-    crate::files::sample_rows(ui, &t, &mut open);
+    crate::samples::rows(ui, &t, &mut open);
     ui.separator();
     crate::frame::menu_heading(ui, &t, "NAVIGATION");
     ui.label("Left drag orbits (or pans or zooms: the navigation bar), right or middle drag pans, the wheel zooms, F or a double click fits.");

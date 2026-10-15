@@ -42,6 +42,7 @@ pub mod palette;
 pub mod reply;
 pub mod results;
 pub mod results_panel;
+pub mod samples;
 pub mod scene;
 pub mod selection;
 pub mod theme;
@@ -1960,6 +1961,72 @@ mod tests {
     fn is_iso(cam: &Camera) -> bool {
         let (yaw, pitch) = StandardView::Iso.angles();
         (cam.yaw - yaw).abs() < 1e-9 && (cam.pitch - pitch).abs() < 1e-9
+    }
+
+    /// Every registered sample is on the Start card and opens with a click, at 1280 × 800 and in a
+    /// small window where the grid scrolls (#245). Unsaved work (a material, no geometry) keeps the
+    /// Start card up and turns the click into the question naming that sample, so nothing loads.
+    #[test]
+    fn every_sample_is_reachable_from_the_start_card() {
+        for (w, h) in [(1280.0, 800.0), (900.0, 560.0)] {
+            let mut scrolled = false;
+            for sample in fieldcraft_engine::sample::SAMPLES {
+                let mut app = ModelApp::new(Session::default());
+                app.run("model.material.create", json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}}))
+                    .unwrap();
+                let ctx = egui::Context::default();
+                let mut time = 0.0;
+                let mut frame = |app: &mut ModelApp, events: Vec<egui::Event>| {
+                    time += 0.1;
+                    let raw = egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    };
+                    let mut out = ctx.run_ui(raw, |ui| app.ui(ui));
+                    out.textures_delta.clear();
+                };
+                frame(&mut app, vec![]);
+                frame(&mut app, vec![]);
+                let card = |ctx: &egui::Context| ctx.read_response(samples::card_id(sample.name)).map(|r| (r.rect, r.interact_rect));
+                // Wheel down over the grid until the card is in view: wholly, or (when the grid is
+                // shorter than a card) most of it.
+                let in_view = |c: Option<(egui::Rect, egui::Rect)>| {
+                    c.is_some_and(|(r, i)| i.is_positive() && i.height() >= (r.height() * 0.6).min(r.height() - 0.5))
+                };
+                // Over the first card, which is in view before any scrolling.
+                let first = ctx
+                    .read_response(samples::card_id(samples::ordered()[0].name))
+                    .map_or(egui::pos2(w / 2.0, h / 2.0), |r| r.interact_rect.center());
+                for _ in 0..40 {
+                    if in_view(card(&ctx)) {
+                        break;
+                    }
+                    let wheel = egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -60.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: Default::default(),
+                    };
+                    frame(&mut app, vec![egui::Event::PointerMoved(first), wheel]);
+                    frame(&mut app, vec![]);
+                    scrolled = true;
+                }
+                assert!(in_view(card(&ctx)), "{w}×{h}: {} is never in view: {:?}", sample.name, card(&ctx));
+                let at = card(&ctx).map_or(egui::Pos2::ZERO, |(_, i)| i.center());
+                let button =
+                    |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+                frame(&mut app, vec![egui::Event::PointerMoved(at)]);
+                frame(&mut app, vec![button(true)]);
+                frame(&mut app, vec![button(false)]);
+                assert_eq!(app.prompt, Some(files::Prompt::Unsaved(files::Replace::Sample(sample.name))), "{w}×{h}: clicking {}", sample.name);
+            }
+            // The small window cannot show them all at once.
+            if w < 1000.0 {
+                assert!(scrolled, "{w}×{h}");
+            }
+        }
     }
 
     /// Opening a sample, then another, frames each in the home view; an edit keeps the camera

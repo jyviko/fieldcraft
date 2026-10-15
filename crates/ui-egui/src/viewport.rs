@@ -92,11 +92,20 @@ fn overlays(app: &mut ModelApp, ui: &egui::Ui, rect: Rect, t: &Tokens) -> Vec<Re
     out
 }
 
+/// The Start card's largest size; a smaller viewport shrinks it and its samples scroll.
+const START_W: f32 = 820.0;
+const START_H: f32 = 620.0;
+/// The margins the view cube and the navigation bar keep.
+const START_RIGHT: f32 = 130.0;
+const START_BOTTOM: f32 = 56.0;
+
 /// The empty viewport: open a file or a sample (the samples are ready to solve).
 fn start_screen(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
     let mut open = None;
     let mut pick = false;
-    let area = Rect::from_center_size(rect.center(), vec2(440.0_f32.min(rect.width() - 24.0), 300.0_f32.min(rect.height() - 24.0)));
+    // Clear of the view cube (top right) and the navigation bar (bottom centre).
+    let free = Rect::from_min_max(rect.min + vec2(12.0, 12.0), rect.max - vec2(START_RIGHT, START_BOTTOM));
+    let area = Rect::from_center_size(free.center(), vec2(START_W.min(free.width()), START_H.min(free.height())));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
     egui::Frame::NONE.fill(t.overlay).corner_radius(6.0).inner_margin(egui::Margin::same(14)).show(&mut child, |ui| {
         ui.label(egui::RichText::new("Start").size(16.0).color(t.overlay_text));
@@ -105,7 +114,9 @@ fn start_screen(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
         pick = ui.button("Open…").clicked();
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Samples").color(t.overlay_text));
-        crate::files::sample_rows(ui, t, &mut open);
+        // The grid takes what the card has left and scrolls the rest.
+        let left = (area.bottom() - ui.cursor().top() - 14.0).max(60.0);
+        crate::samples::grid(ui, t, left, &mut open);
     });
     if pick {
         app.open_dialog(None);

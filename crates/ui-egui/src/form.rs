@@ -2,7 +2,7 @@
 //! with units, drop-downs of the model's items, groups and one-of variants. The form edits the
 //! command's JSON parameters in place; it never builds anything the command does not take.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use egui::{Id, RichText, Ui};
 use fieldcraft_engine::schema::{self, Collection, Field, Kind, MAX_DEPTH, MAX_ROWS, join};
@@ -27,6 +27,14 @@ pub struct Context<'a> {
     /// A salt for the widget ids: the open form (its command and the opening), so no widget
     /// state is shared with another form.
     pub salt: Id,
+    /// The fields the user has edited: their problems show beside them; the others wait.
+    pub touched: &'a BTreeSet<String>,
+    /// OK was tried: every problem shows.
+    pub attempted: bool,
+    /// The command refused a parameter: its path and the problem, shown beside the field.
+    pub refused: Option<(&'a str, &'a str)>,
+    /// What is missing or wrong in the parameters ([`messages`]).
+    pub problems: &'a [(String, String)],
 }
 
 /// What a frame of the form did.
@@ -37,11 +45,14 @@ pub struct Outcome {
     pub invalid: usize,
     /// A reference field's "Create …" was clicked: the collection to add to and the field's path.
     pub create: Option<(Collection, String)>,
+    /// The paths of the fields edited this frame.
+    pub touched: Vec<String>,
 }
 
 struct Form<'a> {
     cx: &'a Context<'a>,
     style: Style,
+    /// Each field's problem, by path, phrased with its label ([`messages`]).
     problems: BTreeMap<String, String>,
     names: BTreeMap<&'static str, Vec<String>>,
     out: Outcome,
@@ -52,8 +63,8 @@ pub fn style(t: &Tokens) -> Style {
 }
 
 /// Draw `fields` editing `params` (an object).
-pub fn show(ui: &mut Ui, t: &Tokens, cx: &Context, fields: &[Field], params: &mut Map<String, Value>) -> Outcome {
-    let problems = schema::object_problems(fields, params).into_iter().filter(|p| p.message != "required").map(|p| (p.path, p.message)).collect();
+pub fn show(ui: &mut Ui, t: &Tokens, cx: &Context, fields: &'static [Field], params: &mut Map<String, Value>) -> Outcome {
+    let problems = cx.problems.iter().cloned().collect();
     let mut f = Form { cx, style: style(t), problems, names: BTreeMap::new(), out: Outcome::default() };
     ui.spacing_mut().item_spacing.y = 3.0;
     f.fields(ui, fields, fields, params, "", 0);
@@ -61,6 +72,23 @@ pub fn show(ui: &mut Ui, t: &Tokens, cx: &Context, fields: &[Field], params: &mu
 }
 
 impl Form<'_> {
+    /// The problem with the field at `path`, under it: the command's refusal at once, the
+    /// form's own once the field was edited or OK was tried.
+    fn problem_note(&self, ui: &mut Ui, path: &str, label: &str) {
+        let message = match self.cx.refused {
+            Some((key, problem)) if key == path => Some(format!("{label}: {problem}")),
+            _ => self.problems.get(path).filter(|_| self.cx.attempted || self.cx.touched.contains(path)).cloned(),
+        };
+        if let Some(message) = message {
+            fields::note(ui, &self.style, &message, self.style.error);
+        }
+    }
+
+    fn touch(&mut self, path: &str) {
+        self.out.changed = true;
+        self.out.touched.push(path.to_string());
+    }
+
     fn id(&self, path: &str) -> Id {
         Id::new(("fc_form", self.cx.salt, path))
     }
@@ -89,10 +117,12 @@ impl Form<'_> {
                 && f.key.is_empty()
             {
                 let current = obj.get(tag).and_then(Value::as_str).map(str::to_string);
-                if let Some(t) = self.variant_choice(ui, f, variants, current.as_deref(), &join(prefix, tag)) {
+                let path = join(prefix, tag);
+                if let Some(t) = self.variant_choice(ui, f, variants, current.as_deref(), &path) {
                     *obj = schema::switch_variant(f, common, obj, &t);
-                    self.out.changed = true;
+                    self.touch(&path);
                 }
+                self.problem_note(ui, &path, f.label);
                 if let Some(v) = obj.get(tag).and_then(Value::as_str).and_then(|t| f.kind.variant(t)) {
                     self.fields(ui, v.fields, common, obj, prefix, depth + 1);
                 }
@@ -124,16 +154,14 @@ impl Form<'_> {
                         Value::Null => obj.remove(f.key),
                         v => obj.insert(f.key.into(), v),
                     };
-                    self.out.changed = true;
+                    self.touch(&path);
                 }
                 if let Kind::Either(options) = f.kind {
                     self.either_value(ui, f, options, obj, &path);
                 }
             }
         }
-        if let Some(message) = self.problems.get(&path).cloned() {
-            fields::note(ui, &self.style, &message, self.style.error);
-        }
+        self.problem_note(ui, &path, f.label);
     }
 
     /// A one-row field; returns its new value (`Null` removes it).
@@ -210,7 +238,7 @@ impl Form<'_> {
         let new = fields::row(ui, &style, "", false, |ui| self.scalar(ui, option, Some(&value), &sub));
         if let Some(new) = new {
             obj.insert(f.key.into(), json!({key: new}));
-            self.out.changed = true;
+            self.touch(path);
         }
     }
 
@@ -239,7 +267,8 @@ impl Form<'_> {
                 self.json_only(ui);
                 return None;
             }
-            _ => vec![if nullable { Value::Null } else { json!(0.0) }; labels.len()],
+            // Empty slots show their placeholder (x, y, z), not a 0 nobody typed.
+            _ => vec![Value::Null; labels.len()],
         };
         let mut next = current.clone();
         let mut changed = false;
@@ -252,10 +281,10 @@ impl Form<'_> {
                     for &i in chunk {
                         let hint = labels.get(i).copied().unwrap_or("");
                         let slot = current.get(i).cloned().unwrap_or(Value::Null);
-                        let shown = if nullable && slot.is_null() { None } else { Some(&slot) };
+                        let shown = (!slot.is_null()).then_some(&slot);
                         if let Some(v) = self.number(ui, id.with(i), shown, hint, false, width) {
                             if let Some(n) = next.get_mut(i) {
-                                *n = if v.is_null() && !nullable { json!(0.0) } else { v };
+                                *n = v;
                             }
                             changed = true;
                         }
@@ -267,7 +296,8 @@ impl Form<'_> {
             }
         });
         // A vector left empty is not written until edited (a required one shows as missing).
-        changed.then_some(Value::Array(next))
+        // The slots left empty of a vector that takes no blanks are 0.
+        changed.then(|| Value::Array(next.into_iter().map(|x| if x.is_null() && !nullable { json!(0.0) } else { x }).collect()))
     }
 
     /// A drop-down of the collection's items; never free text. With none, the drop-down is
@@ -373,7 +403,7 @@ impl Form<'_> {
             } else {
                 obj.remove(f.key);
             }
-            self.out.changed = true;
+            self.touch(path);
         }
         if !on {
             return;
@@ -393,10 +423,12 @@ impl Form<'_> {
                     };
                     let current = child.get(tag).and_then(Value::as_str).map(str::to_string);
                     let row = Field { label: "Type", required: true, ..*f };
-                    if let Some(t) = self.variant_choice(ui, &row, variants, current.as_deref(), &join(path, tag)) {
+                    let tag_path = join(path, tag);
+                    if let Some(t) = self.variant_choice(ui, &row, variants, current.as_deref(), &tag_path) {
                         *child = schema::switch_variant(f, &[], child, &t);
-                        self.out.changed = true;
+                        self.touch(&tag_path);
                     }
+                    self.problem_note(ui, &tag_path, row.label);
                     if let Some(v) = child.get(tag).and_then(Value::as_str).and_then(|t| f.kind.variant(t)) {
                         self.fields(ui, v.fields, v.fields, child, path, depth + 1);
                     }
@@ -427,12 +459,92 @@ impl Form<'_> {
         }
         if let Some(i) = remove {
             list.remove(i);
-            self.out.changed = true;
+            self.touch(path);
         }
         if list.len() < max && ui.small_button("+ Add").clicked() {
             list.push(schema::prefill(fields, &json!({})));
-            self.out.changed = true;
+            self.touch(path);
         }
+    }
+}
+
+/// What is missing or wrong in `params`, in the form's order: (field path, message), each
+/// phrased with the field's label as the form shows it ("Material: choose a material"), never
+/// its JSON key.
+pub fn messages(fields: &'static [Field], params: &Map<String, Value>) -> Vec<(String, String)> {
+    schema::object_problems(fields, params)
+        .into_iter()
+        .map(|p| {
+            let message = field_at(fields, &p.path).map_or_else(|| format!("{}: {}", p.path, p.message), |f| phrase(f, &p.message));
+            (p.path, message)
+        })
+        .collect()
+}
+
+/// The field at `path` (`elastic/young`, `rows/0/name`). A variant's tag gives its
+/// [`Kind::Variants`] field; an [`Kind::Either`] option's value gives the option.
+pub fn field_at(fields: &'static [Field], path: &str) -> Option<&'static Field> {
+    let mut segments = path.split('/');
+    let mut field = find(fields, segments.next()?)?;
+    for (depth, segment) in segments.enumerate() {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        field = match field.kind {
+            Kind::Rows { .. } if segment.parse::<usize>().is_ok() => field,
+            Kind::Group(inner) | Kind::Rows { fields: inner, .. } => find(inner, segment)?,
+            Kind::Variants { tag, .. } if tag == segment => field,
+            Kind::Variants { variants, .. } => variants.iter().find_map(|v| find(v.fields, segment))?,
+            Kind::Either(options) => options.iter().find(|o| o.key == segment)?,
+            _ => return None,
+        };
+    }
+    Some(field)
+}
+
+/// The field of `fields` with key `key`, looking into flattened variants.
+fn find(fields: &'static [Field], key: &str) -> Option<&'static Field> {
+    fields.iter().find_map(|f| match f.kind {
+        Kind::Variants { tag, variants } if f.key.is_empty() => {
+            if tag == key {
+                Some(f)
+            } else {
+                variants.iter().find_map(|v| find(v.fields, key))
+            }
+        }
+        _ => (f.key == key).then_some(f),
+    })
+}
+
+/// A schema problem ([`schema::Problem::message`]) of field `f`, as the form says it.
+fn phrase(f: &Field, problem: &str) -> String {
+    let required = problem == "required";
+    let text = match f.kind {
+        Kind::Ref(c) if required => format!("choose {}", article(c.label())),
+        Kind::RefList(c) if required => format!("choose at least one {}", c.label()),
+        Kind::Either(options) => format!("choose {}", options.iter().map(|o| article(&lower(o.label))).collect::<Vec<_>>().join(" or ")),
+        Kind::Choice(options) => format!("choose one of {}", options.iter().map(|(_, l)| *l).collect::<Vec<_>>().join(", ")),
+        Kind::Variants { .. } => format!("choose {}", article(&lower(f.label))),
+        Kind::Path { .. } if required => "choose a file".into(),
+        Kind::Text if required && f.key.ends_with("name") => "enter a name".into(),
+        _ if required => "enter a value".into(),
+        _ => format!("must be {problem}"),
+    };
+    format!("{}: {text}", f.label)
+}
+
+/// "a material", "an element".
+fn article(noun: &str) -> String {
+    let an = noun.starts_with(['a', 'e', 'i', 'o', 'u']);
+    format!("{} {noun}", if an { "an" } else { "a" })
+}
+
+/// A label lower-cased, but not its acronyms ("Reference point" → "reference point", "RBE2" stays).
+fn lower(label: &str) -> String {
+    let mut chars = label.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), Some(d)) if d.is_lowercase() => c.to_lowercase().chain(label.chars().skip(1)).collect(),
+        _ => label.to_string(),
     }
 }
 
@@ -512,7 +624,16 @@ mod tests {
                 let width = crate::context::WIDTH - 16.0;
                 let mut used = 0.0;
                 let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    let cx = Context { units: UnitSystem::MmTonneS, names, salt: Id::new(c.id) };
+                    let touched = BTreeSet::new();
+                    let cx = Context {
+                        units: UnitSystem::MmTonneS,
+                        names,
+                        salt: Id::new(c.id),
+                        touched: &touched,
+                        attempted: true,
+                        refused: None,
+                        problems: &messages(form, &params),
+                    };
                     ui.vertical(|ui| {
                         ui.set_max_width(width);
                         outcome = show(ui, &Tokens::get(false), &cx, form, &mut params);
@@ -526,5 +647,86 @@ mod tests {
                 assert_eq!(params, before, "{}", c.id);
             }
         }
+    }
+
+    /// In every form, each required field left empty is a problem, so OK waits, and the message
+    /// names the field by its label, never by a JSON key.
+    #[test]
+    fn every_required_field_left_empty_is_named_by_its_label() {
+        let mut checked = 0;
+        for c in fieldcraft_engine::commands() {
+            let Some(form) = c.form else { continue };
+            let full = schema::prefill(form, &json!({}));
+            let Some(full) = full.as_object() else { continue };
+            for (path, message) in messages(form, full) {
+                assert!(!message.contains('`'), "{}: {path}: {message}", c.id);
+            }
+            for f in form.iter().filter(|f| f.required) {
+                let key = match f.kind {
+                    Kind::Variants { tag, .. } if f.key.is_empty() => tag,
+                    _ => f.key,
+                };
+                let mut params = full.clone();
+                params.remove(key);
+                let found: BTreeMap<String, String> = messages(form, &params).into_iter().collect();
+                let message = found.get(key).unwrap_or_else(|| panic!("{}: `{key}` empty is no problem: {found:?}", c.id));
+                assert!(message.starts_with(&format!("{}: ", f.label)), "{}: {message}", c.id);
+                for m in found.values() {
+                    assert!(!m.contains('`'), "{}: {m}", c.id);
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 50, "{checked}");
+    }
+
+    #[test]
+    fn messages_read_as_the_form_shows_them() {
+        let plasticity = fieldcraft_engine::find_command("model.material.plasticity").and_then(|c| c.form).unwrap();
+        let m = messages(plasticity, &Map::new());
+        assert_eq!(m.first(), Some(&("name".to_string(), "Material: choose a material".to_string())), "{m:?}");
+        let load = fieldcraft_engine::find_command("model.load.create").and_then(|c| c.form).unwrap();
+        let m: Vec<String> = messages(load, &json!({"type": "force"}).as_object().cloned().unwrap_or_default()).into_iter().map(|(_, m)| m).collect();
+        assert_eq!(m, ["Name: enter a name", "Target: choose a set or a reference point", "Force: enter a value"]);
+    }
+
+    /// A problem waits until its field is edited or OK is tried; a refused parameter shows at once.
+    #[test]
+    fn problems_show_once_touched_or_attempted() {
+        let form = fieldcraft_engine::find_command("model.material.plasticity").and_then(|c| c.form).unwrap();
+        let ctx = egui::Context::default();
+        let draw = |touched: &BTreeSet<String>, attempted: bool, refused: Option<(&str, &str)>| {
+            let mut shown = String::new();
+            let mut params = Map::new();
+            let names = |_: Collection| Vec::new();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let cx = Context {
+                    units: UnitSystem::MmTonneS,
+                    names: &names,
+                    salt: Id::new("t"),
+                    touched,
+                    attempted,
+                    refused,
+                    problems: &messages(form, &params),
+                };
+                show(ui, &Tokens::get(false), &cx, form, &mut params);
+            });
+            out.textures_delta.clear();
+            // The text drawn this frame.
+            for clipped in &out.shapes {
+                if let egui::Shape::Text(t) = &clipped.shape {
+                    shown.push_str(t.galley.text());
+                    shown.push('\n');
+                }
+            }
+            shown
+        };
+        let none = BTreeSet::new();
+        assert!(!draw(&none, false, None).contains("choose a material"));
+        assert!(draw(&none, true, None).contains("Material: choose a material"));
+        let touched: BTreeSet<String> = ["name".to_string()].into();
+        assert!(draw(&touched, false, None).contains("Material: choose a material"));
+        let refused = draw(&none, false, Some(("name", "names no material")));
+        assert!(refused.contains("Material: names no material") && !refused.contains("choose a material"), "{refused}");
     }
 }

@@ -119,6 +119,12 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     let mut invalid = 0;
     let mut create = None;
+    // What is missing or wrong, by the fields' labels: OK waits for it (in either view).
+    let problems = match (spec.form, params.as_object()) {
+        (Some(fields), Some(obj)) => crate::form::messages(fields, obj),
+        _ => Vec::new(),
+    };
+    let missing = problems.iter().map(|(_, m)| m.as_str()).collect::<Vec<_>>().join("\n");
     // The typed fields edit the JSON text's object; text that is not an object stays in the
     // JSON view until it is.
     let object = params.as_object().cloned();
@@ -133,14 +139,25 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     d.advanced = advanced;
     match (spec.form, object) {
         (Some(fields), Some(mut obj)) if !d.advanced => {
-            let cx = crate::form::Context { units, names: &|c| session.names(c), salt: form_id };
+            let refused = d.refused.as_ref().map(|(k, p)| (k.as_str(), p.as_str()));
+            let cx = crate::form::Context {
+                units,
+                names: &|c| session.names(c),
+                salt: form_id,
+                touched: &d.touched,
+                attempted: d.attempted,
+                refused,
+                problems: &problems,
+            };
             let out = crate::form::show(ui, t, &cx, fields, &mut obj);
             invalid = out.invalid;
             create = out.create;
             if out.changed {
                 d.text = Value::Object(obj).to_string();
                 d.error = None;
+                d.refused = None;
             }
+            d.touched.extend(out.touched);
         }
         _ => {
             ui.add(egui::TextEdit::multiline(&mut d.text).id(form_id.with("json")).code_editor().desired_rows(6).desired_width(f32::INFINITY));
@@ -148,23 +165,34 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     if let Some(e) = &d.error {
         ui.label(RichText::new(e).color(t.error));
+    } else if d.attempted && !missing.is_empty() {
+        ui.label(RichText::new(&missing).color(t.error));
     }
     ui.collapsing(RichText::new("What it takes").size(12.0).color(t.text_dim), |ui| {
         ui.label(RichText::new(spec.params).small().color(t.text_dim));
     });
     ui.add_space(4.0);
+    let ready = invalid == 0 && missing.is_empty();
+    let not_ready =
+        || if invalid > 0 { format!("{missing}\nA field holds something that is not a value").trim().to_string() } else { missing.clone() };
+    let mut attempted = false;
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             cancel |= ui.button("Cancel").clicked();
-            run = ui
-                .add_enabled(
-                    invalid == 0,
-                    egui::Button::new(RichText::new("OK").color(egui::Color32::WHITE)).fill(t.accent).min_size(vec2(64.0, 0.0)),
-                )
-                .on_disabled_hover_text("A field holds something that is not a value")
+            let ok =
+                ui.add_enabled(ready, egui::Button::new(RichText::new("OK").color(egui::Color32::WHITE)).fill(t.accent).min_size(vec2(64.0, 0.0)));
+            // A click on the greyed OK shows every problem, beside its field.
+            attempted = !ready && ok.contains_pointer() && ui.input(|i| i.pointer.primary_clicked());
+            run = ok
+                .on_disabled_hover_ui(|ui| {
+                    ui.label(not_ready());
+                })
                 .clicked();
         });
     });
+    if attempted && let Some(d) = app.dialog.as_mut() {
+        d.attempted = true;
+    }
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) && app.ui.menu.is_none() && !app.ui.palette {
         cancel = true;
     }

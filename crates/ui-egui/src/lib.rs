@@ -50,8 +50,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
-use fieldcraft_engine::Session;
 use fieldcraft_engine::catalogue::{self, Tab, Workspace};
+use fieldcraft_engine::{EngineError, Session};
 use fieldcraft_render::glyphs::Glyphs;
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView};
 use serde::{Deserialize, Serialize};
@@ -158,6 +158,12 @@ pub struct ParamsDialog {
     /// The parameters as JSON text.
     pub text: String,
     pub error: Option<String>,
+    /// The command refused one parameter: its path and the problem, shown beside its field.
+    pub refused: Option<(String, String)>,
+    /// The paths of the fields edited: their problems show; the others wait for OK.
+    pub touched: std::collections::BTreeSet<String>,
+    /// OK was tried with something missing: every problem shows.
+    pub attempted: bool,
     /// The JSON text is shown instead of the typed fields.
     pub advanced: bool,
     /// Which opening of a form this is (counts up): a form opened over another one, even of the
@@ -165,6 +171,12 @@ pub struct ParamsDialog {
     pub opening: u64,
     /// Opened from another form's "Create …" button: the form to go back to.
     pub back: Option<Box<Back>>,
+}
+
+/// A command that failed: its message, and the parameter it refused (path, problem).
+struct Failure {
+    message: String,
+    refused: Option<(String, String)>,
 }
 
 /// The form a "Create …" button left, and where the item made goes in it.
@@ -453,10 +465,25 @@ impl ModelApp {
     /// Run a command with JSON parameters: what every panel, the control channel and scripts
     /// do. The result or the error goes to the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        self.ensure_idle()?;
+        self.run_form(id, params, None).map_err(|f| f.message)
+    }
+
+    /// [`Self::run`] from a form with `fields`: a refused parameter is named by its field's label
+    /// (the engine's message names its key, which agents need).
+    fn run_form(&mut self, id: &str, params: Value, fields: Option<&'static [fieldcraft_engine::schema::Field]>) -> Result<Value, Failure> {
+        self.ensure_idle().map_err(|message| Failure { message, refused: None })?;
         let revision = self.session.revision();
         let label = command_label(id);
-        let r = self.session.execute(id, &params).map_err(|e| e.to_string());
+        let r = self.session.execute(id, &params).map_err(|e| match e {
+            EngineError::Param { key, problem } => {
+                let message = match fields.and_then(|f| form::field_at(f, &key)) {
+                    Some(f) => format!("{}: {problem}", f.label),
+                    None => format!("`{key}` {problem}"),
+                };
+                Failure { message, refused: Some((key, problem)) }
+            }
+            e => Failure { message: e.to_string(), refused: None },
+        });
         let changed = self.session.revision() != revision;
         if changed {
             self.model_changed();
@@ -478,7 +505,7 @@ impl ModelApp {
                 }
                 self.set_status(line, false)
             }
-            Err(e) => self.set_status(format!("{label}: {e}"), true),
+            Err(e) => self.set_status(format!("{label}: {}", e.message), true),
         }
         r
     }
@@ -579,6 +606,9 @@ impl ModelApp {
                 command: spec.id,
                 text: params.to_string(),
                 error: None,
+                refused: None,
+                touched: Default::default(),
+                attempted: false,
                 advanced: spec.form.is_none(),
                 opening: self.forms_opened,
                 back: None,
@@ -626,16 +656,20 @@ impl ModelApp {
     /// Run the open parameter form; it closes when the command succeeds.
     pub fn run_dialog(&mut self) -> Result<Value, String> {
         let (command, params) = self.dialog_params()?;
-        let r = self.run(command, params);
-        match &r {
-            Ok(_) => self.dialog_done(),
-            Err(e) => {
+        let fields = fieldcraft_engine::find_command(command).and_then(|c| c.form);
+        match self.run_form(command, params, fields) {
+            Ok(v) => {
+                self.dialog_done();
+                Ok(v)
+            }
+            Err(Failure { message, refused }) => {
                 if let Some(open) = self.dialog.as_mut() {
-                    open.error = Some(e.clone());
+                    open.error = Some(message.clone());
+                    open.refused = refused;
                 }
+                Err(message)
             }
         }
-        r
     }
 
     /// The open form's command and parameters; parameters that are not JSON are the form's error.
@@ -1439,6 +1473,23 @@ mod tests {
         assert!(app.dialog.is_none());
         assert!(app.session.model.node(7).is_some());
         assert!(app.start("no.such").is_err());
+    }
+
+    /// A parameter the command refuses is named by its field's label in the form and the status
+    /// bar; the command itself (agents) still names the key.
+    #[test]
+    fn a_refused_parameter_is_named_by_its_label() {
+        let mut app = ModelApp::new(Session::default());
+        app.run("model.material.create", json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}})).unwrap();
+        app.start("model.material.plasticity").unwrap();
+        app.dialog.as_mut().unwrap().text = r#"{"name": 7}"#.into();
+        let e = app.run_dialog().unwrap_err();
+        assert_eq!(e, "Material: must be a name");
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.refused, Some(("name".to_string(), "must be a name".to_string())));
+        assert!(app.status.as_ref().is_some_and(|s| s.text == "Plasticity: Material: must be a name"));
+        let raw = app.session.execute("model.material.plasticity", &json!({"name": 7})).unwrap_err();
+        assert_eq!(raw.to_string(), "`name` must be a name");
     }
 
     /// A required reference with one candidate starts picked (the browser's selection wins); with

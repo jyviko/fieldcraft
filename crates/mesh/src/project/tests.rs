@@ -79,7 +79,7 @@ fn seven_block_sphere_converges_without_losing_quality() {
     assert_eq!(topo.blocks.len(), 7);
     let exact = 4.0 / 3.0 * PI * r * r * r;
     let mut last_error = f64::INFINITY;
-    for size in [4.0, 2.0, 1.0] {
+    for size in [3.0, 1.5, 0.75] {
         let m = project_mesh(&topo, &s, &t, &options(size)).unwrap();
         let rep = &m.report;
         assert!(rep.min_scaled_jacobian >= 0.5, "size {size}: {rep:?}");

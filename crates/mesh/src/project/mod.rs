@@ -62,11 +62,16 @@ pub const DEFAULT_MAX_ARC_ANGLE: f64 = std::f64::consts::PI / 6.0;
 /// Samples per side of an outer block face when measuring how much its target turns.
 const CURVATURE_SAMPLES: usize = 32;
 
+/// The longest an element edge may be, in element sizes, when a class of parallel block edges
+/// takes its divisions from the mean of its lengths.
+const MAX_STRETCH: f64 = 2.0;
+
 /// How to project.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectOptions {
     /// The element size: each class of parallel block edges gets `round(length / size)`
-    /// divisions (at least one), from its longest projected edge.
+    /// divisions (at least one), `length` the geometric mean of its projected edges' lengths,
+    /// and enough that no element is longer than twice the size.
     pub size: f64,
     /// The largest angle (radians) the surface may turn through across one element on a curved
     /// target face: a class takes enough divisions that its elements are no longer than the
@@ -360,9 +365,16 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
             }
         }
     }
-    // 2. Divisions per class of parallel edges, from the longest projected edge.
+    // 2. Divisions per class of parallel edges: the count whose element length is nearest the
+    // size, in ratio, over all the class's edges (the geometric mean of their projected
+    // lengths). A class runs through every block its edges are parallel in, so its edges can
+    // differ a lot in length (a cup's wall, 4 mm thick, and its floor's radial edges, twice
+    // that); the longest edge alone would cut the thin blocks into flat slivers. No element is
+    // longer than [`MAX_STRETCH`] sizes, so a coarse size still follows the geometry.
     let (classes, nclass) = edge_classes(t);
-    let mut class_len = vec![0.0f64; nclass];
+    let mut class_log = vec![(0.0f64, 0usize); nclass];
+    let mut class_max = vec![0.0f64; nclass];
+    let mut seen: BTreeSet<[u32; 2]> = BTreeSet::new();
     for (block, cls) in t.blocks.iter().zip(&classes) {
         for d in 0..3 {
             for (k, bits) in CORNERS.iter().enumerate() {
@@ -372,6 +384,9 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
                 let mut e = *bits;
                 e[d] = 1;
                 let (a, b) = (block[k], block[corner_at(e)]);
+                if !seen.insert(edge_key(a, b)) {
+                    continue;
+                }
                 let (pa, pb) = (vpos.get(a as usize).copied().unwrap_or_default(), vpos.get(b as usize).copied().unwrap_or_default());
                 let c = edge_c(edge_key(a, b));
                 let mut len = 0.0;
@@ -381,8 +396,12 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
                     len += dist(prev, x);
                     prev = x;
                 }
-                if let Some(l) = class_len.get_mut(cls[d]) {
-                    *l = l.max(len);
+                if let Some(m) = class_max.get_mut(cls[d]) {
+                    *m = m.max(len);
+                }
+                if let Some(l) = class_log.get_mut(cls[d]).filter(|_| len > tol) {
+                    l.0 += (len / opts.size).ln();
+                    l.1 += 1;
                 }
             }
         }
@@ -441,8 +460,15 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
             }
         }
     }
-    let mut class_n: Vec<usize> =
-        class_len.iter().zip(&class_arc).map(|(l, &arc)| ((l / opts.size).round() as usize).max(arc).clamp(1, crate::block::MAX_DIVISIONS)).collect();
+    let mut class_n: Vec<usize> = class_log
+        .iter()
+        .zip(&class_max)
+        .zip(&class_arc)
+        .map(|((&(sum, k), &longest), &arc)| {
+            let mean = if k == 0 { 1.0 } else { (sum / k as f64).exp().round() };
+            (mean.max((longest / (MAX_STRETCH * opts.size)).ceil()) as usize).max(arc).clamp(1, crate::block::MAX_DIVISIONS)
+        })
+        .collect();
     for &(b, d, n) in &opts.divisions {
         let cls = classes.get(b).and_then(|c| c.get(d)).ok_or_else(|| Error::Invalid(format!("no direction {d} of block {b}")))?;
         if !(1..=crate::block::MAX_DIVISIONS).contains(&n) {

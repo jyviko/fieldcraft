@@ -176,7 +176,7 @@ the version instead.
 | Pull request from a fork or Dependabot | The same plan against the pull request's merge base; never the heavy job. |
 | Nightly (03:23 UTC) and `gh workflow run CI --ref <branch>` | Everything: the full `cargo xtask ci`, heavy and oracle on Linux (manual runs add the macOS oracle). |
 | Weekly (Sunday) | The oracle on macOS. |
-| Release (`release.yml`, push to `main` and dry runs) | `verify-ci` (full `cargo xtask ci`), `verify-heavy`, and `verify-oracle` on Linux and macOS; every packaging job needs all of them. |
+| Release (`release.yml`, push to `main` and dry runs) | `verify-ci` (full `cargo xtask ci`), `verify-heavy`, and `verify-oracle` on Linux and macOS, in parallel with the packaging jobs (macOS universal, Linux, Windows), which only upload workflow artifacts. The `release` job, the only one that signs `SHA256SUMS.txt` or creates/updates the draft, needs every verify and packaging job: a failing verify means no draft and no signature. The verify jobs restore develop's CI caches (shared keys); only `main` saves release caches. A run takes about as long as its slowest job, ~30 min (the macOS universal package; it was ~55–60 min when packaging waited for verify). |
 
 `cargo xtask affected --base <rev> [--head <rev>]` prints the plan for any range, e.g. what a
 commit needs: `cargo xtask affected --base <sha>^ --head <sha>`. A file outside every crate
@@ -207,7 +207,7 @@ Publishing is a maintainer's call; an agent preparing a release stops at the dra
 
 ## Dry runs
 
-`gh workflow run release.yml -R jyviko/fieldcraft --ref <branch>` runs the verify jobs, then builds every package and
+`gh workflow run release.yml -R jyviko/fieldcraft --ref <branch>` runs the verify jobs and builds every package in parallel, and
 uploads them with the notes as the `release-assets` artifact of the run, without creating a
 release. `-f draft=true` creates or updates the draft, and is accepted on `main` only.
 Locally, `packaging/macos/package.sh --arch aarch64` (or `x86_64`, `universal`) and

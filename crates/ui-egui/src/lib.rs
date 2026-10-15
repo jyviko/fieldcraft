@@ -1404,6 +1404,11 @@ impl ModelApp {
                 self.selected = None;
                 self.selected_seed = None;
                 self.reply = None;
+                // Picks are by name, and the names of another document are other things.
+                if !self.pick.selection.is_empty() {
+                    self.pick.selection.clear();
+                    self.pick.generation = self.pick.generation.wrapping_add(1);
+                }
             }
             self.framed_document = Some(self.session.opened());
             self.reframe = framing::Reframe::merge(self.reframe, framing::Reframe::Home);
@@ -1748,6 +1753,7 @@ mod tests {
         app.run("file.sample", json!({"name": "cantilever"})).unwrap();
         assert_eq!(app.model_name(), "Cantilever (sample)");
         let status = |app: &ModelApp| app.status.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+        assert_eq!(status(&app), "Opened the Cantilever sample");
         app.run("solve.run", json!({})).unwrap();
         assert_eq!(status(&app), "Solved 2 steps");
         app.run("results.deformed", json!({"step": "Load", "show": true})).unwrap();

@@ -112,6 +112,10 @@ pub fn done(command: &str, label: &str, params: &Value, v: &Value) -> String {
             None => format!("Showing {step}, last frame"),
         }),
         "results.clear" => Some("Back to the model".to_string()),
+        "file.sample" => {
+            let label = v.get("sample").and_then(Value::as_str).and_then(fieldcraft_engine::sample::find).map(|s| s.label);
+            label.map(|l| format!("Opened the {l} sample"))
+        }
         "solve.run" => v.get("steps").and_then(Value::as_array).map(|s| format!("Solved {}", plural(s.len() as u64, "step"))),
         c if c.starts_with("solve.") => Some(format!("Solved {step}", step = params["step"].as_str().unwrap_or("the step"))),
         _ => None,

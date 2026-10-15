@@ -788,7 +788,7 @@ mod tests {
         assert_eq!(m.first(), Some(&("name".to_string(), "Material: choose a material".to_string())), "{m:?}");
         let load = fieldcraft_engine::find_command("model.load.create").and_then(|c| c.form).unwrap();
         let m: Vec<String> = messages(load, &json!({"type": "force"}).as_object().cloned().unwrap_or_default()).into_iter().map(|(_, m)| m).collect();
-        assert_eq!(m, ["Name: enter a name", "Target: choose a set or a reference point", "Force: enter a value"]);
+        assert_eq!(m, ["Name: enter a name", "Target: choose a set or a reference point", "Force: required"]);
     }
 
     /// A problem waits until its field is edited or OK is tried; a refused parameter shows at once.

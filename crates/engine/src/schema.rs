@@ -580,11 +580,50 @@ pub enum ProblemKind {
     TooManyRows {
         max: usize,
     },
+    /// Not a number greater than 0.
+    NotPositive,
+    /// Not a number in `min..=max`.
+    NotInRange {
+        min: f64,
+        max: f64,
+    },
+    /// Not a list of at most `max` of `what` ("[x, y, z]", "labels").
+    NotAList {
+        max: usize,
+        what: &'static str,
+    },
+    NotAName,
+    NotAPath,
+    /// Wrong for a reason the schema does not describe: what it must be or do instead
+    /// ("names the region of 2D elements; a solid block fills its body").
+    Invalid(String),
+}
+
+impl PartialEq for Problem {
+    /// Problems are equal when they are about the same path and are the same problem (the field
+    /// is where the path leads).
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.kind == other.kind
+    }
 }
 
 impl Problem {
     fn new(path: String, field: &'static Field, kind: ProblemKind) -> Self {
         Problem { path, field: Some(field), kind }
+    }
+
+    /// A problem with the value at `path`, its field not looked up yet ([`Problem::in_form`]).
+    pub fn at(path: impl Into<String>, kind: ProblemKind) -> Self {
+        Problem { path: path.into(), field: None, kind }
+    }
+
+    /// The problem with its field looked up in `fields` (when it has none yet and the path is
+    /// there).
+    pub fn in_form(mut self, fields: &'static [Field]) -> Self {
+        if self.field.is_none() && !self.path.is_empty() {
+            self.field = field_at(fields, &self.path);
+        }
+        self
     }
 
     /// What the value must be, without the field's name ("required", "at least 0").
@@ -613,37 +652,76 @@ impl Problem {
                 _ => "an object with a known type".into(),
             },
             ProblemKind::TooManyRows { max } => format!("a list of at most {max} rows"),
+            ProblemKind::NotPositive => "a positive number".into(),
+            ProblemKind::NotInRange { min, max } => format!("a number in {min}..={max}"),
+            ProblemKind::NotAList { max, what } => format!("a list of at most {max} {what}"),
+            ProblemKind::NotAName => "a name".into(),
+            ProblemKind::NotAPath => "a file path".into(),
+            ProblemKind::Invalid(why) => why.clone(),
         }
     }
 
     /// The problem as agents read it, naming the field by its JSON path:
     /// "`elastic/young` is required", "`bands` must be a whole number in 2..=24".
     pub fn for_agents(&self) -> String {
-        let what = if self.path.is_empty() { "the parameters".to_string() } else { format!("`{}`", self.path) };
-        match self.kind {
-            ProblemKind::Required => format!("{what} is required"),
-            _ => format!("{what} must be {}", self.expected()),
-        }
+        self.phrase(Naming::Key)
     }
 
     /// The problem as a form shows it, naming the field by its label and saying what to do:
     /// "Material: choose a material", "Young's modulus: must be at least 0".
     pub fn for_form(&self) -> String {
-        let Some(f) = self.field else { return format!("The parameters must be {}", self.expected()) };
-        let required = self.kind == ProblemKind::Required;
-        let text = match f.kind {
-            Kind::Ref(c) if required => format!("choose {}", article(c.label())),
-            Kind::RefList(c) if required => format!("choose at least one {}", c.label()),
-            Kind::Either(options) => format!("choose {}", options.iter().map(|o| article(&lower(o.label))).collect::<Vec<_>>().join(" or ")),
-            Kind::Choice(options) => format!("choose one of {}", options.iter().map(|(_, l)| *l).collect::<Vec<_>>().join(", ")),
-            Kind::Variants { .. } => format!("choose {}", article(&lower(f.label))),
-            Kind::Path { .. } if required => "choose a file".into(),
-            Kind::Text if required => format!("enter {}", article(&lower(f.label))),
-            _ if required => "enter a value".into(),
-            _ => format!("must be {}", self.expected()),
-        };
-        format!("{}: {text}", f.label)
+        self.phrase(Naming::Label)
     }
+
+    /// The one phrasing of a problem, naming the field by its key or by its label.
+    pub fn phrase(&self, naming: Naming) -> String {
+        let by_label = naming == Naming::Label;
+        let field = self.field.filter(|_| by_label);
+        let subject = match field {
+            Some(f) => format!("{}:", f.label),
+            None if self.path.is_empty() => if by_label { "The parameters" } else { "the parameters" }.to_string(),
+            None => format!("`{}`", self.path),
+        };
+        let required = self.kind == ProblemKind::Required;
+        let what = match (field.map(|f| f.kind), &self.kind) {
+            (_, ProblemKind::Invalid(why)) => why.clone(),
+            (None, _) if required => "is required".into(),
+            (None, _) => format!("must be {}", self.expected()),
+            (Some(Kind::Ref(c)), _) if required => format!("choose {}", article(c.label())),
+            (Some(Kind::RefList(c)), _) if required => format!("choose at least one {}", c.label()),
+            (Some(Kind::Either(options)), _) => {
+                format!("choose {}", options.iter().map(|o| article(&lower(o.label))).collect::<Vec<_>>().join(" or "))
+            }
+            (Some(Kind::Choice(options)), _) => format!("choose one of {}", options.iter().map(|(_, l)| *l).collect::<Vec<_>>().join(", ")),
+            (Some(Kind::Variants { .. }), _) => format!("choose {}", article(&lower(field.map_or("", |f| f.label)))),
+            (Some(Kind::Path { .. }), _) if required => "enter a path".into(),
+            (Some(Kind::Text), _) if required && field.is_some_and(|f| f.key == "name") => "enter a name".into(),
+            (Some(_), _) if required => "required".into(),
+            (Some(_), _) => format!("must be {}", self.expected()),
+        };
+        format!("{subject} {what}")
+    }
+}
+
+/// How a problem names its field: by its JSON path (agents) or by its label (a form).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Naming {
+    Key,
+    Label,
+}
+
+/// A command's problem with `params`, made as precise as its form `fields` can: when the
+/// command names a group (`plastic`) and the form finds a problem with a field inside it
+/// (`plastic/yield_stress` left out), that problem; otherwise the command's own, with its field
+/// looked up.
+pub fn refine(fields: &'static [Field], params: &Value, problem: Problem) -> Problem {
+    let inside = |p: &Problem| p.path.strip_prefix(problem.path.as_str()).is_some_and(|r| r.starts_with('/'));
+    if !problem.path.is_empty()
+        && let Some(precise) = problems(fields, params).into_iter().find(inside)
+    {
+        return precise;
+    }
+    problem.in_form(fields)
 }
 
 /// "a material", "an element".

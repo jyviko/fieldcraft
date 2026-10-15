@@ -1,2 +1,13 @@
 # Every change to FieldCraft needs the maintainer's review before it merges.
 * @jyviko
+
+# Release and supply-chain paths, named explicitly so they stay owner-reviewed if the rule above
+# is ever relaxed: workflows and secrets use, packaging and signing, the updater, dependencies,
+# licences.
+/.github/ @jyviko
+/packaging/ @jyviko
+/crates/update/ @jyviko
+/Cargo.toml @jyviko
+/Cargo.lock @jyviko
+/ATTRIBUTION.md @jyviko
+/deny.toml @jyviko

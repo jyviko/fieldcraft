@@ -73,6 +73,9 @@ jobs:
   macos:
     name: macOS universal
     needs: version
+    # Signing, notarization and analytics secrets live in the `release` environment, which only
+    # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
+    environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}
     runs-on: macos-14
     timeout-minutes: 120
     outputs:
@@ -118,6 +121,9 @@ jobs:
     name: Linux x86_64
     needs: version
     # The oldest GitHub-hosted image, so the binaries need only glibc >= 2.35.
+    # Signing, notarization and analytics secrets live in the `release` environment, which only
+    # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
+    environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     env:
@@ -201,6 +207,9 @@ jobs:
   windows:
     name: Windows x64
     needs: version
+    # Signing, notarization and analytics secrets live in the `release` environment, which only
+    # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
+    environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -230,6 +239,9 @@ jobs:
   release:
     name: Draft release (or dry-run artifacts)
     needs: [version, macos, linux, windows]
+    # Signing, notarization and analytics secrets live in the `release` environment, which only
+    # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
+    environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write

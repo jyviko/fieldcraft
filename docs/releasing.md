@@ -51,7 +51,8 @@ about it, and the release notes say which of the two the draft contains.
 | `APPLE_PASSWORD` | An app-specific password for that Apple ID (appleid.apple.com › Sign-In and Security) |
 | `APPLE_TEAM_ID` | The 10-character team id of the Developer ID |
 
-Add them with `gh secret set <NAME> -R jyviko/fieldcraft`. With the certificate but without the
+Add them to the `release` environment ([Where the secrets live](#where-the-secrets-live)) with
+`gh secret set <NAME> --env release -R jyviko/fieldcraft`. With the certificate but without the
 three notarization secrets the app is signed and not notarized. A dmg made locally with
 `packaging/macos/package.sh` is ad-hoc signed unless `MACOS_SIGN_IDENTITY` names an identity
 in the keychain.
@@ -66,7 +67,7 @@ untrusted comment: minisign public key: FEF410EFEF5BAB21
 RWQhq1vv7xD0/uAOt8fqERP1hP+1UCM9U9QHTDYTYytWKiuedTkT7Lgr
 ```
 
-The secret half is the repository secret `FIELDCRAFT_SIGNING_KEY`: the whole secret key file
+The secret half is the `release` environment secret `FIELDCRAFT_SIGNING_KEY`: the whole secret key file
 (two lines), made without a password. With it, the release job signs `SHA256SUMS.txt` with
 [rsign2](https://github.com/jedisct1/rsign2) (pinned in `release.yml`), checks the signature
 against the public key in the source, and uploads `SHA256SUMS.txt.minisig`. Without it the
@@ -79,7 +80,7 @@ Setting it up, once:
 ```sh
 cargo install --locked rsign2 --version 0.6.7
 rsign generate -W -p fieldcraft-release.pub -s fieldcraft-release.key   # -W: no password
-gh secret set FIELDCRAFT_SIGNING_KEY -R jyviko/fieldcraft < fieldcraft-release.key
+gh secret set FIELDCRAFT_SIGNING_KEY --env release -R jyviko/fieldcraft < fieldcraft-release.key
 ```
 
 Keep an offline copy of the secret key file (a password manager, an encrypted backup) and
@@ -101,9 +102,39 @@ certificate is added.
 ## Usage analytics key
 
 The release builds (macOS, Linux and Windows jobs) build in the PostHog project key from the
-repository secret `POSTHOG_KEY` as `FIELDCRAFT_POSTHOG_KEY` ([privacy.md](privacy.md)). Without the
-secret the builds ask nothing and send nothing, as local and fork builds do. The web build on
-Pages has no key.
+`release` environment secret `POSTHOG_KEY` as `FIELDCRAFT_POSTHOG_KEY` ([privacy.md](privacy.md)).
+Without the secret the builds ask nothing and send nothing, as local, fork and dry-run builds do.
+The web build on Pages gets the key only when it runs from `main`: its build job then runs in the
+`release` environment (the deploy job already uses `github-pages`, and a job has one environment).
+
+## Where the secrets live
+
+Every release secret (the `APPLE_*` secrets, `KEYCHAIN_PASSWORD`, `FIELDCRAFT_SIGNING_KEY`,
+`POSTHOG_KEY`) is a secret of the GitHub Environment `release`, whose deployment branches allow
+`main` only. Repository secrets are readable by any workflow a writer can run on any branch;
+environment secrets reach only jobs that name the environment and run from an allowed branch, so a
+contributor with write access cannot read the signing keys from a branch of their own. The jobs
+that read them (`release.yml`'s macos, linux, windows and release jobs, `pages.yml`'s build job)
+ask for `release` only on `main`
+(`environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}`); elsewhere the name is
+empty, the job runs in no environment, sees no secrets and builds unsigned. `.github/CODEOWNERS`
+keeps the workflows, packaging and updater under the owner's review.
+
+Moving them from repository secrets, once (the owner; each value comes from its own source file,
+never the shell history):
+
+```sh
+for n in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_PASSWORD \
+         APPLE_TEAM_ID FIELDCRAFT_SIGNING_KEY POSTHOG_KEY; do
+  gh secret set "$n" --env release -R jyviko/fieldcraft < "$n.txt"
+done
+gh secret list --env release -R jyviko/fieldcraft     # all eight listed
+# After a release run on main has signed with them:
+for n in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_PASSWORD \
+         APPLE_TEAM_ID FIELDCRAFT_SIGNING_KEY POSTHOG_KEY; do
+  gh secret delete "$n" -R jyviko/fieldcraft
+done
+```
 
 ## Choose and prepare the version
 

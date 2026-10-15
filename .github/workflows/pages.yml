@@ -33,6 +33,10 @@ env:
 
 jobs:
   build:
+    # POSTHOG_KEY lives in the `release` environment (main only, docs/releasing.md). The deploy job
+    # already uses github-pages and a job has one environment, so the build job reads the key: on
+    # main it runs in `release`, elsewhere in no environment and with an empty key.
+    environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:

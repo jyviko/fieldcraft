@@ -14,7 +14,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const HEX_GENERATE: CommandSpec = CommandSpec {
     id: "mesh.hex.generate",
-    label: "Generate Hex Mesh",
+    label: "Hex Mesh",
     params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "swept" (any sweep) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the mesh with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name; `weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate), so sets by geometry resolve. Edge seeds (mesh.seed.edge) set the counts and spacing of their edges: exact seeds are held, and seeds that cannot all hold (opposite sides of a mapped face, the layers between two levels) are an error naming them. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
     form: Some(super::forms::HEX_GENERATE),
     kind: CommandKind::Model,
@@ -148,7 +148,7 @@ pub const HEX_BLOCKS: CommandSpec = CommandSpec {
     run: hex_blocks,
 };
 
-fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
+pub(super) fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
     let size = number(p, "size")?;
     let quadratic = order(p)?;
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
@@ -495,6 +495,17 @@ mod tests {
         // A list of bodies meshes those only.
         let two = s.execute("mesh.hex.blocks", &json!({"bodies": [bodies[0]["name"], bodies[1]["name"]], "size": 2.5})).unwrap();
         assert_eq!(two["cells"], 2);
+    }
+
+    /// The Partitioned Mesh form's "All hex" option is mesh.hex.blocks.
+    #[test]
+    fn mesh_cells_all_blocks_is_mesh_hex_blocks() {
+        let (_dir, mut s) = split_box(false);
+        let blocks = s.execute("mesh.hex.blocks", &json!({"size": 2.5})).unwrap();
+        let cells = s.execute("mesh.cells", &json!({"default": "blocks", "size": 2.5})).unwrap();
+        assert_eq!(cells, blocks);
+        let e = s.execute("mesh.cells", &json!({"default": "blocks", "methods": {"Box": "tet"}})).unwrap_err().to_string();
+        assert!(e.contains("methods"), "{e}");
     }
 
     #[test]

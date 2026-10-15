@@ -29,8 +29,8 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const CELLS: CommandSpec = CommandSpec {
     id: "mesh.cells",
-    label: "Mesh Cells",
-    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the mesh with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet". Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, a set on each side and a tie between them are made (`tie_<partition>_<k>`, sets `<tie>_main` and `<tie>_secondary`: the side with fewer nodes is the main surface), replacing ties of those names from an earlier run. Reports each cell's method (and why auto fell back to tet), and each interface: `merged` with the nodes merged, or `tied`"#,
+    label: "Partitioned Mesh",
+    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the mesh with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, a set on each side and a tie between them are made (`tie_<partition>_<k>`, sets `<tie>_main` and `<tie>_secondary`: the side with fewer nodes is the main surface), replacing ties of those names from an earlier run. Reports each cell's method (and why auto fell back to tet), and each interface: `merged` with the nodes merged, or `tied`"#,
     form: Some(super::forms::CELLS),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -75,6 +75,12 @@ enum Meshed<'a> {
 }
 
 fn cells(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("default").and_then(Value::as_str) == Some("blocks") {
+        if p.get("methods").is_some_and(|m| m.as_object().is_none_or(|o| !o.is_empty())) {
+            return Err(EngineError::param("methods", "must be empty with \"default\": \"blocks\" (every cell a block)"));
+        }
+        return super::hex::hex_blocks(s, p);
+    }
     let size = super::hex::number(p, "size")?;
     let quadratic = match p.get("order") {
         None => false,

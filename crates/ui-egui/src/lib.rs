@@ -928,7 +928,7 @@ impl ModelApp {
         let cam = self.cam;
         let (_, overlay) = self.overlay();
         let (_, scene) = self.scene();
-        fieldcraft_render::render_layers_png(scene, Some(&overlay), &cam, w, h)
+        fieldcraft_render::render_layers_png(scene, &[&overlay], &cam, w, h)
     }
 
     /// The geometry tags behind the drawn mesh, read again when the model changed.

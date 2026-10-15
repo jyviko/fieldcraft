@@ -1,6 +1,7 @@
 //! A drawable scene (coloured triangles, lines and points) and a CPU rasterizer for headless
 //! snapshots: z-buffered, lit triangles and depth-tested lines, rendered at 2× and downsampled
-//! for anti-aliasing. The GPU viewport draws the same [`Scene`].
+//! for anti-aliasing; a scene's [`Scene::on_top`] lines are drawn over everything. The GPU
+//! viewport draws the same [`Scene`].
 //!
 //! Adapted from SolidCraft's `crates/render/src/raster.rs` (MIT OR Apache-2.0), see
 //! ATTRIBUTION.md.
@@ -57,6 +58,9 @@ pub struct Scene {
     pub lines: Vec<SceneLine>,
     pub points: Vec<ScenePoint>,
     pub labels: Vec<SceneLabel>,
+    /// Lines drawn over everything, after the depth-tested layers (a concentrated load at a
+    /// point inside the part stays visible from any side). A zero-length one is a round dot.
+    pub on_top: Vec<SceneLine>,
     /// Background gradient top → bottom.
     pub background: Option<(Rgb, Rgb)>,
     /// Scene radius around the camera target, for the clipping planes.
@@ -180,22 +184,26 @@ impl Canvas {
 /// 1..=[`MAX_DIM`] per side or over [`MAX_PIXELS`], and scenes over [`MAX_PRIMITIVES`], are
 /// refused ([`fit_size`] gives an accepted size).
 pub fn render(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Canvas, RenderError> {
-    render_layers(scene, None, cam, w, h)
+    render_layers(scene, &[], cam, w, h)
 }
 
 /// Depth (of the 0…1 range) an overlay face may lie behind the scene's and still be drawn: it
 /// covers the faces it repeats.
 const OVERLAY_DEPTH: f32 = 2e-4;
 
-/// [`render`] with an overlay drawn over the scene: its faces over the scene's faces they
-/// coincide with (a highlight repeats the faces it marks), then its lines and points. The
-/// overlay's background and radius are not used.
-pub fn render_layers(scene: &Scene, overlay: Option<&Scene>, cam: &Camera, w: usize, h: usize) -> Result<Canvas, RenderError> {
+/// [`render`] with overlays drawn over the scene (the setup's symbols, a selection highlight):
+/// their faces over the scene's faces they coincide with (a highlight repeats the faces it
+/// marks), then every layer's lines and points depth-tested, then every layer's
+/// [`Scene::on_top`] lines and labels over everything. The overlays' background and radius are
+/// not used.
+pub fn render_layers(scene: &Scene, overlays: &[&Scene], cam: &Camera, w: usize, h: usize) -> Result<Canvas, RenderError> {
     if !size_ok(w, h) {
         return Err(RenderError::Size { w, h });
     }
-    let count = |s: &Scene| s.tris.len().saturating_add(s.lines.len()).saturating_add(s.points.len()).saturating_add(s.labels.len());
-    let primitives = count(scene).saturating_add(overlay.map_or(0, count));
+    let count = |s: &Scene| {
+        s.tris.len().saturating_add(s.lines.len()).saturating_add(s.points.len()).saturating_add(s.labels.len()).saturating_add(s.on_top.len())
+    };
+    let primitives = overlays.iter().fold(count(scene), |n, o| n.saturating_add(count(o)));
     if primitives > MAX_PRIMITIVES {
         return Err(RenderError::SceneTooLarge { primitives });
     }
@@ -213,7 +221,7 @@ pub fn render_layers(scene: &Scene, overlay: Option<&Scene>, cam: &Camera, w: us
     let proj = Projector::new(cam, sw as f64, sh as f64, scene.radius);
     let project = |p: Vec3| proj.screen(p);
     let view_dir = cam.back();
-    for (t, allowance) in scene.tris.iter().map(|t| (t, 0.0)).chain(overlay.into_iter().flat_map(|o| &o.tris).map(|t| (t, OVERLAY_DEPTH))) {
+    for (t, allowance) in scene.tris.iter().map(|t| (t, 0.0)).chain(overlays.iter().flat_map(|o| &o.tris).map(|t| (t, OVERLAY_DEPTH))) {
         let (Some(a), Some(b), Some(cc)) = (project(t.p[0]), project(t.p[1]), project(t.p[2])) else { continue };
         let col = shade(t.normal, view_dir, t.color.f());
         raster_tri(a, b, cc, sw, sh, |x, y, z| {
@@ -225,24 +233,30 @@ pub fn render_layers(scene: &Scene, overlay: Option<&Scene>, cam: &Camera, w: us
             }
         });
     }
-    let layers = || std::iter::once(scene).chain(overlay);
-    for l in layers().flat_map(|s| &s.lines) {
-        let (Some(a), Some(b)) = (project(l.a), project(l.b)) else { continue };
+    let layers = || std::iter::once(scene).chain(overlays.iter().copied());
+    let line = |c: &mut Canvas, l: &SceneLine, depth_test: bool| {
+        let (Some(a), Some(b)) = (project(l.a), project(l.b)) else { return };
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
-        let steps = if len.is_finite() { (len.ceil() as usize).clamp(1, MAX_LINE_STEPS) } else { continue };
+        let steps = if len.is_finite() { (len.ceil() as usize).clamp(1, MAX_LINE_STEPS) } else { return };
         let col = l.color.f();
         for k in 0..=steps {
             let t = k as f64 / steps as f64;
             let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-            dot(&mut c, p, l.width * SS as f64, col, true);
+            dot(c, p, l.width * SS as f64, col, true, depth_test);
         }
+    };
+    for l in layers().flat_map(|s| &s.lines) {
+        line(&mut c, l, true);
     }
     for p in layers().flat_map(|s| &s.points) {
         if let Some(q) = project(p.p) {
-            dot(&mut c, q, p.size * SS as f64, p.color.f(), false);
+            dot(&mut c, q, p.size * SS as f64, p.color.f(), false, true);
         }
     }
-    for l in scene.labels.iter().take(MAX_LABELS) {
+    for l in layers().flat_map(|s| &s.on_top) {
+        line(&mut c, l, false);
+    }
+    for l in layers().flat_map(|s| &s.labels).take(MAX_LABELS) {
         if let Some(q) = project(l.p) {
             label(&mut c, q, &l.text, l.color.f());
         }
@@ -313,8 +327,9 @@ fn label(c: &mut Canvas, p: [f64; 3], text: &str, col: [f64; 3]) {
     }
 }
 
-/// A depth-tested disc (`round`) or square of diameter `size` at screen point `p` (x, y, depth).
-fn dot(c: &mut Canvas, p: [f64; 3], size: f64, col: [f64; 3], round: bool) {
+/// A disc (`round`) or square of diameter `size` at screen point `p` (x, y, depth), depth-tested
+/// unless `depth_test` is off.
+fn dot(c: &mut Canvas, p: [f64; 3], size: f64, col: [f64; 3], round: bool, depth_test: bool) {
     // Widths are capped so a hostile width cannot make the loop below unbounded.
     let half = if size.is_finite() { (size * 0.5).clamp(0.5, MAX_MARK) } else { 0.5 };
     let r = half.ceil() as i64;
@@ -333,7 +348,7 @@ fn dot(c: &mut Canvas, p: [f64; 3], size: f64, col: [f64; 3], round: bool) {
             let cov = (half + 0.5 - d).clamp(0.0, 1.0);
             let i = iy as usize * c.w + ix as usize;
             // Lines and points sit on faces: a small depth allowance keeps them in front.
-            if cov > 0.0 && c.depth.get(i).is_some_and(|dd| (p[2] as f32) <= *dd + 2e-4) {
+            if cov > 0.0 && (!depth_test || c.depth.get(i).is_some_and(|dd| (p[2] as f32) <= *dd + 2e-4)) {
                 c.put(ix as usize, iy as usize, col, cov);
             }
         }
@@ -366,12 +381,12 @@ fn downsample(c: &Canvas, w: usize, h: usize) -> Result<Canvas, RenderError> {
 
 /// Render to PNG bytes.
 pub fn render_png(scene: &Scene, cam: &Camera, w: usize, h: usize) -> Result<Vec<u8>, RenderError> {
-    render_layers_png(scene, None, cam, w, h)
+    render_layers_png(scene, &[], cam, w, h)
 }
 
 /// [`render_layers`] as PNG bytes.
-pub fn render_layers_png(scene: &Scene, overlay: Option<&Scene>, cam: &Camera, w: usize, h: usize) -> Result<Vec<u8>, RenderError> {
-    let c = render_layers(scene, overlay, cam, w, h)?;
+pub fn render_layers_png(scene: &Scene, overlays: &[&Scene], cam: &Camera, w: usize, h: usize) -> Result<Vec<u8>, RenderError> {
+    let c = render_layers(scene, overlays, cam, w, h)?;
     png(c.w, c.h, &c.rgba).ok_or(RenderError::Encode)
 }
 
@@ -436,15 +451,32 @@ mod tests {
         cam.set_view(StandardView::Front);
         let px = |c: &Canvas| c.rgba[(32 * c.w + 32) * 4..(32 * c.w + 32) * 4 + 3].to_vec();
         let green = |s: &Scene| Scene { tris: s.tris.iter().map(|t| SceneTri { color: Rgb(0, 255, 0), ..*t }).collect(), ..Scene::default() };
-        let over = render_layers(&scene, Some(&green(&scene)), &cam, 64, 64).unwrap();
+        let over = render_layers(&scene, &[&green(&scene)], &cam, 64, 64).unwrap();
         assert!(px(&over)[1] > px(&over)[0] + 50, "{:?}", px(&over));
         // The same face moved behind the red one (front view looks along +y) stays hidden.
         let mut behind = green(&scene);
         for t in &mut behind.tris {
             t.p = t.p.map(|p| p + Vec3::Y * 5.0);
         }
-        let hidden = render_layers(&scene, Some(&behind), &cam, 64, 64).unwrap();
+        let hidden = render_layers(&scene, &[&behind], &cam, 64, 64).unwrap();
         assert_eq!(px(&hidden), px(&render(&scene, &cam, 64, 64).unwrap()));
+    }
+
+    /// A line behind a face is hidden; the same line on top is drawn over it.
+    #[test]
+    fn on_top_lines_draw_over_the_faces_in_front_of_them() {
+        let scene = red_triangle();
+        let mut cam = Camera { distance: 50.0, ..Default::default() };
+        cam.set_view(StandardView::Front);
+        let px = |c: &Canvas| c.rgba[(32 * c.w + 32) * 4..(32 * c.w + 32) * 4 + 3].to_vec();
+        // Behind the triangle (the front view looks along +y).
+        let line = SceneLine { a: Vec3::new(-10.0, 5.0, 0.0), b: Vec3::new(10.0, 5.0, 0.0), color: Rgb(0, 0, 255), width: 4.0 };
+        let behind = Scene { lines: vec![line], ..Scene::default() };
+        let hidden = render_layers(&scene, &[&behind], &cam, 64, 64).unwrap();
+        assert_eq!(px(&hidden), px(&render(&scene, &cam, 64, 64).unwrap()));
+        let over = Scene { on_top: vec![line], ..Scene::default() };
+        let shown = render_layers(&scene, &[&over], &cam, 64, 64).unwrap();
+        assert!(px(&shown)[2] > 200 && px(&shown)[0] < 60, "{:?}", px(&shown));
     }
 
     #[test]

@@ -193,6 +193,12 @@ impl Camera {
     pub fn half_height(&self) -> f64 {
         if self.fov > 0.0 { self.distance * (self.fov * 0.5).tan() } else { self.distance * 0.4 }
     }
+    /// Model length one pixel spans at the target, in a view `height_px` pixels high (the scale
+    /// symbols of a fixed screen size are drawn at); `None` for a size or camera that has none.
+    pub fn length_per_pixel(&self, height_px: f64) -> Option<f64> {
+        let l = 2.0 * self.half_height() / height_px;
+        (height_px > 0.0 && l.is_finite() && l > 0.0).then_some(l)
+    }
     /// Near/far planes that keep a scene of radius `radius` around the target visible.
     pub fn clip(&self, radius: f64) -> (f64, f64) {
         let r = radius.max(1e-3);

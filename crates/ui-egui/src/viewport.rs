@@ -409,7 +409,7 @@ fn paint_cpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
     let fresh = app.viewport.cpu.as_ref().is_some_and(|(_, k, c, s)| *k == key && *c == cam && *s == size);
     // A scene the renderer refused is reported once and not retried until it changes.
     if !fresh && app.viewport.cpu_failed != Some(key.0) {
-        let c = match fieldcraft_render::render_layers(&app.scene.1, Some(&overlay), &cam, w, h) {
+        let c = match fieldcraft_render::render_layers(&app.scene.1, &[&overlay], &cam, w, h) {
             Ok(c) => c,
             Err(e) => {
                 app.viewport.cpu = None;

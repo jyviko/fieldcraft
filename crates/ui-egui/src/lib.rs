@@ -421,6 +421,9 @@ pub struct ModelApp {
     pub tree_open: std::collections::BTreeSet<String>,
     /// The definition selected in the browser: (kind, name), its properties on the right.
     pub selected: Option<(browser::Def, String)>,
+    /// The edge seed selected in the browser (by its edge), its properties on the right; never
+    /// together with [`ModelApp::selected`].
+    pub selected_seed: Option<fieldcraft_model::GeometryRef>,
     /// What is picked in the viewport.
     pub pick: PickState,
     /// Set while [`ModelApp::capture`] draws the window offscreen: no pointer there is the
@@ -501,6 +504,7 @@ impl ModelApp {
             command_line: String::new(),
             tree_open: ["mesh", "results"].into_iter().map(str::to_string).collect(),
             selected: None,
+            selected_seed: None,
             pick: PickState::default(),
             capturing: false,
             nav: NavMode::default(),
@@ -1206,7 +1210,8 @@ impl ModelApp {
             h.finish()
         };
         let scene = self.scene_key();
-        let selected = hash(&|h| (scene, self.pick.generation).hash(h));
+        let set = self.selected_set();
+        let selected = hash(&|h| (scene, self.pick.generation, &set).hash(h));
         let key = hash(&|h| (selected, self.pick.hover_generation).hash(h));
         if self.pick.overlay.0 == Some(key) {
             return (key, self.pick.overlay.1.clone());
@@ -1215,8 +1220,16 @@ impl ModelApp {
         // The selection's part is kept while only the hover changes.
         if self.pick.selected_overlay.0 != Some(selected) {
             let sel = std::mem::take(&mut self.pick.selection);
-            let s = self.with_picker(|p| p.overlay(&sel, None, theme::rgb(t.pick_selected), theme::rgb(t.pick_hover)));
+            let mut s = self.with_picker(|p| p.overlay(&sel, None, theme::rgb(t.pick_selected), theme::rgb(t.pick_hover)));
             self.pick.selection = sel;
+            // The set selected in the browser: its members in the highlight of selected symbols.
+            if let Some(items) = set.as_ref().and_then(|name| self.set_items(name)) {
+                let highlight = t.glyph_colors().highlight;
+                let m = self.with_picker(|p| p.items_overlay(&items, highlight));
+                s.tris.extend(m.tris);
+                s.lines.extend(m.lines);
+                s.points.extend(m.points);
+            }
             self.pick.selected_overlay = (Some(selected), Arc::new(s));
         }
         let mut s = (*self.pick.selected_overlay.1).clone();
@@ -1230,6 +1243,44 @@ impl ModelApp {
         }
         self.pick.overlay = (Some(key), Arc::new(s));
         (key, self.pick.overlay.1.clone())
+    }
+
+    /// The seed on `edge`, if it has one.
+    pub fn seed(&self, edge: &fieldcraft_model::GeometryRef) -> Option<&fieldcraft_model::Seed> {
+        self.session.model.seeds().iter().find(|s| s.edge == *edge)
+    }
+
+    /// Select (or with `None` deselect) a definition in the browser, as a click on its row does.
+    pub fn select_definition(&mut self, selected: Option<(browser::Def, String)>) {
+        if selected.is_some() {
+            self.selected_seed = None;
+        }
+        self.selected = selected;
+    }
+
+    /// Select the seed on `edge` in the browser: its properties on the right, its edge picked in
+    /// the viewport.
+    pub fn select_seed(&mut self, edge: fieldcraft_model::GeometryRef) {
+        self.selected = None;
+        self.select([selection::Item::Geometry(edge.clone())], selection::Mode::Replace);
+        self.selected_seed = Some(edge);
+    }
+
+    /// The set selected in the browser, if a set is.
+    fn selected_set(&self) -> Option<String> {
+        match &self.selected {
+            Some((browser::Def::Set, name)) => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    /// Set `name`'s members as viewport items (design entities by name, mesh items by label).
+    fn set_items(&self, name: &str) -> Option<Vec<selection::Item>> {
+        let set = self.session.model.sets().get(name)?;
+        let items = set.geometry.iter().cloned().map(selection::Item::Geometry);
+        let items = items.chain(set.nodes.iter().map(|n| selection::Item::Node(*n)));
+        let items = items.chain(set.elements.iter().map(|e| selection::Item::Element(*e)));
+        Some(items.chain(set.faces.iter().map(|f| selection::Item::Face(*f))).collect())
     }
 
     /// Drop selected nodes, elements and element faces the model no longer has (after an edit,
@@ -1351,6 +1402,7 @@ impl ModelApp {
         if self.framed_document != Some(self.session.opened()) {
             if self.framed_document.is_some() {
                 self.selected = None;
+                self.selected_seed = None;
                 self.reply = None;
             }
             self.framed_document = Some(self.session.opened());
@@ -1418,6 +1470,9 @@ impl ModelApp {
         // A selected definition that is gone (undo, delete) is no longer selected.
         if self.selected.as_ref().is_some_and(|(kind, name)| !kind.exists(&self.session.model, name)) {
             self.selected = None;
+        }
+        if self.selected_seed.as_ref().is_some_and(|edge| self.seed(edge).is_none()) {
+            self.selected_seed = None;
         }
         if self.session.results_view.as_ref().is_some_and(|v| v.animate) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(results::PERIOD / results::FRAMES as f64));

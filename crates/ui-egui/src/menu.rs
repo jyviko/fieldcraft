@@ -1,7 +1,8 @@
 //! The item menu: what a right click on a browser row offers, and on a datum or a partition's cut
 //! face in the viewport. Edit… opens the item's edit form, Hide/Show and Isolate change the view
 //! (`view.*`), Active in step switches a boundary condition or load on or off per step
-//! (`model.step.activate`), and Delete… asks first ([`crate::files::Prompt::Delete`]): it lists
+//! (`model.step.activate`), and Delete… asks first (a seed's Delete clears it at once: undo brings
+//! it back) ([`crate::files::Prompt::Delete`]): it lists
 //! the definitions that use the item, and refuses, or for a datum deletes its partitions with it.
 //! Every entry runs the same command as the ribbon, the forms and scripts.
 
@@ -20,6 +21,8 @@ pub enum Target {
     Surface(String),
     /// A model definition, datum or partition.
     Def(Def, String),
+    /// The seed on a design edge.
+    Seed(fieldcraft_model::GeometryRef),
 }
 
 impl Target {
@@ -29,6 +32,7 @@ impl Target {
             Target::Body(n) => (ItemKind::Body, n),
             Target::Surface(n) => (ItemKind::Surface, n),
             Target::Def(def, n) => (def.item_kind()?, n),
+            Target::Seed(_) => return None,
         };
         Some(ViewItem { kind, name: name.clone() })
     }
@@ -73,6 +77,9 @@ pub fn show(app: &ModelApp, ui: &mut egui::Ui, target: &Target) -> Option<Action
         let tip = edit.clone().unwrap_or_else(|| "Not editable: delete it and make it again".to_string());
         entry(ui, edit.is_some(), "Edit…", &tip, Action::Edit);
     }
+    if let Target::Seed(_) = target {
+        entry(ui, true, "Edit…", "mesh.seed.edge", Action::Edit);
+    }
     if let Some(item) = target.item() {
         if app.session.shows(item.kind, &item.name) {
             entry(ui, true, "Hide", "view.hide", Action::Hide);
@@ -103,6 +110,12 @@ pub fn show(app: &ModelApp, ui: &mut egui::Ui, target: &Target) -> Option<Action
             chosen = Some(Action::Delete);
         }
     }
+    if let Target::Seed(_) = target {
+        ui.separator();
+        if ui.button("Delete").on_hover_text("mesh.seed.clear (undo brings it back)").clicked() {
+            chosen = Some(Action::Delete);
+        }
+    }
     if chosen.is_some() {
         ui.close();
     }
@@ -115,11 +128,17 @@ pub fn apply(app: &mut ModelApp, target: Target, action: Action) {
     // Errors show in the status bar.
     let _ = match action {
         Action::Edit => {
-            if let Target::Def(def, name) = target
-                && let Some((command, params)) = def.edit(&app.session.model, &name)
+            if let Target::Def(def, name) = &target
+                && let Some((command, params)) = def.edit(&app.session.model, name)
             {
-                app.selected = Some((def, name));
+                app.select_definition(Some((*def, name.clone())));
                 app.open_form(&command, params);
+            }
+            if let Target::Seed(edge) = target
+                && let Some(params) = app.seed(&edge).and_then(seed_params)
+            {
+                app.select_seed(edge);
+                app.open_form("mesh.seed.edge", params);
             }
             Ok(Value::Null)
         }
@@ -134,13 +153,24 @@ pub fn apply(app: &mut ModelApp, target: Target, action: Action) {
             }
             _ => Ok(Value::Null),
         },
-        Action::Delete => {
-            if let Target::Def(def, name) = target {
+        Action::Delete => match target {
+            Target::Def(def, name) => {
                 app.ask_delete(def, &name);
+                Ok(Value::Null)
             }
-            Ok(Value::Null)
-        }
+            Target::Seed(edge) => app.run("mesh.seed.clear", json!({"edges": [edge]})),
+            Target::Body(_) | Target::Surface(_) => Ok(Value::Null),
+        },
     };
+}
+
+/// `mesh.seed.edge`'s parameters that make `seed` as it is: its edit form, filled in.
+pub fn seed_params(seed: &fieldcraft_model::Seed) -> Option<Value> {
+    let mut v = serde_json::to_value(seed).ok()?;
+    let o = v.as_object_mut()?;
+    let edge = o.remove("edge")?;
+    o.insert("edges".into(), json!([edge]));
+    Some(v)
 }
 
 /// The question a deletion asks ([`crate::files::Prompt::Delete`]).
@@ -278,6 +308,37 @@ mod tests {
         d.text = json!({"name": "P", "by": {"type": "coordinates", "point": [1, 0, 0]}}).to_string();
         app.run_dialog().unwrap();
         assert_eq!(app.session.journal.last().map(|(c, _)| c.as_str()), Some("geometry.datum.point.edit"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A seed is selected, described, edited and deleted from the browser like a definition
+    /// (#352).
+    #[test]
+    fn seeds_are_selected_edited_and_deleted() {
+        let (mut app, dir) = plate();
+        let bodies = app.run("geometry.bodies", json!({})).unwrap();
+        let edge = json!({"body": bodies[0]["name"], "edge": bodies[0]["edges"][0]["name"]});
+        app.run("mesh.seed.edge", json!({"edges": [edge], "count": 6, "bias": {"ratio": 4, "toward": "end"}})).unwrap();
+        let seed = app.session.model.seeds()[0].clone();
+        app.select_seed(seed.edge.clone());
+        assert!(app.selected.is_none() && crate::context::has_context(&mut app));
+        assert_eq!(app.pick.selection.len(), 1, "its edge is picked");
+        let rows = crate::describe::seed_rows(&app.session.model, &seed);
+        let text: Vec<String> = rows.iter().map(|(k, v)| format!("{k}: {v}")).collect();
+        assert!(text.iter().any(|r| r.contains('6')) && text.iter().any(|r| r.contains('4')), "{text:?}");
+        assert!(!text.iter().any(|r| r.contains('{')), "{text:?}");
+        apply(&mut app, Target::Seed(seed.edge.clone()), Action::Edit);
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.command, "mesh.seed.edge");
+        let params: Value = serde_json::from_str(&d.text).unwrap();
+        assert_eq!((params["count"].clone(), params["edges"][0]["body"].clone()), (json!(6), bodies[0]["name"].clone()), "{params}");
+        app.close_dialog();
+        apply(&mut app, Target::Seed(seed.edge.clone()), Action::Delete);
+        assert!(app.session.model.seeds().is_empty());
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| app.logic(ui.ctx()));
+        out.textures_delta.clear();
+        assert!(app.selected_seed.is_none(), "a deleted seed is no longer selected");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

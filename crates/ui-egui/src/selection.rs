@@ -596,6 +596,13 @@ impl Picker<'_> {
         s
     }
 
+    /// `items` (a set's members) drawn over the scene in `color`.
+    pub fn items_overlay(&self, items: &[Item], color: Rgb) -> Scene {
+        let mut s = Scene::default();
+        self.mark(&Marks::of(self, items.iter()), color, &mut s);
+        s
+    }
+
     /// The hovered item drawn over the scene in `color`. With `fill` off (while result contours
     /// are shown) its faces are left out and only their outline, edges and nodes are drawn, so
     /// the hover never hides the colours under the pointer.

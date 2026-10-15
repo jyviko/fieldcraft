@@ -549,17 +549,16 @@ fn item_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, mut row: Row, t
     if let Some(item) = target.item() {
         row.eye = Some(app.session.shows(item.kind, &item.name));
     }
-    if let Target::Def(kind, name) = &target {
-        row.selected = app.selected.as_ref().is_some_and(|(k, n)| k == kind && n == name);
+    match &target {
+        Target::Def(kind, name) => row.selected = app.selected.as_ref().is_some_and(|(k, n)| k == kind && n == name),
+        Target::Seed(edge) => row.selected = app.selected_seed.as_ref() == Some(edge),
+        Target::Body(_) | Target::Surface(_) => {}
     }
     let r = draw_row(app, ui, id, &row);
     // A right click selects the row its menu acts on (another item's highlight would say the
     // menu is about that one).
     if r.response.as_ref().is_some_and(egui::Response::secondary_clicked) {
-        acts.push(Act::Focus(match &target {
-            Target::Def(kind, name) => Some((*kind, name.clone())),
-            _ => None,
-        }));
+        acts.push(Act::Focus(target.clone()));
     }
     if let Some(resp) = &r.response {
         resp.context_menu(|ui| {
@@ -570,11 +569,13 @@ fn item_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, mut row: Row, t
     }
     if r.eye {
         acts.push(Act::Menu(target, if row.eye == Some(true) { Action::Hide } else { Action::Show }));
-    } else if let Target::Def(kind, name) = target {
-        if r.double {
-            acts.push(Act::Edit(kind, name));
-        } else if r.clicked {
-            acts.push(Act::Select(kind, name));
+    } else if r.double && matches!(target, Target::Def(..) | Target::Seed(_)) {
+        acts.push(Act::Menu(target, Action::Edit));
+    } else if r.clicked {
+        match target {
+            Target::Def(kind, name) => acts.push(Act::Select(kind, name)),
+            Target::Seed(edge) => acts.push(Act::SelectSeed(edge)),
+            Target::Body(_) | Target::Surface(_) => {}
         }
     }
 }
@@ -639,9 +640,10 @@ fn draw_ghost(app: &mut ModelApp, ui: &mut egui::Ui, s: &StageState) -> bool {
 enum Act {
     Fold(String),
     Select(Def, String),
-    /// Select this definition (nothing for an item that is none), as a right click does.
-    Focus(Option<(Def, String)>),
-    Edit(Def, String),
+    /// Select (or deselect) the seed on this edge.
+    SelectSeed(fieldcraft_model::GeometryRef),
+    /// Select the item a right click opened its menu on (nothing for an item that cannot be).
+    Focus(Target),
     ShowResult(String),
     /// A ghost row's command.
     Start(&'static str),
@@ -688,15 +690,21 @@ pub fn browser(app: &mut ModelApp, ui: &mut egui::Ui) {
                 }
             }
             Act::Select(kind, name) => {
-                app.selected = if app.selected.as_ref() == Some(&(kind, name.clone())) { None } else { Some((kind, name)) };
+                let again = app.selected.as_ref() == Some(&(kind, name.clone()));
+                app.select_definition((!again).then_some((kind, name)));
             }
-            Act::Focus(selected) => app.selected = selected,
-            Act::Edit(kind, name) => {
-                if let Some((command, params)) = kind.edit(&app.session.model, &name) {
-                    app.selected = Some((kind, name));
-                    app.open_form(&command, params);
+            Act::SelectSeed(edge) => {
+                if app.selected_seed.as_ref() == Some(&edge) {
+                    app.selected_seed = None;
+                } else {
+                    app.select_seed(edge);
                 }
             }
+            Act::Focus(target) => match target {
+                Target::Def(kind, name) => app.select_definition(Some((kind, name))),
+                Target::Seed(edge) => app.select_seed(edge),
+                Target::Body(_) | Target::Surface(_) => app.select_definition(None),
+            },
             Act::Menu(target, action) => menu::apply(app, target, action),
             Act::ShowResult(step) => {
                 // Errors show in the status bar.
@@ -856,7 +864,8 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
                 &Row { depth: 2, swatch: Some(t.element(kind)), label: kind.name(), note: Some(format!("{n}")), ..Default::default() },
             );
         }
-        // Edge seeds: a click selects the seeded edge in the viewport.
+        // Edge seeds: a click selects the seed (its properties on the right) and its edge in the
+        // viewport; a double click or the menu edits or deletes it.
         let seeds: Vec<(fieldcraft_model::GeometryRef, String)> = app.session.model.seeds().iter().map(|s| (s.edge.clone(), seed_note(s))).collect();
         if !seeds.is_empty() {
             let r = draw_row(
@@ -878,15 +887,8 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
             if open(app, "seeds") {
                 for (i, (edge, note)) in seeds.into_iter().enumerate() {
                     let label = format!("{} · {}", edge.body, edge.entity.name().unwrap_or_default());
-                    let r = draw_row(
-                        app,
-                        ui,
-                        egui::Id::new(("fc_row_seed", i)),
-                        &Row { depth: 3, label: &label, note: Some(note), ..Default::default() },
-                    );
-                    if r.clicked {
-                        app.select([crate::selection::Item::Geometry(edge)], crate::selection::Mode::Replace);
-                    }
+                    let row = Row { depth: 3, icon: Some("mesh.seed.edge"), label: &label, note: Some(note), ..Default::default() };
+                    item_row(app, ui, egui::Id::new(("fc_row_seed", i)), row, Target::Seed(edge), acts);
                 }
             }
         }

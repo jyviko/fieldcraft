@@ -17,7 +17,7 @@ pub const WIDTH: f32 = 310.0;
 
 /// Whether the panel has anything to show.
 pub fn has_context(app: &mut ModelApp) -> bool {
-    app.dialog.is_some() || app.selected.is_some() || app.reply.is_some() || app.plot().is_some()
+    app.dialog.is_some() || app.selected.is_some() || app.selected_seed.is_some() || app.reply.is_some() || app.plot().is_some()
 }
 
 pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
@@ -39,6 +39,10 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
                 }
                 if let Some((kind, name)) = app.selected.clone() {
                     properties(app, ui, &t, kind, &name);
+                    ui.add_space(10.0);
+                }
+                if let Some(edge) = app.selected_seed.clone() {
+                    seed_card(app, ui, &t, edge);
                     ui.add_space(10.0);
                 }
                 if let Some(plot) = app.plot() {
@@ -252,13 +256,7 @@ fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name
         });
     });
     ui.add_space(4.0);
-    egui::Grid::new("fc_properties").num_columns(2).spacing(vec2(10.0, 3.0)).show(ui, |ui| {
-        for (k, text) in rows.iter() {
-            ui.label(RichText::new(k).color(t.text_dim));
-            ui.add(egui::Label::new(text).wrap());
-            ui.end_row();
-        }
-    });
+    property_grid(ui, t, "fc_properties", &rows);
     ui.add_space(6.0);
     let (mut edit, mut delete) = (false, false);
     let editing = kind.edit_command(&app.session.model, name);
@@ -269,12 +267,53 @@ fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name
         delete = ui.button("Delete…").on_hover_text(format!("{} (Delete key)", kind.command("delete"))).clicked();
     });
     if deselect {
-        app.selected = None;
+        app.select_definition(None);
     } else if edit && let Some((command, params)) = kind.edit(&app.session.model, name) {
         app.open_form(&command, params);
     } else if delete {
         app.ask_delete(kind, name);
     }
+}
+
+/// The selected seed: its edge, divisions, bias and constraint, with Edit (the Seed Edges form,
+/// filled in) and Delete (`mesh.seed.clear`).
+fn seed_card(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, edge: fieldcraft_model::GeometryRef) {
+    let Some(seed) = app.seed(&edge) else { return };
+    let rows = crate::describe::seed_rows(&app.session.model, seed);
+    let mut deselect = false;
+    heading(ui, t, Level::Title, |ui| {
+        ui.label(RichText::new("SEED").font(label_font(ui.ctx(), 12.0)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            deselect = ui.small_button("×").on_hover_text("Deselect").clicked();
+        });
+    });
+    ui.add_space(4.0);
+    property_grid(ui, t, "fc_seed_properties", &rows);
+    ui.add_space(6.0);
+    let (mut edit, mut delete) = (false, false);
+    ui.horizontal(|ui| {
+        edit = ui.button("Edit…").on_hover_text("mesh.seed.edge").clicked();
+        delete = ui.button("Delete").on_hover_text("mesh.seed.clear (undo brings it back)").clicked();
+    });
+    let target = crate::menu::Target::Seed(edge);
+    if deselect {
+        app.selected_seed = None;
+    } else if edit {
+        crate::menu::apply(app, target, crate::menu::Action::Edit);
+    } else if delete {
+        crate::menu::apply(app, target, crate::menu::Action::Delete);
+    }
+}
+
+/// Rows of (label, text) as a two-column grid.
+fn property_grid(ui: &mut egui::Ui, t: &Tokens, id: &str, rows: &[(String, String)]) {
+    egui::Grid::new(id).num_columns(2).spacing(vec2(10.0, 3.0)).show(ui, |ui| {
+        for (k, text) in rows {
+            ui.label(RichText::new(k).color(t.text_dim));
+            ui.add(egui::Label::new(text).wrap());
+            ui.end_row();
+        }
+    });
 }
 
 /// A field's value as short text: numbers and strings as they are, long lists as their length

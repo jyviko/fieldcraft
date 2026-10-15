@@ -68,6 +68,18 @@ pub fn rows(model: &Model, kind: Def, name: &str) -> Option<Vec<(String, String)
     Some(out)
 }
 
+/// The seed on `edge` as (label, text) rows: the edge, then `mesh.seed.edge`'s fields.
+pub fn seed_rows(model: &Model, seed: &fieldcraft_model::Seed) -> Vec<(String, String)> {
+    let mut out = vec![("Edge".to_string(), format!("{} · {}", seed.edge.body, seed.edge.entity.name().unwrap_or_default()))];
+    let params = crate::menu::seed_params(seed).unwrap_or_default();
+    if let (Some(fields), Some(obj)) = (fieldcraft_engine::find_command("mesh.seed.edge").and_then(|s| s.form), params.as_object()) {
+        let mut obj = obj.clone();
+        obj.remove("edges");
+        object(fields, &obj, model.units(), &mut out, &mut Vec::new(), 0);
+    }
+    out
+}
+
 /// "contact_pressure" → "Contact pressure".
 fn sentence(key: &str) -> String {
     let s = key.replace('_', " ");

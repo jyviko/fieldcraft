@@ -2,9 +2,12 @@
 //! fieldcraft-cli run <script.json>
 //! fieldcraft-cli features
 //! fieldcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
+//! fieldcraft-cli crashes [list [--json] | show <id> | replay <id> | dir | clear [<id>]]
 //! fieldcraft-cli --version
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
+
+mod crashes;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -28,6 +31,11 @@ usage:
       --automation-read-root DIR       files may be read only inside DIR
       --automation-write-root DIR      files may be written only inside DIR (with either root,
                                        the access a root left out is not granted)
+  fieldcraft-cli crashes [list|show <id>|replay <id>|dir|clear [<id>]]
+                                       the crash reports the desktop app wrote on this
+                                       computer (docs/crash-reports.md): list them (--json),
+                                       show one, replay one (does the crash happen again?),
+                                       print their folder, delete them
   fieldcraft-cli --version             print the version
 ";
 
@@ -52,6 +60,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         Some("mcp") => mcp(args.get(1..).unwrap_or(&[])),
+        Some("crashes") => crashes::run(args.get(1..).unwrap_or(&[])),
         Some("run") => args.get(1).ok_or_else(|| format!("run needs a script\n\n{USAGE}")).and_then(|p| run(p)),
         Some("-V" | "--version") => {
             println!("fieldcraft-cli {}", env!("CARGO_PKG_VERSION"));

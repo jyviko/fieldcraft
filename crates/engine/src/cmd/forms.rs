@@ -1142,6 +1142,9 @@ pub const HEX_PROJECT: &[Field] = &[
     xyz("center", "Centre", POINT).help("Sphere or butterfly centre.").hint("from the body's bounding box"),
     positive("radius", "Radius", D::Millimetre).help("Sphere or butterfly radius.").hint("from the body"),
     xyz("axis", "Axis", D::None).help("Butterfly axis direction.").hint("0, 0, 1"),
+    json("levels", "Levels")
+        .help("Sphere and butterfly levels; for a butterfly, distances along the axis from the centre, as JSON.")
+        .hint("[z0, z1, ...]; from the bounding box"),
     range("inset", "Inset", D::None, 0.05, 0.95).help("Inner square or cube corner at this fraction of the radius.").def("0.55"),
     json("grid", "Grid").help("The block grid: planes per axis or a cell count, and blocks to carve away, as JSON.").hint(r#"{"cells": [ni, nj, nk], "carve": [{"i": [a, b], "j": [c, d], "k": [e, f]}]}"#),
     json("blocks", "Blocks").help("Template Blocks: vertices and hex8 blocks, as JSON.").hint(r#"{"vertices": [[x, y, z], ...], "blocks": [[v1..v8], ...]}"#),
@@ -1153,6 +1156,9 @@ pub const HEX_PROJECT: &[Field] = &[
         .def("\"elliptic\""),
     int("iterations", "Iterations", 1, 100_000).help("Smoothing iterations.").def("100"),
     range("min_quality", "Minimum quality", D::None, 0.0, 1.0).help("Smallest scaled Jacobian accepted.").def("0.2"),
+    range("merge", "Merge distance", D::Millimetre, 0.0, 1.0e9)
+        .help("Join this mesh's nodes with other bodies' meshes within this distance; 0 never.")
+        .hint("1e-6 of the diagonal"),
     flag("preview", "Preview only").help("Return the block topology without meshing."),
     TOLERANCE,
 ];

@@ -276,6 +276,16 @@ impl ModelApp {
         }
     }
 
+    /// The web app: a new deployment is out; the status bar offers to reload into it.
+    pub fn offer_reload(&mut self, reload: Box<dyn Fn()>) {
+        self.reload = Some(reload);
+    }
+
+    /// Whether the status bar offers to reload into a new deployment.
+    pub fn reload_offered(&self) -> bool {
+        self.reload.is_some()
+    }
+
     /// For the control channel's `ui.inspect`.
     pub fn update_json(&self) -> serde_json::Value {
         let Some(u) = &self.updates else { return serde_json::Value::Null };
@@ -291,9 +301,19 @@ impl ModelApp {
     }
 }
 
-/// The status bar's notice: an update offered, or one downloading.
+/// The status bar's notice: an update offered, or one downloading; in the browser, a new
+/// deployment to reload into.
 pub fn notice(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(app.ui.dark);
+    if let Some(reload) = &app.reload {
+        let tip = if app.has_unsaved_work() { "Reloads the page; you are asked about the unsaved changes first" } else { "Reloads the page" };
+        if ui.add(egui::Link::new(RichText::new("Reload to update").size(11.5))).on_hover_text(tip).clicked() {
+            reload();
+        }
+        ui.label(RichText::new("A new version of FieldCraft is available —").size(11.5).color(t.text));
+        ui.separator();
+        return;
+    }
     let Some(u) = &app.updates else { return };
     if let Some(busy) = &u.busy {
         ui.label(RichText::new(busy).size(11.5).color(t.text_dim));

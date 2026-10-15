@@ -391,6 +391,8 @@ pub struct ModelApp {
     consent_asked: bool,
     /// Checking for and installing updates, when this run may ([`updates`]).
     updates: Option<updates::State>,
+    /// The web app: a new deployment is out, and this reloads the page into it.
+    reload: Option<Box<dyn Fn()>>,
     /// The setup progress the browser marks, and what it was worked out for.
     setup: (Option<(u64, u64, bool, bool)>, std::sync::Arc<Vec<fieldcraft_engine::progress::StageState>>),
     /// The file opening in the background, and files waiting to open after it.
@@ -481,6 +483,7 @@ impl ModelApp {
             usage: None,
             consent_asked: false,
             updates: None,
+            reload: None,
             setup: (None, std::sync::Arc::default()),
             loading: None,
             queued: std::collections::VecDeque::new(),

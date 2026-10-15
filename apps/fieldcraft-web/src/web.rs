@@ -107,7 +107,8 @@ pub fn start() {
                     if recoverable > 0 {
                         app.set_status(format!("{recoverable} autosaved model(s) can be recovered: File › Recover…"), false);
                     }
-                    Ok(Box::new(Shell { app, inbox, store, autosaver, autosaved_at: 0.0, storage_error: false, sent_at: 0.0 }))
+                    let deploy = crate::deploy::Watch::start();
+                    Ok(Box::new(Shell { app, inbox, store, autosaver, autosaved_at: 0.0, storage_error: false, sent_at: 0.0, deploy }))
                 }),
             )
             .await;
@@ -213,6 +214,8 @@ struct Shell {
     storage_error: bool,
     /// App time usage events were last sent.
     sent_at: f64,
+    /// Looks for a new deployment of the app.
+    deploy: crate::deploy::Watch,
 }
 
 impl Shell {
@@ -283,6 +286,14 @@ impl eframe::App for Shell {
             crate::usage::send();
         }
         UNSAVED.with(|u| u.set(self.app.session.is_dirty() && !self.app.session.journal.is_empty()));
+        if self.app.now - self.deploy.looked_at >= crate::deploy::INTERVAL || self.app.now < self.deploy.looked_at {
+            self.deploy.looked_at = self.app.now;
+            self.deploy.look();
+        }
+        if self.deploy.found() && !self.app.reload_offered() {
+            self.app.offer_reload(Box::new(crate::deploy::reload));
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(crate::deploy::INTERVAL));
     }
 
     /// Dropped files are read here (browsers read them asynchronously) and arrive through the

@@ -19,6 +19,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(target_arch = "wasm32")]
+mod deploy;
+#[cfg(target_arch = "wasm32")]
 mod storage;
 #[cfg(target_arch = "wasm32")]
 mod usage;
@@ -45,6 +47,25 @@ fn sample_in_query(query: &str) -> Option<String> {
     })
 }
 
+/// The build of the app a page loads: the content-hashed name Trunk gives its WebAssembly
+/// (`fieldcraft-web-<hash>_bg.wasm`). A new deployment loads another one.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn build_in_page(html: &str) -> Option<&str> {
+    const HEAD: &str = "fieldcraft-web-";
+    const TAIL: &str = "_bg.wasm";
+    let mut rest = html;
+    while let Some(at) = rest.find(HEAD) {
+        let candidate = rest.get(at..)?;
+        let hash = candidate.get(HEAD.len()..)?;
+        let len = hash.bytes().take_while(u8::is_ascii_alphanumeric).count();
+        if len > 0 && hash.get(len..)?.starts_with(TAIL) {
+            return candidate.get(..HEAD.len() + len + TAIL.len());
+        }
+        rest = candidate.get(HEAD.len()..)?;
+    }
+    None
+}
+
 /// The name a file from the computer is kept under in the page: its last path part, without
 /// characters a path would read as folders.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -65,6 +86,18 @@ mod tests {
         assert_eq!(sample_in_query("?webgl&sample=cantilever").as_deref(), Some("cantilever"));
         assert_eq!(sample_in_query("?sample=").as_deref(), Some("parts"));
         assert_eq!(sample_in_query("?samples=x"), None);
+    }
+
+    #[test]
+    fn the_running_build_is_found_in_the_page() {
+        let page = r#"<link rel="modulepreload" href="/fieldcraft/fieldcraft-web-1a2b3c.js"><link rel="preload" href="/fieldcraft/fieldcraft-web-1a2b3c_bg.wasm" as="fetch">"#;
+        assert_eq!(build_in_page(page), Some("fieldcraft-web-1a2b3c_bg.wasm"));
+        let next = page.replace("1a2b3c", "9f8e7d");
+        assert_ne!(build_in_page(page), build_in_page(&next));
+        // A development page (no hash) and other text: nothing to compare.
+        assert_eq!(build_in_page(r#"<script src="fieldcraft-web.js"></script>"#), None);
+        assert_eq!(build_in_page("fieldcraft-web-"), None);
+        assert_eq!(build_in_page(""), None);
     }
 
     #[test]

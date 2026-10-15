@@ -518,7 +518,7 @@ impl Affine {
 
 /// Inverse-distance (Shepard, power 4) weights of the ring nodes at `p`, normalized: the
 /// residual correction at `p` is their weighted sum of the ring's residuals.
-fn shepard_weights(p: [f64; 2], ring: &[[f64; 2]]) -> Vec<(usize, f64)> {
+pub(super) fn shepard_weights(p: [f64; 2], ring: &[[f64; 2]]) -> Vec<(usize, f64)> {
     let mut w: Vec<(usize, f64)> = Vec::with_capacity(ring.len());
     for (k, s) in ring.iter().enumerate() {
         let d2 = (p[0] - s[0]).powi(2) + (p[1] - s[1]).powi(2);

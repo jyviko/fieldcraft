@@ -40,6 +40,7 @@ mod arrangement;
 mod brep;
 mod cells;
 mod decompose;
+mod extrude_to;
 pub(crate) mod geom;
 mod interval;
 mod layered;
@@ -54,6 +55,7 @@ mod tests;
 use std::collections::HashMap;
 
 pub use cells::{Cell, CellsMesh, GROWTH, MAX_CELLS, hex_mesh_cells, hex_mesh_swept_cells};
+pub use extrude_to::{ExtrudeBoundary, ExtrudeLayers, ExtrudePath, ExtrudeRole, ExtrudeSpec, Extruded, MAX_BIAS, MAX_LAYERS, extrude_to_surface};
 pub use geom::Surface;
 
 use crate::seeds::EdgeSeed;

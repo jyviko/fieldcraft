@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-62 ready, 42 coming soon.
+63 ready, 41 coming soon.
 
 ## Geometry
 
@@ -26,7 +26,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Panel | Capability | Status | Command |
 |---|---|---|---|
 | Size | Global Size — One element size for the whole part | coming soon (M2) |  |
-| Size | Seed Edges — Element counts, sizes and bias per edge and face | coming soon (M2) |  |
+| Size | Seed Edges — Element counts or sizes per design edge, with bias and an exact, minimum or free constraint; the meshers honour them | ready | `mesh.seed.edge`, `mesh.seed.clear`, `mesh.seed.list` |
 | Size | Curvature — Refine by curvature and proximity | coming soon (M2) |  |
 | Tet | Tet Mesh — Quality tet4 or tet10 mesh of a body to a size: refined, smoothed and improved, boundary on the B-rep faces, faces tagged | ready | `mesh.tet.generate` |
 | Tet | Quadratic — Second-order elements with mid-side nodes on the geometry | coming soon (M2) |  |

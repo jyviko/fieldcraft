@@ -254,7 +254,7 @@ fn partition_delete(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A session with the sample plate (40 × 30 × 10, Ø10 hole at (15, 15)) open.

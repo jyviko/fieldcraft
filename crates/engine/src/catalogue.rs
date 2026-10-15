@@ -251,7 +251,14 @@ pub static CATALOGUE: &[Capability] = &[
     soon("geometry.midsurface", "Midsurface", Geometry, "Prepare", "M8", "Extract midsurfaces of thin parts for shell meshes"),
     // ---- Mesh ----
     soon("mesh.size.global", "Global Size", Mesh, "Size", "M2", "One element size for the whole part"),
-    soon("mesh.size.seed", "Seed Edges", Mesh, "Size", "M2", "Element counts, sizes and bias per edge and face"),
+    ready_more(
+        "mesh.seed.edge",
+        "Seed Edges",
+        Mesh,
+        "Size",
+        "Element counts or sizes per design edge, with bias and an exact, minimum or free constraint; the meshers honour them",
+        &["mesh.seed.clear", "mesh.seed.list"],
+    ),
     soon("mesh.size.adapt", "Curvature", Mesh, "Size", "M2", "Refine by curvature and proximity"),
     ready(
         "mesh.tet.generate",

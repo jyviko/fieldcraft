@@ -30,6 +30,8 @@ pub enum Requirement {
     DatumPlane,
     /// A partition of the design.
     Partition,
+    /// An edge seed.
+    Seed,
     /// At least one mesh node.
     Nodes,
     /// At least one element.
@@ -73,6 +75,7 @@ impl Requirement {
             Requirement::Datum => !m.datums().is_empty(),
             Requirement::DatumPlane => m.datums().values().any(|d| d.plane().is_some()),
             Requirement::Partition => !m.partitions().is_empty(),
+            Requirement::Seed => !m.seeds().is_empty(),
             Requirement::Nodes => !m.nodes().is_empty(),
             Requirement::Mesh => has_elements,
             Requirement::Analysable => {
@@ -110,6 +113,7 @@ impl Requirement {
             Requirement::Datum => "a datum plane or axis",
             Requirement::DatumPlane => "a datum plane",
             Requirement::Partition => "a partition",
+            Requirement::Seed => "an edge seed",
             Requirement::Nodes => "mesh nodes",
             Requirement::Mesh | Requirement::Analysable => "a mesh",
             Requirement::ElementMaterial | Requirement::Material => "a material",
@@ -137,6 +141,7 @@ impl Requirement {
             Requirement::Design | Requirement::Geometry => "geometry.open",
             Requirement::Datum | Requirement::DatumPlane => "geometry.datum",
             Requirement::Partition => "geometry.partition",
+            Requirement::Seed => "mesh.seed.edge",
             Requirement::Nodes => "mesh.node.add",
             Requirement::Mesh | Requirement::Analysable => "mesh.tet.generate",
             Requirement::ElementMaterial | Requirement::Material => "model.material.create",

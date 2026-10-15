@@ -695,7 +695,7 @@ impl ModelApp {
 /// empty when everything resolves.
 fn stale_note(stale: &Value) -> String {
     let names = |k: &str| stale.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", ");
-    let parts: Vec<String> = [("mesh of", names("mesh_bodies")), ("sets", names("sets"))]
+    let parts: Vec<String> = [("mesh of", names("mesh_bodies")), ("sets", names("sets")), ("seeds on", names("seeds"))]
         .into_iter()
         .filter(|(_, n)| !n.is_empty())
         .map(|(what, n)| format!("{what} {n}"))

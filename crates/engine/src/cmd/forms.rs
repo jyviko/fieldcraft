@@ -809,6 +809,23 @@ pub const ELEMENT_ADD: &[Field] = &[
     json("nodes", "Nodes").req().hint("[labels]"),
 ];
 
+pub const SEED_EDGE: &[Field] = &[
+    json("edges", "Edges").req().hint("[{\"body\", \"edge\"}, …] — Use selection with Select: Edges"),
+    int("count", "Count", 1, 100_000).hint("or an element size"),
+    positive("size", "Element size", D::Length).hint("or a count"),
+    group(
+        "bias",
+        "Bias",
+        &[
+            range("ratio", "Ratio", D::None, 1.0, 1e4).req().def("1"),
+            choice("toward", "Small toward", &[("start", "Start"), ("end", "End"), ("both", "Both ends")]).req().def("\"end\""),
+        ],
+    ),
+    choice("constraint", "Constraint", &[("exact", "Exact"), ("min", "At least"), ("free", "Free (a goal)")]).def("\"exact\""),
+];
+
+pub const SEED_CLEAR: &[Field] = &[json("edges", "Edges").hint("every seed")];
+
 pub const DELAUNAY_POINTS: &[Field] = &[json("points", "Points").req().hint("[[x, y, z], …]")];
 
 pub const TAG: &[Field] = &[

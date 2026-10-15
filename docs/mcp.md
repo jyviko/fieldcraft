@@ -140,6 +140,22 @@ and `mesh` (each one's parameters: `list_commands`):
 
 `file.sample {"name": "crank-mirror"}` opens the crank arm built this way (docs/examples.md).
 
+## Edge seeds
+
+Seed an edge when its element count matters more than the global size: through a thin
+section's thickness (at least 2–3 elements for bending), around a fillet or hole where the
+stress peaks (a count or a small size, biased toward the stress raiser), or to give the shared
+edges of partition cells matching counts.
+
+1. `inspect_model` lists each body's edges by persistent name (`<face>|<face>`, `~k` when several
+   separate the same faces) with their lengths; the names follow the faces through edits and
+   partitions.
+2. `execute` `mesh.seed.edge {edges: [{body, edge}], count | size, bias?: {ratio, toward:
+   start|end|both}, constraint?: exact|min|free}`. `exact` keeps the count, `min` keeps at least
+   it, `free` is a goal. The reply gives the count each edge gets.
+3. `mesh.seed.list` lists the seeds and the edges they reach (`stale` when the design has no such
+   edge); `mesh.seed.clear {edges?}` removes them. Seeds are saved with the model.
+
 ## Limits
 
 The server treats its input as hostile. A message line may be at most 16 MiB (the control

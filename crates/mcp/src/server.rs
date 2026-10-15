@@ -36,7 +36,10 @@ datum plane, geometry.partition cuts the design's bodies into cells by it (cut f
 the model and applied again when the design opens); `mesh` method cells meshes the cells each with its own method, \
 method mirror reflects a meshed half across a datum plane into one conforming mesh; \
 model.boundary_condition.symmetry holds a half model on its symmetry plane (file.sample crank-mirror shows the \
-partition, half-mesh and mirror sequence). Failures leave the model unchanged and name what to fix.";
+partition, half-mesh and mirror sequence). Edge seeds: mesh.seed.edge {edges: [{body, edge}], count | size, bias?, \
+constraint?} fixes the element count along design edges (inspect_model lists the edge names): seed a thin section's \
+thickness, a fillet or hole edge (biased toward the stress raiser), and partition cells' shared edges so their \
+counts match. Failures leave the model unchanged and name what to fix.";
 
 pub struct Server {
     backend: Box<dyn Backend>,

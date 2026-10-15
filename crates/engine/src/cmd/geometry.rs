@@ -15,7 +15,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const OPEN: CommandSpec = CommandSpec {
     id: "geometry.open",
     label: "Open Design",
-    params: r#"{"path": "part.solidcraft", "model"?: "keep"} — rebuilds the SolidCraft design and makes its bodies the geometry. `model`: "keep" (default) keeps the mesh and every definition, so opening the same design again after an edit picks up the change and sets follow their persistent face names; "new" starts a new model with the design (no mesh, sets, materials, sections, BCs, loads or steps; the unit system stays; the model is untitled until saved, and undo restores the previous file). The reply's `related` is false when the model (before the open) refers to bodies (mesh tags, set geometry) and the design has none of them, and `stale` lists what no longer resolves: `mesh_bodies` (bodies the mesh is tagged with that the design lacks) and `sets` (sets naming a body or face it lacks). One undo step"#,
+    params: r#"{"path": "part.solidcraft", "model"?: "keep"} — rebuilds the SolidCraft design and makes its bodies the geometry. `model`: "keep" (default) keeps the mesh and every definition, so opening the same design again after an edit picks up the change and sets follow their persistent face names; "new" starts a new model with the design (no mesh, sets, materials, sections, BCs, loads or steps; the unit system stays; the model is untitled until saved, and undo restores the previous file). The reply's `related` is false when the model (before the open) refers to bodies (mesh tags, set geometry) and the design has none of them, and `stale` lists what no longer resolves: `mesh_bodies` (bodies the mesh is tagged with that the design lacks) `sets` (sets naming a body or face it lacks) and `seeds` (edge seeds on edges it lacks). One undo step"#,
     form: Some(super::forms::OPEN_DESIGN),
     kind: CommandKind::Model,
     requires: &[],
@@ -80,6 +80,7 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
         s.set_document(Default::default());
         fit.mesh_bodies.clear();
         fit.sets.clear();
+        fit.seeds.clear();
     }
     let out = json!({
         "name": design.name,
@@ -87,7 +88,7 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
         "errors": design.errors.iter().map(|e| json!({"feature": e.feature, "message": e.message})).collect::<Vec<_>>(),
         "model": if new_model { "new" } else { "kept" },
         "related": fit.related,
-        "stale": {"mesh_bodies": fit.mesh_bodies, "sets": fit.sets},
+        "stale": {"mesh_bodies": fit.mesh_bodies, "sets": fit.sets, "seeds": fit.seeds},
     });
     s.design = Some(Arc::new(design));
     s.sources.design = Some(source);
@@ -103,6 +104,8 @@ struct Fit {
     mesh_bodies: Vec<String>,
     /// Sets naming a body or a face that is not there.
     sets: Vec<String>,
+    /// Edge seeds on an edge the design lacks.
+    seeds: Vec<String>,
 }
 
 fn fit(s: &Session, design: &Design) -> Fit {
@@ -118,6 +121,13 @@ fn fit(s: &Session, design: &Design) -> Fit {
         related: referenced.is_empty() || referenced.iter().any(|b| has(b)),
         mesh_bodies: tagged.into_iter().filter(|b| !has(b)).map(str::to_string).collect(),
         sets: s.model.sets().iter().filter(|(_, set)| !set.geometry.iter().all(resolves)).map(|(n, _)| n.clone()).collect(),
+        seeds: s
+            .model
+            .seeds()
+            .iter()
+            .filter(|seed| super::seeds::seeded_edges(design, &seed.edge).map_or(true, |e| e.is_empty()))
+            .map(|seed| seed.edge.to_string())
+            .collect(),
     }
 }
 

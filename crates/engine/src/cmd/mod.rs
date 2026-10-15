@@ -18,6 +18,7 @@ mod mirror;
 mod model;
 pub(crate) mod octree;
 mod results;
+pub(crate) mod seeds;
 pub(crate) mod solve;
 mod symmetry;
 mod tags;
@@ -57,6 +58,9 @@ pub static ALL: &[CommandSpec] = &[
     hex::HEX_MAPPED,
     hex::HEX_BLOCKS,
     cells::CELLS,
+    seeds::SEED_EDGE,
+    seeds::SEED_CLEAR,
+    seeds::SEED_LIST,
     mirror::MIRROR,
     tags::TAG,
     tags::TAG_CLEAR,

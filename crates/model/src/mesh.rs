@@ -384,6 +384,7 @@ impl Model {
                 set.nodes = nodes;
             }
         }
+        self.relabel_step_nodes(&target);
         for (&from, &to) in map {
             if let Some(tag) = self.classification.nodes().get(&from).copied()
                 && !self.classification.nodes().contains_key(&to)
@@ -394,6 +395,83 @@ impl Model {
             self.nodes.remove(&from);
         }
         Ok(())
+    }
+
+    /// Give nodes and elements new labels: `nodes[old]` and `elements[old]` (labels not listed
+    /// keep theirs). Everything that names them follows: element connectivity, set members,
+    /// geometry tags and an arc-length step's displacement limit. The new labels must be valid,
+    /// distinct, and no node may take a reference point's label (decks write reference points as
+    /// nodes). Refused, with nothing changed, otherwise.
+    pub fn renumber(&mut self, nodes: &BTreeMap<u32, u32>, elements: &BTreeMap<u32, u32>) -> Result<()> {
+        fn check(what: &str, map: &BTreeMap<u32, u32>, labels: &mut dyn Iterator<Item = u32>, exists: &dyn Fn(u32) -> bool) -> Result<()> {
+            for (&from, &to) in map {
+                if !exists(from) {
+                    return Err(Error::NotFound(format!("{what} {from}")));
+                }
+                check_label(what, to)?;
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for l in labels {
+                if !seen.insert(l) {
+                    return Err(Error::Invalid(format!("two {what}s would both be {what} {l}")));
+                }
+            }
+            Ok(())
+        }
+        let node = |l: u32| nodes.get(&l).copied().unwrap_or(l);
+        let element = |l: u32| elements.get(&l).copied().unwrap_or(l);
+        check("node", nodes, &mut self.nodes.keys().map(|&l| node(l)), &|l| self.nodes.contains_key(&l))?;
+        check("element", elements, &mut self.elements.keys().map(|&l| element(l)), &|l| self.elements.contains_key(&l))?;
+        for (name, p) in &self.reference_points {
+            if let Some((&from, _)) = nodes.iter().find(|(_, to)| **to == p.label) {
+                return Err(Error::Invalid(format!("node {from} would take label {}, reference point `{name}`'s", p.label)));
+            }
+        }
+        if nodes.is_empty() && elements.is_empty() {
+            return Ok(());
+        }
+        self.nodes = std::mem::take(&mut self.nodes).into_iter().map(|(l, n)| (node(l), n)).collect();
+        self.elements = std::mem::take(&mut self.elements)
+            .into_iter()
+            .map(|(l, mut e)| {
+                for n in &mut e.nodes {
+                    *n = node(*n);
+                }
+                (element(l), e)
+            })
+            .collect();
+        self.classification.relabel(&node, &element);
+        for set in self.sets.values_mut() {
+            set.nodes = set.nodes.iter().map(|&n| node(n)).collect();
+            set.nodes.sort_unstable();
+            set.nodes.dedup();
+            set.elements = set.elements.iter().map(|&e| element(e)).collect();
+            set.elements.sort_unstable();
+            set.elements.dedup();
+            for f in &mut set.faces {
+                f.element = element(f.element);
+            }
+            set.faces.sort_unstable();
+            set.faces.dedup();
+            for e in &mut set.edges {
+                e.element = element(e.element);
+            }
+            set.edges.sort_unstable();
+            set.edges.dedup();
+        }
+        self.relabel_step_nodes(&node);
+        Ok(())
+    }
+
+    /// The nodes steps name by label (an arc-length step's displacement limit), relabelled.
+    fn relabel_step_nodes(&mut self, node: &dyn Fn(u32) -> u32) {
+        for step in &mut self.steps {
+            if let crate::steps::Procedure::NonlinearStatic(ns) = &mut step.procedure
+                && let Some(limit) = ns.arc_length.as_mut().and_then(|a| a.displacement_limit.as_mut())
+            {
+                limit.node = node(limit.node);
+            }
+        }
     }
 
     /// Element counts by kind, in [`ElementKind::ALL`] order, kinds with none left out.
@@ -565,5 +643,51 @@ mod tests {
         assert_eq!(m.set("pins").unwrap().nodes, vec![1, 2]);
         assert_eq!(m.classification().nodes().get(&1), Some(&vertex));
         assert_eq!(m.classification().elements().get(&2).and_then(|t| t.faces.get(&1)), Some(&face));
+    }
+
+    /// Renumbering moves every reference to a label with it (#234): connectivity, set members,
+    /// tags and a step's displacement limit; colliding labels and a reference point's label are
+    /// refused, changing nothing.
+    #[test]
+    fn renumbering_keeps_every_reference() {
+        use crate::steps::{ArcLength, DisplacementLimit, NonlinearStatic, Procedure, Step};
+        use crate::{GeometryRef, Set};
+        let mut m = cube();
+        m.set_element(2, ElementKind::Tet4, vec![1, 2, 4, 5]).unwrap();
+        let face = m.geometry_tag(&GeometryRef::face("B", "bottom").unwrap()).unwrap();
+        m.tag_element_face(1, 1, face).unwrap();
+        let vertex = m.geometry_tag(&GeometryRef::new("B", crate::geometry::Entity::Vertex("v".into())).unwrap()).unwrap();
+        m.tag_node(8, vertex).unwrap();
+        m.add_set("s", Set { nodes: vec![1, 8], elements: vec![2], faces: vec![ElementFace { element: 1, face: 2 }], ..Set::default() }).unwrap();
+        let limit = DisplacementLimit { node: 8, direction: 3, displacement: 1.0 };
+        let arc = ArcLength { displacement_limit: Some(limit), ..ArcLength::default() };
+        m.add_step(Step::new("Riks", Procedure::NonlinearStatic(NonlinearStatic { arc_length: Some(arc), ..NonlinearStatic::default() })), None)
+            .unwrap();
+        m.add_reference_point("RP", crate::ReferencePoint { xyz: [0.0; 3], label: 50 }).unwrap();
+
+        let before = m.clone();
+        assert!(m.renumber(&[(1, 2)].into(), &BTreeMap::new()).is_err(), "node 2 is taken");
+        assert!(m.renumber(&[(1, 50)].into(), &BTreeMap::new()).is_err(), "the reference point's label");
+        assert!(m.renumber(&[(9, 10)].into(), &BTreeMap::new()).is_err());
+        assert!(m.renumber(&[(1, 0)].into(), &BTreeMap::new()).is_err());
+        assert!(m.renumber(&BTreeMap::new(), &[(1, 2)].into()).is_err());
+        assert_eq!(m, before, "a refused renumbering changes nothing");
+
+        // Swap nodes 1 and 8, move elements to 11 and 12.
+        m.renumber(&[(1, 8), (8, 1)].into(), &[(1, 11), (2, 12)].into()).unwrap();
+        assert_eq!(m.node(8).unwrap().xyz, before.node(1).unwrap().xyz);
+        assert_eq!(m.element(11).unwrap().nodes, vec![8, 2, 3, 4, 5, 6, 7, 1]);
+        assert_eq!(m.element(12).unwrap().nodes, vec![8, 2, 4, 5]);
+        let set = m.set("s").unwrap();
+        assert_eq!((set.nodes.clone(), set.elements.clone(), set.faces.clone()), (vec![1, 8], vec![12], vec![ElementFace { element: 11, face: 2 }]));
+        assert_eq!(m.classification().nodes().get(&1), Some(&vertex));
+        assert_eq!(m.classification().elements().get(&11).and_then(|t| t.faces.get(&1)), Some(&face));
+        let Procedure::NonlinearStatic(ns) = &m.steps()[0].procedure else { panic!() };
+        assert_eq!(ns.arc_length.as_ref().and_then(|a| a.displacement_limit.as_ref()).map(|l| l.node), Some(1));
+        // Merging moves the limit to the survivor.
+        m.set_node(21, [0.0, 0.0, 1.0]).unwrap();
+        m.merge_nodes(&[(1, 21)].into()).unwrap();
+        let Procedure::NonlinearStatic(ns) = &m.steps()[0].procedure else { panic!() };
+        assert_eq!(ns.arc_length.as_ref().and_then(|a| a.displacement_limit.as_ref()).map(|l| l.node), Some(21));
     }
 }

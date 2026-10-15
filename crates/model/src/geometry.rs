@@ -266,6 +266,13 @@ impl Classification {
     pub(crate) fn forget_node(&mut self, label: u32) {
         self.nodes.remove(&label);
     }
+
+    /// Give tagged nodes and elements their new labels (labels `node` or `element` leaves alone
+    /// keep theirs; the caller checked the new labels are distinct).
+    pub(crate) fn relabel(&mut self, node: &dyn Fn(u32) -> u32, element: &dyn Fn(u32) -> u32) {
+        self.nodes = std::mem::take(&mut self.nodes).into_iter().map(|(l, t)| (node(l), t)).collect();
+        self.elements = std::mem::take(&mut self.elements).into_iter().map(|(l, t)| (element(l), t)).collect();
+    }
 }
 
 impl Model {

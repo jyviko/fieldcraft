@@ -106,7 +106,7 @@ pub const SURFACE_CHECK: CommandSpec = CommandSpec {
 pub const TET_GENERATE: CommandSpec = CommandSpec {
     id: "mesh.tet.generate",
     label: "Generate Tet Mesh",
-    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the body's bounding-box diagonal), the boundary options of mesh.surface.check ("weld", "weld_distance", "feature_angle"), optional "size": mm (target edge length; default a twentieth of the bounding-box diagonal), "order": "linear" | "quadratic" (tet4 or tet10; quadratic mid-edge nodes lie on the B-rep faces), "quality": true (false: the raw constrained Delaunay tetrahedralization), "quality_target": 40 (degrees: tetrahedra whose smallest dihedral-angle sine is at least sin of this are left alone by improvement, 5..=60), "curvature_angle": 22.5 (degrees per element along curved boundary, 0 for none, at most 90), "grading": 0.3 (largest size change per unit length, 0.05..=2), "max_passes": 20 (improvement passes, 0..=200), "max_points": 1000000 (1..=20000000), "max_steiner": 50000 (0..=10000000), "max_tets": 5000000 (1..=50000000) — the constrained Delaunay tetrahedralization of the welded boundary (every boundary triangle a union of tet faces), refined to the size field with its boundary vertices on the B-rep faces, smoothed and improved (Delaunay refinement, ODT smoothing, Klingner–Shewchuk improvement), with a quality report. Adds the elements and their nodes (labels after the largest existing ones), tags the elements with the body and each boundary element face with its geometry face, and fails, changing nothing, if a surface is invalid or a mesh does not pass the validity gate. Reports the totals and, under `bodies`, each body's counts, size and quality report"#,
+    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the body's bounding-box diagonal), the boundary options of mesh.surface.check ("weld", "weld_distance", "feature_angle"), optional "size": mm (target edge length; default a twentieth of the bounding-box diagonal), "order": "linear" | "quadratic" (tet4 or tet10; quadratic mid-edge nodes lie on the B-rep faces), "quality": true (false: the raw constrained Delaunay tetrahedralization), "quality_target": 40 (degrees: tetrahedra whose smallest dihedral-angle sine is at least sin of this are left alone by improvement, 5..=60), "curvature_angle": 22.5 (degrees per element along curved boundary, 0 for none, at most 90), "grading": 0.3 (largest size change per unit length, 0.05..=2), "max_passes": 20 (improvement passes, 0..=200), "max_points": 1000000 (1..=20000000), "max_steiner": 50000 (0..=10000000), "max_tets": 5000000 (1..=50000000) — the constrained Delaunay tetrahedralization of the welded boundary (every boundary triangle a union of tet faces), refined to the size field with its boundary vertices on the B-rep faces, smoothed and improved (Delaunay refinement, ODT smoothing, Klingner–Shewchuk improvement), with a quality report. Adds the elements and their nodes (labels after the largest existing ones), tags the elements with the body and each boundary element face with its geometry face, and fails, changing nothing, if a surface is invalid or a mesh does not pass the validity gate. Edge seeds (mesh.seed.edge) divide their edges at the seeded nodes, and the size field grades from them. Reports the totals and, under `bodies`, each body's counts, size, quality report and `seeds` (per seeded edge, the mesh edges along it)"#,
     form: Some(super::forms::TET),
     kind: CommandKind::Model,
     requires: &[Requirement::Geometry],
@@ -250,7 +250,12 @@ pub(super) fn mesh_body(
         };
         let surface = BoundarySurface::new(&input.mesh.positions, &input.mesh.triangles, &input.mesh.tri_face, &surface_options(p, &input.mesh)?)?;
         let tets = tetrahedralize(&surface, cdt)?;
-        let mesh = if quality { quality_mesh(&surface, &tets, analytic, options)? } else { raw_mesh(&surface, &tets)? };
+        let mesh = if quality {
+            let options = QualityOptions { seeds: input.seeds.clone(), ..options.clone() };
+            quality_mesh(&surface, &tets, analytic, &options)?
+        } else {
+            raw_mesh(&surface, &tets)?
+        };
         Ok(BodyTets {
             name: input.name.clone(),
             face_names: input.face_names.clone(),
@@ -301,6 +306,7 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
                 "straightened": r.straightened,
                 "stopped": r.stopped,
             },
+            "seeds": r.seeds.iter().map(|(name, count, edges)| json!({"edge": name, "count": count, "mesh_edges": edges})).collect::<Vec<_>>(),
         }));
     }
     let sum = |f: fn(&BodyTets) -> f64| meshed.iter().map(f).sum::<f64>();

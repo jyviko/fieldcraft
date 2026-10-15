@@ -65,6 +65,37 @@ pub(crate) fn seeded_edges(design: &Design, r: &GeometryRef) -> Result<Vec<Edge>
     Ok(body.edges()?.into_iter().filter(|e| GeometryRef::new(r.body.clone(), Entity::Edge(e.name.clone())).is_ok_and(|g| r.selects(&g))).collect())
 }
 
+/// Every seed on the open design's edges, as the meshers take them. A mesher matches them to its
+/// own curves by position, so a seed on an edge two partition cells share holds in both.
+pub(crate) fn edge_seeds(s: &Session) -> Result<Vec<fieldcraft_mesh::seeds::EdgeSeed>> {
+    let Some(design) = s.design.as_deref() else { return Ok(Vec::new()) };
+    let mut out = Vec::new();
+    // Each body's edges, found once.
+    let mut edges: std::collections::BTreeMap<&str, (f64, Vec<Edge>)> = std::collections::BTreeMap::new();
+    for seed in s.model.seeds() {
+        let Some(body) = design.body(&seed.edge.body) else { continue };
+        let (tolerance, all) = match edges.entry(body.name.as_str()) {
+            std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(((body.size()? * fieldcraft_geometry::EDGE_TOLERANCE).max(1e-4), body.edges()?))
+            }
+        };
+        let selected = all.iter().filter(|e| GeometryRef::new(body.name.clone(), Entity::Edge(e.name.clone())).is_ok_and(|g| seed.edge.selects(&g)));
+        for e in selected.cloned().collect::<Vec<_>>() {
+            let tolerance = *tolerance;
+            out.push(fieldcraft_mesh::seeds::EdgeSeed {
+                name: format!("{}:{}", seed.edge.body, e.name),
+                count: seed.count(e.length()) as usize,
+                points: e.points,
+                tolerance,
+                bias: seed.bias,
+                constraint: seed.constraint,
+            });
+        }
+    }
+    Ok(out)
+}
+
 fn design(s: &Session) -> Result<&Design> {
     s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first (geometry.open)".into()))
 }
@@ -190,6 +221,78 @@ mod tests {
             assert_eq!(l["on"].as_array().unwrap().len(), 1, "{l}");
             assert!((l["on"][0]["length"].as_f64().unwrap() - 15.0).abs() < 1e-6, "{l}");
         }
+    }
+
+    /// The polyline of edge `name` of body `body`.
+    fn edge_points(s: &Session, body: &str, name: &str) -> Vec<[f64; 3]> {
+        s.design.as_ref().unwrap().body(body).unwrap().edges().unwrap().into_iter().find(|e| e.name == name).unwrap().points
+    }
+
+    /// The model's nodes on a straight edge, by their distance from its start, sorted.
+    fn nodes_on(s: &Session, line: &[[f64; 3]]) -> Vec<f64> {
+        let (a, b) = (line[0], *line.last().unwrap());
+        let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let mut out: Vec<f64> = s
+            .model
+            .nodes()
+            .values()
+            .filter_map(|n| {
+                let v = [n.xyz[0] - a[0], n.xyz[1] - a[1], n.xyz[2] - a[2]];
+                let t = (v[0] * d[0] + v[1] * d[1] + v[2] * d[2]) / len;
+                let off = [v[0] - t * d[0] / len, v[1] - t * d[1] / len, v[2] - t * d[2] / len];
+                let off = (off[0] * off[0] + off[1] * off[1] + off[2] * off[2]).sqrt();
+                (off < 1e-6 && (-1e-6..=len + 1e-6).contains(&t)).then_some(t)
+            })
+            .collect();
+        out.sort_by(f64::total_cmp);
+        out
+    }
+
+    #[test]
+    fn the_meshers_honour_seeds() {
+        let mut s = plate();
+        let edges = thickness_edges(&mut s);
+        let name = edges[0]["edge"].as_str().unwrap().to_string();
+        let line = edge_points(&s, "Body1", &name);
+        let seed = json!({"edges": [edges[0]], "count": 5, "bias": {"ratio": 3, "toward": "end"}});
+        s.execute("mesh.seed.edge", &seed).unwrap();
+        // Hex sweep: five layers through the thickness, graded geometrically toward the edge's end.
+        s.execute("mesh.hex.sweep", &json!({"body": "Body1", "size": 4})).unwrap();
+        let t = nodes_on(&s, &line);
+        let dt: Vec<f64> = t.windows(2).map(|w| w[1] - w[0]).collect();
+        assert_eq!(dt.len(), 5, "{t:?}");
+        assert!((dt[0] / dt[4] - 3.0).abs() < 1e-6, "{dt:?}");
+        // Tet: the edge is divided at the seed's nodes.
+        let r = s.execute("mesh.tet.generate", &json!({"body": "Body1", "size": 5})).unwrap();
+        assert_eq!(r["bodies"][0]["seeds"][0]["mesh_edges"], 5, "{}", r["bodies"][0]["seeds"]);
+        // Two exact seeds that cannot both hold are refused, naming both.
+        s.execute("mesh.seed.edge", &json!({"edges": [edges[1]], "count": 3})).unwrap();
+        let e = s.execute("mesh.hex.sweep", &json!({"body": "Body1", "size": 4})).unwrap_err().to_string();
+        assert!(e.contains(&name) && e.contains(edges[1]["edge"].as_str().unwrap()) && e.contains("conflict"), "{e}");
+    }
+
+    #[test]
+    fn a_seed_on_a_cut_edge_holds_in_both_cells() {
+        let (mut s, _dir) = super::super::datum::tests::plate();
+        s.execute("geometry.datum", &json!({"name": "X30", "by": {"type": "offset", "plane": "yz", "offset": 30}})).unwrap();
+        s.execute("geometry.partition", &json!({"name": "P", "datum": "X30"})).unwrap();
+        // An edge of the cut face, 30 mm along y, on the cell with the hole.
+        let edge = s
+            .design
+            .as_ref()
+            .unwrap()
+            .body("Body1/a")
+            .unwrap()
+            .edges()
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name.contains("partition:P:a") && (e.length() - 30.0).abs() < 1e-6)
+            .unwrap();
+        s.execute("mesh.seed.edge", &json!({"edges": [{"body": "Body1/a", "edge": edge.name}], "count": 9})).unwrap();
+        let r = s.execute("mesh.cells", &json!({"default": "hex", "size": 2.5})).unwrap();
+        assert_eq!(r["interfaces"][0]["joined"], "merged", "{r}");
+        assert_eq!(nodes_on(&s, &edge.points).len(), 10, "{r}");
     }
 
     #[test]

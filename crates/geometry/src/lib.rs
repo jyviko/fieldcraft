@@ -25,7 +25,7 @@ pub mod sample;
 mod script;
 
 pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design};
-pub use edges::Edge;
+pub use edges::{EDGE_TOLERANCE, Edge};
 pub use partition::{Cut, CutReport};
 pub mod tagged_mesh;
 #[cfg(feature = "scripts")]

@@ -15,7 +15,7 @@ use crate::{Result, Shape, SurfaceMesh};
 
 /// Tessellation tolerance (a fraction of the body's size) of [`Shape::edges`]: the edge polylines
 /// are for display, picking and matching edges by position.
-const EDGE_TOLERANCE: f64 = 1e-3;
+pub const EDGE_TOLERANCE: f64 = 1e-3;
 
 /// A B-rep edge of a body.
 #[derive(Debug, Clone, PartialEq)]

@@ -15,7 +15,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const HEX_GENERATE: CommandSpec = CommandSpec {
     id: "mesh.hex.generate",
     label: "Generate Hex Mesh",
-    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "swept" (any sweep) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the mesh with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name; `weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate), so sets by geometry resolve. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
+    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "swept" (any sweep) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the mesh with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name; `weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate), so sets by geometry resolve. Edge seeds (mesh.seed.edge) set the counts and spacing of their edges: exact seeds are held, and seeds that cannot all hold (opposite sides of a mapped face, the layers between two levels) are an error naming them. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
     form: Some(super::forms::HEX_GENERATE),
     kind: CommandKind::Model,
     requires: &[Requirement::Geometry],
@@ -35,9 +35,12 @@ const DEFAULT_RELATIVE_TOLERANCE: f64 = 1e-3;
 pub(super) struct Input<'a> {
     pub(super) name: String,
     pub(super) mesh: Cow<'a, SurfaceMesh>,
-    surfaces: Vec<Option<Surface>>,
+    pub(super) surfaces: Vec<Option<Surface>>,
     pub(super) face_names: Vec<String>,
     pub(super) diagonal: f64,
+    /// The design's edge seeds ([`super::seeds::edge_seeds`]); the mesher applies those on its
+    /// edges.
+    pub(super) seeds: Vec<fieldcraft_mesh::seeds::EdgeSeed>,
 }
 
 fn analytic(s: FaceSurface) -> Surface {
@@ -71,7 +74,7 @@ pub(super) fn shape_input(shape: &Shape, tolerance: Option<f64>) -> Result<Input
     }
     let surfaces = shape.face_surfaces()?.into_iter().map(|f| f.map(analytic)).collect();
     let face_names = shape.faces().iter().map(|f| f.name.clone()).collect();
-    Ok(Input { name: shape.name.clone(), mesh: Cow::Owned(shape.tessellate(tol)?), surfaces, face_names, diagonal: diag })
+    Ok(Input { name: shape.name.clone(), mesh: Cow::Owned(shape.tessellate(tol)?), surfaces, face_names, diagonal: diag, seeds: Vec::new() })
 }
 
 pub(super) fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
@@ -84,7 +87,7 @@ pub(super) fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
                 .as_deref()
                 .and_then(|d| d.body(name))
                 .ok_or_else(|| EngineError::Params(format!("no body `{name}` (open a design first)")))?;
-            Ok(vec![shape_input(shape, tolerance)?])
+            Ok(vec![Input { seeds: super::seeds::edge_seeds(s)?, ..shape_input(shape, tolerance)? }])
         }
         (None, Some(i)) => {
             let n = s.surfaces.len();
@@ -101,14 +104,15 @@ pub(super) fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
             let name = if t.name.trim().is_empty() { format!("Surface{index}") } else { t.name.clone() };
             // Faces named by index, as mesh.tet.generate names them.
             let face_names = (0..t.faces).map(|f| f.to_string()).collect();
-            Ok(vec![Input { name, mesh: Cow::Borrowed(&t.mesh), surfaces: Vec::new(), face_names, diagonal: diagonal(lo, hi) }])
+            Ok(vec![Input { name, mesh: Cow::Borrowed(&t.mesh), surfaces: Vec::new(), face_names, diagonal: diagonal(lo, hi), seeds: Vec::new() }])
         }
         (None, None) => {
             let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first, or give `surface`".into()))?;
             if design.bodies.is_empty() || design.bodies.len() > MAX_BODIES {
                 return Err(EngineError::Params(format!("the design has {} bodies; meshing takes 1 to {MAX_BODIES}", design.bodies.len())));
             }
-            design.bodies.iter().map(|b| shape_input(b, tolerance)).collect()
+            let seeds = super::seeds::edge_seeds(s)?;
+            design.bodies.iter().map(|b| Ok(Input { seeds: seeds.clone(), ..shape_input(b, tolerance)? })).collect()
         }
         _ => Err(EngineError::Params("give `body` or `surface`, not both".into())),
     }
@@ -208,6 +212,7 @@ fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
         quadratic,
         chordal_tolerance: tolerance,
         max_elements: fieldcraft_model::MAX_ELEMENTS / 8,
+        seeds: super::seeds::edge_seeds(s)?,
         ..HexOptions::default()
     };
     let cm = hex_mesh_cells(&cells, &UniformSize(h), &options).map_err(|e| EngineError::Params(e.to_string()))?;
@@ -331,8 +336,14 @@ pub(super) fn hex_body(p: &Value, b: &Input, method: HexMethod, quadratic: bool,
     let surface = BoundarySurface::new(&b.mesh.positions, &b.mesh.triangles, &b.mesh.tri_face, &surface_options)
         .map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?;
     let chord = if b.surfaces.is_empty() { 0.0 } else { number(p, "tolerance")?.unwrap_or(DEFAULT_RELATIVE_TOLERANCE * b.diagonal) };
-    let options =
-        HexOptions { method, quadratic, chordal_tolerance: chord, max_elements: fieldcraft_model::MAX_ELEMENTS / 8, ..HexOptions::default() };
+    let options = HexOptions {
+        method,
+        quadratic,
+        chordal_tolerance: chord,
+        max_elements: fieldcraft_model::MAX_ELEMENTS / 8,
+        seeds: b.seeds.clone(),
+        ..HexOptions::default()
+    };
     hex_mesh(&surface, &b.surfaces, &UniformSize(h), &options).map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))
 }
 

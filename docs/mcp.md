@@ -153,7 +153,13 @@ edges of partition cells matching counts.
 2. `execute` `mesh.seed.edge {edges: [{body, edge}], count | size, bias?: {ratio, toward:
    start|end|both}, constraint?: exact|min|free}`. `exact` keeps the count, `min` keeps at least
    it, `free` is a goal. The reply gives the count each edge gets.
-3. `mesh.seed.list` lists the seeds and the edges they reach (`stale` when the design has no such
+3. Mesh: the hex meshers (`hex`, `hex_sweep`, `hex_mapped`, `hex_blocks`, `cells`) keep exact counts
+   through their interval assignment and refuse, naming the seeds, when two exact counts cannot
+   both hold (opposite sides of a mapped face, the layers between two levels); the tet mesher
+   divides the edge at the seed's nodes and grades its size field from them (its reply's
+   `seeds` gives the mesh edges along each). A seed on an edge two partition cells share holds
+   in both, so their meshes still conform.
+4. `mesh.seed.list` lists the seeds and the edges they reach (`stale` when the design has no such
    edge); `mesh.seed.clear {edges?}` removes them. Seeds are saved with the model.
 
 ## Limits

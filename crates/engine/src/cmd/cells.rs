@@ -138,10 +138,11 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
     let (tet_options, quality) = quality_options(&tet_params, s.limits.max_tets as u64)?;
     let cdt = CdtOptions { max_steiner: s.limits.max_steiner, max_tets: tet_options.max_tets };
 
+    let seeds = super::seeds::edge_seeds(s)?;
     let mut meshed: Vec<(Meshed, Value)> = Vec::with_capacity(shapes.len());
     for shape in shapes {
         let method = methods.get(&shape.name).copied().unwrap_or(default);
-        let input = || super::hex::shape_input(shape, Some(tolerance));
+        let input = || Ok::<_, EngineError>(Input { seeds: seeds.clone(), ..super::hex::shape_input(shape, Some(tolerance))? });
         let hex = |m: HexMethod| -> Result<(Input<'static>, HexMesh)> {
             let b = input()?;
             let mesh = hex_body(&hex_params, &b, m, quadratic, size)?;

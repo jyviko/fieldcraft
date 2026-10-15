@@ -12,7 +12,9 @@
 //! - The result is compared with the root by whole folder names: `/work2/x` is not inside
 //!   `/work`.
 //! - Read and write access are separate; a root left out grants none of its access. Without
-//!   either root ([`Roots::default`]) nothing is confined.
+//!   either root ([`Roots::default`]) nothing is confined. [`Roots::writes_within`] confines
+//!   writes alone (a crash replay may read the model's geometry wherever it is, and writes
+//!   nothing outside a scratch folder).
 //!
 //! A path is checked, then opened: another program that swaps a link in between can still win
 //! that race, so the roots keep an agent to the files it was given rather than guarding against
@@ -41,9 +43,28 @@ impl Access {
 /// The folders file access is confined to; the default confines nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Roots {
-    /// `None` while unconfined; otherwise the resolved read and write roots (each `None` when
-    /// that access is not granted).
-    confined: Option<[Option<PathBuf>; 2]>,
+    /// `None` while unconfined; otherwise what each of read and write access is granted.
+    confined: Option<[Grant; 2]>,
+}
+
+/// What one kind of access is granted while confined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Grant {
+    /// Not granted.
+    None,
+    /// Granted anywhere.
+    Anywhere,
+    /// Granted inside this resolved folder.
+    Within(PathBuf),
+}
+
+fn resolve_root(p: &Path, access: Access) -> Result<PathBuf> {
+    let shown = p.display();
+    let dir = std::fs::canonicalize(p).map_err(|e| Error::Io(format!("the {} root `{shown}`: {e}", access.name())))?;
+    if !dir.is_dir() {
+        return Err(Error::Io(format!("the {} root `{shown}` is not a folder", access.name())));
+    }
+    Ok(dir)
 }
 
 impl Roots {
@@ -55,16 +76,15 @@ impl Roots {
     /// Confine reads to `read` and writes to `write`. A root left out grants none of its access.
     /// Each root must be an existing folder; it is resolved (links followed) once, here.
     pub fn new(read: Option<&Path>, write: Option<&Path>) -> Result<Roots> {
-        let resolve = |p: Option<&Path>, access: Access| -> Result<Option<PathBuf>> {
-            let Some(p) = p else { return Ok(None) };
-            let shown = p.display();
-            let dir = std::fs::canonicalize(p).map_err(|e| Error::Io(format!("the {} root `{shown}`: {e}", access.name())))?;
-            if !dir.is_dir() {
-                return Err(Error::Io(format!("the {} root `{shown}` is not a folder", access.name())));
-            }
-            Ok(Some(dir))
+        let grant = |p: Option<&Path>, access: Access| -> Result<Grant> {
+            Ok(p.map(|p| resolve_root(p, access)).transpose()?.map_or(Grant::None, Grant::Within))
         };
-        Ok(Roots { confined: Some([resolve(read, Access::Read)?, resolve(write, Access::Write)?]) })
+        Ok(Roots { confined: Some([grant(read, Access::Read)?, grant(write, Access::Write)?]) })
+    }
+
+    /// Reads anywhere, writes only inside `write` (an existing folder, resolved here).
+    pub fn writes_within(write: &Path) -> Result<Roots> {
+        Ok(Roots { confined: Some([Grant::Anywhere, Grant::Within(resolve_root(write, Access::Write)?)]) })
     }
 
     /// Whether any access is confined.
@@ -72,10 +92,12 @@ impl Roots {
         self.confined.is_some()
     }
 
-    /// The root of `access`, when confined and granted.
+    /// The root of `access`, when confined to one.
     pub fn root(&self, access: Access) -> Option<&Path> {
-        let roots = self.confined.as_ref()?;
-        roots.get(access as usize).and_then(|r| r.as_deref())
+        match self.confined.as_ref()?.get(access as usize)? {
+            Grant::Within(root) => Some(root),
+            Grant::None | Grant::Anywhere => None,
+        }
     }
 
     /// The path to use for `access` to `path`: unchanged while unconfined, else the resolved path
@@ -84,8 +106,12 @@ impl Roots {
     pub fn check(&self, path: &Path, access: Access) -> Result<PathBuf> {
         let Some(roots) = &self.confined else { return Ok(path.to_path_buf()) };
         let shown = path.display();
-        let Some(root) = roots.get(access as usize).and_then(|r| r.as_deref()) else {
-            return Err(Error::Refused(format!("automation filesystem access is not granted: {} authority is absent: {shown}", access.name())));
+        let root = match roots.get(access as usize) {
+            Some(Grant::Anywhere) => return Ok(path.to_path_buf()),
+            Some(Grant::Within(root)) => root,
+            Some(Grant::None) | None => {
+                return Err(Error::Refused(format!("automation filesystem access is not granted: {} authority is absent: {shown}", access.name())));
+            }
         };
         let resolved = resolve(path).map_err(|why| Error::Refused(format!("automation path rejected: {why}: {shown}")))?;
         if !resolved.starts_with(root) {
@@ -207,6 +233,18 @@ mod tests {
         assert!(Roots::new(Some(&d.0.join("missing")), None).is_err());
         std::fs::write(d.0.join("file"), b"").unwrap();
         assert!(Roots::new(None, Some(&d.0.join("file"))).is_err(), "a root is a folder");
+    }
+
+    #[test]
+    fn writes_within_reads_anywhere() {
+        let d = Dir::new("writes");
+        let r = Roots::writes_within(&d.0).unwrap();
+        assert!(r.is_confined());
+        assert_eq!(r.check(Path::new("/etc/passwd"), Access::Read).unwrap(), Path::new("/etc/passwd"));
+        assert!(r.check(Path::new("/etc/passwd"), Access::Write).is_err());
+        assert_eq!(r.check(&d.0.join("x.inp"), Access::Write).unwrap(), d.0.join("x.inp"));
+        assert_eq!(r.root(Access::Write), Some(d.0.as_path()));
+        assert_eq!(r.root(Access::Read), None);
     }
 
     #[cfg(unix)]

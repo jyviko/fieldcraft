@@ -32,26 +32,36 @@ pub fn automation_dir() -> PathBuf {
 /// Set by [`use_automation_dir`].
 static AUTOMATED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
-/// This process is driven by automation (a control channel): unless `FIELDCRAFT_RECOVERY_DIR`
-/// names a folder, [`default_dir`] is [`automation_dir`] from now on.
+/// This process is driven by automation (a control channel): [`data_dir`] is the temporary
+/// `fieldcraft-automation` folder from now on, so unless `FIELDCRAFT_RECOVERY_DIR` names a
+/// folder, [`default_dir`] is [`automation_dir`].
 pub fn use_automation_dir() {
     let _ = AUTOMATED.set(());
 }
 
-/// The recovery folder: `FIELDCRAFT_RECOVERY_DIR`, else [`automation_dir`] in automated runs
-/// ([`use_automation_dir`], or the `CI` environment variable set), else `recovery` in
-/// the platform's per-user data folder (`FieldCraft/recovery`, `fieldcraft/recovery` on Linux);
+/// The recovery folder: `FIELDCRAFT_RECOVERY_DIR`, else `recovery` in [`data_dir`];
 /// [`BROWSER_DIR`] in the browser.
 pub fn default_dir() -> Option<PathBuf> {
     if cfg!(target_arch = "wasm32") {
         return Some(PathBuf::from(BROWSER_DIR));
     }
-    let env = |k: &str| std::env::var_os(k).filter(|d| !d.is_empty()).map(PathBuf::from);
-    if let Some(d) = env("FIELDCRAFT_RECOVERY_DIR") {
-        return Some(d);
+    if let Some(d) = std::env::var_os("FIELDCRAFT_RECOVERY_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(d));
     }
+    data_dir().map(|d| d.join("recovery"))
+}
+
+/// The app's per-user data folder, which holds the recovery, crash and log folders: the
+/// platform's (`FieldCraft`, `fieldcraft` on Linux), or `fieldcraft-automation` in the temporary
+/// folder in automated runs ([`use_automation_dir`], or the `CI` environment variable set).
+/// `None` in the browser and where the platform names no such folder.
+pub fn data_dir() -> Option<PathBuf> {
+    if cfg!(target_arch = "wasm32") {
+        return None;
+    }
+    let env = |k: &str| std::env::var_os(k).filter(|d| !d.is_empty()).map(PathBuf::from);
     if AUTOMATED.get().is_some() || env("CI").is_some() {
-        return Some(automation_dir());
+        return automation_dir().parent().map(Path::to_path_buf);
     }
     let (root, name) = if cfg!(windows) {
         (env("LOCALAPPDATA")?, "FieldCraft")
@@ -60,7 +70,7 @@ pub fn default_dir() -> Option<PathBuf> {
     } else {
         (env("XDG_DATA_HOME").or_else(|| env("HOME").map(|h| h.join(".local/share")))?, "fieldcraft")
     };
-    Some(root.join(name).join("recovery"))
+    Some(root.join(name))
 }
 
 /// Entries older than this many days are pruned ([`prune`]).
@@ -338,6 +348,11 @@ impl Slot {
         Ok(())
     }
 
+    /// The autosaved model's file (there once [`Slot::write`] has written it).
+    pub fn file(&self) -> PathBuf {
+        file(&self.dir, &self.id, EXTENSION)
+    }
+
     /// Drop the autosave (nothing is unsaved any more).
     pub fn clear(&mut self) {
         if self.has_entry {
@@ -458,6 +473,7 @@ mod tests {
         use_automation_dir();
         assert_eq!(default_dir(), Some(automation_dir()));
         assert!(automation_dir().starts_with(std::env::temp_dir()));
+        assert_eq!(data_dir().map(|d| d.join("recovery")), Some(automation_dir()));
     }
 
     #[test]

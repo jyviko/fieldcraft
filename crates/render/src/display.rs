@@ -175,9 +175,25 @@ pub(crate) fn centre(p: &[Vec3]) -> Vec3 {
 
 impl DisplayMesh {
     pub fn from_model(model: &Model) -> DisplayMesh {
+        DisplayMesh::from_model_hiding(model, &std::collections::BTreeSet::new())
+    }
+
+    /// [`DisplayMesh::from_model`] without the `hidden` elements (a hidden body's): their faces
+    /// are not drawn, a face they share with a shown element is drawn as its boundary, and nodes
+    /// only they use are left out (so nothing picks or frames them).
+    pub fn from_model_hiding(model: &Model, hidden: &std::collections::BTreeSet<u32>) -> DisplayMesh {
         let mut out = DisplayMesh::default();
         let pos = |label: u32| model.node(label).map(|n| Vec3::from(n.xyz));
-        for (&label, n) in model.nodes() {
+        let shown = |label: &u32| !hidden.contains(label);
+        // With elements hidden, the nodes only they use go too.
+        let hidden_nodes: std::collections::BTreeSet<u32> = if hidden.is_empty() {
+            Default::default()
+        } else {
+            let used: std::collections::BTreeSet<u32> =
+                model.elements().iter().filter(|(l, _)| shown(l)).flat_map(|(_, e)| e.nodes.iter().copied()).collect();
+            hidden.iter().filter_map(|l| model.element(*l)).flat_map(|e| e.nodes.iter().copied()).filter(|n| !used.contains(n)).collect()
+        };
+        for (&label, n) in model.nodes().iter().filter(|(l, _)| !hidden_nodes.contains(l)) {
             let p = Vec3::from(n.xyz);
             out.nodes.push(DisplayNode { label, p });
             out.bounds.add(p);
@@ -186,7 +202,9 @@ impl DisplayMesh {
         // keep the ones that occur more than once.
         let mut keys: Vec<[u32; 4]> = model
             .elements()
-            .values()
+            .iter()
+            .filter(|(l, _)| shown(l))
+            .map(|(_, e)| e)
             .filter(|e| e.kind.dimension() == 3)
             .flat_map(|e| drawn_faces(e.kind).iter().filter_map(|f| face_key(&e.nodes, f)))
             .collect();
@@ -197,7 +215,7 @@ impl DisplayMesh {
         // Element edges on geometry edges (by their corner nodes): the mesh's feature lines.
         let classification = model.classification();
         let mut features: Vec<(u32, u32)> = Vec::new();
-        for (&element, tags) in classification.elements() {
+        for (&element, tags) in classification.elements().iter().filter(|(l, _)| shown(l)) {
             let Some(e) = model.element(element) else { continue };
             for (&edge, &tag) in &tags.edges {
                 if classification.entity(tag).is_some_and(|g| g.entity.dimension() == 1)
@@ -212,7 +230,7 @@ impl DisplayMesh {
         features.dedup();
         // (segment's nodes, the element edge's corners), each sorted.
         let mut edges: Vec<((u32, u32), (u32, u32))> = Vec::new();
-        for (&label, e) in model.elements() {
+        for (&label, e) in model.elements().iter().filter(|(l, _)| shown(l)) {
             if e.kind.dimension() == 1 {
                 if let (Some(&na), Some(&nb)) = (e.nodes.first(), e.nodes.get(1))
                     && let (Some(a), Some(b)) = (pos(na), pos(nb))
@@ -458,6 +476,17 @@ mod tests {
         // Euler on the skin: V - E + F = 2 (two nodes are inside).
         let skin_nodes = 4 * 3 * 3 - 2;
         assert_eq!(skin_nodes as i64 - d.edges.len() as i64 + 32, 2);
+    }
+
+    /// Hidden elements (a hidden body's) are not drawn; the face they shared with a shown one
+    /// is its boundary now, and nodes only they used are gone (#365).
+    #[test]
+    fn hidden_elements_are_left_out() {
+        let m = block(2, 1, 1);
+        let d = DisplayMesh::from_model_hiding(&m, &[2].into_iter().collect());
+        assert_eq!(d.tris.len(), 12, "one cube's six faces");
+        assert_eq!(d.nodes.len(), 8);
+        assert_eq!(d.bounds.max, Vec3::new(1.0, 1.0, 1.0));
     }
 
     #[test]

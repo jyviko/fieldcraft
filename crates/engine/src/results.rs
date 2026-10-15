@@ -621,6 +621,11 @@ pub(crate) fn inputs_fingerprint(model: &Model, step: &str) -> Option<u64> {
     Some(h.0.finish())
 }
 
+/// The principal values of a stress (xx, yy, zz, xy, xz, yz), largest first.
+pub fn principal(t: &[f64; 6]) -> [f64; 3] {
+    fieldcraft_fem::principal(t)
+}
+
 pub fn magnitude(v: [f64; 3]) -> f64 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }

@@ -118,7 +118,7 @@ pub struct Shown {
 
 /// The model's display data with the open design's bodies and the imported surfaces.
 pub fn display(s: &Session) -> (DisplayMesh, Vec<String>) {
-    let mut d = DisplayMesh::from_model(&s.model);
+    let mut d = DisplayMesh::from_model_hiding(&s.model, &s.hidden_elements());
     let mut failed = Vec::new();
     for body in s.design.iter().flat_map(|d| &d.bodies).filter(|b| s.shows(fieldcraft_io::ItemKind::Body, &b.name)) {
         let mesh = body.measure().and_then(|m| body.tessellate(display_tolerance(&Aabb3 { min: m.bbox_min.into(), max: m.bbox_max.into() })));

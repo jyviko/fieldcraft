@@ -141,6 +141,11 @@ impl Session {
         })
     }
 
+    /// The elements of the bodies the view hides: hiding a body hides its mesh and its results.
+    pub fn hidden_elements(&self) -> std::collections::BTreeSet<u32> {
+        self.view.hidden.iter().filter(|i| i.kind == ItemKind::Body).flat_map(|i| self.model.body_elements(&i.name)).collect()
+    }
+
     /// Whether the view shows item `name` of `kind`.
     pub fn shows(&self, kind: ItemKind, name: &str) -> bool {
         !self.view.is_hidden(kind, name)

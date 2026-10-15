@@ -207,6 +207,19 @@ fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({"steps": done}))
 }
 
+/// A sum of nodal values with its round-off set to 0: a component below a billionth of the sum
+/// of the terms' magnitudes is what cancelling left (a balanced load sums to ~1e-11, not 0).
+fn settled(total: [f64; 3], terms: &[[f64; 3]]) -> [f64; 3] {
+    let mut out = total;
+    for (k, c) in out.iter_mut().enumerate() {
+        let scale: f64 = terms.iter().filter_map(|t| t.get(k)).map(|x| x.abs()).filter(|x| x.is_finite()).sum();
+        if c.abs() <= 1e-9 * scale {
+            *c = 0.0;
+        }
+    }
+    out
+}
+
 fn largest(values: impl Iterator<Item = (u32, f64)>) -> Value {
     extreme(values, |v, b| v > b)
 }
@@ -228,8 +241,8 @@ fn run_static(s: &mut Session, p: &Value) -> Result<Value> {
         "factor_entries": r.stats.factor_entries,
         "max_displacement": largest(r.nodes.iter().zip(&r.displacement).map(|(l, u)| (*l, crate::results::magnitude(*u)))),
         "max_von_mises": largest(r.nodes.iter().zip(&r.von_mises).map(|(l, v)| (*l, *v))),
-        "applied_total": r.applied_total,
-        "reaction_total": r.reaction_total,
+        "applied_total": settled(r.applied_total, &r.reaction),
+        "reaction_total": settled(r.reaction_total, &r.reaction),
         "reference_points": r.reference_points.iter().map(|p| json!({
             "name": p.name,
             "label": p.label,
@@ -272,8 +285,8 @@ fn run_nonlinear(s: &mut Session, p: &Value) -> Result<Value> {
         "max_displacement": largest(r.nodes.iter().zip(&r.displacement).map(|(l, u)| (*l, crate::results::magnitude(*u)))),
         "max_von_mises": largest(r.nodes.iter().zip(&r.von_mises).map(|(l, v)| (*l, *v))),
         "max_plastic_strain": largest(r.elements.iter().flat_map(|e| e.plastic_strain.iter().map(|v| (e.label, *v)))),
-        "applied_total": r.applied_total,
-        "reaction_total": r.reaction_total,
+        "applied_total": settled(r.applied_total, &r.reaction),
+        "reaction_total": settled(r.reaction_total, &r.reaction),
         "reference_points": r.reference_points.iter().map(|p| json!({
             "name": p.name,
             "label": p.label,

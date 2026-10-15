@@ -15,11 +15,11 @@ struct TestBin {
     dir: String,
 }
 
-/// Build the tests with `cargo_args` (e.g. `--locked`), run each binary with `test_args`, and run
+/// Build the tests of `packages` (every workspace package when empty) with `cargo_args` (e.g. `--locked`), run each binary with `test_args`, and run
 /// the `side` jobs one after another meanwhile. Each prints a line when it ends; a failure prints
 /// its whole output.
-pub fn run(cargo_args: &[&str], test_args: &[&str], side: Vec<(String, Command)>) -> Result<(), String> {
-    let bins = build(cargo_args)?;
+pub fn run(packages: &[&str], cargo_args: &[&str], test_args: &[&str], side: Vec<(String, Command)>) -> Result<(), String> {
+    let bins = build(packages, cargo_args)?;
     let start = Instant::now();
     let (tx, rx) = mpsc::channel::<(String, Result<String, String>, f64)>();
     let mut failed = Vec::new();
@@ -66,11 +66,20 @@ fn finish(mut c: Command) -> Result<String, String> {
     }
 }
 
-/// `cargo test --workspace --profile ci --no-run`, and the executables it built.
-fn build(cargo_args: &[&str]) -> Result<Vec<TestBin>, String> {
+/// `cargo test --workspace --profile ci --no-run` (or `-p` each of `packages`), and the executables
+/// it built.
+fn build(packages: &[&str], cargo_args: &[&str]) -> Result<Vec<TestBin>, String> {
     let mut c = cargo();
-    c.args(["test", "--workspace", "--profile", "ci", "--no-run", "--message-format=json-render-diagnostics"]).args(cargo_args);
-    eprintln!("$ cargo test --workspace --profile ci --no-run");
+    c.arg("test");
+    if packages.is_empty() {
+        c.arg("--workspace");
+    }
+    for p in packages {
+        c.args(["-p", p]);
+    }
+    c.args(["--profile", "ci", "--no-run", "--message-format=json-render-diagnostics"]).args(cargo_args);
+    let scope = if packages.is_empty() { "--workspace".to_string() } else { format!("{} packages", packages.len()) };
+    eprintln!("$ cargo test {scope} --profile ci --no-run");
     let out = c.stderr(Stdio::inherit()).output().map_err(|e| format!("cargo test --no-run: failed to spawn: {e}"))?;
     if !out.status.success() {
         return Err(format!("cargo test --no-run: exited with {}", out.status));

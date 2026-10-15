@@ -5,6 +5,7 @@
 //! ATTRIBUTION.md.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod affected;
 mod app_icon;
 mod assets;
 mod icons;
@@ -42,10 +43,17 @@ commands:
                   against their references and fixtures; write docs/oracle.md after a full run;
                   --bless freezes a passing case's results in its fixture.json; --quick skips
                   cases marked slow (release build)
+  affected --base REV [--head REV] [--github-output]
+                  the workspace crates changed between REV and HEAD-REV (the working tree) and every crate that depends on them,
+                  and the flags CI plans its jobs with: everything (manifest, lock file,
+                  toolchain, xtask or workflows changed), solver (the heavy tests or the oracle
+                  are affected), wasm (a crate the wasm check builds is affected)
   wasm            cargo check every library crate and the web app for wasm32-unknown-unknown
-  ci              fmt --check, assets, layers, clippy -D warnings, then the tests
+  ci [--affected REV]
+                  fmt --check, assets, layers, clippy -D warnings, then the tests
                   (not the heavy ones) with the wasm check alongside (stops at the first failing
-                  step)
+                  step); --affected REV lints and tests only the crates `affected --base REV`
+                  lists, and checks wasm only when it flags wasm
 ";
 
 fn main() -> ExitCode {
@@ -65,12 +73,17 @@ fn main() -> ExitCode {
             let (cargo_args, test_args) = rest.iter().position(|a| *a == "--").map_or((rest, &[][..]), |i| (&rest[..i], &rest[i + 1..]));
             if heavy {
                 let ignored: Vec<&str> = ["--ignored"].into_iter().chain(test_args.iter().copied()).collect();
-                test::run(cargo_args, &ignored, vec![test::doc_tests(cargo_args, test_args)])
+                test::run(&[], cargo_args, &ignored, vec![test::doc_tests(cargo_args, test_args)])
             } else {
-                test::run(cargo_args, test_args, vec![])
+                test::run(&[], cargo_args, test_args, vec![])
             }
         }
-        Some("ci") => cmd_ci(),
+        Some("affected") => affected::run(&rest),
+        Some("ci") => match rest.as_slice() {
+            [] => cmd_ci(),
+            ["--affected", base] => cmd_ci_affected(base),
+            _ => Err(format!("ci: expected no arguments or `--affected REV`\n\n{USAGE}")),
+        },
         Some("corpus") => {
             // A binary of the testkit, so xtask itself stays free of SolidCraft.
             let mut c = cargo();
@@ -80,7 +93,7 @@ fn main() -> ExitCode {
         Some("oracle") => {
             // A binary of the testkit, which has the engine and SolidCraft scripts for geometry.
             let mut c = cargo();
-            c.args(["run", "--release", "-p", "fieldcraft-testkit", "--bin", "oracle", "--"]).args(&rest);
+            c.args(["run", "--release", "-p", affected::ORACLE_PACKAGE, "--bin", "oracle", "--"]).args(&rest);
             run(c, "oracle")
         }
         Some("wasm") => cmd_wasm(),
@@ -171,15 +184,16 @@ fn cmd_wasm() -> Result<(), String> {
 /// The app that runs in the browser (apps/fieldcraft-web), checked with the layered crates.
 const WEB_APP: &str = "fieldcraft-web";
 
+/// Whether the wasm check builds `pkg`: a layered crate or the web app.
+pub fn wasm_crate(pkg: &str) -> bool {
+    pkg == WEB_APP || matches!(layers::classify(pkg), Some(layers::Class::Layer(_)))
+}
+
 /// The wasm check and how many crates it covers. It uses the ci profile so the host build
 /// scripts and proc macros built for clippy and the tests are reused.
 fn wasm_check() -> Result<(Command, usize), String> {
     let crates = layers::from_metadata(&metadata()?)?;
-    let set: Vec<String> = crates
-        .iter()
-        .filter(|c| c.name == WEB_APP || matches!(layers::classify(&c.name), Some(layers::Class::Layer(_))))
-        .map(|c| c.name.clone())
-        .collect();
+    let set: Vec<String> = crates.iter().filter(|c| wasm_crate(&c.name)).map(|c| c.name.clone()).collect();
     if !set.iter().any(|c| c == WEB_APP) {
         return Err(format!("wasm: the web app `{WEB_APP}` is not in the workspace"));
     }
@@ -195,16 +209,54 @@ fn wasm_check() -> Result<(Command, usize), String> {
 /// which leaves cargo's build lock free. The heavy tests and the doc tests are the CI heavy job's
 /// (`cargo xtask test --heavy`).
 fn cmd_ci() -> Result<(), String> {
-    let mut c = cargo();
-    c.args(["fmt", "--all", "--", "--check"]);
-    run(c, "cargo fmt --check")?;
-    assets::run(&root())?;
-    cmd_layers()?;
+    quick_gates()?;
     let mut c = cargo();
     c.args(["clippy", "--workspace", "--all-targets", "--profile", "ci", "--", "-D", "warnings"]);
     run(c, "cargo clippy -D warnings")?;
     let (wasm, n) = wasm_check()?;
-    test::run(&[], &[], vec![(format!("wasm32-unknown-unknown check ({n} crates)"), wasm)])?;
+    test::run(&[], &[], &[], vec![(format!("wasm32-unknown-unknown check ({n} crates)"), wasm)])?;
     eprintln!("ci: all gates passed");
+    Ok(())
+}
+
+/// The gates that look at the whole tree and take seconds: they run on every change.
+fn quick_gates() -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["fmt", "--all", "--", "--check"]);
+    run(c, "cargo fmt --check")?;
+    assets::run(&root())?;
+    cmd_layers()
+}
+
+/// `ci --affected REV`: the quick gates, then clippy and the tests of the affected crates only, and
+/// the wasm check when an affected crate is built for wasm. A change that runs everything is the
+/// full gate.
+fn cmd_ci_affected(base: &str) -> Result<(), String> {
+    let (plan, files) = affected::plan_since(base, None)?;
+    affected::print(&plan, base, files);
+    if plan.everything {
+        return cmd_ci();
+    }
+    quick_gates()?;
+    if plan.crates.is_empty() {
+        eprintln!("ci: no crate affected; the quick gates passed");
+        return Ok(());
+    }
+    let packages: Vec<&str> = plan.crates.iter().map(String::as_str).collect();
+    let mut c = cargo();
+    c.args(["clippy", "--all-targets", "--profile", "ci"]);
+    for p in &packages {
+        c.args(["-p", p]);
+    }
+    c.args(["--", "-D", "warnings"]);
+    run(c, &format!("cargo clippy -D warnings ({} crates)", packages.len()))?;
+    let side = if plan.wasm {
+        let (wasm, n) = wasm_check()?;
+        vec![(format!("wasm32-unknown-unknown check ({n} crates)"), wasm)]
+    } else {
+        vec![]
+    };
+    test::run(&packages, &[], &[], side)?;
+    eprintln!("ci: all gates passed for {} affected crate(s)", packages.len());
     Ok(())
 }

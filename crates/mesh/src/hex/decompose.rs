@@ -35,14 +35,16 @@
 //!
 //! **Scoring.** A piece is scored by meshing it alone with its scheme on the target size (coarser
 //! for a fine size: the quality of a block depends on its shape): the smallest corner scaled
-//! Jacobian of its quadrilaterals. A piece no structured scheme fits counts as free. The score
-//! takes the place of the medial axis's geometric rules in Tam and Armstrong: it prefers cuts
+//! Jacobian of its quadrilaterals, capped by their aspect (shortest edge against the longest or
+//! the target size), so thin strips and pieces much smaller than the elements score low. A piece
+//! no structured scheme fits counts as free. The score takes the place of the medial axis's geometric rules in Tam and Armstrong: it prefers cuts
 //! that cross the region where it narrows, square to its sides, and that leave blocks that do
 //! not shear.
 //!
-//! **Do no harm.** A region's blocks are kept when they are fair (smallest corner scaled Jacobian
-//! at least 0.5) or no worse than the free all-quad mesh of the whole region; otherwise the
-//! region is left to the free mesher. Cuts never end inside a seeded curve, so edge seeds keep
+//! **Do no harm.** A region's blocks are kept when they are fair (score at least 0.5) or no worse
+//! than the free all-quad mesh of the whole region (scored alike); otherwise the region is left
+//! to the free mesher. A region whose pieces cannot be given division counts together (mapped
+//! pieces round a hole whose opposite sides chain back to a longer side) keeps no cuts either. Cuts never end inside a seeded curve, so edge seeds keep
 //! their curves.
 
 use super::arrangement::{Arrangement, Q};
@@ -58,9 +60,9 @@ pub(crate) const CUT: usize = usize::MAX;
 
 /// Steps (one cut, or one hole step) per region at most.
 const MAX_STEPS: usize = 256;
-/// Blocks this good (smallest corner scaled Jacobian) are taken whatever the free mesh would do.
+/// Blocks this good (score) are taken whatever the free mesh would do.
 const FAIR: f64 = 0.5;
-/// How much worse than the region's free mesh (smallest corner scaled Jacobian) its blocks may be.
+/// How much worse than the region's free mesh (score) its blocks may be.
 const HARM_MARGIN: f64 = 0.05;
 
 /// A piece whose score is at least this is not cut further.
@@ -73,6 +75,10 @@ const MIN_GAIN: f64 = 2e-3;
 /// bounded).
 const SEARCH_BUDGET: usize = 2_000;
 const REGION_BUDGET: usize = 20_000;
+/// The edge ratio (longest over shortest edge) a piece's quadrilaterals may have before it lowers
+/// the piece's score: the score is at most this over the ratio, so a strip twice as long per
+/// element scores 0.5 and one at the analyst's limit of 10 scores 0.4.
+const ASPECT_FREE: f64 = 4.0;
 /// Boundary divisions a piece is scored with at most.
 const SCORE_RESOLUTION: f64 = 96.0;
 /// Candidate cuts compared per piece at most.
@@ -485,8 +491,8 @@ fn split(loops: &[Poly], a: End, b: End) -> Option<Vec<Vec<Poly>>> {
     Some(out)
 }
 
-/// How good a piece is: `None` when no structured scheme fits it, else the smallest corner
-/// scaled Jacobian of its mesh on the target size.
+/// How good a piece is: `None` when no structured scheme fits it, else the worst
+/// [`quad_score`] of its mesh on the target size.
 fn score(piece: &[Poly], s: &Settings) -> Option<f64> {
     let [poly] = piece else { return ring_score(piece, s) };
     if poly.len() > MAX_PIECE_POINTS {
@@ -553,14 +559,26 @@ fn mesh_score(loops: &[Vec<Vec<Q>>], scheme: Scheme, s: &Settings) -> Option<f64
         starts.push(st);
     }
     let m = region::mesh_structured(&nodes, &starts, scheme, s.field, s.opts).ok()??;
-    let mut worst = f64::INFINITY;
-    for q in &m.quads {
-        let c = q.map(|i| m.nodes.get(i as usize).copied().unwrap_or([0.0; 2]));
-        for i in 0..4 {
-            worst = worst.min(planar_corner(&c, i).1.unwrap_or(-1.0));
-        }
-    }
+    let worst = m.quads.iter().map(|q| quad_score(&q.map(|i| m.nodes.get(i as usize).copied().unwrap_or([0.0; 2])), s)).fold(f64::INFINITY, f64::min);
     worst.is_finite().then_some(worst)
+}
+
+/// A quadrilateral's quality for the scores: its smallest corner scaled Jacobian, and no more
+/// than its aspect allows, its shortest edge against its longest or the target size (the layers
+/// it is swept into are that thick): a thin strip or a small piece is square-cornered but
+/// makes slivers.
+fn quad_score(c: &[Q; 4], s: &Settings) -> f64 {
+    let mut worst = f64::INFINITY;
+    for i in 0..4 {
+        worst = worst.min(planar_corner(c, i).1.unwrap_or(-1.0));
+    }
+    let edges = (0..4).map(|i| len(sub(c[(i + 1) % 4], c[i])));
+    let (short, long) = edges.fold((f64::INFINITY, 0.0_f64), |(a, b), e| (a.min(e), b.max(e)));
+    let long = long.max(s.size(centroid(c)));
+    if long > 0.0 && long.is_finite() {
+        worst = worst.min(ASPECT_FREE * short / long);
+    }
+    worst
 }
 
 /// `n + 1` points evenly along a polyline by length.
@@ -727,7 +745,10 @@ fn candidates(loops: &[Poly], s: &Settings) -> Vec<(End, End)> {
 fn search(piece: &[Poly], depth: usize, s: &Settings, budget: &mut usize) -> (Value, Option<(End, End)>) {
     let here = score(piece, s);
     let leaf = Value::of(here, piece);
-    if depth == 0 || here.is_some_and(|q| q >= GOOD) || piece.len() != 1 || *budget == 0 {
+    // A disk is its own O-grid: cut into pieces round its centre it only gets worse, however a
+    // coarse tessellation makes its curve ends look like corners.
+    let disk = || matches!(piece, [poly] if region::classify(std::slice::from_ref(&poly.curves().0)) == Scheme::Disk);
+    if depth == 0 || here.is_some_and(|q| q >= GOOD) || piece.len() != 1 || *budget == 0 || disk() {
         return (leaf, None);
     }
     let mut best = (leaf, None);
@@ -847,6 +868,40 @@ fn pieces_after(loops: &[Poly], cuts: &[Vec<Q>], tol: f64) -> Option<Vec<Vec<Pol
     Some(out)
 }
 
+/// Whether a region cut by `cuts` can be given division counts that every piece's scheme
+/// accepts: the interval assignment of its pieces together, as the cross-section's will be. Each
+/// piece fitting on its own is not enough: mapped pieces round a hole chain their opposite sides,
+/// and a chain that comes back to a side with one more curve on it has no solution (#397).
+fn assignable(loops: &[Poly], cuts: &[Vec<Q>], s: &Settings) -> bool {
+    let mut polylines: Vec<(Vec<Q>, usize)> = Vec::new();
+    let mut vertices: Vec<Q> = Vec::new();
+    for poly in loops {
+        let (curves, _) = poly.curves();
+        for c in curves {
+            vertices.extend(c.first().into_iter().chain(c.last()).copied());
+            polylines.push((c, 0));
+        }
+    }
+    for c in cuts {
+        vertices.extend(c.first().into_iter().chain(c.last()).copied());
+        polylines.push((c.clone(), CUT));
+    }
+    let Ok(arr) = super::arrangement::build(&vertices, &polylines, s.tol, 0.0) else { return false };
+    let mut used = Vec::with_capacity(arr.regions.len());
+    for region in &arr.regions {
+        let Ok(p) = super::layered::interior_point(&arr, region) else { return false };
+        used.push(inside(loops, p));
+    }
+    let mut ia = Intervals::default();
+    for curve in &arr.curves {
+        let pts: Vec<Q> = curve.points.iter().filter_map(|&p| arr.points.get(p).copied()).collect();
+        let length: f64 = pts.windows(2).map(|w| len(sub(w[1], w[0]))).sum();
+        ia.var(length / s.size(pts.first().copied().unwrap_or([0.0; 2])), 1);
+    }
+    super::section::schemes(&arr, &used, &mut ia);
+    ia.solve().is_ok()
+}
+
 /// O-grid cuts round the one hole of a region (step 2): of the layouts below, the one whose
 /// pieces (each allowed one more cut) score best.
 /// - From the outer loop's corners towards the hole's centre.
@@ -882,6 +937,16 @@ fn o_grid(loops: &[Poly], s: &Settings, budget: &mut usize) -> Vec<Vec<Q>> {
             .collect(),
     );
     layouts.push((0..hole.len()).filter(|&i| concave(hole, i)).filter_map(|i| ray(1, i, unit(sub(hole.at(i), c))?, 0)).collect());
+    // From the hole's concave corners along both of its sides there, continued: a rectangular
+    // opening becomes side strips and corner blocks whose lines carry on the opening's sides
+    // (submapping, Whiteley et al.), so every corner stays near 90° where a diagonal would
+    // leave 45° wedges.
+    let n = hole.len();
+    let extensions = (0..n).filter(|&i| concave(hole, i)).flat_map(|i| {
+        let o = hole.at(i);
+        [unit(sub(o, hole.at(i + n - 1))), unit(sub(o, hole.at(i + 1)))].into_iter().flatten().map(move |d| (i, d))
+    });
+    layouts.push(extensions.filter_map(|(i, d)| ray(1, i, d, 0)).collect());
     let s2 = std::f64::consts::FRAC_1_SQRT_2;
     for dirs in [[[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]], [[s2, s2], [-s2, s2], [-s2, -s2], [s2, -s2]]] {
         let mut cuts = Vec::new();
@@ -908,6 +973,9 @@ fn o_grid(loops: &[Poly], s: &Settings, budget: &mut usize) -> Vec<Vec<Q>> {
             continue;
         }
         let Some(pieces) = pieces_after(loops, &cuts, s.tol) else { continue };
+        if !assignable(loops, &cuts, s) {
+            continue;
+        }
         let mut value: Option<Value> = None;
         for piece in &pieces {
             let (v, _) = search(piece, 1, s, budget);
@@ -965,8 +1033,8 @@ fn decompose_region(loops: &[Poly], s: &Settings) -> (Vec<Vec<Q>>, Vec<Vec<Poly>
     (cuts, leaves)
 }
 
-/// The smallest corner scaled Jacobian of the free all-quad mesh of a region on the target
-/// size (0 when it cannot be meshed): what the region gets without cuts.
+/// The score of the free all-quad mesh of a region on the target size, as a piece's (0 when it
+/// cannot be meshed): what the region gets without cuts.
 fn free_score(loops: &[Poly], s: &Settings) -> f64 {
     let min = if loops.len() > 1 { 6 } else { 4 };
     let mut nodes: Vec<Vec<Q>> = Vec::with_capacity(loops.len());
@@ -1001,7 +1069,8 @@ fn free_score(loops: &[Poly], s: &Settings) -> f64 {
         nodes.push(pts);
     }
     let Ok(m) = crate::quad::free_quad_mesh(&nodes, s.field, s.opts) else { return 0.0 };
-    m.stats.min_scaled_jacobian.max(0.0)
+    let worst = m.quads.iter().map(|q| quad_score(&q.map(|i| m.nodes.get(i as usize).copied().unwrap_or([0.0; 2])), s)).fold(f64::INFINITY, f64::min);
+    if worst.is_finite() { worst.max(0.0) } else { 0.0 }
 }
 
 /// The cuts that decompose the filled regions of `arr` (`used`) into blocks the structured
@@ -1025,7 +1094,9 @@ pub(crate) fn cuts(arr: &Arrangement, used: &[bool], locked: &[bool], s: &Settin
             continue;
         }
         let (cuts, leaves) = decompose_region(&loops, s);
-        if cuts.is_empty() {
+        // A region whose pieces cannot be given counts together would fail the whole
+        // cross-section: it stays as it is.
+        if cuts.is_empty() || !assignable(&loops, &cuts, s) {
             continue;
         }
         // Do no harm: blocks of poor quality that are worse than the free mesh of the whole
@@ -1198,6 +1269,30 @@ mod tests {
         check(&m, &profile, 0.5);
     }
 
+    /// A thin ring of air round a square pedestal (the Pi enclosure's, #397): the opening's sides
+    /// carry on to the outer side, so the ring is side strips and corner blocks, all square,
+    /// instead of a free mesh with slivers at the opening's corners. The outer sides carry curve
+    /// ends off the opening's lines (cuts of the cells around), which the strips take in.
+    #[test]
+    fn a_ring_round_a_square_opening_continues_the_opening_sides() {
+        let (x0, x1, y0, y1) = (29.94, 49.77, -49.0, -29.0);
+        let outer = vec![
+            line([x0, y0], [39.85, y0]),
+            line([39.85, y0], [x1, y0]),
+            line([x1, y0], [x1, -39.0]),
+            line([x1, -39.0], [x1, y1]),
+            line([x1, y1], [39.85, y1]),
+            line([39.85, y1], [x0, y1]),
+            line([x0, y1], [x0, -39.0]),
+            line([x0, -39.0], [x0, y0]),
+        ];
+        let hole = polygon(&[[31.5, -30.5], [48.5, -30.5], [48.5, -47.5], [31.5, -47.5]]);
+        let profile = vec![outer, hole];
+        let m = mesh_profile(&profile, &[], 3.0);
+        assert_eq!(m.cuts, 8);
+        assert!(check(&m, &profile, 0.99) > 0.99);
+    }
+
     #[test]
     fn a_plate_with_a_slot_gets_an_o_grid() {
         let mut profile = vec![polygon(&[[0.0, 0.0], [80.0, 0.0], [80.0, 40.0], [0.0, 40.0]])];
@@ -1318,6 +1413,78 @@ mod tests {
                 assert!(!(seg_dist(p, a, b) < 1e-9 && len(sub(p, a)) > 1e-9 && len(sub(p, b)) > 1e-9), "{c:?} ends inside the seeded side");
             }
         }
+    }
+
+    /// A loop of points, every one a curve end.
+    fn corners(pts: &[Q]) -> Poly {
+        Poly { pts: pts.to_vec(), end: vec![true; pts.len()], locked: vec![false; pts.len()] }
+    }
+
+    /// Mapped pieces round a hole chain their opposite sides; when one cut leaves the outer loop
+    /// beside a corner instead of at it, the chain comes back to the side that also holds the
+    /// short piece of outer side between them, which then needs no divisions: no counts exist,
+    /// and the whole cross-section would fail (the Pi enclosure's base, #397).
+    #[test]
+    fn cuts_whose_pieces_cannot_be_given_counts_together_are_refused() {
+        // A square plate with a round hole (16 points, clockwise; curve ends where cuts start).
+        let at = |k: usize| {
+            let a = -(k as f64) * PI / 8.0;
+            [5.0 + 2.0 * a.cos(), 5.0 + 2.0 * a.sin()]
+        };
+        let hole: Vec<Q> = (0..16).map(at).collect();
+        let mut end = vec![false; 16];
+        for k in [2, 6, 7, 10, 14] {
+            end[k] = true;
+        }
+        let outer = corners(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.5]]);
+        let loops = vec![outer, Poly { locked: vec![false; 16], pts: hole, end }];
+        let field = UniformSize(2.0);
+        let opts = QuadOptions::default();
+        let s = Settings { field: &field, tol: 1e-9, opts: &opts };
+        let cut = |k: usize, b: Q| vec![at(k), b];
+        // The O-grid: from the hole to the plate's corners.
+        let o_grid = vec![cut(2, [10.0, 0.0]), cut(6, [0.0, 0.0]), cut(10, [0.0, 10.0]), cut(14, [10.0, 10.0])];
+        assert!(assignable(&loops, &o_grid, &s));
+        // One cut runs to the left side just above the corner, nearly along it: the piece below
+        // takes it and the short piece of side as one side, opposite the cut beside it, which
+        // the ring of pieces makes equal to the first.
+        let beside = vec![cut(2, [10.0, 0.0]), cut(7, [0.0, 0.5]), cut(10, [0.0, 10.0]), cut(14, [10.0, 10.0])];
+        assert!(!assignable(&loops, &beside, &s));
+    }
+
+    /// A strip one element across scores no better than its elements' aspect, and a piece much
+    /// smaller than the target size no better than its elements against that size: their
+    /// corners are square, their hexahedra slivers.
+    #[test]
+    fn thin_strips_and_small_pieces_score_low() {
+        let field = UniformSize(2.5);
+        let opts = QuadOptions::default();
+        let s = Settings { field: &field, tol: 1e-9, opts: &opts };
+        let rect = |w: f64, h: f64| vec![corners(&[[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]])];
+        let square = score(&rect(10.0, 10.0), &s).unwrap();
+        let strip = score(&rect(10.0, 0.3), &s).unwrap();
+        let small = score(&rect(0.3, 0.3), &s).unwrap();
+        assert!(square > 0.99, "{square}");
+        assert!(strip <= 4.0 * 0.3 / 2.5 + 1e-9, "{strip}");
+        assert!(small <= 4.0 * 0.3 / 2.5 + 1e-9, "{small}");
+    }
+
+    /// A disk is meshed as its O-grid: a coarse tessellation whose curve ends turn like corners
+    /// does not get it cut into wedges round its centre (they leave slivers at the rim).
+    #[test]
+    fn a_disk_is_not_cut() {
+        let n = 10;
+        let pts: Vec<Q> = (0..n).map(|k| k as f64 / n as f64 * 2.0 * PI).map(|a| [1.645 * a.cos(), 1.645 * a.sin()]).collect();
+        let mut end = vec![false; n];
+        for k in [0, 3, 5, 8] {
+            end[k] = true;
+        }
+        let disk = vec![Poly { locked: vec![false; n], pts, end }];
+        let field = UniformSize(2.5);
+        let opts = QuadOptions::default();
+        let s = Settings { field: &field, tol: 1e-9, opts: &opts };
+        let (cuts, _) = decompose_region(&disk, &s);
+        assert!(cuts.is_empty(), "{cuts:?}");
     }
 
     #[test]

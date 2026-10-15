@@ -751,6 +751,17 @@ pub fn file_name(path: &str) -> String {
     Path::new(path).file_name().and_then(|n| n.to_str()).map_or_else(|| path.to_string(), str::to_string)
 }
 
+/// How long ago, from an age in seconds: "just now", "5 min ago", "3 h ago", "2 days ago".
+pub fn ago(seconds: u64) -> String {
+    match seconds {
+        0..60 => "just now".into(),
+        60..3600 => format!("{} min ago", seconds / 60),
+        3600..86_400 => format!("{} h ago", seconds / 3600),
+        86_400..172_800 => "1 day ago".into(),
+        _ => format!("{} days ago", seconds / 86_400),
+    }
+}
+
 /// The prompts (unsaved changes, recover), the loading overlay and the drop hint.
 pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
     let t = crate::theme::Tokens::get(app.ui.dark);
@@ -842,17 +853,21 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
         }
         Some(Prompt::Recover) => {
             let entries = app.recover_list(ctx);
-            let (mut recover, mut discard, mut close) = (None, None, false);
+            let (mut recover, mut discard, mut discard_all, mut close) = (None, None, false, false);
             crate::frame::window(ctx, "Recover", crate::frame::Width::Wide).id(egui::Id::new("fc_recover")).show(ctx, |ui| {
                 if entries.is_empty() {
                     ui.label(egui::RichText::new("No autosaved models to recover.").color(t.text_dim));
                 }
-                egui::Grid::new("fc_recover_grid").num_columns(3).spacing(egui::vec2(10.0, 4.0)).show(ui, |ui| {
+                egui::Grid::new("fc_recover_grid").num_columns(4).spacing(egui::vec2(10.0, 4.0)).show(ui, |ui| {
                     for e in &entries {
                         let id = e.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
-                        let name = e.get("path").and_then(Value::as_str).map_or_else(|| "Untitled".to_string(), file_name);
+                        let path = e.get("path").and_then(Value::as_str);
                         let n = |k: &str| e.get(k).and_then(Value::as_u64).unwrap_or(0);
-                        ui.label(name);
+                        let name = ui.label(path.map_or_else(|| "Untitled".to_string(), file_name));
+                        if let Some(path) = path {
+                            name.on_hover_text(path);
+                        }
+                        ui.label(egui::RichText::new(ago(n("age"))).color(t.text_dim));
                         ui.label(egui::RichText::new(format!("{} nodes, {} elements", n("nodes"), n("elements"))).color(t.text_dim));
                         ui.horizontal(|ui| {
                             if ui.button("Recover").clicked() {
@@ -866,12 +881,18 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                     }
                 });
                 ui.add_space(6.0);
-                close = ui.button("Close").clicked();
+                ui.horizontal(|ui| {
+                    close = ui.button("Close").clicked();
+                    if entries.len() > 1 {
+                        discard_all = ui.button("Discard all").clicked();
+                    }
+                });
             });
             if let Some(id) = recover {
                 app.recover(&id);
-            } else if let Some(id) = discard {
-                let _ = app.run("file.recovery.discard", json!({"id": id}));
+            } else if discard.is_some() || discard_all {
+                let params = discard.map_or_else(|| json!({"all": true}), |id| json!({"id": id}));
+                let _ = app.run("file.recovery.discard", params);
                 ctx.data_mut(|d| d.remove::<Vec<Value>>(egui::Id::new("fc_recover_entries")));
             } else if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 app.prompt = None;
@@ -1192,6 +1213,22 @@ mod tests {
         let text = std::fs::read_to_string(format!("{target}.inp")).unwrap();
         assert!(text.contains("*NODE") || text.contains("*Node"), "{}", &text[..text.len().min(200)]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recovered_entries_say_how_long_ago() {
+        let cases = [
+            (0, "just now"),
+            (59, "just now"),
+            (60, "1 min ago"),
+            (3599, "59 min ago"),
+            (7200, "2 h ago"),
+            (90_000, "1 day ago"),
+            (13 * 86_400, "13 days ago"),
+        ];
+        for (s, want) in cases {
+            assert_eq!(ago(s), want, "{s}");
+        }
     }
 
     #[test]

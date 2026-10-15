@@ -52,7 +52,7 @@ pub const SAVE_AS: CommandSpec = CommandSpec {
 pub const RECOVERY_LIST: CommandSpec = CommandSpec {
     id: "file.recovery.list",
     label: "Recoverable Models",
-    params: r#"{"dir"?: "…"} — models autosaved by apps that crashed or closed with unsaved changes, newest first (default folder: FIELDCRAFT_RECOVERY_DIR or the per-user data folder)"#,
+    params: r#"{"dir"?: "…"} — models autosaved by apps that crashed or closed with unsaved changes, newest first, each with its id, path, saved_at, age (seconds) and node and element counts (default folder: FIELDCRAFT_RECOVERY_DIR, a temporary folder in runs driven by automation, else the per-user data folder)"#,
     form: Some(super::forms::RECOVERY_LIST),
     kind: CommandKind::Session,
     requires: &[],
@@ -307,8 +307,15 @@ fn recovery_dir(s: &Session, p: &Value, access: Access) -> Result<PathBuf> {
 }
 
 fn recovery_list(s: &mut Session, p: &Value) -> Result<Value> {
-    let entries = fieldcraft_io::recovery::orphans(&recovery_dir(s, p, Access::Read)?);
-    serde_json::to_value(entries).map_err(|e| EngineError::Params(e.to_string()))
+    let mut listed = Vec::new();
+    for e in fieldcraft_io::recovery::orphans(&recovery_dir(s, p, Access::Read)?) {
+        let mut v = serde_json::to_value(&e).map_err(|e| EngineError::Params(e.to_string()))?;
+        if let Some(o) = v.as_object_mut() {
+            o.insert("age".into(), json!(e.age()));
+        }
+        listed.push(v);
+    }
+    Ok(Value::Array(listed))
 }
 
 fn recover(s: &mut Session, p: &Value) -> Result<Value> {

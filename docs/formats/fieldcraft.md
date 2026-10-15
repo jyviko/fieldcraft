@@ -87,8 +87,17 @@ refused.
 ## Autosave and recovery
 
 The desktop app autosaves every 30 seconds while there are unsaved changes, into the recovery
-folder (`FIELDCRAFT_RECOVERY_DIR`, else `FieldCraft/recovery` in the per-user data folder):
-`<id>.fieldcraft`, `<id>.json` (the model's own path, time, counts) and `<id>.lock`, held while
-the app runs. Saving (or undoing back to the saved state) drops the autosave. After a crash, the
-next launch reports the entries; `file.recovery.list` lists them, `file.recover` opens one as
-unsaved work under its original path, and `file.recovery.discard` deletes them.
+folder: `FIELDCRAFT_RECOVERY_DIR` when set; else, in runs driven by automation (`--control`,
+`FIELDCRAFT_CONTROL_PORT`) and on CI (`CI` set), a temporary folder
+(`fieldcraft-automation/recovery` in the system's temporary folder, beside that run's recent files
+and preferences), so they never add to the user's recoveries; else `FieldCraft/recovery` in the
+per-user data folder. An entry is `<id>.fieldcraft`, `<id>.json` (the model's own path, time,
+counts) and `<id>.lock`, held while the app runs. Saving (or undoing back to the saved state)
+drops the autosave. After a crash, the next launch reports the entries; `file.recovery.list`
+lists them newest first, `file.recover` opens one as unsaved work under its original path, and
+`file.recovery.discard` deletes one or all of them (File › Recover… shows each with its name,
+age and counts, with Recover, Discard and Discard all).
+
+Entries prune themselves: each launch deletes left-behind entries older than 14 days, and those
+whose model's own file was saved after the autosave (the file's modification time is later than
+the entry's). Entries of running apps are never touched.

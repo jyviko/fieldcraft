@@ -84,6 +84,7 @@ mod tests {
         let listed = s.execute("file.recovery.list", &json!({"dir": dir})).unwrap();
         assert_eq!(listed[0]["id"], id);
         assert_eq!(listed[0]["nodes"], 1);
+        assert!(listed[0]["age"].as_u64().is_some_and(|a| a < 60), "{listed}");
         let mut next = Session::default();
         let r = next.execute("file.recover", &json!({"id": id, "dir": dir})).unwrap();
         assert_eq!(r["nodes"], 1);

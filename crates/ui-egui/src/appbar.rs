@@ -340,9 +340,12 @@ fn help_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
         .button("Report a Bug…")
         .on_hover_text("Draft a GitHub issue with the version, the OS and the last error; nothing is sent until you submit it")
         .clicked();
+    let settings = ui.button("Settings…").on_hover_text("Privacy: anonymous usage sharing").clicked();
     ui.label(egui::RichText::new(format!("FieldCraft {}", crate::VERSION)).color(t.text_dim));
     if report {
         app.report_bug(None);
+    } else if settings {
+        app.open_settings();
     }
     if let Some(n) = open {
         app.ui.menu = None;

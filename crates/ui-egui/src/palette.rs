@@ -73,6 +73,10 @@ pub fn matches(query: &str) -> Vec<Hit> {
 /// Run a line of command-line input: `id {json}` runs the command with those parameters, `id`
 /// starts it, anything else starts the best match.
 pub fn submit(app: &mut ModelApp, line: &str) {
+    app.with_origin(fieldcraft_engine::usage::Origin::Palette, |app| submit_line(app, line));
+}
+
+fn submit_line(app: &mut ModelApp, line: &str) {
     let line = line.trim();
     if line.is_empty() {
         return;
@@ -246,7 +250,7 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
     if let Some(id) = picked {
         app.palette_text.clear();
         app.ui.palette = false;
-        let _ = app.start(id);
+        let _ = app.with_origin(fieldcraft_engine::usage::Origin::Palette, |app| app.start(id));
     } else if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.ui.palette = false;
         app.palette_text.clear();

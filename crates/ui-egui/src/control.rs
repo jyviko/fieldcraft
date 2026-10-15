@@ -158,6 +158,18 @@ fn select(app: &mut ModelApp, p: &Value) -> Result<Value, String> {
     Ok(selection_json(app))
 }
 
+/// The privacy choices, for `ui.inspect` and `ui.prompt`.
+fn privacy_json(app: &ModelApp) -> Value {
+    let p = app.prefs();
+    json!({
+        "available": app.usage_available(),
+        "usage_sharing": p.usage_sharing,
+        "usage_automation": p.usage_automation,
+        "recording": fieldcraft_engine::usage::enabled(),
+        "queued": fieldcraft_engine::usage::queued(),
+    })
+}
+
 pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -206,11 +218,18 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 crate::files::Prompt::Delete(d) => json!({"delete": d.question(), "kind": d.kind, "name": d.name, "users": d.users, "allowed": d.allowed()}),
                 crate::files::Prompt::Crashed(r) => json!({"crashed": r}),
                 crate::files::Prompt::ReportBug => json!({"report_bug": app.report.as_ref().and_then(|f| f.drafted_json())}),
+                crate::files::Prompt::Consent => json!({"consent": crate::privacy::QUESTION}),
+                crate::files::Prompt::Settings => json!("settings"),
             }),
+            "privacy": privacy_json(app),
             "recent": app.recent.paths,
             "version": crate::VERSION,
         })),
         "ui.toolbar" => ok(crate::toolbar::describe(app)),
+        "ui.settings" => {
+            app.open_settings();
+            ok(privacy_json(app))
+        }
         "ui.select" if p.get("kind").is_none() && VIEWPORT_SELECT.iter().any(|k| p.get(*k).is_some()) => wrap(select(app, p)),
         "ui.selection" => ok(selection_json(app)),
         "ui.select" => {
@@ -388,6 +407,23 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 }
                 // The form's fields; sending opens the browser, which only a click does.
                 (crate::files::Prompt::ReportBug, Some("set")) => wrap(app.set_report(p)),
+                (crate::files::Prompt::Consent, Some(a @ ("share" | "decline"))) => {
+                    app.answer_consent(a == "share");
+                    ok(privacy_json(app))
+                }
+                (crate::files::Prompt::Settings, Some("set")) => {
+                    if !app.usage_available() {
+                        return err("this run cannot share usage (no analytics key, or FIELDCRAFT_TELEMETRY=0, CI or automation)");
+                    }
+                    let sharing = p.get("usage_sharing").and_then(Value::as_bool).unwrap_or(app.prefs().usage_sharing == Some(true));
+                    let automation = p.get("usage_automation").and_then(Value::as_bool).unwrap_or(app.prefs().usage_automation);
+                    app.set_usage(sharing, automation);
+                    ok(privacy_json(app))
+                }
+                (crate::files::Prompt::Settings, Some("close" | "cancel")) => {
+                    app.prompt = None;
+                    ok(Value::Null)
+                }
                 (crate::files::Prompt::ReportBug, Some("close" | "cancel")) => {
                     app.prompt = None;
                     app.report = None;
@@ -401,7 +437,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     None => err("missing `id` (from file.recovery.list)"),
                 },
                 (_, a) => err(format!(
-                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; replace_mesh: replace, cancel; delete: delete, cancel; recover: recover with id, close; samples: open with name, close; crashed: report, close; report_bug: set with title/observed/share_session/include_model, close)"
+                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; replace_mesh: replace, cancel; delete: delete, cancel; recover: recover with id, close; samples: open with name, close; crashed: report, close; report_bug: set with title/observed/share_session/include_model, close; consent: share, decline; settings: set with usage_sharing/usage_automation, close)"
                 )),
             }
         }

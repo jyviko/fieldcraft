@@ -39,6 +39,7 @@ pub mod icons;
 pub mod menu;
 pub mod navigation;
 pub mod palette;
+pub mod privacy;
 pub mod reply;
 pub mod report;
 pub mod results;
@@ -383,7 +384,10 @@ pub struct ModelApp {
     pub recent: files::Recent,
     /// The user's preferences as last saved.
     prefs: files::Prefs,
-    /// The user's preferences as last saved.
+    /// The host's go-ahead to share usage, when this run may ([`privacy`]).
+    usage: Option<privacy::UsageHost>,
+    /// The consent question was asked in this run.
+    consent_asked: bool,
     /// The setup progress the browser marks, and what it was worked out for.
     setup: (Option<(u64, u64, bool, bool)>, std::sync::Arc<Vec<fieldcraft_engine::progress::StageState>>),
     /// The file opening in the background, and files waiting to open after it.
@@ -430,7 +434,9 @@ pub struct ModelApp {
 }
 
 impl ModelApp {
-    pub fn new(session: Session) -> ModelApp {
+    pub fn new(mut session: Session) -> ModelApp {
+        // The window's own model: its commands count as clicks unless said otherwise.
+        session.origin.get_or_insert(fieldcraft_engine::usage::Origin::Ui);
         ModelApp {
             session,
             ui: UiState::default(),
@@ -469,6 +475,8 @@ impl ModelApp {
             services: files::Services::default(),
             recent: files::Recent::default(),
             prefs: files::Prefs::default(),
+            usage: None,
+            consent_asked: false,
             setup: (None, std::sync::Arc::default()),
             loading: None,
             queued: std::collections::VecDeque::new(),
@@ -503,7 +511,7 @@ impl ModelApp {
     /// Use the host's services (file pickers, the recent-files file) and load the recent list.
     pub fn with_services(mut self, services: files::Services) -> Self {
         self.recent = files::Recent::load(services.recent_path.clone());
-        self.prefs = files::Prefs::load(services.prefs_path.as_deref());
+        self.prefs = files::Prefs::load(services.prefs.as_ref());
         self.ui.nav_preset = self.prefs.nav_preset.clone();
         self.ui.reverse_zoom = self.prefs.reverse_zoom;
         self.services = services;
@@ -624,6 +632,10 @@ impl ModelApp {
         let spec = fieldcraft_engine::find_command(command).ok_or_else(|| format!("unknown command `{command}`"))?;
         // A command missing what it needs opens no form: the status names what is missing.
         if let Err(u) = self.session.availability(spec) {
+            self.record_ui(fieldcraft_engine::usage::Event::UnavailableClicked {
+                command: u.command,
+                missing: u.missing.iter().map(|m| m.0).collect(),
+            });
             let e = u.to_string();
             self.set_status(e.clone(), true);
             return Err(e);
@@ -689,6 +701,9 @@ impl ModelApp {
 
     /// Close the open form: back to the form it was opened from, if any.
     pub fn close_dialog(&mut self) {
+        if let Some(d) = &self.dialog {
+            self.record_ui(fieldcraft_engine::usage::Event::FormCancelled { command: d.command });
+        }
         self.dialog = self.dialog.take().and_then(|d| d.back).map(|b| b.dialog);
     }
 
@@ -1460,6 +1475,8 @@ impl ModelApp {
         palette::popup(self, ui.ctx());
         files::show(self, ui.ctx());
         report::show(self, ui.ctx());
+        self.ask_consent();
+        privacy::show(self, ui.ctx());
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
         }
@@ -1480,8 +1497,9 @@ impl ModelApp {
     /// Save the preferences the window changed (a View menu toggle, `ui.set`).
     pub(crate) fn save_prefs(&mut self) {
         if self.ui.nav_preset != self.prefs.nav_preset || self.ui.reverse_zoom != self.prefs.reverse_zoom {
-            self.prefs = files::Prefs { nav_preset: self.ui.nav_preset.clone(), reverse_zoom: self.ui.reverse_zoom };
-            self.prefs.save(self.services.prefs_path.as_deref());
+            self.prefs.nav_preset = self.ui.nav_preset.clone();
+            self.prefs.reverse_zoom = self.ui.reverse_zoom;
+            self.prefs.save(self.services.prefs.as_ref());
         }
     }
 
@@ -1502,7 +1520,12 @@ impl ModelApp {
         let Some(rx) = self.control_rx.take() else { return };
         for _ in 0..PER_FRAME {
             let Ok(req) = rx.try_recv() else { break };
-            match control::handle(self, ctx, &req) {
+            // The MCP server says so; anything else on the channel is a script.
+            let origin = match req.params.get("client").and_then(Value::as_str) {
+                Some("mcp") => fieldcraft_engine::usage::Origin::Mcp,
+                _ => fieldcraft_engine::usage::Origin::Script,
+            };
+            match self.with_origin(origin, |app| control::handle(app, ctx, &req)) {
                 control::Outcome::Done(v) => {
                     let _ = req.reply.send(v);
                 }

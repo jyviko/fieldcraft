@@ -230,7 +230,8 @@ fn temp_png() -> PathBuf {
 
 impl Backend for Remote {
     fn execute(&mut self, command: &str, params: Value) -> Result<Value, String> {
-        self.call("engine.execute", json!({"command": command, "params": params}))
+        // `client` lets the app count an agent's commands apart from a script's (docs/privacy.md).
+        self.call("engine.execute", json!({"command": command, "params": params, "client": "mcp"}))
     }
 
     fn commands(&mut self) -> Result<Value, String> {

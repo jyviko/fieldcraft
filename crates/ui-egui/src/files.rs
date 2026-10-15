@@ -44,8 +44,9 @@ pub struct Services {
     pub pick_save: Option<PickSave>,
     /// The recent-files list's file (JSON); `None` keeps the list for this run only.
     pub recent_path: Option<PathBuf>,
-    /// The user's preferences file (JSON, [`Prefs`]); `None` keeps them for this run only.
-    pub prefs_path: Option<PathBuf>,
+    /// Where the user's preferences ([`Prefs`]) are kept: a file on the desktop, the browser's
+    /// storage on the web; `None` keeps them for this run only.
+    pub prefs: Option<PrefsStore>,
     /// Opens a link in the browser (Help › Report a Bug); without it, egui's own
     /// `open_url` (the browser build opens the link itself).
     pub open_url: Option<OpenUrl>,
@@ -174,6 +175,30 @@ impl Recent {
 /// Largest preferences file read.
 const MAX_PREFS_BYTES: u64 = 64 * 1024;
 
+/// Where the preferences are kept: reads their JSON (`None` when there is none) and writes it.
+pub struct PrefsStore {
+    pub load: Box<dyn Fn() -> Option<Vec<u8>>>,
+    pub save: Box<dyn Fn(&[u8]) -> Result<(), String>>,
+}
+
+impl PrefsStore {
+    /// The preferences in `file` (an unreadable or oversized file reads as none).
+    pub fn file(file: PathBuf) -> PrefsStore {
+        let read = file.clone();
+        PrefsStore {
+            load: Box::new(move || {
+                std::fs::metadata(&read).is_ok_and(|m| m.is_file() && m.len() <= MAX_PREFS_BYTES).then(|| std::fs::read(&read).ok()).flatten()
+            }),
+            save: Box::new(move |bytes| {
+                if let Some(dir) = file.parent() {
+                    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                }
+                std::fs::write(&file, bytes).map_err(|e| format!("{}: {e}", file.display()))
+            }),
+        }
+    }
+}
+
 /// What the window remembers for the user between runs (`prefs.json` beside `recent.json`).
 /// Keys it no longer knows (`show_setup`, from before the setup card went) are ignored.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -183,34 +208,37 @@ pub struct Prefs {
     pub nav_preset: String,
     /// The wheel zooms the other way.
     pub reverse_zoom: bool,
+    /// Share anonymous usage (docs/privacy.md); `None` until the user is asked.
+    pub usage_sharing: Option<bool>,
+    /// Count commands run by scripts and AI agents (MCP) too.
+    pub usage_automation: bool,
+    /// The random id usage is sent under, made when the user first agrees; empty before.
+    pub install_id: String,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { nav_preset: crate::navigation::DEFAULT_PRESET.into(), reverse_zoom: false }
+        Prefs {
+            nav_preset: crate::navigation::DEFAULT_PRESET.into(),
+            reverse_zoom: false,
+            usage_sharing: None,
+            usage_automation: true,
+            install_id: String::new(),
+        }
     }
 }
 
 impl Prefs {
-    /// The preferences kept in `file` (an unreadable or malformed file gives the defaults).
-    pub fn load(file: Option<&Path>) -> Prefs {
-        file.filter(|f| std::fs::metadata(f).is_ok_and(|m| m.is_file() && m.len() <= MAX_PREFS_BYTES))
-            .and_then(|f| std::fs::read(f).ok())
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+    /// The preferences kept in `store` (unreadable or malformed ones give the defaults).
+    pub fn load(store: Option<&PrefsStore>) -> Prefs {
+        store.and_then(|s| (s.load)()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
     }
 
-    /// Write them to `file`; a failure is logged (the preferences stay for this run).
-    pub fn save(&self, file: Option<&Path>) {
-        let Some(file) = file else { return };
-        let write = || -> std::io::Result<()> {
-            if let Some(dir) = file.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            std::fs::write(file, serde_json::to_vec_pretty(self).unwrap_or_default())
-        };
-        if let Err(e) = write() {
-            log::warn!("preferences {}: {e}", file.display());
+    /// Write them to `store`; a failure is logged (the preferences stay for this run).
+    pub fn save(&self, store: Option<&PrefsStore>) {
+        let Some(store) = store else { return };
+        if let Err(e) = (store.save)(&serde_json::to_vec_pretty(self).unwrap_or_default()) {
+            log::warn!("preferences: {e}");
         }
     }
 }
@@ -280,6 +308,10 @@ pub enum Prompt {
     /// Delete a definition (the item menu's Delete…, the Delete key): what uses it is listed, and
     /// the deletion refused or (a datum's partitions) done with it.
     Delete(crate::menu::DeleteAsk),
+    /// The first run asks once whether to share anonymous usage ([`crate::privacy`]).
+    Consent,
+    /// Help › Settings: the privacy choices ([`crate::privacy`]).
+    Settings,
     /// The last run crashed (its new crash reports, newest first): report it, or not now.
     Crashed(Vec<fieldcraft_engine::crash::Summary>),
     /// Help › Report a Bug ([`crate::report`]; the form is [`ModelApp::report`]).
@@ -389,6 +421,7 @@ impl ModelApp {
         let base = if fresh {
             let mut s = Session::default();
             s.crash_journal = self.session.crash_journal;
+            s.origin = self.session.origin;
             s
         } else {
             self.session.clone()
@@ -591,7 +624,11 @@ impl ModelApp {
     /// A finished job's session replaces the window's.
     fn take_opened(&mut self, o: Opened) {
         // The session it replaces may be large: it is freed off the window thread.
-        let old = std::mem::replace(&mut self.session, *o.session);
+        let mut session = *o.session;
+        // Its commands come from where the window's do now (the job may have started from the
+        // command search or the control channel).
+        session.origin = self.session.origin;
+        let old = std::mem::replace(&mut self.session, session);
         off_thread("fieldcraft drop".into(), move || drop(old));
         self.model_changed();
         if let Some(p) = &o.recent {
@@ -1006,8 +1043,8 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                 app.prompt = None;
             }
         }
-        // Drawn by `crate::report::show`.
-        Some(Prompt::Crashed(_) | Prompt::ReportBug) | None => {}
+        // Drawn by `crate::report::show` and `crate::privacy::show`.
+        Some(Prompt::Crashed(_) | Prompt::ReportBug | Prompt::Consent | Prompt::Settings) | None => {}
     }
 }
 
@@ -1104,8 +1141,9 @@ mod tests {
     fn navigation_preferences_are_remembered() {
         let file = temp("prefs").join("prefs.json");
         std::fs::write(&file, br#"{"show_setup": false}"#).unwrap();
-        assert_eq!(Prefs::load(Some(&file)), Prefs::default());
-        let services = || Services { prefs_path: Some(file.clone()), ..Default::default() };
+        let store = PrefsStore::file(file.clone());
+        assert_eq!(Prefs::load(Some(&store)), Prefs::default());
+        let services = || Services { prefs: Some(PrefsStore::file(file.clone())), ..Default::default() };
         let mut app = ModelApp::new(Session::default()).with_services(services());
         app.ui.nav_preset = "solidworks".into();
         app.ui.reverse_zoom = true;
@@ -1113,7 +1151,7 @@ mod tests {
         let again = ModelApp::new(Session::default()).with_services(services());
         assert_eq!((again.ui.nav_preset.as_str(), again.ui.reverse_zoom), ("solidworks", true));
         std::fs::write(&file, b"{nope").unwrap();
-        assert_eq!(Prefs::load(Some(&file)), Prefs::default());
+        assert_eq!(Prefs::load(Some(&store)), Prefs::default());
     }
 
     /// A picker that answers `path` and records the filters it was offered.

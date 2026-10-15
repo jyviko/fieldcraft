@@ -16,7 +16,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const HEX_GENERATE: CommandSpec = CommandSpec {
     id: "mesh.hex.generate",
     label: "Hex Mesh",
-    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "swept" (any sweep) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the mesh with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name; `weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate), so sets by geometry resolve. Edge seeds (mesh.seed.edge) set the counts and spacing of their edges: exact seeds are held, and seeds that cannot all hold (opposite sides of a mapped face, the layers between two levels) are an error naming them. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
+    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "method": "auto" (default) | "swept" (any sweep) | "extrude" | "sweep" | "revolve" | "mapped", "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal)} — replaces the meshes of the bodies it meshes (as mesh.tet.generate; other bodies keep theirs) with structured hexahedra: multi-level sweeps along a direction or around an axis, one-to-one sweeps through linking faces, or mapped blocks. Boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name; `weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate), so sets by geometry resolve. Edge seeds (mesh.seed.edge) set the counts and spacing of their edges: exact seeds are held, and seeds that cannot all hold (opposite sides of a mapped face, the layers between two levels) are an error naming them. Reports per body the method, counts and quality; a body no structured method fits is an error that says why"#,
     form: Some(super::forms::HEX_GENERATE),
     kind: CommandKind::Model,
     requires: &[Requirement::Geometry],
@@ -76,6 +76,16 @@ pub(super) fn shape_input(shape: &Shape, tolerance: Option<f64>) -> Result<Input
     Ok(Input { name: shape.name.clone(), mesh: Cow::Owned(shape.tessellate(tol)?), surfaces, face_names, diagonal: diag, seeds: Vec::new() })
 }
 
+/// The imported surface `surface` names, with the body name its mesh is tagged with.
+pub(super) fn surface<'a>(s: &'a Session, p: &Value) -> Result<(String, &'a fieldcraft_geometry::tagged_mesh::TaggedSurface)> {
+    let n = s.surfaces.len();
+    let index = p.get("surface").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).filter(|&i| i < n);
+    let index = index.ok_or_else(|| EngineError::Params(format!("`surface` must be the index of an imported surface (there are {n})")))?;
+    let t = s.surfaces.get(index).ok_or_else(|| EngineError::Params("no such surface".into()))?;
+    let name = if t.name.trim().is_empty() { format!("Surface{index}") } else { t.name.clone() };
+    Ok((name, t))
+}
+
 pub(super) fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
     let tolerance = number(p, "tolerance")?;
     match (p.get("body"), p.get("surface")) {
@@ -88,11 +98,8 @@ pub(super) fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
                 .ok_or_else(|| EngineError::Params(format!("no body `{name}` (open a design first)")))?;
             Ok(vec![Input { seeds: super::seeds::edge_seeds(s)?, ..shape_input(shape, tolerance)? }])
         }
-        (None, Some(i)) => {
-            let n = s.surfaces.len();
-            let index = i.as_u64().and_then(|i| usize::try_from(i).ok()).filter(|&i| i < n);
-            let index = index.ok_or_else(|| EngineError::Params(format!("`surface` must be the index of an imported surface (there are {n})")))?;
-            let t = s.surfaces.get(index).ok_or_else(|| EngineError::Params("no such surface".into()))?;
+        (None, Some(_)) => {
+            let (name, t) = surface(s, p)?;
             let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
             for q in &t.mesh.positions {
                 for k in 0..3 {
@@ -100,7 +107,6 @@ pub(super) fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
                     hi[k] = hi[k].max(q[k]);
                 }
             }
-            let name = if t.name.trim().is_empty() { format!("Surface{index}") } else { t.name.clone() };
             // Faces named by index, as mesh.tet.generate names them.
             let face_names = (0..t.faces).map(|f| f.to_string()).collect();
             Ok(vec![Input { name, mesh: Cow::Borrowed(&t.mesh), surfaces: Vec::new(), face_names, diagonal: diagonal(lo, hi), seeds: Vec::new() }])
@@ -140,7 +146,7 @@ pub const HEX_MAPPED: CommandSpec = CommandSpec {
 pub const HEX_BLOCKS: CommandSpec = CommandSpec {
     id: "mesh.hex.blocks",
     label: "Block Hex Mesh",
-    params: r#"{"bodies": ["Cell1", "Cell2"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of that diagonal)} — replaces the mesh with one conforming all-hex mesh of a part partitioned into cells (bodies that meet face to face, such as the pieces of solid.split_body in SolidCraft): every cell a mapped block (six four-sided faces; faces that meet smoothly, such as the two halves of a hole, count as one), division counts assigned over all cells together, each shared face meshed once and its nodes merged, radial lines graded off holes and fillets. Elements are tagged with their cell's body and boundary faces with its B-rep faces (`weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate). Reports the cells, the shared faces, counts and quality; a cell that is not a block, or cells that touch without sharing whole faces, is an error that says which"#,
+    params: r#"{"bodies": ["Cell1", "Cell2"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 (hex8) or 2 (hex20, mid-edge nodes on the geometry), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of that diagonal)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one conforming all-hex mesh of a part partitioned into cells (bodies that meet face to face, such as the pieces of solid.split_body in SolidCraft): every cell a mapped block (six four-sided faces; faces that meet smoothly, such as the two halves of a hole, count as one), division counts assigned over all cells together, each shared face meshed once and its nodes merged, radial lines graded off holes and fillets. Elements are tagged with their cell's body and boundary faces with its B-rep faces (`weld`, `weld_distance` and `feature_angle` as in mesh.tet.generate). Reports the cells, the shared faces, counts and quality; a cell that is not a block, or cells that touch without sharing whole faces, is an error that says which"#,
     form: Some(super::forms::HEX_BLOCKS),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -216,10 +222,12 @@ pub(super) fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let cm = hex_mesh_cells(&cells, &UniformSize(h), &options).map_err(|e| EngineError::Params(e.to_string()))?;
     let m = &cm.mesh;
-    // Replace the mesh: definitions stay, nodes, elements and geometry tags are new.
-    let mut model = s.model.without_mesh();
+    // Replace the cells' meshes (replace.rs); other bodies and the definitions stay.
+    let model = &mut s.model;
+    let cleared = super::replace::clear(model, inputs.iter().map(|b| b.name.as_str()));
+    let (first_node, first_element) = super::fresh_labels(model, m.nodes.len(), m.element_count())?;
     for (i, xyz) in m.nodes.iter().enumerate() {
-        model.set_node(label(i)?, *xyz)?;
+        model.set_node(first_node + i as u32, *xyz)?;
     }
     let mut body_tags = Vec::with_capacity(inputs.len());
     for b in &inputs {
@@ -227,15 +235,15 @@ pub(super) fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
     }
     for e in 0..m.element_count() {
         let cell = cm.element_cell.get(e).map_or(0, |&c| c as usize);
-        let nodes: Vec<u32> = m.element(e).unwrap_or(&[]).iter().map(|&i| i + 1).collect();
-        model.set_element(label(e)?, m.kind, nodes)?;
-        model.tag_element(label(e)?, body_tags.get(cell).copied().ok_or_else(|| EngineError::Params("element without a cell".into()))?)?;
+        let nodes: Vec<u32> = m.element(e).unwrap_or(&[]).iter().map(|&i| first_node + i).collect();
+        let l = first_element + e as u32;
+        model.set_element(l, m.kind, nodes)?;
+        model.tag_element(l, body_tags.get(cell).copied().ok_or_else(|| EngineError::Params("element without a cell".into()))?)?;
     }
-    tag_faces(&mut model, &inputs, |e| cm.element_cell.get(e as usize).map_or(0, |&c| c as usize), &m.boundary, 1)?;
-    s.model = model;
+    tag_faces(model, &inputs, |e| cm.element_cell.get(e as usize).map_or(0, |&c| c as usize), &m.boundary, first_element)?;
     let blocks: Vec<Value> =
         inputs.iter().zip(&cm.blocks).map(|(b, d)| json!({"body": b.name, "divisions": d, "elements": d.iter().product::<usize>()})).collect();
-    Ok(json!({
+    let reply = json!({
         "cells": inputs.len(),
         "interfaces": cm.interfaces,
         "description": m.report.description,
@@ -248,12 +256,8 @@ pub(super) fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
         "surface_volume": m.report.surface_volume,
         "size": h,
         "blocks": blocks,
-    }))
-}
-
-/// A 1-based model label for 0-based index `i`.
-fn label(i: usize) -> Result<u32> {
-    u32::try_from(i).ok().and_then(|x| x.checked_add(1)).ok_or_else(|| EngineError::Params("too many nodes or elements".into()))
+    });
+    Ok(cleared.report(s, reply))
 }
 
 /// The `order` parameter: false for hex8, true for hex20.
@@ -298,8 +302,10 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
         let mesh = hex_body(p, &b, method, quadratic, size)?;
         meshes.push((b, mesh));
     }
-    // Replace the mesh: definitions stay, nodes, elements and geometry tags are new.
-    let mut model = s.model.without_mesh();
+    // Replace the bodies' meshes (replace.rs); other bodies and the definitions stay.
+    // A copy: the inputs borrow the session.
+    let mut model = s.model.clone();
+    let cleared = super::replace::clear(&mut model, meshes.iter().map(|(b, _)| b.name.as_str()));
     let mut report = Vec::with_capacity(meshes.len());
     for (b, m) in &meshes {
         add_hex(&mut model, b, m)?;
@@ -318,7 +324,7 @@ fn generate(s: &mut Session, p: &Value, default: HexMethod, allowed: &[HexMethod
     }
     let (nodes, elements) = (model.nodes().len(), model.elements().len());
     s.model = model;
-    Ok(json!({"bodies": report, "nodes": nodes, "elements": elements}))
+    Ok(cleared.report(s, json!({"bodies": report, "nodes": nodes, "elements": elements})))
 }
 
 /// Mesh one body with `method` (hex20 when `quadratic`) at `size` (default: from its extent);
@@ -501,7 +507,12 @@ mod tests {
     fn mesh_cells_all_blocks_is_mesh_hex_blocks() {
         let (_dir, mut s) = split_box(false);
         let blocks = s.execute("mesh.hex.blocks", &json!({"size": 2.5})).unwrap();
-        let cells = s.execute("mesh.cells", &json!({"default": "blocks", "size": 2.5})).unwrap();
+        let mut cells = s.execute("mesh.cells", &json!({"default": "blocks", "size": 2.5})).unwrap();
+        let mut blocks = blocks;
+        // The same mesh, in place of the first one.
+        let replaced = cells.as_object_mut().and_then(|o| o.remove("replaced")).unwrap();
+        assert_eq!(replaced.as_array().map(Vec::len), Some(4), "{replaced}");
+        blocks.as_object_mut().and_then(|o| o.remove("replaced"));
         assert_eq!(cells, blocks);
         let e = s.execute("mesh.cells", &json!({"default": "blocks", "methods": {"Box": "tet"}})).unwrap_err().to_string();
         assert!(e.contains("methods"), "{e}");

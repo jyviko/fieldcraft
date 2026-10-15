@@ -15,7 +15,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const HEX_OCTREE: CommandSpec = CommandSpec {
     id: "mesh.hex.octree",
     label: "Octree Hex Mesh",
-    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size in the interior, mm; default 1/25 of the bounding-box diagonal), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal), "max_depth": 3 (refinement levels below the size, each a third, 0..=5), "max_elements": 2000000 (1..=10000000; default the session limit), "attempts": 4 (builds, refining where one failed, 1..=8), "max_sweeps": 300 (optimiser sweeps, 0..=10000), and the boundary options of mesh.tet.generate ("weld", "weld_distance", "feature_angle")} — replaces the mesh with an unstructured all-hex8 mesh of any part: an adaptive 3-refinement grid with conforming transition templates, a core inside the part, two boundary layers that capture every B-rep face boundary and sharp edge, and untangling. Every element is proven valid; boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name), so sets by geometry resolve. Reports per body the elements, quality, volume and grid statistics"#,
+    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size in the interior, mm; default 1/25 of the bounding-box diagonal), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal), "max_depth": 3 (refinement levels below the size, each a third, 0..=5), "max_elements": 2000000 (1..=10000000; default the session limit), "attempts": 4 (builds, refining where one failed, 1..=8), "max_sweeps": 300 (optimiser sweeps, 0..=10000), and the boundary options of mesh.tet.generate ("weld", "weld_distance", "feature_angle")} — replaces the meshes of the bodies it meshes (as mesh.tet.generate; other bodies keep theirs) with an unstructured all-hex8 mesh of any part: an adaptive 3-refinement grid with conforming transition templates, a core inside the part, two boundary layers that capture every B-rep face boundary and sharp edge, and untangling. Every element is proven valid; boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name), so sets by geometry resolve. Reports per body the elements, quality, volume and grid statistics"#,
     form: Some(super::forms::HEX_OCTREE),
     kind: CommandKind::Model,
     requires: &[Requirement::Geometry],
@@ -64,22 +64,20 @@ fn hex_octree(s: &mut Session, p: &Value) -> Result<Value> {
         total += mesh.hexes.len();
         meshes.push((b, mesh));
     }
-    // Replace the mesh: definitions stay, nodes, elements and geometry tags are new.
-    let mut model = s.model.without_mesh();
+    // Replace the bodies' meshes (replace.rs); other bodies and the definitions stay.
+    let mut model = s.model.clone();
+    let cleared = super::replace::clear(&mut model, meshes.iter().map(|(b, _)| b.name.as_str()));
     let mut report = Vec::with_capacity(meshes.len());
-    let (mut node_label, mut element_label) = (1u32, 1u32);
     for (b, m) in &meshes {
-        let first_node = node_label;
-        for xyz in &m.nodes {
-            model.set_node(node_label, *xyz)?;
-            node_label = node_label.checked_add(1).ok_or_else(|| EngineError::Params("too many nodes".into()))?;
+        let (first_node, first_element) = super::fresh_labels(&model, m.nodes.len(), m.hexes.len())?;
+        for (i, xyz) in m.nodes.iter().enumerate() {
+            model.set_node(first_node + i as u32, *xyz)?;
         }
         let body_tag = model.geometry_tag(&GeometryRef::body(b.name.as_str())?)?;
-        let first_element = element_label;
-        for hx in &m.hexes {
-            model.set_element(element_label, ElementKind::Hex8, hx.iter().map(|&i| first_node + i).collect())?;
-            model.tag_element(element_label, body_tag)?;
-            element_label = element_label.checked_add(1).ok_or_else(|| EngineError::Params("too many elements".into()))?;
+        for (i, hx) in m.hexes.iter().enumerate() {
+            let l = first_element + i as u32;
+            model.set_element(l, ElementKind::Hex8, hx.iter().map(|&i| first_node + i).collect())?;
+            model.tag_element(l, body_tag)?;
         }
         tag_faces(&mut model, std::slice::from_ref(b), |_| 0, &m.boundary, first_element)?;
         let r = &m.report;
@@ -99,8 +97,9 @@ fn hex_octree(s: &mut Session, p: &Value) -> Result<Value> {
             "sweeps": r.sweeps,
         }));
     }
+    let (nodes, elements) = (model.nodes().len(), model.elements().len());
     s.model = model;
-    Ok(json!({"bodies": report, "nodes": node_label - 1, "elements": element_label - 1}))
+    Ok(cleared.report(s, json!({"bodies": report, "nodes": nodes, "elements": elements})))
 }
 
 #[cfg(test)]

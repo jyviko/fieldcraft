@@ -17,6 +17,7 @@ pub mod catalogue;
 pub mod cmd;
 
 pub use cmd::analytic_surfaces;
+pub use cmd::replace::{MESHERS, Replacement, replacement};
 pub mod history;
 pub mod progress;
 pub mod requirement;

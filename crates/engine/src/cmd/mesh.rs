@@ -107,7 +107,7 @@ pub const SURFACE_CHECK: CommandSpec = CommandSpec {
 pub const TET_GENERATE: CommandSpec = CommandSpec {
     id: "mesh.tet.generate",
     label: "Generate Tet Mesh",
-    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the body's bounding-box diagonal), the boundary options of mesh.surface.check ("weld", "weld_distance", "feature_angle"), optional "size": mm (target edge length; default a twentieth of the bounding-box diagonal), "order": "linear" | "quadratic" (tet4 or tet10; quadratic mid-edge nodes lie on the B-rep faces), "quality": true (false: the raw constrained Delaunay tetrahedralization), "quality_target": 40 (degrees: tetrahedra whose smallest dihedral-angle sine is at least sin of this are left alone by improvement, 5..=60), "curvature_angle": 22.5 (degrees per element along curved boundary, 0 for none, at most 90), "grading": 0.3 (largest size change per unit length, 0.05..=2), "max_passes": 20 (improvement passes, 0..=200), "max_points": 1000000 (1..=20000000), "max_steiner": 50000 (0..=10000000), "max_tets": 5000000 (1..=50000000) — the constrained Delaunay tetrahedralization of the welded boundary (every boundary triangle a union of tet faces), refined to the size field with its boundary vertices on the B-rep faces, smoothed and improved (Delaunay refinement, ODT smoothing, Klingner–Shewchuk improvement), with a quality report. Adds the elements and their nodes (labels after the largest existing ones), tags the elements with the body and each boundary element face with its geometry face, and fails, changing nothing, if a surface is invalid or a mesh does not pass the validity gate. Edge seeds (mesh.seed.edge) divide their edges at the seeded nodes, and the size field grades from them. Reports the totals and, under `bodies`, each body's counts, size, quality report and `seeds` (per seeded edge, the mesh edges along it)"#,
+    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the body's bounding-box diagonal), the boundary options of mesh.surface.check ("weld", "weld_distance", "feature_angle"), optional "size": mm (target edge length; default a twentieth of the bounding-box diagonal), "order": "linear" | "quadratic" (tet4 or tet10; quadratic mid-edge nodes lie on the B-rep faces), "quality": true (false: the raw constrained Delaunay tetrahedralization), "quality_target": 40 (degrees: tetrahedra whose smallest dihedral-angle sine is at least sin of this are left alone by improvement, 5..=60), "curvature_angle": 22.5 (degrees per element along curved boundary, 0 for none, at most 90), "grading": 0.3 (largest size change per unit length, 0.05..=2), "max_passes": 20 (improvement passes, 0..=200), "max_points": 1000000 (1..=20000000), "max_steiner": 50000 (0..=10000000), "max_tets": 5000000 (1..=50000000) — the constrained Delaunay tetrahedralization of the welded boundary (every boundary triangle a union of tet faces), refined to the size field with its boundary vertices on the B-rep faces, smoothed and improved (Delaunay refinement, ODT smoothing, Klingner–Shewchuk improvement), with a quality report. Replaces the mesh of each body it meshes (its elements and the nodes only they use; other bodies' meshes stay; the reply's `replaced`, `stale_sets` and `results_cleared` say what went), adds the elements and their nodes (labels after the largest existing ones), tags the elements with the body and each boundary element face with its geometry face, and fails, changing nothing, if a surface is invalid or a mesh does not pass the validity gate. Edge seeds (mesh.seed.edge) divide their edges at the seeded nodes, and the size field grades from them. Reports the totals and, under `bodies`, each body's counts, size, quality report and `seeds` (per seeded edge, the mesh edges along it)"#,
     form: Some(super::forms::TET),
     kind: CommandKind::Model,
     requires: &[Requirement::Geometry],
@@ -284,6 +284,8 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
         meshed.push(mesh_body(s, p, input, &cdt_options, &options, quality, several)?);
     }
 
+    // Replace the bodies' meshes (replace.rs); other bodies and the definitions stay.
+    let cleared = super::replace::clear(&mut s.model, meshed.iter().map(|b| b.name.as_str()));
     let mut bodies = Vec::with_capacity(meshed.len());
     for b in &meshed {
         let (first_node, first_element) = add_tets(&mut s.model, &b.name, &b.face_names, &b.mesh)?;
@@ -316,7 +318,7 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
     let sum = |f: fn(&BodyTets) -> f64| meshed.iter().map(f).sum::<f64>();
     let count = |f: fn(&BodyTets) -> usize| meshed.iter().map(f).sum::<usize>();
     let first = bodies.first();
-    Ok(json!({
+    let reply = json!({
         "kind": meshed.first().map(|b| b.mesh.kind.name()),
         "nodes": count(|b| b.mesh.points.len()),
         "elements": count(|b| b.mesh.elements.len()),
@@ -327,7 +329,8 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
         "boundary_volume": sum(|b| b.mesh.report.boundary_volume),
         "surface_volume": sum(|b| b.surface_volume),
         "bodies": bodies,
-    }))
+    });
+    Ok(cleared.report(s, reply))
 }
 
 /// Add one body's elements after the model's largest labels, tagging them with the body and each
@@ -366,7 +369,7 @@ pub(super) fn add_tets(model: &mut fieldcraft_model::Model, body: &str, face_nam
 pub const PLANAR: CommandSpec = CommandSpec {
     id: "mesh.planar",
     label: "2D Mesh",
-    params: r#"{"size": 1.0, "kind": "quad4|quad8|tri3|tri6" (default quad4), and either "polygon": [[x, y], ...] with optional "holes": [[[x, y], ...], ...] and "name": "Plane" (the body name its tags use), or "body": "Body1", "face": "F2:top", "tolerance": 0.05 (a planar face of an open design, parallel to XY); optional "max_elements": 1000000 (1..=4000000)} — meshes the planar region with 2D elements in the XY plane (a face at z = c is meshed at z = 0) for plane stress, plane strain or axisymmetric sections (x the radius, Y the axis): free quadrilaterals (or constrained Delaunay triangles) of about `size`, mid-side nodes on the boundary for quadratic kinds. Adds nodes and elements after the largest existing labels and tags them: the elements with the face (polygon: face `area` of body `name`), the boundary element edges with edges named after the neighbouring face of the body (polygon: `e1`, `e2`, … side by side, the outer loop then each hole, and vertices `v1`, … at the corners), so sets on those edges carry loads and boundary conditions"#,
+    params: r#"{"size": 1.0, "kind": "quad4|quad8|tri3|tri6" (default quad4), and either "polygon": [[x, y], ...] with optional "holes": [[[x, y], ...], ...] and "name": "Plane" (the body name its tags use), or "body": "Body1", "face": "F2:top", "tolerance": 0.05 (a planar face of an open design, parallel to XY); optional "max_elements": 1000000 (1..=4000000)} — meshes the planar region with 2D elements in the XY plane (a face at z = c is meshed at z = 0) for plane stress, plane strain or axisymmetric sections (x the radius, Y the axis): free quadrilaterals (or constrained Delaunay triangles) of about `size`, mid-side nodes on the boundary for quadratic kinds. Replaces the body's mesh (as mesh.tet.generate), then adds nodes and elements after the largest existing labels and tags them: the elements with the face (polygon: face `area` of body `name`), the boundary element edges with edges named after the neighbouring face of the body (polygon: `e1`, `e2`, … side by side, the outer loop then each hole, and vertices `v1`, … at the corners), so sets on those edges carry loads and boundary conditions"#,
     form: Some(super::forms::PLANAR),
     kind: CommandKind::Model,
     requires: &[],
@@ -459,6 +462,8 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let m = mesh_region(&loops, kind, size, &opts)?;
 
+    // Replace the body's mesh (replace.rs); other bodies and the definitions stay.
+    let cleared = super::replace::clear(&mut s.model, [body.as_str()]);
     let (first_node, first_element) = super::fresh_labels(&s.model, m.nodes.len(), m.elements.len())?;
     for (i, xy) in m.nodes.iter().enumerate() {
         s.model.set_node(first_node + i as u32, [xy[0], xy[1], 0.0])?;
@@ -489,8 +494,8 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
             s.model.tag_node(first_node + node, t)?;
         }
     }
-    let edges: Vec<&String> = tags.keys().filter_map(|id| names.get(id)).collect();
-    Ok(json!({
+    let edges: Vec<String> = tags.keys().filter_map(|id| names.get(id)).cloned().collect();
+    let reply = json!({
         "body": body,
         "face": face,
         "kind": kind.name(),
@@ -499,7 +504,18 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
         "first_node": first_node,
         "first_element": first_element,
         "edges": edges,
-    }))
+    });
+    Ok(cleared.report(s, reply))
+}
+
+/// The body `mesh.planar` fills: `body`, or the polygon's `name` (default `Plane`).
+pub(super) fn planar_body(_: &Session, p: &Value) -> Result<Vec<String>> {
+    let name = match (p.get("polygon"), p.get("body")) {
+        (Some(_), None) => p.get("name").map_or(Some("Plane"), Value::as_str),
+        (None, Some(b)) => b.as_str(),
+        _ => None,
+    };
+    Ok(vec![name.ok_or_else(|| EngineError::Params("give either `polygon` or `body`".into()))?.to_string()])
 }
 
 fn node_add(s: &mut Session, p: &Value) -> Result<Value> {
@@ -797,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn tet_generate_meshes_a_body_with_tags_and_appends() {
+    fn tet_generate_meshes_a_body_with_tags_and_replaces_its_mesh() {
         use std::sync::Arc;
 
         use fieldcraft_geometry::open_design;
@@ -823,11 +839,12 @@ mod tests {
         let q = s.execute("mesh.quality", &json!({})).unwrap();
         assert_eq!(q["valid"].as_u64().unwrap() as usize, elements);
         assert!(q["summary"].as_str().unwrap().starts_with(&format!("{elements} elements, all valid; scaled Jacobian min ")), "{q}");
-        // A second run appends after the existing labels.
+        // A second run replaces the body's mesh (#267).
         let again = s.execute("mesh.tet.generate", &json!({"body": "Body1", "tolerance": 0.5})).unwrap();
-        assert_eq!(again["first_element"].as_u64().unwrap() as usize, elements + 1);
-        assert_eq!(s.model.elements().len(), 2 * elements);
-        assert_eq!(s.journal.len(), 2);
+        assert_eq!(again["replaced"][0]["elements"].as_u64().unwrap() as usize, elements, "{again}");
+        assert_eq!(s.model.elements().len(), elements);
+        // The same mesh again, under the same labels: nothing changed, so no undo step.
+        assert_eq!(s.journal.len(), 1);
 
         let journal = s.journal.len();
         let model = s.model.clone();

@@ -1,0 +1,325 @@
+//! Meshing a body replaces its mesh (#267). Every mesher that fills bodies goes through
+//! [`clear`]: before it adds a body's new elements it removes that body's old elements and the
+//! nodes only they use, so other bodies keep their meshes and two meshes never stack on one
+//! body. The reply's `replaced` says what went; sets that listed the removed labels are named as
+//! `stale_sets` (sets by geometry re-resolve on the new mesh), and results solved on the old
+//! mesh as `results_cleared`. The command is one undo step, so undo brings the old mesh back.
+//!
+//! [`MESHERS`] lists those commands with the bodies each one fills, which the UI reads
+//! ([`replacement`]) to ask before replacing a mesh. Programmatic calls never ask. `mesh.block`
+//! is not one of them: a body is built from several blocks, each call adding one.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use fieldcraft_model::{BodyMesh, ElementKind, Model};
+use serde_json::{Value, json};
+
+use crate::{EngineError, Result, Session};
+
+/// What [`clear`] removed.
+#[derive(Default)]
+pub(super) struct Cleared {
+    /// Per body that had a mesh: its name and the element and node counts removed.
+    bodies: Vec<(String, usize, usize)>,
+    removed: BodyMesh,
+    /// Sets that listed a removed node or element by label.
+    stale_sets: Vec<String>,
+}
+
+/// Remove the meshes of `bodies` from `model` (each body once).
+pub(super) fn clear<'a>(model: &mut Model, bodies: impl IntoIterator<Item = &'a str>) -> Cleared {
+    let mut out = Cleared::default();
+    let mut seen = BTreeSet::new();
+    for body in bodies {
+        if !seen.insert(body) {
+            continue;
+        }
+        let r = model.remove_body_mesh(body);
+        if !r.elements.is_empty() {
+            out.bodies.push((body.to_string(), r.elements.len(), r.nodes.len()));
+            out.removed.elements.extend(r.elements);
+            out.removed.nodes.extend(r.nodes);
+        }
+    }
+    out.stale_sets = model.sets_using(&out.removed);
+    out
+}
+
+impl Cleared {
+    /// Add `replaced`, `stale_sets` and `results_cleared` to a command's reply (an object).
+    pub(super) fn report(self, s: &Session, mut reply: Value) -> Value {
+        if let Some(o) = reply.as_object_mut() {
+            let replaced: Vec<Value> = self.bodies.iter().map(|(b, e, n)| json!({"body": b, "elements": e, "nodes": n})).collect();
+            o.insert("replaced".into(), json!(replaced));
+            if !self.stale_sets.is_empty() {
+                o.insert("stale_sets".into(), json!(self.stale_sets));
+            }
+            let results: Vec<&str> = s.solved_steps().collect();
+            if !results.is_empty() {
+                o.insert("results_cleared".into(), json!(results));
+            }
+        }
+        reply
+    }
+}
+
+/// The bodies a meshing command fills, from its parameters, without meshing anything.
+pub type Targets = fn(&Session, &Value) -> Result<Vec<String>>;
+
+/// Every command that fills bodies with a mesh and replaces theirs, with the bodies it fills.
+pub static MESHERS: &[(&str, Targets)] = &[
+    ("mesh.tet.generate", body_or_all),
+    ("mesh.hex.generate", body_or_all),
+    ("mesh.hex.sweep", body_or_all),
+    ("mesh.hex.mapped", body_or_all),
+    ("mesh.hex.octree", body_or_all),
+    ("mesh.hex.blocks", listed_or_all),
+    ("mesh.cells", listed_or_all),
+    ("mesh.planar", super::mesh::planar_body),
+    ("mesh.mirror", super::mirror::image_names),
+];
+
+/// `body`, the imported `surface`, or every body of the open design.
+fn body_or_all(s: &Session, p: &Value) -> Result<Vec<String>> {
+    match (p.get("body"), p.get("surface")) {
+        (Some(b), None) => Ok(vec![b.as_str().ok_or_else(|| EngineError::param("body", crate::schema::ProblemKind::NotAName))?.to_string()]),
+        (None, Some(_)) => Ok(vec![super::hex::surface(s, p)?.0]),
+        (None, None) => design_bodies(s),
+        _ => Err(EngineError::Params("give `body` or `surface`, not both".into())),
+    }
+}
+
+/// `bodies`, or every body of the open design.
+fn listed_or_all(s: &Session, p: &Value) -> Result<Vec<String>> {
+    match p.get("bodies") {
+        Some(_) => super::req(p, "bodies"),
+        None => design_bodies(s),
+    }
+}
+
+fn design_bodies(s: &Session) -> Result<Vec<String>> {
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    Ok(design.bodies.iter().map(|b| b.name.clone()).collect())
+}
+
+/// What running a meshing command would replace, for a confirmation before it runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Replacement {
+    /// "CrankArm already has a mesh (7,274 hex20). Replace it?"
+    pub question: String,
+    /// What else goes with the old mesh: sets that list its labels, solved results.
+    pub warnings: Vec<String>,
+}
+
+/// What `command` with `params` would replace: `None` when it is not a mesher, its parameters
+/// do not name bodies, or none of its bodies has a mesh.
+pub fn replacement(s: &Session, command: &str, params: &Value) -> Option<Replacement> {
+    let targets = MESHERS.iter().find(|(id, _)| *id == command)?.1;
+    let bodies = targets(s, params).ok()?;
+    let mut meshed = Vec::new();
+    let mut removed = BodyMesh::default();
+    for body in bodies.iter().collect::<BTreeSet<_>>() {
+        let mesh = s.model.body_mesh(body);
+        if mesh.elements.is_empty() {
+            continue;
+        }
+        let mut counts: BTreeMap<ElementKind, usize> = BTreeMap::new();
+        for e in mesh.elements.iter().filter_map(|l| s.model.element(*l)) {
+            *counts.entry(e.kind).or_default() += 1;
+        }
+        let kinds: Vec<String> = ElementKind::ALL.iter().filter_map(|k| counts.get(k).map(|n| format!("{} {}", thousands(*n), k.name()))).collect();
+        meshed.push((body.as_str(), kinds.join(", ")));
+        removed.elements.extend(mesh.elements);
+        removed.nodes.extend(mesh.nodes);
+    }
+    let question = match meshed.as_slice() {
+        [] => return None,
+        [(body, counts)] => format!("{body} already has a mesh ({counts}). Replace it?"),
+        many => {
+            let list: Vec<String> = many.iter().map(|(body, counts)| format!("{body} ({counts})")).collect();
+            format!("{} already have meshes. Replace them?", list.join(", "))
+        }
+    };
+    let mut warnings = Vec::new();
+    let stale = s.model.sets_using(&removed);
+    if !stale.is_empty() {
+        warnings.push(format!("Sets that list its nodes or elements by label ({}) will name labels of the old mesh.", stale.join(", ")));
+    }
+    let results: Vec<&str> = s.solved_steps().collect();
+    if !results.is_empty() {
+        warnings.push(format!("The results of {} will be cleared.", results.join(", ")));
+    }
+    Some(Replacement { question, warnings })
+}
+
+/// `n` with thousands separators: 7274 → "7,274".
+fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use fieldcraft_model::Element;
+
+    use super::*;
+
+    #[test]
+    fn every_mesher_is_a_command() {
+        for (id, _) in MESHERS {
+            assert!(crate::find_command(id).is_some(), "{id}");
+        }
+        assert_eq!(thousands(7274), "7,274");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1_000_000), "1,000,000");
+    }
+
+    /// A 20 × 10 × 10 box split at x = 10 into `Box` (x < 10) and `Box (1)`.
+    fn two_boxes() -> (crate::tests::TempDir, Session) {
+        let commands = json!({"commands": [
+            {"command": "solid.box", "params": {"length": 20, "width": 10, "height": 10, "body_name": "Box"}},
+            {"command": "solid.split_body", "params": {"body": "Box", "plane": {"origin": [10, 0, 0], "normal": [1, 0, 0]}}},
+        ]});
+        let bytes = fieldcraft_geometry::script_design(&commands.to_string()).unwrap();
+        let (dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        (dir, s)
+    }
+
+    /// A body's elements, by label.
+    fn elements_of(s: &Session, body: &str) -> BTreeMap<u32, Element> {
+        s.model.body_elements(body).into_iter().filter_map(|l| Some((l, s.model.element(l)?.clone()))).collect()
+    }
+
+    /// Every mesher in [`MESHERS`], run twice on a body: the second run replaces the first (as
+    /// many elements as a fresh mesh, reported as `replaced`), leaves the other body's mesh as it
+    /// was, names the set that listed the old labels, and one undo brings the first mesh back.
+    #[test]
+    fn every_mesher_replaces_the_mesh_of_its_body_only() {
+        let tet_other = json!({"command": "mesh.tet.generate", "params": {"body": "Box (1)", "size": 5}});
+        let hex_box = json!({"command": "mesh.hex.generate", "params": {"body": "Box", "size": 2.5}});
+        let square = json!([[0, 0], [10, 0], [10, 10], [0, 10]]);
+        let cases: Vec<(&str, Vec<Value>, Value, &str, &str)> = vec![
+            ("mesh.tet.generate", vec![tet_other.clone()], json!({"body": "Box", "size": 4}), "Box", "Box (1)"),
+            ("mesh.hex.generate", vec![tet_other.clone()], json!({"body": "Box", "size": 2.5}), "Box", "Box (1)"),
+            ("mesh.hex.sweep", vec![tet_other.clone()], json!({"body": "Box", "size": 2.5}), "Box", "Box (1)"),
+            ("mesh.hex.mapped", vec![tet_other.clone()], json!({"body": "Box", "size": 2.5}), "Box", "Box (1)"),
+            ("mesh.hex.octree", vec![tet_other.clone()], json!({"body": "Box", "size": 2.5}), "Box", "Box (1)"),
+            ("mesh.hex.blocks", vec![tet_other.clone()], json!({"bodies": ["Box"], "size": 2.5}), "Box", "Box (1)"),
+            ("mesh.cells", vec![tet_other.clone()], json!({"bodies": ["Box"], "size": 2.5, "default": "hex"}), "Box", "Box (1)"),
+            ("mesh.planar", vec![tet_other.clone()], json!({"polygon": square, "size": 2.5, "name": "Box"}), "Box", "Box (1)"),
+            // The image's tets (meshed before) are replaced by the mirrored hexahedra.
+            (
+                "mesh.mirror",
+                vec![hex_box, tet_other],
+                json!({"plane": {"point": [10, 0, 0], "normal": [1, 0, 0]}, "bodies": ["Box"]}),
+                "Box (1)",
+                "Box",
+            ),
+        ];
+        let covered: BTreeSet<&str> = cases.iter().map(|c| c.0).collect();
+        assert_eq!(covered, MESHERS.iter().map(|m| m.0).collect::<BTreeSet<_>>(), "every mesher has a case");
+
+        let (_dir, fresh) = two_boxes();
+        for (id, prep, params, body, other) in cases {
+            let mut s = fresh.clone();
+            for c in &prep {
+                s.execute(c["command"].as_str().unwrap(), &c["params"]).unwrap();
+            }
+            // What the session says it would replace matches what the command replaces.
+            let first = s.execute(id, &params).unwrap();
+            let fresh_count = elements_of(&s, body).len();
+            assert!(fresh_count > 0, "{id}: {first}");
+            let others = elements_of(&s, other);
+            assert!(!others.is_empty(), "{id}");
+            let some: Vec<u32> = elements_of(&s, body).keys().take(3).copied().collect();
+            s.execute("model.set.create", &json!({"name": "by_label", "elements": some})).unwrap();
+            let asked = replacement(&s, id, &params).unwrap_or_else(|| panic!("{id}: no question"));
+            assert!(asked.question.starts_with(&format!("{body} already has a mesh (")), "{id}: {asked:?}");
+            assert!(asked.warnings.iter().any(|w| w.contains("by_label")), "{id}: {asked:?}");
+
+            let before = s.model.clone();
+            let second = s.execute(id, &params).unwrap();
+            assert_eq!(elements_of(&s, body).len(), fresh_count, "{id}: {second}");
+            assert_eq!(elements_of(&s, other), others, "{id}: the other body's mesh is untouched");
+            assert_eq!(
+                second["replaced"],
+                json!([{"body": body, "elements": fresh_count, "nodes": second["replaced"][0]["nodes"]}]),
+                "{id}: {second}"
+            );
+            assert_eq!(second["stale_sets"], json!(["by_label"]), "{id}: {second}");
+            // No node is left that no element uses.
+            let used: BTreeSet<u32> = s.model.elements().values().flat_map(|e| e.nodes.iter().copied()).collect();
+            assert!(s.model.nodes().keys().all(|n| used.contains(n)), "{id}: orphan nodes");
+
+            // A mesher is deterministic: the same mesh again is the same model, and no undo step.
+            if s.model != before {
+                s.execute("edit.undo", &json!({})).unwrap();
+                assert_eq!(s.model, before, "{id}: undo restores the first mesh");
+            }
+        }
+    }
+
+    #[test]
+    fn tets_over_hexahedra_leave_only_tets() {
+        let (_dir, mut s) = two_boxes();
+        s.execute("mesh.hex.generate", &json!({"size": 2.5})).unwrap();
+        let hexes = elements_of(&s, "Box").len();
+        let other = elements_of(&s, "Box (1)");
+        let r = s.execute("mesh.tet.generate", &json!({"body": "Box", "size": 4})).unwrap();
+        assert_eq!(r["replaced"][0]["elements"], hexes, "{r}");
+        assert!(elements_of(&s, "Box").values().all(|e| e.kind == ElementKind::Tet4));
+        assert_eq!(elements_of(&s, "Box (1)"), other);
+        let tets = s.model.clone();
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(elements_of(&s, "Box").len(), hexes, "one undo brings the hexahedra back");
+        assert!(elements_of(&s, "Box").values().all(|e| e.kind == ElementKind::Hex8));
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.model, tets);
+        // Meshing every body replaces both.
+        let r = s.execute("mesh.tet.generate", &json!({"size": 4})).unwrap();
+        assert_eq!(r["replaced"].as_array().map(Vec::len), Some(2), "{r}");
+        assert!(s.model.elements().values().all(|e| e.kind == ElementKind::Tet4));
+        // A body without a mesh asks nothing.
+        let (_dir2, s2) = two_boxes();
+        assert_eq!(replacement(&s2, "mesh.tet.generate", &json!({"body": "Box"})), None);
+        assert_eq!(replacement(&s, "mesh.block", &json!({"body": "Box"})), None, "not a mesher");
+    }
+
+    #[test]
+    fn results_solved_on_the_old_mesh_are_cleared_and_undo_brings_them_back() {
+        let mut s = Session::default();
+        let corners = json!([[0, 0, 0], [10, 0, 0], [10, 1, 0], [0, 1, 0], [0, 0, 1], [10, 0, 1], [10, 1, 1], [0, 1, 1]]);
+        s.run_script(&json!([
+            {"command": "mesh.block", "params": {"body": "Bar", "kind": "hex8", "corners": corners, "divisions": [10, 1, 1], "faces": {"6": "root", "4": "tip"}}},
+            {"command": "model.set.create", "params": {"name": "all", "geometry": [{"body": "Bar"}]}},
+            {"command": "model.set.create", "params": {"name": "root", "geometry": [{"body": "Bar", "face": "root"}]}},
+            {"command": "model.set.create", "params": {"name": "tip", "geometry": [{"body": "Bar", "face": "tip"}]}},
+            {"command": "model.material.create", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.0}}},
+            {"command": "model.section.create", "params": {"name": "all", "set": "all", "material": "Mat", "kind": {"type": "solid"}}},
+            {"command": "model.boundary_condition.create", "params": {"name": "Clamp", "type": "fixed", "target": {"set": "root"}}},
+            {"command": "model.load.create", "params": {"name": "Pull", "type": "force", "target": {"set": "tip"}, "vector": [1, 0, 0]}},
+            {"command": "model.step.create", "params": {"name": "Load", "procedure": {"type": "static"}, "boundary_conditions": ["Clamp"], "loads": ["Pull"]}}
+        ]))
+        .unwrap();
+        s.execute("solve.static", &json!({"step": "Load"})).unwrap();
+        assert!(s.result("Load").is_some());
+        let asked = replacement(&s, "mesh.planar", &json!({"polygon": [[0, 0], [10, 0], [10, 1], [0, 1]], "size": 1, "name": "Bar"})).unwrap();
+        assert_eq!(asked.question, "Bar already has a mesh (10 hex8). Replace it?");
+        assert!(asked.warnings.iter().any(|w| w.contains("results of Load")), "{asked:?}");
+        let r = s.execute("mesh.planar", &json!({"polygon": [[0, 0], [10, 0], [10, 1], [0, 1]], "size": 1, "name": "Bar"})).unwrap();
+        assert_eq!(r["results_cleared"], json!(["Load"]), "{r}");
+        assert!(s.result("Load").is_none());
+        assert!(s.model.elements().values().all(|e| e.kind.dimension() == 2));
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert!(s.result("Load").is_some(), "undo brings the solved state back");
+    }
+}

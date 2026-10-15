@@ -17,6 +17,7 @@ pub use mesh::analytic_surfaces;
 mod mirror;
 mod model;
 pub(crate) mod octree;
+pub mod replace;
 mod results;
 pub(crate) mod seeds;
 pub(crate) mod solve;

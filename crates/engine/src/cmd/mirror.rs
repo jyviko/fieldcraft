@@ -21,7 +21,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const MIRROR: CommandSpec = CommandSpec {
     id: "mesh.mirror",
     label: "Mirror Mesh",
-    params: r#"{"plane": "Sym" (a datum plane) or {"point": [x, y, z], "normal": [nx, ny, nz]}, "bodies": ["Part/a"] (default: every body the mesh is tagged with), "as": {"Part/a": "Part/b"} (optional: the body each image is; default the design's body at the reflected place, else "<body>/mirror")} — adds the reflection of the bodies' elements (tet4, tet10, wedge6, hex8, hex20) across the plane: each copy right-handed (its nodes in reflected order), the copies of the nodes on the plane merged with them so the mesh is conforming there, geometry tags carried to the image (its body, and on it the faces the reflected faces lie on, so sets by face name select both halves). Reports the elements and nodes added, the nodes shared on the plane and each image's body"#,
+    params: r#"{"plane": "Sym" (a datum plane) or {"point": [x, y, z], "normal": [nx, ny, nz]}, "bodies": ["Part/a"] (default: every body the mesh is tagged with), "as": {"Part/a": "Part/b"} (optional: the body each image is; default the design's body at the reflected place, else "<body>/mirror")} — replaces each image body's mesh (as mesh.tet.generate) with the reflection of the bodies' elements (tet4, tet10, wedge6, hex8, hex20) across the plane: each copy right-handed (its nodes in reflected order), the copies of the nodes on the plane merged with them so the mesh is conforming there, geometry tags carried to the image (its body, and on it the faces the reflected faces lie on, so sets by face name select both halves). Reports the elements and nodes added, the nodes shared on the plane and each image's body"#,
     form: Some(super::forms::MIRROR),
     kind: CommandKind::Model,
     requires: &[Requirement::Mesh],
@@ -78,7 +78,18 @@ fn image_body<'a>(bodies: &'a [Shape], source: &Shape, point: [f64; 3], n: [f64;
     Ok(None)
 }
 
-fn mirror_mesh(s: &mut Session, p: &Value) -> Result<Value> {
+/// What `mesh.mirror` reflects, across which plane, into which bodies.
+struct Plan<'d> {
+    point: [f64; 3],
+    /// The plane's unit normal.
+    n: [f64; 3],
+    /// The elements reflected.
+    region: BTreeSet<u32>,
+    /// Each mirrored body's image: its name and, when the design has it, its shape.
+    image: BTreeMap<String, (String, Option<&'d Shape>)>,
+}
+
+fn plan<'d>(s: &Session, design: Option<&'d fieldcraft_geometry::Design>, p: &Value) -> Result<Plan<'d>> {
     let (point, normal) = plane(s, p)?;
     let len = normal.iter().map(|x| x * x).sum::<f64>().sqrt();
     if !(len > 1e-12 && len.is_finite() && point.iter().all(|x| x.is_finite())) {
@@ -115,13 +126,12 @@ fn mirror_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         c.elements().iter().filter(|(_, t)| t.region.and_then(|r| tagged.get(&r)).is_some_and(|b| bodies.contains(b))).map(|(e, _)| *e).collect();
 
     // The image of each body: named, found in the design, or its own `/mirror`.
-    let design = s.design.clone();
     let mut image: BTreeMap<String, (String, Option<&Shape>)> = BTreeMap::new();
     for b in &bodies {
-        let source = design.as_deref().and_then(|d| d.body(b));
+        let source = design.and_then(|d| d.body(b));
         let target = match named.get(b) {
-            Some(t) => (t.clone(), design.as_deref().and_then(|d| d.body(t))),
-            None => match (design.as_deref(), source) {
+            Some(t) => (t.clone(), design.and_then(|d| d.body(t))),
+            None => match (design, source) {
                 (Some(d), Some(src)) => match image_body(&d.bodies, src, point, n)? {
                     Some(t) => (t.name.clone(), Some(t)),
                     None => (format!("{b}/mirror"), None),
@@ -134,6 +144,17 @@ fn mirror_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         }
         image.insert(b.clone(), target);
     }
+    Ok(Plan { point, n, region, image })
+}
+
+/// The bodies `mesh.mirror` fills: the images.
+pub(super) fn image_names(s: &Session, p: &Value) -> Result<Vec<String>> {
+    Ok(plan(s, s.design.as_deref(), p)?.image.into_values().map(|(name, _)| name).collect())
+}
+
+fn mirror_mesh(s: &mut Session, p: &Value) -> Result<Value> {
+    let design = s.design.clone();
+    let Plan { point, n, region, image } = plan(s, design.as_deref(), p)?;
 
     let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
     for node in s.model.nodes().values() {
@@ -143,20 +164,22 @@ fn mirror_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let diagonal = (0..3).map(|k| (hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt().max(1e-9);
-    let before = s.model.clone();
-    let mut model = s.model.clone();
-    let r = mirror(&mut model, &region, point, n, ON_PLANE * diagonal).map_err(|e| EngineError::Params(e.to_string()))?;
-    tag_image(&mut model, &before, &r, &image, point, n, diagonal)?;
+    // An image body's earlier mesh is replaced (replace.rs).
+    let model = &mut s.model;
+    let cleared = super::replace::clear(model, image.values().map(|(name, _)| name.as_str()));
+    let before = model.clone();
+    let r = mirror(model, &region, point, n, ON_PLANE * diagonal).map_err(|e| EngineError::Params(e.to_string()))?;
+    tag_image(model, &before, &r, &image, point, n, diagonal)?;
     let added_nodes = model.nodes().len() - before.nodes().len();
-    s.model = model;
     let images: Vec<Value> = image.iter().map(|(b, (t, shape))| json!({"body": b, "image": t, "in_design": shape.is_some()})).collect();
-    Ok(json!({
+    let reply = json!({
         "elements": r.elements.len(),
         "nodes": added_nodes,
         "on_plane": r.on_plane,
         "images": images,
         "total": {"nodes": s.model.nodes().len(), "elements": s.model.elements().len()},
-    }))
+    });
+    Ok(cleared.report(s, reply))
 }
 
 /// Tag the image: each copy with its image body, its faces with the faces of that body they lie

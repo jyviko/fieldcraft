@@ -30,7 +30,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const CELLS: CommandSpec = CommandSpec {
     id: "mesh.cells",
     label: "Partitioned Mesh",
-    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the mesh with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, a set on each side and a tie between them are made (`tie_<partition>_<k>`, sets `<tie>_main` and `<tie>_secondary`: the side with fewer nodes is the main surface), replacing ties of those names from an earlier run. Reports each cell's method (and why auto fell back to tet), and each interface: `merged` with the nodes merged, or `tied`"#,
+    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, a set on each side and a tie between them are made (`tie_<partition>_<k>`, sets `<tie>_main` and `<tie>_secondary`: the side with fewer nodes is the main surface), replacing ties of those names from an earlier run. Reports each cell's method (and why auto fell back to tet), and each interface: `merged` with the nodes merged, or `tied`"#,
     form: Some(super::forms::CELLS),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -179,17 +179,19 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
         meshed.push((cell, info));
     }
 
-    // Replace the mesh with the cells' meshes, each after the labels before it.
-    let mut model = s.model.without_mesh();
+    // Replace the cells' meshes (replace.rs), each after the labels before it; other bodies
+    // and the definitions stay.
+    let model = &mut s.model;
+    let cleared = super::replace::clear(model, names.iter().map(String::as_str));
     let mut report = Vec::with_capacity(meshed.len());
     for (cell, mut info) in meshed {
         let (kind, elements, nodes) = match &cell {
             Meshed::Hex(b, m) => {
-                add_hex(&mut model, b, m)?;
+                add_hex(model, b, m)?;
                 (m.kind, m.element_count(), m.nodes.len())
             }
             Meshed::Tet(t) => {
-                add_tets(&mut model, &t.name, &t.face_names, &t.mesh)?;
+                add_tets(model, &t.name, &t.face_names, &t.mesh)?;
                 (t.mesh.kind, t.mesh.elements.len(), t.mesh.points.len())
             }
         };
@@ -200,10 +202,9 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
         }
         report.push(info);
     }
-    let interfaces = join(&mut model, &names, COINCIDENT * diagonal)?;
+    let interfaces = join(model, &names, COINCIDENT * diagonal)?;
     let (nodes, elements) = (model.nodes().len(), model.elements().len());
-    s.model = model;
-    Ok(json!({"cells": report, "interfaces": interfaces, "nodes": nodes, "elements": elements, "size": size}))
+    Ok(cleared.report(s, json!({"cells": report, "interfaces": interfaces, "nodes": nodes, "elements": elements, "size": size})))
 }
 
 /// One side of an interface: a cell's element faces on one side of a partition.

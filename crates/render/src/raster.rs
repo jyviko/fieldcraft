@@ -76,6 +76,20 @@ impl Scene {
         self.labels.extend(other.labels);
         self.on_top.extend(other.on_top);
     }
+
+    /// Line widths and point sizes (given in points) in pixels at `pixels_per_point`, as the GPU
+    /// viewport draws them: a CPU render at device resolution then matches the window.
+    pub fn scale_marks(&mut self, pixels_per_point: f64) {
+        if !(pixels_per_point.is_finite() && pixels_per_point > 0.0) {
+            return;
+        }
+        for l in self.lines.iter_mut().chain(self.on_top.iter_mut()) {
+            l.width *= pixels_per_point;
+        }
+        for p in &mut self.points {
+            p.size *= pixels_per_point;
+        }
+    }
 }
 
 /// The lit colour of a surface with normal `n` seen along `view_dir` (toward the eye). The GPU

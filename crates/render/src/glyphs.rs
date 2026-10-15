@@ -198,6 +198,15 @@ pub fn symbol_unit(length_per_pixel: f64, size: f64) -> Option<f64> {
     (unit.is_finite() && unit > 0.0).then_some(unit)
 }
 
+/// The symbol unit for symbols `size_pt` points across in a view `height_px` pixels high at
+/// `pixels_per_point` (1 for a headless image, the display's scale for the desktop), seen with
+/// `cam`: the one helper the desktop, `ui.render` and headless renders share, so a render at
+/// device resolution matches the window. A scale that is not a positive number counts as 1.
+pub fn unit_for(cam: &crate::Camera, height_px: f64, size_pt: f64, pixels_per_point: f64) -> Option<f64> {
+    let ppp = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
+    symbol_unit(cam.length_per_pixel(height_px)? * ppp, size_pt)
+}
+
 /// A symbol unit rounded to a quarter of a doubling (within 9 %), and the step it is: a viewer
 /// rebuilds its symbols only when zooming changes the step.
 pub fn quantise_unit(unit: f64) -> Option<(i32, f64)> {
@@ -1414,6 +1423,11 @@ mod tests {
         assert_eq!(symbol_unit(1.0, 1e9), Some(SIZE_RANGE.1));
         assert_eq!(symbol_unit(1.0, f64::NAN), Some(DEFAULT_SIZE));
         assert_eq!(symbol_unit(f64::INFINITY, 10.0), None);
+        // A view at twice the pixels per point has the same unit as at one (#285).
+        let cam = crate::Camera::default();
+        assert_eq!(unit_for(&cam, 1600.0, DEFAULT_SIZE, 2.0), unit_for(&cam, 800.0, DEFAULT_SIZE, 1.0));
+        assert_eq!(unit_for(&cam, 800.0, DEFAULT_SIZE, f64::NAN), unit_for(&cam, 800.0, DEFAULT_SIZE, 1.0));
+        assert_eq!(unit_for(&cam, 0.0, DEFAULT_SIZE, 1.0), None);
         assert_eq!(Camera::default().length_per_pixel(0.0), None);
         // Units round to a quarter of a doubling.
         let (k, q) = quantise_unit(1.1).unwrap();

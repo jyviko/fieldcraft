@@ -266,7 +266,7 @@ pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette
     let mut pic = picture(s, p);
     let mut cam = Camera::default();
     let aspect = w as f64 / h.max(1) as f64;
-    let unit = |cam: &Camera| cam.length_per_pixel(h as f64).and_then(|l| glyphs::symbol_unit(l, glyphs::DEFAULT_SIZE)).unwrap_or(f64::NAN);
+    let unit = |cam: &Camera| glyphs::unit_for(cam, h as f64, glyphs::DEFAULT_SIZE, 1.0).unwrap_or(f64::NAN);
     // Framed on the model, then again with its symbols at that camera's size, which reach a
     // little beyond it.
     cam.orient(&Orientation { distance: None, ..*at });

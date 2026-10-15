@@ -600,12 +600,25 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 (Ok(w), Ok(h)) => (w, h),
                 (Err(e), _) | (_, Err(e)) => return err(e),
             };
-            let png = match app.render_png(w, h) {
+            // Sizes on screen are in points: at the window's pixels per point unless given, so a
+            // render at device resolution matches the window (#285).
+            let scale =
+                match p.get("scale") {
+                    None | Some(Value::Null) => Ok(window_size(ctx).scale),
+                    Some(v) => v.as_f64().map(|x| x as f32).filter(|x| crate::capture::SCALE_RANGE.contains(x)).ok_or_else(|| {
+                        format!("`scale` must be from {} to {}", crate::capture::SCALE_RANGE.start(), crate::capture::SCALE_RANGE.end())
+                    }),
+                };
+            let scale = match scale {
+                Ok(s) => s,
+                Err(e) => return err(e),
+            };
+            let png = match app.render_png(w, h, f64::from(scale)) {
                 Ok(png) => png,
                 Err(e) => return err(e),
             };
             match std::fs::write(path, &png) {
-                Ok(()) => ok(json!({"path": path, "width": w, "height": h, "bytes": png.len()})),
+                Ok(()) => ok(json!({"path": path, "width": w, "height": h, "scale": scale, "bytes": png.len()})),
                 Err(e) => err(format!("{path}: {e}")),
             }
         }

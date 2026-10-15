@@ -1109,18 +1109,18 @@ impl ModelApp {
     /// The setup's symbols for the viewport as drawn last frame (its height in points).
     pub fn symbols(&mut self) -> (u64, &Scene) {
         let height = self.viewport.rect.map_or(DEFAULT_VIEW_HEIGHT, |r| f64::from(r.height()));
-        self.symbols_for(height)
+        self.symbols_for(height, 1.0)
     }
 
-    /// The setup's symbols at the size setting on screen, for a view `height` points (or
-    /// pixels) high with the current camera: a layer of their own, rebuilt when the model, what
+    /// The setup's symbols at the size setting on screen (in points), for a view `height` pixels
+    /// high at `pixels_per_point` ([`glyphs::unit_for`]) with the current camera: a layer of their own, rebuilt when the model, what
     /// is shown, the plot, the highlighted definition or the size changes, and while zooming
     /// only when the symbol unit moves to another quarter of a doubling (the mesh's scene is
     /// never rebuilt for it). Their nodes follow the drawn shape (a results plot's deformed one).
-    pub fn symbols_for(&mut self, height: f64) -> (u64, &Scene) {
+    pub fn symbols_for(&mut self, height: f64, pixels_per_point: f64) -> (u64, &Scene) {
         self.display();
         self.plot();
-        let unit = self.cam.length_per_pixel(height).and_then(|l| glyphs::symbol_unit(l, self.ui.symbol_size)).and_then(glyphs::quantise_unit);
+        let unit = glyphs::unit_for(&self.cam, height, self.ui.symbol_size, pixels_per_point).and_then(glyphs::quantise_unit);
         let mut h = std::hash::DefaultHasher::new();
         let plot = self.plot.1.as_ref().map(|p| Arc::as_ptr(p) as usize);
         let show = self.ui.show();
@@ -1170,13 +1170,21 @@ impl ModelApp {
     }
 
     /// A CPU render of the viewport's scene with the current camera and the selection, as PNG
-    /// bytes.
-    pub fn render_png(&mut self, w: usize, h: usize) -> Result<Vec<u8>, fieldcraft_render::RenderError> {
+    /// bytes, `w` × `h` pixels at `pixels_per_point`: symbols, lines and nodes are as large as
+    /// in a window of that scale (#285).
+    pub fn render_png(&mut self, w: usize, h: usize, pixels_per_point: f64) -> Result<Vec<u8>, fieldcraft_render::RenderError> {
         let cam = self.cam;
         let (_, overlay) = self.overlay();
-        self.symbols_for(h as f64);
+        self.symbols_for(h as f64, pixels_per_point);
         self.scene();
-        fieldcraft_render::render_layers_png(&self.scene.1, &[&self.symbols.1, &overlay], &cam, w, h)
+        if pixels_per_point == 1.0 {
+            return fieldcraft_render::render_layers_png(&self.scene.1, &[&self.symbols.1, &overlay], &cam, w, h);
+        }
+        let (mut scene, mut symbols, mut overlay) = (self.scene.1.clone(), self.symbols.1.clone(), (*overlay).clone());
+        for s in [&mut scene, &mut symbols, &mut overlay] {
+            s.scale_marks(pixels_per_point);
+        }
+        fieldcraft_render::render_layers_png(&scene, &[&symbols, &overlay], &cam, w, h)
     }
 
     /// The geometry tags behind the drawn mesh, read again when the model changed.
@@ -2217,7 +2225,7 @@ mod tests {
         // Framed when the viewport first draws.
         draw(&mut app, &egui::Context::default(), 1280.0, 800.0);
         assert!(app.framed(), "{:?}", app.cam);
-        let png = app.render_png(64, 48).unwrap();
+        let png = app.render_png(64, 48, 1.0).unwrap();
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
     }
 
@@ -2297,7 +2305,7 @@ mod tests {
         // length (a symbol unit) long.
         let measure = |app: &mut ModelApp| {
             let cam = app.cam;
-            let lines = app.symbols_for(h).1.lines.clone();
+            let lines = app.symbols_for(h, 1.0).1.lines.clone();
             let t = theme::Tokens::get(app.ui.dark);
             let at = |p: Vec3| cam.to_screen(p, 800.0, h, 1e6).unwrap();
             lines
@@ -2310,14 +2318,14 @@ mod tests {
                 .fold(0.0, f64::max)
         };
         let scene = app.scene_key();
-        let (symbols, _) = app.symbols_for(h);
+        let (symbols, _) = app.symbols_for(h, 1.0);
         let mut sizes = Vec::new();
         for distance in [40.0, 150.0, 900.0, 5000.0] {
             app.cam.distance = distance;
             sizes.push(measure(&mut app));
         }
         assert_eq!(app.scene_key(), scene, "the camera is not in the scene's key");
-        assert_ne!(app.symbols_for(h).0, symbols, "zooming resizes the symbols");
+        assert_ne!(app.symbols_for(h, 1.0).0, symbols, "zooming resizes the symbols");
         let (lo, hi) = sizes.iter().fold((f64::MAX, 0.0f64), |(lo, hi), s| (lo.min(*s), hi.max(*s)));
         assert!(lo > 10.0 && hi / lo < 1.2, "{sizes:?}");
         // The size setting scales them.

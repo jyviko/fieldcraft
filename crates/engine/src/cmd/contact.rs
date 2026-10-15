@@ -34,7 +34,7 @@ fn contact(p: &Value, surfaces: ContactSurfaces) -> Result<Contact> {
 
 /// A required name-valued parameter.
 fn text<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
-    p.get(key).and_then(Value::as_str).ok_or_else(|| EngineError::Params(format!("`{key}` must be a set name")))
+    p.get(key).and_then(Value::as_str).ok_or_else(|| EngineError::param(key, "must be a set name"))
 }
 
 pub const PAIR: CommandSpec = CommandSpec {

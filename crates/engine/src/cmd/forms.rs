@@ -1029,7 +1029,11 @@ mod tests {
                     fill_required(&s, form, &mut p);
                 }
                 let missing: Vec<String> = problems(form, &p).into_iter().filter(|p| p.message == "required").map(|p| p.path).collect();
-                match s.execute(c.id, &p) {
+                let r = s.execute(c.id, &p).map_err(|e| match e {
+                    EngineError::Param { .. } => EngineError::Params(e.to_string()),
+                    e => e,
+                });
+                match r {
                     // State, not parameters: the meshers' default is the open design's bodies, the
                     // bar has no explicit step; activation and probes need one of several fields.
                     Err(EngineError::Params(e)) if STATE.iter().any(|m| e.contains(m)) => {}

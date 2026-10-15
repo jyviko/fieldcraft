@@ -38,7 +38,7 @@ struct ElementEdge {
 /// An optional list parameter of at most [`MAX_ELEMENTS`] entries.
 fn list<'a, T: serde::Deserialize<'a>>(p: &'a Value, key: &str) -> Result<Vec<T>> {
     if p.get(key).and_then(Value::as_array).is_some_and(|a| a.len() > MAX_ELEMENTS) {
-        return Err(EngineError::Params(format!("`{key}` must be a list of at most {MAX_ELEMENTS} entries")));
+        return Err(EngineError::param(key, format!("must be a list of at most {MAX_ELEMENTS} entries")));
     }
     Ok(opt(p, key)?.unwrap_or_default())
 }

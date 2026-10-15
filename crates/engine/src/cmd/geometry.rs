@@ -141,14 +141,14 @@ fn bodies(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 fn body<'a>(s: &'a Session, p: &Value) -> Result<&'a Shape> {
-    let name = p.get("body").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`body` must be a body name".into()))?;
+    let name = p.get("body").and_then(Value::as_str).ok_or_else(|| EngineError::param("body", "must be a body name"))?;
     s.design.as_deref().and_then(|d| d.body(name)).ok_or_else(|| EngineError::Params(format!("no body `{name}` (open a design first)")))
 }
 
 /// The body named by `body`, tessellated within `tolerance`.
 pub(crate) fn body_mesh<'a>(s: &'a Session, p: &Value) -> Result<(&'a Shape, SurfaceMesh)> {
     let shape = body(s, p)?;
-    let tolerance = p.get("tolerance").and_then(Value::as_f64).ok_or_else(|| EngineError::Params("`tolerance` must be a number (mm)".into()))?;
+    let tolerance = p.get("tolerance").and_then(Value::as_f64).ok_or_else(|| EngineError::param("tolerance", "must be a number (mm)"))?;
     Ok((shape, shape.tessellate(tolerance)?))
 }
 

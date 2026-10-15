@@ -126,9 +126,9 @@ pub(super) fn optional_count(p: &Value, key: &str, default: u64, range: std::ops
         Some(v) => v
             .as_u64()
             .filter(|n| range.contains(n))
-            .ok_or_else(|| EngineError::Params(format!("`{key}` must be a whole number in {}..={}", range.start(), range.end())))?,
+            .ok_or_else(|| EngineError::param(key, format!("must be a whole number in {}..={}", range.start(), range.end())))?,
     };
-    usize::try_from(v).map_err(|_| EngineError::Params(format!("`{key}` is too large")))
+    usize::try_from(v).map_err(|_| EngineError::param(key, "is too large"))
 }
 
 /// The boundary options of `mesh.surface.check`, `mesh.tet.generate` and the hex meshers.
@@ -144,7 +144,7 @@ pub(super) fn surface_options(p: &Value, mesh: &SurfaceMesh) -> Result<SurfaceOp
 /// An optional number in `range`.
 fn number_in(p: &Value, key: &str, default: f64, range: std::ops::RangeInclusive<f64>) -> Result<f64> {
     let v = optional_number(p, key, default)?;
-    if range.contains(&v) { Ok(v) } else { Err(EngineError::Params(format!("`{key}` must be a number in {}..={}", range.start(), range.end()))) }
+    if range.contains(&v) { Ok(v) } else { Err(EngineError::param(key, format!("must be a number in {}..={}", range.start(), range.end()))) }
 }
 
 /// The quality options of `mesh.tet.generate`, and whether the quality stage runs at all.
@@ -155,7 +155,7 @@ pub(super) fn quality_options(p: &Value, max_tets: u64) -> Result<(QualityOption
         Some(v) => Some(
             v.as_f64()
                 .filter(|h| *h > 0.0 && h.is_finite() && *h <= fieldcraft_model::MAX_COORD)
-                .ok_or_else(|| EngineError::Params("`size` must be a positive number (mm)".into()))?,
+                .ok_or_else(|| EngineError::param("size", "must be a positive number (mm)"))?,
         ),
     };
     let order = match p.get("order") {
@@ -163,7 +163,7 @@ pub(super) fn quality_options(p: &Value, max_tets: u64) -> Result<(QualityOption
         Some(v) => match v.as_str() {
             Some("linear") => Order::Linear,
             Some("quadratic") => Order::Quadratic,
-            _ => return Err(EngineError::Params("`order` must be \"linear\" or \"quadratic\"".into())),
+            _ => return Err(EngineError::param("order", "must be \"linear\" or \"quadratic\"")),
         },
     };
     let target = number_in(p, "quality_target", 40.0, 5.0..=60.0)?;
@@ -389,14 +389,14 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
         .get("size")
         .and_then(Value::as_f64)
         .filter(|v| *v > 0.0 && v.is_finite())
-        .ok_or_else(|| EngineError::Params("`size` must be a positive number (the element size)".into()))?;
+        .ok_or_else(|| EngineError::param("size", "must be a positive number (the element size)"))?;
     let kind = match p.get("kind") {
         None => ElementKind::Quad4,
         Some(k) => k
             .as_str()
             .and_then(ElementKind::from_name)
             .filter(|k| k.dimension() == 2)
-            .ok_or_else(|| EngineError::Params("`kind` must be quad4, quad8, tri3 or tri6".into()))?,
+            .ok_or_else(|| EngineError::param("kind", "must be quad4, quad8, tri3 or tri6"))?,
     };
     let opts = fieldcraft_mesh::quad::QuadOptions {
         max_elements: optional_count(p, "max_elements", 1_000_000, 1..=PLANAR_MAX_ELEMENTS)?,
@@ -418,7 +418,7 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let name = match p.get("name") {
                 None => "Plane".to_string(),
-                Some(n) => n.as_str().map(str::to_string).ok_or_else(|| EngineError::Params("`name` must be a body name".into()))?,
+                Some(n) => n.as_str().map(str::to_string).ok_or_else(|| EngineError::param("name", "must be a body name"))?,
             };
             GeometryRef::body(name.clone())?;
             let mut id = 0u32;
@@ -438,7 +438,7 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
             (loops, name, "area".to_string(), names)
         }
         (None, Some(_)) => {
-            let face_name = p.get("face").and_then(Value::as_str).ok_or_else(|| EngineError::Params("`face` must be a face name".into()))?;
+            let face_name = p.get("face").and_then(Value::as_str).ok_or_else(|| EngineError::param("face", "must be a face name"))?;
             let (shape, mesh) = super::geometry::body_mesh(s, p)?;
             let face = shape.face_index(face_name).ok_or_else(|| EngineError::Params(format!("body `{}` has no face `{face_name}`", shape.name)))?;
             let b = face_boundary(&mesh.positions, &mesh.triangles, &mesh.tri_face, face, mesh.weld_distance)?;
@@ -528,7 +528,7 @@ fn number(v: f64) -> Value {
 fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
     let bins = match p.get("bins") {
         None => 10,
-        Some(v) => v.as_u64().and_then(|b| usize::try_from(b).ok()).ok_or_else(|| EngineError::Params("`bins` must be a whole number".into()))?,
+        Some(v) => v.as_u64().and_then(|b| usize::try_from(b).ok()).ok_or_else(|| EngineError::param("bins", "must be a whole number"))?,
     };
     let selection = match p.get("elements") {
         None => None,

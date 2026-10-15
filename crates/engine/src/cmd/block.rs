@@ -109,7 +109,7 @@ fn block_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let region = match (planar, &p.face) {
         (true, face) => GeometryRef::face(p.body.clone(), face.clone().unwrap_or_else(|| "area".into()))?,
         (false, None) => GeometryRef::body(p.body.clone())?,
-        (false, Some(_)) => return Err(EngineError::Params("`face` names the region of 2D elements; a solid block fills its body".into())),
+        (false, Some(_)) => return Err(EngineError::param("face", "names the region of 2D elements; a solid block fills its body")),
     };
     if planar && !p.faces.is_empty() {
         return Err(EngineError::Params("a 2D patch has no faces to name: name its edges".into()));

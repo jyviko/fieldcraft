@@ -41,6 +41,11 @@ pub enum EngineError {
     UnknownCommand(String),
     #[error("{0}")]
     Params(String),
+    /// One parameter is missing or wrong: its key (a JSON path, `elastic/young`) and what is
+    /// wrong with it. The message names the key (agents need it); a form shows the problem
+    /// beside the field, by its label.
+    #[error("`{key}` {problem}")]
+    Param { key: String, problem: String },
     #[error(transparent)]
     Model(#[from] fieldcraft_model::Error),
     #[error(transparent)]
@@ -63,6 +68,13 @@ pub enum EngineError {
     /// A command panicked; the model is unchanged.
     #[error("internal error in {command}: {message}")]
     Internal { command: String, message: String },
+}
+
+impl EngineError {
+    /// A problem with parameter `key`.
+    pub fn param(key: impl Into<String>, problem: impl Into<String>) -> Self {
+        Self::Param { key: key.into(), problem: problem.into() }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;

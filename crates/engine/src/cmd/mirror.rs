@@ -43,7 +43,7 @@ fn plane(s: &Session, p: &Value) -> Result<([f64; 3], [f64; 3])> {
             .and_then(|d| d.plane())
             .ok_or_else(|| EngineError::Params(format!("no datum plane `{}`", name.chars().take(64).collect::<String>()))),
         Some(v @ Value::Object(_)) => Ok((super::xyz(v, "point")?, super::xyz(v, "normal")?)),
-        _ => Err(EngineError::Params("`plane` must be a datum plane's name or {\"point\", \"normal\"}".into())),
+        _ => Err(EngineError::param("plane", "must be a datum plane's name or {\"point\", \"normal\"}")),
     }
 }
 

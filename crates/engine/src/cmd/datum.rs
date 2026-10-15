@@ -126,7 +126,7 @@ fn plane_datum(by: PlaneBy) -> Result<Datum> {
     Ok(match by {
         PlaneBy::Offset { plane, offset } => {
             if !offset.is_finite() {
-                return Err(EngineError::Params("`offset` must be a finite number".into()));
+                return Err(EngineError::param("offset", "must be a finite number"));
             }
             let normal = match plane {
                 Principal::Yz => [1.0, 0.0, 0.0],

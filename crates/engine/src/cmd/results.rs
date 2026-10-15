@@ -173,7 +173,7 @@ fn deformed(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn contour(s: &mut Session, p: &Value) -> Result<Value> {
     let step = step_for(s, p, Want::Any)?;
-    let name = opt::<String>(p, "field")?.ok_or_else(|| EngineError::Params("`field` is required (a field id, or \"none\")".into()))?;
+    let name = opt::<String>(p, "field")?.ok_or_else(|| EngineError::param("field", "is required (a field id, or \"none\")"))?;
     let field = match name.as_str() {
         "none" => None,
         id => Some(Field::parse(id).ok_or_else(|| {
@@ -255,7 +255,7 @@ fn frame(s: &mut Session, p: &Value) -> Result<Value> {
         (None, Some(t)) if t.is_finite() => {
             times.iter().enumerate().min_by(|a, b| (a.1 - t).abs().total_cmp(&(b.1 - t).abs())).map_or(last, |(i, _)| i)
         }
-        (None, Some(_)) => return Err(EngineError::Params("`time` must be a number".into())),
+        (None, Some(_)) => return Err(EngineError::param("time", "must be a number")),
         (None, None) => last,
     };
     let v = view_of(s, &step)?;
@@ -272,7 +272,7 @@ fn reactions(s: &mut Session, p: &Value) -> Result<Value> {
     let step = step_for(s, p, Want::Any)?;
     let about = if p.get("about").is_some() { xyz(p, "about")? } else { [0.0; 3] };
     if !about.iter().all(|c| c.is_finite()) {
-        return Err(EngineError::Params("`about` must be a finite [x, y, z]".into()));
+        return Err(EngineError::param("about", "must be a finite [x, y, z]"));
     }
     let Some((result, current)) = s.latest_result(&step) else { return Err(EngineError::Params(solved_list(s))) };
     let Kind::Static(r) = result.kind() else {
@@ -287,7 +287,7 @@ fn reactions(s: &mut Session, p: &Value) -> Result<Value> {
                 .filter(|a| a.len() <= MAX_SETS)
                 .ok_or_else(|| EngineError::Params(format!("`sets` must be a list of at most {MAX_SETS} set names")))?;
             list.iter()
-                .map(|n| n.as_str().map(str::to_string).ok_or_else(|| EngineError::Params("`sets` must be set names".into())))
+                .map(|n| n.as_str().map(str::to_string).ok_or_else(|| EngineError::param("sets", "must be set names")))
                 .collect::<Result<_>>()?
         }
         None => {

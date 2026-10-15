@@ -848,57 +848,130 @@ impl Glyphs {
     }
 }
 
-/// How far a datum plane's square reaches from the model's centre, and a datum axis's line,
-/// as a fraction of the bounding box diagonal.
-const DATUM_REACH: f64 = 0.6;
+/// The margin around a datum plane's rectangle and beyond a datum axis's ends, as a fraction
+/// of the model's extent drawn.
+const DATUM_MARGIN: f64 = 0.05;
 /// A datum point's cross: each arm's length, as a fraction of the bounding box diagonal.
 const DATUM_POINT: f64 = 0.02;
-/// Hatch lines across a datum plane's square.
+/// Hatch lines across a datum plane's rectangle (its light fill).
 const DATUM_HATCH: usize = 4;
 
-/// Draw the model's datum planes (an outlined, hatched square around the model, `bounds`), axes
-/// (a line through the model) and points (a small cross), each with its name; returns the box
-/// around them. Only the datums `shown` takes are drawn.
-pub fn datums(model: &Model, bounds: &Aabb3, shown: &dyn Fn(&str) -> bool, colors: &GlyphColors, scene: &mut Scene) -> Aabb3 {
+/// Corner `k` (0..8, one bit per axis) of box `b`.
+fn box_corner(b: &Aabb3, k: usize) -> Vec3 {
+    let pick = |bit: usize, lo: f64, hi: f64| if k & bit == 0 { lo } else { hi };
+    Vec3::new(pick(1, b.min.x, b.max.x), pick(2, b.min.y, b.max.y), pick(4, b.min.z, b.max.z))
+}
+
+/// The rectangle datum plane (`p`, unit normal `n`) is drawn as, in its own axes `(u, v)`
+/// ([`perpendiculars`]): the model's extent within the plane (where the plane cuts `bounds`;
+/// the box's shadow on the plane when it misses it) with a [`DATUM_MARGIN`] around it. Returns
+/// the rectangle's centre on the plane and its half sizes along `u` and `v`.
+fn plane_rect(bounds: &Aabb3, p: Vec3, n: Vec3, u: Vec3, v: Vec3) -> (Vec3, f64, f64) {
+    if bounds.is_empty() || !bounds.diagonal().is_finite() {
+        return (p, 1.0, 1.0);
+    }
+    let (lo, hi) = (bounds.min, bounds.max);
+    let corner =
+        |k: usize| Vec3::new(if k & 1 == 0 { lo.x } else { hi.x }, if k & 2 == 0 { lo.y } else { hi.y }, if k & 4 == 0 { lo.z } else { hi.z });
+    let height = |q: Vec3| (q - p).dot(n);
+    // The box's twelve edges join corners differing in one coordinate bit.
+    let mut cut: Vec<Vec3> = Vec::with_capacity(12);
+    for a in 0..8usize {
+        for bit in [1usize, 2, 4].into_iter().filter(|bit| a & bit == 0) {
+            let b = a | bit;
+            let (qa, qb) = (corner(a), corner(b));
+            let (ha, hb) = (height(qa), height(qb));
+            if (ha <= 0.0 && hb >= 0.0) || (ha >= 0.0 && hb <= 0.0) {
+                let t = if (ha - hb).abs() > 0.0 { ha / (ha - hb) } else { 0.0 };
+                cut.push(qa + (qb - qa) * t);
+            }
+        }
+    }
+    if cut.is_empty() {
+        cut = (0..8).map(|k| corner(k) - n * height(corner(k))).collect();
+    }
+    let (mut u0, mut u1, mut v0, mut v1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+    for q in &cut {
+        let (a, b) = ((*q - p).dot(u), (*q - p).dot(v));
+        (u0, u1, v0, v1) = (u0.min(a), u1.max(a), v0.min(b), v1.max(b));
+    }
+    let size = (u1 - u0).max(v1 - v0);
+    let margin = if size > 0.0 { DATUM_MARGIN * size } else { DATUM_MARGIN * bounds.diagonal().max(1e-9) };
+    let centre = p + u * ((u0 + u1) * 0.5) + v * ((v0 + v1) * 0.5);
+    (centre, (u1 - u0) * 0.5 + margin, (v1 - v0) * 0.5 + margin)
+}
+
+/// The ends datum axis (`p`, unit direction `a`) is drawn between: the model's extent along it
+/// (`bounds`' corners projected on it) with a [`DATUM_MARGIN`] beyond each end.
+fn axis_ends(bounds: &Aabb3, p: Vec3, a: Vec3) -> (Vec3, Vec3) {
+    if bounds.is_empty() || !bounds.diagonal().is_finite() {
+        return (p - a, p + a);
+    }
+    let (mut t0, mut t1) = (f64::INFINITY, f64::NEG_INFINITY);
+    for k in 0..8usize {
+        let t = (box_corner(bounds, k) - p).dot(a);
+        (t0, t1) = (t0.min(t), t1.max(t));
+    }
+    let span = t1 - t0;
+    let margin = if span > 0.0 { DATUM_MARGIN * span } else { DATUM_MARGIN * bounds.diagonal().max(1e-9) };
+    (p + a * (t0 - margin), p + a * (t1 + margin))
+}
+
+/// Draw the model's datum planes (an outlined, lightly hatched rectangle: the model's extent
+/// within the plane, `bounds`, plus a margin), axes (a line along the model's extent) and points
+/// (a small cross), each with its name; returns the box around them. Only the datums `shown`
+/// takes are drawn, and `highlight` (the one selected in the browser) whether shown or not, in
+/// the highlight colour.
+pub fn datums(
+    model: &Model,
+    bounds: &Aabb3,
+    shown: &dyn Fn(&str) -> bool,
+    highlight: Option<&str>,
+    colors: &GlyphColors,
+    scene: &mut Scene,
+) -> Aabb3 {
     let mut d = Draw { scene, bounds: Aabb3::EMPTY, color: colors.datum, width: OUTLINE_WIDTH, on_top: false };
-    let (centre, diagonal) = if bounds.is_empty() { (Vec3::ZERO, 1.0) } else { (bounds.center(), bounds.diagonal().max(1e-9)) };
-    let reach = DATUM_REACH * diagonal;
-    for (name, datum) in model.datums().iter().filter(|(n, _)| shown(n)) {
+    let diagonal = if bounds.is_empty() { 1.0 } else { bounds.diagonal().max(1e-9) };
+    for (name, datum) in model.datums().iter().filter(|(n, _)| shown(n) || highlight == Some(n.as_str())) {
+        let picked = highlight == Some(name.as_str());
+        let color = if picked { colors.highlight } else { colors.datum };
+        let (outline, thin) = if picked { (HIGHLIGHT_WIDTH, OUTLINE_WIDTH) } else { (OUTLINE_WIDTH, COUPLING_WIDTH) };
+        // The one selected in the browser shows through the part.
+        (d.color, d.on_top) = (color, picked);
         match *datum {
             fieldcraft_model::Datum::Plane { point, normal } => {
                 let (p, n) = (Vec3::from(point), Vec3::from(normal));
-                // The model's centre moved onto the plane.
-                let c = centre - n * (centre - p).dot(n);
                 let (u, v) = perpendiculars(n);
-                let corner = |a: f64, b: f64| c + u * (a * reach) + v * (b * reach);
+                let (c, hu, hv) = plane_rect(bounds, p, n, u, v);
+                let corner = |a: f64, b: f64| c + u * (a * hu) + v * (b * hv);
                 let ring = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
+                d.width = outline;
                 for (k, a) in ring.iter().enumerate() {
                     let b = ring.get((k + 1) % 4).copied().unwrap_or(*a);
-                    d.width = OUTLINE_WIDTH;
                     d.line(*a, b);
                 }
+                d.width = thin;
                 for k in 1..DATUM_HATCH {
                     let t = -1.0 + 2.0 * k as f64 / DATUM_HATCH as f64;
-                    d.width = COUPLING_WIDTH;
                     d.line(corner(t, -1.0), corner(t, 1.0));
                     d.line(corner(-1.0, t), corner(1.0, t));
                 }
-                d.scene.labels.push(SceneLabel { p: corner(1.0, 1.0), text: name.clone(), color: colors.datum });
+                d.scene.labels.push(SceneLabel { p: corner(1.0, 1.0), text: name.clone(), color });
             }
             fieldcraft_model::Datum::Axis { point, direction } => {
-                let (p, a) = (Vec3::from(point), Vec3::from(direction));
-                let c = p + a * (centre - p).dot(a);
-                d.width = SHAFT_WIDTH;
-                d.line(c - a * reach, c + a * reach);
-                d.scene.labels.push(SceneLabel { p: c + a * reach, text: name.clone(), color: colors.datum });
+                let (a, b) = axis_ends(bounds, Vec3::from(point), Vec3::from(direction));
+                d.width = if picked { SHAFT_WIDTH + 1.0 } else { SHAFT_WIDTH };
+                d.line(a, b);
+                d.scene.labels.push(SceneLabel { p: b, text: name.clone(), color });
             }
             fieldcraft_model::Datum::Point { point } => {
                 let p = Vec3::from(point);
                 let arm = DATUM_POINT * diagonal;
+                d.width = outline;
                 for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
                     d.line(p - axis * arm, p + axis * arm);
                 }
-                d.scene.labels.push(SceneLabel { p: p + (Vec3::X + Vec3::Y) * arm, text: name.clone(), color: colors.datum });
+                d.scene.labels.push(SceneLabel { p: p + (Vec3::X + Vec3::Y) * arm, text: name.clone(), color });
             }
         }
     }
@@ -1516,18 +1589,23 @@ mod tests {
         b.diagonal()
     }
 
+    fn cube(lo: f64, hi: f64) -> Aabb3 {
+        let mut b = Aabb3::EMPTY;
+        b.add(Vec3::new(lo, lo, lo));
+        b.add(Vec3::new(hi, hi, hi));
+        b
+    }
+
     #[test]
-    fn datums_draw_around_the_model_with_their_names() {
+    fn datums_draw_at_the_model_with_their_names() {
         let mut m = Model::default();
         m.add_datum("Mid", fieldcraft_model::Datum::Plane { point: [5.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0] }).unwrap();
         m.add_datum("Ax", fieldcraft_model::Datum::Axis { point: [0.0; 3], direction: [0.0, 0.0, 1.0] }).unwrap();
         m.add_datum("Pt", fieldcraft_model::Datum::Point { point: [1.0, 2.0, 3.0] }).unwrap();
-        let mut bounds = Aabb3::EMPTY;
-        bounds.add(Vec3::ZERO);
-        bounds.add(Vec3::new(10.0, 10.0, 10.0));
+        let bounds = cube(0.0, 10.0);
         let mut scene = Scene::default();
-        let drawn = datums(&m, &bounds, &|_| true, &COLORS, &mut scene);
-        // A square with its hatch (4 + 2 × 3 lines), the axis line and the point's three arms,
+        let drawn = datums(&m, &bounds, &|_| true, None, &COLORS, &mut scene);
+        // A rectangle with its hatch (4 + 2 × 3 lines), the axis line and the point's three arms,
         // each crossing at the point.
         assert_eq!(scene.lines.len(), 14);
         let p = Vec3::new(1.0, 2.0, 3.0);
@@ -1535,12 +1613,79 @@ mod tests {
         let mut names: Vec<&str> = scene.labels.iter().map(|l| l.text.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, ["Ax", "Mid", "Pt"]);
-        // The plane's lines lie on x = 5, centred on the model.
-        assert!(scene.lines.iter().skip(1).take(10).all(|l| (l.a.x - 5.0).abs() < 1e-12 && (l.b.x - 5.0).abs() < 1e-12));
-        assert!(drawn.diagonal() > bounds.diagonal());
-        // A datum left out draws nothing.
+        // The axis spans the model along z with a 5 % margin: z from -0.5 to 10.5.
+        let axis = scene.lines.iter().find(|l| l.width == SHAFT_WIDTH).unwrap();
+        assert!((axis.a.z + 0.5).abs() < 1e-9 && (axis.b.z - 10.5).abs() < 1e-9, "{axis:?}");
+        // Everything drawn stays within the model's box and its margin.
+        let mut reach = bounds;
+        reach.add(Vec3::new(-0.5, -0.5, -0.5));
+        reach.add(Vec3::new(10.5, 10.5, 10.5));
+        assert!(drawn.min.x >= reach.min.x - 1e-9 && drawn.max.z <= reach.max.z + 1e-9, "{drawn:?}");
+        // A datum left out draws nothing; the highlighted one draws anyway, on top.
         let mut only = Scene::default();
-        datums(&m, &bounds, &|n| n == "Ax", &COLORS, &mut only);
+        datums(&m, &bounds, &|n| n == "Ax", None, &COLORS, &mut only);
         assert_eq!((only.lines.len(), only.labels.len()), (1, 1));
+        let mut picked = Scene::default();
+        datums(&m, &bounds, &|_| false, Some("Mid"), &COLORS, &mut picked);
+        assert_eq!((picked.lines.len(), picked.on_top.len()), (0, 10));
+        assert!(picked.on_top.iter().all(|l| l.color == COLORS.highlight));
+    }
+
+    /// A datum plane at any offset or angle is drawn as the model's extent within it plus the
+    /// margin: every corner lies on the plane and within the model's box grown by the margin.
+    #[test]
+    fn datum_planes_fit_the_model_at_any_offset_and_angle() {
+        let bounds = cube(-20.0, 20.0);
+        let size = 40.0;
+        let normals = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0], [1.0, 2.0, 3.0], [0.3, -0.2, 0.9]];
+        for nr in normals {
+            let n = Vec3::from(nr).normalized().unwrap();
+            for offset in [-19.0, -7.5, 0.0, 3.0, 15.0] {
+                let p = n * offset;
+                let mut m = Model::default();
+                m.add_datum("D", fieldcraft_model::Datum::Plane { point: [p.x, p.y, p.z], normal: [n.x, n.y, n.z] }).unwrap();
+                let mut scene = Scene::default();
+                datums(&m, &bounds, &|_| true, None, &COLORS, &mut scene);
+                // Every line lies on the plane.
+                assert!(scene.lines.iter().all(|l| ((l.a - p).dot(n)).abs() < 1e-9 && ((l.b - p).dot(n)).abs() < 1e-9), "{nr:?} at {offset}");
+                // The outline is the tightest rectangle in the plane's axes around the points
+                // where the plane cuts the box's edges, plus the margin on each side.
+                let (u, v) = perpendiculars(n);
+                let mut cut = Vec::new();
+                for a in 0..8usize {
+                    for bit in [1usize, 2, 4] {
+                        if a & bit == 0 {
+                            let at = |k: usize| Vec3::new([-20.0, 20.0][k & 1], [-20.0, 20.0][(k >> 1) & 1], [-20.0, 20.0][(k >> 2) & 1]);
+                            let (qa, qb) = (at(a), at(a | bit));
+                            let (ha, hb) = ((qa - p).dot(n), (qb - p).dot(n));
+                            if ha * hb <= 0.0 && ha != hb {
+                                cut.push(qa + (qb - qa) * (ha / (ha - hb)));
+                            }
+                        }
+                    }
+                }
+                let range = |pts: &mut dyn Iterator<Item = f64>| pts.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)));
+                let (cu, cv) = (range(&mut cut.iter().map(|q| (*q - p).dot(u))), range(&mut cut.iter().map(|q| (*q - p).dot(v))));
+                let margin = DATUM_MARGIN * (cu.1 - cu.0).max(cv.1 - cv.0);
+                let (ru, rv) = (
+                    range(&mut scene.lines.iter().take(4).map(|l| (l.a - p).dot(u))),
+                    range(&mut scene.lines.iter().take(4).map(|l| (l.a - p).dot(v))),
+                );
+                let close = |a: (f64, f64), b: (f64, f64)| (a.0 - (b.0 - margin)).abs() < 1e-9 && (a.1 - (b.1 + margin)).abs() < 1e-9;
+                assert!(close(ru, cu) && close(rv, cv), "{nr:?} at {offset}: {ru:?} {rv:?} around {cu:?} {cv:?}");
+                // Never larger than the model's section can be, plus the margins.
+                assert!((ru.1 - ru.0).hypot(rv.1 - rv.0) <= (1.0 + 2.0 * DATUM_MARGIN) * 2f64.sqrt() * bounds.diagonal() + 1e-9);
+                if nr.iter().filter(|x| **x != 0.0).count() == 1 {
+                    // An axis-aligned plane: the cube's face plus 5 % on each side.
+                    assert!((ru.1 - ru.0 - size * 1.1).abs() < 1e-9 && (rv.1 - rv.0 - size * 1.1).abs() < 1e-9);
+                }
+            }
+        }
+        // A plane missing the model is drawn as the model's shadow on it.
+        let mut m = Model::default();
+        m.add_datum("Far", fieldcraft_model::Datum::Plane { point: [0.0, 0.0, 100.0], normal: [0.0, 0.0, 1.0] }).unwrap();
+        let mut scene = Scene::default();
+        let drawn = datums(&m, &bounds, &|_| true, None, &COLORS, &mut scene);
+        assert!((drawn.max.x - 22.0).abs() < 1e-9 && (drawn.min.y + 22.0).abs() < 1e-9, "{drawn:?}");
     }
 }

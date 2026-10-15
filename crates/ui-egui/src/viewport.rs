@@ -209,7 +209,7 @@ fn datum_at(app: &mut ModelApp, at: Pos2) -> Option<String> {
     let mut best: Option<(f32, String)> = None;
     for name in names {
         let mut drawn = fieldcraft_render::Scene::default();
-        fieldcraft_render::glyphs::datums(&app.session.model, &bounds, &|n| n == name, &colors, &mut drawn);
+        fieldcraft_render::glyphs::datums(&app.session.model, &bounds, &|n| n == name, None, &colors, &mut drawn);
         for l in &drawn.lines {
             let (Some(a), Some(b)) = (to_screen(app, l.a), to_screen(app, l.b)) else { continue };
             let xy = |p: Pos2| [f64::from(p.x), f64::from(p.y)];

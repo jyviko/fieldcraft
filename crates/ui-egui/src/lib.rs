@@ -883,7 +883,7 @@ impl ModelApp {
     pub fn scene_key(&self) -> u64 {
         let mut h = std::hash::DefaultHasher::new();
         let plot = self.plot.1.as_ref().map(|p| Arc::as_ptr(p) as usize);
-        (self.revision, self.ui.style, self.ui.show(), self.ui.dark, plot).hash(&mut h);
+        (self.revision, self.ui.style, self.ui.show(), self.ui.dark, plot, self.selected_datum()).hash(&mut h);
         h.finish()
     }
 
@@ -929,17 +929,26 @@ impl ModelApp {
             };
             let mut datums = Aabb3::EMPTY;
             if show.geometry && self.plot.1.is_none() {
-                datums = scene::datums(&mut s, &self.session, &self.display.1.bounds, &t);
+                datums = scene::datums(&mut s, &self.session, &self.display.1.bounds, self.selected_datum(), &t);
                 scene::seeds(&mut s, &self.session.model, &self.pick.names, &self.display.1, &t);
             }
             self.scene = (Some(key), s, datums);
         }
-        // The clipping radius holds the symbols too (framing leaves them out: their size in the
-        // model follows the zoom).
+        // The clipping radius holds the symbols and the datums too (framing leaves them out: the
+        // symbols' size in the model follows the zoom, the datums are drawn at the model).
         let mut bounds = self.drawn_bounds();
         bounds.union(self.symbols.2.bounds);
+        bounds.union(self.scene.2);
         self.scene.1.radius = scene::radius(&bounds, &self.cam);
         (key, &self.scene.1)
+    }
+
+    /// The datum selected in the browser: drawn highlighted, shown or hidden.
+    fn selected_datum(&self) -> Option<&str> {
+        match &self.selected {
+            Some((browser::Def::Datum, name)) => Some(name.as_str()),
+            _ => None,
+        }
     }
 
     /// The definition selected in the browser, when it has symbols.
@@ -981,13 +990,13 @@ impl ModelApp {
     }
 
     /// What the scene built last draws, as framing sees it: the model, a results plot's
-    /// (deformed) shape, the datums and the reference points.
+    /// (deformed) shape and the reference points. Datums are never framed (#295): they are drawn
+    /// at the model's extent, so framing them would only shrink the part.
     fn drawn_bounds(&self) -> Aabb3 {
         let mut bounds = self.display.1.bounds;
         if let Some(p) = &self.plot.1 {
             bounds.union(p.display.bounds);
         }
-        bounds.union(self.scene.2);
         // Reference points are places in the model, framed with it (their symbols are not).
         for p in self.session.model.reference_points().values() {
             let p = Vec3::from(p.xyz);
@@ -2036,6 +2045,35 @@ mod tests {
                 assert!(scrolled, "{w}×{h}");
             }
         }
+    }
+
+    /// Fit and home never frame datums (#295); a hidden datum selected in the browser is drawn,
+    /// highlighted, until the selection moves on.
+    #[test]
+    fn datums_are_not_framed_and_a_selected_one_shows() {
+        let mut app = ModelApp::new(Session::default());
+        let ctx = egui::Context::default();
+        app.run("file.sample", json!({"name": "cantilever"})).unwrap();
+        draw(&mut app, &ctx, 1280.0, 800.0);
+        app.home_view();
+        let home = app.cam;
+        app.run("geometry.datum", json!({"name": "Far", "by": {"type": "offset", "plane": "xy", "offset": 5000}})).unwrap();
+        draw(&mut app, &ctx, 1280.0, 800.0);
+        app.home_view();
+        // What framing sees is the model alone; the view stays as close as before (the overlays
+        // may differ a little after a command).
+        assert_eq!(app.drawn_bounds(), app.display.1.bounds, "a datum far off is not framed");
+        assert!(app.cam.distance < home.distance * 1.2, "{:?} vs {:?}", app.cam, home);
+        app.fit_view();
+        assert!(app.cam.distance < home.distance * 1.2);
+        let highlight = theme::Tokens::get(app.ui.dark).glyph_colors().highlight;
+        let lit = |app: &mut ModelApp| app.scene().1.on_top.iter().filter(|l| l.color == highlight).count();
+        app.run("view.hide", json!({"items": [{"kind": "datum", "name": "Far"}]})).unwrap();
+        assert_eq!(lit(&mut app), 0);
+        app.selected = Some((browser::Def::Datum, "Far".into()));
+        assert!(lit(&mut app) > 0, "the selected datum is drawn though hidden");
+        app.selected = None;
+        assert_eq!(lit(&mut app), 0);
     }
 
     /// Opening a sample, then another, frames each in the home view; an edit keeps the camera

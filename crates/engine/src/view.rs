@@ -164,6 +164,8 @@ struct Picture {
     shown: Shown,
     glyphs: Glyphs,
     colors: GlyphColors,
+    /// The box around the datums drawn: inside the clipping radius, never framed (#295).
+    datums: Aabb3,
 }
 
 impl Picture {
@@ -185,15 +187,10 @@ fn picture(s: &Session, p: &Palette) -> Picture {
     let plot = s.results_view.as_ref().and_then(|v| s.latest_result(&v.step).map(|(r, _)| (v, r)));
     let Some((view, result)) = plot else {
         let mut scene = model_scene(&base, p);
-        let mut bounds = base.bounds;
-        bounds.union(fieldcraft_render::glyphs::datums(
-            &s.model,
-            &base.bounds,
-            &|n| s.shows(fieldcraft_io::ItemKind::Datum, n),
-            &p.glyphs,
-            &mut scene,
-        ));
-        return Picture { scene, drawn: base, bounds, shown, glyphs, colors: p.glyphs };
+        let bounds = base.bounds;
+        let shows = |n: &str| s.shows(fieldcraft_io::ItemKind::Datum, n);
+        let datums = fieldcraft_render::glyphs::datums(&s.model, &base.bounds, &shows, None, &p.glyphs, &mut scene);
+        return Picture { scene, drawn: base, bounds, shown, glyphs, colors: p.glyphs, datums };
     };
     shown.step = Some(view.step.clone());
     let pick = view.pick();
@@ -237,7 +234,7 @@ fn picture(s: &Session, p: &Palette) -> Picture {
     }
     let mut bounds = base.bounds;
     bounds.union(drawn.bounds);
-    Picture { scene, drawn, bounds, shown, glyphs, colors: p.glyphs.over_results(p.background.1) }
+    Picture { scene, drawn, bounds, shown, glyphs, colors: p.glyphs.over_results(p.background.1), datums: Aabb3::EMPTY }
 }
 
 /// The scene of the session (the model, or the results view's plot) with the setup's symbols
@@ -269,7 +266,8 @@ pub fn orientation(p: &Value) -> Result<Orientation> {
     Orientation::checked(yaw, pitch, distance).ok_or_else(|| bad("`yaw` and `pitch` must be finite and `distance` finite and above 0"))
 }
 
-/// A PNG of the session seen from `at`, `w` × `h` pixels: framing everything drawn, or from
+/// A PNG of the session seen from `at`, `w` × `h` pixels: framing everything drawn but the
+/// datums (they are drawn at the model's extent, and framing them would only add margin), or from
 /// `at`'s distance when it has one. The symbols are drawn at their default size on screen
 /// ([`glyphs::DEFAULT_SIZE`] pixels) for that camera.
 pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette) -> Result<(Vec<u8>, Shown)> {
@@ -289,6 +287,7 @@ pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette
     symbols = Scene::default();
     let mut bounds = pic.bounds;
     bounds.union(pic.symbols(unit(&cam), &mut symbols));
+    bounds.union(pic.datums);
     pic.scene.radius = if bounds.is_empty() { 1.0 } else { (cam.target.dist(bounds.center()) + bounds.diagonal() * 0.5).max(1e-3) };
     let png = fieldcraft_render::render_layers_png(&pic.scene, &[&symbols], &cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;
     Ok((png, pic.shown))

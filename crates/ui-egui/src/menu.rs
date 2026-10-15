@@ -233,7 +233,7 @@ mod tests {
     fn on_datum(app: &mut ModelApp, name: &str) -> egui::Pos2 {
         let bounds = app.display().bounds;
         let mut s = fieldcraft_render::Scene::default();
-        fieldcraft_render::glyphs::datums(&app.session.model, &bounds, &|n| n == name, &crate::theme::Tokens::dark().glyph_colors(), &mut s);
+        fieldcraft_render::glyphs::datums(&app.session.model, &bounds, &|n| n == name, None, &crate::theme::Tokens::dark().glyph_colors(), &mut s);
         let l = s.lines[0];
         viewport::to_screen(app, (l.a + l.b) * 0.5).unwrap()
     }

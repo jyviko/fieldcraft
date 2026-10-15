@@ -89,8 +89,8 @@ fn plane_of(cut: &Cut) -> Result<(Plane, [f64; 3])> {
 
 impl Design {
     /// The design as opened, cut by `cuts` in order (the partitions replace any applied before).
-    /// A cut that names a body the design does not have, or that does not divide a body it
-    /// names, is listed in [`Design::errors`] (feature `partition <name>`), as a feature of the
+    /// A cut that names a body the design does not have, that does not divide a body it names,
+    /// or that the kernel fails to make on any body it applies to, is listed in [`Design::errors`] (feature `partition <name>`), as a feature of the
     /// design that failed to rebuild; the rest still apply.
     pub fn partitioned(&self, cuts: &[Cut]) -> Result<Design> {
         if cuts.len() > MAX_CUTS {
@@ -116,12 +116,12 @@ impl Design {
                     continue;
                 }
                 match split(&body, plane, *n, cut)? {
-                    Some((cells, faces)) => {
+                    Split::Cells(cells, faces) => {
                         report.split.push(body.name.clone());
                         report.faces += faces;
                         next.extend(cells);
                     }
-                    None => {
+                    Split::Misses => {
                         if listed {
                             errors.push(FeatureError {
                                 feature: feature.clone(),
@@ -129,6 +129,16 @@ impl Design {
                                 bodies: vec![body.name.clone()],
                             });
                         }
+                        next.push(body);
+                    }
+                    // Listed or not: the plane may well divide the body, and a cut that silently
+                    // leaves it whole would be mistaken for one that does not reach it (#283).
+                    Split::Failed(e) => {
+                        errors.push(FeatureError {
+                            feature: feature.clone(),
+                            message: format!("the kernel could not cut `{}` ({e})", body.name),
+                            bodies: vec![body.name.clone()],
+                        });
                         next.push(body);
                     }
                 }
@@ -143,12 +153,22 @@ impl Design {
     }
 }
 
-/// Cut one body: its cells, named, and how many cut faces they have; `None` when the plane does
-/// not divide it.
-fn split(body: &Shape, plane: &Plane, n: [f64; 3], cut: &Cut) -> Result<Option<(Vec<Shape>, usize)>> {
+/// What cutting one body gave.
+enum Split {
+    /// Its cells, named, and how many cut faces they have.
+    Cells(Vec<Shape>, usize),
+    /// The plane does not divide it.
+    Misses,
+    /// The kernel failed to cut it: its message.
+    Failed(String),
+}
+
+/// Cut one body.
+fn split(body: &Shape, plane: &Plane, n: [f64; 3], cut: &Cut) -> Result<Split> {
     let parts = match guard("partition", || solidcraft_kernel::split_by_plane(&body.body, plane)) {
         Ok(p) if p.len() >= 2 => p,
-        _ => return Ok(None),
+        Ok(_) => return Ok(Split::Misses),
+        Err(e) => return Ok(Split::Failed(e.to_string())),
     };
     let size = body.size()?;
     let tol = (MATCH_TOLERANCE * size).max(1e-4);
@@ -180,7 +200,7 @@ fn split(body: &Shape, plane: &Plane, n: [f64; 3], cut: &Cut) -> Result<Option<(
         faces += name_faces(&mut shape, &parent, cut, n, size, tol)?;
         out.push(shape);
     }
-    Ok(Some((out, faces)))
+    Ok(Split::Cells(out, faces))
 }
 
 /// A body's faces as matching needs them: each face's analytic surface, name and triangles.

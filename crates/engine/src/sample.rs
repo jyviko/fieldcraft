@@ -708,6 +708,32 @@ mod tests {
         assert!(r["energy_balance"].as_f64().unwrap() < 0.05, "{r}");
     }
 
+    /// A partition the kernel fails to make is reported as the kernel's failure, never as a plane
+    /// that does not divide the body (#283): x = 148 plainly crosses the crank's half y > 0, whose
+    /// cut fails in the kernel's boolean, and the same plane cuts the half y < 0.
+    #[test]
+    fn a_kernel_failure_to_partition_is_reported_as_such() {
+        use fieldcraft_geometry::Cut;
+        let design = fieldcraft_geometry::open_design(&fieldcraft_geometry::script_design(CRANK_ARM).unwrap()).unwrap();
+        let cut = |name: &str, point: [f64; 3], normal: [f64; 3], bodies: &[&str]| Cut {
+            name: name.into(),
+            point,
+            normal,
+            bodies: bodies.iter().map(|b| b.to_string()).collect(),
+        };
+        let half = cut("Half", [0.0; 3], [0.0, 1.0, 0.0], &[]);
+        let p = design.partitioned(&[half.clone(), cut("X148", [148.0, 0.0, 0.0], [1.0, 0.0, 0.0], &[CRANK_HALF])]).unwrap();
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let p = design.partitioned(&[half, cut("X148", [148.0, 0.0, 0.0], [1.0, 0.0, 0.0], &["CrankArm/b"])]).unwrap();
+        // Should the kernel learn to make this cut, the cut is all there is to check.
+        if p.cuts[1].split.is_empty() {
+            let errors: Vec<&str> = p.errors.iter().filter(|e| e.feature == "partition X148").map(|e| e.message.as_str()).collect();
+            assert!(matches!(errors.as_slice(), [m] if m.starts_with("the kernel could not cut `CrankArm/b`")), "{errors:?}");
+        } else {
+            assert_eq!(p.cuts[1].split, ["CrankArm/b"]);
+        }
+    }
+
     /// `file.sample NAME`, checked clean: ready, no errors or warnings.
     fn open(name: &str) -> Session {
         let mut s = Session::default();

@@ -19,6 +19,7 @@
 
 mod design;
 mod edges;
+pub mod features;
 pub mod partition;
 pub mod sample;
 #[cfg(feature = "scripts")]
@@ -26,6 +27,7 @@ mod script;
 
 pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design};
 pub use edges::{EDGE_TOLERANCE, Edge, Vertex};
+pub use features::{BodyFeatures, Curve, FeatureNode, ProfileGeometry, SketchGeometry};
 pub use partition::{Cut, CutReport};
 pub mod tagged_mesh;
 #[cfg(feature = "scripts")]

@@ -1356,6 +1356,7 @@ version = "0.6.0"
 dependencies = [
  "fieldcraft-model",
  "quick-xml 0.42.0",
+ "serde",
  "serde_json",
  "solidcraft-doc",
  "solidcraft-engine",

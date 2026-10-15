@@ -40,7 +40,8 @@ pub struct Cut {
     pub point: [f64; 3],
     pub normal: [f64; 3],
     /// The bodies to cut, by name, as they are when this partition comes (the cells of earlier
-    /// partitions included); empty: every body the plane divides.
+    /// partitions included); a body earlier partitions cut stands for its cells (`B` for `B/a`,
+    /// `B/b/a`, …); empty: every body the plane divides.
     pub bodies: Vec<String>,
 }
 
@@ -104,39 +105,45 @@ impl Design {
         let mut reports = Vec::with_capacity(cuts.len());
         for (cut, (plane, n)) in cuts.iter().zip(&planes) {
             let feature = format!("partition {}", cut.name);
+            // A listed name is the body of that name, or the cells earlier partitions cut it into.
+            let names = |name: &str, b: &str| name == b || name.strip_prefix(b).is_some_and(|rest| rest.starts_with('/'));
             for b in &cut.bodies {
-                if !bodies.iter().any(|x| &x.name == b) {
+                if !bodies.iter().any(|x| names(&x.name, b)) {
                     errors.push(FeatureError { feature: feature.clone(), message: format!("no body `{b}` to cut"), bodies: vec![b.clone()] });
                 }
             }
             let mut report = CutReport { name: cut.name.clone(), split: Vec::new(), faces: 0, warnings: Vec::new() };
             let mut next = Vec::with_capacity(bodies.len() + 1);
+            // The listed names some body of which the plane divides.
+            let mut divided = vec![false; cut.bodies.len()];
             for body in bodies {
-                let listed = cut.bodies.iter().any(|b| b == &body.name);
-                if !(cut.bodies.is_empty() || listed) {
+                let listed: Vec<usize> = (0..cut.bodies.len()).filter(|&i| cut.bodies.get(i).is_some_and(|b| names(&body.name, b))).collect();
+                if !(cut.bodies.is_empty() || !listed.is_empty()) {
                     next.push(body);
                     continue;
                 }
                 match split(&body, plane, *n, cut)? {
                     Split::Cells(cells, faces, warnings) => {
+                        for &i in &listed {
+                            if let Some(d) = divided.get_mut(i) {
+                                *d = true;
+                            }
+                        }
                         report.split.push(body.name.clone());
                         report.faces += faces;
                         report.warnings.extend(warnings);
                         next.extend(cells);
                     }
-                    Split::Misses => {
-                        if listed {
-                            errors.push(FeatureError {
-                                feature: feature.clone(),
-                                message: format!("the plane does not divide `{}`", body.name),
-                                bodies: vec![body.name.clone()],
-                            });
-                        }
-                        next.push(body);
-                    }
+                    Split::Misses => next.push(body),
                     // Listed or not: the plane may well divide the body, and a cut that silently
                     // leaves it whole would be mistaken for one that does not reach it (#283).
                     Split::Failed(e) => {
+                        // Reported here; not again as a plane that divides nothing.
+                        for &i in &listed {
+                            if let Some(d) = divided.get_mut(i) {
+                                *d = true;
+                            }
+                        }
                         errors.push(FeatureError {
                             feature: feature.clone(),
                             message: format!("the kernel could not cut `{}` ({e})", body.name),
@@ -149,10 +156,28 @@ impl Design {
                     return Err(Error::Invalid(format!("the partitions make at most {MAX_CELLS} cells")));
                 }
             }
+            for (b, divided) in cut.bodies.iter().zip(divided) {
+                // A body that is not there is reported above; one that is, and that the plane
+                // misses (all of its cells), is an error: the cut would do nothing to it.
+                if !divided && next.iter().any(|x| names(&x.name, b)) {
+                    errors.push(FeatureError {
+                        feature: feature.clone(),
+                        message: format!("the plane does not divide `{b}`"),
+                        bodies: vec![b.clone()],
+                    });
+                }
+            }
             bodies = next;
             reports.push(report);
         }
-        Ok(Design { name: self.name.clone(), bodies, errors, cuts: reports, source: std::sync::Arc::clone(&self.source) })
+        Ok(Design {
+            name: self.name.clone(),
+            bodies,
+            errors,
+            cuts: reports,
+            source: std::sync::Arc::clone(&self.source),
+            history: self.history.clone(),
+        })
     }
 }
 
@@ -542,6 +567,25 @@ mod tests {
             let above = b.measure().unwrap().centroid[2] > 5.0;
             assert!(n.contains(&if above { "partition:Z:a" } else { "partition:Z:b" }), "{n:?}");
         }
+    }
+
+    /// A body cut before stands for its cells: listing it cuts the cells the plane divides, and
+    /// a plane that misses all of them is an error, as for a whole body.
+    #[test]
+    fn a_cut_body_listed_again_cuts_its_cells() {
+        let d = plate();
+        let body = d.bodies[0].name.clone();
+        let on = |name: &str, point, normal| Cut { bodies: vec![body.clone()], ..cut(name, point, normal) };
+        let p = d.partitioned(&[on("X", [30.0, 0.0, 0.0], [1.0, 0.0, 0.0]), on("Z", [0.0, 0.0, 5.0], [0.0, 0.0, 1.0])]).unwrap();
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert_eq!(p.bodies.len(), 4);
+        // Only one cell (x < 30) reaches x = 20.
+        let p = d.partitioned(&[on("X", [30.0, 0.0, 0.0], [1.0, 0.0, 0.0]), on("Y", [20.0, 0.0, 0.0], [1.0, 0.0, 0.0])]).unwrap();
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert_eq!(p.bodies.len(), 3);
+        let p = d.partitioned(&[on("X", [30.0, 0.0, 0.0], [1.0, 0.0, 0.0]), on("Out", [100.0, 0.0, 0.0], [1.0, 0.0, 0.0])]).unwrap();
+        assert_eq!(p.errors.iter().map(|e| e.feature.as_str()).collect::<Vec<_>>(), ["partition Out"]);
+        assert_eq!(p.bodies.len(), 2);
     }
 
     #[test]

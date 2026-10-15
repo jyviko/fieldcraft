@@ -27,6 +27,8 @@ pub struct Design {
     pub cuts: Vec<crate::partition::CutReport>,
     /// The bodies as opened, before any partition: what [`Design::partitioned`] starts from.
     pub(crate) source: std::sync::Arc<Vec<Shape>>,
+    /// The timeline the design was rebuilt from ([`Design::features`]).
+    pub(crate) history: Option<std::sync::Arc<crate::features::History>>,
 }
 
 /// A feature of the design that failed to rebuild.
@@ -77,6 +79,11 @@ impl Design {
         self.bodies.iter().find(|b| b.name == name)
     }
 
+    /// The body `name` of the design as opened (before any partition).
+    pub fn source_body(&self, name: &str) -> Option<&Shape> {
+        self.source.iter().find(|b| b.name == name)
+    }
+
     /// The body of the design as opened that `name` is, or that partitions cut it from
     /// (`Base` for `Base/a/b1`).
     pub fn source_of(&self, name: &str) -> Option<&str> {
@@ -101,6 +108,11 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
         m.evaluate(doc);
         Ok(m)
     })?;
+    let history = crate::features::History {
+        doc: doc.clone(),
+        state: model.state(),
+        errors: model.results.iter().filter(|r| !r.skipped).filter_map(|r| Some((r.id, r.error.clone()?))).collect(),
+    };
     // Placed in the world: a component's bodies through every occurrence of it (an instance is a
     // body of its own, named after its occurrence path), as SolidCraft displays and exports them.
     let state = guard("place components", || Ok(solidcraft_doc::world_state(doc, &model.state())))?;
@@ -137,13 +149,20 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
             e
         })
         .collect();
-    Ok(Design { name: doc.name.clone(), source: std::sync::Arc::new(bodies.clone()), bodies, errors, cuts: Vec::new() })
+    Ok(Design {
+        name: doc.name.clone(),
+        source: std::sync::Arc::new(bodies.clone()),
+        bodies,
+        errors,
+        cuts: Vec::new(),
+        history: Some(std::sync::Arc::new(history)),
+    })
 }
 
 /// A body name without the suffixes SolidCraft gives the pieces of a split body: ` (1)` for the
 /// new piece and `'` for a piece kept under its old name, any number of times
 /// (`Bracket (1) (1)' (1)` → `Bracket`).
-fn split_base(name: &str) -> &str {
+pub(crate) fn split_base(name: &str) -> &str {
     let mut s = name;
     loop {
         let t = s.trim_end_matches('\'');

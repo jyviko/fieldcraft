@@ -94,7 +94,7 @@ pub const DATUM_DELETE: CommandSpec = CommandSpec {
 pub const PARTITION: CommandSpec = CommandSpec {
     id: "geometry.partition",
     label: "Partition",
-    params: r#"{"name": "Half", "datum": "Mid", "bodies"?: ["Body1"] (default: every body the plane divides)} — cuts bodies of the open design into cells by a datum plane, in memory (the design file is not changed); the model keeps the partition and applies it again whenever the design is opened, after the partitions before it. A cut body `B` becomes the cells `B/a` (on the plane's negative side) and `B/b` (several pieces on a side: `B/a1`, `B/a2`, …). The two faces of the cut are paired by name: `partition:<name>:a` on the cells on the negative side, `partition:<name>:b` on the positive side (`…#0`, `…#1` where a cell has several); every other face keeps the persistent name of the face it is a piece of (`<face>#k` for several pieces on one cell), so sets by face name still select it. Reports the cells made and the cut faces named, and `warnings` when the plane lies on a face of a body it cuts or a cell's boundary does not tessellate into one a mesher takes (a cut through existing edges or vertices, such as a hole's axis), naming the plane, the cell and where; a body it cuts loses its mesh (`replaced`, as a mesher reports it; remesh the cells); a plane that divides no body, a listed body it does not divide, or a body the kernel fails to cut (its message) is an error"#,
+    params: r#"{"name": "Half", "datum": "Mid", "bodies"?: ["Body1"] (default: every body the plane divides; a body earlier partitions cut stands for its cells)} — cuts bodies of the open design into cells by a datum plane, in memory (the design file is not changed); the model keeps the partition and applies it again whenever the design is opened, after the partitions before it. A cut body `B` becomes the cells `B/a` (on the plane's negative side) and `B/b` (several pieces on a side: `B/a1`, `B/a2`, …). The two faces of the cut are paired by name: `partition:<name>:a` on the cells on the negative side, `partition:<name>:b` on the positive side (`…#0`, `…#1` where a cell has several); every other face keeps the persistent name of the face it is a piece of (`<face>#k` for several pieces on one cell), so sets by face name still select it. Reports the cells made and the cut faces named, and `warnings` when the plane lies on a face of a body it cuts or a cell's boundary does not tessellate into one a mesher takes (a cut through existing edges or vertices, such as a hole's axis), naming the plane, the cell and where; a body it cuts loses its mesh (`replaced`, as a mesher reports it; remesh the cells); a plane that divides no body, a listed body it does not divide, or a body the kernel fails to cut (its message) is an error"#,
     form: Some(super::forms::PARTITION),
     kind: CommandKind::Model,
     requires: &[Requirement::Design, Requirement::DatumPlane],
@@ -478,7 +478,7 @@ pub(crate) fn partitioned(design: &Design, model: &Model) -> Result<Design> {
 /// Cut the session's design by its model's partitions again. The bodies that are gone (cells
 /// whose partition went, a body a new partition cut) take their meshes with them (#385): what
 /// went is in the returned [`super::replace::Cleared`], which the command reports.
-fn recut(s: &mut Session) -> Result<super::replace::Cleared> {
+pub(super) fn recut(s: &mut Session) -> Result<super::replace::Cleared> {
     let Some(d) = &s.design else { return Ok(super::replace::Cleared::default()) };
     let cut = partitioned(d, &s.model)?;
     let gone: Vec<String> = d.bodies.iter().filter(|b| cut.body(&b.name).is_none()).map(|b| b.name.clone()).collect();
@@ -508,7 +508,7 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
     let (faces, bodies): (usize, Vec<String>) = (report.map_or(0, |r| r.faces), design.bodies.iter().map(|b| b.name.clone()).collect());
     let mut warnings: Vec<String> = report.map(|r| r.warnings.clone()).unwrap_or_default();
     for cell in &cells {
-        if let Some(why) = design.body(cell).and_then(|shape| unmeshable(shape).err()) {
+        if let Some(why) = design.body(cell).and_then(|shape| unmeshable(shape, None).err()) {
             warnings.push(format!(
                 "partition `{name}`: cell `{cell}` has a boundary no mesher takes ({why}): the plane passes within the kernel's tolerance of a face, edge or vertex it cut (along a face, through the axis of a hole); move the plane off it (by a fraction of the element size)"
             ));
@@ -534,10 +534,10 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(cleared.report_if_any(s, reply))
 }
 
-/// Whether a cell's boundary, tessellated as the meshers take it by default, bounds a volume mesh:
+/// Whether a cell's boundary, tessellated as the meshers take it (by default, or at `tolerance`), bounds a volume mesh:
 /// the defects (open edges, edges on three triangles) when it does not.
-fn unmeshable(shape: &fieldcraft_geometry::Shape) -> Result<()> {
-    let input = super::hex::shape_input(shape, None)?;
+pub(super) fn unmeshable(shape: &fieldcraft_geometry::Shape, tolerance: Option<f64>) -> Result<()> {
+    let input = super::hex::shape_input(shape, tolerance)?;
     let options = fieldcraft_mesh::surface::SurfaceOptions { weld_distance: input.mesh.weld_distance, ..Default::default() };
     fieldcraft_mesh::surface::BoundarySurface::new(&input.mesh.positions, &input.mesh.triangles, &input.mesh.tri_face, &options)
         .map(|_| ())

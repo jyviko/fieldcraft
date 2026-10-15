@@ -18,6 +18,7 @@ pub mod cmd;
 
 pub use cmd::analytic_surfaces;
 pub mod history;
+pub mod progress;
 pub mod requirement;
 pub mod results;
 pub mod sample;

@@ -67,6 +67,11 @@ fn point_segment(p: P, a: P, b: P) -> f64 {
     dist(p, lerp(a, b, t))
 }
 
+/// The distance from `p` to a polyline.
+pub(crate) fn distance_to(poly: &[P], p: P) -> f64 {
+    point_polyline(p, poly)
+}
+
 fn point_polyline(p: P, poly: &[P]) -> f64 {
     match poly {
         [] => f64::INFINITY,

@@ -93,6 +93,10 @@ pub struct QualityOptions {
     pub order: Order,
     pub max_tets: usize,
     pub max_points: usize,
+    /// Edge seeds: the size at each seeded node is the seed's spacing there, and the size field
+    /// grows from it at the grading rate. A seed finer than the global size refines along its
+    /// edge; one coarser leaves it to the global size.
+    pub seeds: Vec<crate::seeds::EdgeSeed>,
 }
 
 impl Default for QualityOptions {
@@ -112,6 +116,7 @@ impl Default for QualityOptions {
             order: Order::Linear,
             max_tets: 5_000_000,
             max_points: 1_000_000,
+            seeds: Vec::new(),
         }
     }
 }
@@ -197,6 +202,9 @@ pub struct QualityReport {
     pub straightened: usize,
     /// Why a stage stopped early, if one did.
     pub stopped: Vec<String>,
+    /// Per edge seed: its name, the count it asks for and the boundary edges the mesh has along
+    /// it.
+    pub seeds: Vec<(String, usize, usize)>,
 }
 
 /// The quality mesh.
@@ -246,7 +254,92 @@ pub fn size_field(surface: &BoundarySurface, geometry: &Tessellation, global: f6
             }
         }
     }
+    for seed in &o.seeds {
+        for (p, h) in crate::seeds::node_sizes(seed) {
+            let h = h.max(floor);
+            if h < global {
+                samples.push((p, h));
+            }
+        }
+    }
     GradedSize::new(global, &samples, lo, hi, o.grading)
+}
+
+/// Put the seeds' nodes on their feature curves, pinned (corner vertices, which neither
+/// smoothing nor coarsening moves), so the curve is divided where the seed says. A node within
+/// [`refine::MIN_GAP`] of the local size of a vertex already on the curve pins that vertex
+/// instead.
+fn seed_curves(cx: &mut TetComplex, ctx: &Context, seeds: &[crate::seeds::EdgeSeed], global: f64) -> Result<()> {
+    for seed in seeds {
+        let tol = 2.0 * seed.tolerance + 1e-6 * global;
+        let on = |x: [f64; 3]| crate::seeds::distance_to(&seed.points, x) <= tol;
+        let nodes = crate::seeds::place(&seed.points, &seed.fractions(seed.count, false))?;
+        for p in nodes.iter().skip(1).take(nodes.len().saturating_sub(2)) {
+            // The curve edge along the seed nearest the node.
+            let mut best: Option<(f64, u32, u32, u32)> = None;
+            for ((a, b), c) in cx.curve_edges() {
+                let (xa, xb) = (cx.xyz(a)?, cx.xyz(b)?);
+                if !(on(xa) && on(xb)) {
+                    continue;
+                }
+                let d = crate::seeds::distance_to(&[xa, xb], *p);
+                if best.is_none_or(|x| d < x.0) {
+                    best = Some((d, a, b, c));
+                }
+            }
+            let Some((_, a, b, c)) = best else { continue };
+            let gap = refine::MIN_GAP * ctx.h(*p, global);
+            let near = [a, b].into_iter().map(|v| Ok((measure::dist(cx.xyz(v)?, *p), v))).collect::<Result<Vec<_>>>()?;
+            if let Some(&(_, v)) = near.iter().filter(|x| x.0 <= gap).min_by(|x, y| x.0.total_cmp(&y.0)) {
+                if cx.kind(v) != VertexKind::Corner {
+                    cx.set_kind(v, VertexKind::Corner);
+                }
+                continue;
+            }
+            let Some(q) = ctx.place(VertexKind::Curve(c), *p) else { continue };
+            if let Some(v) = ops::insert_delaunay_apart(cx, q, VertexKind::Curve(c), ops::Site::Edge(a, b), refine::MAX_CAVITY, gap)? {
+                cx.set_kind(v, VertexKind::Corner);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// How many boundary edges of a mesh lie along each seed's edge: both ends on its polyline, and
+/// the middle within a fifth of the edge's length of it (an element edge on a curved edge cuts
+/// its chord).
+fn seed_counts(points: &[[f64; 3]], tets: &[[u32; 4]], boundary: &[TaggedFace], seeds: &[crate::seeds::EdgeSeed]) -> Vec<(String, usize, usize)> {
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+    let mut edges: Vec<(u32, u32)> = Vec::with_capacity(boundary.len() * 3);
+    for b in boundary {
+        let Some(t) = tets.get(b.tet as usize) else { continue };
+        let f = face_toward(*t, usize::from(b.opposite));
+        for (a, c) in [(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
+            edges.push(sorted2(a, c));
+        }
+    }
+    edges.sort_unstable();
+    edges.dedup();
+    let (lo, hi) = bounds(points);
+    let eps = 1e-6 * measure::dist(lo, hi);
+    seeds
+        .iter()
+        .map(|seed| {
+            let tol = 2.0 * seed.tolerance + eps;
+            let on = |p: [f64; 3], slack: f64| crate::seeds::distance_to(&seed.points, p) <= tol + slack;
+            let n = edges
+                .iter()
+                .filter(|(a, c)| {
+                    let (Some(&pa), Some(&pc)) = (points.get(*a as usize), points.get(*c as usize)) else { return false };
+                    let m = [(pa[0] + pc[0]) / 2.0, (pa[1] + pc[1]) / 2.0, (pa[2] + pc[2]) / 2.0];
+                    on(pa, 0.0) && on(pc, 0.0) && on(m, 0.2 * measure::dist(pa, pc))
+                })
+                .count();
+            (seed.name.clone(), seed.count, n)
+        })
+        .collect()
 }
 
 /// The CDT as a [`TetComplex`] with B-rep face tags, feature curves and vertex kinds; and the
@@ -391,6 +484,7 @@ pub fn quality_mesh(surface: &BoundarySurface, cdt: &TetMesh, analytic: Vec<Opti
     }
     // Coarsen what the boundary recovery made denser than the size field asks for.
     report.collapsed = refine::coarsen(&mut cx, &ctx, 0.6, 1.4, 0.05, 6)?;
+    seed_curves(&mut cx, &ctx, &o.seeds, global)?;
     let ropt = RefineOptions { radius_edge: o.radius_edge, ..RefineOptions::default() };
     for _ in 0..o.rounds {
         let stats = refine::refine(&mut cx, &ctx, &ropt)?;
@@ -420,6 +514,7 @@ pub fn quality_mesh(surface: &BoundarySurface, cdt: &TetMesh, analytic: Vec<Opti
     let c = cx.compact()?;
     let boundary: Vec<TaggedFace> = c.boundary.iter().map(|&(tet, k, face)| TaggedFace { tet, opposite: k as u8, face }).collect();
     report.output = tet_quality_stats(&c.points, &c.tets)?;
+    report.seeds = seed_counts(&c.points, &c.tets, &boundary, &o.seeds);
     report.boundary_volume = boundary_volume(&c.points, &c.tets, &boundary)?;
     let gate = linear_gate(&c.points, &c.tets, report.boundary_volume)?;
     report.volume = gate.volume;

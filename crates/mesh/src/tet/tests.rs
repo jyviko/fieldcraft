@@ -196,6 +196,35 @@ mod pipeline {
     }
 
     #[test]
+    fn a_seeded_edge_gets_the_seeded_spacing_and_the_size_grows_from_it() {
+        use crate::seeds::EdgeSeed;
+        use fieldcraft_model::SeedConstraint;
+        let s = box_surface();
+        let cdt = tetrahedralize(&s, &CdtOptions::default()).unwrap();
+        let edge = vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]];
+        let seed = EdgeSeed { name: "front".into(), points: edge, tolerance: 0.0, count: 16, bias: None, constraint: SeedConstraint::Exact };
+        let plain = QualityOptions { size: Some(5.0), seeds: vec![EdgeSeed { count: 1, ..seed.clone() }], ..QualityOptions::default() };
+        let seeded = QualityOptions { seeds: vec![seed], ..plain.clone() };
+        let a = quality_mesh(&s, &cdt, Vec::new(), &plain).unwrap();
+        let b = quality_mesh(&s, &cdt, Vec::new(), &seeded).unwrap();
+        let (na, nb) = (a.report.seeds[0].2, b.report.seeds[0].2);
+        // Unseeded, the 10 mm edge gets about two 5 mm elements; seeded, about sixteen.
+        assert!(na <= 4, "{na}");
+        assert_eq!(nb, 16);
+        assert_eq!(b.report.seeds[0].1, 16);
+        assert!(b.report.output.tets > a.report.output.tets && b.report.output.inadmissible == 0);
+        // Biased: the mesh's nodes on the edge are the seed's.
+        let bias = Some(fieldcraft_model::Bias { ratio: 4.0, toward: fieldcraft_model::BiasToward::Start });
+        let biased = QualityOptions { seeds: vec![EdgeSeed { count: 8, bias, ..seeded.seeds[0].clone() }], ..plain.clone() };
+        let c = quality_mesh(&s, &cdt, Vec::new(), &biased).unwrap();
+        let mut x: Vec<f64> = c.points.iter().filter(|p| p[1].abs() < 1e-9 && p[2].abs() < 1e-9).map(|p| p[0]).collect();
+        x.sort_by(f64::total_cmp);
+        let want: Vec<f64> = biased.seeds[0].fractions(8, false).iter().map(|f| 10.0 * f).collect();
+        assert_eq!(x.len(), want.len(), "{x:?}");
+        assert!(x.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-9), "{x:?} {want:?}");
+    }
+
+    #[test]
     fn a_sphere_keeps_its_boundary_on_the_sphere_to_second_order() {
         let (p, t) = uv_sphere(10, 20);
         let p: Vec<[f64; 3]> = p.iter().map(|c| c.map(|x| 5.0 * x)).collect();

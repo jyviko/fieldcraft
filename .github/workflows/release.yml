@@ -17,7 +17,11 @@
 # macOS: signed with a Developer ID and notarized when the APPLE_* secrets exist, ad-hoc
 # otherwise (the release notes say which). Linux and Windows builds are not signed.
 #
-# Dry run: `gh workflow run release.yml --ref <branch>` builds everything and uploads the
+# Before anything is packaged, the verify jobs run everything CI can: the full `cargo xtask ci`,
+# `cargo xtask test --heavy` and `cargo xtask oracle` on Linux, and the oracle on macOS. Develop's
+# CI tests only what each change affects (ci.yml), so this is where a release proves all of it.
+#
+# Dry run: `gh workflow run release.yml --ref <branch>` verifies and builds everything and uploads the
 # `release-assets` artifact without creating a release. `-f draft=true` on `main` retries
 # the draft.
 name: Release
@@ -71,9 +75,62 @@ jobs:
           { echo "version=$VERSION"; echo "prerelease=$pre"; echo "draft=$REQUEST_DRAFT"; } >>"$GITHUB_OUTPUT"
           echo "### FieldCraft v$VERSION (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
 
+  # The full gate, the heavy tests and the oracle on Linux and macOS: every packaging job needs
+  # them, so a release (or a dry run) never builds from a commit that fails any of them.
+  verify-ci:
+    name: Verify (cargo xtask ci)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo xtask ci
+
+  verify-heavy:
+    name: Verify (cargo xtask test --heavy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo xtask test --heavy
+
+  verify-oracle:
+    name: Verify (cargo xtask oracle, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            cache: release-oracle-linux
+          - os: macos-14
+            cache: release-oracle-macos
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.cache }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo xtask oracle
+      - name: docs/oracle.md is current
+        run: git diff --exit-code docs/oracle.md
+
   macos:
     name: macOS universal
-    needs: version
+    needs: [version, verify-ci, verify-heavy, verify-oracle]
     # Signing, notarization and analytics secrets live in the `release` environment, which only
     # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
     environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}
@@ -122,7 +179,7 @@ jobs:
 
   linux:
     name: Linux x86_64
-    needs: version
+    needs: [version, verify-ci, verify-heavy, verify-oracle]
     # The oldest GitHub-hosted image, so the binaries need only glibc >= 2.35.
     # Signing, notarization and analytics secrets live in the `release` environment, which only
     # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
@@ -211,7 +268,7 @@ jobs:
 
   windows:
     name: Windows x64
-    needs: version
+    needs: [version, verify-ci, verify-heavy, verify-oracle]
     # Signing, notarization and analytics secrets live in the `release` environment, which only
     # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
     environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}

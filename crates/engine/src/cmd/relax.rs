@@ -52,6 +52,7 @@ const REMESH: &[&str] = &[
     "mesh.hex.sweep",
     "mesh.hex.mapped",
     "mesh.hex.blocks",
+    "mesh.plan.apply",
     "mesh.hex.octree",
     "mesh.cells",
     "mesh.block",

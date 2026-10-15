@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>mesh.plan</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M12 3 L20 7 L20 16 L12 20 L4 16 L4 7 Z" fill="#2d4e70" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M4 7 L12 11 L20 7 M12 11 L12 20" fill="none" stroke="#dde2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M4 11.5 L12 15.5 L20 11.5 M8 9 L8 18 M16 9 L16 18" fill="none" stroke="#4f9ce8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 3 L12 5.4 M20 7 L15.2 7 M12 11 L12 8.6 M4 7 L8.8 7" fill="none" stroke="#4f9ce8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M8.8 7 C8.8 7.884 10.233 8.6 12 8.6 C13.767 8.6 15.2 7.884 15.2 7 C15.2 6.116 13.767 5.4 12 5.4 C10.233 5.4 8.8 6.116 8.8 7 Z" fill="none" stroke="#f0b44a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

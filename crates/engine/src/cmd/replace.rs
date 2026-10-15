@@ -130,6 +130,7 @@ pub static MESHERS: &[(&str, Targets)] = &[
     ("mesh.hex.blocks", listed_or_all),
     ("mesh.hex.project", body_or_all),
     ("mesh.cells", listed_or_all),
+    ("mesh.plan.apply", super::plan::plan_bodies),
     ("mesh.planar", super::mesh::planar_body),
     ("mesh.mirror", super::mirror::image_names),
 ];
@@ -173,7 +174,7 @@ fn made_kind(command: &str, params: &Value) -> Option<ElementKind> {
             Some(if params.get("order").and_then(Value::as_str) == Some("quadratic") { ElementKind::Tet10 } else { ElementKind::Tet4 })
         }
         "mesh.hex.project" => Some(ElementKind::Hex8),
-        "mesh.hex.generate" | "mesh.hex.sweep" | "mesh.hex.mapped" | "mesh.hex.blocks" => {
+        "mesh.hex.generate" | "mesh.hex.sweep" | "mesh.hex.mapped" | "mesh.hex.blocks" | "mesh.plan.apply" => {
             Some(if params.get("order").and_then(Value::as_i64) == Some(2) { ElementKind::Hex20 } else { ElementKind::Hex8 })
         }
         _ => None,
@@ -313,6 +314,13 @@ mod tests {
             ("mesh.hex.blocks", vec![tet_other.clone()], json!({"bodies": ["Box.1"], "size": 2.5}), "Box.1", "Box.2"),
             ("mesh.hex.project", vec![tet_other.clone()], json!({"body": "Box.1", "size": 2.5, "merge": 0}), "Box.1", "Box.2"),
             ("mesh.cells", vec![tet_other.clone()], json!({"bodies": ["Box.1"], "size": 2.5, "default": "hex"}), "Box.1", "Box.2"),
+            (
+                "mesh.plan.apply",
+                vec![tet_other.clone(), json!({"command": "mesh.plan", "params": {"body": "Box.1", "size": 2.5}})],
+                json!({"plan": "Plan-Box_1"}),
+                "Box.1",
+                "Box.2",
+            ),
             ("mesh.planar", vec![tet_other.clone()], json!({"polygon": square, "size": 2.5, "name": "Box.1"}), "Box.1", "Box.2"),
             // The image's tets (meshed before) are replaced by the mirrored hexahedra.
             (

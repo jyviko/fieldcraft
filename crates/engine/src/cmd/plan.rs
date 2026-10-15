@@ -1,0 +1,1381 @@
+//! Provenance-driven mesh plans (#402): the features that built a body (`geometry.features`)
+//! become its hex-meshing plan, and the plan is carried out with today's meshers.
+//!
+//! `mesh.plan` reads the body's feature graph and maps each feature to a template:
+//! - an extrude of a sketch: the sweep, along its stored direction, of the profile's cross-section
+//!   (circles butterflied, circular holes O-gridded);
+//! - a box: a block (or a part of the swept cross-section); a cylinder: a butterfly, an O-grid
+//!   when it cuts;
+//! - a hole: an O-grid at its stored diameter and axis;
+//! - a shell: layers through its stored thickness (the element size takes the layers through
+//!   the thinnest wall);
+//! - a join or cut (and a combine): the tool's cross-section imprinted on the swept one;
+//! - a pattern or mirror: the instance meshed and repeated;
+//! - a split body: its partition cuts.
+//!
+//! The sweep direction is the direction most mapped features are prismatic along (the first new
+//! body's stored direction on a tie); a feature that is not prismatic along it is reported as not
+//! mapped. Fillets, chamfers, revolves, sweeps and lofts are reported as not mapped (their blend,
+//! revolve and sweep templates are step 3 of #402); nothing is faked.
+//!
+//! The butterflies and O-grids need a frame round each circle: the plan cuts the body by planes
+//! square to the sweep on either side of every circle that is not the body's own outline
+//! ([`frame_cuts`]), placed so the frame is square (as far from the circle as the body's nearest
+//! side, when that is close) and never on or near a face of the body, through another circle, or
+//! next to another cut. `mesh.plan.apply` adds those cuts as partitions of the body (only those),
+//! sweeps its cells together (`mesh.cells`), or sweeps the whole body when the plan has no cuts
+//! (`mesh.hex.generate`), and reports the quality and whether the cells joined node to node.
+//!
+//! The plan is a definition of the model ([`MeshPlan`]): saved with it, inspectable, editable
+//! (apply an edited plan object) and applied again after the design changes. The projection
+//! blocking mesher (#399) consumes the same plan: its direction, templates and cuts.
+
+use fieldcraft_geometry::{Curve, Design, FaceSurface, FeatureNode, Shape};
+use fieldcraft_model::{CutRole, Datum, MeshPlan, Partition, PlanCut, PlanFeature, PlanMesher, PlanRing, PlanUnmapped, RingKind};
+use serde_json::{Value, json};
+
+use crate::requirement::Requirement;
+use crate::schema::ProblemKind;
+use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
+
+/// Elements a plan aims at most for one body unless told otherwise.
+pub const DEFAULT_MAX_ELEMENTS: usize = 300_000;
+/// The most a plan may aim at.
+const MAX_ELEMENTS: usize = 5_000_000;
+/// Element size by default, as a fraction of the body's bounding-box diagonal (as the meshers).
+const DEFAULT_RELATIVE_SIZE: f64 = 1.0 / 25.0;
+/// The finest tessellation a plan asks for, as a fraction of the diagonal (as the meshers take).
+const MIN_RELATIVE_TOLERANCE: f64 = 1e-5;
+
+pub const PLAN: CommandSpec = CommandSpec {
+    id: "mesh.plan",
+    label: "Mesh Plan",
+    params: r#"{"body": "Base", "name"?: "Plan-Base", "size"?: mm (largest element size; default 1/25 of the body's diagonal), "layers"?: 2 (elements through the thinnest wall: a shell's thickness, a plate's; 1..=10), "max_elements"?: 300000 (the size grows past the walls' when more would be needed)} — the body's hex-meshing plan derived from the features that built it (geometry.features), saved in the model under `name` (replacing a plan of that name); nothing is meshed (mesh.plan.apply). The plan: the sweep `direction` (and every direction the mapped features are prismatic along), the element `size`, `tolerance` and `layers`; per mapped feature its `template` (sweep of an extrude's profile along its stored direction, block for a box, butterfly for a cylinder or a circular boss, o_grid for a hole or a circular cut, layers through a shell's thickness, imprint of a join, cut or combine tool's cross-section, copy for a pattern or mirror, partition for a split body) and the `faces` it made (the projection targets); the `rings` round the body's circles (o_grid or butterfly: centre, axis, radius, half-side of the square `frame`, the cylindrical `faces` they project onto); the partition `cuts` the frames and imprints need (each with its feature and reason, never on a face of the body); the `mesher` (cells when there are cuts, else sweep); the `copies` (the other bodies a pattern or mirror made from it); the features it does not map with the reason (`unmapped`: fillets, chamfers, revolves, sweeps and lofts are step 3; a feature not prismatic along the sweep needs projection blocking, #399) and `notes`"#,
+    form: Some(super::forms::MESH_PLAN),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Design],
+    run: plan,
+};
+
+pub const APPLY: CommandSpec = CommandSpec {
+    id: "mesh.plan.apply",
+    label: "Apply Mesh Plan",
+    params: r#"{"plan": "Plan-Base" (a saved plan) | {plan object, as mesh.plan replies it; edited}, "name"?: "Plan-Base" (the name an object is saved under; default Plan-<body>)} — carries the plan out with today's meshers: replaces the plan's earlier partitions (`<plan>-cut<k>`) with its `cuts` (datum planes and partitions of the plan's body only; a cut the kernel cannot make, or that leaves a cell no mesher takes, is left out and reported in `skipped_cuts`), then meshes the body: its cells swept together with structured hex (mesh.cells, `default` hex) when there are cuts, else the body swept (mesh.hex.generate, swept), at the plan's size; each of its `copies` is meshed the same way by a plan of its own (`Plan-<copy>`, saved). No fallback: a cell that does not mesh all-hex is the error. Replies the cuts made and skipped, the cells, the element count, the smallest scaled Jacobian, `all_hex`, whether the cells joined node to node into one mesh (`conforming`), the mapped features, what today's meshers cannot build yet (`pending`: the O-grid and butterfly rings, which need the projection blocking mesher, #399), the `unmapped` features, the copies and the mesher's reply (`mesh`); `replaced` names the meshes it replaced. A plan object is checked and saved first"#,
+    form: Some(super::forms::MESH_PLAN_APPLY),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Design],
+    run: apply,
+};
+
+type V3 = [f64; 3];
+
+fn dot(a: V3, b: V3) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: V3, b: V3) -> V3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn unit(v: V3) -> Option<V3> {
+    let n = dot(v, v).sqrt();
+    (n.is_finite() && n > 1e-12).then(|| v.map(|c| c / n))
+}
+
+/// Parallel or opposite, within 1e-6 of a radian.
+fn parallel(a: V3, b: V3) -> bool {
+    match (unit(a), unit(b)) {
+        (Some(a), Some(b)) => dot(a, b).abs() > 1.0 - 1e-6,
+        _ => false,
+    }
+}
+
+fn perpendicular(a: V3, b: V3) -> bool {
+    match (unit(a), unit(b)) {
+        (Some(a), Some(b)) => dot(a, b).abs() < 1e-6,
+        _ => false,
+    }
+}
+
+/// A direction up to its sign: the first non-zero component positive.
+fn canonical(d: V3) -> Option<V3> {
+    let d = unit(d)?;
+    let first = d.iter().copied().find(|c| c.abs() > 1e-9).unwrap_or(1.0);
+    Some(if first < 0.0 { d.map(|c| if c == 0.0 { 0.0 } else { -c }) } else { d })
+}
+
+const AXES: [V3; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+/// Whether the faces `faces` (persistent names on `shape`) are all prismatic along `d`: planes
+/// along or across it, cylinders about an axis along it.
+fn faces_prismatic(shape: &Shape, surfaces: &[Option<FaceSurface>], faces: &[String], d: V3) -> bool {
+    faces.iter().all(|name| {
+        let Some(i) = shape.face_index(name) else { return true };
+        match surfaces.get(i as usize).copied().flatten() {
+            Some(FaceSurface::Plane { normal, .. }) => parallel(normal, d) || perpendicular(normal, d),
+            Some(FaceSurface::Cylinder { axis, .. }) => parallel(axis, d),
+            _ => false,
+        }
+    })
+}
+
+/// The kinds of feature the plan has a template for.
+fn template_of(f: &FeatureNode) -> Option<&'static str> {
+    let op = f.operation.as_deref().unwrap_or("new_body");
+    Some(match (f.kind.as_str(), op) {
+        ("extrude", "new_body") => "sweep",
+        ("extrude", "join" | "cut" | "intersect") => "imprint",
+        ("box", "new_body") => "block",
+        ("box", _) => "imprint",
+        ("cylinder", "cut") => "o_grid",
+        ("cylinder", _) => "butterfly",
+        ("hole", _) => "o_grid",
+        ("shell", _) => "layers",
+        ("combine", _) => "imprint",
+        ("pattern" | "mirror", _) => "copy",
+        ("split", _) => "partition",
+        _ => return None,
+    })
+}
+
+/// Why a feature with no template is not mapped.
+fn unmapped_reason(f: &FeatureNode) -> String {
+    match f.kind.as_str() {
+        "fillet" | "chamfer" => "a blend layer along its edges at its stored size is step 3 of the provenance plan (#402); no template yet".into(),
+        "revolve" => "revolving the profile mesh about the stored axis is step 3 of the provenance plan (#402); no template yet".into(),
+        "sweep" | "loft" => {
+            "sweeping the profile along the stored path or between the sections is step 3 of the provenance plan (#402); no template yet".into()
+        }
+        other => format!("no template for `{other}` features yet"),
+    }
+}
+
+/// The directions a feature builds along, or is prismatic along by its nature.
+fn feature_directions(f: &FeatureNode) -> Vec<V3> {
+    match f.kind.as_str() {
+        "box" => AXES.to_vec(),
+        _ => f.direction.into_iter().collect(),
+    }
+}
+
+/// Whether `f` keeps to a sweep along `d`.
+fn compatible(f: &FeatureNode, d: V3, shape: &Shape, surfaces: &[Option<FaceSurface>]) -> bool {
+    match f.kind.as_str() {
+        "extrude" | "cylinder" | "hole" if f.direction.is_some_and(|x| parallel(x, d)) => true,
+        "box" => AXES.iter().any(|a| parallel(*a, d)),
+        // Copies and combines bring the features they repeat or join, which are judged themselves.
+        "pattern" | "mirror" | "combine" | "split" => true,
+        _ => faces_prismatic(shape, surfaces, &f.faces, d),
+    }
+}
+
+/// A circle a butterfly or O-grid goes round: in the plane square to the sweep.
+#[derive(Debug, Clone, Copy)]
+struct Circle {
+    center: V3,
+    radius: f64,
+    feature: u64,
+    kind: RingKind,
+    /// Whether the circle needs a frame cut round it (not the body's own outline).
+    framed: bool,
+}
+
+/// The circles of `f` along `d`: a cylinder's or hole's, an extrude's profile circles (in world
+/// coordinates). A circle that is the body's whole outline (a lone cylinder) needs no frame.
+fn circles(f: &FeatureNode, d: V3) -> Vec<Circle> {
+    let mut out = Vec::new();
+    let cut = f.operation.as_deref() == Some("cut");
+    match f.kind.as_str() {
+        "cylinder" | "hole" if f.direction.is_some_and(|x| parallel(x, d)) => {
+            let r = f.values.get("radius").copied().or_else(|| f.values.get("diameter").map(|v| v / 2.0));
+            if let (Some(c), Some(r)) = (f.placement, r) {
+                let kind = if cut { RingKind::OGrid } else { RingKind::Butterfly };
+                out.push(Circle { center: c, radius: r, feature: f.id, kind, framed: f.operation.as_deref() != Some("new_body") });
+            }
+        }
+        "extrude" if f.direction.is_some_and(|x| parallel(x, d)) => {
+            let Some(sk) = &f.sketch else { return out };
+            let world = |p: [f64; 2]| -> V3 { std::array::from_fn(|k| sk.origin[k] + p[0] * sk.x_dir[k] + p[1] * sk.y_dir[k]) };
+            for p in &sk.profiles {
+                // A profile whose outline is one circle is the body's own when the extrude makes
+                // a new body; a joined boss's or a cut's otherwise.
+                let outline_is_body = f.operation.as_deref() == Some("new_body");
+                // An outline is material inside (unless the extrude cuts), a hole material outside.
+                let loops = std::iter::once((&p.outer, outline_is_body, cut)).chain(p.holes.iter().map(|h| (h, false, !cut)));
+                for (lp, own, hollow) in loops {
+                    if let [Curve::Circle { center, radius }] = lp.as_slice() {
+                        let kind = if hollow { RingKind::OGrid } else { RingKind::Butterfly };
+                        out.push(Circle { center: world(*center), radius: *radius, feature: f.id, kind, framed: !own });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// The circles of `f` where the body has them: a feature's stored placement is the original's,
+/// and a pattern or mirror copy has its circles elsewhere. Each stored circle takes the centre of
+/// a cylindrical face of the feature on this body of its radius, about an axis along `d`, each
+/// face once; a stored circle with no such face keeps its place.
+fn placed(stored: Vec<Circle>, f: &FeatureNode, d: V3, shape: &Shape, surfaces: &[Option<FaceSurface>]) -> Vec<Circle> {
+    let mut axes: Vec<(V3, f64)> = Vec::new();
+    for name in &f.faces {
+        let Some(i) = shape.face_index(name) else { continue };
+        if let Some(FaceSurface::Cylinder { origin, axis, radius }) = surfaces.get(i as usize).copied().flatten()
+            && parallel(axis, d)
+        {
+            // The axis's point in the plane through the origin square to `d`.
+            let along = dot(origin, d);
+            let p: V3 = std::array::from_fn(|k| origin[k] - along * d[k]);
+            let same =
+                |(q, r): &(V3, f64)| (r - radius).abs() < 1e-6 * radius.max(1.0) && (0..3).all(|k| (q[k] - p[k]).abs() < 1e-6 * radius.max(1.0));
+            if !axes.iter().any(same) {
+                axes.push((p, radius));
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(stored.len());
+    for mut c in stored {
+        let near = |(p, r): &(V3, f64)| {
+            let off: V3 = std::array::from_fn(|k| c.center[k] - p[k]);
+            let along = dot(off, d);
+            ((r - c.radius).abs() < 1e-6 * c.radius.max(1.0), dot(off, off) - along * along)
+        };
+        let best = axes.iter().enumerate().filter(|(_, a)| near(a).0).min_by(|a, b| near(a.1).1.total_cmp(&near(b.1).1)).map(|(k, _)| k);
+        if let Some(k) = best {
+            let (p, _) = axes.swap_remove(k);
+            // Keep the stored point's level along the sweep.
+            let along = dot(c.center, d);
+            c.center = std::array::from_fn(|i| p[i] + along * d[i]);
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// What the cuts must keep clear of: the body's extent, its planar faces (normal, offset, name)
+/// and the points of its curved faces, and the smallest distance a cut keeps.
+struct Clearance<'a> {
+    corners: Vec<V3>,
+    planes: Vec<(V3, f64, &'a str)>,
+    curved: Vec<Vec<V3>>,
+    gap: f64,
+}
+
+impl Clearance<'_> {
+    /// The body's extent along `n`.
+    fn extent(&self, n: V3) -> (f64, f64) {
+        self.corners.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), c| (l.min(dot(*c, n)), h.max(dot(*c, n))))
+    }
+
+    /// Whether the plane `n·x = t` lies inside the body, `gap` from its extent.
+    fn inside(&self, n: V3, t: f64) -> bool {
+        let (lo, hi) = self.extent(n);
+        t > lo + self.gap && t < hi - self.gap
+    }
+
+    /// Whether the plane passes through a curved face (between its points' extremes along `n`,
+    /// by more than `gap`): the partitions' tessellation does not close along such a cut.
+    fn crosses_curved(&self, n: V3, t: f64) -> bool {
+        self.curved.iter().any(|pts| {
+            let (lo, hi) = pts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), p| (l.min(dot(*p, n)), h.max(dot(*p, n))));
+            t > lo + 1e-6 && t < hi - 1e-6
+        })
+    }
+
+    /// The planar faces square to `n` within `gap` of the plane `n·x = t`, with their distance.
+    fn faces_near(&self, n: V3, t: f64) -> impl Iterator<Item = (f64, &str)> + '_ {
+        self.planes
+            .iter()
+            .filter(move |(m, _, _)| parallel(*m, n))
+            .map(move |(m, off, name)| ((t - off * dot(*m, n).signum()).abs(), *name))
+            .filter(|(x, _)| *x < self.gap)
+    }
+}
+
+/// A joined or cutting tool's place along the sweep and, for a cut, its sides across it: the
+/// levels and the frame of its imprint.
+struct Imprint {
+    feature: u64,
+    cut: bool,
+    /// Where its cross-section starts and ends along the sweep direction.
+    extent: Option<(f64, f64)>,
+    /// A cut's side planes along the sweep (normal, offset): a rectangle's four.
+    sides: Vec<(V3, f64)>,
+}
+
+/// The imprint of `f` (a join or cut, `cut` saying which) along `d`.
+fn imprint_of(f: &FeatureNode, d: V3, cut: bool) -> Option<Imprint> {
+    let v = |k: &str| f.values.get(k).copied();
+    let mut sides = Vec::new();
+    let extent = match f.kind.as_str() {
+        "box" => {
+            let p = f.placement?;
+            let dims = [v("length")?, v("width")?, v("height")?];
+            let k = AXES.iter().position(|a| parallel(*a, d))?;
+            for j in (0..3).filter(|&j| j != k) {
+                sides.push((AXES[j], p[j]));
+                sides.push((AXES[j], p[j] + dims[j]));
+            }
+            Some((p[k], p[k] + dims[k]))
+        }
+        "cylinder" => {
+            let (p, a) = (f.placement?, f.direction?);
+            parallel(a, d).then(|| (dot(p, d), dot(p, d) + v("height").unwrap_or_default() * dot(a, d)))
+        }
+        "hole" => {
+            let (p, a) = (f.placement?, f.direction?);
+            v("depth").filter(|_| parallel(a, d)).map(|depth| (dot(p, d), dot(p, d) + depth * dot(a, d)))
+        }
+        "extrude" => {
+            let (sk, a) = (f.sketch.as_ref()?, f.direction?);
+            if !parallel(a, d) || f.two_sided {
+                return None;
+            }
+            // A rectangle's sides (four lines, each along a sketch axis).
+            for p in &sk.profiles {
+                let lines: Vec<([f64; 2], [f64; 2])> =
+                    p.outer.iter().filter_map(|c| if let Curve::Line { a, b } = c { Some((*a, *b)) } else { None }).collect();
+                let square = lines.len() == 4
+                    && p.outer.len() == 4
+                    && p.holes.is_empty()
+                    && lines.iter().all(|(a, b)| (a[0] - b[0]).abs() < 1e-9 || (a[1] - b[1]).abs() < 1e-9);
+                if square {
+                    for (a, b) in lines {
+                        let world = |q: [f64; 2]| -> V3 { std::array::from_fn(|k| sk.origin[k] + q[0] * sk.x_dir[k] + q[1] * sk.y_dir[k]) };
+                        let (wa, wb) = (world(a), world(b));
+                        if let Some(n) = unit(cross(std::array::from_fn(|k| wb[k] - wa[k]), d)) {
+                            sides.push((n, dot(n, wa)));
+                        }
+                    }
+                }
+            }
+            let t0 = dot(sk.origin, d);
+            Some((t0, t0 + v("distance")? * dot(a, d)))
+        }
+        _ => None,
+    };
+    Some(Imprint { feature: f.id, cut, extent, sides: if cut { sides } else { Vec::new() } })
+}
+
+/// The cuts that imprint the tools: a plane square to the sweep where each tool's cross-section
+/// starts or ends inside the body (a level), and for a cutting tool with a rectangular section,
+/// its four sides extended across the body (the frame of the opening). A plane goes in only
+/// inside the body (`gap` from its extent), not through a curved face, not near but off a face, not on a face a feature
+/// other than the tools made (exactly on a tool's own face is that face carried on: no sliver), and not
+/// next to another cut.
+fn imprint_cuts(tools: &[Imprint], d: V3, body: &Clearance, cuts: &mut Vec<PlanCut>) {
+    let tool_ids: Vec<u64> = tools.iter().map(|t| t.feature).collect();
+    let mut add = |n: V3, t: f64, reason: String, feature: u64| {
+        if !body.inside(n, t) || body.crosses_curved(n, t) {
+            return;
+        }
+        // Near a face but off it, or on a face some other feature made (a floor a boss stands
+        // on): a sliver, or a cut along a face that the kernel splits badly.
+        let near_face =
+            body.faces_near(n, t).any(|(x, name)| x > 1e-6 || !fieldcraft_geometry::features::feature_ids(name).any(|id| tool_ids.contains(&id)));
+        if near_face || cuts.iter().any(|k| parallel(k.normal, n) && (dot(k.point, n) - t).abs() < body.gap) {
+            return;
+        }
+        let role = if parallel(n, d) { CutRole::Level } else { CutRole::Frame };
+        cuts.push(PlanCut { point: n.map(|x| x * t), normal: n, role, feature: Some(feature), reason });
+    };
+    for tool in tools {
+        let what = if tool.cut { "cut" } else { "joined" };
+        if let Some((a, b)) = tool.extent {
+            for (t, end) in [(a.min(b), "starts"), (a.max(b), "ends")] {
+                add(d, t, format!("level: the {what} section of F{} {end} here", tool.feature), tool.feature);
+            }
+        }
+        for (n, off) in &tool.sides {
+            add(*n, *off, format!("frame: a side of the opening F{} cuts, carried across the body", tool.feature), tool.feature);
+        }
+    }
+}
+
+/// Most profile segments [`profile_wall`] compares pairwise.
+const MAX_WALL_SEGMENTS: usize = 2000;
+
+/// The thinnest wall of a profile: the smallest distance between two parallel lines of its
+/// loops with material between them (the point halfway between, over their overlap, inside the
+/// outline and outside its holes). Arcs count only as the polygon their ends make.
+fn profile_wall(p: &fieldcraft_geometry::ProfileGeometry) -> Option<f64> {
+    let polygon = |lp: &[Curve]| -> Vec<[f64; 2]> {
+        let mut pts = Vec::new();
+        for c in lp {
+            match c {
+                Curve::Line { a, .. } => pts.push(*a),
+                Curve::Arc { center, radius, start, sweep } => {
+                    for k in 0..8 {
+                        let t = start + sweep * f64::from(k) / 8.0;
+                        pts.push([center[0] + radius * t.cos(), center[1] + radius * t.sin()]);
+                    }
+                }
+                Curve::Circle { center, radius } => {
+                    for k in 0..16 {
+                        let t = std::f64::consts::TAU * f64::from(k) / 16.0;
+                        pts.push([center[0] + radius * t.cos(), center[1] + radius * t.sin()]);
+                    }
+                }
+                Curve::Other { .. } => {}
+            }
+        }
+        pts
+    };
+    let inside = |poly: &[[f64; 2]], q: [f64; 2]| {
+        let mut odd = false;
+        for (i, a) in poly.iter().enumerate() {
+            let b = poly[(i + 1) % poly.len()];
+            if (a[1] > q[1]) != (b[1] > q[1]) && q[0] < a[0] + (q[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]) {
+                odd = !odd;
+            }
+        }
+        odd
+    };
+    let outer = polygon(&p.outer);
+    let holes: Vec<Vec<[f64; 2]>> = p.holes.iter().map(|h| polygon(h)).collect();
+    let material = |q: [f64; 2]| inside(&outer, q) && !holes.iter().any(|h| inside(h, q));
+    let lines: Vec<([f64; 2], [f64; 2])> = std::iter::once(&p.outer)
+        .chain(&p.holes)
+        .flatten()
+        .filter_map(|c| if let Curve::Line { a, b } = c { Some((*a, *b)) } else { None })
+        .take(MAX_WALL_SEGMENTS)
+        .collect();
+    let mut best: Option<f64> = None;
+    for (i, (a, b)) in lines.iter().enumerate() {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len = (dx * dx + dy * dy).sqrt();
+        if !(len > 1e-12) {
+            continue;
+        }
+        let (ux, uy) = (dx / len, dy / len);
+        for (c, e) in lines.iter().skip(i + 1) {
+            let (ex, ey) = (e[0] - c[0], e[1] - c[1]);
+            if (ux * ey - uy * ex).abs() > 1e-9 * (ex * ex + ey * ey).sqrt().max(1e-12) {
+                continue;
+            }
+            let gap = ux * (c[1] - a[1]) - uy * (c[0] - a[0]);
+            if gap.abs() < 1e-9 {
+                continue;
+            }
+            // The overlap of the two along the direction.
+            let along = |q: [f64; 2]| (q[0] - a[0]) * ux + (q[1] - a[1]) * uy;
+            let (lo, hi) = (along(*c).min(along(*e)).max(0.0), along(*c).max(along(*e)).min(len));
+            if hi - lo <= 1e-9 {
+                continue;
+            }
+            let m = 0.5 * (lo + hi);
+            let q = [a[0] + ux * m - uy * gap / 2.0, a[1] + uy * m + ux * gap / 2.0];
+            if material(q) && best.is_none_or(|x| gap.abs() < x) {
+                best = Some(gap.abs());
+            }
+        }
+    }
+    best
+}
+
+/// Two in-plane axes square to `d`: the other two principal axes when `d` is one.
+fn in_plane_axes(d: V3) -> [V3; 2] {
+    if let Some(k) = AXES.iter().position(|a| parallel(*a, d)) {
+        let others: Vec<V3> = AXES.iter().enumerate().filter(|(i, _)| *i != k).map(|(_, a)| *a).collect();
+        if let [u, v] = others.as_slice() {
+            return [*u, *v];
+        }
+    }
+    let least = AXES.iter().copied().min_by(|a, b| dot(*a, d).abs().total_cmp(&dot(*b, d).abs())).unwrap_or([1.0, 0.0, 0.0]);
+    let u = unit(cross(d, least)).unwrap_or([1.0, 0.0, 0.0]);
+    [u, unit(cross(d, u)).unwrap_or([0.0, 1.0, 0.0])]
+}
+
+/// The frame cuts round the circles: for each circle (concentric ones together, the largest
+/// framing them) and each in-plane axis, a plane on either side, square to the axis, at a
+/// distance `h` from the centre; none on a side where the body's side is within 4 radii (it is
+/// the frame there). `h` is first the distance to the body's side on the other side (a square
+/// frame, when that is 1.4 to 4 radii), else 2, 1.75, 2.5, 1.5 or 3 radii, the first
+/// that keeps the plane inside the body, off its curved faces, at least `gap` off every face of
+/// the body square to the axis, clear of the other circles (1.3 of their radius), and not next to another cut (one
+/// within 0.6 of the radius serves instead). A side with no such place gets no cut, and a note.
+fn frame_cuts(circles: &[Circle], d: V3, body: &Clearance, cuts: &mut Vec<PlanCut>) -> Vec<String> {
+    let mut groups: Vec<Circle> = Vec::new();
+    for c in circles.iter().filter(|c| c.framed) {
+        let same_axis = |g: &Circle| {
+            let off = std::array::from_fn::<f64, 3, _>(|k| c.center[k] - g.center[k]);
+            let along = dot(off, d);
+            dot(off, off) - along * along < 1e-12
+        };
+        match groups.iter_mut().find(|g| same_axis(g)) {
+            Some(g) if c.radius > g.radius => *g = *c,
+            Some(_) => {}
+            None => groups.push(*c),
+        }
+    }
+    let gap = body.gap;
+    let mut notes = Vec::new();
+    for g in &groups {
+        let r = g.radius;
+        for a in in_plane_axes(d) {
+            let (amin, amax) = body.extent(a);
+            let c = dot(g.center, a);
+            for sign in [1.0, -1.0] {
+                let opposite = if sign > 0.0 { c - amin } else { amax - c };
+                let same = if sign > 0.0 { amax - c } else { c - amin };
+                // The body's side close by on this side frames the circle itself.
+                if same <= 4.0 * r {
+                    continue;
+                }
+                let mut hs: Vec<f64> = [opposite].into_iter().filter(|h| (1.4 * r..=4.0 * r).contains(h)).collect();
+                hs.extend([2.0, 1.75, 2.5, 1.5, 3.0].map(|k| k * r));
+                let mut placed = false;
+                for h in hs {
+                    let t = c + sign * h;
+                    if !body.inside(a, t) || body.crosses_curved(a, t) || body.faces_near(a, t).next().is_some() {
+                        continue;
+                    }
+                    if groups.iter().any(|o| !std::ptr::eq(o, g) && (t - dot(o.center, a)).abs() < 1.3 * o.radius) {
+                        continue;
+                    }
+                    if cuts.iter().any(|k| parallel(k.normal, a) && (dot(k.point, a) - t).abs() < (0.6 * r).max(gap)) {
+                        placed = true;
+                        break;
+                    }
+                    cuts.push(PlanCut {
+                        point: a.map(|x| x * t),
+                        normal: a,
+                        role: CutRole::Frame,
+                        feature: Some(g.feature),
+                        reason: format!("frame of the O-grid round the circle of radius {r:.4} at F{}: {h:.4} mm from its centre", g.feature),
+                    });
+                    placed = true;
+                    break;
+                }
+                if !placed {
+                    notes.push(format!(
+                        "F{}: no frame cut on the {} side along {:?} (the body's side or a face is the frame there)",
+                        g.feature,
+                        if sign > 0.0 { "positive" } else { "negative" },
+                        a
+                    ));
+                }
+            }
+        }
+    }
+    notes
+}
+
+/// The rings round the circles: each circle once (concentric ones the largest), with the
+/// half-side of its square frame (an O-grid's: the nearest frame cut or side of the body square
+/// to an in-plane axis; a butterfly's core: half the radius) and the cylindrical faces of the
+/// feature it projects onto.
+fn plan_rings(
+    circles: &[Circle],
+    d: V3,
+    body: &Clearance,
+    cuts: &[PlanCut],
+    shape: &Shape,
+    surfaces: &[Option<FaceSurface>],
+    features: &[FeatureNode],
+) -> Vec<PlanRing> {
+    let mut out: Vec<PlanRing> = Vec::new();
+    for c in circles {
+        let same = |r: &PlanRing| {
+            let off: V3 = std::array::from_fn(|k| c.center[k] - r.center[k]);
+            let along = dot(off, d);
+            dot(off, off) - along * along < 1e-12
+        };
+        if out.iter().any(|r| same(r) && r.radius >= c.radius) {
+            continue;
+        }
+        out.retain(|r| !same(r));
+        let frame = match c.kind {
+            RingKind::Butterfly => 0.5 * c.radius,
+            RingKind::OGrid => in_plane_axes(d)
+                .iter()
+                .flat_map(|&a| {
+                    let (lo, hi) = body.extent(a);
+                    let t = dot(c.center, a);
+                    let planes = cuts.iter().filter(move |k| parallel(k.normal, a)).map(move |k| (dot(k.point, a) - t).abs());
+                    [t - lo, hi - t].into_iter().chain(planes)
+                })
+                .filter(|x| *x > c.radius)
+                .fold(f64::INFINITY, f64::min),
+        };
+        let faces = features
+            .iter()
+            .filter(|f| f.id == c.feature)
+            .flat_map(|f| &f.faces)
+            .filter(|name| {
+                let Some(i) = shape.face_index(name) else { return false };
+                match surfaces.get(i as usize).copied().flatten() {
+                    Some(FaceSurface::Cylinder { origin, axis, radius }) => {
+                        let off: V3 = std::array::from_fn(|k| c.center[k] - origin[k]);
+                        let along = dot(off, d);
+                        parallel(axis, d)
+                            && (radius - c.radius).abs() < 1e-6 * c.radius.max(1.0)
+                            && dot(off, off) - along * along < 1e-9 * c.radius.max(1.0)
+                    }
+                    _ => false,
+                }
+            })
+            .cloned()
+            .collect();
+        if let Some(axis) = canonical(d) {
+            out.push(PlanRing {
+                feature: c.feature,
+                kind: c.kind,
+                center: c.center,
+                axis,
+                radius: c.radius,
+                frame: if frame.is_finite() { frame } else { 2.0 * c.radius },
+                faces,
+            });
+        }
+    }
+    out
+}
+
+/// The other bodies of the design the plan's copy features (a pattern, a mirror) made from the
+/// same timeline: each lists that feature too.
+fn copies_of(design: &Design, body: &str, features: &[PlanFeature]) -> Result<Vec<String>> {
+    let copy_ids: Vec<u64> = features.iter().filter(|f| f.template == "copy").map(|f| f.id).collect();
+    if copy_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for graph in design.features(None)? {
+        if graph.body != body && graph.features.iter().any(|f| copy_ids.contains(&f.id)) {
+            out.push(graph.body);
+        }
+    }
+    Ok(out)
+}
+
+/// Build the plan of `body` (a body of the design as opened).
+pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32, max_elements: usize) -> Result<MeshPlan> {
+    let shape = design.source_body(body).ok_or_else(|| {
+        let source = design.source_of(body).map(|s| format!(" (a cell of `{s}`: plan the body it was cut from)")).unwrap_or_default();
+        EngineError::Params(format!("no body `{body}` in the design as opened{source}"))
+    })?;
+    let graph = design.features(Some(body))?;
+    let features: Vec<FeatureNode> = graph.into_iter().next().map(|b| b.features).unwrap_or_default();
+    let surfaces = shape.face_surfaces()?;
+    let m = shape.measure()?;
+    let (lo, hi) = (m.bbox_min, m.bbox_max);
+    let diagonal = dot(std::array::from_fn(|k| hi[k] - lo[k]), std::array::from_fn(|k| hi[k] - lo[k])).sqrt();
+    if !(diagonal.is_finite() && diagonal > 0.0) {
+        return Err(EngineError::Params(format!("body `{body}` has no extent")));
+    }
+
+    // The sweep direction: the candidate most mapped features keep to, the first new body's own
+    // on a tie (candidates in the order the features give them).
+    let mapped: Vec<&FeatureNode> = features.iter().filter(|f| template_of(f).is_some() && f.error.is_none()).collect();
+    let primary = mapped.iter().find(|f| f.operation.as_deref() == Some("new_body")).and_then(|f| feature_directions(f).first().copied());
+    let mut candidates: Vec<V3> = Vec::new();
+    for d in primary.into_iter().chain(mapped.iter().flat_map(|f| feature_directions(f))).filter_map(canonical) {
+        if !candidates.iter().any(|c| parallel(*c, d)) {
+            candidates.push(d);
+        }
+    }
+    let score = |d: V3| mapped.iter().filter(|f| compatible(f, d, shape, &surfaces)).count();
+    let best = candidates.iter().map(|d| score(*d)).max().unwrap_or(0);
+    let directions: Vec<V3> = candidates.iter().copied().filter(|d| score(*d) == best && best > 0).collect();
+    let direction = directions.first().copied();
+
+    let mut plan_features = Vec::new();
+    let mut unmapped = Vec::new();
+    let mut notes = Vec::new();
+    let mut circle_list = Vec::new();
+    let mut imprints = Vec::new();
+    // The thinnest wall the features give, with what gives it.
+    let mut thin: Option<(f64, String)> = None;
+    let mut thinner = |t: f64, why: String| {
+        if t.is_finite() && t > 0.0 && thin.as_ref().is_none_or(|(x, _)| t < *x) {
+            thin = Some((t, why));
+        }
+    };
+    for f in &features {
+        let unmap = |reason: String| PlanUnmapped { id: f.id, name: f.name.clone(), kind: f.kind.clone(), reason };
+        if let Some(e) = &f.error {
+            unmapped.push(unmap(format!("failed to rebuild: {e}")));
+            continue;
+        }
+        let Some(template) = template_of(f) else {
+            let mut reason = unmapped_reason(f);
+            if let Some(d) = direction
+                && !f.faces.is_empty()
+                && faces_prismatic(shape, &surfaces, &f.faces, d)
+            {
+                reason.push_str("; its faces are prismatic along the sweep, so the sweep meshes them as part of the cross-section");
+            }
+            unmapped.push(unmap(reason));
+            continue;
+        };
+        let Some(d) = direction else {
+            unmapped.push(unmap("no sweep direction keeps to the body's features".into()));
+            continue;
+        };
+        if !compatible(f, d, shape, &surfaces) {
+            unmapped.push(unmap(format!("not prismatic along the sweep direction {d:?}: it needs blocks of its own (projection blocking, #399)")));
+            continue;
+        }
+        let v = |k: &str| f.values.get(k).copied();
+        let note = match (f.kind.as_str(), template) {
+            ("extrude", "sweep") => {
+                if let Some(t) = v("distance").filter(|_| f.direction.is_some_and(|x| parallel(x, d))) {
+                    thinner(t, format!("{} extent", f.name));
+                }
+                for p in f.sketch.iter().flat_map(|sk| &sk.profiles) {
+                    if let Some(t) = profile_wall(p) {
+                        thinner(t, format!("{} profile's thinnest wall", f.name));
+                    }
+                }
+                let along = if f.direction.is_some_and(|x| parallel(x, d)) {
+                    "along its stored direction"
+                } else {
+                    "across its extrude direction (its profile is prismatic along the sweep)"
+                };
+                format!("the profile's cross-section swept {along}; circles butterflied, circular holes O-gridded")
+            }
+            ("extrude", _) => "its profile imprinted on the swept cross-section between the levels of its extent".into(),
+            ("box", t) => {
+                let dims: Vec<f64> = ["length", "width", "height"].iter().filter_map(|k| v(k)).collect();
+                if let Some(min) = dims.iter().copied().reduce(f64::min) {
+                    thinner(min, format!("{} thinnest side", f.name));
+                }
+                if t == "block" {
+                    "a mapped block (part of the swept cross-section)".into()
+                } else {
+                    "its rectangle imprinted on the swept cross-section".into()
+                }
+            }
+            ("cylinder", "butterfly") => format!("a butterfly round its circle (radius {:.4})", v("radius").unwrap_or_default()),
+            ("cylinder", _) => format!("an O-grid round its circle (radius {:.4})", v("radius").unwrap_or_default()),
+            ("hole", _) => format!("an O-grid round the hole (diameter {:.4}) along its stored axis", v("diameter").unwrap_or_default()),
+            ("shell", _) => {
+                let t = v("thickness").unwrap_or_default();
+                thinner(t, format!("{} thickness", f.name));
+                format!("{layers} layers through the {t:.4} mm wall")
+            }
+            ("combine", _) => format!("the cross-sections of {} imprinted on the target", f.tools.join(", ")),
+            ("pattern" | "mirror", _) => format!("the instance meshed and repeated by {} transforms", f.transforms.len()),
+            ("split", _) => "the pieces meshed as cells of the split".into(),
+            _ => String::new(),
+        };
+        circle_list.extend(placed(circles(f, d), f, d, shape, &surfaces));
+        // A tool: joined or cut by its own operation, or the tool body of a combine.
+        let role = match f.operation.as_deref() {
+            Some("join") => Some(false),
+            Some("cut") => Some(true),
+            _ => features.iter().find(|c| c.kind == "combine" && c.tools.iter().any(|t| f.creates.contains(t))).and_then(|c| {
+                match c.operation.as_deref() {
+                    Some("join") => Some(false),
+                    Some("cut") => Some(true),
+                    _ => None,
+                }
+            }),
+        };
+        let template = if role.is_some() && template == "block" { "imprint" } else { template };
+        if let Some(cut) = role {
+            imprints.extend(imprint_of(f, d, cut));
+        }
+        plan_features.push(PlanFeature {
+            id: f.id,
+            name: f.name.clone(),
+            kind: f.kind.clone(),
+            template: template.into(),
+            note,
+            faces: f.faces.clone(),
+        });
+    }
+
+    // The element size: at most the one asked for (or the meshers' default), small enough for
+    // `layers` through the thinnest wall, but not so small the body takes more than
+    // `max_elements`.
+    let asked = size.unwrap_or(DEFAULT_RELATIVE_SIZE * diagonal);
+    let mut h = asked;
+    if let Some((t, why)) = &thin {
+        let through = t / f64::from(layers);
+        if through < h {
+            notes.push(format!("size {through:.4} mm: {layers} layers through the {t:.4} mm wall ({why})"));
+            h = through;
+        }
+    }
+    let floor = (m.volume.abs() / max_elements as f64).cbrt();
+    if h < floor {
+        notes.push(format!("size {floor:.4} mm instead of {h:.4}: at most {max_elements} elements (fewer layers through the thinnest wall)"));
+        h = floor;
+    }
+    let mut cuts = Vec::new();
+    let mut rings = Vec::new();
+    if let Some(d) = direction {
+        let planes = surfaces
+            .iter()
+            .zip(shape.faces())
+            .filter_map(|(s, f)| match s {
+                Some(FaceSurface::Plane { normal, point }) => Some((*normal, dot(*normal, *point), f.name.as_str())),
+                _ => None,
+            })
+            .collect();
+        // The curved faces' points, from a tessellation at the meshers' default tolerance.
+        let mesh = shape.tessellate(1e-3 * diagonal)?;
+        let mut curved: Vec<Vec<V3>> = vec![Vec::new(); surfaces.len()];
+        for (t, &f) in mesh.triangles.iter().zip(&mesh.tri_face) {
+            if !matches!(surfaces.get(f as usize), Some(Some(FaceSurface::Plane { .. })))
+                && let Some(pts) = curved.get_mut(f as usize)
+            {
+                pts.extend(t.iter().filter_map(|&i| mesh.positions.get(i as usize).copied()));
+            }
+        }
+        curved.retain(|p| !p.is_empty());
+        let corners = (0..8)
+            .map(|i| [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }])
+            .collect();
+        let body = Clearance { corners, planes, curved, gap: 0.5 * h };
+        imprint_cuts(&imprints, d, &body, &mut cuts);
+        notes.extend(frame_cuts(&circle_list, d, &body, &mut cuts));
+        rings = plan_rings(&circle_list, d, &body, &cuts, shape, &surfaces, &features);
+    }
+    // The tessellation: the meshers' default, finer where the body has small curves (a hundredth
+    // of the smallest radius), so short blend edges stay edges.
+    let radius = surfaces
+        .iter()
+        .filter_map(|s| match s {
+            Some(FaceSurface::Cylinder { radius, .. }) | Some(FaceSurface::Sphere { radius, .. }) => Some(*radius),
+            Some(FaceSurface::Torus { minor, .. }) => Some(*minor),
+            _ => None,
+        })
+        .fold(f64::INFINITY, f64::min);
+    let tolerance = (1e-3 * diagonal).min(0.01 * radius).max(MIN_RELATIVE_TOLERANCE * diagonal);
+    if tolerance < 1e-3 * diagonal {
+        notes.push(format!("tolerance {tolerance:.4} mm: a hundredth of the smallest radius ({radius:.4} mm)"));
+    }
+    let mesher = if cuts.is_empty() { PlanMesher::Sweep } else { PlanMesher::Cells };
+    let copies = copies_of(design, body, &plan_features)?;
+    let plan = MeshPlan {
+        body: body.into(),
+        size: h,
+        tolerance: Some(tolerance),
+        layers,
+        mesher,
+        direction,
+        directions,
+        features: plan_features,
+        cuts,
+        rings,
+        copies,
+        unmapped,
+        notes,
+    };
+    plan.check()?;
+    Ok(plan)
+}
+
+fn plan(s: &mut Session, p: &Value) -> Result<Value> {
+    let body: String = super::req(p, "body")?;
+    let size: Option<f64> = super::opt(p, "size")?;
+    if size.is_some_and(|v| !(v.is_finite() && v > 0.0)) {
+        return Err(EngineError::param("size", ProblemKind::NotPositive));
+    }
+    let layers: u32 = super::opt(p, "layers")?.unwrap_or(2);
+    if !(1..=10).contains(&layers) {
+        return Err(EngineError::Params("`layers` must be 1 to 10".into()));
+    }
+    let max_elements: usize = super::opt(p, "max_elements")?.unwrap_or(DEFAULT_MAX_ELEMENTS);
+    if !(1..=MAX_ELEMENTS).contains(&max_elements) {
+        return Err(EngineError::Params(format!("`max_elements` must be 1 to {MAX_ELEMENTS}")));
+    }
+    let name: String = super::opt(p, "name")?.unwrap_or_else(|| MeshPlan::default_name(&body));
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let plan = build(design, &body, size, layers, max_elements)?;
+    s.model.set_mesh_plan(&name, plan.clone())?;
+    let mut reply = serde_json::to_value(&plan).map_err(|e| EngineError::Params(e.to_string()))?;
+    if let Some(o) = reply.as_object_mut() {
+        o.insert("name".into(), json!(name));
+    }
+    Ok(reply)
+}
+
+/// The partitions (and their datums) an earlier apply of plan `name` made.
+fn plan_cut_names(s: &Session, name: &str) -> Vec<String> {
+    let prefix = format!("{name}-cut");
+    s.model
+        .partitions()
+        .iter()
+        .map(|p| p.name.clone())
+        .filter(|n| n.strip_prefix(&prefix).is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit())))
+        .collect()
+}
+
+fn apply(s: &mut Session, p: &Value) -> Result<Value> {
+    let (name, plan) = match p.get("plan") {
+        Some(Value::String(n)) => (n.clone(), s.model.mesh_plan(n).cloned().ok_or_else(|| EngineError::Params(format!("no mesh plan `{n}`")))?),
+        Some(v @ Value::Object(_)) => {
+            let plan: MeshPlan = serde_json::from_value(v.clone()).map_err(|e| EngineError::Params(format!("`plan`: {e}")))?;
+            let name: String = super::opt(p, "name")?.unwrap_or_else(|| MeshPlan::default_name(&plan.body));
+            s.model.set_mesh_plan(&name, plan.clone())?;
+            (name, plan)
+        }
+        _ => return Err(EngineError::Params("`plan` must be a saved plan's name or a plan object".into())),
+    };
+    let mut reply = apply_one(s, &name, &plan)?;
+    // The copies: each meshed by a plan of its own at this plan's size, saved beside it.
+    let mut copies = Vec::with_capacity(plan.copies.len());
+    for copy in &plan.copies {
+        let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+        if design.source_body(copy).is_none() {
+            return Err(EngineError::Params(format!("mesh plan `{name}`: no copy `{copy}` in the design")));
+        }
+        let mut theirs = build(design, copy, Some(plan.size), plan.layers, MAX_ELEMENTS)?;
+        // Its copies are this body and the others: they are meshed here, not again.
+        theirs.copies.clear();
+        theirs.size = plan.size;
+        let copy_name = MeshPlan::default_name(copy);
+        s.model.set_mesh_plan(&copy_name, theirs.clone())?;
+        let r = apply_one(s, &copy_name, &theirs)?;
+        take_replaced(&mut reply, &r);
+        copies.push(json!({"body": copy, "plan": copy_name, "cells": r["cells"], "elements": r["elements"], "min_scaled_jacobian": r["min_scaled_jacobian"], "conforming": r["conforming"]}));
+    }
+    let mins: Vec<f64> = std::iter::once(&reply).chain(&copies).filter_map(|r| r["min_scaled_jacobian"].as_f64()).collect();
+    if let Some(o) = reply.as_object_mut() {
+        if !copies.is_empty() {
+            o.insert("copies".into(), json!(copies));
+            o.insert("min_scaled_jacobian".into(), json!(mins.iter().copied().reduce(f64::min)));
+        }
+        let results: Vec<&str> = s.solved_steps().collect();
+        if o.get("replaced").is_some_and(|r| r.as_array().is_some_and(|a| !a.is_empty())) && !results.is_empty() {
+            o.insert("results_cleared".into(), json!(results));
+        }
+    }
+    Ok(reply)
+}
+
+/// The bodies `mesh.plan.apply` fills (replace.rs): the cells of the plan's body and of its
+/// copies, as the design has them now (the body itself when it is not cut).
+pub(crate) fn plan_bodies(s: &Session, p: &Value) -> Result<Vec<String>> {
+    let plan = match p.get("plan") {
+        Some(Value::String(n)) => s.model.mesh_plan(n).cloned().ok_or_else(|| EngineError::Params(format!("no mesh plan `{n}`")))?,
+        Some(v @ Value::Object(_)) => serde_json::from_value(v.clone()).map_err(|e| EngineError::Params(format!("`plan`: {e}")))?,
+        _ => return Err(EngineError::Params("`plan` must be a saved plan's name or a plan object".into())),
+    };
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let sources: Vec<&str> = std::iter::once(plan.body.as_str()).chain(plan.copies.iter().map(String::as_str)).collect();
+    Ok(design.bodies.iter().filter(|b| design.source_of(&b.name).is_some_and(|x| sources.contains(&x))).map(|b| b.name.clone()).collect())
+}
+
+/// Move a mesher's `replaced` and `stale_sets` (replace.rs) into `into`, which reports them once
+/// for the whole command.
+fn take_replaced(into: &mut Value, from: &Value) {
+    for key in ["replaced", "stale_sets"] {
+        let Some(items) = from.get(key).and_then(Value::as_array).filter(|a| !a.is_empty()) else { continue };
+        if let Some(o) = into.as_object_mut() {
+            let list = o.entry(key).or_insert_with(|| json!([]));
+            if let Some(list) = list.as_array_mut() {
+                for item in items {
+                    if !list.contains(item) {
+                        list.push(item.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Carry out one plan: its cuts, then the mesh of the cells (or of the body when it has none).
+fn apply_one(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Value> {
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let source = design
+        .source_body(&plan.body)
+        .ok_or_else(|| EngineError::Params(format!("the plan is of body `{}`, which the design does not have", plan.body)))?;
+    // The chordal tolerance the cells are tessellated with, from the body's extent (as mesh.cells
+    // takes it from the cells'), for the check of the cells and the mesher alike.
+    let tolerance = match plan.tolerance {
+        Some(t) => t,
+        None => {
+            let b = source.measure()?;
+            1e-3 * (0..3).map(|k| (b.bbox_max[k] - b.bbox_min[k]).powi(2)).sum::<f64>().sqrt()
+        }
+    };
+    let cuts: Vec<&PlanCut> = plan.cuts.iter().collect();
+    let (cleared, made, skipped) = cut(s, name, &plan.body, &cuts, tolerance)?;
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let cells: Vec<String> = design.bodies.iter().filter(|b| design.source_of(&b.name) == Some(plan.body.as_str())).map(|b| b.name.clone()).collect();
+    // No fallback to a coarser plan: a cell the hex meshers cannot take is the error, with the
+    // cuts that made it, so the plan is edited rather than quietly paved.
+    let mesh = if cells.len() > 1 {
+        (super::cells::CELLS.run)(s, &json!({"bodies": cells, "size": plan.size, "default": "hex", "tolerance": tolerance}))
+    } else {
+        let body = cells.first().cloned().unwrap_or_else(|| plan.body.clone());
+        (super::hex::HEX_GENERATE.run)(s, &json!({"body": body, "size": plan.size, "method": "swept", "tolerance": tolerance}))
+    }
+    .map_err(|e| EngineError::Params(format!("mesh plan `{name}`: the cells {cells:?} (cuts {made:?}) do not mesh all-hex: {e}")))?;
+    let summary = summary(&mesh, &cells);
+    // What today's meshers cannot express yet: the rings round circles are built by the
+    // projection mesher (#399); until then the frame cuts box the circle and the sweep meshes the
+    // cell's cross-section.
+    let pending: Vec<Value> = plan
+        .rings
+        .iter()
+        .map(|r| {
+            let what = match r.kind {
+                RingKind::OGrid => "O-grid ring round the hole",
+                RingKind::Butterfly => "butterfly round the circle",
+            };
+            json!({"feature": r.feature, "ring": r.kind, "radius": r.radius, "needs": format!("the {what} is built by the projection blocking mesher (#399); today the frame cuts box it and the swept cell's cross-section is meshed by the sweep's quad mesher")})
+        })
+        .collect();
+    let mut reply = json!({
+        "name": name,
+        "body": plan.body,
+        "cuts": made,
+        "skipped_cuts": skipped.iter().map(|(n, why)| json!({"name": n, "reason": why})).collect::<Vec<_>>(),
+        "cells": cells,
+        "size": plan.size,
+        "tolerance": tolerance,
+        "elements": summary.elements,
+        "min_scaled_jacobian": summary.min_scaled_jacobian,
+        "all_hex": summary.all_hex,
+        "conforming": summary.conforming,
+        "mapped": plan.features.iter().map(|f| json!({"id": f.id, "name": f.name, "type": f.kind, "template": f.template})).collect::<Vec<_>>(),
+        "pending": pending,
+        "unmapped": plan.unmapped,
+        "mesh": mesh,
+    });
+    reply = cleared.report_if_any(s, reply);
+    if let Some(m) = reply.get_mut("mesh").and_then(Value::as_object_mut) {
+        let theirs = json!({"replaced": m.remove("replaced"), "stale_sets": m.remove("stale_sets")});
+        m.remove("results_cleared");
+        take_replaced(&mut reply, &theirs);
+    }
+    if let Some(o) = reply.as_object_mut() {
+        // Reported once for the whole command, by apply.
+        o.remove("results_cleared");
+    }
+    Ok(reply)
+}
+
+/// Replace plan `name`'s partitions of `body` with `cuts` (named `<name>-cut<k>` after their
+/// place in the plan). A cut the kernel cannot make (or that divides nothing left), or that
+/// leaves a cell whose boundary no mesher takes at `tolerance` (a plane the tessellation does
+/// not close along), is left out: the latest such cut first, one at a time. Returns the meshes
+/// the first recut removed, the cuts made and those left out with why.
+#[allow(clippy::type_complexity)]
+fn cut(
+    s: &mut Session,
+    name: &str,
+    body: &str,
+    cuts: &[&PlanCut],
+    tolerance: f64,
+) -> Result<(super::replace::Cleared, Vec<String>, Vec<(String, String)>)> {
+    for old in plan_cut_names(s, name) {
+        s.model.remove_partition(&old)?;
+        if s.model.datum_users(&old).is_empty() && s.model.datum(&old).is_some() {
+            s.model.remove_datum(&old)?;
+        }
+    }
+    let mut names = Vec::with_capacity(cuts.len());
+    for (k, c) in cuts.iter().enumerate() {
+        let n = format!("{name}-cut{}", k + 1);
+        if s.model.datum(&n).is_some() {
+            return Err(EngineError::Params(format!("datum `{n}` exists and is not the plan's: rename it or the plan")));
+        }
+        s.model.add_datum(&n, Datum::Plane { point: c.point, normal: c.normal })?;
+        s.model.add_partition(Partition { name: n.clone(), datum: n.clone(), bodies: vec![body.to_string()], suppressed: false })?;
+        names.push(n);
+    }
+    let cleared = super::datum::recut(s)?;
+    let mut skipped: Vec<(String, String)> = Vec::new();
+    for _ in 0..=names.len() {
+        let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+        let live: Vec<&String> = names.iter().filter(|n| !skipped.iter().any(|(k, _)| k == *n)).collect();
+        let mut failed: Vec<(String, String)> = live
+            .iter()
+            .filter_map(|n| {
+                let feature = format!("partition {n}");
+                let messages: Vec<&str> = design.errors.iter().filter(|e| e.feature == feature).map(|e| e.message.as_str()).collect();
+                (!messages.is_empty()).then(|| ((*n).clone(), messages.join("; ")))
+            })
+            .collect();
+        if failed.is_empty() {
+            let bad = design.bodies.iter().filter(|b| design.source_of(&b.name) == Some(body)).find_map(|cell| {
+                let why = super::datum::unmeshable(cell, Some(tolerance)).err()?;
+                // The latest of the plan's cuts that bound the cell.
+                let latest = live.iter().rev().find(|n| cell.faces().iter().any(|f| f.name.starts_with(&format!("partition:{n}:"))))?;
+                Some(((*latest).clone(), format!("cell `{}` it bounds has a boundary no mesher takes ({why})", cell.name)))
+            });
+            failed.extend(bad);
+        }
+        if failed.is_empty() {
+            break;
+        }
+        for (n, _) in &failed {
+            s.model.remove_partition(n)?;
+            s.model.remove_datum(n)?;
+        }
+        skipped.extend(failed);
+        // The meshes this recut removes are those of cells the first one made, which had none.
+        super::datum::recut(s)?;
+    }
+    let made = names.into_iter().filter(|n| !skipped.iter().any(|(f, _)| f == n)).collect();
+    Ok((cleared, made, skipped))
+}
+
+/// What a mesher's reply says of the mesh a plan made.
+struct Summary {
+    min_scaled_jacobian: Option<f64>,
+    elements: usize,
+    /// Every element a hexahedron.
+    all_hex: bool,
+    /// The cells joined node to node into one mesh: every interface merged (none tied), and the
+    /// merged interfaces connect every cell.
+    conforming: bool,
+}
+
+/// The [`Summary`] of a mesher's reply (`mesh.hex.generate`'s `bodies`, or `mesh.cells`'
+/// `cells` and `interfaces`) over `cells`.
+fn summary(mesh: &Value, cells: &[String]) -> Summary {
+    let mut min: Option<f64> = None;
+    let (mut elements, mut all_hex) = (0usize, true);
+    let rows = mesh.get("bodies").or_else(|| mesh.get("cells")).and_then(Value::as_array).into_iter().flatten();
+    for b in rows {
+        if let Some(v) = b.get("quality").and_then(|q| q.get("min_scaled_jacobian")).and_then(Value::as_f64) {
+            min = Some(min.map_or(v, |m: f64| m.min(v)));
+        }
+        elements += b.get("elements").and_then(Value::as_u64).map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+        all_hex &= b.get("kind").and_then(Value::as_str).is_some_and(|k| k.starts_with("hex"));
+    }
+    // The cells the merged interfaces join, grown from the first.
+    let interfaces: Vec<&Value> = mesh.get("interfaces").and_then(Value::as_array).into_iter().flatten().collect();
+    let merged = |i: &Value| i.get("joined").and_then(Value::as_str) == Some("merged");
+    let mut joined: Vec<&str> = cells.first().map(String::as_str).into_iter().collect();
+    loop {
+        let before = joined.len();
+        for i in interfaces.iter().copied().filter(|i| merged(i)) {
+            let pair: Vec<&str> = i.get("cells").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+            if let [a, b] = pair.as_slice() {
+                match (joined.contains(a), joined.contains(b)) {
+                    (true, false) => joined.push(b),
+                    (false, true) => joined.push(a),
+                    _ => {}
+                }
+            }
+        }
+        if joined.len() == before {
+            break;
+        }
+    }
+    let conforming = interfaces.iter().all(|i| merged(i)) && cells.iter().all(|c| joined.contains(&c.as_str()));
+    Summary { min_scaled_jacobian: min, elements, all_hex, conforming }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use crate::Session;
+
+    fn open_script(script: &str) -> (crate::tests::TempDir, Session) {
+        let bytes = fieldcraft_geometry::script_design(script).unwrap();
+        let (dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        (dir, s)
+    }
+
+    fn open(commands: Value) -> (crate::tests::TempDir, Session) {
+        open_script(&json!({"commands": commands}).to_string())
+    }
+
+    fn templates(plan: &Value) -> Vec<(String, String)> {
+        plan["features"].as_array().unwrap().iter().map(|f| (f["type"].as_str().unwrap().into(), f["template"].as_str().unwrap().into())).collect()
+    }
+
+    fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        list.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    }
+
+    /// Plan, apply, and check the mesh is all-hex, conforming and fills the body.
+    fn apply(s: &mut Session, plan: &Value, min_sj: f64) -> Value {
+        let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
+        assert_eq!((r["all_hex"].as_bool(), r["conforming"].as_bool()), (Some(true), Some(true)), "{r}");
+        let sj = r["min_scaled_jacobian"].as_f64().unwrap();
+        assert!(sj >= min_sj, "min scaled Jacobian {sj} < {min_sj}: {r}");
+        r
+    }
+
+    /// The mesh's volume against the bodies'.
+    fn volume_matches(s: &mut Session) {
+        let q = s.execute("mesh.quality", &json!({})).unwrap();
+        let bodies = s.execute("geometry.bodies", &json!({})).unwrap();
+        let geometry: f64 = bodies.as_array().unwrap().iter().map(|b| b["volume"].as_f64().unwrap()).sum();
+        let mesh = q["volume"].as_f64().unwrap_or_else(|| q["metrics"]["volume"]["sum"].as_f64().unwrap_or_default());
+        if mesh > 0.0 {
+            assert!((mesh - geometry).abs() < 0.02 * geometry, "mesh volume {mesh} vs {geometry}");
+        }
+    }
+
+    #[test]
+    fn a_plate_with_holes_is_a_block_with_o_grids_framed_by_cuts() {
+        let (_d, mut s) = open(json!([
+            {"command": "solid.box", "params": {"length": 60, "width": 40, "height": 6, "body_name": "Plate"}},
+            {"command": "solid.hole", "params": {"position": [15, 20, 6], "diameter": 8, "depth": 6}},
+            {"command": "solid.hole", "params": {"position": [45, 20, 6], "diameter": 8, "depth": 6}},
+        ]));
+        let plan = s.execute("mesh.plan", &json!({"body": "Plate"})).unwrap();
+        assert_eq!(templates(&plan), pairs(&[("box", "block"), ("hole", "o_grid"), ("hole", "o_grid")]));
+        assert_eq!(plan["direction"], json!([0.0, 0.0, 1.0]));
+        assert_eq!(plan["mesher"], "cells");
+        // Two O-grid rings, each projecting onto its hole's walls, framed short of the other hole.
+        let rings = plan["rings"].as_array().unwrap();
+        assert_eq!(rings.len(), 2, "{plan}");
+        for r in rings {
+            assert_eq!((r["kind"].as_str(), r["radius"].as_f64()), (Some("o_grid"), Some(4.0)));
+            assert!(!r["faces"].as_array().unwrap().is_empty(), "{r}");
+            assert!(r["frame"].as_f64().unwrap() > 4.0);
+        }
+        // The cut between the holes, and the frames above and below them.
+        assert!(plan["cuts"].as_array().unwrap().iter().any(|c| c["point"][0] == 30.0 && c["normal"] == json!([1.0, 0.0, 0.0])), "{plan}");
+        let r = apply(&mut s, &plan, 0.5);
+        assert!(r["cells"].as_array().unwrap().len() > 1, "{r}");
+        assert_eq!(r["pending"].as_array().unwrap().len(), 2, "{r}");
+        volume_matches(&mut s);
+        // Saved: applied again by name it replaces its cuts and mesh.
+        let again = s.execute("mesh.plan.apply", &json!({"plan": "Plan-Plate"})).unwrap();
+        assert_eq!(again["cuts"], r["cuts"]);
+        assert_eq!(s.model.partitions().len(), r["cuts"].as_array().unwrap().len());
+        assert!(!again["replaced"].as_array().unwrap().is_empty(), "{again}");
+    }
+
+    #[test]
+    fn a_sketched_plate_sweeps_its_profile_and_o_grids_its_circle() {
+        let bytes = fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap();
+        let (_d, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        let body = s.execute("geometry.bodies", &json!({})).unwrap()[0]["name"].as_str().unwrap().to_string();
+        let plan = s.execute("mesh.plan", &json!({"body": body})).unwrap();
+        assert_eq!(templates(&plan), pairs(&[("extrude", "sweep"), ("extrude", "imprint")]));
+        assert_eq!(plan["rings"].as_array().unwrap().len(), 1, "{plan}");
+        assert_eq!(plan["rings"][0]["kind"], "o_grid");
+        apply(&mut s, &plan, 0.5);
+        volume_matches(&mut s);
+    }
+
+    #[test]
+    fn a_cylinder_is_a_butterfly_swept_along_its_axis() {
+        let (_d, mut s) = open(json!([{"command": "solid.cylinder", "params": {"diameter": 20, "height": 30, "body_name": "Cyl"}}]));
+        let plan = s.execute("mesh.plan", &json!({"body": "Cyl"})).unwrap();
+        assert_eq!(templates(&plan), pairs(&[("cylinder", "butterfly")]));
+        assert_eq!((plan["mesher"].as_str(), plan.get("cuts")), (Some("sweep"), None));
+        assert_eq!(plan["rings"][0]["kind"], "butterfly");
+        assert_eq!(plan["rings"][0]["frame"], 5.0);
+        apply(&mut s, &plan, 0.7);
+        volume_matches(&mut s);
+    }
+
+    #[test]
+    fn a_joined_boss_is_a_butterfly_on_the_block() {
+        let (_d, mut s) = open(json!([
+            {"command": "solid.box", "params": {"length": 40, "width": 40, "height": 10, "body_name": "Base"}},
+            {"command": "solid.cylinder", "params": {"diameter": 12, "height": 8, "base": [20, 20, 10], "operation": "join", "targets": ["Base"]}},
+        ]));
+        let plan = s.execute("mesh.plan", &json!({"body": "Base"})).unwrap();
+        assert_eq!(templates(&plan), pairs(&[("box", "block"), ("cylinder", "butterfly")]));
+        assert_eq!(plan["rings"][0]["kind"], "butterfly");
+        apply(&mut s, &plan, 0.5);
+        volume_matches(&mut s);
+    }
+
+    #[test]
+    fn a_shelled_box_takes_layers_through_its_wall() {
+        let (_d, mut s) = open(json!([
+            {"command": "solid.box", "params": {"length": 40, "width": 30, "height": 20, "body_name": "Case"}},
+            {"command": "solid.shell", "params": {"faces": [[20, 15, 20]], "thickness": 2, "body": "Case"}},
+        ]));
+        let plan = s.execute("mesh.plan", &json!({"body": "Case", "layers": 2})).unwrap();
+        assert_eq!(templates(&plan), pairs(&[("box", "block"), ("shell", "layers")]));
+        // Two elements through the 2 mm wall.
+        assert_eq!(plan["size"], 1.0);
+        apply(&mut s, &plan, 0.9);
+        volume_matches(&mut s);
+    }
+
+    #[test]
+    fn a_patterned_and_mirrored_part_meshes_every_copy() {
+        let (_d, mut s) = open(json!([
+            {"command": "solid.box", "params": {"length": 10, "width": 10, "height": 4, "body_name": "Tab"}},
+            {"command": "solid.hole", "params": {"position": [5, 5, 4], "diameter": 4, "depth": 4}},
+            {"command": "solid.pattern.rectangular", "params": {"bodies": ["Tab"], "dir1": [1, 0, 0], "count1": 3, "spacing1": 15}},
+            {"command": "solid.mirror", "params": {"bodies": ["Tab"], "plane": {"origin": [0, 0, 0], "normal": [0, 1, 0]}}},
+        ]));
+        let plan = s.execute("mesh.plan", &json!({"body": "Tab.1"})).unwrap();
+        assert_eq!(templates(&plan), pairs(&[("box", "block"), ("hole", "o_grid"), ("pattern", "copy"), ("mirror", "copy")]));
+        let copies = plan["copies"].as_array().unwrap();
+        assert_eq!(copies.len(), 3, "{plan}");
+        let r = apply(&mut s, &plan, 0.5);
+        assert_eq!(r["copies"].as_array().unwrap().len(), 3, "{r}");
+        for c in r["copies"].as_array().unwrap() {
+            assert_eq!(c["conforming"], true, "{c}");
+            assert_eq!(c["elements"], r["elements"], "a copy meshes as the instance: {c}");
+        }
+        // Every body meshed.
+        for b in s.execute("geometry.bodies", &json!({})).unwrap().as_array().unwrap() {
+            assert!(!s.model.body_elements(b["name"].as_str().unwrap()).is_empty(), "{b}");
+        }
+    }
+
+    #[test]
+    fn fillets_are_unmapped_with_the_reason_and_hostile_plans_are_refused() {
+        let (_d, mut s) = open(json!([
+            {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 20, "body_name": "B"}},
+            {"command": "solid.fillet", "params": {"edges": [[20, 10, 20]], "radius": 2}},
+        ]));
+        let plan = s.execute("mesh.plan", &json!({"body": "B"})).unwrap();
+        let unmapped = plan["unmapped"].as_array().unwrap();
+        assert_eq!(unmapped.len(), 1, "{plan}");
+        assert_eq!(unmapped[0]["type"], "fillet");
+        assert!(unmapped[0]["reason"].as_str().unwrap().contains("step 3"), "{plan}");
+        let mut bad = plan.clone();
+        bad["size"] = json!(-1.0);
+        assert!(s.execute("mesh.plan.apply", &json!({"plan": bad})).is_err());
+        let mut bad = plan.clone();
+        bad["rings"] = json!([{"feature": 1, "kind": "o_grid", "center": [0, 0, 0], "axis": [0, 0, 0], "radius": 1, "frame": 2}]);
+        assert!(s.execute("mesh.plan.apply", &json!({"plan": bad})).is_err());
+        assert!(s.execute("mesh.plan", &json!({"body": "Nope"})).is_err());
+        assert!(s.execute("mesh.plan", &json!({"body": "B", "layers": 0})).is_err());
+        assert!(s.execute("mesh.plan", &json!({"body": "B", "size": f64::MAX})).is_ok());
+        assert!(s.execute("mesh.plan.apply", &json!({"plan": "Nope"})).is_err());
+    }
+
+    /// The feature graph of every corpus design and the crank arm: every body lists the features
+    /// that built it, and a plan builds for every body (fillets, revolves and lofts unmapped).
+    #[test]
+    fn every_corpus_design_has_a_feature_graph_and_a_plan() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
+        let mut scripts: Vec<(String, String)> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| {
+                let path = e.ok()?.path().join("recipe.json");
+                Some((path.parent()?.file_name()?.to_string_lossy().into_owned(), std::fs::read_to_string(path).ok()?))
+            })
+            .collect();
+        scripts.push(("crank-arm".into(), crate::sample::CRANK_ARM.into()));
+        scripts.sort();
+        assert!(scripts.len() > 10);
+        for (name, script) in scripts {
+            let (_d, mut s) = open_script(&script);
+            let graph = s.execute("geometry.features", &json!({})).unwrap();
+            for b in graph["bodies"].as_array().unwrap() {
+                let features = b["features"].as_array().unwrap();
+                assert!(!features.is_empty(), "{name}: {b}");
+                // Every feature's faces are faces of the body.
+                let body = b["body"].as_str().unwrap();
+                let plan = s.execute("mesh.plan", &json!({"body": body}));
+                let plan = plan.unwrap_or_else(|e| panic!("{name}/{body}: {e}"));
+                let mapped = plan["features"].as_array().map_or(0, Vec::len);
+                let unmapped = plan["unmapped"].as_array().map_or(0, Vec::len);
+                assert_eq!(mapped + unmapped, features.len(), "{name}/{body}: {plan}");
+            }
+        }
+    }
+}

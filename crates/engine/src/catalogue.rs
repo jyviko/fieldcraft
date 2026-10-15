@@ -244,7 +244,7 @@ pub static CATALOGUE: &[Capability] = &[
         Geometry,
         "Inspect",
         "List the open design's bodies, volumes and named faces, edges and vertices",
-        &["geometry.centre"],
+        &["geometry.centre", "geometry.features"],
     ),
     ready("geometry.tessellate", "Tessellate", Geometry, "Inspect", "Tessellate a body into a face-tagged boundary surface"),
     ready(
@@ -331,6 +331,14 @@ pub static CATALOGUE: &[Capability] = &[
         "Structured Hex",
         "One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions",
         &["mesh.hex.blocks"],
+    ),
+    ready_more(
+        "mesh.plan",
+        "Mesh Plan",
+        Mesh,
+        "Structured Hex",
+        "A hex-meshing plan from the features that built a body (sweeps, blocks, O-grids, layers, imprints, copies); saved, editable, applied with the structured meshers",
+        &["mesh.plan.apply"],
     ),
     ready_more(
         "mesh.block",

@@ -33,6 +33,16 @@ pub const BODIES: CommandSpec = CommandSpec {
     run: bodies,
 };
 
+pub const FEATURES: CommandSpec = CommandSpec {
+    id: "geometry.features",
+    label: "Feature Graph",
+    params: r#"{"body"?: "Base" (default: every body)} — the features of the SolidCraft timeline that built each body of the open design, in order (read-only): each feature's `id` (`F<id>` in persistent names), `name`, `type` (extrude, box, cylinder, hole, shell, fillet, combine, pattern, mirror, split, …), `operation` (new_body, join, cut, intersect), `values` (its numeric inputs evaluated: mm, radians, counts), `placement` (a primitive's corner, base or centre), `direction` (an extrude's along the sketch normal, a cylinder's axis, a hole's drilling direction), `two_sided`, `sketch` (plane origin, axes and normal, and the profiles used: lines, arcs and circles in sketch coordinates, holes, curve ids), `transforms` (pattern and mirror copies, 4×4 row-major), `targets` and `tools`, the stored `definition`, the persistent `faces` and `edges` of the body it made, and `error` when it failed to rebuild. A partition cell is described by the body it was cut from"#,
+    form: Some(super::forms::FEATURES),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Design],
+    run: features,
+};
+
 pub const CENTRE: CommandSpec = CommandSpec {
     id: "geometry.centre",
     label: "Centre of Selection",
@@ -168,6 +178,16 @@ fn bodies(s: &mut Session, _: &Value) -> Result<Value> {
         }));
     }
     Ok(Value::Array(out))
+}
+
+fn features(s: &mut Session, p: &Value) -> Result<Value> {
+    let body = match p.get("body") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_str().ok_or_else(|| EngineError::param("body", ProblemKind::NotAName))?),
+    };
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let graph = design.features(body)?;
+    Ok(json!({"bodies": graph}))
 }
 
 /// Most geometry items and nodes `geometry.centre` takes.

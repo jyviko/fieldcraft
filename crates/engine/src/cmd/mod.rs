@@ -23,6 +23,7 @@ mod mirror;
 mod model;
 pub(crate) mod nodes;
 pub(crate) mod octree;
+pub(crate) mod plan;
 mod project;
 pub(crate) mod relax;
 pub mod replace;
@@ -47,6 +48,7 @@ pub static ALL: &[CommandSpec] = &[
     model::INFO,
     geometry::OPEN,
     geometry::BODIES,
+    geometry::FEATURES,
     geometry::CENTRE,
     geometry::TESSELLATE,
     geometry::IMPORT_MESH,
@@ -83,6 +85,8 @@ pub static ALL: &[CommandSpec] = &[
     hex::HEX_BLOCKS,
     project::HEX_PROJECT,
     cells::CELLS,
+    plan::PLAN,
+    plan::APPLY,
     seeds::SEED_EDGE,
     seeds::SEED_CLEAR,
     seeds::SEED_LIST,

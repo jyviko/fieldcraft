@@ -1599,6 +1599,15 @@ pub const PARTITION: &[Field] = &[
     references("bodies", "Bodies", C::Body).help("The bodies to divide; every body the plane cuts when empty.").hint("every body the plane divides"),
 ];
 pub const PARTITION_DELETE: &[Field] = existing!("Partition", C::Partition);
+pub const MESH_PLAN: &[Field] = &[
+    reference("body", "Body", C::Body).help("The body of the design to plan (as opened, not a partition cell).").req(),
+    text("name", "Name").help("The name the plan is saved under.").hint("Plan-<body>"),
+    positive("size", "Element size", D::Millimetre).help("The largest element size; thin walls make it smaller.").hint("1/25 of the diagonal"),
+    int("layers", "Layers through walls", 1, 10).help("Elements through the thinnest wall the features give (a shell, a plate).").hint("2"),
+    int("max_elements", "Most elements", 1, 5_000_000).help("The size grows past the walls' when more elements would be needed.").hint("300000"),
+];
+pub const MESH_PLAN_APPLY: &[Field] = &[text("plan", "Plan").help("The name of a saved mesh plan (mesh.plan).").req()];
+pub const FEATURES: &[Field] = &[reference("body", "Body", C::Body).help("Only this body's features.").hint("every body")];
 pub const TESSELLATE: &[Field] = &[reference("body", "Body", C::Body).help("The body to tessellate.").req(), TOLERANCE];
 pub const IMPORT_MESH: &[Field] = &[path("path", "3MF file", false).help("A 3MF surface mesh with named faces.").req()];
 pub const FILE_OPEN: &[Field] = &[path("path", "Model", false).help("The FieldCraft model file to open.").req()];

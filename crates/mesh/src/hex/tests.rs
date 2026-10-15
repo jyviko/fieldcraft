@@ -61,8 +61,19 @@ pub(crate) fn prism(poly: &[[f64; 2]], z0: f64, z1: f64) -> BoundarySurface {
     polyhedron(&pts, &faces)
 }
 
+/// The mesh has no crack ([`crate::quality::conformity`]): its free faces close up, no two nodes
+/// coincide, one mid-side node per element edge.
+fn assert_conforming(m: &HexMesh) {
+    let nodes: Vec<(u32, [f64; 3])> = m.nodes.iter().enumerate().map(|(i, p)| (i as u32, *p)).collect();
+    let elements = (0..m.element_count()).filter_map(|e| Some((e as u32, m.kind, m.element(e)?)));
+    let c = crate::quality::conformity(&nodes, elements, 1e-9).unwrap();
+    assert!(c.is_conforming(), "{:?} {:?} {:?}", c.open_edges.first(), c.coincident.first(), c.midside_mismatches.first());
+    assert_eq!(c.free_faces.len(), m.boundary.len());
+}
+
 fn check(m: &HexMesh, volume: f64) {
     assert!(m.report.gate.passed());
+    assert_conforming(m);
     assert!((m.report.volume - volume).abs() < 1e-9 * volume, "{} vs {volume}", m.report.volume);
     assert!(m.report.min_scaled_jacobian > 0.0);
     // Every boundary face is tagged and the boundary faces are exactly the hex faces used once.
@@ -146,6 +157,7 @@ fn mapped_block_with_a_curved_top() {
     // Top nodes lie on the tessellated top.
     let quadratic = hex_mesh(&s, &[], &UniformSize(0.5), &HexOptions { quadratic: true, ..opts }).unwrap();
     assert!(quadratic.report.gate.passed());
+    assert_conforming(&quadratic);
     assert!((quadratic.report.volume - s.volume()).abs() < 1e-3 * s.volume(), "{} vs {}", quadratic.report.volume, s.volume());
 }
 
@@ -264,6 +276,29 @@ fn an_l_prism_sweeps_one_to_one() {
     check(&m, 40.0);
 }
 
+/// Hex20 meshes are conforming whichever method makes them (#260), on a curved body too: the
+/// mid-side nodes put on the curved top are shared by the elements on both sides of an edge.
+#[test]
+fn hex20_meshes_are_conforming_by_every_method() {
+    let l = [[0.0, 0.0], [6.0, 0.0], [6.0, 2.0], [2.0, 2.0], [2.0, 6.0], [0.0, 6.0]];
+    let s = prism(&l, 0.0, 2.0);
+    for method in [HexMethod::Extrude, HexMethod::Sweep] {
+        let m = hex_mesh(&s, &[], &UniformSize(1.0), &HexOptions { method, quadratic: true, ..HexOptions::default() }).unwrap();
+        assert_eq!(m.kind, ElementKind::Hex20);
+        assert_conforming(&m);
+    }
+    let curved = curved_block();
+    for method in [HexMethod::Extrude, HexMethod::Mapped] {
+        let m = hex_mesh(&curved, &[], &UniformSize(0.5), &HexOptions { method, quadratic: true, ..HexOptions::default() }).unwrap();
+        assert_conforming(&m);
+    }
+    let (pipe, faces) = pipe(1.0, 2.0, 2.0, 16);
+    for method in [HexMethod::Extrude, HexMethod::Revolve] {
+        let m = hex_mesh(&pipe, &faces, &UniformSize(0.5), &HexOptions { method, quadratic: true, ..HexOptions::default() }).unwrap();
+        assert_conforming(&m);
+    }
+}
+
 #[test]
 fn unsweepable_bodies_say_why_and_hostile_input_is_an_error() {
     // A tetrahedron: every face is slanted to every other.
@@ -369,6 +404,7 @@ fn boxes_side_by_side_conform() {
     // Corner nodes plus one node per lattice edge: 9·9·5 + (8·9·5)·2 + 9·9·4.
     assert_eq!(q.mesh.nodes.len(), 405 + 720 + 324);
     assert!(distinct_positions(&q.mesh));
+    assert_conforming(&q.mesh);
 }
 
 #[test]

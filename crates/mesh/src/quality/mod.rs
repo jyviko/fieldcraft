@@ -25,12 +25,14 @@
 //! their integration points, so whatever passes the gate passes the solvers.
 
 mod bernstein;
+pub mod conformity;
 pub mod jacobian;
 mod report;
 pub(crate) mod shape;
 
 use fieldcraft_model::{ElementKind, admissible_jacobian, check_coordinates, tet4_jacobian};
 
+pub use conformity::{Conformity, conformity};
 pub use jacobian::{JacobianCheck, Validity};
 pub use report::{
     GateOptions, GateReport, MetricStats, QualityReport, enclosed_volume, quality_report, validity_gate, validity_gate_checks, validity_gate_elements,

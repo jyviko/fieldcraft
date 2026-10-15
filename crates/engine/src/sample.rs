@@ -817,6 +817,23 @@ mod tests {
         assert!((reaction["sets"][0]["force"][1].as_f64().unwrap() - PEDAL_LOAD).abs() < 1e-6, "{reaction}");
     }
 
+    /// The conformity of `s`'s mesh ([`fieldcraft_mesh::quality::conformity`]).
+    fn conformity(s: &Session) -> fieldcraft_mesh::quality::Conformity {
+        let nodes: Vec<(u32, [f64; 3])> = s.model.nodes().iter().map(|(l, n)| (*l, n.xyz)).collect();
+        let elements = s.model.elements().iter().map(|(l, e)| (*l, e.kind, e.nodes.as_slice()));
+        fieldcraft_mesh::quality::conformity(&nodes, elements, 1e-6).unwrap()
+    }
+
+    /// The crank arm swept all-hex20 has no crack (#260): its free faces close up, no two nodes
+    /// coincide and every element edge has one mid-side node.
+    #[test]
+    fn the_crank_arm_hex20_mesh_is_conforming() {
+        let s = open("crank-arm");
+        let c = conformity(&s);
+        assert_eq!(s.model.elements().len(), 7274);
+        assert!(c.is_conforming(), "{:?} {:?} {:?}", c.open_edges.first(), c.coincident.first(), c.midside_mismatches.first());
+    }
+
     /// The mirrored crank opens as one conforming all-hex20 mesh: its two halves alike, joined
     /// on the symmetry plane, every element valid, and the spindle and pedal faces found on both
     /// halves (the image's faces carry the names of the half they are the image of).

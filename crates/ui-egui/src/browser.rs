@@ -423,6 +423,8 @@ struct Row<'a> {
     /// Some(visible) for rows with an eye.
     eye: Option<bool>,
     icon: Option<&'static str>,
+    /// A motion arrow over the icon's corner: a boundary condition that moves the part.
+    moves: bool,
     /// A colour swatch instead of an icon (element kinds).
     swatch: Option<Color32>,
     label: &'a str,
@@ -499,7 +501,17 @@ fn draw_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, row: &Row) -> R
         x += 20.0;
     }
     if let Some(icon) = row.icon {
-        icons::paint(app, ui, icon, Rect::from_min_size(pos2(x, cy - 8.0), Vec2::splat(16.0)), Look::of(!row.dim));
+        let ir = Rect::from_min_size(pos2(x, cy - 8.0), Vec2::splat(16.0));
+        icons::paint(app, ui, icon, ir, Look::of(!row.dim));
+        if row.moves {
+            // An arrow out of the icon's lower right corner, on a disc of the row's background.
+            let c = ir.right_bottom() - vec2(3.0, 3.0);
+            ui.painter().circle_filled(c, 4.5, if row.selected { t.accent_soft } else { t.panel });
+            let s = Stroke::new(1.4, t.accent);
+            ui.painter().line_segment([c + vec2(-3.0, -3.0), c + vec2(2.5, 2.5)], s);
+            ui.painter().line_segment([c + vec2(2.5, 2.5), c + vec2(-0.5, 2.5)], s);
+            ui.painter().line_segment([c + vec2(2.5, 2.5), c + vec2(2.5, -0.5)], s);
+        }
         x += 21.0;
     } else if let Some(c) = row.swatch {
         ui.painter().rect_filled(Rect::from_center_size(pos2(x + 6.0, cy), Vec2::splat(10.0)), 2.0, c);
@@ -649,6 +661,25 @@ enum Act {
     Start(&'static str),
     /// An item menu's entry, or an item's eye.
     Menu(Target, Action),
+}
+
+/// A definition's icon in the tree, by what it is: thermal boundary conditions and loads carry
+/// the heat icon (a temperature is no support), and a boundary condition that moves the part
+/// (a non-zero prescribed displacement) its kind's icon with a motion arrow (`true`).
+fn item_icon(m: &Model, kind: Def, name: &str) -> (&'static str, bool) {
+    const HEAT: &str = "model.step.heat";
+    match kind {
+        Def::BoundaryCondition => match m.boundary_condition(name) {
+            Some(bc) if bc.is_thermal() => (HEAT, false),
+            Some(bc) => (kind.icon(), bc.drives()),
+            None => (kind.icon(), false),
+        },
+        Def::Load => match m.loads().get(name) {
+            Some(l) if l.is_thermal() || matches!(l, fieldcraft_model::Load::Temperature { .. }) => (HEAT, false),
+            _ => (kind.icon(), false),
+        },
+        _ => (kind.icon(), false),
+    }
 }
 
 /// A seed in a few words: `8 exact`, `2.5 min, bias 4 end`.
@@ -936,7 +967,8 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         if open(app, key) {
             for (kind, name) in items {
                 let id = egui::Id::new(("fc_row_def", kind.stem(), &name));
-                let row = Row { depth: 2, icon: Some(kind.icon()), label: &name, ..Default::default() };
+                let (icon, moves) = item_icon(&app.session.model, kind, &name);
+                let row = Row { depth: 2, icon: Some(icon), moves, label: &name, ..Default::default() };
                 item_row(app, ui, id, row, Target::Def(kind, name.clone()), acts);
             }
         }
@@ -1053,6 +1085,20 @@ mod tests {
         assert!(marks(&mut app).iter().all(|(_, st, add)| matches!(st, None | Some(Done)) && add.is_empty()), "{:?}", marks(&mut app));
         let v = describe(&mut app);
         assert_eq!(v[2], json!({"node": "sets", "state": "done", "tip": "Done", "add": []}));
+    }
+
+    /// A prescribed displacement and a temperature read apart from a support in the tree (#354,
+    /// #355).
+    #[test]
+    fn driving_and_thermal_conditions_have_their_own_icons() {
+        let mut s = Session::default();
+        s.run_script(&fieldcraft_engine::sample::rubber_seal()).unwrap();
+        assert_eq!(item_icon(&s.model, Def::BoundaryCondition, "Press"), ("model.boundary_condition.create", true));
+        assert_eq!(item_icon(&s.model, Def::BoundaryCondition, "Base"), ("model.boundary_condition.create", false));
+        let mut s = Session::default();
+        s.execute("file.sample", &json!({"name": "heated-bracket"})).unwrap();
+        assert_eq!(item_icon(&s.model, Def::BoundaryCondition, "Heater"), ("model.step.heat", false));
+        assert_eq!(item_icon(&s.model, Def::Load, "Air").0, "model.step.heat");
     }
 
     #[test]

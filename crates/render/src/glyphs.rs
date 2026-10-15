@@ -244,7 +244,18 @@ enum Shape {
     Constraint,
     Force(Vec3),
     Moment(Vec3),
+    /// Heat generated in a set's elements: a dot at each node.
     Thermal,
+    /// A prescribed temperature (a boundary condition or a temperature field): a stem off the
+    /// part ending in a bulb, a thermometer.
+    Temperature,
+    /// A prescribed motion along a unit direction: an arrow leaving the node from a short bar,
+    /// telling it apart from a force (an arrow onto the node) and a support (triangles).
+    Prescribed(Vec3),
+    /// Convection to the surroundings: a wavy line off the face.
+    Convection,
+    /// A heat flux into the face: an arrow onto it.
+    HeatFlux,
     /// A pressure: onto the face (positive) or away from it.
     Pressure {
         onto: bool,
@@ -474,10 +485,11 @@ impl Builder<'_> {
         }
     }
 
-    /// Dots at a thermal condition's nodes.
-    fn thermal(&mut self, owner: usize, target: &Target) {
+    /// A thermal condition's symbol (`shape`, at nodes) at its target's nodes.
+    fn thermal(&mut self, owner: usize, target: &Target, shape: Shape) {
         let (spots, total) = self.spots(target);
-        self.group(owner, Shape::Thermal, spots, Vec::new(), total, 1.5);
+        let cell = if shape == Shape::Temperature { 2.4 } else { 1.5 };
+        self.group(owner, shape, spots, Vec::new(), total, cell);
     }
 
     /// The faces of a set (its element faces, else the edges of its 2D elements) with their
@@ -543,9 +555,22 @@ impl Builder<'_> {
     fn boundary_condition(&mut self, name: &str, bc: &BoundaryCondition) {
         let owner = self.owner(Definition::BoundaryCondition, name);
         if bc.is_thermal() {
-            return self.thermal(owner, bc.target());
+            return self.thermal(owner, bc.target(), Shape::Temperature);
         }
         let mut dofs = bc.dofs().bits();
+        // A prescribed non-zero translation moves the nodes: an arrow along the motion; the
+        // degrees of freedom it drives are no supports.
+        if let BoundaryCondition::Displacement { values, .. } = bc {
+            let moved = |i: usize| values.get(i).copied().flatten().filter(|v| v.is_finite() && *v != 0.0);
+            let motion = Vec3::new(moved(0).unwrap_or(0.0), moved(1).unwrap_or(0.0), moved(2).unwrap_or(0.0));
+            for (i, _) in values.iter().enumerate().filter(|(i, _)| moved(*i).is_some()) {
+                dofs &= !(1u8 << i);
+            }
+            if let Some(dir) = motion.normalized() {
+                let (spots, total) = self.spots(bc.target());
+                self.group(owner, Shape::Prescribed(dir), spots, Vec::new(), total, 2.8);
+            }
+        }
         // A symmetry plane shows its normal only: the rotations it holds follow from it.
         if matches!(bc, BoundaryCondition::Symmetry { .. }) {
             dofs &= 0b000_111;
@@ -606,10 +631,17 @@ impl Builder<'_> {
                 let centre = point + axis * axis.dot(c - point);
                 self.marks.push((owner, Mark::Spin { centre, axis, half_length: 0.5 * self.bounds.diagonal() }));
             }
-            Load::Temperature { target, .. } => self.thermal(owner, target),
-            Load::SurfaceFlux { set, .. } | Load::Convection { set, .. } | Load::HeatSource { set, .. } => {
-                self.thermal(owner, &Target::Set(set.clone()))
+            Load::Temperature { target, .. } => self.thermal(owner, target, Shape::Temperature),
+            Load::Convection { set, .. } | Load::SurfaceFlux { set, .. } => {
+                let shape = if matches!(load, Load::Convection { .. }) { Shape::Convection } else { Shape::HeatFlux };
+                let (faces, total) = self.faces(set);
+                if faces.is_empty() {
+                    self.thermal(owner, &Target::Set(set.clone()), Shape::Thermal);
+                } else {
+                    self.group(owner, shape, Vec::new(), faces, total, 2.2);
+                }
             }
+            Load::HeatSource { set, .. } => self.thermal(owner, &Target::Set(set.clone()), Shape::Thermal),
         }
     }
 
@@ -761,8 +793,8 @@ impl Glyphs {
                 continue;
             }
             let color = match g.shape {
-                Shape::Constraint => colors.constraint,
-                Shape::Thermal => colors.thermal,
+                Shape::Constraint | Shape::Prescribed(_) => colors.constraint,
+                Shape::Thermal | Shape::Temperature | Shape::Convection | Shape::HeatFlux => colors.thermal,
                 Shape::Surface => colors.contact,
                 _ => colors.load,
             };
@@ -1087,7 +1119,29 @@ impl Draw<'_> {
                 self.curl(p, dir, radius, head);
             }
             Shape::Thermal => self.point(p, THERMAL_SIZE),
-            Shape::Pressure { .. } | Shape::Traction(_) | Shape::Surface => {}
+            Shape::Temperature => {
+                // Off the part along its faces' outward direction (up, away from faces).
+                let dir = s.normal.unwrap_or(Vec3::Z);
+                let (stem, bulb) = if spread { (1.2 * u, 0.32 * u) } else { (1.8 * u, 0.45 * u) };
+                self.line(p, p + dir * stem);
+                let (e1, _) = perpendiculars(dir);
+                let c = p + dir * (stem + bulb);
+                for k in 0..ARC_SEGMENTS {
+                    let at = |k: usize| {
+                        let a = std::f64::consts::TAU * k as f64 / ARC_SEGMENTS as f64;
+                        c + (dir * a.cos() + e1 * a.sin()) * bulb
+                    };
+                    self.line(at(k), at(k + 1));
+                }
+                self.point(p, THERMAL_SIZE * 0.7);
+            }
+            Shape::Prescribed(dir) => {
+                let (len, head) = if spread { (2.2 * u, 0.7 * u) } else { (3.5 * u, 0.9 * u) };
+                let (e1, _) = perpendiculars(dir);
+                self.line(p - e1 * (0.45 * u), p + e1 * (0.45 * u));
+                self.arrow(p, dir, len, head);
+            }
+            Shape::Pressure { .. } | Shape::Traction(_) | Shape::Surface | Shape::Convection | Shape::HeatFlux => {}
         }
     }
 
@@ -1108,6 +1162,21 @@ impl Draw<'_> {
             Shape::Pressure { onto: true } => self.arrow(c + outward * len, -outward, len, head),
             Shape::Pressure { onto: false } => self.arrow(c, outward, len, head),
             Shape::Traction(dir) => self.arrow(c - dir * len, dir, len, head),
+            Shape::HeatFlux => self.arrow(c + outward * len, -outward, len, head),
+            Shape::Convection => {
+                // A wave leaving the face.
+                let (e1, _) = perpendiculars(outward);
+                let steps = 6;
+                let at = |k: usize| {
+                    let along = len * k as f64 / steps as f64;
+                    let side = if k == 0 { 0.0 } else { (k as f64 * std::f64::consts::FRAC_PI_2).sin() * 0.25 * u };
+                    c + outward * along + e1 * side
+                };
+                for k in 0..steps {
+                    self.line(at(k), at(k + 1));
+                }
+                self.head(at(steps), outward, head);
+            }
             Shape::Surface => {
                 // A small square on the face, lifted off it a little.
                 let (e1, e2) = perpendiculars(outward);
@@ -1117,7 +1186,7 @@ impl Draw<'_> {
                     self.line(*a, ring.get((k + 1) % 4).copied().unwrap_or(*a));
                 }
             }
-            Shape::Constraint | Shape::Force(_) | Shape::Moment(_) | Shape::Thermal => {}
+            Shape::Constraint | Shape::Force(_) | Shape::Moment(_) | Shape::Thermal | Shape::Temperature | Shape::Prescribed(_) => {}
         }
     }
 
@@ -1242,6 +1311,30 @@ mod tests {
         let (s, _) = drawn_at(&Glyphs::from_model(&m), &m, &view(GlyphShow::ALL, u));
         assert_eq!(s.lines.len(), 4 * 6);
         assert_eq!(near(&bases(&s, Vec3::ZERO), -Vec3::X * u), 2);
+    }
+
+    /// A prescribed motion is drawn as an arrow leaving each node along it (a bar, a shaft and a
+    /// head), its held degrees of freedom still as supports (#354); a prescribed
+    /// temperature is a thermometer, never a support (#355).
+    #[test]
+    fn prescribed_motion_and_temperature_have_their_own_symbols() {
+        let u = 0.1;
+        let mut m = bar(4);
+        let values = [Some(0.0), None, Some(-2.5), None, None, None];
+        m.add_boundary_condition("Press", BoundaryCondition::Displacement { target: Target::Set("root".into()), values }).unwrap();
+        let (s, _) = drawn_at(&Glyphs::from_model(&m), &m, &view(GlyphShow::ALL, u));
+        // Per node: one support triangle (x held at 0, six lines), and the motion's bar, shaft and
+        // four-line head pointing down from the node.
+        assert_eq!(s.lines.len(), 4 * (6 + 1 + 1 + 4), "{}", s.lines.len());
+        let down = s.lines.iter().filter(|l| l.a.dist(Vec3::ZERO) < 1e-9 && l.b.dist(Vec3::new(0.0, 0.0, -2.2 * u)) < 1e-9).count();
+        assert_eq!(down, 1, "a shaft leaves the node along the motion");
+        assert!(s.lines.iter().all(|l| l.color == COLORS.constraint));
+
+        let mut m = bar(4);
+        m.add_boundary_condition("Heater", BoundaryCondition::Temperature { target: Target::Set("root".into()), value: 120.0 }).unwrap();
+        let (s, _) = drawn_at(&Glyphs::from_model(&m), &m, &view(GlyphShow::ALL, u));
+        assert!(s.lines.iter().all(|l| l.color == COLORS.thermal) && s.lines.len() >= 4 * (1 + ARC_SEGMENTS), "{}", s.lines.len());
+        assert_eq!(s.points.len(), 4);
     }
 
     #[test]

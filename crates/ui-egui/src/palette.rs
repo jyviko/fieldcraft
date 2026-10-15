@@ -58,7 +58,7 @@ pub fn matches(query: &str) -> Vec<Hit> {
                 Hit { id: c.id, label: c.label, place: place.clone(), icon: c.id, soon },
             ));
         }
-        for m in c.more {
+        for m in c.more.iter().chain(c.covers) {
             let label = crate::command_label(m);
             if q.is_empty() || format!("{label} {m}").to_lowercase().contains(&q) {
                 hits.push((rank(label, m), Hit { id: m, label, place: place.clone(), icon: c.id, soon: None }));
@@ -267,7 +267,7 @@ mod tests {
         let soon = hits.iter().position(|h| h.soon.is_some()).unwrap();
         assert!(hits.iter().skip(soon).all(|h| h.soon.is_some()), "coming soon last");
         assert_eq!(matches("").len(), {
-            let mut ids: Vec<&str> = CATALOGUE.iter().flat_map(|c| std::iter::once(c.id).chain(c.more.iter().copied())).collect();
+            let mut ids: Vec<&str> = CATALOGUE.iter().flat_map(|c| std::iter::once(c.id).chain(c.more.iter().chain(c.covers).copied())).collect();
             ids.sort();
             ids.dedup();
             ids.len()

@@ -155,6 +155,9 @@ pub struct Capability {
     pub status: Status,
     /// Related commands in the entry's drop-down (edit, delete…).
     pub more: &'static [&'static str],
+    /// Commands the entry's own form covers (an option of it does the same): claimed by the entry
+    /// for the command search and the ribbon's stage, but not listed in the ribbon.
+    pub covers: &'static [&'static str],
 }
 
 impl Capability {
@@ -194,7 +197,7 @@ impl Capability {
 }
 
 const fn ready(id: &'static str, label: &'static str, tab: Tab, panel: &'static str, tip: &'static str) -> Capability {
-    Capability { id, label, tab, panel, tip, status: Status::Ready, more: &[] }
+    Capability { id, label, tab, panel, tip, status: Status::Ready, more: &[], covers: &[] }
 }
 
 const fn ready_more(
@@ -208,12 +211,23 @@ const fn ready_more(
     Capability { more, ..ready(id, label, tab, panel, tip) }
 }
 
+const fn covering(
+    id: &'static str,
+    label: &'static str,
+    tab: Tab,
+    panel: &'static str,
+    tip: &'static str,
+    covers: &'static [&'static str],
+) -> Capability {
+    Capability { covers, ..ready(id, label, tab, panel, tip) }
+}
+
 const fn soon(id: &'static str, label: &'static str, tab: Tab, panel: &'static str, milestone: &'static str, tip: &'static str) -> Capability {
-    Capability { id, label, tab, panel, tip, status: Status::Planned { milestone }, more: &[] }
+    Capability { id, label, tab, panel, tip, status: Status::Planned { milestone }, more: &[], covers: &[] }
 }
 
 const fn deck(id: &'static str, label: &'static str, format: &'static str, tip: &'static str) -> Capability {
-    Capability { id, label, tab: Tab::Solve, panel: "Decks", tip, status: Status::Deck { format, milestone: "M3" }, more: &[] }
+    Capability { id, label, tab: Tab::Solve, panel: "Decks", tip, status: Status::Deck { format, milestone: "M3" }, more: &[], covers: &[] }
 }
 
 use Tab::*;
@@ -277,29 +291,21 @@ pub static CATALOGUE: &[Capability] = &[
         "Quad or triangle mesh of a planar face or polygon in the XY plane for plane stress, plane strain and axisymmetric models; edges tagged",
     ),
     soon("mesh.quad.faces", "Quad Faces", Mesh, "Structured Hex", "M5", "All-quad meshes of faces on shared edge nodes"),
-    ready_more(
-        "mesh.hex.mapped",
-        "Mapped Hex",
+    covering(
+        "mesh.hex.generate",
+        "Hex Mesh",
         Mesh,
         "Structured Hex",
-        "Mapped hex mesh of a six-sided block (curved faces allowed)",
-        &["mesh.hex.generate"],
+        "Structured hex mesh of a body: automatic, or extruded, swept, revolved or mapped (the Method drop-down)",
+        &["mesh.hex.sweep", "mesh.hex.mapped"],
     ),
-    ready_more(
-        "mesh.hex.sweep",
-        "Sweep Hex",
+    covering(
+        "mesh.cells",
+        "Partitioned Mesh",
         Mesh,
         "Structured Hex",
-        "Hex mesh swept along extrusions (several levels), around revolutions, or from a source face to a target",
-        &["mesh.hex.generate"],
-    ),
-    ready_more(
-        "mesh.hex.blocks",
-        "Block Hex",
-        Mesh,
-        "Structured Hex",
-        "One conforming hex mesh of a part split into six-sided blocks: shared faces meshed once",
-        &["mesh.cells"],
+        "One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions",
+        &["mesh.hex.blocks"],
     ),
     soon("mesh.hex.decompose", "Decompose", Mesh, "Structured Hex", "M5", "Find sweepable and mappable regions and propose the splits"),
     soon("mesh.transition", "Transition", Mesh, "Structured Hex", "M5", "Conforming tet–hex interfaces with pyramids"),
@@ -452,13 +458,13 @@ pub static CATALOGUE: &[Capability] = &[
         "Contact between everything that may touch, or self contact of a surface, with friction (explicit dynamics and nonlinear static steps)",
         &["interaction.contact.edit", "interaction.contact.delete"],
     ),
-    ready_more(
+    // Its edit and delete rows are General Contact's: they act on contacts of either kind.
+    ready(
         "interaction.contact.pair",
         "Contact Pair",
         Interactions,
         "Contact",
         "Contact between two surfaces: with friction in explicit dynamics, mortar contact with friction in nonlinear static steps",
-        &["interaction.contact.edit", "interaction.contact.delete"],
     ),
     ready(
         "interaction.contact.find",
@@ -566,9 +572,12 @@ pub fn find(id: &str) -> Option<&'static Capability> {
 }
 
 /// The entry that claims a command: the one running it, else the one listing it among its
-/// related commands. Every registered command has one (a test checks it).
+/// related commands or covering it. Every registered command has one (a test checks it).
 pub fn entry_of(command: &str) -> Option<&'static Capability> {
-    CATALOGUE.iter().find(|c| c.command() == Some(command)).or_else(|| CATALOGUE.iter().find(|c| c.more.contains(&command)))
+    CATALOGUE
+        .iter()
+        .find(|c| c.command() == Some(command))
+        .or_else(|| CATALOGUE.iter().find(|c| c.more.contains(&command) || c.covers.contains(&command)))
 }
 
 /// The tab the ribbon follows to when `command` has run from anywhere but the ribbon (a script,
@@ -611,7 +620,8 @@ pub fn features_page() -> String {
             let preset = c.preset();
             let main =
                 c.command().map(|id| if preset.as_object().is_some_and(|o| !o.is_empty()) { format!("`{id} {preset}`") } else { format!("`{id}`") });
-            let commands: Vec<String> = main.into_iter().chain(c.more.iter().map(|id| format!("`{id}`"))).collect();
+            let commands: Vec<String> =
+                main.into_iter().chain(c.more.iter().map(|id| format!("`{id}`"))).chain(c.covers.iter().map(|id| format!("(`{id}`)"))).collect();
             let _ = writeln!(md, "| {} | {} — {} | {status} | {} |", c.panel, c.label, c.tip, commands.join(", "));
         }
     }
@@ -641,6 +651,25 @@ mod tests {
         }
     }
 
+    /// Each command has one place in the ribbon: no two menu rows (an entry or a drop-down row)
+    /// run the same command with the same preset, and a command an entry's form covers is no row.
+    #[test]
+    fn no_command_appears_twice_across_ribbon_menus() {
+        let mut rows: Vec<String> = Vec::new();
+        for c in CATALOGUE {
+            let entry = c.command().map(|id| format!("{id} {}", c.preset()));
+            for row in entry.into_iter().chain(c.more.iter().map(|id| format!("{id} {{}}"))) {
+                assert!(!rows.contains(&row), "{}: `{row}` is in the ribbon twice", c.id);
+                rows.push(row);
+            }
+        }
+        for c in CATALOGUE {
+            for m in c.covers {
+                assert!(!rows.iter().any(|r| r.split(' ').next() == Some(m)), "{}: `{m}` is covered by its form and also a ribbon row", c.id);
+            }
+        }
+    }
+
     #[test]
     fn the_ribbon_follows_each_command_to_its_stage() {
         assert_eq!(stage_tab("mesh.hex.sweep"), Some(Tab::Mesh));
@@ -655,7 +684,7 @@ mod tests {
         assert_eq!(stage_tab("no.such"), None);
         // A ribbon click (an entry's command, or one of its drop-down's) stays on the tab shown.
         for c in CATALOGUE {
-            for command in c.command().into_iter().chain(c.more.iter().copied()) {
+            for command in c.command().into_iter().chain(c.more.iter().copied()).chain(c.covers.iter().copied()) {
                 assert!(stage_tab(command).is_none_or(|t| t == c.tab), "{}: `{command}` would move the ribbon from {:?}", c.id, c.tab);
             }
         }
@@ -669,9 +698,9 @@ mod tests {
                 assert!(find_command(command).is_some(), "{}: `{command}` is not a registered command", c.id);
                 claimed.push(command);
             } else {
-                assert!(c.more.is_empty(), "{}: a planned entry has no commands", c.id);
+                assert!(c.more.is_empty() && c.covers.is_empty(), "{}: a planned entry has no commands", c.id);
             }
-            for m in c.more {
+            for m in c.more.iter().chain(c.covers) {
                 assert!(find_command(m).is_some(), "{}: `{m}` is not a registered command", c.id);
                 claimed.push(m);
             }

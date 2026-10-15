@@ -423,6 +423,7 @@ pub fn describe(app: &ModelApp) -> serde_json::Value {
                 "panel": c.panel,
                 "command": c.command(),
                 "more": c.more,
+                "covers": c.covers,
                 "coming_soon": c.milestone(),
                 "enabled": c.command().is_some() && missing.is_none(),
                 "unavailable": missing.map(|u| u.to_json()),

@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-63 ready, 41 coming soon.
+62 ready, 41 coming soon.
 
 ## Geometry
 
@@ -33,9 +33,8 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Tet | Delaunay Points — Delaunay tetrahedralization of a point list (debugging aid) | ready | `mesh.delaunay.points` |
 | 2D | 2D Mesh — Quad or triangle mesh of a planar face or polygon in the XY plane for plane stress, plane strain and axisymmetric models; edges tagged | ready | `mesh.planar` |
 | Structured Hex | Quad Faces — All-quad meshes of faces on shared edge nodes | coming soon (M5) |  |
-| Structured Hex | Mapped Hex — Mapped hex mesh of a six-sided block (curved faces allowed) | ready | `mesh.hex.mapped`, `mesh.hex.generate` |
-| Structured Hex | Sweep Hex — Hex mesh swept along extrusions (several levels), around revolutions, or from a source face to a target | ready | `mesh.hex.sweep`, `mesh.hex.generate` |
-| Structured Hex | Block Hex — One conforming hex mesh of a part split into six-sided blocks: shared faces meshed once | ready | `mesh.hex.blocks`, `mesh.cells` |
+| Structured Hex | Hex Mesh — Structured hex mesh of a body: automatic, or extruded, swept, revolved or mapped (the Method drop-down) | ready | `mesh.hex.generate`, (`mesh.hex.sweep`), (`mesh.hex.mapped`) |
+| Structured Hex | Partitioned Mesh — One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions | ready | `mesh.cells`, (`mesh.hex.blocks`) |
 | Structured Hex | Decompose — Find sweepable and mappable regions and propose the splits | coming soon (M5) |  |
 | Structured Hex | Transition — Conforming tet–hex interfaces with pyramids | coming soon (M5) |  |
 | Automatic Hex | Octree Hex — Unstructured all-hex mesh of any part: adaptive grid, boundary layers on every sharp edge, untangled and proven valid | ready | `mesh.hex.octree` |
@@ -104,7 +103,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Constraints | Coupling — Kinematic or distributing coupling of a set to a reference point | ready | `model.coupling.create`, `model.coupling.edit`, `model.coupling.delete` |
 | Constraints | Tie — Tie non-matching meshes together (dual mortar constraints) | ready | `interaction.tie`, `interaction.tie.edit`, `interaction.tie.delete` |
 | Contact | General Contact — Contact between everything that may touch, or self contact of a surface, with friction (explicit dynamics and nonlinear static steps) | ready | `interaction.contact.general`, `interaction.contact.edit`, `interaction.contact.delete` |
-| Contact | Contact Pair — Contact between two surfaces: with friction in explicit dynamics, mortar contact with friction in nonlinear static steps | ready | `interaction.contact.pair`, `interaction.contact.edit`, `interaction.contact.delete` |
+| Contact | Contact Pair — Contact between two surfaces: with friction in explicit dynamics, mortar contact with friction in nonlinear static steps | ready | `interaction.contact.pair` |
 | Contact | Find Contacts — Find the parts of the mesh that touch, and make contact pairs of them | ready | `interaction.contact.find` |
 | Contact | Rigid Wall — Rigid walls for explicit dynamics | coming soon (M10) |  |
 | Connectors | Bolt Load — Bolt pretension | coming soon (M7) |  |

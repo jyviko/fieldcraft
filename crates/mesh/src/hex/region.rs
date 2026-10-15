@@ -163,7 +163,22 @@ pub(crate) fn constrain(ia: &mut Intervals, loops: &[Vec<usize>], scheme: Scheme
 /// positions where its curve uses start. Returns the mesh (boundary nodes first, in the order of
 /// the loops) and the scheme used.
 pub(crate) fn mesh(loops: &[Vec<Q>], starts: &[Vec<usize>], scheme: Scheme, size: &dyn SizeField, opts: &QuadOptions) -> Result<(QuadMesh, Scheme)> {
-    let structured = match scheme {
+    match mesh_structured(loops, starts, scheme, size, opts)? {
+        Some(m) => Ok((m, scheme)),
+        None => Ok((free_quad_mesh(loops, size, opts)?, Scheme::Free)),
+    }
+}
+
+/// The structured mesh of a region with its scheme, or `None` when the scheme is free or its
+/// grid would fold.
+pub(crate) fn mesh_structured(
+    loops: &[Vec<Q>],
+    starts: &[Vec<usize>],
+    scheme: Scheme,
+    size: &dyn SizeField,
+    opts: &QuadOptions,
+) -> Result<Option<QuadMesh>> {
+    Ok(match scheme {
         Scheme::Mapped(c) => {
             let s0 = starts.first();
             let pos = c.map(|k| s0.and_then(|s| s.get(k)).copied().unwrap_or(0));
@@ -181,11 +196,7 @@ pub(crate) fn mesh(loops: &[Vec<Q>], starts: &[Vec<usize>], scheme: Scheme, size
         Scheme::Annulus => annulus(loops, size, opts)?,
         Scheme::Disk => disk(loops, size, opts)?,
         Scheme::Free => None,
-    };
-    match structured {
-        Some(m) => Ok((m, scheme)),
-        None => Ok((free_quad_mesh(loops, size, opts)?, Scheme::Free)),
-    }
+    })
 }
 
 /// The triangle primitive on one loop with corners at node positions `corners` (in loop order),

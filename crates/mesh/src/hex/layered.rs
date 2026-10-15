@@ -18,8 +18,9 @@
 //! region fills is decided by the inside test at its centre ([`super::geom::Inside`]).
 //!
 //! **Meshing.** Interval assignment ([`super::interval`]) gives every curve its count so that
-//! four-sided regions are mapped (opposite sides equal) and the others have even loops for the
-//! free all-quad mesher; each level interval gets its own layer count. Each region's quads are
+//! every region's scheme fits ([`super::section`]: four-sided regions mapped with opposite sides
+//! equal, three-sided ones the triangle primitive, rings and disks O-grids, the rest even loops
+//! for the free all-quad mesher); each level interval gets its own layer count. Each region's quads are
 //! stacked through its intervals; shared curves and levels share nodes, so the hexahedra
 //! conform. Nodes of curves on analytic walls are projected onto them; in a revolution, the
 //! rotated nodes then lie exactly on every surface of revolution.
@@ -31,7 +32,8 @@ use super::arrangement::{self, Arrangement, Q};
 use super::brep::{Brep, Face};
 use super::geom::{Inside, Surface, add, dist, scale, unit};
 use super::interval::Intervals;
-use super::region::{self, Scheme};
+use super::region::Scheme;
+use super::section;
 use super::{Ctx, Raw};
 use crate::predicates::Sign;
 use crate::seeds::EdgeSeed;
@@ -435,27 +437,7 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
         let goal = ideal_divisions(ctx.field, &curve3d(c))?;
         ia.var(goal * fine, 1);
     }
-    let oriented = |c: usize, fwd: bool| -> Vec<Q> {
-        let mut v: Vec<Q> =
-            arr.curves.get(c).map(|x| x.points.iter().map(|&p| arr.points.get(p).copied().unwrap_or([0.0; 2])).collect()).unwrap_or_default();
-        if !fwd {
-            v.reverse();
-        }
-        v
-    };
-    let mut schemes: Vec<Scheme> = vec![Scheme::Free; arr.regions.len()];
-    for (r, region) in arr.regions.iter().enumerate() {
-        if !used.get(r).copied().unwrap_or(false) {
-            continue;
-        }
-        let polylines: Vec<Vec<Vec<Q>>> = region.loops.iter().map(|lp| lp.iter().map(|&(c, f)| oriented(c, f)).collect()).collect();
-        let scheme = region::classify(&polylines);
-        let vars: Vec<Vec<usize>> = region.loops.iter().map(|lp| lp.iter().map(|x| x.0).collect()).collect();
-        region::constrain(&mut ia, &vars, scheme);
-        if let Some(slot) = schemes.get_mut(r) {
-            *slot = scheme;
-        }
-    }
+    let schemes = section::schemes(arr, used, &mut ia);
     let seeds = Seeds::of(ctx, frame, h_ref, intervals, setup.h_tol, &(0..arr.curves.len()).map(curve3d).collect::<Vec<_>>())?;
     for (c, seed) in seeds.curves.iter().enumerate() {
         if let Some((seed, _)) = seed {
@@ -483,85 +465,21 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
         }
         layers.push(n);
     }
-    // 2D nodes: curve ends, then curve interiors (projected onto analytic walls).
-    let mut nodes2: Vec<Q> = Vec::new();
-    let mut point_node: HashMap<usize, u32> = HashMap::new();
-    let mut curve_nodes: Vec<Vec<u32>> = Vec::with_capacity(arr.curves.len());
-    for (c, curve) in arr.curves.iter().enumerate() {
-        let n = counts.get(c).copied().unwrap_or(1);
+    // The cross-section's nodes (curve interiors projected onto analytic walls) and quadrilaterals.
+    let place = |c: usize, n: usize| -> Result<Vec<Q>> {
         let pts3 = match seeds.curves.get(c).copied().flatten() {
             Some((seed, rev)) => crate::seeds::place(&curve3d(c), &seed.fractions(n, rev))?,
             None => divide_polyline(ctx.field, &curve3d(c), n)?,
         };
-        let wall = curve.tags.iter().find_map(|&f| brep.faces.get(f).and_then(|x| x.surface)).filter(|s| !matches!(s, Surface::Plane { .. }));
-        let mut ids = Vec::with_capacity(pts3.len());
-        let last = pts3.len().saturating_sub(1);
-        for (k, p) in pts3.iter().enumerate() {
-            let end = if k == 0 {
-                curve.points.first()
-            } else if k == last {
-                curve.points.last()
-            } else {
-                None
-            };
-            let id = match end {
-                Some(&pid) => *point_node.entry(pid).or_insert_with(|| {
-                    nodes2.push(arr.points.get(pid).copied().unwrap_or([0.0; 2]));
-                    nodes2.len() as u32 - 1
-                }),
-                None => {
-                    let p = wall.and_then(|s| s.project(*p)).unwrap_or(*p);
-                    nodes2.push(frame.coords(p).0);
-                    nodes2.len() as u32 - 1
-                }
-            };
-            ids.push(id);
-        }
-        curve_nodes.push(ids);
-    }
-    // Quad meshes of the filled regions.
-    let mut region_quads: Vec<Vec<[u32; 4]>> = vec![Vec::new(); arr.regions.len()];
-    let quad_opts = &ctx.opts.quad;
-    for (r, region) in arr.regions.iter().enumerate() {
-        if !used.get(r).copied().unwrap_or(false) {
-            continue;
-        }
-        let mut loops_ids: Vec<Vec<u32>> = Vec::with_capacity(region.loops.len());
-        let mut starts: Vec<Vec<usize>> = Vec::new();
-        for lp in &region.loops {
-            let mut ids = Vec::new();
-            let mut st = Vec::new();
-            for &(c, fwd) in lp {
-                st.push(ids.len());
-                let cn = curve_nodes.get(c).map(Vec::as_slice).unwrap_or(&[]);
-                let mut seq: Vec<u32> = cn.to_vec();
-                if !fwd {
-                    seq.reverse();
-                }
-                seq.pop();
-                ids.extend(seq);
-            }
-            loops_ids.push(ids);
-            starts.push(st);
-        }
-        let at = |i: u32| nodes2.get(i as usize).copied().unwrap_or([0.0; 2]);
-        let loops: Vec<Vec<Q>> = loops_ids.iter().map(|l| l.iter().map(|&i| at(i)).collect()).collect();
-        let scheme = schemes.get(r).copied().unwrap_or(Scheme::Free);
-        let (mesh, used_scheme) = region::mesh(&loops, &starts, scheme, &plane_field, quad_opts).map_err(|e| region_error(r, e))?;
-        if let Some(slot) = schemes.get_mut(r) {
-            *slot = used_scheme;
-        }
-        let boundary: Vec<u32> = loops_ids.concat();
-        let mut local: Vec<u32> = boundary.clone();
-        for p in mesh.nodes.iter().skip(mesh.boundary_nodes) {
-            nodes2.push(*p);
-            local.push(nodes2.len() as u32 - 1);
-        }
-        let quads = region_quads.get_mut(r).ok_or_else(|| Error::Failed("region index".into()))?;
-        for q in &mesh.quads {
-            quads.push(q.map(|i| local.get(i as usize).copied().unwrap_or(0)));
-        }
-    }
+        let wall = arr
+            .curves
+            .get(c)
+            .and_then(|curve| curve.tags.iter().find_map(|&f| brep.faces.get(f).and_then(|x| x.surface)))
+            .filter(|s| !matches!(s, Surface::Plane { .. }));
+        Ok(pts3.iter().map(|p| frame.coords(wall.and_then(|s| s.project(*p)).unwrap_or(*p)).0).collect())
+    };
+    let section::Section { nodes: nodes2, quads: region_quads, schemes } =
+        section::mesh(arr, used, schemes, &counts, &place, &plane_field, &ctx.opts.quad)?;
     // Layer coordinates.
     let mut heights: Vec<f64> = Vec::new();
     let mut first_layer: Vec<usize> = Vec::with_capacity(intervals.len());
@@ -883,13 +801,6 @@ fn cuts(arr: &Arrangement, used: &[bool], tol: f64) -> Vec<(Vec<Q>, usize)> {
         }
     }
     out
-}
-
-fn region_error(r: usize, e: Error) -> Error {
-    match e {
-        Error::Limit(m) => Error::Limit(m),
-        other => Error::Failed(format!("cross-section region {r}: {other}")),
-    }
 }
 
 /// A point well inside a region: off the middle of one of its outer edges, inside the outer

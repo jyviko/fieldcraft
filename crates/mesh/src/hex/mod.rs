@@ -42,6 +42,7 @@ mod interval;
 mod layered;
 mod mapped;
 mod region;
+mod section;
 mod sweep;
 
 #[cfg(test)]

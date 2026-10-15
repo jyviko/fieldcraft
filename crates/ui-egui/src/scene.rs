@@ -194,7 +194,7 @@ mod tests {
         let mut d = DisplayMesh::default();
         // Two edges of 10 mm; the first in two segments.
         d.add_curves(&[vec![[0.0; 3], [4.0, 0.0, 0.0], [10.0, 0.0, 0.0]], vec![[0.0; 3], [0.0, 10.0, 0.0]]]);
-        let names = [crate::selection::BodyNames { name: "B".into(), faces: vec![], edges: vec!["a|b".into(), "a|c".into()] }];
+        let names = [crate::selection::BodyNames { name: "B".into(), faces: vec![], edges: vec!["a|b".into(), "a|c".into()], vertices: Vec::new() }];
         let mut m = Model::default();
         let edge = GeometryRef::new("B", Entity::Edge("a|b".into())).unwrap();
         m.set_seed(Seed::new(edge, Divisions::Count(4), Some(Bias { ratio: 8.0, toward: BiasToward::Start }), SeedConstraint::Exact).unwrap())

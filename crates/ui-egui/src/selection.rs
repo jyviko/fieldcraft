@@ -264,18 +264,24 @@ pub fn items_from_params(p: &Value) -> Result<Vec<Item>, String> {
 }
 
 /// A drawn geometry surface's names: its body and, by face tag, its faces; by edge index, its
-/// B-rep edges ([`DisplayMesh::curves`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// B-rep edges ([`DisplayMesh::curves`]); its B-rep vertices with their points.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct BodyNames {
     pub name: String,
     pub faces: Vec<String>,
     pub edges: Vec<String>,
+    pub vertices: Vec<(String, Vec3)>,
 }
 
 impl BodyNames {
     /// The reference to face `face` of this body, when it has a name.
     fn face(&self, face: u32) -> Option<GeometryRef> {
         GeometryRef::face(self.name.clone(), self.faces.get(face as usize)?.clone()).ok()
+    }
+
+    /// The reference to B-rep vertex `name` of this body.
+    fn vertex(&self, name: &str) -> Option<GeometryRef> {
+        GeometryRef::new(self.name.clone(), Entity::Vertex(name.to_string())).ok()
     }
 
     /// The reference to B-rep edge `edge` of this body, when it has a name.
@@ -500,6 +506,14 @@ impl Picker<'_> {
                 self.nearest_visible(proj, near, POINT_RADIUS).and_then(|i| self.display.nodes.get(i)).map(|n| Item::Node(n.label))
             }
             Filter::Vertices => {
+                // A design's B-rep vertices first, by their persistent names.
+                if self.curves {
+                    let design: Vec<(&BodyNames, &(String, Vec3))> = self.names.iter().flat_map(|b| b.vertices.iter().map(move |v| (b, v))).collect();
+                    let near = design.iter().enumerate().filter_map(|(i, (_, (_, p)))| Some((i, screen(*p)?, *p))).collect();
+                    if let Some((b, (name, _))) = nearest_passing(near, POINT_RADIUS, |p| self.curve_visible(proj, p)).and_then(|i| design.get(i)) {
+                        return b.vertex(name).map(Item::Geometry);
+                    }
+                }
                 let tagged = &self.index.vertices;
                 let near = tagged.iter().enumerate().filter_map(|(i, (n, _))| {
                     let p = self.display.node_position(*n)?;
@@ -692,6 +706,15 @@ impl Picker<'_> {
                 }
             }
         }
+        if m.vertices && self.curves {
+            for body in self.names {
+                for (name, p) in &body.vertices {
+                    if body.vertex(name).is_some_and(|g| m.refs.iter().any(|r| r.selects(&g))) {
+                        s.points.push(ScenePoint { p: *p, color, size: NODE_SIZE });
+                    }
+                }
+            }
+        }
         let vertices = self.index.vertices.iter().filter(|_| m.vertices).filter(|(_, t)| on(Some(*t))).map(|(n, _)| *n);
         for n in m.nodes.iter().copied().chain(vertices) {
             if let Some(p) = self.display.node_position(n) {
@@ -798,6 +821,15 @@ pub enum Target {
     Set,
     /// The selected geometry edges, as `edges: [{body, edge}]` (edge seeds).
     Edges,
+    /// A point at what is selected (`geometry.centre`: a vertex, a node, a hole's centre, a
+    /// centroid), as the reference point's `xyz`.
+    Position,
+    /// A datum point on what is selected: at a vertex, along an edge, at a face's centre, or at
+    /// the point `geometry.centre` finds (a hole's centre, nodes, several items).
+    DatumPoint,
+    /// The selected bodies (or the bodies of the selected faces, edges and vertices) as the
+    /// `bodies` list (the cells of a partitioned mesh).
+    Bodies,
 }
 
 /// Where command `id`'s form takes the selection, if it does. `params` (the form's current
@@ -806,8 +838,13 @@ pub fn target(id: &str, params: &Value) -> Option<Target> {
     match id {
         "model.set.create" | "model.set.edit" => Some(Target::Members),
         "mesh.seed.edge" | "mesh.seed.clear" => Some(Target::Edges),
+        "model.reference_point.create" | "model.reference_point.edit" => Some(Target::Position),
+        "geometry.datum.point" | "geometry.datum.point.edit" => Some(Target::DatumPoint),
+        "mesh.cells" => Some(Target::Bodies),
         "model.boundary_condition.create" | "model.boundary_condition.edit" => Some(Target::TargetSet),
-        "model.section.create" | "model.section.edit" | "model.coupling.create" | "model.coupling.edit" => Some(Target::Set),
+        "model.section.create" | "model.section.edit" | "model.coupling.create" | "model.coupling.edit" | "interaction.rigid_wall" => {
+            Some(Target::Set)
+        }
         "model.load.create" | "model.load.edit" => {
             let kind = params.get("type").and_then(Value::as_str);
             Some(if matches!(kind, None | Some("force" | "moment")) { Target::TargetSet } else { Target::Set })
@@ -874,7 +911,7 @@ pub fn with_set(params: &Value, target: Target, set: &str) -> Value {
         Target::Set => {
             out.insert("set".into(), json!(set));
         }
-        Target::Members | Target::Edges => {}
+        Target::Members | Target::Edges | Target::Position | Target::DatumPoint | Target::Bodies => {}
     }
     Value::Object(out)
 }
@@ -886,6 +923,38 @@ pub fn same_set(model: &Model, set: &Value) -> Option<String> {
     members.remove("name");
     let wanted = serde_json::from_value::<Set>(Value::Object(members)).ok()?.normalized().ok()?;
     model.sets().iter().find(|(_, s)| **s == wanted).map(|(n, _)| n.clone())
+}
+
+/// The bodies of the selection's geometry (a body, or the body of a face, edge or vertex), each
+/// once; `None` when no geometry is selected.
+pub fn bodies(selection: &Selection) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for item in selection.items() {
+        if let Item::Geometry(g) = item
+            && !out.contains(&g.body)
+        {
+            out.push(g.body.clone());
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// A datum point's `by` for the selection, given the point `geometry.centre` found for it
+/// (`centre`: its reply): one vertex, one edge or one face by name, unless the centre is a
+/// hole's (`from: circle`); anything else at the centre's coordinates.
+pub fn datum_point_by(selection: &Selection, centre: &Value) -> Value {
+    let circle = centre.get("from").and_then(Value::as_str) == Some("circle");
+    let point = centre.get("point").cloned().unwrap_or(Value::Null);
+    let items = selection.items();
+    match items.iter().next() {
+        Some(Item::Geometry(g)) if items.len() == 1 && !circle => match &g.entity {
+            Entity::Vertex(v) => json!({"type": "vertex", "body": g.body, "vertex": v}),
+            Entity::Edge(e) => json!({"type": "edge", "body": g.body, "edge": e, "fraction": 0.5}),
+            Entity::Face(f) => json!({"type": "face_centre", "body": g.body, "face": f}),
+            Entity::Body => json!({"type": "coordinates", "point": point}),
+        },
+        _ => json!({"type": "coordinates", "point": point}),
+    }
 }
 
 /// A set name not taken in `model`: `<base>`, then `<base>-2`, `<base>-3`, …; `Set` when
@@ -1062,7 +1131,8 @@ mod tests {
         // Its one B-rep edge: the diagonal between the two faces.
         display.add_curves(&[vec![square[0], square[2]]]);
         display.add_surface(&square, &[[0, 1, 2], [0, 2, 3]], &[0, 1]);
-        let names = [BodyNames { name: "Plate".into(), faces: vec!["F1:a".into(), "F1:b".into()], edges: vec!["F1:a|F1:b".into()] }];
+        let names =
+            [BodyNames { name: "Plate".into(), faces: vec!["F1:a".into(), "F1:b".into()], edges: vec!["F1:a|F1:b".into()], vertices: Vec::new() }];
         let model = Model::default();
         let index = Index::new(&model, &display);
         let p = Picker { display: &display, names: &names, model: &model, index: &index, elements: false, geometry: true, curves: true };

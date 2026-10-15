@@ -771,6 +771,21 @@ pub fn browser(app: &mut ModelApp, ui: &mut egui::Ui) {
 }
 
 /// The viewport setting a definition group's eye shows and hides: the setup's symbols.
+/// The rigid walls of the explicit steps: a row label (`Rigid wall on front (Impact)`) and the
+/// step each belongs to.
+fn rigid_walls(m: &Model) -> Vec<(String, String)> {
+    m.steps()
+        .iter()
+        .filter_map(|s| match &s.procedure {
+            fieldcraft_model::Procedure::ExplicitDynamic(e) => {
+                Some(e.rigid_walls.iter().map(move |w| (format!("Rigid wall on {} ({})", w.set, s.name), s.name.clone())))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
 fn eye_flag<'u>(state: &'u mut crate::UiState, group: &str) -> Option<&'u mut bool> {
     match group {
         "loads" => Some(&mut state.show_loads),
@@ -958,6 +973,8 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     ];
     for (key, label, kinds) in groups {
         let items: Vec<(Def, String)> = kinds.iter().flat_map(|k| k.names(&app.session.model).into_iter().map(move |n| (*k, n))).collect();
+        // Rigid walls belong to their explicit step; they are listed here too, and open it.
+        let walls: Vec<(String, String)> = if key == "interactions" { rigid_walls(&app.session.model) } else { Vec::new() };
         let icon = kinds.first().map(|k| k.icon());
         let eye = eye_flag(&mut app.ui, key).map(|v| *v);
         let (mark, tip) = state(key);
@@ -971,8 +988,8 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
                 eye,
                 icon,
                 label,
-                note: Some(format!("{}", items.len())),
-                dim: items.is_empty(),
+                note: Some(format!("{}", items.len() + walls.len())),
+                dim: items.is_empty() && walls.is_empty(),
                 mark,
                 tip,
                 ..Default::default()
@@ -991,6 +1008,11 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
                 let (icon, moves) = item_icon(&app.session.model, kind, &name);
                 let row = Row { depth: 2, icon: Some(icon), moves, label: &name, ..Default::default() };
                 item_row(app, ui, id, row, Target::Def(kind, name.clone()), acts);
+            }
+            for (i, (label, step)) in walls.into_iter().enumerate() {
+                let id = egui::Id::new(("fc_row_rigid_wall", i));
+                let row = Row { depth: 2, icon: Some("interaction.rigid_wall"), label: &label, ..Default::default() };
+                item_row(app, ui, id, row, Target::Def(Def::Step, step), acts);
             }
         }
         ghost_rows(app, ui, &stages, key, acts);

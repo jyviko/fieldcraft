@@ -237,6 +237,8 @@ pub struct PickState {
     pub dragging: Option<(egui::Pos2, egui::Pos2)>,
     /// Where the pointer was when the hover was worked out (window points).
     pub hover_at: Option<egui::Pos2>,
+    /// The hover is a body whose row in a command form is under the pointer, not the viewport's.
+    pub form_hover: bool,
     /// Bumped whenever the selection changes, and whenever the hover does.
     generation: u64,
     hover_generation: u64,
@@ -957,6 +959,7 @@ impl ModelApp {
                             name: body.name.clone(),
                             faces: body.faces().iter().map(|f| f.name.clone()).collect(),
                             edges: body.edge_names(&mesh),
+                            vertices: body.vertex_names(&mesh).into_iter().map(|v| (v.name, v.point.into())).collect(),
                         };
                         Some((names, mesh))
                     })
@@ -980,6 +983,7 @@ impl ModelApp {
                     name: s.name.clone(),
                     faces: (0..s.faces).map(|f| f.to_string()).collect(),
                     edges: Vec::new(),
+                    vertices: Vec::new(),
                 });
             }
             let was_empty = self.display.1.bounds.is_empty();
@@ -1422,6 +1426,23 @@ impl ModelApp {
             selection::Target::Members => selection::with_members(&params, &self.pick.selection),
             selection::Target::Edges => {
                 selection::with_edges(&params, &self.pick.selection).ok_or("no edge is selected: pick edges with Select: Edges")?
+            }
+            selection::Target::Position | selection::Target::DatumPoint => {
+                // A query that fills the form: it changes nothing and has no reply panel of its own.
+                let centre = self.session.execute("geometry.centre", &self.pick.selection.params()).map_err(|e| e.to_string())?;
+                let mut out = params.as_object().cloned().unwrap_or_default();
+                if target == selection::Target::Position {
+                    out.insert("xyz".into(), centre.get("point").cloned().unwrap_or(Value::Null));
+                } else {
+                    out.insert("by".into(), selection::datum_point_by(&self.pick.selection, &centre));
+                }
+                Value::Object(out)
+            }
+            selection::Target::Bodies => {
+                let bodies = selection::bodies(&self.pick.selection).ok_or("no geometry is selected: pick cells with Select: Bodies")?;
+                let mut out = params.as_object().cloned().unwrap_or_default();
+                out.insert("bodies".into(), json!(bodies));
+                Value::Object(out)
             }
             selection::Target::Set | selection::Target::TargetSet => {
                 let base = params.get("name").and_then(Value::as_str).map(|n| format!("{n}-set"));

@@ -26,6 +26,11 @@ pub fn has_context(app: &mut ModelApp) -> bool {
 }
 
 pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
+    // A form's row hovered last frame no longer is once the form is gone.
+    if app.dialog.is_none() && app.pick.form_hover {
+        app.pick.form_hover = false;
+        app.set_hover(None);
+    }
     if !has_context(app) {
         return;
     }
@@ -150,6 +155,9 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
                     "Names a set of the selection here: an existing set with the same members, or a new one made on OK (model.set.create)"
                 }
                 selection::Target::Edges => "The selected design edges (Select: Edges) become the edges seeded",
+                selection::Target::Position => "Puts the point at what is selected: a vertex or node, the centre of a hole (its faces or rim), or the centroid of faces and edges",
+                selection::Target::DatumPoint => "Puts the point on what is selected: a vertex, an edge's midpoint, a face's centre, or the centre of a hole or of several items",
+                selection::Target::Bodies => "The selected bodies (Select: Bodies), or the bodies of the selected faces, become the cells",
             };
             use_selection = ui.add_enabled(selected.is_some(), egui::Button::new("Use selection")).on_hover_text(tip).clicked();
             match &selected {
@@ -169,6 +177,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     let mut invalid = 0;
     let mut create = None;
+    let mut hover_body = None;
     // What is missing or wrong, by the fields' labels: OK waits for it (in either view).
     let problems = match (spec.form, params.as_object()) {
         (Some(fields), Some(obj)) => crate::form::messages(fields, obj),
@@ -211,6 +220,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             let out = crate::form::show(ui, t, &cx, fields, &mut obj);
             invalid = out.invalid;
             create = out.create;
+            hover_body = out.hover_body;
             if out.changed {
                 d.text = Value::Object(obj).to_string();
                 d.error = None;
@@ -257,6 +267,18 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) && app.ui.menu.is_none() && !app.ui.palette {
         cancel = true;
+    }
+    // A body's row under the pointer is highlighted in the viewport, as a hover there is.
+    match hover_body.and_then(|b| fieldcraft_model::GeometryRef::body(b).ok()) {
+        Some(g) => {
+            app.pick.form_hover = true;
+            app.set_hover(Some(selection::Item::Geometry(g)));
+        }
+        None if app.pick.form_hover => {
+            app.pick.form_hover = false;
+            app.set_hover(None);
+        }
+        None => {}
     }
     if cancel {
         app.close_dialog();

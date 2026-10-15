@@ -367,6 +367,8 @@ pub(crate) fn budget(limits: &Limits, mesh: &Mesh, graph: &NodeGraph, matrices: 
 /// quasi-static thermoelasticity without thermoelastic dissipation, so solving the two in turn
 /// is the monolithic solution exactly.
 pub fn solve_static(model: &Model, step: Option<&str>, limits: &Limits) -> Result<StaticResult> {
+    // A job cancelled before it starts stops here, before any setup work.
+    fieldcraft_model::progress::check()?;
     let resolved = model.resolve()?;
     let step = model.select_step(
         step,
@@ -571,6 +573,8 @@ pub(crate) const TOLERANCE: f64 = 1e-9;
 /// Solve a frequency step (the step named `step`, or the model's only frequency step): the
 /// lowest natural modes within the step's frequency range.
 pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOptions, limits: &Limits) -> Result<FrequencyResult> {
+    // A job cancelled before it starts stops here, before any setup work.
+    fieldcraft_model::progress::check()?;
     let resolved: Resolved = model.resolve()?;
     let step = model.select_step(step, |p| matches!(p, Procedure::Frequency { .. }), "frequency")?;
     let Procedure::Frequency { modes, min_hz, max_hz } = step.procedure else {
@@ -590,6 +594,7 @@ pub fn solve_frequency(model: &Model, step: Option<&str>, options: &FrequencyOpt
     let setup = Setup { model, resolved: &resolved, mesh: &mesh, step };
     let red = reduction(&setup, false, &order, budget(limits, &mesh, &graph, 2), &mut warnings)?;
     let Assembled { k, m } = assemble(&mesh, &graph, Some(options.mass))?;
+    fieldcraft_model::progress::check()?;
     let m = m.ok_or_else(|| Error::Internal("mass matrix".into()))?;
     // Every element's mass entries between translations sum to its mass, once per direction
     // (the mean over the directions for a point mass given per direction; rotary inertia, and

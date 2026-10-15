@@ -107,6 +107,8 @@ impl Operator for Shifted<'_> {
 
 /// Solve a buckling step (the step named `step`, or the model's only buckling step).
 pub fn solve_buckle(model: &Model, step: Option<&str>, limits: &Limits) -> Result<FrequencyResult> {
+    // A job cancelled before it starts stops here, before any setup work.
+    fieldcraft_model::progress::check()?;
     let step = model.select_step(step, |p| matches!(p, Procedure::Buckle { .. }), "buckling")?;
     let Procedure::Buckle { modes, shift } = step.procedure else {
         return Err(Error::Internal("buckling step".into()));

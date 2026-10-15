@@ -1069,6 +1069,8 @@ fn followers(model: &Model, resolved: &fieldcraft_model::Resolved, mesh: &Mesh, 
 /// Solve a nonlinear static step: the step named `step`, or the model's only nonlinear static
 /// step.
 pub fn solve_nonlinear(model: &Model, step: Option<&str>, limits: &Limits) -> Result<StaticResult> {
+    // A job cancelled before it starts stops here, before any setup work.
+    fieldcraft_model::progress::check()?;
     let chosen = model.select_step(step, |p| matches!(p, Procedure::NonlinearStatic(_)), "nonlinear static")?;
     let Procedure::NonlinearStatic(settings) = &chosen.procedure else {
         return Err(Error::Internal("nonlinear static step".into()));

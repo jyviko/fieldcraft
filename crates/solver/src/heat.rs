@@ -479,6 +479,8 @@ pub(crate) fn temperatures_at(model: &Model, resolved: &Resolved, step: &Step, l
 
 /// Solve a heat transfer step: the step named `step`, or the model's only one.
 pub fn solve_heat(model: &Model, step: Option<&str>, limits: &Limits) -> Result<HeatResult> {
+    // A job cancelled before it starts stops here, before any setup work.
+    fieldcraft_model::progress::check()?;
     let resolved = model.resolve()?;
     let step = model.select_step(step, |p| matches!(p, Procedure::HeatTransfer { .. }), "heat transfer")?;
     let mut warnings: Vec<String> = resolved.warnings.iter().map(ToString::to_string).collect();

@@ -24,10 +24,12 @@ pub enum Requirement {
     Design,
     /// Geometry to mesh: an open design or an imported surface.
     Geometry,
-    /// A datum plane or axis.
+    /// A datum plane, axis or point.
     Datum,
     /// A datum plane (what a partition cuts by).
     DatumPlane,
+    DatumAxis,
+    DatumPoint,
     /// A partition of the design.
     Partition,
     /// An edge seed.
@@ -74,6 +76,8 @@ impl Requirement {
             Requirement::Geometry => s.design.is_some() || !s.surfaces.is_empty(),
             Requirement::Datum => !m.datums().is_empty(),
             Requirement::DatumPlane => m.datums().values().any(|d| d.plane().is_some()),
+            Requirement::DatumAxis => m.datums().values().any(|d| d.axis().is_some()),
+            Requirement::DatumPoint => m.datums().values().any(|d| d.point().is_some()),
             Requirement::Partition => !m.partitions().is_empty(),
             Requirement::Seed => !m.seeds().is_empty(),
             Requirement::Nodes => !m.nodes().is_empty(),
@@ -110,8 +114,10 @@ impl Requirement {
         match self {
             Requirement::Design => "an open design",
             Requirement::Geometry => "geometry (an open design or an imported surface)",
-            Requirement::Datum => "a datum plane or axis",
+            Requirement::Datum => "a datum",
             Requirement::DatumPlane => "a datum plane",
+            Requirement::DatumAxis => "a datum axis",
+            Requirement::DatumPoint => "a datum point",
             Requirement::Partition => "a partition",
             Requirement::Seed => "an edge seed",
             Requirement::Nodes => "mesh nodes",
@@ -140,6 +146,8 @@ impl Requirement {
         match self {
             Requirement::Design | Requirement::Geometry => "geometry.open",
             Requirement::Datum | Requirement::DatumPlane => "geometry.datum",
+            Requirement::DatumAxis => "geometry.datum.axis",
+            Requirement::DatumPoint => "geometry.datum.point",
             Requirement::Partition => "geometry.partition",
             Requirement::Seed => "mesh.seed.edge",
             Requirement::Nodes => "mesh.node.add",
@@ -195,6 +203,8 @@ impl crate::schema::Collection {
             C::Body => Requirement::Design,
             C::Datum => Requirement::Datum,
             C::DatumPlane => Requirement::DatumPlane,
+            C::DatumAxis => Requirement::DatumAxis,
+            C::DatumPoint => Requirement::DatumPoint,
             C::Partition => Requirement::Partition,
         }
     }
@@ -333,6 +343,8 @@ mod tests {
             C::Body,
             C::Datum,
             C::DatumPlane,
+            C::DatumAxis,
+            C::DatumPoint,
             C::Partition,
         ];
         let empty = Session::default();

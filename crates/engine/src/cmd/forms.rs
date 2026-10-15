@@ -1277,6 +1277,25 @@ pub const DATUM_PLANE: &[Field] = &[
                     xyz("normal", "Normal", D::None).help("The plane's normal direction.").req(),
                 ],
             ),
+            variant(
+                "datum_points",
+                "Three datum points",
+                &[
+                    reference("a", "Point A", C::DatumPoint).help("First datum point.").req(),
+                    reference("b", "Point B", C::DatumPoint).help("Second datum point.").req(),
+                    reference("c", "Point C", C::DatumPoint).help("Third datum point.").req(),
+                ],
+            ),
+            variant(
+                "normal_to_axis",
+                "Normal to an axis",
+                &[
+                    reference("axis", "Axis", C::DatumAxis).help("The datum axis the plane is normal to.").req(),
+                    reference("point", "Through", C::DatumPoint)
+                        .help("A datum point on the plane; the axis's own point when empty.")
+                        .hint("the axis's point"),
+                ],
+            ),
         ],
     )
     .help("How the plane is defined.")
@@ -1313,13 +1332,70 @@ pub const DATUM_AXIS: &[Field] = &[
                     xyz("direction", "Direction", D::None).help("The axis direction.").req(),
                 ],
             ),
+            variant(
+                "datum_points",
+                "Two datum points",
+                &[
+                    reference("a", "Point A", C::DatumPoint).help("First datum point on the axis.").req(),
+                    reference("b", "Point B", C::DatumPoint).help("Second datum point on the axis.").req(),
+                ],
+            ),
         ],
     )
     .help("How the axis is defined.")
     .req()
     .def(r#"{"type": "principal"}"#),
 ];
-pub const DATUM_DELETE: &[Field] = existing!("Datum", C::Datum);
+pub const DATUM_POINT: &[Field] = &[
+    NAME,
+    variants(
+        "by",
+        "Definition",
+        &[
+            variant("coordinates", "Coordinates", &[xyz("point", "Point", POINT).help("The point's coordinates.").req()]),
+            variant(
+                "vertex",
+                "Mesh vertex",
+                &[
+                    reference("body", "Body", C::Body).help("The body the vertex belongs to.").req(),
+                    text("vertex", "Vertex").help("The vertex's name, as the mesh tags it.").req(),
+                ],
+            ),
+            variant(
+                "edge",
+                "On an edge",
+                &[
+                    reference("body", "Body", C::Body).help("The body the edge belongs to.").req(),
+                    text("edge", "Edge").help("The edge's persistent name.").req(),
+                    range("fraction", "Fraction", D::None, 0.0, 1.0).help("How far along the edge from its start: 0.5 is its midpoint.").def("0.5"),
+                ],
+            ),
+            variant(
+                "face_centre",
+                "Face centre",
+                &[
+                    reference("body", "Body", C::Body).help("The body the face belongs to.").req(),
+                    text("face", "Face").help("The face's persistent name.").req(),
+                ],
+            ),
+            variant(
+                "axis_plane",
+                "Axis and plane",
+                &[
+                    reference("axis", "Axis", C::DatumAxis).help("The datum axis.").req(),
+                    reference("plane", "Plane", C::DatumPlane).help("The datum plane the axis crosses.").req(),
+                ],
+            ),
+        ],
+    )
+    .help("How the point is defined.")
+    .req()
+    .def(r#"{"type": "coordinates"}"#),
+];
+pub const DATUM_DELETE: &[Field] = &[
+    reference("name", "Datum", C::Datum).req().help("The Datum to act on, by name."),
+    flag("cascade", "Delete its partitions").help("Also delete the partitions that cut by it; without it, a datum in use is refused."),
+];
 pub const PARTITION: &[Field] = &[
     NAME,
     reference("datum", "Datum plane", C::DatumPlane).help("The plane that divides the bodies.").req(),

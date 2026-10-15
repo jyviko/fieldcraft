@@ -13,6 +13,7 @@ mod geometry;
 mod hex;
 pub(crate) mod mesh;
 
+pub use datum::edit_params as datum_edit_params;
 pub use mesh::analytic_surfaces;
 mod mirror;
 mod model;
@@ -41,6 +42,10 @@ pub static ALL: &[CommandSpec] = &[
     geometry::IMPORT_MESH,
     datum::DATUM_PLANE,
     datum::DATUM_AXIS,
+    datum::DATUM_POINT,
+    datum::DATUM_EDIT,
+    datum::DATUM_AXIS_EDIT,
+    datum::DATUM_POINT_EDIT,
     datum::DATUM_DELETE,
     datum::PARTITION,
     datum::PARTITION_DELETE,

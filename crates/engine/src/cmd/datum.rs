@@ -1,6 +1,10 @@
-//! Datum planes and axes, and partitions of the open design by datum planes.
+//! Datum planes, axes and points, and partitions of the open design by datum planes.
 //!
-//! Datums and partitions are part of the model (`fieldcraft_model::datums`). A partition cuts the
+//! Datums and partitions are part of the model (`fieldcraft_model::datums`). A datum point is
+//! placed by coordinates, at a mesh vertex, along a design edge, at a design face's centre or
+//! where a datum axis crosses a datum plane; planes and axes can be made through datum points.
+//! Each takes the coordinates of what it is made from when it is made (a later edit of a datum
+//! point leaves the planes and axes made through it where they are). A partition cuts the
 //! design in memory (`fieldcraft_geometry::partition`); the model's partitions are applied again,
 //! in order, whenever the design is opened (`geometry.open`, `file.open`, samples), so an edit
 //! of the design followed by a re-open replays them.
@@ -19,7 +23,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const DATUM_PLANE: CommandSpec = CommandSpec {
     id: "geometry.datum",
     label: "Datum Plane",
-    params: r#"{"name": "Mid", "by": {"type": "offset", "plane": "yz" | "zx" | "xy", "offset": 15} | {"type": "three_points", "a": [x, y, z], "b": […], "c": […]} | {"type": "point_normal", "point": [x, y, z], "normal": [nx, ny, nz]}} — a named datum plane (model coordinates, mm for SolidCraft geometry): a principal plane moved along its normal (yz: normal +x, zx: normal +y, xy: normal +z), through three points (normal (b − a) × (c − a)), or through a point with a normal. Partitions (geometry.partition) cut by it; shown in the viewport"#,
+    params: r#"{"name": "Mid", "by": {"type": "offset", "plane": "yz" | "zx" | "xy", "offset": 15} | {"type": "three_points", "a": [x, y, z], "b": […], "c": […]} | {"type": "point_normal", "point": [x, y, z], "normal": [nx, ny, nz]} | {"type": "datum_points", "a": "P1", "b": "P2", "c": "P3"} | {"type": "normal_to_axis", "axis": "Spindle", "point"?: "P1"}} — a named datum plane (model coordinates, mm for SolidCraft geometry): a principal plane moved along its normal (yz: normal +x, zx: normal +y, xy: normal +z), through three points or three datum points (normal (b − a) × (c − a)), through a point with a normal, or normal to a datum axis through a datum point (the axis's point by default). Partitions (geometry.partition) cut by it; shown in the viewport"#,
     form: Some(super::forms::DATUM_PLANE),
     kind: CommandKind::Model,
     requires: &[],
@@ -29,17 +33,57 @@ pub const DATUM_PLANE: CommandSpec = CommandSpec {
 pub const DATUM_AXIS: CommandSpec = CommandSpec {
     id: "geometry.datum.axis",
     label: "Datum Axis",
-    params: r#"{"name": "Spindle", "by": {"type": "principal", "axis": "x" | "y" | "z", "through"?: [x, y, z] (default the origin)} | {"type": "two_points", "a": [x, y, z], "b": […]} | {"type": "point_direction", "point": [x, y, z], "direction": [dx, dy, dz]}} — a named datum axis, shown in the viewport"#,
+    params: r#"{"name": "Spindle", "by": {"type": "principal", "axis": "x" | "y" | "z", "through"?: [x, y, z] (default the origin)} | {"type": "two_points", "a": [x, y, z], "b": […]} | {"type": "point_direction", "point": [x, y, z], "direction": [dx, dy, dz]} | {"type": "datum_points", "a": "P1", "b": "P2"}} — a named datum axis, shown in the viewport"#,
     form: Some(super::forms::DATUM_AXIS),
     kind: CommandKind::Model,
     requires: &[],
     run: datum_axis,
 };
 
+pub const DATUM_POINT: CommandSpec = CommandSpec {
+    id: "geometry.datum.point",
+    label: "Datum Point",
+    params: r#"{"name": "P1", "by": {"type": "coordinates", "point": [x, y, z]} | {"type": "vertex", "body": "Body1", "vertex": "v3"} | {"type": "edge", "body": "Body1", "edge": "F1:top|F2:side", "fraction"?: 0.5} | {"type": "face_centre", "body": "Body1", "face": "F2:top"} | {"type": "axis_plane", "axis": "Spindle", "plane": "Mid"}} — a named datum point, shown in the viewport as a small cross: at coordinates, at a vertex of the mesh (as its geometry tags name it), a fraction along an edge of the open design (0.5: its midpoint), at the area centre of a face of the open design, or where a datum axis crosses a datum plane. Datum planes and axes can be made through datum points"#,
+    form: Some(super::forms::DATUM_POINT),
+    kind: CommandKind::Model,
+    requires: &[],
+    run: datum_point,
+};
+
+pub const DATUM_EDIT: CommandSpec = CommandSpec {
+    id: "geometry.datum.edit",
+    label: "Edit Datum Plane",
+    params: r#"{"name": "Mid", "by": …} — redefines a datum plane (the parameters of geometry.datum); the partitions that cut by it cut again"#,
+    form: Some(super::forms::DATUM_PLANE),
+    kind: CommandKind::Model,
+    requires: &[Requirement::DatumPlane],
+    run: |s, p| datum_edit(s, p, "plane"),
+};
+
+pub const DATUM_AXIS_EDIT: CommandSpec = CommandSpec {
+    id: "geometry.datum.axis.edit",
+    label: "Edit Datum Axis",
+    params: r#"{"name": "Spindle", "by": …} — redefines a datum axis (the parameters of geometry.datum.axis)"#,
+    form: Some(super::forms::DATUM_AXIS),
+    kind: CommandKind::Model,
+    requires: &[Requirement::DatumAxis],
+    run: |s, p| datum_edit(s, p, "axis"),
+};
+
+pub const DATUM_POINT_EDIT: CommandSpec = CommandSpec {
+    id: "geometry.datum.point.edit",
+    label: "Edit Datum Point",
+    params: r#"{"name": "P1", "by": …} — redefines a datum point (the parameters of geometry.datum.point); planes and axes made through it stay where they are"#,
+    form: Some(super::forms::DATUM_POINT),
+    kind: CommandKind::Model,
+    requires: &[Requirement::DatumPoint],
+    run: |s, p| datum_edit(s, p, "point"),
+};
+
 pub const DATUM_DELETE: CommandSpec = CommandSpec {
     id: "geometry.datum.delete",
     label: "Delete Datum",
-    params: r#"{"name": "Mid"} — deletes a datum plane or axis no partition uses"#,
+    params: r#"{"name": "Mid", "cascade"?: false} — deletes a datum plane, axis or point; one a partition cuts by is refused (naming the partitions), unless `cascade` deletes those partitions too"#,
     form: Some(super::forms::DATUM_DELETE),
     kind: CommandKind::Model,
     requires: &[Requirement::Datum],
@@ -91,6 +135,16 @@ enum PlaneBy {
         point: [f64; 3],
         normal: [f64; 3],
     },
+    DatumPoints {
+        a: String,
+        b: String,
+        c: String,
+    },
+    NormalToAxis {
+        axis: String,
+        #[serde(default)]
+        point: Option<String>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -117,13 +171,74 @@ enum AxisBy {
         point: [f64; 3],
         direction: [f64; 3],
     },
+    DatumPoints {
+        a: String,
+        b: String,
+    },
+}
+
+fn half() -> f64 {
+    0.5
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum PointBy {
+    Coordinates {
+        point: [f64; 3],
+    },
+    Vertex {
+        body: String,
+        vertex: String,
+    },
+    Edge {
+        body: String,
+        edge: String,
+        #[serde(default = "half")]
+        fraction: f64,
+    },
+    FaceCentre {
+        body: String,
+        face: String,
+    },
+    AxisPlane {
+        axis: String,
+        plane: String,
+    },
 }
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-fn plane_datum(by: PlaneBy) -> Result<Datum> {
+/// The coordinates of datum point `name`.
+fn datum_point_at(m: &Model, name: &str) -> Result<[f64; 3]> {
+    match m.datum(name) {
+        Some(d) => d.point().ok_or_else(|| EngineError::Params(format!("datum `{name}` is a datum {}, not a point", d.kind()))),
+        None => Err(EngineError::Params(format!("no datum point `{name}`"))),
+    }
+}
+
+/// The point and unit direction of datum axis `name`.
+fn datum_axis_of(m: &Model, name: &str) -> Result<([f64; 3], [f64; 3])> {
+    match m.datum(name) {
+        Some(d) => d.axis().ok_or_else(|| EngineError::Params(format!("datum `{name}` is a datum {}, not an axis", d.kind()))),
+        None => Err(EngineError::Params(format!("no datum axis `{name}`"))),
+    }
+}
+
+/// A plane through three points; collinear points are refused relative to their spread.
+fn three_points(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Result<Datum> {
+    let (u, v) = (sub(b, a), sub(c, a));
+    let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    let size = u.iter().chain(&v).map(|x| x * x).sum::<f64>();
+    if !(n.iter().map(|x| x * x).sum::<f64>() > 1e-20 * size * size) {
+        return Err(EngineError::Params("the three points must not lie on one line".into()));
+    }
+    Ok(Datum::Plane { point: a, normal: n })
+}
+
+fn plane_datum(m: &Model, by: PlaneBy) -> Result<Datum> {
     Ok(match by {
         PlaneBy::Offset { plane, offset } => {
             if !offset.is_finite() {
@@ -136,22 +251,22 @@ fn plane_datum(by: PlaneBy) -> Result<Datum> {
             };
             Datum::Plane { point: normal.map(|n| n * offset), normal }
         }
-        PlaneBy::ThreePoints { a, b, c } => {
-            let (u, v) = (sub(b, a), sub(c, a));
-            let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-            // Collinear points: refused relative to the points' spread.
-            let size = u.iter().chain(&v).map(|x| x * x).sum::<f64>();
-            if !(n.iter().map(|x| x * x).sum::<f64>() > 1e-20 * size * size) {
-                return Err(EngineError::Params("the three points must not lie on one line".into()));
-            }
-            Datum::Plane { point: a, normal: n }
-        }
+        PlaneBy::ThreePoints { a, b, c } => three_points(a, b, c)?,
         PlaneBy::PointNormal { point, normal } => Datum::Plane { point, normal },
+        PlaneBy::DatumPoints { a, b, c } => three_points(datum_point_at(m, &a)?, datum_point_at(m, &b)?, datum_point_at(m, &c)?)?,
+        PlaneBy::NormalToAxis { axis, point } => {
+            let (on_axis, direction) = datum_axis_of(m, &axis)?;
+            let point = match point {
+                Some(p) => datum_point_at(m, &p)?,
+                None => on_axis,
+            };
+            Datum::Plane { point, normal: direction }
+        }
     })
 }
 
-fn axis_datum(by: AxisBy) -> Datum {
-    match by {
+fn axis_datum(m: &Model, by: AxisBy) -> Result<Datum> {
+    Ok(match by {
         AxisBy::Principal { axis, through } => {
             let direction = match axis {
                 Axis::X => [1.0, 0.0, 0.0],
@@ -162,6 +277,80 @@ fn axis_datum(by: AxisBy) -> Datum {
         }
         AxisBy::TwoPoints { a, b } => Datum::Axis { point: a, direction: sub(b, a) },
         AxisBy::PointDirection { point, direction } => Datum::Axis { point, direction },
+        AxisBy::DatumPoints { a, b } => {
+            let a = datum_point_at(m, &a)?;
+            Datum::Axis { point: a, direction: sub(datum_point_at(m, &b)?, a) }
+        }
+    })
+}
+
+/// Most mesh nodes a vertex is looked for among.
+const MAX_VERTEX_NODES: usize = 10_000_000;
+
+fn point_datum(s: &Session, by: PointBy) -> Result<Datum> {
+    let shape = |body: &str| -> Result<&fieldcraft_geometry::Shape> {
+        let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+        design.body(body).ok_or_else(|| EngineError::Params(format!("the design has no body `{body}`")))
+    };
+    let point = match by {
+        PointBy::Coordinates { point } => point,
+        PointBy::Vertex { body, vertex } => {
+            let m = &s.model;
+            let at = fieldcraft_model::GeometryRef::new(body.clone(), fieldcraft_model::Entity::Vertex(vertex.clone()))?;
+            let tags = m.classification().tags_selected_by(&at);
+            let node =
+                m.classification().nodes().iter().take(MAX_VERTEX_NODES).find(|(_, t)| tags.contains(t)).and_then(|(n, _)| m.node(*n)).ok_or_else(
+                    || EngineError::Params(format!("vertex `{vertex}` of body `{body}` is on no mesh node (vertices are named on meshed bodies)")),
+                )?;
+            node.xyz
+        }
+        PointBy::Edge { body, edge, fraction } => {
+            if !(0.0..=1.0).contains(&fraction) {
+                return Err(EngineError::invalid("fraction", "is a number from 0 to 1".to_string()));
+            }
+            let edges = shape(&body)?.edges()?;
+            let e = edges.iter().find(|e| e.name == edge).ok_or_else(|| EngineError::Params(format!("body `{body}` has no edge `{edge}`")))?;
+            e.point_at(fraction).ok_or_else(|| EngineError::Params(format!("edge `{edge}` of body `{body}` has no points")))?
+        }
+        PointBy::FaceCentre { body, face } => shape(&body)?.face_centre(&face)?,
+        PointBy::AxisPlane { axis, plane } => {
+            let (p, d) = datum_axis_of(&s.model, &axis)?;
+            let (q, n) = match s.model.datum(&plane) {
+                Some(x) => x.plane().ok_or_else(|| EngineError::Params(format!("datum `{plane}` is a datum {}, not a plane", x.kind())))?,
+                None => return Err(EngineError::Params(format!("no datum plane `{plane}`"))),
+            };
+            let along = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            let across = along(d, n);
+            // Unit vectors: the sine of the angle between the axis and the plane.
+            if across.abs() < 1e-9 {
+                return Err(EngineError::Params(format!("axis `{axis}` is parallel to plane `{plane}`: they do not cross")));
+            }
+            let t = along(sub(q, p), n) / across;
+            [p[0] + t * d[0], p[1] + t * d[1], p[2] + t * d[2]]
+        }
+    };
+    Ok(Datum::Point { point })
+}
+
+/// The datum `by` defines for a datum of `kind` (`plane`, `axis` or `point`).
+fn datum_of(s: &Session, kind: &str, p: &Value) -> Result<Datum> {
+    match kind {
+        "plane" => plane_datum(&s.model, super::req(p, "by")?),
+        "axis" => axis_datum(&s.model, super::req(p, "by")?),
+        _ => point_datum(s, super::req(p, "by")?),
+    }
+}
+
+/// The parameters of the command that edits datum `name`, describing it as it is (a plane by
+/// its point and normal, an axis by its point and direction, a point by its coordinates); and
+/// that command.
+pub fn edit_params(name: &str, d: &Datum) -> (&'static str, Value) {
+    match *d {
+        Datum::Plane { point, normal } => (DATUM_EDIT.id, json!({"name": name, "by": {"type": "point_normal", "point": point, "normal": normal}})),
+        Datum::Axis { point, direction } => {
+            (DATUM_AXIS_EDIT.id, json!({"name": name, "by": {"type": "point_direction", "point": point, "direction": direction}}))
+        }
+        Datum::Point { point } => (DATUM_POINT_EDIT.id, json!({"name": name, "by": {"type": "coordinates", "point": point}})),
     }
 }
 
@@ -173,24 +362,55 @@ fn datum_json(name: &str, d: &Datum) -> Value {
     v
 }
 
-fn datum_plane(s: &mut Session, p: &Value) -> Result<Value> {
+fn datum_create(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     let name = super::name(p)?;
-    let datum = plane_datum(super::req(p, "by")?)?;
+    let datum = datum_of(s, kind, p)?;
     s.model.add_datum(name, datum)?;
     Ok(datum_json(name, s.model.datum(name).unwrap_or(&datum)))
 }
 
+fn datum_plane(s: &mut Session, p: &Value) -> Result<Value> {
+    datum_create(s, p, "plane")
+}
+
 fn datum_axis(s: &mut Session, p: &Value) -> Result<Value> {
+    datum_create(s, p, "axis")
+}
+
+fn datum_point(s: &mut Session, p: &Value) -> Result<Value> {
+    datum_create(s, p, "point")
+}
+
+/// Redefine datum `name` of `kind`; the partitions that cut by a plane cut again.
+fn datum_edit(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     let name = super::name(p)?;
-    let datum = axis_datum(super::req(p, "by")?);
-    s.model.add_datum(name, datum)?;
+    match s.model.datum(name) {
+        Some(d) if d.kind() == kind => {}
+        Some(d) => return Err(EngineError::Params(format!("datum `{name}` is a datum {}, not a {kind}", d.kind()))),
+        None => return Err(EngineError::Params(format!("no datum {kind} `{name}`"))),
+    }
+    let datum = datum_of(s, kind, p)?;
+    s.model.replace_datum(name, datum)?;
+    if !s.model.datum_users(name).is_empty() {
+        recut(s)?;
+    }
     Ok(datum_json(name, s.model.datum(name).unwrap_or(&datum)))
 }
 
 fn datum_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let name = super::name(p)?;
+    let cascade: bool = super::opt(p, "cascade")?.unwrap_or(false);
+    let partitions: Vec<String> = s.model.partitions().iter().filter(|x| x.datum == name).map(|x| x.name.clone()).collect();
+    if cascade {
+        for partition in &partitions {
+            s.model.remove_partition(partition)?;
+        }
+    }
     s.model.remove_datum(name)?;
-    Ok(json!({"deleted": name}))
+    if cascade && !partitions.is_empty() {
+        recut(s)?;
+    }
+    Ok(json!({"deleted": name, "partitions": if cascade { partitions } else { Vec::new() }}))
 }
 
 /// The model's partitions as cuts of the geometry.
@@ -359,6 +579,117 @@ pub(crate) mod tests {
         assert_eq!(bodies(&s).len(), 2);
         s.execute("geometry.partition.delete", &json!({"name": "Half"})).unwrap();
         assert_eq!(bodies(&s), [body]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn datum_points_by_each_definition_and_planes_and_axes_through_them() {
+        let (mut s, dir) = plate();
+        let point = |s: &Session, n: &str| s.model.datum(n).and_then(Datum::point).unwrap();
+        let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-6);
+        s.execute("geometry.datum.point", &json!({"name": "O", "by": {"type": "coordinates", "point": [0, 0, 0]}})).unwrap();
+        s.execute("geometry.datum.point", &json!({"name": "X", "by": {"type": "coordinates", "point": [10, 0, 0]}})).unwrap();
+        s.execute("geometry.datum.point", &json!({"name": "Y", "by": {"type": "coordinates", "point": [0, 10, 0]}})).unwrap();
+        // The plate's edge along x at y = 0, z = 0, its midpoint and a quarter along it.
+        let body = s.design.as_ref().unwrap().bodies[0].clone();
+        let edge = body.edges().unwrap().into_iter().find(|e| e.points.iter().all(|p| p[1].abs() < 1e-9 && p[2].abs() < 1e-9)).unwrap();
+        let by = |fraction: f64| json!({"type": "edge", "body": body.name, "edge": edge.name, "fraction": fraction});
+        s.execute("geometry.datum.point", &json!({"name": "Mid", "by": {"type": "edge", "body": body.name, "edge": edge.name}})).unwrap();
+        assert!(close(point(&s, "Mid"), [20.0, 0.0, 0.0]), "{:?}", point(&s, "Mid"));
+        s.execute("geometry.datum.point", &json!({"name": "Q", "by": by(0.25)})).unwrap();
+        let q = point(&s, "Q");
+        assert!((q[0] - 10.0).abs() < 1e-6 || (q[0] - 30.0).abs() < 1e-6, "{q:?}");
+        // The centre of the face at x = 0.
+        let side =
+            body.face_surfaces().unwrap().iter().position(
+                |f| matches!(f, Some(fieldcraft_geometry::FaceSurface::Plane { normal, point }) if normal[0] < -0.5 && point[0].abs() < 1e-9),
+            );
+        let face = body.faces()[side.unwrap()].name.clone();
+        s.execute("geometry.datum.point", &json!({"name": "C", "by": {"type": "face_centre", "body": body.name, "face": face}})).unwrap();
+        assert!(close(point(&s, "C"), [0.0, 15.0, 5.0]), "{:?}", point(&s, "C"));
+
+        // Planes and axes through datum points; a point where an axis crosses a plane.
+        let r = s.execute("geometry.datum", &json!({"name": "Base", "by": {"type": "datum_points", "a": "O", "b": "X", "c": "Y"}})).unwrap();
+        assert_eq!(r["normal"], json!([0.0, 0.0, 1.0]));
+        s.execute("geometry.datum.axis", &json!({"name": "Ax", "by": {"type": "datum_points", "a": "O", "b": "X"}})).unwrap();
+        assert_eq!(s.model.datum("Ax"), Some(&Datum::Axis { point: [0.0; 3], direction: [1.0, 0.0, 0.0] }));
+        s.execute("geometry.datum", &json!({"name": "Cut", "by": {"type": "normal_to_axis", "axis": "Ax", "point": "Mid"}})).unwrap();
+        assert_eq!(s.model.datum("Cut"), Some(&Datum::Plane { point: point(&s, "Mid"), normal: [1.0, 0.0, 0.0] }));
+        s.execute("geometry.datum.point", &json!({"name": "Hit", "by": {"type": "axis_plane", "axis": "Ax", "plane": "Cut"}})).unwrap();
+        assert!(close(point(&s, "Hit"), [20.0, 0.0, 0.0]));
+
+        let journal = s.journal.len();
+        for p in [
+            json!({"name": "Z", "by": {"type": "axis_plane", "axis": "Ax", "plane": "Base"}}),
+            json!({"name": "Z", "by": {"type": "axis_plane", "axis": "Base", "plane": "Cut"}}),
+            json!({"name": "Z", "by": {"type": "edge", "body": body.name, "edge": edge.name, "fraction": 2}}),
+            json!({"name": "Z", "by": {"type": "edge", "body": body.name, "edge": "nope"}}),
+            json!({"name": "Z", "by": {"type": "edge", "body": "Nope", "edge": edge.name}}),
+            json!({"name": "Z", "by": {"type": "face_centre", "body": body.name, "face": "nope"}}),
+            // No mesh: no vertex is named.
+            json!({"name": "Z", "by": {"type": "vertex", "body": body.name, "vertex": "v1"}}),
+            json!({"name": "Z", "by": {"type": "coordinates", "point": [f64::MAX, 0, 0]}}),
+            json!({"name": "Z", "by": {"type": "coordinates", "point": [0, 0]}}),
+        ] {
+            assert!(s.execute("geometry.datum.point", &p).is_err(), "{p}");
+        }
+        for (command, p) in [
+            ("geometry.datum", json!({"name": "Z", "by": {"type": "datum_points", "a": "O", "b": "X", "c": "Mid"}})),
+            ("geometry.datum", json!({"name": "Z", "by": {"type": "datum_points", "a": "O", "b": "X", "c": "Ax"}})),
+            ("geometry.datum", json!({"name": "Z", "by": {"type": "normal_to_axis", "axis": "Nope"}})),
+            ("geometry.datum.axis", json!({"name": "Z", "by": {"type": "datum_points", "a": "O", "b": "O"}})),
+        ] {
+            assert!(s.execute(command, &p).is_err(), "{p}");
+        }
+        assert_eq!(s.journal.len(), journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_vertex_point_is_at_the_tagged_mesh_node() {
+        let mut s = Session::default();
+        s.execute(
+            "mesh.block",
+            &json!({"body": "Bar", "kind": "hex8", "corners": [[0,0,0],[4,0,0],[4,1,0],[0,1,0],[0,0,1],[4,0,1],[4,1,1],[0,1,1]], "divisions": [2, 1, 1], "vertices": {"7": "tip"}}),
+        )
+        .unwrap();
+        s.execute("geometry.datum.point", &json!({"name": "Tip", "by": {"type": "vertex", "body": "Bar", "vertex": "tip"}})).unwrap();
+        assert_eq!(s.model.datum("Tip").and_then(Datum::point), Some([4.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn editing_and_deleting_datums_follow_their_partitions() {
+        let (mut s, dir) = plate();
+        s.execute("geometry.datum", &json!({"name": "Mid", "by": {"type": "offset", "plane": "yz", "offset": 15}})).unwrap();
+        s.execute("geometry.datum.axis", &json!({"name": "Ax", "by": {"type": "principal", "axis": "x"}})).unwrap();
+        s.execute("geometry.partition", &json!({"name": "Half", "datum": "Mid"})).unwrap();
+        let cut_at = |s: &Session| s.design.as_ref().unwrap().bodies[0].measure().unwrap().bbox_max[0];
+        assert!((cut_at(&s) - 15.0).abs() < 1e-6);
+
+        // Moving the plane cuts again; an edit of the wrong kind or to an axis is refused.
+        s.execute("geometry.datum.edit", &json!({"name": "Mid", "by": {"type": "offset", "plane": "yz", "offset": 25}})).unwrap();
+        assert!((cut_at(&s) - 25.0).abs() < 1e-6);
+        assert!(s.execute("geometry.datum.axis.edit", &json!({"name": "Mid", "by": {"type": "principal", "axis": "y"}})).is_err());
+        assert!(s.execute("geometry.datum.edit", &json!({"name": "Ax", "by": {"type": "offset", "plane": "xy"}})).is_err());
+        s.execute("geometry.datum.axis.edit", &json!({"name": "Ax", "by": {"type": "principal", "axis": "y"}})).unwrap();
+        assert_eq!(s.model.datum("Ax"), Some(&Datum::Axis { point: [0.0; 3], direction: [0.0, 1.0, 0.0] }));
+
+        // The edit commands take the parameters edit_params gives back.
+        for name in ["Mid", "Ax"] {
+            let (command, params) = edit_params(name, s.model.datum(name).unwrap());
+            s.execute(command, &params).unwrap();
+        }
+
+        // Deleting the plane names its partition, or deletes it too.
+        let e = s.execute("geometry.datum.delete", &json!({"name": "Mid"})).unwrap_err().to_string();
+        assert!(e.contains("partition `Half`"), "{e}");
+        let r = s.execute("geometry.datum.delete", &json!({"name": "Mid", "cascade": true})).unwrap();
+        assert_eq!(r["partitions"], json!(["Half"]));
+        assert!(s.model.partitions().is_empty() && s.model.datum("Mid").is_none());
+        assert_eq!(bodies(&s).len(), 1);
+        // One undo step brings both back.
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!((s.model.partitions().len(), bodies(&s).len()), (1, 2));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

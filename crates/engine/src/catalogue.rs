@@ -155,8 +155,9 @@ pub struct Capability {
     pub status: Status,
     /// Related commands in the entry's drop-down (edit, delete…).
     pub more: &'static [&'static str],
-    /// Commands the entry's own form covers (an option of it does the same): claimed by the entry
-    /// for the command search and the ribbon's stage, but not listed in the ribbon.
+    /// Commands the entry's own form covers (an option of it does the same), or that act on what
+    /// it makes from the browser's item menu (edit, delete): claimed by the entry for the command
+    /// search and the ribbon's stage, but not listed in the ribbon.
     pub covers: &'static [&'static str],
 }
 
@@ -246,15 +247,32 @@ pub static CATALOGUE: &[Capability] = &[
         "Inspect",
         "Weld, closed, manifold, orientation and self-intersection checks; feature edges",
     ),
-    ready_more(
+    // Edit and delete of datums and partitions are on the browser's item menu, not the ribbon.
+    covering(
         "geometry.datum",
         "Datum Plane",
         Geometry,
         "Prepare",
-        "Datum planes (principal plane and offset, three points, point and normal) and axes",
-        &["geometry.datum.axis", "geometry.datum.delete"],
+        "A datum plane: principal plane and offset, three points or datum points, point and normal, normal to an axis",
+        &["geometry.datum.edit", "geometry.datum.delete"],
     ),
-    ready_more(
+    covering(
+        "geometry.datum.axis",
+        "Datum Axis",
+        Geometry,
+        "Prepare",
+        "A datum axis: principal axis, two points or datum points, point and direction",
+        &["geometry.datum.axis.edit"],
+    ),
+    covering(
+        "geometry.datum.point",
+        "Datum Point",
+        Geometry,
+        "Prepare",
+        "A datum point: coordinates, a mesh vertex, along an edge, a face's centre, an axis through a plane",
+        &["geometry.datum.point.edit"],
+    ),
+    covering(
         "geometry.partition",
         "Partition",
         Geometry,

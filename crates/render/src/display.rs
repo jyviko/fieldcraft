@@ -3,9 +3,12 @@
 //! Finite elements: the faces nobody shares (the skin of the solid elements, and every shell),
 //! the element edges on those faces, line elements and nodes. Faces shared by two solid elements
 //! are inside the mesh and are left out, so a model of a million elements draws its surface, not
-//! its interior. Higher-order elements (tet10, hex20, tri6, quad8) draw through their corner
-//! nodes. Every element primitive keeps its node labels, so results (displacements, contours)
-//! can be drawn on it ([`DisplayMesh::displaced`]).
+//! its interior. Higher-order elements (tet10, hex20, tri6, quad8) draw through all their nodes:
+//! a face is cut into triangles whose vertices are its corners and mid-side nodes, and each
+//! edge is drawn as its two halves through its mid-side node, so the faces, the edges, the
+//! feature lines and a highlight all share the same vertices and meet exactly at any zoom.
+//! Every element primitive keeps its node labels, so results (displacements, contours) can be
+//! drawn on it ([`DisplayMesh::displaced`]).
 //!
 //! Geometry: triangulated boundary surfaces (tessellated bodies, imported surfaces) added with
 //! [`DisplayMesh::add_surface`], drawn with the edges between their faces.
@@ -40,11 +43,16 @@ impl DisplayTri {
     }
 }
 
-/// An element edge.
+/// A drawn segment of an element edge: the whole edge of a linear element, a half (corner to
+/// mid-side node) of a quadratic one, so edges bend with the faces they bound.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DisplayEdge {
     pub p: [Vec3; 2],
     pub nodes: [u32; 2],
+    /// The corner nodes of the element edge it is (part of), lower first.
+    pub corners: [u32; 2],
+    /// The element edge lies on a geometry edge: a feature line of the mesh.
+    pub feature: bool,
 }
 
 /// A line element.
@@ -108,29 +116,43 @@ pub struct DisplayMesh {
     pub bounds: Aabb3,
 }
 
-/// The faces of an element as corner indices (0-based into its node list), each wound
-/// counter-clockwise seen from outside for a positively oriented element. A solid's faces come in
-/// the order [`ElementKind::faces`] numbers them (with the same corners); a shell draws its top
-/// side, face 1.
-fn faces(kind: ElementKind) -> &'static [&'static [usize]] {
-    match kind {
-        ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => &[],
-        ElementKind::Tri3 | ElementKind::Tri6 => &[&[0, 1, 2]],
-        ElementKind::Quad4 | ElementKind::Quad8 => &[&[0, 1, 2, 3]],
-        ElementKind::Tet4 | ElementKind::Tet10 => &[&[0, 2, 1], &[0, 1, 3], &[1, 2, 3], &[2, 0, 3]],
-        ElementKind::Wedge6 => &[&[0, 2, 1], &[3, 4, 5], &[0, 1, 4, 3], &[1, 2, 5, 4], &[2, 0, 3, 5]],
-        ElementKind::Hex8 | ElementKind::Hex20 => &[&[0, 3, 2, 1], &[4, 5, 6, 7], &[0, 1, 5, 4], &[1, 2, 6, 5], &[2, 3, 7, 6], &[3, 0, 4, 7]],
-    }
+/// The faces drawn of an element, as positions in its node list ([`ElementKind::faces`]: the
+/// corners counter-clockwise seen from outside, then the mid-side nodes of quadratic kinds): a
+/// solid's faces in their numbering, a shell's top side (face 1).
+fn drawn_faces(kind: ElementKind) -> &'static [&'static [usize]] {
+    let all = kind.faces();
+    if kind.dimension() == 2 { all.get(..1).unwrap_or(&[]) } else { all }
 }
 
-/// Most corners of any element (hex).
-const MAX_CORNERS: usize = 8;
+/// The corners of a face listed with `n` nodes: a quadratic face (tri6, quad8) has as many
+/// mid-side nodes as corners.
+fn face_corner_count(n: usize) -> usize {
+    if n >= 6 { n / 2 } else { n }
+}
 
-/// A face's identity regardless of winding and starting corner: its sorted node labels, a
+/// Triangles (positions in the face's boundary ring) that fill a face whose boundary ring has
+/// `n` points. A quadratic face's ring alternates corner and mid-side node, and every triangle's
+/// vertices are nodes: one triangle cut off at each corner, and the polygon of the mid-side
+/// nodes fanned, so the drawn face passes through every node and its sides are the drawn edges.
+fn face_triangles(n: usize, quadratic: bool) -> Vec<[usize; 3]> {
+    if !quadratic {
+        return (1..n.saturating_sub(1)).map(|k| [0, k, k + 1]).collect();
+    }
+    let mut out: Vec<[usize; 3]> = (0..n).step_by(2).map(|c| [c, c + 1, (c + n - 1) % n]).collect();
+    let mids: Vec<usize> = (1..n).step_by(2).collect();
+    for k in 1..mids.len().saturating_sub(1) {
+        if let (Some(&a), Some(&b), Some(&c)) = (mids.first(), mids.get(k), mids.get(k + 1)) {
+            out.push([a, b, c]);
+        }
+    }
+    out
+}
+
+/// A face's identity regardless of winding and starting corner: its sorted corner labels, a
 /// triangle padded with `u32::MAX`.
 fn face_key(e: &[u32], face: &[usize]) -> Option<[u32; 4]> {
     let mut k = [u32::MAX; 4];
-    for (slot, &i) in k.iter_mut().zip(face) {
+    for (slot, &i) in k.iter_mut().zip(face.iter().take(face_corner_count(face.len()))) {
         *slot = *e.get(i)?;
     }
     k.sort_unstable();
@@ -166,65 +188,85 @@ impl DisplayMesh {
             .elements()
             .values()
             .filter(|e| e.kind.dimension() == 3)
-            .flat_map(|e| faces(e.kind).iter().filter_map(|f| face_key(&e.nodes, f)))
+            .flat_map(|e| drawn_faces(e.kind).iter().filter_map(|f| face_key(&e.nodes, f)))
             .collect();
         keys.sort_unstable();
         let mut inner: Vec<[u32; 4]> = keys.windows(2).filter(|w| w.first() == w.get(1)).filter_map(|w| w.first().copied()).collect();
         inner.dedup();
         drop(keys);
-        let mut edges: Vec<(u32, u32)> = Vec::new();
-        for (&label, e) in model.elements() {
-            // Corners: one past the highest face index (line elements: their two ends).
-            let corners = faces(e.kind).iter().flat_map(|f| f.iter()).max().map_or(2, |m| m + 1).min(MAX_CORNERS);
-            let mut at = [Vec3::ZERO; MAX_CORNERS];
-            let mut found = 0;
-            for (slot, &n) in at.iter_mut().zip(e.nodes.iter().take(corners)) {
-                if let Some(p) = pos(n) {
-                    *slot = p;
-                    found += 1;
+        // Element edges on geometry edges (by their corner nodes): the mesh's feature lines.
+        let classification = model.classification();
+        let mut features: Vec<(u32, u32)> = Vec::new();
+        for (&element, tags) in classification.elements() {
+            let Some(e) = model.element(element) else { continue };
+            for (&edge, &tag) in &tags.edges {
+                if classification.entity(tag).is_some_and(|g| g.entity.dimension() == 1)
+                    && let Some(local) = e.kind.edges().get(usize::from(edge).wrapping_sub(1))
+                    && let (Some(&a), Some(&b)) = (local.first().and_then(|&i| e.nodes.get(i)), local.get(1).and_then(|&i| e.nodes.get(i)))
+                {
+                    features.push((a.min(b), a.max(b)));
                 }
             }
-            if found < corners {
-                continue;
-            }
-            let at = at.get(..corners).unwrap_or(&[]);
+        }
+        features.sort_unstable();
+        features.dedup();
+        // (segment's nodes, the element edge's corners), each sorted.
+        let mut edges: Vec<((u32, u32), (u32, u32))> = Vec::new();
+        for (&label, e) in model.elements() {
             if e.kind.dimension() == 1 {
-                if let (Some(&a), Some(&b), Some(&na), Some(&nb)) = (at.first(), at.get(1), e.nodes.first(), e.nodes.get(1)) {
+                if let (Some(&na), Some(&nb)) = (e.nodes.first(), e.nodes.get(1))
+                    && let (Some(a), Some(b)) = (pos(na), pos(nb))
+                {
                     out.lines.push(DisplayLine { a, b, nodes: [na, nb], kind: e.kind, element: label });
                 }
                 continue;
             }
+            let Some(at) = e.nodes.iter().map(|&n| pos(n)).collect::<Option<Vec<Vec3>>>() else { continue };
+            if at.len() != e.kind.node_count() {
+                continue;
+            }
             let solid = e.kind.dimension() == 3;
-            let element_centre = centre(at);
-            for (number, f) in faces(e.kind).iter().enumerate() {
+            let element_centre = centre(at.get(..e.kind.corner_count()).unwrap_or(&at));
+            for (number, f) in drawn_faces(e.kind).iter().enumerate() {
                 let face = u8::try_from(number + 1).unwrap_or(u8::MAX);
                 if solid && face_key(&e.nodes, f).is_some_and(|k| inner.binary_search(&k).is_ok()) {
                     continue;
                 }
-                let p: Vec<Vec3> = f.iter().filter_map(|&i| at.get(i).copied()).collect();
-                let labels: Vec<u32> = f.iter().filter_map(|&i| e.nodes.get(i).copied()).collect();
+                // The face's boundary: corner, mid-side node, corner, … (corners only when linear).
+                let corners = face_corner_count(f.len());
+                let ring: Vec<usize> = (0..corners).flat_map(|j| std::iter::once(j).chain((f.len() > corners).then_some(corners + j))).collect();
+                let Some(ring) =
+                    ring.iter().map(|&k| f.get(k).and_then(|&i| Some((*at.get(i)?, *e.nodes.get(i)?)))).collect::<Option<Vec<(Vec3, u32)>>>()
+                else {
+                    continue;
+                };
+                let p: Vec<Vec3> = ring.iter().map(|r| r.0).collect();
                 let Some(mut normal) = polygon_normal(&p) else { continue };
                 if solid && normal.dot(centre(&p) - element_centre) < 0.0 {
                     normal = -normal;
                 }
-                for k in 1..p.len().saturating_sub(1) {
-                    if let (Some(&a), Some(&b), Some(&c), Some(&la), Some(&lb), Some(&lc)) =
-                        (p.first(), p.get(k), p.get(k + 1), labels.first(), labels.get(k), labels.get(k + 1))
-                    {
-                        out.tris.push(DisplayTri { p: [a, b, c], nodes: [la, lb, lc], normal, kind: e.kind, element: label, face });
+                for [a, b, c] in face_triangles(ring.len(), corners < ring.len()) {
+                    if let (Some(&(pa, la)), Some(&(pb, lb)), Some(&(pc, lc))) = (ring.get(a), ring.get(b), ring.get(c)) {
+                        out.tris.push(DisplayTri { p: [pa, pb, pc], nodes: [la, lb, lc], normal, kind: e.kind, element: label, face });
                     }
                 }
-                for (j, &i) in f.iter().enumerate() {
-                    let i2 = f.get((j + 1) % f.len()).copied().unwrap_or(i);
-                    if let (Some(&a), Some(&b)) = (e.nodes.get(i), e.nodes.get(i2)) {
-                        edges.push((a.min(b), a.max(b)));
-                    }
+                let step = ring.len() / corners.max(1);
+                for (k, &(_, a)) in ring.iter().enumerate() {
+                    let b = ring.get((k + 1) % ring.len()).map_or(a, |r| r.1);
+                    let (c0, c1) = (ring.get(k - k % step).map_or(a, |r| r.1), ring.get((k - k % step + step) % ring.len()).map_or(b, |r| r.1));
+                    edges.push(((a.min(b), a.max(b)), (c0.min(c1), c0.max(c1))));
                 }
             }
         }
         edges.sort_unstable();
         edges.dedup();
-        out.edges = edges.into_iter().filter_map(|(a, b)| Some(DisplayEdge { p: [pos(a)?, pos(b)?], nodes: [a, b] })).collect();
+        out.edges = edges
+            .into_iter()
+            .filter_map(|((a, b), corners)| {
+                let feature = features.binary_search(&corners).is_ok();
+                Some(DisplayEdge { p: [pos(a)?, pos(b)?], nodes: [a, b], corners: [corners.0, corners.1], feature })
+            })
+            .collect();
         out
     }
 
@@ -351,7 +393,7 @@ impl DisplayMesh {
             .collect();
         let mut out = DisplayMesh {
             tris,
-            edges: self.edges.iter().map(|e| DisplayEdge { p: [at(e.p[0], e.nodes[0]), at(e.p[1], e.nodes[1])], nodes: e.nodes }).collect(),
+            edges: self.edges.iter().map(|e| DisplayEdge { p: [at(e.p[0], e.nodes[0]), at(e.p[1], e.nodes[1])], ..*e }).collect(),
             lines: self.lines.iter().map(|l| DisplayLine { a: at(l.a, l.nodes[0]), b: at(l.b, l.nodes[1]), ..*l }).collect(),
             nodes: self.nodes.iter().map(|n| DisplayNode { label: n.label, p: at(n.p, n.label) }).collect(),
             ..Default::default()
@@ -509,17 +551,6 @@ mod tests {
     /// the element face a set or load refers to.
     #[test]
     fn drawn_faces_carry_the_models_face_numbers() {
-        for kind in [ElementKind::Tet4, ElementKind::Tet10, ElementKind::Wedge6, ElementKind::Hex8, ElementKind::Hex20] {
-            let drawn = faces(kind);
-            assert_eq!(drawn.len(), kind.faces().len(), "{kind:?}");
-            for (d, m) in drawn.iter().zip(kind.faces()) {
-                let corners = d.len();
-                let (mut a, mut b) = (d.to_vec(), m.get(..corners).unwrap().to_vec());
-                a.sort_unstable();
-                b.sort_unstable();
-                assert_eq!(a, b, "{kind:?}");
-            }
-        }
         let m = block(2, 1, 1);
         let d = DisplayMesh::from_model(&m);
         for t in &d.tris {
@@ -530,6 +561,88 @@ mod tests {
         let h = d.hit_element_face(Vec3::new(10.0, 0.3, 0.6), Vec3::new(-1.0, 0.0, 0.0)).unwrap();
         let t = d.tris[h.index];
         assert_eq!((t.element, t.face, h.t), (2, 4, 8.0));
+    }
+
+    /// `block(2, 1, 1)` as hex20: a mid-side node on every edge, the ones on the top face
+    /// raised by 0.1 (a curved top, as a mesher puts them on a curved surface), and element 1's
+    /// edge 5 (corners 5 → 6, along the top) on a geometry edge.
+    fn curved_hex20_block() -> Model {
+        let linear = block(2, 1, 1);
+        let mut m = Model::default();
+        for (&l, n) in linear.nodes() {
+            m.set_node(l, n.xyz).unwrap();
+        }
+        let mut mids = std::collections::BTreeMap::new();
+        let mut next = 100;
+        for (&label, e) in linear.elements() {
+            let mut nodes = e.nodes.clone();
+            for edge in ElementKind::Hex20.edges() {
+                let (a, b) = (e.nodes[edge[0]], e.nodes[edge[1]]);
+                let id = *mids.entry((a.min(b), a.max(b))).or_insert_with(|| {
+                    let (p, q) = (linear.node(a).unwrap().xyz, linear.node(b).unwrap().xyz);
+                    let mut mid = [0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1]), 0.5 * (p[2] + q[2])];
+                    if p[2] == 1.0 && q[2] == 1.0 {
+                        mid[2] += 0.1;
+                    }
+                    next += 1;
+                    m.set_node(next, mid).unwrap();
+                    next
+                });
+                nodes.push(id);
+            }
+            m.set_element(label, ElementKind::Hex20, nodes).unwrap();
+        }
+        let edge = fieldcraft_model::GeometryRef::new("B", fieldcraft_model::Entity::Edge("top".into())).unwrap();
+        let tag = m.geometry_tag(&edge).unwrap();
+        m.tag_element_edge(1, 5, tag).unwrap();
+        m
+    }
+
+    /// A curved hex20 face is drawn through its mid-side nodes, and its faces, edges and feature
+    /// lines share their vertices exactly (#260: lines met the faces nowhere when zoomed in).
+    #[test]
+    fn quadratic_faces_and_edges_share_their_vertices() {
+        let m = curved_hex20_block();
+        let d = DisplayMesh::from_model(&m);
+        let at = |l: u32| Vec3::from(m.node(l).unwrap().xyz);
+        // Every vertex drawn is a node, exactly where the node is.
+        for t in &d.tris {
+            assert!(t.nodes.iter().zip(t.p).all(|(&l, p)| at(l) == p), "{t:?}");
+        }
+        for e in &d.edges {
+            assert!(e.nodes.iter().zip(e.p).all(|(&l, p)| at(l) == p), "{e:?}");
+        }
+        // 10 skin faces, 6 triangles each; the 20 element edges in two halves each.
+        assert_eq!(d.tris.len(), 60);
+        assert_eq!(d.edges.len(), 40);
+        // The drawn edges are exactly the sides of the faces' outlines.
+        let mut sides: Vec<((u32, u8), [u32; 2])> = d
+            .tris
+            .iter()
+            .flat_map(|t| {
+                [0, 1, 2].map(|k| {
+                    ((t.element, t.face), {
+                        let mut s = [t.nodes[k], t.nodes[(k + 1) % 3]];
+                        s.sort_unstable();
+                        s
+                    })
+                })
+            })
+            .collect();
+        sides.sort_unstable();
+        let mut outline: Vec<[u32; 2]> = sides.chunk_by(|a, b| a == b).filter(|r| r.len() == 1).map(|r| r[0].1).collect();
+        outline.sort_unstable();
+        outline.dedup();
+        let mut drawn: Vec<[u32; 2]> = d.edges.iter().map(|e| e.nodes).collect();
+        drawn.sort_unstable();
+        assert_eq!(outline, drawn);
+        // A top edge bows up through its mid-side node.
+        assert!(d.edges.iter().any(|e| e.p.iter().any(|p| (p.z - 1.1).abs() < 1e-12)));
+        // The edge on the geometry edge is a feature line, both halves; the rest are not.
+        let feature: Vec<[u32; 2]> = d.edges.iter().filter(|e| e.feature).map(|e| e.corners).collect();
+        let e1 = &m.element(1).unwrap().nodes;
+        let top = [e1[4].min(e1[5]), e1[4].max(e1[5])];
+        assert_eq!(feature, vec![top, top]);
     }
 
     #[test]

@@ -141,8 +141,14 @@ fn model_scene(d: &DisplayMesh, p: &Palette) -> Scene {
         s.tris.extend(d.surface_tris.iter().map(|t| SceneTri { p: t.p, normal: t.normal, color: d.body_color(t, p.geometry, &p.bodies) }));
     }
     s.lines = d.edges.iter().map(|e| SceneLine { a: e.p[0], b: e.p[1], color: p.mesh_edge, width: EDGE_WIDTH }).collect();
-    let edge = if faces_drawn { p.mesh_edge } else { p.geometry_edge };
-    s.lines.extend(d.surface_edges.iter().map(|[a, b]| SceneLine { a: *a, b: *b, color: edge, width: GEOMETRY_EDGE_WIDTH }));
+    if faces_drawn {
+        s.lines.extend(d.surface_edges.iter().map(|[a, b]| SceneLine { a: *a, b: *b, color: p.mesh_edge, width: GEOMETRY_EDGE_WIDTH }));
+    } else {
+        // Over the mesh the geometry's edges are drawn along it (the element edges on them), so
+        // they lie on the element faces.
+        let edge = p.geometry_edge;
+        s.lines.extend(d.edges.iter().filter(|e| e.feature).map(|e| SceneLine { a: e.p[0], b: e.p[1], color: edge, width: GEOMETRY_EDGE_WIDTH }));
+    }
     s.lines.extend(d.lines.iter().map(|l| SceneLine { a: l.a, b: l.b, color: p.element(l.kind), width: LINE_ELEMENT_WIDTH }));
     s
 }

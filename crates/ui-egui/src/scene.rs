@@ -2,8 +2,9 @@
 //! colours. The GPU viewport and the headless render (`ui.render`) draw the same [`Scene`].
 //!
 //! Geometry (the open design, imported surfaces) draws as faces with their boundaries while
-//! the model has no element faces; once it is meshed, as boundaries only, so the mesh is not
-//! hidden behind coincident faces. The analysis setup's symbols ([`symbols`]) go over the model,
+//! the model has no element faces; once it is meshed, as its boundaries drawn along the mesh
+//! (the element edges on geometry edges), so the mesh is not hidden behind coincident faces and
+//! every line lies on the element faces. The analysis setup's symbols ([`symbols`]) go over the model,
 //! muted over a results plot.
 
 use fieldcraft_render::glyphs::{GlyphShow, Glyphs};
@@ -97,14 +98,16 @@ pub fn build(display: &DisplayMesh, style: Style, show: Show, t: &Tokens) -> Sce
         let color = rgb(if style == Style::Wireframe { t.hex } else { t.mesh_edge });
         s.lines = display.edges.iter().map(|e| SceneLine { a: e.p[0], b: e.p[1], color, width: EDGE_WIDTH }).collect();
     }
-    // Face boundaries in every style: they are the geometry's outline.
+    // Face boundaries in every style: they are the geometry's outline. Over the mesh they are
+    // the element edges on geometry edges, so they lie exactly on the element faces; the
+    // geometry's own tessellation lies off them by its chord error.
     if show.geometry {
-        s.lines.extend(display.surface_edges.iter().map(|[a, b]| SceneLine {
-            a: *a,
-            b: *b,
-            color: rgb(t.geometry_edge),
-            width: GEOMETRY_EDGE_WIDTH,
-        }));
+        let color = rgb(t.geometry_edge);
+        if mesh_faces {
+            s.lines.extend(display.edges.iter().filter(|e| e.feature).map(|e| SceneLine { a: e.p[0], b: e.p[1], color, width: GEOMETRY_EDGE_WIDTH }));
+        } else {
+            s.lines.extend(display.surface_edges.iter().map(|[a, b]| SceneLine { a: *a, b: *b, color, width: GEOMETRY_EDGE_WIDTH }));
+        }
     }
     if show.mesh {
         s.lines.extend(display.lines.iter().map(|l| SceneLine { a: l.a, b: l.b, color: rgb(t.element(l.kind)), width: LINE_ELEMENT_WIDTH }));
@@ -179,6 +182,32 @@ mod tests {
         assert_eq!(xs.len(), 5);
         assert!(xs.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "{xs:?}");
         assert!(s.points.iter().all(|p| p.p.y == 0.0), "only the seeded edge has ticks");
+    }
+
+    /// Over the mesh the geometry's outline is drawn along the element edges on geometry edges,
+    /// never the design's tessellation, which lies off the element faces (#260).
+    #[test]
+    fn geometry_edges_over_the_mesh_follow_its_element_edges() {
+        let mut m = Model::default();
+        for (i, p) in
+            [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0., 0., 1.], [1., 0., 1.], [1., 1., 1.], [0., 1., 1.]].into_iter().enumerate()
+        {
+            m.set_node(i as u32 + 1, p).unwrap();
+        }
+        m.set_element(1, ElementKind::Hex8, (1..=8).collect()).unwrap();
+        let edge = fieldcraft_model::GeometryRef::new("B", fieldcraft_model::Entity::Edge("e".into())).unwrap();
+        let tag = m.geometry_tag(&edge).unwrap();
+        m.tag_element_edge(1, 1, tag).unwrap();
+        let mut d = DisplayMesh::from_model(&m);
+        // The design's own edge, a little off the element edge (its chord error).
+        d.add_surface(&[[0.0, -0.01, 0.0], [1.0, -0.01, 0.0], [0.5, -0.01, 1.0]], &[[0, 1, 2]], &[0]);
+        let t = Tokens::dark();
+        let geometry = |s: &Scene| s.lines.iter().filter(|l| l.color == rgb(t.geometry_edge)).map(|l| [l.a, l.b]).collect::<Vec<_>>();
+        let s = build(&d, Style::ShadedEdges, Show::DEFAULT, &t);
+        assert_eq!(geometry(&s), vec![[Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)]]);
+        // Without the mesh the design's edges are drawn.
+        let s = build(&d, Style::ShadedEdges, Show { mesh: false, ..Show::DEFAULT }, &t);
+        assert_eq!(geometry(&s).len(), 3);
     }
 
     #[test]

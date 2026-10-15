@@ -389,6 +389,11 @@ impl Picker<'_> {
         }
     }
 
+    /// Element faces are drawn: the geometry is drawn along the mesh.
+    fn elements_drawn(&self) -> bool {
+        self.elements && !self.display.tris.is_empty()
+    }
+
     /// The drawn faces' triangles (for a depth map).
     fn drawn(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
         let e = self.display.tris.iter().filter(|_| self.elements).map(|t| t.p);
@@ -519,7 +524,7 @@ impl Picker<'_> {
                     .display
                     .edges
                     .iter()
-                    .filter_map(|e| Some((e.p[0], e.p[1], *self.index.edge_tag.get(&edge_key(e.nodes[0], e.nodes[1]))?)))
+                    .filter_map(|e| Some((e.p[0], e.p[1], *self.index.edge_tag.get(&edge_key(e.corners[0], e.corners[1]))?)))
                     .collect();
                 tagged.extend(self.display.lines.iter().zip(&self.index.line_tag).filter_map(|(l, t)| Some((l.a, l.b, (*t)?))));
                 let near = tagged.iter().enumerate().filter_map(|(i, (a, b, _))| {
@@ -658,7 +663,9 @@ impl Picker<'_> {
             }
         }
         outline(s, first, color);
-        if m.edges && self.curves {
+        // Over element faces a design edge is marked along the mesh's edges on it (below), which
+        // lie on the faces; its own polyline lies off them by the tessellation's chord error.
+        if m.edges && self.curves && !self.elements_drawn() {
             // Which edges of each drawn body are marked, worked out once per edge.
             let marked: Vec<Vec<bool>> = self
                 .names
@@ -677,7 +684,7 @@ impl Picker<'_> {
         }
         if m.edges {
             for e in &self.display.edges {
-                if on(self.index.edge_tag.get(&edge_key(e.nodes[0], e.nodes[1])).copied()) {
+                if on(self.index.edge_tag.get(&edge_key(e.corners[0], e.corners[1])).copied()) {
                     s.lines.push(SceneLine { a: e.p[0], b: e.p[1], color, width: EDGE_WIDTH });
                 }
             }

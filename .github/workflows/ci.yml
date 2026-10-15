@@ -60,12 +60,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/develop' }}
-      # A dependency update changes THIRD-PARTY-LICENSES.txt, which Dependabot cannot regenerate:
-      # regenerate it here so the gate checks everything else, and dependabot-licences.yml commits
-      # it to the pull request.
-      - name: Regenerate THIRD-PARTY-LICENSES.txt (Dependabot)
-        if: github.event.pull_request.user.login == 'dependabot[bot]'
-        run: cargo xtask licences
       - run: cargo xtask ci
 
   heavy:
@@ -120,7 +114,7 @@ jobs:
         run: git diff --exit-code docs/oracle.md
 
   advisories:
-    name: Dependency advisories and sources
+    name: Dependency licences, advisories and sources
     if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -129,4 +123,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-deny
         run: cargo install cargo-deny --version 0.20.2 --locked
-      - run: cargo deny --locked check --warn unmaintained advisories bans sources
+      - run: cargo deny --locked check --warn unmaintained advisories bans licenses sources

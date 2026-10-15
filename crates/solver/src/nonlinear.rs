@@ -702,7 +702,11 @@ impl Run<'_> {
         let mut dq = rf.clone();
         let [kff] = red.reduce([&k])?;
         drop(k);
-        let Ok(chol) = factor_raw(&kff, self.limits) else { return Ok(None) };
+        let chol = match factor_raw(&kff, self.limits) {
+            Ok(chol) => chol,
+            Err(FactorError::Cancelled) => return Err(Failure::Fatal(fieldcraft_model::Error::Cancelled.into())),
+            Err(_) => return Ok(None),
+        };
         chol.solve(&mut dq)?;
         let energy = dot(&dq, &rf).abs();
         Ok(dq.iter().all(|v| v.is_finite()).then(|| (q0.iter().zip(&dq).map(|(a, d)| a + d).collect(), energy)))
@@ -744,6 +748,7 @@ impl Run<'_> {
         let mut flips = 0usize;
         let max_iterations = usize::try_from(self.settings.max_iterations).unwrap_or(usize::MAX);
         for _ in 0..max_iterations {
+            fieldcraft_model::progress::check().map_err(Error::from)?;
             // The round-off rule: nothing left to correct.
             if norm_inf(&r) <= ROUND_OFF * tol.force * self.scale() && self.force_floor.is_some() {
                 return Ok(Converged { q, evaluation: eval, energy: first_energy });
@@ -1234,6 +1239,7 @@ fn solve_on(model: &Model, step: &str, limits: &Limits, notes: Vec<String>) -> R
         fieldcraft_model::progress::stage("Load factor", Some(1.0), "");
         while t < 1.0 {
             fieldcraft_model::progress::count(lambda);
+            fieldcraft_model::progress::check()?;
             if history.increments.len() >= max_increments {
                 return Err(Error::Limit(format!(
                     "step `{}`: {} increments reached the step's cap at load factor {lambda:.6} (raise max_increments)",
@@ -1663,6 +1669,7 @@ fn arc_length(
     let mut last: Option<Evaluation> = None;
     let max_increments = usize::try_from(settings.max_increments).unwrap_or(usize::MAX);
     loop {
+        fieldcraft_model::progress::check()?;
         if history.increments.len() >= max_increments {
             warnings.push(format!(
                 "the arc-length step `{}` ended at its cap of {} increments, at load factor {lambda:.6}",

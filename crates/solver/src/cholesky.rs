@@ -221,6 +221,8 @@ pub enum FactorError {
     OutOfMemory { entries: usize },
     /// A broken internal invariant (a bug), reported instead of a panic.
     Internal(String),
+    /// The command was cancelled ([`fieldcraft_model::progress`]) between supernodes.
+    Cancelled,
 }
 
 impl FactorError {
@@ -892,8 +894,17 @@ impl Symbolic {
             at = range.end;
         }
         let broken = std::sync::Mutex::new(None::<FactorError>);
+        // The pool's threads do not report: they ask the caller's progress whether to stop.
+        let progress = fieldcraft_model::progress::current();
+        let cancelled = || progress.as_ref().is_some_and(|p| p.is_cancelled());
         parallel::for_each_mut(&mut pieces, |_, (range, piece, failed)| {
             for j in range.clone() {
+                if cancelled() {
+                    if let Ok(mut b) = broken.lock() {
+                        b.get_or_insert(FactorError::Cancelled);
+                    }
+                    break;
+                }
                 let (done, own) = piece.split_at_mut(j - range.start);
                 let Some(own) = own.first_mut() else { break };
                 match supernode(&context, j, done, range.start, own) {
@@ -923,6 +934,9 @@ impl Symbolic {
             None => e,
         };
         for &j in &self.top {
+            if cancelled() {
+                return Err(FactorError::Cancelled);
+            }
             if earliest.as_ref().and_then(FactorError::column).is_some_and(|c| self.structure.cols(j).start > c) {
                 break;
             }
@@ -1078,6 +1092,14 @@ mod tests {
         }
         let e = Factor::new(&UpperColumns::from_symmetric(&dense_to_csr(&sing)), usize::MAX).unwrap_err();
         assert_eq!(e, FactorError::NotPositiveDefinite { column: n - 1 });
+        // A cancelled command stops between supernodes, in Cholesky and LDLᵀ alike.
+        let p = fieldcraft_model::progress::Progress::new();
+        p.cancel();
+        fieldcraft_model::progress::scoped(Some(p), || {
+            let upper = UpperColumns::from_symmetric(&csr);
+            assert_eq!(Factor::new(&upper, usize::MAX).unwrap_err(), FactorError::Cancelled);
+            assert_eq!(crate::ldlt::LdltFactor::new(&upper, usize::MAX).unwrap_err(), FactorError::Cancelled);
+        });
         // Empty and 1 × 1 matrices.
         let empty = Csr { n: 0, ptr: vec![0], idx: vec![], val: vec![] };
         let f = Factor::new(&UpperColumns::from_symmetric(&empty), 10).unwrap();

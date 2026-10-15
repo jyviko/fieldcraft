@@ -308,6 +308,7 @@ fn factor(a: &Csr, limits: &Limits, mesh: &HeatMesh, eqs: &Reduction) -> Result<
         }
         FactorError::OutOfMemory { entries } => Error::Limit(format!("not enough memory for the factorization ({entries} entries)")),
         FactorError::Internal(what) => Error::Internal(what),
+        FactorError::Cancelled => Error::Model(fieldcraft_model::Error::Cancelled),
         FactorError::NotPositiveDefinite { column } | FactorError::Singular { column } => {
             let node = eqs.eq_dof.get(column).and_then(|d| mesh.layout.locate(*d)).map(|(slot, _)| slot);
             let label = node.and_then(|n| mesh.labels.get(n)).copied().unwrap_or(0);
@@ -434,6 +435,7 @@ fn run(model: &Model, resolved: &Resolved, step: &Step, limits: &Limits) -> Resu
             fieldcraft_model::progress::stage("Time increment", Some(steps as f64), "");
             for i in 1..=steps {
                 fieldcraft_model::progress::count((i - 1) as f64);
+                fieldcraft_model::progress::check()?;
                 b.mul(&t, &mut rhs);
                 for (r, fj) in rhs.iter_mut().zip(&f) {
                     *r += dt * fj;

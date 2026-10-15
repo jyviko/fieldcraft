@@ -251,6 +251,7 @@ pub fn octree_hex_mesh(surface: &BoundarySurface, field: &dyn SizeField, options
     let mut hints: Vec<P> = Vec::new();
     let mut retries: Vec<String> = Vec::new();
     for attempt in 0..options.attempts {
+        fieldcraft_model::progress::check()?;
         let cap = if attempt == 0 {
             options.max_elements
         } else {

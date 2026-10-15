@@ -363,6 +363,7 @@ pub fn solve_explicit(model: &Model, step: Option<&str>, limits: &Limits) -> Res
     loop {
         if increments.is_multiple_of(PROGRESS_EVERY) {
             fieldcraft_model::progress::count(t);
+            fieldcraft_model::progress::check()?;
         }
         if increments >= max_increments {
             completed = false;

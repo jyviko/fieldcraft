@@ -296,6 +296,7 @@ pub fn lanczos(op: &impl Operator, shift: f64, wanted: Wanted, block: usize, max
     let mut prev_b: Option<Vec<Vec<f64>>> = None;
     let mut next_check = (wanted.count + b).max(2 * b);
     loop {
+        fieldcraft_model::progress::check()?;
         let j0 = q.len();
         // W = Op Q_j.
         let mut w: Vec<Vec<f64>> = Vec::with_capacity(b);

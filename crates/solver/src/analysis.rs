@@ -271,6 +271,7 @@ pub(crate) fn factor_error(e: FactorError, mesh: &Mesh, reduction: &Reduction) -
         }
         FactorError::OutOfMemory { entries } => Error::Limit(format!("not enough memory for the factorization ({entries} entries)")),
         FactorError::Internal(what) => Error::Internal(what),
+        FactorError::Cancelled => Error::Model(fieldcraft_model::Error::Cancelled),
         FactorError::NotPositiveDefinite { column } => {
             let at = reduction.eq_dof.get(column).map_or_else(|| "an unknown degree of freedom".to_string(), |d| mesh.describe_dof(*d));
             Error::Singular(format!(

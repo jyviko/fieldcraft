@@ -137,6 +137,7 @@ pub fn run(setup: &Setup, flow: &mut Flow, limits: &Limits) -> Result<FluidResul
     let mut next_frame = 1u64;
     fieldcraft_model::progress::stage("Fluid steps", Some(total as f64), "");
     for k in 1..=total {
+        fieldcraft_model::progress::check()?;
         flow.step()?;
         if k % 64 == 0 {
             fieldcraft_model::progress::count(k as f64);

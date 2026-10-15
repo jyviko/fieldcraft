@@ -491,6 +491,7 @@ pub fn quality_mesh(surface: &BoundarySurface, cdt: &TetMesh, analytic: Vec<Opti
     progress::stage("Refinement round", Some(o.rounds as f64), "");
     for round in 0..o.rounds {
         progress::count((round + 1) as f64);
+        progress::check()?;
         let stats = refine::refine(&mut cx, &ctx, &ropt)?;
         let quiet = stats.interior + stats.boundary == 0;
         let stopped = stats.stopped.clone();
@@ -514,6 +515,7 @@ pub fn quality_mesh(surface: &BoundarySurface, cdt: &TetMesh, analytic: Vec<Opti
     }
     // Put the boundary vertices on the exact surfaces (the tessellation is within its chordal
     // tolerance of them).
+    progress::check()?;
     progress::stage("Snapping to the geometry", None, "");
     report.unsnapped = snap_to_geometry(&mut cx, &exact, true)?;
     let c = cx.compact()?;

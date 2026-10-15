@@ -276,6 +276,7 @@ pub fn hex_mesh(surface: &BoundarySurface, faces: &[Option<Surface>], field: &dy
     };
     let mut reasons: Vec<String> = Vec::new();
     for &method in methods {
+        fieldcraft_model::progress::check()?;
         let mut last = None;
         match method {
             HexMethod::Extrude | HexMethod::Revolve => {
@@ -287,6 +288,7 @@ pub fn hex_mesh(surface: &BoundarySurface, faces: &[Option<Surface>], field: &dy
                     }
                 };
                 for setup in setups {
+                    fieldcraft_model::progress::check()?;
                     // The cross-section is laid out once per frame; refinement retries reuse it.
                     let prepared = match layered::prepare(&ctx, setup) {
                         Ok(p) => p,
@@ -364,6 +366,7 @@ fn candidate_setups(ctx: &Ctx, method: HexMethod) -> std::result::Result<Vec<lay
 fn with_refinement(ctx: &Ctx, method: HexMethod, run: impl Fn(u32) -> Result<Raw>) -> Result<HexMesh> {
     let mut last = Error::Failed("no attempt".into());
     for refine in 0..=MAX_REFINE {
+        fieldcraft_model::progress::check()?;
         match run(refine).and_then(|raw| finish(&Cells::one(ctx), raw, method)) {
             Ok(mesh) => return Ok(mesh),
             Err(e @ Error::Failed(_)) => last = e,

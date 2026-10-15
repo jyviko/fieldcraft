@@ -263,6 +263,10 @@ pub fn refine(cx: &mut TetComplex, ctx: &Context, o: &RefineOptions) -> Result<R
     while head < queue.len() {
         let t = queue.get(head).copied().unwrap_or(NONE);
         head += 1;
+        // A round can insert hundreds of thousands of vertices: stop between them when asked.
+        if head.is_multiple_of(1024) {
+            fieldcraft_model::progress::check()?;
+        }
         // Keep the queue's memory bounded: drop the processed prefix now and then.
         if head > 1 << 20 {
             queue.drain(..head);

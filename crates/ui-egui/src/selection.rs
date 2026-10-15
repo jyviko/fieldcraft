@@ -72,6 +72,21 @@ impl Filter {
         }
     }
 
+    /// The filter that picks `item`.
+    pub fn of(item: &Item) -> Filter {
+        match item {
+            Item::Geometry(g) => match g.entity {
+                Entity::Body => Filter::Bodies,
+                Entity::Face(_) => Filter::Faces,
+                Entity::Edge(_) => Filter::Edges,
+                Entity::Vertex(_) => Filter::Vertices,
+            },
+            Item::Node(_) => Filter::Nodes,
+            Item::Element(_) => Filter::Elements,
+            Item::Face(_) => Filter::ElementFaces,
+        }
+    }
+
     /// Geometry (named) rather than mesh (labelled) entities.
     pub fn geometry(self) -> bool {
         matches!(self, Filter::Faces | Filter::Edges | Filter::Vertices | Filter::Bodies)
@@ -140,6 +155,13 @@ pub struct Selection {
 impl Selection {
     pub fn items(&self) -> &BTreeSet<Item> {
         &self.items
+    }
+
+    /// The one filter that picks every selected item (`None` when empty or mixed).
+    pub fn filter(&self) -> Option<Filter> {
+        let mut kinds = self.items.iter().map(Filter::of);
+        let first = kinds.next()?;
+        kinds.all(|k| k == first).then_some(first)
     }
 
     pub fn len(&self) -> usize {
@@ -973,6 +995,20 @@ mod tests {
     use fieldcraft_render::{Camera, StandardView};
 
     use super::*;
+
+    /// The filter a selection holds: one kind names it, a mix or nothing names none (#341).
+    #[test]
+    fn a_selection_names_the_filter_of_what_it_holds() {
+        let edge = Item::Geometry(GeometryRef::new("Bar", Entity::Edge("top".into())).unwrap());
+        let mut sel = Selection::default();
+        assert_eq!(sel.filter(), None);
+        sel.apply([edge], Mode::Replace);
+        assert_eq!(sel.filter(), Some(Filter::Edges));
+        sel.apply([Item::Node(3)], Mode::Add);
+        assert_eq!(sel.filter(), None);
+        sel.apply([Item::Node(4)], Mode::Replace);
+        assert_eq!(sel.filter(), Some(Filter::Nodes));
+    }
 
     /// `nx × ny × nz` unit hex8 cells, the faces at x = nx tagged as face `end` of body `Bar`, the
     /// solids as the body, the edge along x = nx, z = nz as edge `top` and the corner node at

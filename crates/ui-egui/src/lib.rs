@@ -1264,6 +1264,11 @@ impl ModelApp {
         if self.pick.selection.apply(items, mode) {
             self.pick.generation = self.pick.generation.wrapping_add(1);
         }
+        // The filter label follows what the selection holds (a seed picked in the browser selects
+        // its edge whatever the filter was, #341).
+        if let Some(f) = self.pick.selection.filter() {
+            self.pick.filter = f;
+        }
         let mut text = format!("Selected: {}", self.pick.selection.summary());
         if self.pick.selection.capped() {
             text.push_str(&format!(" (at most {} items)", selection::MAX_SELECTION));

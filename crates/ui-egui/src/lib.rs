@@ -1092,6 +1092,34 @@ impl ModelApp {
         }
     }
 
+    /// The bodies the open Partition form would cut: those it lists, or every drawn body whose
+    /// surface lies on both sides of its datum plane. Empty without such a form.
+    pub fn partition_preview(&self) -> Vec<String> {
+        let Some(d) = self.dialog.as_ref().filter(|d| d.command == "geometry.partition") else { return Vec::new() };
+        let Ok(params) = serde_json::from_str::<Value>(&d.text) else { return Vec::new() };
+        if let Some(listed) = params.get("bodies").and_then(Value::as_array).filter(|l| !l.is_empty()) {
+            return listed.iter().filter_map(Value::as_str).map(str::to_string).collect();
+        }
+        let Some((point, normal)) = params.get("datum").and_then(Value::as_str).and_then(|n| self.session.model.datum(n)).and_then(|d| d.plane())
+        else {
+            return Vec::new();
+        };
+        let (point, normal) = (Vec3::from(point), Vec3::from(normal));
+        let display = &self.display.1;
+        let tol = 1e-6 * display.bounds.diagonal().max(1e-9);
+        // Per body: whether it has surface points below and above the plane.
+        let mut sides = vec![(false, false); self.pick.names.len()];
+        for t in &display.surface_tris {
+            let Some(side) = sides.get_mut(t.body as usize) else { continue };
+            for p in t.p {
+                let h = (p - point).dot(normal);
+                side.0 |= h < -tol;
+                side.1 |= h > tol;
+            }
+        }
+        self.pick.names.iter().zip(sides).filter(|(_, s)| s.0 && s.1).map(|(b, _)| b.name.clone()).collect()
+    }
+
     /// The datum the open datum form defines so far, drawn before OK.
     /// Worked out once per form text and model revision (a face centre costs a design query).
     fn datum_preview(&self) -> Option<fieldcraft_model::Datum> {
@@ -1336,7 +1364,8 @@ impl ModelApp {
         };
         let scene = self.scene_key();
         let set = self.selected_set();
-        let selected = hash(&|h| (scene, self.pick.generation, &set).hash(h));
+        let cut = self.partition_preview();
+        let selected = hash(&|h| (scene, self.pick.generation, &set, &cut).hash(h));
         let key = hash(&|h| (selected, self.pick.hover_generation).hash(h));
         if self.pick.overlay.0 == Some(key) {
             return (key, self.pick.overlay.1.clone());
@@ -1354,6 +1383,17 @@ impl ModelApp {
                 s.tris.extend(m.tris);
                 s.lines.extend(m.lines);
                 s.points.extend(m.points);
+            }
+            // The bodies the open Partition form would cut (#347).
+            if !cut.is_empty() {
+                let items: Vec<selection::Item> = cut
+                    .iter()
+                    .filter_map(|b| fieldcraft_model::GeometryRef::new(b.as_str(), fieldcraft_model::Entity::Body).ok())
+                    .map(selection::Item::Geometry)
+                    .collect();
+                let m = self.with_picker(|p| p.items_overlay(&items, theme::rgb(t.pick_hover)));
+                s.tris.extend(m.tris);
+                s.lines.extend(m.lines);
             }
             self.pick.selected_overlay = (Some(selected), Arc::new(s));
         }

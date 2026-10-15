@@ -261,6 +261,25 @@ mod tests {
         (app, dir)
     }
 
+    /// The Partition form highlights the bodies its plane would cut: a plane through the plate
+    /// cuts it, one beyond it nothing, and listed bodies are those listed (#347).
+    #[test]
+    fn the_partition_form_names_the_bodies_it_would_cut() {
+        let (mut app, dir) = plate();
+        app.run("geometry.datum", json!({"name": "Far", "by": {"type": "offset", "plane": "yz", "offset": 1000}})).unwrap();
+        app.run("geometry.datum", json!({"name": "Cut", "by": {"type": "offset", "plane": "xy", "offset": 1}})).unwrap();
+        assert!(app.partition_preview().is_empty(), "no form, nothing");
+        app.open_form("geometry.partition", json!({"name": "Q", "datum": "Cut"}));
+        let cut = app.partition_preview();
+        assert_eq!(cut.len(), 2, "both cells of Half: {cut:?}");
+        app.open_form("geometry.partition", json!({"name": "Q", "datum": "Far"}));
+        assert!(app.partition_preview().is_empty());
+        let one = cut.first().cloned().unwrap();
+        app.open_form("geometry.partition", json!({"name": "Q", "datum": "Cut", "bodies": [one.clone()]}));
+        assert_eq!(app.partition_preview(), vec![one]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// A screen point on datum `name`'s drawn lines.
     fn on_datum(app: &mut ModelApp, name: &str) -> egui::Pos2 {
         let bounds = app.display().bounds;

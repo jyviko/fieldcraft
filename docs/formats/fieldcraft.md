@@ -12,7 +12,7 @@ unzip tool reads them: `unzip -p bracket.fieldcraft model.json`):
 
 | Part | Content |
 |---|---|
-| `fieldcraft.json` | Manifest: `format` (`"fieldcraft/1"`), `generator` (`"FieldCraft 0.5.8"`), `geometry`, `view` (left out when empty), and `parts`: the byte size and SHA-256 of each other part. |
+| `fieldcraft.json` | Manifest: `format` (`"fieldcraft/1"`), `generator` (`"FieldCraft 0.5.9"`), `geometry`, `view` (left out when empty), and `parts`: the byte size and SHA-256 of each other part. |
 | `model.json` | The model definition: unit system, sets, materials, sections, reference points, couplings, boundary conditions, loads, steps, datum planes, axes and points, and the partitions that cut the geometry (in order; applied again when the design is opened). Pretty-printed JSON with a fixed key order (maps sorted by name), so a change shows as a line diff. Its form is the model's own JSON form, which commands take as parameters. |
 | `mesh.bin` | Nodes, elements and geometry tags, binary (below). |
 | `journal.json` | The commands that built the model, `[{"command": id, "params": {...}}, ...]`, one per line. It is a script `fieldcraft-cli run` replays. |

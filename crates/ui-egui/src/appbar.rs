@@ -349,10 +349,13 @@ fn help_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
             .on_hover_text("Download this version again, verify it and swap it in, to repair a damaged install")
             .clicked();
     }
+    let crashes = ui.button("Crash Reports…").on_hover_text("The crash reports saved on this computer: report, copy or delete them").clicked();
     let settings = ui.button("Settings…").on_hover_text("Privacy and updates").clicked();
     ui.label(egui::RichText::new(format!("FieldCraft {}", crate::VERSION)).color(t.text_dim));
     if report {
         app.report_bug(None);
+    } else if crashes {
+        app.open_crash_reports();
     } else if check {
         app.check_for_updates();
     } else if reinstall {

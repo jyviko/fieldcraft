@@ -615,7 +615,7 @@ pub static CATALOGUE: &[Capability] = &[
         Tools,
         "Help",
         "Draft a GitHub bug report with the version, the OS and the last error; you review it, and nothing is sent until you submit it",
-        &["diagnostics.crash_reports", "diagnostics.crash_report", "diagnostics.crash_test", "app.update.check"],
+        &["diagnostics.crash_reports", "diagnostics.crash_report", "diagnostics.crash_reports.delete", "diagnostics.crash_test", "app.update.check"],
     ),
 ];
 

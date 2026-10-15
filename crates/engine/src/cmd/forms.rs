@@ -1518,6 +1518,11 @@ pub const CRASH_REPORT: &[Field] = &[
     text("id", "Report").help("The crash report to show.").req(),
     path("dir", "Folder", false).help("The crash folder; the default one when empty.").hint("the crash folder"),
 ];
+pub const CRASH_REPORTS_DELETE: &[Field] = &[
+    text("id", "Report").help("The crash report to delete.").hint("or All"),
+    flag("all", "All").help("Delete every crash report instead of one."),
+    path("dir", "Folder", false).help("The crash folder; the default one when empty.").hint("the crash folder"),
+];
 pub const BUG_REPORT: &[Field] = &[
     text("title", "Title").help("The issue's title; one is made up when empty."),
     text("observed", "What happened").help("What went wrong; the last error when empty."),

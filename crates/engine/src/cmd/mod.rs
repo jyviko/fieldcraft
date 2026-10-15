@@ -165,6 +165,7 @@ pub static ALL: &[CommandSpec] = &[
     results::CLEAR,
     diagnostics::CRASH_REPORTS,
     diagnostics::CRASH_REPORT,
+    diagnostics::CRASH_REPORTS_DELETE,
     diagnostics::BUG_REPORT,
     diagnostics::CRASH_TEST,
     update::CHECK,

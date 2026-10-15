@@ -30,6 +30,16 @@ pub const CRASH_REPORT: CommandSpec = CommandSpec {
     run: crash_report,
 };
 
+pub const CRASH_REPORTS_DELETE: CommandSpec = CommandSpec {
+    id: "diagnostics.crash_reports.delete",
+    label: "Delete Crash Reports",
+    params: r#"{"id": "20261014-101500-…"} or {"all": true}; "dir"?: "…" — deletes one crash report, or all of them, from this computer: how many were deleted"#,
+    form: Some(super::forms::CRASH_REPORTS_DELETE),
+    kind: CommandKind::Session,
+    requires: &[],
+    run: crash_reports_delete,
+};
+
 pub const BUG_REPORT: CommandSpec = CommandSpec {
     id: "diagnostics.bug_report",
     label: "Report a Bug",
@@ -51,8 +61,12 @@ pub const CRASH_TEST: CommandSpec = CommandSpec {
 };
 
 fn crash_dir(s: &Session, p: &Value) -> Result<PathBuf> {
+    crash_dir_for(s, p, Access::Read)
+}
+
+fn crash_dir_for(s: &Session, p: &Value, access: Access) -> Result<PathBuf> {
     if p.get("dir").is_some() {
-        return Ok(PathBuf::from(file_param(s, p, "dir", Access::Read)?));
+        return Ok(PathBuf::from(file_param(s, p, "dir", access)?));
     }
     crash::default_dir().ok_or_else(|| EngineError::Params("no crash folder: set FIELDCRAFT_CRASH_DIR or give `dir`".into()))
 }
@@ -69,6 +83,21 @@ fn crash_report(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = crash_dir(s, p)?;
     let id = req::<String>(p, "id")?;
     crash::read(&dir, &id).map_err(EngineError::Params)
+}
+
+fn crash_reports_delete(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = opt::<String>(p, "id")?;
+    let all = opt::<bool>(p, "all")?.unwrap_or(false);
+    let dir = crash_dir_for(s, p, Access::Write)?;
+    let deleted = match (id.as_deref(), all) {
+        (Some(id), false) => match crash::clear(&dir, Some(id)) {
+            0 => return Err(EngineError::Params(format!("no crash report `{}`", crash::limited(id, 64)))),
+            n => n,
+        },
+        (None, true) => crash::clear(&dir, None),
+        _ => return Err(EngineError::Params("give one of `id` (a crash report) or `all: true`".into())),
+    };
+    Ok(json!({"deleted": deleted}))
 }
 
 /// The draft input for `p` from the session: its commands and model (when shared), or a crash
@@ -129,5 +158,41 @@ fn crash_test(_: &mut Session, p: &Value) -> Result<Value> {
         }
         "abort" => std::process::abort(),
         _ => Err(EngineError::invalid("mode", "must be panic, recovered or abort")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `diagnostics.crash_reports.delete` deletes one report by id, then the rest; an unknown or
+    /// hostile id and a missing choice are errors that delete nothing.
+    #[test]
+    fn crash_reports_are_deleted_one_or_all() {
+        let dir = std::env::temp_dir().join(format!("fieldcraft-crash-delete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ids = ["20261014-101500-0000000000000001", "20261014-101600-0000000000000002", "20261014-101700-0000000000000003"];
+        for id in ids {
+            std::fs::create_dir_all(dir.join(id)).unwrap();
+            std::fs::write(dir.join(id).join("report.json"), r#"{"kind": "panic", "message": "x"}"#).unwrap();
+        }
+        let mut s = Session::default();
+        let d = dir.to_string_lossy().to_string();
+        let listed = |s: &mut Session| s.execute("diagnostics.crash_reports", &json!({"dir": d})).unwrap()["reports"].as_array().map_or(0, Vec::len);
+        assert_eq!(listed(&mut s), 3);
+        for bad in [
+            json!({"dir": d}),
+            json!({"dir": d, "id": "../x"}),
+            json!({"dir": d, "id": "20261014-101500-00000000000000ff"}),
+            json!({"dir": d, "id": ids[0], "all": true}),
+        ] {
+            assert!(s.execute("diagnostics.crash_reports.delete", &bad).is_err(), "{bad}");
+        }
+        assert_eq!(listed(&mut s), 3);
+        assert_eq!(s.execute("diagnostics.crash_reports.delete", &json!({"dir": d, "id": ids[1]})).unwrap()["deleted"], 1);
+        assert_eq!(listed(&mut s), 2);
+        assert_eq!(s.execute("diagnostics.crash_reports.delete", &json!({"dir": d, "all": true})).unwrap()["deleted"], 2);
+        assert_eq!(listed(&mut s), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

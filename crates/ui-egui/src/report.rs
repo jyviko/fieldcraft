@@ -93,6 +93,33 @@ impl ModelApp {
         self.ui.menu = None;
     }
 
+    /// Help › Crash Reports: the saved reports (`diagnostics.crash_reports`), newest first.
+    pub fn open_crash_reports(&mut self) {
+        // Read directly: a listing changes nothing, and the window shows it instead of the reply.
+        let reports = match self.session.execute("diagnostics.crash_reports", &json!({})) {
+            Ok(r) => r.get("reports").and_then(Value::as_array).map_or_else(Vec::new, |a| a.iter().filter_map(summary_of).collect()),
+            Err(e) => {
+                self.set_status(format!("Crash reports: {e}"), true);
+                return;
+            }
+        };
+        self.prompt = Some(Prompt::CrashReports(reports));
+        self.ui.menu = None;
+    }
+
+    /// Delete one crash report, or all (`diagnostics.crash_reports.delete`), and list them again.
+    pub fn delete_crash_reports(&mut self, id: Option<&str>) -> Result<Value, String> {
+        let params = match id {
+            Some(id) => json!({"id": id}),
+            None => json!({"all": true}),
+        };
+        let r = self.run("diagnostics.crash_reports.delete", params)?;
+        let n = r.get("deleted").and_then(Value::as_u64).unwrap_or(0);
+        self.set_status(format!("Deleted {n} crash report{}", if n == 1 { "" } else { "s" }), false);
+        self.open_crash_reports();
+        Ok(r)
+    }
+
     /// The host found these crash reports at startup: ask about the real crashes.
     pub fn announce_crashes(&mut self, fresh: &[Summary]) {
         let crashes: Vec<Summary> = fresh.iter().filter(|r| r.kind != "recovered_panic").cloned().collect();
@@ -178,6 +205,22 @@ impl ModelApp {
     }
 }
 
+/// A crash report as `diagnostics.crash_reports` lists it.
+fn summary_of(v: &Value) -> Option<Summary> {
+    let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+    Some(Summary {
+        id: v.get("id").and_then(Value::as_str)?.to_string(),
+        kind: s("kind"),
+        time: s("time"),
+        message: s("message"),
+        command: v.get("command").and_then(Value::as_str).map(str::to_string),
+        count: v.get("count").and_then(Value::as_u64).unwrap_or(1),
+        version: s("version"),
+        path: s("path"),
+        replayable: v.get("replayable").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
 fn size(bytes: usize) -> String {
     if bytes < 1024 { format!("{bytes} B") } else { format!("{} KB", bytes.div_ceil(1024)) }
 }
@@ -226,6 +269,74 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                 app.report_bug(Some(first.id.clone()));
             } else if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 app.prompt = None;
+            }
+        }
+        Some(Prompt::CrashReports(reports)) => {
+            enum Act {
+                Report(String),
+                Copy(String),
+                Delete(String),
+                DeleteAll,
+                Close,
+            }
+            let mut act = None;
+            crate::frame::window(ctx, "Crash Reports", crate::frame::Width::Wide).id(egui::Id::new("fc_crash_reports")).show(ctx, |ui| {
+                if reports.is_empty() {
+                    ui.label("No crash reports are saved on this computer.");
+                } else {
+                    ui.label(
+                        RichText::new("Saved on this computer, newest first. Reporting one opens a GitHub issue you review first; nothing is sent until you submit it.")
+                            .color(t.text_dim),
+                    );
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical().max_height((ctx.content_rect().height() * 0.6).max(160.0)).show(ui, |ui| {
+                        for r in &reports {
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(kind_label(&r.kind)).strong());
+                                let when = if r.count > 1 { format!("{} · {} times", r.time, r.count) } else { r.time.clone() };
+                                ui.label(RichText::new(when).color(t.text_dim));
+                            });
+                            ui.label(RichText::new(&r.message).color(t.text_dim).size(11.0));
+                            ui.horizontal(|ui| {
+                                if ui.button("Report…").clicked() {
+                                    act = Some(Act::Report(r.id.clone()));
+                                }
+                                if ui.button("Copy Path").on_hover_text(&r.path).clicked() {
+                                    act = Some(Act::Copy(r.path.clone()));
+                                }
+                                if ui.button("Delete").clicked() {
+                                    act = Some(Act::Delete(r.id.clone()));
+                                }
+                            });
+                        }
+                    });
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!reports.is_empty(), egui::Button::new("Delete All")).clicked() {
+                        act = Some(Act::DeleteAll);
+                    }
+                    if ui.button("Close").clicked() {
+                        act = Some(Act::Close);
+                    }
+                });
+            });
+            match act {
+                Some(Act::Report(id)) => app.report_bug(Some(id)),
+                Some(Act::Copy(path)) => {
+                    ctx.copy_text(path);
+                    app.set_status("Copied the crash report's folder", false);
+                }
+                Some(Act::Delete(id)) => {
+                    let _ = app.delete_crash_reports(Some(&id));
+                }
+                Some(Act::DeleteAll) => {
+                    let _ = app.delete_crash_reports(None);
+                }
+                Some(Act::Close) => app.prompt = None,
+                None if ctx.input(|i| i.key_pressed(egui::Key::Escape)) => app.prompt = None,
+                None => {}
             }
         }
         Some(Prompt::ReportBug) => {
@@ -334,6 +445,24 @@ mod tests {
         // The model goes only with the session.
         let d = app.set_report(&json!({"share_session": false})).unwrap();
         assert_eq!(d["attachments"], json!([]), "{d}");
+    }
+
+    /// Help › Crash Reports reads each report as `diagnostics.crash_reports` lists it.
+    #[test]
+    fn crash_reports_read_the_listing() {
+        let r = Summary {
+            id: "20261014-101500-0000000000000001".into(),
+            kind: "unclean_exit".into(),
+            time: "2026-10-14T10:15:00Z".into(),
+            message: "ended".into(),
+            command: Some("solve.run".into()),
+            count: 2,
+            version: "0.5.9".into(),
+            path: "/x".into(),
+            replayable: true,
+        };
+        assert_eq!(summary_of(&serde_json::to_value(&r).unwrap()), Some(r));
+        assert_eq!(summary_of(&json!({"kind": "panic"})), None, "a report without an id is left out");
     }
 
     fn bug_report_text(d: &Draft) -> String {

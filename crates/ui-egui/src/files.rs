@@ -402,6 +402,9 @@ pub enum Prompt {
     Crashed(Vec<fieldcraft_engine::crash::Summary>),
     /// Help › Report a Bug ([`crate::report`]; the form is [`ModelApp::report`]).
     ReportBug,
+    /// Help › Crash Reports: the saved reports, newest first, each to report, copy or delete
+    /// ([`crate::report`]).
+    CrashReports(Vec<fieldcraft_engine::crash::Summary>),
 }
 
 /// The answer to [`Prompt::Design`].
@@ -940,7 +943,8 @@ impl ModelApp {
             "file.recover" | "file.recovery.list" => self.prompt = Some(Prompt::Recover),
             "file.sample" => self.prompt = Some(Prompt::Samples),
             "file.new" => self.new_model(),
-            "diagnostics.bug_report" | "diagnostics.crash_reports" | "diagnostics.crash_report" => self.report_bug(None),
+            "diagnostics.bug_report" => self.report_bug(None),
+            "diagnostics.crash_reports" | "diagnostics.crash_report" | "diagnostics.crash_reports.delete" => self.open_crash_reports(),
             "solve.run" => self.solve_all(),
             "deck.write" if can_save => match preset.get("format").and_then(Value::as_str) {
                 Some(f) => self.write_deck(f),
@@ -1208,7 +1212,7 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
             }
         }
         // Drawn by `crate::report::show` and `crate::privacy::show`.
-        Some(Prompt::Crashed(_) | Prompt::ReportBug | Prompt::Consent | Prompt::Settings | Prompt::Update) | None => {}
+        Some(Prompt::Crashed(_) | Prompt::CrashReports(_) | Prompt::ReportBug | Prompt::Consent | Prompt::Settings | Prompt::Update) | None => {}
     }
 }
 

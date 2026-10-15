@@ -7,6 +7,10 @@ this computer (anonymous usage, if you agreed to share it, never carries them: s
 [privacy.md](privacy.md)). The only way they leave it is **Help › Report a Bug** (or **Report It…** after a crash), which opens a GitHub issue
 form in your browser; you read it there and submit it, or not.
 
+**Help › Crash Reports…** lists every saved report (when, what, how many times), each with
+**Report…**, **Copy Path** and **Delete**, and **Delete All** (`diagnostics.crash_reports`,
+`diagnostics.crash_reports.delete`).
+
 What a bug report carries:
 
 | Always (you can edit it) | Only with **Share my session** | Only with **Include the model file** as well |

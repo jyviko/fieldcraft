@@ -256,6 +256,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 crate::files::Prompt::ReplaceMesh(r) => json!({"replace_mesh": r.question, "warnings": r.warnings}),
                 crate::files::Prompt::Delete(d) => json!({"delete": d.question(), "kind": d.kind, "name": d.name, "users": d.users, "allowed": d.allowed()}),
                 crate::files::Prompt::Crashed(r) => json!({"crashed": r}),
+                crate::files::Prompt::CrashReports(r) => json!({"crash_reports": r}),
                 crate::files::Prompt::ReportBug => json!({"report_bug": app.report.as_ref().and_then(|f| f.drafted_json())}),
                 crate::files::Prompt::Consent => json!({"consent": crate::privacy::QUESTION}),
                 crate::files::Prompt::Settings => json!("settings"),
@@ -449,7 +450,19 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     app.report_bug(r.first().map(|c| c.id.clone()));
                     ok(json!({"prompt": "report_bug"}))
                 }
-                (crate::files::Prompt::Crashed(_), Some("close" | "cancel")) => {
+                (crate::files::Prompt::CrashReports(_), Some("report")) => match s("id") {
+                    Some(id) => {
+                        app.report_bug(Some(id.to_string()));
+                        ok(json!({"prompt": "report_bug"}))
+                    }
+                    None => err("missing `id` (a crash report)"),
+                },
+                (crate::files::Prompt::CrashReports(_), Some("delete")) => match s("id") {
+                    Some(id) => wrap(app.delete_crash_reports(Some(id))),
+                    None => err("missing `id` (a crash report)"),
+                },
+                (crate::files::Prompt::CrashReports(_), Some("delete_all")) => wrap(app.delete_crash_reports(None)),
+                (crate::files::Prompt::Crashed(_) | crate::files::Prompt::CrashReports(_), Some("close" | "cancel")) => {
                     app.prompt = None;
                     ok(Value::Null)
                 }

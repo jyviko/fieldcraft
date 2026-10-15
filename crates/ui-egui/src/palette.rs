@@ -156,6 +156,7 @@ pub fn command_line(app: &mut ModelApp, ui: &mut egui::Ui) {
                     ui.separator();
                     ui.label(RichText::new(format!("{nodes} nodes  {elements} elements")).size(11.5).color(t.text_dim));
                     ui.separator();
+                    crate::updates::notice(app, ui);
                     let (text, color) = match &app.status {
                         Some(s) => (s.text.as_str(), if s.error { t.error } else { t.text }),
                         None => ("Ready", t.text_dim),

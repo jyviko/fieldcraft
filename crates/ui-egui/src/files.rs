@@ -214,6 +214,12 @@ pub struct Prefs {
     pub usage_automation: bool,
     /// The random id usage is sent under, made when the user first agrees; empty before.
     pub install_id: String,
+    /// Check for updates at start-up, at most once a day ([`crate::updates`]).
+    pub update_check: bool,
+    /// When the last automatic check was made (seconds since the Unix epoch; 0: never).
+    pub update_checked_at: u64,
+    /// The version the user skipped (the automatic check does not offer it); empty for none.
+    pub update_skip: String,
 }
 
 impl Default for Prefs {
@@ -224,6 +230,9 @@ impl Default for Prefs {
             usage_sharing: None,
             usage_automation: true,
             install_id: String::new(),
+            update_check: true,
+            update_checked_at: 0,
+            update_skip: String::new(),
         }
     }
 }
@@ -279,6 +288,8 @@ pub enum Replace {
     File(String),
     /// A sample (`file.sample`).
     Sample(&'static str),
+    /// Restarting to finish installing an update ([`crate::updates`]).
+    Update,
 }
 
 impl Replace {
@@ -286,6 +297,7 @@ impl Replace {
         match self {
             Replace::File(p) => file_name(p),
             Replace::Sample(n) => fieldcraft_engine::sample::find(n).map_or_else(|| (*n).to_string(), |s| format!("the {} sample", s.label)),
+            Replace::Update => "the update".into(),
         }
     }
 }
@@ -310,8 +322,10 @@ pub enum Prompt {
     Delete(crate::menu::DeleteAsk),
     /// The first run asks once whether to share anonymous usage ([`crate::privacy`]).
     Consent,
-    /// Help › Settings: the privacy choices ([`crate::privacy`]).
+    /// Help › Settings: the privacy and update choices ([`crate::privacy`]).
     Settings,
+    /// An update is downloaded and verified: restart to finish it, or later ([`crate::updates`]).
+    Update,
     /// The last run crashed (its new crash reports, newest first): report it, or not now.
     Crashed(Vec<fieldcraft_engine::crash::Summary>),
     /// Help › Report a Bug ([`crate::report`]; the form is [`ModelApp::report`]).
@@ -485,7 +499,7 @@ impl ModelApp {
     }
 
     /// Whether replacing the model would lose work: unsaved changes made by commands.
-    fn has_unsaved_work(&self) -> bool {
+    pub(crate) fn has_unsaved_work(&self) -> bool {
         self.session.is_dirty() && !self.session.journal.is_empty()
     }
 
@@ -765,6 +779,7 @@ impl ModelApp {
                 }
             }
             Replace::Sample(name) => self.load_sample(name),
+            Replace::Update => self.close_to_update(),
         }
     }
 
@@ -879,7 +894,10 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
         Some(Prompt::Unsaved(next)) => {
             let mut answer = None;
             crate::frame::window(ctx, "Unsaved changes", crate::frame::Width::Normal).id(egui::Id::new("fc_unsaved")).show(ctx, |ui| {
-                ui.label(format!("Save the changes to {} before opening {}?", app.model_name(), next.name()));
+                ui.label(match next {
+                    Replace::Update => format!("Save the changes to {} before restarting to update?", app.model_name()),
+                    _ => format!("Save the changes to {} before opening {}?", app.model_name(), next.name()),
+                });
                 ui.label(egui::RichText::new("Without saving, they are lost.").color(t.text_dim));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -1044,7 +1062,7 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
             }
         }
         // Drawn by `crate::report::show` and `crate::privacy::show`.
-        Some(Prompt::Crashed(_) | Prompt::ReportBug | Prompt::Consent | Prompt::Settings) | None => {}
+        Some(Prompt::Crashed(_) | Prompt::ReportBug | Prompt::Consent | Prompt::Settings | Prompt::Update) | None => {}
     }
 }
 

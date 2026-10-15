@@ -126,7 +126,7 @@ impl ModelApp {
         r
     }
 
-    fn open_link(&mut self, ctx: &egui::Context, url: &str) {
+    pub(crate) fn open_link(&mut self, ctx: &egui::Context, url: &str) {
         match &self.services.open_url {
             Some(open) => {
                 if let Err(e) = open(url) {
@@ -143,7 +143,7 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
     let t = crate::theme::Tokens::get(app.ui.dark);
     match app.prompt {
         Some(Prompt::Consent) => {
-            let (mut share, mut decline, mut link) = (false, false, false);
+            let (mut share, mut decline, mut link, mut updates) = (false, false, false, None);
             crate::frame::window(ctx, "Help Improve FieldCraft", crate::frame::Width::Normal).id(egui::Id::new("fc_consent")).show(ctx, |ui| {
                 ui.label(QUESTION);
                 ui.add_space(4.0);
@@ -151,6 +151,10 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                 ui.add_space(2.0);
                 ui.label(RichText::new("You can change this any time in Help › Settings.").color(t.text_dim).size(11.0));
                 link = ui.link("What is sent (docs/privacy.md)").on_hover_text(PRIVACY_URL).clicked();
+                if app.updates_available() {
+                    ui.add_space(4.0);
+                    updates = update_check(ui, &t, app.prefs.update_check);
+                }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     share = ui.button("Share Anonymous Usage").clicked();
@@ -159,6 +163,9 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
             });
             if link {
                 app.open_link(ctx, PRIVACY_URL);
+            }
+            if let Some(on) = updates {
+                app.set_update_prefs(on, None);
             }
             if share {
                 app.answer_consent(true);
@@ -169,8 +176,20 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
         Some(Prompt::Settings) => {
             let available = app.usage_available();
             let (mut sharing, mut automation) = (app.prefs.usage_sharing == Some(true), app.prefs.usage_automation);
-            let (mut close, mut link) = (false, false);
+            let (mut close, mut link, mut updates, mut unskip, mut check) = (false, false, None, false, false);
             crate::frame::window(ctx, "Settings", crate::frame::Width::Normal).id(egui::Id::new("fc_settings")).show(ctx, |ui| {
+                if app.updates_available() {
+                    crate::frame::menu_heading(ui, &t, "UPDATES");
+                    updates = update_check(ui, &t, app.prefs.update_check);
+                    ui.horizontal(|ui| {
+                        check = ui.button("Check Now").on_hover_text("Help › Check for Updates").clicked();
+                        if !app.prefs.update_skip.is_empty() {
+                            ui.label(RichText::new(format!("Skipping FieldCraft {}", app.prefs.update_skip)).color(t.text_dim).size(11.0));
+                            unskip = ui.small_button("Offer It Again").clicked();
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
                 crate::frame::menu_heading(ui, &t, "PRIVACY");
                 ui.add_enabled(available, egui::Checkbox::new(&mut sharing, "Share anonymous usage")).on_hover_text(QUESTION);
                 ui.indent("fc_usage_automation", |ui| {
@@ -199,6 +218,12 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
             if available && (sharing != (app.prefs.usage_sharing == Some(true)) || automation != app.prefs.usage_automation) {
                 app.set_usage(sharing, automation);
             }
+            if updates.is_some() || unskip {
+                app.set_update_prefs(updates.unwrap_or(app.prefs.update_check), unskip.then(String::new));
+            }
+            if check {
+                app.check_for_updates();
+            }
             if link {
                 app.open_link(ctx, PRIVACY_URL);
             }
@@ -208,6 +233,23 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
         }
         _ => {}
     }
+}
+
+/// The automatic update check's checkbox; the new value when it was clicked.
+fn update_check(ui: &mut egui::Ui, t: &crate::theme::Tokens, on: bool) -> Option<bool> {
+    let mut checked = on;
+    let changed = ui
+        .checkbox(&mut checked, "Check for updates automatically")
+        .on_hover_text(
+            "At start-up, at most once a day, FieldCraft asks GitHub Releases for the latest version. Nothing installs until you choose Install.",
+        )
+        .changed();
+    ui.label(
+        RichText::new("The check sends only the request (your IP address and the FieldCraft version reach GitHub); off means no check.")
+            .color(t.text_dim)
+            .size(11.0),
+    );
+    changed.then_some(checked)
 }
 
 #[cfg(test)]

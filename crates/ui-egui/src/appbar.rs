@@ -340,10 +340,23 @@ fn help_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
         .button("Report a Bug…")
         .on_hover_text("Draft a GitHub issue with the version, the OS and the last error; nothing is sent until you submit it")
         .clicked();
-    let settings = ui.button("Settings…").on_hover_text("Privacy: anonymous usage sharing").clicked();
+    let (mut check, mut reinstall) = (false, false);
+    if app.updates_available() {
+        check =
+            ui.button("Check for Updates").on_hover_text("Ask GitHub Releases whether a newer FieldCraft is published (app.update.check)").clicked();
+        reinstall = ui
+            .button("Reinstall FieldCraft…")
+            .on_hover_text("Download this version again, verify it and swap it in, to repair a damaged install")
+            .clicked();
+    }
+    let settings = ui.button("Settings…").on_hover_text("Privacy and updates").clicked();
     ui.label(egui::RichText::new(format!("FieldCraft {}", crate::VERSION)).color(t.text_dim));
     if report {
         app.report_bug(None);
+    } else if check {
+        app.check_for_updates();
+    } else if reinstall {
+        app.reinstall();
     } else if settings {
         app.open_settings();
     }

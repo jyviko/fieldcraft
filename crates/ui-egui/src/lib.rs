@@ -51,6 +51,7 @@ pub mod theme;
 pub mod timeline;
 pub mod titlebar;
 pub mod toolbar;
+pub mod updates;
 pub mod viewport;
 
 use std::hash::{Hash, Hasher};
@@ -388,6 +389,8 @@ pub struct ModelApp {
     usage: Option<privacy::UsageHost>,
     /// The consent question was asked in this run.
     consent_asked: bool,
+    /// Checking for and installing updates, when this run may ([`updates`]).
+    updates: Option<updates::State>,
     /// The setup progress the browser marks, and what it was worked out for.
     setup: (Option<(u64, u64, bool, bool)>, std::sync::Arc<Vec<fieldcraft_engine::progress::StageState>>),
     /// The file opening in the background, and files waiting to open after it.
@@ -477,6 +480,7 @@ impl ModelApp {
             prefs: files::Prefs::default(),
             usage: None,
             consent_asked: false,
+            updates: None,
             setup: (None, std::sync::Arc::default()),
             loading: None,
             queued: std::collections::VecDeque::new(),
@@ -1350,6 +1354,7 @@ impl ModelApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.dropped_files(ctx);
+        self.poll_updates(ctx);
         self.shortcuts(ctx);
         self.cam.fov = if self.ui.perspective { PERSPECTIVE_FOV } else { 0.0 };
         if !self.synthetic.is_empty() {
@@ -1477,6 +1482,7 @@ impl ModelApp {
         report::show(self, ui.ctx());
         self.ask_consent();
         privacy::show(self, ui.ctx());
+        updates::show(self, ui.ctx());
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
         }

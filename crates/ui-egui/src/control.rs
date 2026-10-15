@@ -210,6 +210,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 crate::files::Prompt::Unsaved(next) => json!({"unsaved": match next {
                     crate::files::Replace::File(p) => p.clone(),
                     crate::files::Replace::Sample(n) => format!("sample {n}"),
+                    crate::files::Replace::Update => "update".to_string(),
                 }}),
                 crate::files::Prompt::Recover => json!("recover"),
                 crate::files::Prompt::Samples => json!("samples"),
@@ -220,8 +221,10 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 crate::files::Prompt::ReportBug => json!({"report_bug": app.report.as_ref().and_then(|f| f.drafted_json())}),
                 crate::files::Prompt::Consent => json!({"consent": crate::privacy::QUESTION}),
                 crate::files::Prompt::Settings => json!("settings"),
+                crate::files::Prompt::Update => json!({"update": app.update_json()}),
             }),
             "privacy": privacy_json(app),
+            "updates": app.update_json(),
             "recent": app.recent.paths,
             "version": crate::VERSION,
         })),
@@ -411,6 +414,16 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     app.answer_consent(a == "share");
                     ok(privacy_json(app))
                 }
+                (crate::files::Prompt::Settings, Some("set")) if p.get("update_check").is_some() || p.get("update_skip").is_some() => {
+                    let automatic = p.get("update_check").and_then(Value::as_bool).unwrap_or(app.prefs().update_check);
+                    let skip = p.get("update_skip").and_then(Value::as_str).map(str::to_string);
+                    app.set_update_prefs(automatic, skip);
+                    ok(app.update_json())
+                }
+                (crate::files::Prompt::Update, Some(a @ ("restart" | "later"))) => {
+                    app.answer_update(a == "restart");
+                    ok(app.update_json())
+                }
                 (crate::files::Prompt::Settings, Some("set")) => {
                     if !app.usage_available() {
                         return err("this run cannot share usage (no analytics key, or FIELDCRAFT_TELEMETRY=0, CI or automation)");
@@ -437,7 +450,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     None => err("missing `id` (from file.recovery.list)"),
                 },
                 (_, a) => err(format!(
-                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; replace_mesh: replace, cancel; delete: delete, cancel; recover: recover with id, close; samples: open with name, close; crashed: report, close; report_bug: set with title/observed/share_session/include_model, close; consent: share, decline; settings: set with usage_sharing/usage_automation, close)"
+                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; replace_mesh: replace, cancel; delete: delete, cancel; recover: recover with id, close; samples: open with name, close; crashed: report, close; report_bug: set with title/observed/share_session/include_model, close; consent: share, decline; settings: set with usage_sharing/usage_automation or update_check/update_skip, close; update: restart, later)"
                 )),
             }
         }

@@ -224,6 +224,9 @@ pub struct Session {
     pub journal: Vec<(String, Value)>,
     /// The `.fieldcraft` file the session was opened from or last saved to.
     pub path: Option<String>,
+    /// The sample the session was opened as (`file.sample`), by its label; the document is named
+    /// after it until it is saved under a name of its own.
+    pub sample: Option<&'static str>,
     history: History,
     /// Identifies the current state: it changes with every edit, undo and redo, and comes back
     /// when an undo returns to an earlier state.

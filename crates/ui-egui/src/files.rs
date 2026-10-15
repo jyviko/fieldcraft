@@ -352,8 +352,12 @@ pub enum Answer {
 }
 
 /// The file name a model is saved under by default.
+/// The document's name: its file's, else the sample it was opened as ("Cantilever (sample)").
 fn model_name(session: &Session) -> String {
-    session.path.as_deref().and_then(|p| Path::new(p).file_stem()).and_then(|s| s.to_str()).map_or_else(|| "Untitled".to_string(), str::to_string)
+    match session.path.as_deref().and_then(|p| Path::new(p).file_stem()).and_then(|s| s.to_str()) {
+        Some(stem) => stem.to_string(),
+        None => session.sample.map_or_else(|| "Untitled".to_string(), |label| format!("{label} (sample)")),
+    }
 }
 
 /// `path` with `ext` added when it has no extension of that name (some pickers leave it off).
@@ -406,7 +410,7 @@ fn spawn(session: Session, command: &'static str, params: Value) -> (Receiver<(B
 }
 
 impl ModelApp {
-    /// The model's name: its file's stem, or "Untitled".
+    /// The model's name: its file's stem, the sample it was opened as, or "Untitled".
     pub fn model_name(&self) -> String {
         model_name(&self.session)
     }
@@ -579,7 +583,8 @@ impl ModelApp {
     pub fn cancel_loading(&mut self) {
         if let Some(l) = self.loading.take() {
             self.queued.clear();
-            self.set_status(format!("Cancelled: {}", l.title), false);
+            let line = if l.title == "Solving" { "Solve cancelled".to_string() } else { format!("{} cancelled", l.title) };
+            self.set_status(line, false);
         }
     }
 

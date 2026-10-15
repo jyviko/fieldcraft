@@ -106,6 +106,7 @@ fn open_sample(s: &mut Session, p: &Value) -> Result<Value> {
     // A sample just opened has nothing to save: it opens again the same way.
     opened.saved_revision = Some(opened.revision);
     opened.saved_view = opened.view.clone();
+    opened.sample = Some(sample.label);
     s.replace_with(opened);
     let mut reply = summary(s, &[]);
     reply["sample"] = json!(sample.name);

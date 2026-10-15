@@ -53,6 +53,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Build the web app
         working-directory: apps/fieldcraft-web
+        env:
+          # Usage analytics only in the deployed build (main), and only with the user's consent
+          # (docs/privacy.md); develop builds get an empty key, which sends nothing.
+          FIELDCRAFT_POSTHOG_KEY: ${{ github.ref == 'refs/heads/main' && secrets.POSTHOG_KEY || '' }}
         run: trunk build --release --public-url /fieldcraft/
       - name: Bundle size
         run: |

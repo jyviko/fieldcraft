@@ -80,5 +80,5 @@ A `command_run` as sent:
 The events and the policy are `fieldcraft_engine::usage`; the consent question and the settings
 are `crates/ui-egui/src/privacy.rs`; the desktop sender is `apps/fieldcraft/src/usage.rs`, the
 web one `apps/fieldcraft-web/src/usage.rs`. The PostHog project key is the build-time variable
-`FIELDCRAFT_POSTHOG_KEY`, which the release workflow sets from the repository secret
+`FIELDCRAFT_POSTHOG_KEY`, which the release workflow and the Pages build of `main` set from the repository secret
 `POSTHOG_KEY`; it is an ingest-only key. A new event or property is added here first.

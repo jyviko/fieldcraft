@@ -53,19 +53,24 @@ pub fn rows(model: &Model, kind: Def, name: &str) -> Option<Vec<(String, String)
     if kind == Def::Set {
         return Some(set_rows(model, name, obj));
     }
-    let form = fieldcraft_engine::find_command(&kind.command("create")).and_then(|spec| spec.form);
+    Some(command_rows(model, &kind.command("create"), obj))
+}
+
+/// Parameters of `command` as (label, text) rows in its form's words and units; fields its form
+/// does not show stay readable by their key.
+pub fn command_rows(model: &Model, command: &str, obj: &Map<String, Value>) -> Vec<(String, String)> {
+    let form = fieldcraft_engine::find_command(command).and_then(|spec| spec.form);
     let mut out = Vec::new();
     let mut used = Vec::new();
     if let Some(fields) = form {
         object(fields, obj, model.units(), &mut out, &mut used, 0);
     }
-    // What the form does not show stays readable.
     for (k, field) in obj {
         if k != "name" && !used.iter().any(|u| u == k) {
             out.push((sentence(k), crate::context::value_text(field)));
         }
     }
-    Some(out)
+    out
 }
 
 /// The seed on `edge` as (label, text) rows: the edge, then `mesh.seed.edge`'s fields.

@@ -899,8 +899,18 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     );
     if r.eye {
         app.ui.show_mesh = !app.ui.show_mesh;
-    } else if r.fold || r.clicked {
+    } else if r.fold {
         acts.push(Act::Fold("mesh".into()));
+    } else if r.clicked {
+        // A click shows how the mesh was made (#343) and opens the node; again, deselects it.
+        if app.selected_mesh {
+            app.selected_mesh = false;
+        } else {
+            app.select_mesh();
+        }
+        if !open(app, "mesh") {
+            acts.push(Act::Fold("mesh".into()));
+        }
     }
     if open(app, "mesh") {
         let r = draw_row(

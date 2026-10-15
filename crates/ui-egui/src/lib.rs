@@ -451,6 +451,9 @@ pub struct ModelApp {
     /// The edge seed selected in the browser (by its edge), its properties on the right; never
     /// together with [`ModelApp::selected`].
     pub selected_seed: Option<fieldcraft_model::GeometryRef>,
+    /// The Mesh node is selected in the browser: how the current mesh was made shows on the
+    /// right ([`ModelApp::mesh_history`]); never together with a definition or a seed.
+    pub selected_mesh: bool,
     /// What is picked in the viewport.
     pub pick: PickState,
     /// Set while [`ModelApp::capture`] draws the window offscreen: no pointer there is the
@@ -468,6 +471,8 @@ pub struct ModelApp {
     element_counts: Option<(u64, Vec<(fieldcraft_model::ElementKind, usize)>)>,
     /// The selected definition's property rows and what they were read for.
     properties: Option<((u64, browser::Def, String), std::sync::Arc<Vec<(String, String)>>)>,
+    /// [`ModelApp::mesh_history`] with each command's rows, by model revision.
+    mesh_made: Option<(u64, std::sync::Arc<Vec<(String, Value, Vec<(String, String)>)>>)>,
     /// The search's query and its results.
     search: Option<(String, std::sync::Arc<Vec<palette::Hit>>)>,
 }
@@ -536,6 +541,7 @@ impl ModelApp {
             tree_open: ["mesh", "results"].into_iter().map(str::to_string).collect(),
             selected: None,
             selected_seed: None,
+            selected_mesh: false,
             pick: PickState::default(),
             capturing: false,
             nav: NavMode::default(),
@@ -545,6 +551,7 @@ impl ModelApp {
             element_counts: None,
             search: None,
             properties: None,
+            mesh_made: None,
         }
     }
 
@@ -1372,14 +1379,45 @@ impl ModelApp {
     pub fn select_definition(&mut self, selected: Option<(browser::Def, String)>) {
         if selected.is_some() {
             self.selected_seed = None;
+            self.selected_mesh = false;
         }
         self.selected = selected;
+    }
+
+    /// Select the Mesh node in the browser: how the current mesh was made, on the right.
+    pub fn select_mesh(&mut self) {
+        self.selected = None;
+        self.selected_seed = None;
+        self.selected_mesh = true;
+    }
+
+    /// The meshing commands that made the current mesh with their parameters, oldest first: from
+    /// the journal, the latest run for each body that still has elements (a remesh replaces an
+    /// earlier run, a mirror adds its image). Empty for a mesh no mesher made (imported, built
+    /// node by node).
+    pub fn mesh_history(&self) -> Vec<(String, Value)> {
+        let mut covered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for (command, params) in self.session.journal.iter().rev() {
+            let Some((_, targets)) = fieldcraft_engine::MESHERS.iter().find(|(m, _)| m == command) else { continue };
+            let Ok(bodies) = targets(&self.session, params) else { continue };
+            let fresh: Vec<String> =
+                bodies.into_iter().filter(|b| !covered.contains(b) && !self.session.model.body_mesh(b).elements.is_empty()).collect();
+            if fresh.is_empty() {
+                continue;
+            }
+            covered.extend(fresh);
+            out.push((command.clone(), params.clone()));
+        }
+        out.reverse();
+        out
     }
 
     /// Select the seed on `edge` in the browser: its properties on the right, its edge picked in
     /// the viewport.
     pub fn select_seed(&mut self, edge: fieldcraft_model::GeometryRef) {
         self.selected = None;
+        self.selected_mesh = false;
         self.select([selection::Item::Geometry(edge.clone())], selection::Mode::Replace);
         self.selected_seed = Some(edge);
     }
@@ -1538,6 +1576,7 @@ impl ModelApp {
             if self.framed_document.is_some() {
                 self.selected = None;
                 self.selected_seed = None;
+                self.selected_mesh = false;
                 self.reply = None;
                 // Picks are by name, and the names of another document are other things.
                 if !self.pick.selection.is_empty() {

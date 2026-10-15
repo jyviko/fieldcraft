@@ -1606,6 +1606,11 @@ mod tests {
         app.wait_loaded();
         assert!(app.dialog.is_none(), "{:?}", app.status);
         assert_eq!(app.session.model.element_counts(), counts, "replaced, not stacked");
+        // The Mesh node shows the run that made it, once though it ran twice (#343).
+        let made = app.mesh_history();
+        assert_eq!(made.len(), 1, "{made:?}");
+        assert_eq!(made[0].0, "mesh.tet.generate");
+        assert_eq!(made[0].1["order"], "linear");
 
         // A plate with a hole is not one mapped block: the form stays with the reason.
         app.start("mesh.hex.mapped").unwrap();

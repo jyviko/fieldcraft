@@ -21,6 +21,7 @@ pub fn has_context(app: &mut ModelApp) -> bool {
         || app.refused.is_some()
         || app.selected.is_some()
         || app.selected_seed.is_some()
+        || app.selected_mesh
         || app.reply.is_some()
         || app.plot().is_some()
 }
@@ -57,6 +58,10 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
                 }
                 if let Some(edge) = app.selected_seed.clone() {
                     seed_card(app, ui, &t, edge);
+                    ui.add_space(10.0);
+                }
+                if app.selected_mesh {
+                    mesh_card(app, ui, &t);
                     ui.add_space(10.0);
                 }
                 if let Some(plot) = app.plot() {
@@ -367,6 +372,61 @@ fn seed_card(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, edge: fieldcraft
         crate::menu::apply(app, target, crate::menu::Action::Edit);
     } else if delete {
         crate::menu::apply(app, target, crate::menu::Action::Delete);
+    }
+}
+
+/// The mesh: its size, then each command that made it with its parameters (in its form's
+/// words), with Edit… opening that command's form filled in (#343).
+fn mesh_card(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
+    let key = app.session.revision();
+    let made = match &app.mesh_made {
+        Some((k, made)) if *k == key => made.clone(),
+        _ => {
+            let model = &app.session.model;
+            let made: Vec<(String, Value, Vec<(String, String)>)> = app
+                .mesh_history()
+                .into_iter()
+                .map(|(c, p)| {
+                    let rows = p.as_object().map(|o| crate::describe::command_rows(model, &c, o)).unwrap_or_default();
+                    (c, p, rows)
+                })
+                .collect();
+            let made = std::sync::Arc::new(made);
+            app.mesh_made = Some((key, made.clone()));
+            made
+        }
+    };
+    let mut deselect = false;
+    heading(ui, t, Level::Title, |ui| {
+        ui.label(RichText::new("MESH").font(label_font(ui.ctx(), 12.0)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            deselect = ui.small_button("×").on_hover_text("Deselect").clicked();
+        });
+    });
+    ui.add_space(4.0);
+    let (nodes, elements) = (app.session.model.nodes().len(), app.session.model.elements().len());
+    let size = [("Nodes".to_string(), crate::describe::quantity(nodes as f64)), ("Elements".to_string(), crate::describe::quantity(elements as f64))];
+    property_grid(ui, t, "fc_mesh_size", &size);
+    let mut edit = None;
+    if made.is_empty() && elements > 0 {
+        ui.add_space(4.0);
+        ui.label(RichText::new("Not made by a mesher in this model (imported or built by hand)").size(11.5).color(t.text_dim));
+    }
+    for (i, (command, params, rows)) in made.iter().enumerate() {
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(crate::command_label(command)).strong());
+            ui.label(RichText::new(command.as_str()).size(11.0).color(t.text_dim));
+        });
+        property_grid(ui, t, &format!("fc_mesh_made_{i}"), rows);
+        if ui.button("Edit…").on_hover_text(format!("{command}: its form with these parameters")).clicked() {
+            edit = Some((command.clone(), params.clone()));
+        }
+    }
+    if deselect {
+        app.selected_mesh = false;
+    } else if let Some((command, params)) = edit {
+        app.open_form(&command, params);
     }
 }
 

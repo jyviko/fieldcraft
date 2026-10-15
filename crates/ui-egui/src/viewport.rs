@@ -13,13 +13,16 @@
 //! click selects it (Shift adds, Cmd/Ctrl adds or removes, a click on nothing clears), Escape
 //! clears. The selection bar (top centre) chooses what is picked and turns on box selection,
 //! where a left drag selects the visible nodes, element faces or elements inside the box. A
-//! right click offers a set made from the selection.
+//! right click offers a set made from the selection, and on a datum or a partition's cut face
+//! that item's menu ([`crate::menu`]), as its browser row does.
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use fieldcraft_render::{StandardView, Vec3};
 
+use crate::browser::Def;
 use crate::gpu::{GpuScene, ViewportCallback};
 use crate::icons::{self, Look};
+use crate::menu::{self, Target};
 use crate::navigation::{self, NavButton};
 use crate::selection::{Filter, Mode};
 use crate::theme::Tokens;
@@ -179,8 +182,69 @@ fn hover_label(app: &ModelApp, painter: &egui::Painter, t: &Tokens) {
 }
 
 /// The right-click menu: a set from the selection, clearing it, and the filter.
+/// Most screen distance (points) from a datum's drawn lines at which a right click is on it.
+const DATUM_REACH: f32 = 6.0;
+
+/// The datum drawn under window point `at`: the nearest shown datum whose lines pass within
+/// [`DATUM_REACH`].
+fn datum_at(app: &mut ModelApp, at: Pos2) -> Option<String> {
+    if app.plot().is_some() || !app.ui.show_geometry {
+        return None;
+    }
+    let bounds = app.display().bounds;
+    let colors = Tokens::get(app.ui.dark).glyph_colors();
+    let names: Vec<String> =
+        app.session.model.datums().keys().filter(|n| app.session.shows(fieldcraft_engine::ItemKind::Datum, n)).cloned().collect();
+    let mut best: Option<(f32, String)> = None;
+    for name in names {
+        let mut drawn = fieldcraft_render::Scene::default();
+        fieldcraft_render::glyphs::datums(&app.session.model, &bounds, &|n| n == name, &colors, &mut drawn);
+        for l in &drawn.lines {
+            let (Some(a), Some(b)) = (to_screen(app, l.a), to_screen(app, l.b)) else { continue };
+            let xy = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
+            let d = fieldcraft_render::pick::segment_distance(xy(at), xy(a), xy(b)).0 as f32;
+            if d <= DATUM_REACH && best.as_ref().is_none_or(|(e, _)| d < *e) {
+                best = Some((d, name.clone()));
+            }
+        }
+    }
+    best.map(|(_, n)| n)
+}
+
+/// The partition whose cut face is under window point `at` (`partition:<name>:a|b`).
+fn partition_at(app: &mut ModelApp, at: Pos2) -> Option<String> {
+    let rect = app.viewport.rect.filter(|r| r.contains(at))?;
+    let proj = app.projector()?;
+    let local = [f64::from(at.x - rect.left()), f64::from(at.y - rect.top())];
+    let item = app.with_picker(|p| p.pick(&proj, local, Filter::Faces))?;
+    let crate::selection::Item::Geometry(g) = item else { return None };
+    let name = g.entity.name()?.strip_prefix("partition:")?.split(':').next()?.to_string();
+    app.session.model.partitions().iter().any(|p| p.name == name).then_some(name)
+}
+
+/// What a right click at `at` offers its item menu for: a datum drawn there, else a partition
+/// whose cut face is there.
+pub(crate) fn menu_target(app: &mut ModelApp, at: Pos2) -> Option<Target> {
+    if let Some(name) = datum_at(app, at) {
+        return Some(Target::Def(Def::Datum, name));
+    }
+    partition_at(app, at).map(|name| Target::Def(Def::Partition, name))
+}
+
 fn context_menu(app: &mut ModelApp, response: &egui::Response) {
+    if response.secondary_clicked() {
+        app.viewport.menu_target = response.interact_pointer_pos().and_then(|at| menu_target(app, at));
+    }
     response.context_menu(|ui| {
+        if let Some(target) = app.viewport.menu_target.clone() {
+            let Target::Def(def, name) = &target else { return };
+            ui.label(egui::RichText::new(format!("{} {name}", def.label())).strong());
+            if let Some(action) = menu::show(app, ui, &target) {
+                menu::apply(app, target, action);
+                return;
+            }
+            ui.separator();
+        }
         let has = !app.pick.selection.is_empty();
         if ui
             .add_enabled(has, egui::Button::new("Create set from selection…"))

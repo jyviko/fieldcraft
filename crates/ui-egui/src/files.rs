@@ -272,6 +272,9 @@ pub enum Prompt {
     /// A design (its path) has none of the bodies the model's mesh and sets are on: start a new
     /// model with it, or keep the model. The opened session waits in [`ModelApp::held`].
     Design(String),
+    /// Delete a definition (the item menu's Delete…, the Delete key): what uses it is listed, and
+    /// the deletion refused or (a datum's partitions) done with it.
+    Delete(crate::menu::DeleteAsk),
 }
 
 /// The answer to [`Prompt::Design`].
@@ -869,6 +872,32 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
             }
             if let Some(a) = answer {
                 app.answer_design(a);
+            }
+        }
+        Some(Prompt::Delete(ask)) => {
+            let mut answer = None;
+            crate::frame::window(ctx, "Delete", crate::frame::Width::Normal).id(egui::Id::new("fc_delete")).show(ctx, |ui| {
+                ui.label(ask.question());
+                if ask.allowed() && !ask.users.is_empty() {
+                    ui.label(egui::RichText::new("They are deleted too; Undo brings everything back.").color(t.text_dim));
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ask.allowed() && ui.button("Delete").clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button(if ask.allowed() { "Cancel" } else { "Close" }).clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                answer = Some(false);
+            } else if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                answer = Some(ask.allowed());
+            }
+            if let Some(delete) = answer {
+                app.answer_delete(delete);
             }
         }
         Some(Prompt::ReplaceMesh(r)) => {

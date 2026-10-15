@@ -36,6 +36,7 @@ pub mod frame;
 pub mod framing;
 pub mod gpu;
 pub mod icons;
+pub mod menu;
 pub mod navigation;
 pub mod palette;
 pub mod reply;
@@ -276,6 +277,8 @@ pub struct Viewport {
     pub drag: Option<NavMode>,
     /// The point the current orbit turns about (drawn as a marker while orbiting).
     pub orbit_pivot: Option<Vec3>,
+    /// The item the open context menu was opened on (a datum or a partition), if any.
+    pub menu_target: Option<menu::Target>,
 }
 
 /// A probed node: its values as lines of text, for the step, mode and frame they were read from.
@@ -518,7 +521,7 @@ impl ModelApp {
     /// label (the engine's message names its key, which agents need).
     fn run_form(&mut self, id: &str, params: Value, form: bool) -> Result<Value, Failure> {
         self.ensure_idle().map_err(|message| Failure { message, refused: None })?;
-        let revision = self.session.revision();
+        let (revision, view) = (self.session.revision(), self.session.view.clone());
         let label = command_label(id);
         let r = self.session.execute(id, &params).map_err(|e| match e {
             EngineError::Param(p) => {
@@ -529,7 +532,8 @@ impl ModelApp {
             e => Failure { message: e.to_string(), refused: None },
         });
         let changed = self.session.revision() != revision;
-        if changed {
+        // A view change (hide, show) draws the model again, as an edit does.
+        if changed || self.session.view != view {
             self.model_changed();
         }
         // The results display commands reply with what is shown, which the viewport shows.
@@ -835,13 +839,14 @@ impl ModelApp {
                 }
             }
             self.pick.names.clear();
-            for (names, mesh) in &self.bodies.1 {
+            // Hidden bodies and surfaces are neither drawn nor picked.
+            for (names, mesh) in self.bodies.1.iter().filter(|(n, _)| self.session.shows(fieldcraft_engine::ItemKind::Body, &n.name)) {
                 d.add_curves(&mesh.edges);
                 d.add_surface(&mesh.positions, &mesh.triangles, &mesh.tri_face);
                 self.pick.names.push(names.clone());
             }
             // An imported surface's faces are named by their tags.
-            for s in &self.session.surfaces {
+            for s in self.session.surfaces.iter().filter(|s| self.session.shows(fieldcraft_engine::ItemKind::Surface, &s.name)) {
                 d.add_surface(&s.mesh.positions, &s.mesh.triangles, &s.mesh.tri_face);
                 self.pick.names.push(selection::BodyNames {
                     name: s.name.clone(),
@@ -851,7 +856,7 @@ impl ModelApp {
             }
             let was_empty = self.display.1.bounds.is_empty();
             self.display = (Some(self.revision), d);
-            self.glyphs = Glyphs::from_model(&self.session.model);
+            self.glyphs = self.session.glyphs();
             if was_empty && !self.display.1.bounds.is_empty() {
                 self.reframe = framing::Reframe::merge(self.reframe, framing::Reframe::Fit);
             }
@@ -915,7 +920,7 @@ impl ModelApp {
             };
             let mut datums = Aabb3::EMPTY;
             if show.geometry && self.plot.1.is_none() {
-                datums = scene::datums(&mut s, &self.session.model, &self.display.1.bounds, &t);
+                datums = scene::datums(&mut s, &self.session, &self.display.1.bounds, &t);
                 scene::seeds(&mut s, &self.session.model, &self.pick.names, &self.display.1, &t);
             }
             self.scene = (Some(key), s, datums);
@@ -1337,8 +1342,8 @@ impl ModelApp {
     }
 
     /// Undo (Ctrl/Cmd+Z), redo (Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y), open (Ctrl/Cmd+O), save
-    /// (Ctrl/Cmd+S) and save as (Ctrl/Cmd+Shift+S), unless a text field has the keyboard (it
-    /// undoes its own typing).
+    /// (Ctrl/Cmd+S), save as (Ctrl/Cmd+Shift+S) and delete the browser's selection (Delete),
+    /// unless a text field has the keyboard (it undoes its own typing).
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.memory(|m| m.focused().is_some()) {
             return;
@@ -1373,6 +1378,14 @@ impl ModelApp {
         }
         if open {
             self.open_dialog(None);
+        }
+        // Delete (or Backspace) deletes the definition selected in the browser, after asking.
+        if self.prompt.is_none()
+            && let Some((kind, name)) = self.selected.clone()
+            && ctx
+                .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
+        {
+            self.ask_delete(kind, &name);
         }
         // The command search: S (as in SolidCraft) or Cmd/Ctrl+K.
         let search = ctx.input_mut(|i| {

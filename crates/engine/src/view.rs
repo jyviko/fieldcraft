@@ -186,7 +186,13 @@ fn picture(s: &Session, p: &Palette) -> Picture {
     let Some((view, result)) = plot else {
         let mut scene = model_scene(&base, p);
         let mut bounds = base.bounds;
-        bounds.union(fieldcraft_render::glyphs::datums(&s.model, &base.bounds, &|n| s.shows(fieldcraft_io::ItemKind::Datum, n), &p.glyphs, &mut scene));
+        bounds.union(fieldcraft_render::glyphs::datums(
+            &s.model,
+            &base.bounds,
+            &|n| s.shows(fieldcraft_io::ItemKind::Datum, n),
+            &p.glyphs,
+            &mut scene,
+        ));
         return Picture { scene, drawn: base, bounds, shown, glyphs, colors: p.glyphs };
     };
     shown.step = Some(view.step.clone());

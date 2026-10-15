@@ -82,9 +82,10 @@ pub fn symbols(
     glyphs.draw(pos, &view, s)
 }
 
-/// Draw the model's datum planes and axes around `bounds` into `s`; returns the box around them.
-pub fn datums(s: &mut Scene, model: &fieldcraft_model::Model, bounds: &Aabb3, t: &Tokens) -> Aabb3 {
-    fieldcraft_render::glyphs::datums(model, bounds, &|_| true, &t.glyph_colors(), s)
+/// Draw the datums the session's view shows around `bounds` into `s`; returns the box around them.
+pub fn datums(s: &mut Scene, session: &fieldcraft_engine::Session, bounds: &Aabb3, t: &Tokens) -> Aabb3 {
+    let shown = |name: &str| session.shows(fieldcraft_engine::ItemKind::Datum, name);
+    fieldcraft_render::glyphs::datums(&session.model, bounds, &shown, &t.glyph_colors(), s)
 }
 
 /// The scene for `display` drawn in `style`.

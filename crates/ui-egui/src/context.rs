@@ -253,16 +253,19 @@ fn properties(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens, kind: Def, name
     });
     ui.add_space(6.0);
     let (mut edit, mut delete) = (false, false);
+    let editing = kind.edit_command(&app.session.model, name);
     ui.horizontal(|ui| {
-        edit = ui.button("Edit…").on_hover_text(kind.command("edit")).clicked();
-        delete = ui.button("Delete").on_hover_text(kind.command("delete")).clicked();
+        if let Some(command) = &editing {
+            edit = ui.button("Edit…").on_hover_text(command).clicked();
+        }
+        delete = ui.button("Delete…").on_hover_text(format!("{} (Delete key)", kind.command("delete"))).clicked();
     });
     if deselect {
         app.selected = None;
-    } else if edit && let Some(v) = browser::definition(&app.session.model, kind, name) {
-        app.open_form(&kind.command("edit"), v);
-    } else if delete && app.run(&kind.command("delete"), json!({"name": name})).is_ok() {
-        app.selected = None;
+    } else if edit && let Some((command, params)) = kind.edit(&app.session.model, name) {
+        app.open_form(&command, params);
+    } else if delete {
+        app.ask_delete(kind, name);
     }
 }
 

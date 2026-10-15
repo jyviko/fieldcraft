@@ -1148,7 +1148,8 @@ mod tests {
         assert!(s.tris.is_empty() && s.on_top.is_empty());
         assert_eq!(s.lines.len(), 4 * 3 * 6);
         // A hidden definition draws nothing; hiding another leaves it.
-        let (hidden, _) = drawn_at(&Glyphs::from_model_hiding(&m, &|d, n| d == Definition::BoundaryCondition && n == "Clamp"), &m, &view(GlyphShow::ALL, u));
+        let (hidden, _) =
+            drawn_at(&Glyphs::from_model_hiding(&m, &|d, n| d == Definition::BoundaryCondition && n == "Clamp"), &m, &view(GlyphShow::ALL, u));
         assert!(hidden.lines.is_empty());
         let (other, _) = drawn_at(&Glyphs::from_model_hiding(&m, &|d, _| d == Definition::Load), &m, &view(GlyphShow::ALL, u));
         assert_eq!(other.lines.len(), s.lines.len());

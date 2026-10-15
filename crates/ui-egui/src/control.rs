@@ -201,6 +201,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 crate::files::Prompt::Samples => json!("samples"),
                 crate::files::Prompt::Design(p) => json!({"design": p}),
                 crate::files::Prompt::ReplaceMesh(r) => json!({"replace_mesh": r.question, "warnings": r.warnings}),
+                crate::files::Prompt::Delete(d) => json!({"delete": d.question(), "kind": d.kind, "name": d.name, "users": d.users, "allowed": d.allowed()}),
             }),
             "recent": app.recent.paths,
             "version": crate::VERSION,
@@ -303,6 +304,35 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             }
             ok(json!(app.dialog.as_ref().map(|d| json!({"command": d.command, "text": d.text, "error": d.error}))))
         }
+        "ui.item" => {
+            // An item menu's entry, as a right click on the item's browser row and a click on the
+            // entry do (crate::menu).
+            let kind = s("kind");
+            let name = s("name").unwrap_or_default().to_string();
+            let target = match kind {
+                Some("body") => crate::menu::Target::Body(name),
+                Some("surface") => crate::menu::Target::Surface(name),
+                Some(k) => match serde_json::from_value::<crate::browser::Def>(json!(k)) {
+                    Ok(def) => crate::menu::Target::Def(def, name),
+                    Err(_) => return err(format!("unknown item kind `{}`", k.chars().take(40).collect::<String>())),
+                },
+                None => return err("missing `kind`"),
+            };
+            let action = match (s("action"), s("step")) {
+                (Some("edit"), _) => crate::menu::Action::Edit,
+                (Some("hide"), _) => crate::menu::Action::Hide,
+                (Some("show"), _) => crate::menu::Action::Show,
+                (Some("isolate"), _) => crate::menu::Action::Isolate,
+                (Some("show_all"), _) => crate::menu::Action::ShowAll,
+                (Some("delete"), _) => crate::menu::Action::Delete,
+                (Some(a @ ("activate" | "deactivate")), Some(step)) => {
+                    crate::menu::Action::Active { step: step.to_string(), active: a == "activate" }
+                }
+                (a, _) => return err(format!("`action` {a:?}: edit, hide, show, isolate, show_all, delete, or activate/deactivate with `step`")),
+            };
+            crate::menu::apply(app, target, action);
+            ok(json!({"status": app.status, "prompt": app.prompt.is_some(), "dialog": app.dialog.as_ref().map(|d| d.command)}))
+        }
         "ui.prompt" => {
             let Some(prompt) = app.prompt.clone() else { return err("no prompt is open") };
             match (prompt, s("answer")) {
@@ -328,6 +358,10 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     app.answer_replace_mesh(a == "replace");
                     ok(json!({"busy": app.busy()}))
                 }
+                (crate::files::Prompt::Delete(_), Some(a @ ("delete" | "cancel"))) => {
+                    app.answer_delete(a == "delete");
+                    ok(json!({"status": app.status}))
+                }
                 (crate::files::Prompt::Samples, Some("open")) => match s("name") {
                     Some(name) => {
                         app.prompt = None;
@@ -348,7 +382,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     None => err("missing `id` (from file.recovery.list)"),
                 },
                 (_, a) => err(format!(
-                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; replace_mesh: replace, cancel; recover: recover with id, close; samples: open with name, close)"
+                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; replace_mesh: replace, cancel; delete: delete, cancel; recover: recover with id, close; samples: open with name, close)"
                 )),
             }
         }
@@ -853,6 +887,7 @@ mod tests {
             "ui.capture",
             "ui.toolbar",
             "ui.prompt",
+            "ui.item",
             "ui.select",
             "ui.selection",
             "ui.fullscreen",

@@ -18,6 +18,7 @@ pub mod cmd;
 
 pub use cmd::analytic_surfaces;
 pub use cmd::replace::{MESHERS, Replacement, replacement};
+pub use fieldcraft_io::{Item as ViewItem, ItemKind};
 pub mod history;
 pub mod progress;
 pub mod requirement;

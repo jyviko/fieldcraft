@@ -2,8 +2,11 @@
 //! partitions) and Mesh with eye toggles, then the model's
 //! definitions (sets, materials, sections, steps, loads and boundary conditions, interactions)
 //! with counts (Loads & BCs and Interactions with eye toggles for their viewport symbols), and
-//! the solved steps' results. Clicking a definition selects it (its properties show on the
-//! right), a double click opens its edit form, and clicking a result step shows it.
+//! the solved steps' results. Clicking a definition, datum or partition selects it (its
+//! properties show on the right), a double click opens its edit form, and clicking a result step
+//! shows it. Each item the viewport draws on its own (bodies, surfaces, datums, boundary
+//! conditions, loads, reference points, couplings) has its own eye, and a right click on an item
+//! opens its menu ([`crate::menu`]: edit, hide, isolate, active in step, delete).
 //!
 //! The tree also shows where the model is in the analysis workflow
 //! ([`fieldcraft_engine::progress`]): each top-level node that is a setup stage carries a mark at
@@ -24,6 +27,7 @@ use serde_json::{Value, json};
 
 use crate::ModelApp;
 use crate::icons::{self, Look};
+use crate::menu::{self, Action, Target};
 use crate::theme::Tokens;
 
 /// The browser's width.
@@ -161,9 +165,27 @@ pub enum Def {
     Coupling,
     Contact,
     FluidDomain,
+    /// A datum plane, axis or point.
+    Datum,
+    Partition,
 }
 
 impl Def {
+    pub const ALL: [Def; 12] = [
+        Def::Set,
+        Def::Material,
+        Def::Section,
+        Def::Step,
+        Def::BoundaryCondition,
+        Def::Load,
+        Def::ReferencePoint,
+        Def::Coupling,
+        Def::Contact,
+        Def::FluidDomain,
+        Def::Datum,
+        Def::Partition,
+    ];
+
     /// The kind of setup symbols a definition of this kind draws, if any.
     pub fn symbols(self) -> Option<fieldcraft_render::glyphs::Definition> {
         use fieldcraft_render::glyphs::Definition;
@@ -174,7 +196,7 @@ impl Def {
             Def::Coupling => Definition::Coupling,
             Def::Contact => Definition::Contact,
             Def::Step => Definition::Step,
-            Def::Set | Def::Material | Def::Section | Def::FluidDomain => return None,
+            Def::Set | Def::Material | Def::Section | Def::FluidDomain | Def::Datum | Def::Partition => return None,
         })
     }
 
@@ -191,6 +213,8 @@ impl Def {
             Def::Coupling => Collection::Coupling,
             Def::Contact => Collection::Contact,
             Def::FluidDomain => Collection::FluidDomain,
+            Def::Datum => Collection::Datum,
+            Def::Partition => Collection::Partition,
         }
     }
 
@@ -207,6 +231,8 @@ impl Def {
             Def::Coupling => "coupling",
             Def::Contact => "contact",
             Def::FluidDomain => "fluid_domain",
+            Def::Datum => "datum",
+            Def::Partition => "partition",
         }
     }
 
@@ -222,6 +248,8 @@ impl Def {
             Def::Coupling => "Coupling",
             Def::Contact => "Contact",
             Def::FluidDomain => "Fluid Domain",
+            Def::Datum => "Datum",
+            Def::Partition => "Partition",
         }
     }
 
@@ -238,16 +266,72 @@ impl Def {
             Def::Coupling => "model.coupling.create",
             Def::Contact => "interaction.contact.pair",
             Def::FluidDomain => "model.fluid_domain.create",
+            Def::Datum => "geometry.datum",
+            Def::Partition => "geometry.partition",
         }
     }
 
     /// The command of this kind with `verb` (`create`, `edit`, `delete`); contacts are
-    /// interactions, created as pairs or general contact.
+    /// interactions, created as pairs or general contact; datums and partitions are geometry
+    /// (a datum's edit command depends on its kind: [`Def::edit`]).
     pub fn command(self, verb: &str) -> String {
         match (self, verb) {
             (Def::Contact, "create") => "interaction.contact.pair".into(),
             (Def::Contact, _) => format!("interaction.contact.{verb}"),
+            (Def::Datum | Def::Partition, "create") => self.icon().into(),
+            (Def::Datum | Def::Partition, _) => format!("geometry.{}.{verb}", self.stem()),
             _ => format!("model.{}.{verb}", self.stem()),
+        }
+    }
+
+    /// The command that edits definition `name` (without building its parameters); `None` when
+    /// it is gone or cannot be edited.
+    pub fn edit_command(self, m: &Model, name: &str) -> Option<String> {
+        match self {
+            Def::Partition => None,
+            Def::Datum => m.datum(name).map(|d| fieldcraft_engine::cmd::datum_edit_params(name, d).0.to_string()),
+            _ => self.exists(m, name).then(|| self.command("edit")),
+        }
+    }
+
+    /// The command that edits definition `name` and its parameters as it is (its edit form,
+    /// filled in); `None` when it is gone or cannot be edited (a partition).
+    pub fn edit(self, m: &Model, name: &str) -> Option<(String, Value)> {
+        match self {
+            Def::Partition => None,
+            Def::Datum => m.datum(name).map(|d| {
+                let (command, params) = fieldcraft_engine::cmd::datum_edit_params(name, d);
+                (command.to_string(), params)
+            }),
+            _ => definition(m, self, name).map(|v| (self.command("edit"), v)),
+        }
+    }
+
+    /// The viewport item it is, for the kinds the viewport draws one by one (and can hide).
+    pub fn item_kind(self) -> Option<fieldcraft_engine::ItemKind> {
+        use fieldcraft_engine::ItemKind as K;
+        match self {
+            Def::BoundaryCondition => Some(K::BoundaryCondition),
+            Def::Load => Some(K::Load),
+            Def::ReferencePoint => Some(K::ReferencePoint),
+            Def::Coupling => Some(K::Coupling),
+            Def::Datum => Some(K::Datum),
+            _ => None,
+        }
+    }
+
+    /// The definitions that refer to `name`, as `kind \`name\`` strings: what refuses its
+    /// deletion (a datum's partitions are deleted with it instead, when confirmed).
+    pub fn users(self, m: &Model, name: &str) -> Vec<String> {
+        match self {
+            Def::Set => m.set_users(name),
+            Def::Material => m.material_users(name),
+            Def::BoundaryCondition => m.boundary_condition_users(name),
+            Def::Load => m.load_users(name),
+            Def::ReferencePoint => m.reference_point_users(name),
+            Def::FluidDomain => m.fluid_domain_users(name),
+            Def::Datum => m.datum_users(name),
+            Def::Section | Def::Step | Def::Coupling | Def::Contact | Def::Partition => Vec::new(),
         }
     }
 
@@ -264,6 +348,8 @@ impl Def {
             Def::Coupling => m.couplings().len(),
             Def::Contact => m.contacts().len(),
             Def::FluidDomain => m.fluid_domains().len(),
+            Def::Datum => m.datums().len(),
+            Def::Partition => m.partitions().len(),
         }
     }
 
@@ -280,6 +366,8 @@ impl Def {
             Def::Coupling => m.couplings().contains_key(name),
             Def::Contact => m.contacts().contains_key(name),
             Def::FluidDomain => m.fluid_domain(name).is_some(),
+            Def::Datum => m.datum(name).is_some(),
+            Def::Partition => m.partitions().iter().any(|p| p.name == name),
         }
     }
 
@@ -296,6 +384,8 @@ impl Def {
             Def::Coupling => m.couplings().keys().cloned().collect(),
             Def::Contact => m.contacts().keys().cloned().collect(),
             Def::FluidDomain => m.fluid_domains().keys().cloned().collect(),
+            Def::Datum => m.datums().keys().cloned().collect(),
+            Def::Partition => m.partitions().iter().map(|p| p.name.clone()).collect(),
         }
     }
 }
@@ -313,6 +403,8 @@ pub fn definition(m: &Model, kind: Def, name: &str) -> Option<Value> {
         Def::Coupling => serde_json::to_value(m.couplings().get(name)?),
         Def::Contact => serde_json::to_value(m.contacts().get(name)?),
         Def::FluidDomain => serde_json::to_value(m.fluid_domain(name)?),
+        Def::Datum => serde_json::to_value(m.datum(name)?),
+        Def::Partition => serde_json::to_value(m.partitions().iter().find(|p| p.name == name)?),
     }
     .ok()?;
     let mut v = if v.is_object() { v } else { json!({"value": v}) };
@@ -351,6 +443,8 @@ struct RowResp {
     double: bool,
     fold: bool,
     eye: bool,
+    /// The row's response, for its context menu (`None` when the row was not drawn).
+    response: Option<egui::Response>,
 }
 
 fn draw_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, row: &Row) -> RowResp {
@@ -446,7 +540,37 @@ fn draw_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, row: &Row) -> R
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, row.label));
     out.clicked = resp.clicked() && click_on == 0;
     out.double = resp.double_clicked() && click_on == 0;
+    out.response = Some(resp);
     out
+}
+
+/// A row for one item: its eye when the viewport draws it on its own, selection by a click and
+/// its edit form by a double click (definitions, datums, partitions), and its menu by a right
+/// click.
+fn item_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, mut row: Row, target: Target, acts: &mut Vec<Act>) {
+    if let Some(item) = target.item() {
+        row.eye = Some(app.session.shows(item.kind, &item.name));
+    }
+    if let Target::Def(kind, name) = &target {
+        row.selected = app.selected.as_ref().is_some_and(|(k, n)| k == kind && n == name);
+    }
+    let r = draw_row(app, ui, id, &row);
+    if let Some(resp) = &r.response {
+        resp.context_menu(|ui| {
+            if let Some(a) = menu::show(app, ui, &target) {
+                acts.push(Act::Menu(target.clone(), a));
+            }
+        });
+    }
+    if r.eye {
+        acts.push(Act::Menu(target, if row.eye == Some(true) { Action::Hide } else { Action::Show }));
+    } else if let Target::Def(kind, name) = target {
+        if r.double {
+            acts.push(Act::Edit(kind, name));
+        } else if r.clicked {
+            acts.push(Act::Select(kind, name));
+        }
+    }
 }
 
 /// ✓ done (success), → next (accent), ⚠ blocked (muted); nothing for the rest.
@@ -513,6 +637,8 @@ enum Act {
     ShowResult(String),
     /// A ghost row's command.
     Start(&'static str),
+    /// An item menu's entry, or an item's eye.
+    Menu(Target, Action),
 }
 
 /// A seed in a few words: `8 exact`, `2.5 min, bias 4 end`.
@@ -557,11 +683,12 @@ pub fn browser(app: &mut ModelApp, ui: &mut egui::Ui) {
                 app.selected = if app.selected.as_ref() == Some(&(kind, name.clone())) { None } else { Some((kind, name)) };
             }
             Act::Edit(kind, name) => {
-                if let Some(v) = definition(&app.session.model, kind, &name) {
+                if let Some((command, params)) = kind.edit(&app.session.model, &name) {
                     app.selected = Some((kind, name));
-                    app.open_form(&kind.command("edit"), v);
+                    app.open_form(&command, params);
                 }
             }
+            Act::Menu(target, action) => menu::apply(app, target, action),
             Act::ShowResult(step) => {
                 // Errors show in the status bar.
                 let _ = app.run("results.deformed", json!({"step": step}));
@@ -641,40 +768,29 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
                 &Row { depth: 2, icon: Some("geometry.open"), label: &label, note: Some(format!("{bodies} bodies")), ..Default::default() },
             );
             for (i, b) in d.bodies.iter().enumerate() {
-                draw_row(
-                    app,
-                    ui,
-                    egui::Id::new(("fc_row_body", i)),
-                    &Row { depth: 3, icon: Some("geometry.bodies"), label: &b.name, ..Default::default() },
-                );
+                let row = Row { depth: 3, icon: Some("geometry.bodies"), label: &b.name, ..Default::default() };
+                item_row(app, ui, egui::Id::new(("fc_row_body", i)), row, Target::Body(b.name.clone()), acts);
             }
         }
         for (i, s) in surfaces.iter().enumerate() {
-            draw_row(
-                app,
-                ui,
-                egui::Id::new(("fc_row_surface", i)),
-                &Row { depth: 2, icon: Some("geometry.import.mesh"), label: s, ..Default::default() },
-            );
+            let row = Row { depth: 2, icon: Some("geometry.import.mesh"), label: s, ..Default::default() };
+            item_row(app, ui, egui::Id::new(("fc_row_surface", i)), row, Target::Surface(s.clone()), acts);
         }
-        // Datum planes and axes, then the partitions in the order they cut.
+        // Datum planes, axes and points, then the partitions in the order they cut.
         let datums: Vec<(String, &'static str)> = app.session.model.datums().iter().map(|(n, d)| (n.clone(), d.kind())).collect();
         for (i, (n, kind)) in datums.iter().enumerate() {
-            draw_row(
-                app,
-                ui,
-                egui::Id::new(("fc_row_datum", i)),
-                &Row { depth: 2, icon: Some("geometry.datum"), label: n, note: Some((*kind).into()), ..Default::default() },
-            );
+            let icon = match *kind {
+                "axis" => "geometry.datum.axis",
+                "point" => "geometry.datum.point",
+                _ => "geometry.datum",
+            };
+            let row = Row { depth: 2, icon: Some(icon), label: n, note: Some((*kind).into()), ..Default::default() };
+            item_row(app, ui, egui::Id::new(("fc_row_datum", i)), row, Target::Def(Def::Datum, n.clone()), acts);
         }
         let partitions: Vec<(String, String)> = app.session.model.partitions().iter().map(|p| (p.name.clone(), p.datum.clone())).collect();
         for (i, (n, datum)) in partitions.iter().enumerate() {
-            draw_row(
-                app,
-                ui,
-                egui::Id::new(("fc_row_partition", i)),
-                &Row { depth: 2, icon: Some("geometry.partition"), label: n, note: Some(format!("by {datum}")), ..Default::default() },
-            );
+            let row = Row { depth: 2, icon: Some("geometry.partition"), label: n, note: Some(format!("by {datum}")), ..Default::default() };
+            item_row(app, ui, egui::Id::new(("fc_row_partition", i)), row, Target::Def(Def::Partition, n.clone()), acts);
         }
     }
     ghost_rows(app, ui, &stages, "geometry", acts);
@@ -808,18 +924,9 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         }
         if open(app, key) {
             for (kind, name) in items {
-                let selected = app.selected.as_ref() == Some(&(kind, name.clone()));
-                let r = draw_row(
-                    app,
-                    ui,
-                    egui::Id::new(("fc_row_def", kind.stem(), &name)),
-                    &Row { depth: 2, icon: Some(kind.icon()), label: &name, selected, ..Default::default() },
-                );
-                if r.double {
-                    acts.push(Act::Edit(kind, name));
-                } else if r.clicked {
-                    acts.push(Act::Select(kind, name));
-                }
+                let id = egui::Id::new(("fc_row_def", kind.stem(), &name));
+                let row = Row { depth: 2, icon: Some(kind.icon()), label: &name, ..Default::default() };
+                item_row(app, ui, id, row, Target::Def(kind, name.clone()), acts);
             }
         }
         ghost_rows(app, ui, &stages, key, acts);
@@ -947,19 +1054,9 @@ mod tests {
         assert_eq!(steel["name"], "Steel");
         assert!(steel.get("elastic").is_some(), "{steel}");
         assert!(definition(m, Def::Load, "nope").is_none());
-        for kind in [
-            Def::Set,
-            Def::Material,
-            Def::Section,
-            Def::Step,
-            Def::BoundaryCondition,
-            Def::Load,
-            Def::ReferencePoint,
-            Def::Coupling,
-            Def::Contact,
-            Def::FluidDomain,
-        ] {
-            for verb in ["create", "edit", "delete"] {
+        for kind in Def::ALL {
+            let verbs: &[&str] = if kind == Def::Partition { &["create", "delete"] } else { &["create", "edit", "delete"] };
+            for verb in verbs {
                 assert!(fieldcraft_engine::find_command(&kind.command(verb)).is_some(), "{kind:?} {verb}");
             }
             assert!(fieldcraft_engine::catalogue::find(kind.icon()).is_some());

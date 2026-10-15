@@ -37,6 +37,9 @@ pub(crate) struct Intervals {
     pub multiple: Vec<(Vec<usize>, usize)>,
     /// `Σ vars ≥ min`.
     pub at_least: Vec<(Vec<usize>, usize)>,
+    /// Variables held at their goal (an exact edge seed), with the seed in words; empty or
+    /// `None`: free.
+    pub fixed: Vec<Option<String>>,
 }
 
 /// The largest count a variable may reach.
@@ -48,6 +51,43 @@ impl Intervals {
         self.goals.push(goal);
         self.mins.push(min.max(1));
         self.goals.len() - 1
+    }
+
+    /// Apply an edge seed to variable `v`: an exact seed holds it at the seeded count, a minimum
+    /// raises its lower bound (and its goal), a free seed sets its goal.
+    pub(crate) fn seed(&mut self, v: usize, seed: &crate::seeds::EdgeSeed) {
+        use fieldcraft_model::SeedConstraint;
+        let n = seed.count.max(1);
+        let (Some(goal), Some(min)) = (self.goals.get_mut(v), self.mins.get_mut(v)) else { return };
+        match seed.constraint {
+            SeedConstraint::Exact => {
+                *goal = n as f64;
+                *min = n;
+                if self.fixed.len() <= v {
+                    self.fixed.resize(v + 1, None);
+                }
+                if let Some(slot) = self.fixed.get_mut(v) {
+                    *slot = Some(seed.describe());
+                }
+            }
+            SeedConstraint::Min => {
+                *min = (*min).max(n);
+                *goal = goal.max(n as f64);
+            }
+            SeedConstraint::Free => *goal = n as f64,
+        }
+    }
+
+    fn is_fixed(&self, v: usize) -> bool {
+        self.fixed.get(v).is_some_and(Option::is_some)
+    }
+
+    /// The conflict error: the exact seeds among `vars` cannot all keep their counts.
+    fn conflict(&self, vars: &[usize], what: &str) -> Error {
+        let mut seeds: Vec<&str> = vars.iter().filter_map(|&v| self.fixed.get(v).and_then(Option::as_deref)).collect();
+        seeds.sort_unstable();
+        seeds.dedup();
+        Error::Invalid(format!("the exact edge seeds {} conflict: {what}; change a count or make a seed `min` or `free`", seeds.join(", ")))
     }
 
     pub(crate) fn solve(&self) -> Result<Vec<usize>> {
@@ -110,13 +150,22 @@ impl Intervals {
                 if cands.is_empty() {
                     return Err(Error::Failed("interval assignment: a side constraint cannot be met (the same curves on both sides)".into()));
                 }
+                let cands: Vec<usize> = cands.into_iter().filter(|&i| !self.is_fixed(i)).collect();
+                if cands.is_empty() {
+                    let all: Vec<usize> = a.iter().chain(b).copied().collect();
+                    return Err(self.conflict(&all, &format!("opposite sides of a mapped or swept face need equal counts ({sa} against {sb})")));
+                }
                 raise = Some(cands);
                 break;
             }
             if raise.is_none() {
                 for (l, m) in &self.at_least {
                     if sum(l, &x) < *m {
-                        raise = Some(l.clone());
+                        let free: Vec<usize> = l.iter().copied().filter(|&i| !self.is_fixed(i)).collect();
+                        if free.is_empty() {
+                            return Err(self.conflict(l, &format!("a face's loop needs at least {m} divisions")));
+                        }
+                        raise = Some(free);
                         break;
                     }
                 }
@@ -129,6 +178,10 @@ impl Intervals {
                         let moving: Vec<usize> = l.iter().copied().filter(|&i| !l.iter().filter(|&&k| k == i).count().is_multiple_of(*m)).collect();
                         if moving.is_empty() {
                             return Err(Error::Failed("interval assignment: a loop's count cannot reach the multiple it needs".into()));
+                        }
+                        let moving: Vec<usize> = moving.into_iter().filter(|&i| !self.is_fixed(i)).collect();
+                        if moving.is_empty() {
+                            return Err(self.conflict(l, &format!("a face's loop needs a multiple of {m} divisions")));
                         }
                         raise = Some(moving);
                         parity = true;
@@ -203,6 +256,38 @@ mod tests {
         assert_eq!(x[a] + x[b], x[c]);
         assert!(x[a] + x[b] + x[c] >= 12);
         assert_eq!((x[a] + x[b] + x[c]) % 2, 0);
+    }
+
+    #[test]
+    fn exact_seeds_hold_and_conflicts_name_them() {
+        use crate::seeds::EdgeSeed;
+        use fieldcraft_model::SeedConstraint;
+        let seed =
+            |name: &str, count: usize, constraint| EdgeSeed { name: name.into(), points: Vec::new(), tolerance: 0.0, count, bias: None, constraint };
+        // The other side follows an exact seed.
+        let mut p = Intervals::default();
+        let a = p.var(3.0, 1);
+        let b = p.var(3.0, 1);
+        p.equal.push((vec![a], vec![b]));
+        p.seed(a, &seed("A", 7, SeedConstraint::Exact));
+        assert_eq!(p.solve().unwrap(), vec![7, 7]);
+        // Two exact seeds on opposite sides that differ.
+        p.seed(b, &seed("B", 5, SeedConstraint::Exact));
+        let e = p.solve().unwrap_err().to_string();
+        assert!(e.contains("A (7 exact)") && e.contains("B (5 exact)"), "{e}");
+        // A minimum and a free goal.
+        let mut q = Intervals::default();
+        let a = q.var(3.0, 1);
+        let b = q.var(3.0, 1);
+        q.seed(a, &seed("A", 6, SeedConstraint::Min));
+        q.seed(b, &seed("B", 9, SeedConstraint::Free));
+        assert_eq!(q.solve().unwrap(), vec![6, 9]);
+        // An exact odd count on a loop that must be even, with nothing else to move.
+        let mut r = Intervals::default();
+        let a = r.var(3.0, 1);
+        r.multiple.push((vec![a], 2));
+        r.seed(a, &seed("A", 3, SeedConstraint::Exact));
+        assert!(r.solve().unwrap_err().to_string().contains("multiple of 2"));
     }
 
     #[test]

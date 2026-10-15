@@ -34,9 +34,11 @@ use super::interval::Intervals;
 use super::region::{self, Scheme};
 use super::{Ctx, Raw};
 use crate::predicates::Sign;
+use crate::seeds::EdgeSeed;
 use crate::size::{SizeField, divide_polyline, edge_divisions, ideal_divisions};
 use crate::vec3::{P, cross, dot, norm, sub};
 use crate::{Error, Result};
+use fieldcraft_model::SeedConstraint;
 
 /// Angular tolerance (radians) of "parallel" and "perpendicular" for the recognition.
 const ANGLE_TOL: f64 = 1e-6;
@@ -262,6 +264,8 @@ pub(crate) struct Setup {
     roles: Vec<Role>,
     /// Sorted levels (heights or angles in `[0, 2π)`).
     levels: Vec<f64>,
+    /// Sweep coordinates closer than this are one level.
+    h_tol: f64,
 }
 
 /// Classify faces and edges and find the levels; an `Unsupported` error says why the body does
@@ -322,7 +326,7 @@ pub(crate) fn setup(ctx: &Ctx, frame: &Frame) -> Result<Setup> {
     if levels.len() < need {
         return Err(Error::Unsupported("no source and target faces across the sweep".into()));
     }
-    Ok(Setup { frame: *frame, roles, levels })
+    Ok(Setup { frame: *frame, roles, levels, h_tol })
 }
 
 impl Setup {
@@ -452,6 +456,12 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
             *slot = scheme;
         }
     }
+    let seeds = Seeds::of(ctx, frame, h_ref, intervals, setup.h_tol, &(0..arr.curves.len()).map(curve3d).collect::<Vec<_>>())?;
+    for (c, seed) in seeds.curves.iter().enumerate() {
+        if let Some((seed, _)) = seed {
+            ia.seed(c, seed);
+        }
+    }
     let counts = ia.solve()?;
     let r_max = arr.points.iter().map(|q| q[1].abs()).fold(0.0, f64::max);
     let mut layers = Vec::with_capacity(intervals.len());
@@ -464,6 +474,13 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
         if frame.periodic() {
             n = n.max(((hi - lo) / FRAC_PI_4).ceil() as usize);
         }
+        if let Some(Some(l)) = seeds.layers.get(layers.len()) {
+            let seeded = l.fractions.len().saturating_sub(1).max(1);
+            n = match l.seed.constraint {
+                SeedConstraint::Exact | SeedConstraint::Free => seeded,
+                SeedConstraint::Min => n.max(seeded),
+            };
+        }
         layers.push(n);
     }
     // 2D nodes: curve ends, then curve interiors (projected onto analytic walls).
@@ -472,7 +489,10 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
     let mut curve_nodes: Vec<Vec<u32>> = Vec::with_capacity(arr.curves.len());
     for (c, curve) in arr.curves.iter().enumerate() {
         let n = counts.get(c).copied().unwrap_or(1);
-        let pts3 = divide_polyline(ctx.field, &curve3d(c), n)?;
+        let pts3 = match seeds.curves.get(c).copied().flatten() {
+            Some((seed, rev)) => crate::seeds::place(&curve3d(c), &seed.fractions(n, rev))?,
+            None => divide_polyline(ctx.field, &curve3d(c), n)?,
+        };
         let wall = curve.tags.iter().find_map(|&f| brep.faces.get(f).and_then(|x| x.surface)).filter(|s| !matches!(s, Surface::Plane { .. }));
         let mut ids = Vec::with_capacity(pts3.len());
         let last = pts3.len().saturating_sub(1);
@@ -548,8 +568,12 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
     for (k, &(lo, hi)) in intervals.iter().enumerate() {
         first_layer.push(heights.len());
         let n = layers.get(k).copied().unwrap_or(1);
-        for j in 0..n {
-            heights.push(lo + (hi - lo) * j as f64 / n as f64);
+        let fractions = match seeds.layers.get(k).and_then(Option::as_ref) {
+            Some(l) if l.fractions.len() == n + 1 => l.fractions.clone(),
+            _ => (0..=n).map(|j| j as f64 / n as f64).collect(),
+        };
+        for f in fractions.iter().take(n) {
+            heights.push(lo + (hi - lo) * f);
         }
     }
     if !frame.periodic()
@@ -612,6 +636,145 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
         if total_layers == 2 { "" } else { "s" },
     );
     Ok(Raw { nodes, hexes, description })
+}
+
+/// The edge seeds as a layered mesh takes them: on the cross-section's curves (seeds of edges
+/// across the sweep, projected into the cross-section) and on the level intervals (seeds of
+/// edges along the sweep, which set the interval's layers). Each with whether it runs against
+/// the curve, or from the interval's top down.
+struct Seeds<'s> {
+    curves: Vec<Option<(&'s EdgeSeed, bool)>>,
+    layers: Vec<Option<LayerSeed<'s>>>,
+}
+
+/// A seed's layers in one level interval: its nodes there, as fractions from the interval's
+/// bottom (0) to its top (1).
+#[derive(Clone)]
+struct LayerSeed<'s> {
+    seed: &'s EdgeSeed,
+    fractions: Vec<f64>,
+}
+
+/// Split a seed's node positions (fractions from the bottom of the span it seeds, 0 to 1) over
+/// the level intervals in it (`bounds`: the levels from the bottom of the span to its top, as
+/// fractions): each inner level takes the nearest node still free, and the nodes between two
+/// levels are stretched to fit between them. Every interval gets at least one division; `None`
+/// when there are fewer nodes than that needs.
+fn split_over(nodes: &[f64], bounds: &[f64]) -> Option<Vec<Vec<f64>>> {
+    let (n, m) = (nodes.len().checked_sub(1)?, bounds.len().checked_sub(1)?);
+    if m == 0 || n < m {
+        return None;
+    }
+    // The node index at each level.
+    let mut at = vec![0usize; m + 1];
+    at[m] = n;
+    for i in 1..m {
+        let b = bounds.get(i).copied()?;
+        let (lo, hi) = (at[i - 1] + 1, n - (m - i));
+        at[i] = (lo..=hi).min_by(|&a, &c| (nodes[a] - b).abs().total_cmp(&(nodes[c] - b).abs()))?;
+    }
+    (0..m)
+        .map(|i| {
+            let (j0, j1) = (at[i], at[i + 1]);
+            let (z0, z1) = (nodes.get(j0).copied()?, nodes.get(j1).copied()?);
+            let span = z1 - z0;
+            Some(
+                (j0..=j1)
+                    .map(|j| {
+                        if j == j0 {
+                            0.0
+                        } else if j == j1 {
+                            1.0
+                        } else {
+                            nodes.get(j).map_or(0.0, |z| (z - z0) / span)
+                        }
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+impl<'s> Seeds<'s> {
+    fn of(ctx: &'s Ctx, frame: &Frame, h_ref: f64, intervals: &[(f64, f64)], h_tol: f64, curves: &[Vec<P>]) -> Result<Seeds<'s>> {
+        let brep = ctx.brep;
+        let tol = ctx.tol;
+        let mut out = Seeds { curves: vec![None; curves.len()], layers: vec![None; intervals.len()] };
+        let stol = super::seed_tolerance(ctx.opts, tol);
+        let conflict = |a: &EdgeSeed, b: &EdgeSeed, why: &str| {
+            Error::Invalid(format!(
+                "the exact edge seeds {} and {} conflict: {why}; change a count or make a seed `min` or `free`",
+                a.describe(),
+                b.describe()
+            ))
+        };
+        let unsupported = |seed: &EdgeSeed, why: &str| Error::Unsupported(format!("the exact edge seed {} {why}", seed.describe()));
+        for e in 0..brep.edges.len() {
+            let Some((seed, rev)) = ctx.seed_of(e) else { continue };
+            let exact = seed.constraint == SeedConstraint::Exact;
+            let pts: Vec<(Q, f64)> = brep.edge_points(e, true).into_iter().map(|p| frame.coords(p)).collect();
+            let (Some(&(_, h0)), Some(&(_, h1))) = (pts.first(), pts.last()) else { continue };
+            let across = pts.iter().all(|&(q, h)| frame.span(q, frame.dh(h, h0)) <= tol);
+            if across {
+                // The seed moved into the cross-section plane at the reference level.
+                let projected = EdgeSeed { points: seed.points.iter().map(|&p| frame.point(frame.coords(p).0, h_ref)).collect(), ..seed.clone() };
+                match curves.iter().position(|c| crate::seeds::matches(&projected, c, stol).is_some()) {
+                    Some(c) => {
+                        let r = crate::seeds::matches(&projected, curves.get(c).map(Vec::as_slice).unwrap_or(&[]), stol).unwrap_or(false);
+                        let slot = out.curves.get_mut(c).ok_or_else(|| Error::Failed("curve index".into()))?;
+                        if let Some((other, _)) = slot
+                            && exact
+                            && other.constraint == SeedConstraint::Exact
+                            && other.count != seed.count
+                        {
+                            return Err(conflict(other, seed, "both lie on one curve of the swept cross-section"));
+                        }
+                        *slot = Some((seed, r));
+                    }
+                    None if exact => return Err(unsupported(seed, "is not one curve of the swept cross-section")),
+                    None => {}
+                }
+                continue;
+            }
+            // Along the sweep: the interval from its lower to its upper end.
+            let span = frame.dh(h1, h0);
+            let (lo, hi, down) = if span >= 0.0 { (h0, h0 + span, false) } else { (h0 + span, h0, true) };
+            let same = |a: f64, b: f64| frame.dh(a, b).abs() <= h_tol;
+            let first = intervals.iter().position(|&(l, _)| same(l, lo));
+            let last = intervals.iter().position(|&(_, h)| same(h, hi));
+            let (Some(k0), Some(k1)) = (first, last) else {
+                if exact {
+                    return Err(unsupported(seed, "does not run from one level of the sweep to another"));
+                }
+                continue;
+            };
+            let spanned = intervals.get(k0..=k1).unwrap_or(&[]);
+            let length = frame.dh(hi, lo).abs().max(f64::MIN_POSITIVE);
+            let mut bounds: Vec<f64> = spanned.iter().map(|&(l, _)| frame.dh(l, lo) / length).collect();
+            bounds.push(1.0);
+            // The seed's nodes from the bottom: the seed runs down when the edge does and the
+            // seed runs with it, or up against a downward edge.
+            let nodes = seed.fractions(seed.count, rev != down);
+            let Some(parts) = split_over(&nodes, &bounds) else {
+                if exact {
+                    return Err(unsupported(seed, &format!("has fewer divisions than the {} level intervals it spans", spanned.len())));
+                }
+                continue;
+            };
+            for (k, fractions) in (k0..=k1).zip(parts) {
+                let slot = out.layers.get_mut(k).ok_or_else(|| Error::Failed("interval index".into()))?;
+                if let Some(other) = slot
+                    && exact
+                    && other.seed.constraint == SeedConstraint::Exact
+                    && other.fractions.len() != fractions.len()
+                {
+                    return Err(conflict(other.seed, seed, "both set the layers between the same two levels"));
+                }
+                *slot = Some(LayerSeed { seed, fractions });
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// Which level intervals each region of the arrangement fills (inside test at the region's
@@ -790,4 +953,23 @@ fn interior_point(arr: &Arrangement, region: &arrangement::Region) -> Result<Q> 
         }
     }
     best.filter(|(c, _)| *c > 0.0).map(|(_, p)| p).ok_or_else(|| Error::Failed("no point found inside a cross-section region".into()))
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::split_over;
+
+    #[test]
+    fn a_seed_over_several_levels_is_split_at_them() {
+        // Six even divisions over levels at 0, 0.4 and 1: the level takes the node at 1/3.
+        let nodes: Vec<f64> = (0..=6).map(|j| j as f64 / 6.0).collect();
+        let parts = split_over(&nodes, &[0.0, 0.4, 1.0]).unwrap();
+        assert_eq!(parts.iter().map(|p| p.len() - 1).collect::<Vec<_>>(), vec![2, 4]);
+        assert!(parts.iter().all(|p| p[0] == 0.0 && *p.last().unwrap() == 1.0 && p.windows(2).all(|w| w[0] < w[1])));
+        // Every interval keeps at least one division; too few nodes is None.
+        let parts = split_over(&[0.0, 0.5, 1.0], &[0.0, 0.1, 0.2, 1.0]);
+        assert!(parts.is_none());
+        let parts = split_over(&[0.0, 0.9, 0.95, 1.0], &[0.0, 0.1, 0.2, 1.0]).unwrap();
+        assert_eq!(parts.iter().map(|p| p.len() - 1).collect::<Vec<_>>(), vec![1, 1, 1]);
+    }
 }

@@ -32,7 +32,7 @@ use super::layered::{Frame, PlaneField};
 use super::region;
 use super::{Ctx, Raw, project_to_face, project_to_faces};
 use crate::quad::transfinite_grid;
-use crate::size::{divide_polyline, ideal_divisions};
+use crate::size::ideal_divisions;
 use crate::vec3::{P, sub};
 use crate::{Error, Result};
 
@@ -215,7 +215,7 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
     let fine = f64::from(1u32 << refine.min(8));
     for e in 0..brep.edges.len() {
         let goal = ideal_divisions(ctx.field, &brep.edge_points(e, true))?;
-        ia.var(if sides.contains(&e) { goal } else { goal * fine }, 1);
+        ctx.edge_var(&mut ia, e, if sides.contains(&e) { goal } else { goal * fine });
     }
     let vars = |uses: &[(usize, bool)]| uses.iter().map(|x| x.0).collect::<Vec<_>>();
     for stages in &topo.rings {
@@ -257,7 +257,7 @@ fn build(ctx: &Ctx, topo: &Topology, refine: u32) -> Result<Raw> {
     let mut edge_nodes: Vec<Vec<u32>> = Vec::with_capacity(brep.edges.len());
     for (e, edge) in brep.edges.iter().enumerate() {
         let n = counts.get(e).copied().unwrap_or(1);
-        let pts = divide_polyline(ctx.field, &brep.edge_points(e, true), n)?;
+        let pts = ctx.divide_edge(e, true, n)?;
         let last = pts.len().saturating_sub(1);
         let mut ids = Vec::with_capacity(pts.len());
         for (k, p) in pts.iter().enumerate() {

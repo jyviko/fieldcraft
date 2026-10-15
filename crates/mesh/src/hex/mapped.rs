@@ -16,7 +16,7 @@ use super::brep::Brep;
 use super::interval::Intervals;
 use super::{Ctx, Raw, project_to_face, project_to_faces};
 use crate::quad::{lattice_index, transfinite_faces, transfinite_volume};
-use crate::size::{divide_polyline, ideal_divisions};
+use crate::size::ideal_divisions;
 use crate::vec3::{P, det, sub};
 use crate::{Error, Result};
 
@@ -155,7 +155,7 @@ pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
     let groups = cube.groups;
     let mut ia = Intervals::default();
     for e in 0..brep.edges.len() {
-        ia.var(ideal_divisions(ctx.field, &brep.edge_points(e, true))?, 1);
+        ctx.edge_var(&mut ia, e, ideal_divisions(ctx.field, &brep.edge_points(e, true))?);
     }
     for g in &groups {
         let first = g.first().map(|x| x.0).unwrap_or(0);
@@ -173,7 +173,7 @@ pub(crate) fn mesh(ctx: &Ctx) -> Result<Raw> {
     }
     // Edge node positions, low corner to high.
     let edge_pts = |(e, fwd): (usize, bool), n: usize| -> Result<Vec<P>> {
-        let pts = divide_polyline(ctx.field, &brep.edge_points(e, fwd), n)?;
+        let pts = ctx.divide_edge(e, fwd, n)?;
         let faces = brep.edges.get(e).map(|x| x.faces.to_vec()).unwrap_or_default();
         let last = pts.len().saturating_sub(1);
         Ok(pts.iter().enumerate().map(|(k, q)| if k == 0 || k == last { *q } else { project_to_faces(ctx, &faces, *q) }).collect())

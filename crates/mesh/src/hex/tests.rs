@@ -480,3 +480,105 @@ fn an_o_grid_round_a_hole_conforms_with_graded_radial_lines() {
         assert!(r.windows(3).all(|w| (w[2] - w[1]) <= 1.35 * (w[1] - w[0])), "{r:?}");
     }
 }
+
+fn seed(
+    name: &str,
+    points: Vec<[f64; 3]>,
+    count: usize,
+    bias: Option<fieldcraft_model::Bias>,
+    constraint: fieldcraft_model::SeedConstraint,
+) -> crate::seeds::EdgeSeed {
+    crate::seeds::EdgeSeed { name: name.into(), points, tolerance: 0.0, count, bias, constraint }
+}
+
+/// The distinct values of coordinate `k` of the nodes `on` accepts, sorted.
+fn along(m: &HexMesh, k: usize, on: impl Fn([f64; 3]) -> bool) -> Vec<f64> {
+    let mut v: Vec<f64> = m.nodes.iter().filter(|p| on(**p)).map(|p| p[k]).collect();
+    v.sort_by(f64::total_cmp);
+    v.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    v
+}
+
+#[test]
+fn seeds_give_a_swept_block_exact_counts_and_geometric_spacing() {
+    use fieldcraft_model::{Bias, BiasToward, SeedConstraint};
+    let s = prism(&[[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], 0.0, 3.0);
+    let bias = Some(Bias { ratio: 4.0, toward: BiasToward::Start });
+    let opts = HexOptions {
+        seeds: vec![
+            // Through the thickness, 7 layers small at z = 0 (the seed runs up).
+            seed("thickness", vec![[0.0, 0.0, 0.0], [0.0, 0.0, 3.0]], 7, bias, SeedConstraint::Exact),
+            // Along x on the top: 5 divisions, the seed runs from x = 4 to 0.
+            seed("length", vec![[4.0, 2.0, 3.0], [0.0, 2.0, 3.0]], 5, None, SeedConstraint::Exact),
+        ],
+        ..HexOptions::default()
+    };
+    let m = hex_mesh(&s, &[], &UniformSize(1.0), &opts).unwrap();
+    check(&m, 24.0);
+    assert_eq!(m.element_count(), 5 * 2 * 7, "{}", m.report.description);
+    // The nodes on the seeded edges.
+    assert_eq!(along(&m, 0, |p| (p[1] - 2.0).abs() < 1e-9 && (p[2] - 3.0).abs() < 1e-9).len(), 6);
+    let z = along(&m, 2, |p| p[0].abs() < 1e-9 && p[1].abs() < 1e-9);
+    assert_eq!(z.len(), 8, "{z:?}");
+    // Element heights grow geometrically from the bottom, the last 4 times the first.
+    let dz: Vec<f64> = z.windows(2).map(|w| w[1] - w[0]).collect();
+    let q = 4f64.powf(1.0 / 6.0);
+    assert!(dz.windows(2).all(|w| (w[1] / w[0] - q).abs() < 1e-9), "{dz:?}");
+    // Seeded the other way round: small at the top.
+    let down = HexOptions { seeds: vec![seed("t", vec![[0.0, 0.0, 3.0], [0.0, 0.0, 0.0]], 7, bias, SeedConstraint::Exact)], ..opts.clone() };
+    let m = hex_mesh(&s, &[], &UniformSize(1.0), &down).unwrap();
+    let z = along(&m, 2, |p| p[0].abs() < 1e-9 && p[1].abs() < 1e-9);
+    assert!(z[7] - z[6] < z[1] - z[0], "{z:?}");
+    // The one-to-one sweep and the mapped mesher keep the same seeds.
+    for method in [HexMethod::Sweep, HexMethod::Mapped] {
+        let m = hex_mesh(&s, &[], &UniformSize(1.0), &HexOptions { method, ..opts.clone() }).unwrap();
+        let z = along(&m, 2, |p| p[0].abs() < 1e-9 && p[1].abs() < 1e-9);
+        let dz: Vec<f64> = z.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(dz.len() == 7 && dz.windows(2).all(|w| (w[1] / w[0] - q).abs() < 1e-9), "{method:?} {dz:?}");
+        assert_eq!(m.element_count(), 5 * 2 * 7, "{method:?}");
+    }
+    // A minimum raises a count; a free seed is a goal the other constraints may move (its
+    // opposite edges want 4, so 6 holds and 2 would not).
+    let min = HexOptions { seeds: vec![seed("x", vec![[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], 2, None, SeedConstraint::Min)], ..opts.clone() };
+    let front = |p: [f64; 3]| p[1].abs() < 1e-9 && p[2].abs() < 1e-9;
+    assert_eq!(along(&hex_mesh(&s, &[], &UniformSize(1.0), &min).unwrap(), 0, front).len(), 5);
+    let free = HexOptions { seeds: vec![seed("x", vec![[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], 6, None, SeedConstraint::Free)], ..opts.clone() };
+    assert_eq!(along(&hex_mesh(&s, &[], &UniformSize(1.0), &free).unwrap(), 0, front).len(), 7);
+}
+
+#[test]
+fn conflicting_exact_seeds_are_refused_with_their_names() {
+    use fieldcraft_model::SeedConstraint;
+    let s = prism(&[[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], 0.0, 3.0);
+    // Opposite edges of the mapped block (and of the swept cross-section) with different counts.
+    let opts = HexOptions {
+        method: HexMethod::Mapped,
+        seeds: vec![
+            seed("front", vec![[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], 5, None, SeedConstraint::Exact),
+            seed("back", vec![[0.0, 2.0, 3.0], [4.0, 2.0, 3.0]], 3, None, SeedConstraint::Exact),
+        ],
+        ..HexOptions::default()
+    };
+    let e = hex_mesh(&s, &[], &UniformSize(1.0), &opts).unwrap_err().to_string();
+    assert!(e.contains("front (5 exact)") && e.contains("back (3 exact)"), "{e}");
+    let e = hex_mesh(&s, &[], &UniformSize(1.0), &HexOptions { method: HexMethod::Auto, ..opts }).unwrap_err().to_string();
+    assert!(e.contains("front (5 exact)") && e.contains("back (3 exact)"), "{e}");
+}
+
+#[test]
+fn a_seed_on_a_shared_edge_holds_in_every_cell() {
+    use fieldcraft_model::{Bias, BiasToward, SeedConstraint};
+    let pairs = boxes(&[([0.0, 2.0], [0.0, 1.0]), ([2.0, 3.0], [0.0, 1.0])], 1.0);
+    let none = vec![Vec::new(); 2];
+    // The edge both cells share, at x = 2, along z.
+    let bias = Some(Bias { ratio: 3.0, toward: BiasToward::Both });
+    let opts =
+        HexOptions { seeds: vec![seed("shared", vec![[2.0, 0.0, 0.0], [2.0, 0.0, 1.0]], 6, bias, SeedConstraint::Exact)], ..HexOptions::default() };
+    let m = hex_mesh_cells(&cells_of(&pairs, &none), &UniformSize(0.5), &opts).unwrap();
+    assert!(m.blocks.iter().all(|b| b[2] == 6), "{:?}", m.blocks);
+    assert!(distinct_positions(&m.mesh));
+    let z = along(&m.mesh, 2, |p| (p[0] - 2.0).abs() < 1e-9 && p[1].abs() < 1e-9);
+    assert_eq!(z.len(), 7, "{z:?}");
+    // Small at both ends, symmetric.
+    assert!((z[1] - z[0] - (z[6] - z[5])).abs() < 1e-9 && z[3] - z[2] > z[1] - z[0], "{z:?}");
+}

@@ -36,8 +36,9 @@ use std::collections::BTreeMap;
 use super::brep::Brep;
 use super::geom::{TriangleTree, add, dist, scale};
 use super::mapped::{self, Cube, face_ring, other};
-use super::{Cells, Ctx, HexMesh, HexMethod, HexOptions, RELATIVE_TOLERANCE, Raw, Surface, finish, project_to_face, project_to_faces};
+use super::{Cells, Ctx, HexMesh, HexMethod, HexOptions, Raw, Surface, finish, project_to_face, project_to_faces};
 use crate::quad::{lattice_index, transfinite_grid, transfinite_volume};
+use crate::seeds::EdgeSeed;
 use crate::size::{SizeField, divide_polyline, ideal_divisions};
 use crate::surface::BoundarySurface;
 use crate::vec3::{P, cross, dot, norm, sub};
@@ -112,8 +113,7 @@ pub fn hex_mesh_cells(cells: &[Cell], field: &dyn SizeField, opts: &HexOptions) 
     super::check_estimate(&surfaces, field, opts)?;
     let breps: Vec<Brep> = cells.iter().map(|c| Brep::composite(c.surface, c.faces)).collect::<Result<_>>()?;
     let trees: Vec<TriangleTree> = cells.iter().map(|c| TriangleTree::new(c.surface)).collect::<Result<_>>()?;
-    let ctxs: Vec<Ctx> =
-        breps.iter().zip(&trees).map(|(brep, tree)| Ctx { brep, tree, field, opts, tol: RELATIVE_TOLERANCE * brep.diagonal }).collect();
+    let ctxs: Vec<Ctx> = breps.iter().zip(&trees).map(|(brep, tree)| Ctx::new(brep, tree, field, opts)).collect::<Result<_>>()?;
     let names: Vec<&str> = cells.iter().map(|c| c.name).collect();
     let cubes: Vec<Cube> = breps
         .iter()
@@ -317,12 +317,24 @@ impl Topology {
     fn intervals(&self, ctxs: &[Ctx], cubes: &[Cube], field: &dyn SizeField) -> Result<Vec<Division>> {
         let polylines: Vec<Vec<P>> = self.edges.iter().map(|e| self.polyline(ctxs, e)).collect::<Result<_>>()?;
         let goals: Vec<f64> = polylines.iter().map(|p| ideal_divisions(field, p)).collect::<Result<_>>()?;
-        let first = self.solve(&goals)?;
+        // The seed on each edge (a shared edge is one edge, so its seed holds in every cell it
+        // bounds), oriented from `a` to `b`.
+        let seeds: Vec<Option<(&EdgeSeed, bool)>> = self
+            .edges
+            .iter()
+            .map(|e| {
+                let (c, be, fwd) = e.owner;
+                ctxs.get(c).and_then(|x| x.seed_of(be)).map(|(seed, rev)| (seed, rev == fwd))
+            })
+            .collect();
+        let first = self.solve(&goals, &seeds)?;
         // Ends of edges that leave a curved face: the spacing along that face there.
         let ends = self.graded_ends(ctxs, cubes, &first);
         let mut graded = goals;
         let mut divisions = Vec::with_capacity(polylines.len());
-        for ((poly, ends), goal) in polylines.into_iter().zip(ends).zip(graded.iter_mut()) {
+        for (((poly, ends), goal), seed) in polylines.into_iter().zip(ends).zip(graded.iter_mut()).zip(&seeds) {
+            // A seeded edge keeps the seed's spacing, not a grading.
+            let ends = if seed.is_some() { [None, None] } else { ends };
             let poly = if ends.iter().any(Option::is_some) {
                 let dense = densify(&poly);
                 *goal = goal.max(ideal_divisions(&Grading { field, ends }, &dense)?);
@@ -330,18 +342,21 @@ impl Topology {
             } else {
                 poly
             };
-            divisions.push(Division { count: 1, ends, polyline: poly });
+            divisions.push(Division { count: 1, ends, polyline: poly, seed: seed.map(|(s, rev)| (s.clone(), rev)) });
         }
-        for (d, n) in divisions.iter_mut().zip(self.solve(&graded)?) {
+        for (d, n) in divisions.iter_mut().zip(self.solve(&graded, &seeds)?) {
             d.count = n;
         }
         Ok(divisions)
     }
 
-    fn solve(&self, goals: &[f64]) -> Result<Vec<usize>> {
+    fn solve(&self, goals: &[f64], seeds: &[Option<(&EdgeSeed, bool)>]) -> Result<Vec<usize>> {
         let mut ia = super::interval::Intervals::default();
-        for &g in goals {
-            ia.var(g, 1);
+        for (&g, seed) in goals.iter().zip(seeds) {
+            let v = ia.var(g, 1);
+            if let Some((seed, _)) = seed {
+                ia.seed(v, seed);
+            }
         }
         for groups in &self.cell_edges {
             for g in groups {
@@ -499,6 +514,8 @@ struct Division {
     count: usize,
     ends: GradedEnds,
     polyline: Vec<P>,
+    /// The edge's seed, and whether it runs from `b` to `a`.
+    seed: Option<(EdgeSeed, bool)>,
 }
 
 /// The size along a graded edge: the field's, capped near each graded end by the spacing there
@@ -566,7 +583,9 @@ impl Builder<'_, '_, '_> {
         // Edges: divided once, on the geometry.
         for (edge, division) in topo.edges.iter().zip(self.divisions) {
             let n = division.count;
-            let pts = if division.ends.iter().any(Option::is_some) {
+            let pts = if let Some((seed, rev)) = &division.seed {
+                crate::seeds::place(&division.polyline, &seed.fractions(n, *rev))?
+            } else if division.ends.iter().any(Option::is_some) {
                 divide_polyline(&Grading { field, ends: division.ends }, &division.polyline, n)?
             } else {
                 divide_polyline(field, &division.polyline, n)?

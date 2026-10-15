@@ -52,6 +52,8 @@ use std::collections::HashMap;
 pub use cells::{Cell, CellsMesh, GROWTH, MAX_CELLS, hex_mesh_cells};
 pub use geom::Surface;
 
+use crate::seeds::EdgeSeed;
+
 use brep::Brep;
 use geom::{TriangleTree, add, dist, scale, unit};
 
@@ -109,11 +111,21 @@ pub struct HexOptions {
     pub max_elements: usize,
     /// Options of the face meshers.
     pub quad: QuadOptions,
+    /// Edge seeds: the B-rep edges they lie on get their counts (exact seeds are held, and a
+    /// method that cannot keep them names them) and their spacing.
+    pub seeds: Vec<EdgeSeed>,
 }
 
 impl Default for HexOptions {
     fn default() -> Self {
-        HexOptions { method: HexMethod::Auto, quadratic: false, chordal_tolerance: 0.0, max_elements: 5_000_000, quad: QuadOptions::default() }
+        HexOptions {
+            method: HexMethod::Auto,
+            quadratic: false,
+            chordal_tolerance: 0.0,
+            max_elements: 5_000_000,
+            quad: QuadOptions::default(),
+            seeds: Vec::new(),
+        }
     }
 }
 
@@ -176,6 +188,49 @@ pub(crate) struct Ctx<'a> {
     pub opts: &'a HexOptions,
     /// Classification tolerance (model units).
     pub tol: f64,
+    /// The seed on each B-rep edge (index into `opts.seeds`, and whether the edge runs from the
+    /// seed's end to its start).
+    pub edge_seeds: Vec<Option<(usize, bool)>>,
+}
+
+impl<'a> Ctx<'a> {
+    pub(crate) fn new(brep: &'a Brep<'a>, tree: &'a TriangleTree<'a>, field: &'a dyn SizeField, opts: &'a HexOptions) -> Result<Ctx<'a>> {
+        let tol = RELATIVE_TOLERANCE * brep.diagonal;
+        let curves: Vec<Vec<P>> = (0..brep.edges.len()).map(|e| brep.edge_points(e, true)).collect();
+        let edge_seeds = crate::seeds::match_curves(&opts.seeds, &curves, seed_tolerance(opts, tol))?;
+        Ok(Ctx { brep, tree, field, opts, tol, edge_seeds })
+    }
+
+    /// The seed on B-rep edge `e`, and whether it runs against the edge.
+    pub(crate) fn seed_of(&self, e: usize) -> Option<(&EdgeSeed, bool)> {
+        let (i, rev) = self.edge_seeds.get(e).copied().flatten()?;
+        Some((self.opts.seeds.get(i)?, rev))
+    }
+
+    /// A division-count variable for B-rep edge `e` with goal `goal`, its seed applied.
+    pub(crate) fn edge_var(&self, ia: &mut interval::Intervals, e: usize, goal: f64) -> usize {
+        let v = ia.var(goal, 1);
+        if let Some((seed, _)) = self.seed_of(e) {
+            ia.seed(v, seed);
+        }
+        v
+    }
+
+    /// `n + 1` points along B-rep edge `e` (traversed forwards or not): at the seed's spacing
+    /// when it has one, else evenly in the size field.
+    pub(crate) fn divide_edge(&self, e: usize, forward: bool, n: usize) -> Result<Vec<P>> {
+        let pts = self.brep.edge_points(e, forward);
+        match self.seed_of(e) {
+            Some((seed, rev)) => crate::seeds::place(&pts, &seed.fractions(n, rev == forward)),
+            None => crate::size::divide_polyline(self.field, &pts, n),
+        }
+    }
+}
+
+/// How far apart a seed's polyline and a mesher's curve of the same edge may lie: both are
+/// tessellations of it.
+pub(crate) fn seed_tolerance(opts: &HexOptions, tol: f64) -> f64 {
+    4.0 * opts.chordal_tolerance.max(0.0) + 16.0 * tol
 }
 
 /// What a method produces: linear hexahedra in the model's node order.
@@ -208,7 +263,7 @@ pub fn hex_mesh(surface: &BoundarySurface, faces: &[Option<Surface>], field: &dy
     check_estimate(&[surface], field, opts)?;
     let brep = Brep::new(surface, faces)?;
     let tree = TriangleTree::new(surface)?;
-    let ctx = Ctx { brep: &brep, tree: &tree, field, opts, tol: RELATIVE_TOLERANCE * brep.diagonal };
+    let ctx = Ctx::new(&brep, &tree, field, opts)?;
     let methods: &[HexMethod] = match opts.method {
         HexMethod::Auto => &[HexMethod::Extrude, HexMethod::Sweep, HexMethod::Revolve, HexMethod::Mapped],
         HexMethod::Swept => &[HexMethod::Extrude, HexMethod::Sweep, HexMethod::Revolve],

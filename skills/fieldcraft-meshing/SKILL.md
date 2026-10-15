@@ -21,11 +21,21 @@ not guessed. Read it before you plan anything:
    template per feature (`sweep`, `block`, `butterfly`, `o_grid`, `layers`, `imprint`, `copy`,
    `partition`), the `rings` round circles, the partition `cuts` that frame them, the element size
    (layers through the thinnest wall) and the `copies` of a pattern or mirror. Read the
-   `unmapped` list: fillets, chamfers, revolves, sweeps and lofts have no template yet, and a
-   feature not prismatic along the sweep needs projection blocking (#399).
-3. Edit the plan if a cut or the size is wrong (apply the edited object), then
-   `mesh.plan.apply {"plan": "Plan-<body>"}`. Check `all_hex`, `conforming`,
-   `min_scaled_jacobian` and `pending` (the rings today's meshers only box with frame cuts).
+   `unmapped` list: revolves, sweeps and lofts have no template yet, and a feature not
+   prismatic along the sweep needs projection blocking (#399). Fillets and chamfers map to a
+   `blend` layer.
+3. Edit the plan if the size is wrong (apply the edited object), then
+   `mesh.plan.apply {"plan": "Plan-<body>"}`. When the plan has rings or blends and the body
+   fits, its `mesher` is `project`: one block topology over the whole body (a grid on the
+   body's planar faces, an O-grid square-inside-square round every circle, concentric ones
+   nested: a boss and its hole; a blend layer along fillets, chamfers and shell walls at their
+   stored depth) projected and smoothed — no partitions, one conforming mesh, one division
+   count per sheet of blocks. Read `layout` and `blend_layers`; the plan's `notes` say why a
+   body did not fit (a plane at an angle, a curved face that is not a ring or a blend, two
+   circles in one frame), and then the frame cuts and swept cells are used instead (`pending`
+   lists the rings left boxed). Check `all_hex`, `conforming`, `min_scaled_jacobian`.
+   Known gap: a shelled box whose fillet radius exceeds the wall (the enclosure-base pattern)
+   can still leave a twisted element at the outer fillet's bottom corner.
 4. Then verify as in §4. When the plan does not fit (unmapped primary features, a failed cell),
    fall back to the manual process below, keeping the plan's cuts that work.
 

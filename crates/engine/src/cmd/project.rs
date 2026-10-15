@@ -4,7 +4,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use fieldcraft_geometry::Shape;
 use fieldcraft_mesh::hex::BoundaryFace;
 use fieldcraft_mesh::join::{check_conforming, weld};
 use fieldcraft_mesh::project::{ProjectOptions, Smoothing, Topology, project_mesh};
@@ -254,8 +253,7 @@ struct ProjectParams {
 }
 
 /// The body, its tessellation as a boundary surface and projection target, and its size.
-struct Body<'a> {
-    shape: &'a Shape,
+pub(crate) struct Body {
     input: super::hex::Input<'static>,
     surface: BoundarySurface,
     target: Tessellation,
@@ -263,7 +261,14 @@ struct Body<'a> {
     hi: [f64; 3],
 }
 
-fn open_body<'a>(s: &'a Session, name: &str, tolerance: Option<f64>, raw: &Value) -> Result<Body<'a>> {
+impl Body {
+    /// The body's bounding-box diagonal.
+    pub(crate) fn diagonal(&self) -> f64 {
+        self.input.diagonal
+    }
+}
+
+pub(crate) fn open_body(s: &Session, name: &str, tolerance: Option<f64>, raw: &Value) -> Result<Body> {
     let shape =
         s.design.as_deref().and_then(|d| d.body(name)).ok_or_else(|| EngineError::Params(format!("no body `{name}` (open a design first)")))?;
     if tolerance.is_some_and(|t| !(t > 0.0 && t.is_finite())) {
@@ -275,11 +280,16 @@ fn open_body<'a>(s: &'a Session, name: &str, tolerance: Option<f64>, raw: &Value
             .map_err(|e| EngineError::Params(format!("body `{name}`: {e}")))?;
     let target = Tessellation::new(&surface, super::mesh::analytic_surfaces(shape));
     let m = shape.measure()?;
-    Ok(Body { shape, input, surface, target, lo: m.bbox_min, hi: m.bbox_max })
+    Ok(Body { input, surface, target, lo: m.bbox_min, hi: m.bbox_max })
 }
 
-fn face_index(shape: &Shape, name: &str) -> Result<u32> {
-    shape.face_index(name).ok_or_else(|| EngineError::Params(format!("body `{}` has no face `{name}`", shape.name)))
+fn face_index(b: &Body, body: &str, name: &str) -> Result<u32> {
+    b.input
+        .face_names
+        .iter()
+        .position(|f| f == name)
+        .map(|i| i as u32)
+        .ok_or_else(|| EngineError::Params(format!("body `{body}` has no face `{name}`")))
 }
 
 fn element_size(size: Option<f64>, diag: f64) -> Result<f64> {
@@ -290,7 +300,7 @@ fn element_size(size: Option<f64>, diag: f64) -> Result<f64> {
     Ok(h)
 }
 
-fn merge_distance(merge: Option<f64>, diag: f64) -> Result<f64> {
+pub(crate) fn merge_distance(merge: Option<f64>, diag: f64) -> Result<f64> {
     let m = merge.unwrap_or(1e-6 * diag);
     if !(m.is_finite() && m >= 0.0 && m <= 1e-2 * diag) {
         return Err(EngineError::Params(format!("`merge` must be from 0 to 1/100 of the body's diagonal ({diag})")));
@@ -475,7 +485,7 @@ fn hex_project(s: &mut Session, raw: &Value) -> Result<Value> {
     let mut faces = Vec::with_capacity(p.faces.len());
     for f in &p.faces {
         bounded(&f.to, "faces.to")?;
-        faces.push((f.block, face_of(&t, f.block, &f.face)?, f.to.iter().map(|n| face_index(b.shape, n)).collect::<Result<Vec<u32>>>()?));
+        faces.push((f.block, face_of(&t, f.block, &f.face)?, f.to.iter().map(|n| face_index(&b, &p.body, n)).collect::<Result<Vec<u32>>>()?));
     }
     let mut divisions = Vec::with_capacity(p.divisions.len());
     for d in &p.divisions {
@@ -500,15 +510,22 @@ fn hex_project(s: &mut Session, raw: &Value) -> Result<Value> {
         return Err(EngineError::invalid("min_quality", "from -1 to 1"));
     }
     let opts = ProjectOptions { size, divisions, faces, smoothing, iterations, max_elements: fieldcraft_model::MAX_ELEMENTS / 8, min_quality };
-    let m = project_mesh(&t, &b.surface, &b.target, &opts).map_err(|e| EngineError::of_body(&p.body, e))?;
     let merge = merge_distance(p.merge, diag)?;
+    project_body(s, &p.body, b, &t, &opts, merge)
+}
+
+/// Mesh body `name` (opened as `b`) with the block topology `t` projected onto it, replace its
+/// mesh, and reply what `mesh.hex.project` replies. The plan's projection mesher (plan.rs) takes
+/// the same path.
+pub(crate) fn project_body(s: &mut Session, name: &str, b: Body, t: &Topology, opts: &ProjectOptions, merge: f64) -> Result<Value> {
+    let m = project_mesh(t, &b.surface, &b.target, opts).map_err(|e| EngineError::of_body(name, e))?;
     let r = &m.report;
     let names = b.input.face_names.clone();
     let face_name = |f: &u32| names.get(*f as usize).cloned().unwrap_or_else(|| f.to_string());
-    let blocks = listing(&t, Some(&r.divisions));
+    let blocks = listing(t, Some(&r.divisions));
     let targets: Vec<Value> = r.targets.iter().map(|set| json!(set.iter().map(face_name).collect::<Vec<_>>())).collect();
     let mut reply = json!({
-        "body": p.body,
+        "body": name,
         "kind": "hex8",
         "blocks": r.blocks,
         "elements": r.elements,

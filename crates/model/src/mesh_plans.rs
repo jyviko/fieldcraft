@@ -25,6 +25,10 @@ pub enum PlanMesher {
     Sweep,
     /// The body cut by the plan's partitions, its cells swept together (`mesh.cells`).
     Cells,
+    /// One block topology laid over the whole body (a grid with O-grids round its circles and a
+    /// blend layer along its fillets, chamfers and shell walls) projected onto its faces
+    /// (projection blocking, `mesh.hex.project`): no partitions, one conforming mesh.
+    Project,
 }
 
 /// A feature the plan maps, and the template it takes.

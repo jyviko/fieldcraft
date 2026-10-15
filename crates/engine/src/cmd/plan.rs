@@ -34,6 +34,8 @@ use fieldcraft_geometry::{Curve, Design, FaceSurface, FeatureNode, Shape};
 use fieldcraft_model::{CutRole, Datum, MeshPlan, Partition, PlanCut, PlanFeature, PlanMesher, PlanRing, PlanUnmapped, RingKind};
 use serde_json::{Value, json};
 
+mod blocks;
+
 use crate::requirement::Requirement;
 use crate::schema::ProblemKind;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
@@ -134,6 +136,7 @@ fn template_of(f: &FeatureNode) -> Option<&'static str> {
         ("combine", _) => "imprint",
         ("pattern" | "mirror", _) => "copy",
         ("split", _) => "partition",
+        ("fillet" | "chamfer", _) => "blend",
         _ => return None,
     })
 }
@@ -141,7 +144,6 @@ fn template_of(f: &FeatureNode) -> Option<&'static str> {
 /// Why a feature with no template is not mapped.
 fn unmapped_reason(f: &FeatureNode) -> String {
     match f.kind.as_str() {
-        "fillet" | "chamfer" => "a blend layer along its edges at its stored size is step 3 of the provenance plan (#402); no template yet".into(),
         "revolve" => "revolving the profile mesh about the stored axis is step 3 of the provenance plan (#402); no template yet".into(),
         "sweep" | "loft" => {
             "sweeping the profile along the stored path or between the sections is step 3 of the provenance plan (#402); no template yet".into()
@@ -165,6 +167,8 @@ fn compatible(f: &FeatureNode, d: V3, shape: &Shape, surfaces: &[Option<FaceSurf
         "box" => AXES.iter().any(|a| parallel(*a, d)),
         // Copies and combines bring the features they repeat or join, which are judged themselves.
         "pattern" | "mirror" | "combine" | "split" => true,
+        // A blend is a layer of blocks along the body's sides, whatever its edges' direction.
+        "fillet" | "chamfer" => true,
         _ => faces_prismatic(shape, surfaces, &f.faces, d),
     }
 }
@@ -584,10 +588,10 @@ fn plan_rings(
             let along = dot(off, d);
             dot(off, off) - along * along < 1e-12
         };
-        if out.iter().any(|r| same(r) && r.radius >= c.radius) {
+        // Concentric circles each get a ring (a boss and its hole: squares inside squares).
+        if out.iter().any(|r| same(r) && (r.radius - c.radius).abs() < 1e-9 * c.radius.max(1.0)) {
             continue;
         }
-        out.retain(|r| !same(r));
         let frame = match c.kind {
             RingKind::Butterfly => 0.5 * c.radius,
             RingKind::OGrid => in_plane_axes(d)
@@ -760,6 +764,12 @@ pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32,
             ("combine", _) => format!("the cross-sections of {} imprinted on the target", f.tools.join(", ")),
             ("pattern" | "mirror", _) => format!("the instance meshed and repeated by {} transforms", f.transforms.len()),
             ("split", _) => "the pieces meshed as cells of the split".into(),
+            ("fillet", _) => {
+                format!("a blend layer of blocks along its edges, {:.4} mm deep, projected onto the fillet faces", v("radius").unwrap_or_default())
+            }
+            ("chamfer", _) => {
+                format!("a blend layer of blocks along its edges, {:.4} mm deep, projected onto the chamfer faces", v("distance").unwrap_or_default())
+            }
             _ => String::new(),
         };
         circle_list.extend(placed(circles(f, d), f, d, shape, &surfaces));
@@ -852,7 +862,7 @@ pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32,
     }
     let mesher = if cuts.is_empty() { PlanMesher::Sweep } else { PlanMesher::Cells };
     let copies = copies_of(design, body, &plan_features)?;
-    let plan = MeshPlan {
+    let mut plan = MeshPlan {
         body: body.into(),
         size: h,
         tolerance: Some(tolerance),
@@ -868,7 +878,48 @@ pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32,
         notes,
     };
     plan.check()?;
+    // Rings and blends: one block topology over the whole body when it fits (no cuts needed);
+    // else the frame cuts and swept cells, with the reason.
+    match layout_of(design, &plan)? {
+        Some(Ok(layout)) => {
+            plan.mesher = PlanMesher::Project;
+            plan.cuts.clear();
+            plan.notes.push(layout.summary());
+        }
+        Some(Err(why)) => plan.notes.push(format!("no projection layout ({why}): the frame cuts box the rings and the cells are swept")),
+        None => {}
+    }
+    plan.check()?;
     Ok(plan)
+}
+
+/// The block layout of `plan` for the projection mesher, when the plan has rings or blends
+/// (`None` when it has neither: the sweep meshes it); `Err` inside says why the body does not
+/// take one.
+fn layout_of(design: &Design, plan: &MeshPlan) -> Result<Option<std::result::Result<blocks::Layout, String>>> {
+    let blends: Vec<&PlanFeature> = plan.features.iter().filter(|f| f.template == "blend").collect();
+    if plan.rings.is_empty() && blends.is_empty() {
+        return Ok(None);
+    }
+    let Some(direction) = plan.direction else { return Ok(Some(Err("no sweep direction".into()))) };
+    let shape = design.source_body(&plan.body).ok_or_else(|| EngineError::Params(format!("no body `{}` in the design", plan.body)))?;
+    let surfaces = shape.face_surfaces()?;
+    let m = shape.measure()?;
+    let diagonal = (0..3).map(|k| (m.bbox_max[k] - m.bbox_min[k]).powi(2)).sum::<f64>().sqrt();
+    let mesh = shape.tessellate(plan.tolerance.unwrap_or(1e-3 * diagonal).max(1e-5 * diagonal))?;
+    let blend_faces = blends.iter().flat_map(|f| &f.faces).filter_map(|n| shape.face_index(n)).collect();
+    let shell = if plan.features.iter().any(|f| f.kind == "shell") {
+        design
+            .features(Some(&plan.body))?
+            .into_iter()
+            .flat_map(|b| b.features)
+            .filter(|f| f.kind == "shell")
+            .find_map(|f| f.values.get("thickness").copied())
+    } else {
+        None
+    };
+    let input = blocks::Input { shape, surfaces: &surfaces, mesh: &mesh, direction, rings: &plan.rings, blends: blend_faces, shell, size: plan.size };
+    Ok(Some(blocks::layout(&input)))
 }
 
 fn plan(s: &mut Session, p: &Value) -> Result<Value> {
@@ -996,6 +1047,9 @@ fn apply_one(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Value> {
             1e-3 * (0..3).map(|k| (b.bbox_max[k] - b.bbox_min[k]).powi(2)).sum::<f64>().sqrt()
         }
     };
+    if plan.mesher == PlanMesher::Project {
+        return apply_projection(s, name, plan, tolerance);
+    }
     let cuts: Vec<&PlanCut> = plan.cuts.iter().collect();
     let (cleared, made, skipped) = cut(s, name, &plan.body, &cuts, tolerance)?;
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
@@ -1049,6 +1103,61 @@ fn apply_one(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Value> {
     }
     if let Some(o) = reply.as_object_mut() {
         // Reported once for the whole command, by apply.
+        o.remove("results_cleared");
+    }
+    Ok(reply)
+}
+
+/// Carry out a plan whose mesher is projection blocking: its earlier partitions removed, one block
+/// layout over the whole body (rings, blend layer) projected and smoothed, the body's mesh
+/// replaced. No fallback: a layout that does not fit, or a mesh below the projection's quality
+/// floor, is the error.
+fn apply_projection(s: &mut Session, name: &str, plan: &MeshPlan, tolerance: f64) -> Result<Value> {
+    let (cleared, _, _) = cut(s, name, &plan.body, &[], tolerance)?;
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let layout = match layout_of(design, plan)? {
+        Some(Ok(l)) => l,
+        Some(Err(why)) => return Err(EngineError::Params(format!("mesh plan `{name}`: no projection layout for body `{}`: {why}", plan.body))),
+        None => return Err(EngineError::Params(format!("mesh plan `{name}`: projection blocking needs rings or blends; set the mesher to sweep"))),
+    };
+    let body = super::project::open_body(s, &plan.body, Some(tolerance), &json!({}))?;
+    let merge = super::project::merge_distance(None, body.diagonal())?;
+    let opts = fieldcraft_mesh::project::ProjectOptions { size: plan.size, ..Default::default() };
+    let mut mesh = super::project::project_body(s, &plan.body, body, &layout.topology, &opts, merge)
+        .map_err(|e| EngineError::Params(format!("mesh plan `{name}`: the projected layout does not mesh: {e}")))?;
+    if let Some(m) = mesh.as_object_mut() {
+        // The block listing is long; the plan reports the layout instead.
+        m.remove("topology");
+    }
+    let mut reply = json!({
+        "name": name,
+        "body": plan.body,
+        "mesher": "project",
+        "layout": layout.summary(),
+        "blend_layers": layout.layers.iter().map(|(side, depth, what)| json!({"side": side, "depth": depth, "for": what})).collect::<Vec<_>>(),
+        "cuts": [],
+        "skipped_cuts": [],
+        "cells": [plan.body],
+        "size": plan.size,
+        "tolerance": tolerance,
+        "blocks": mesh["blocks"],
+        "elements": mesh["elements"],
+        "min_scaled_jacobian": mesh["min_scaled_jacobian"],
+        "all_hex": true,
+        // One block topology, one mesh: every block face shared node to node.
+        "conforming": true,
+        "mapped": plan.features.iter().map(|f| json!({"id": f.id, "name": f.name, "type": f.kind, "template": f.template})).collect::<Vec<_>>(),
+        "pending": [],
+        "unmapped": plan.unmapped,
+        "mesh": mesh,
+    });
+    reply = cleared.report_if_any(s, reply);
+    if let Some(m) = reply.get_mut("mesh").and_then(Value::as_object_mut) {
+        let theirs = json!({"replaced": m.remove("replaced"), "stale_sets": m.remove("stale_sets")});
+        m.remove("results_cleared");
+        take_replaced(&mut reply, &theirs);
+    }
+    if let Some(o) = reply.as_object_mut() {
         o.remove("results_cleared");
     }
     Ok(reply)
@@ -1215,7 +1324,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plate_with_holes_is_a_block_with_o_grids_framed_by_cuts() {
+    fn a_plate_with_holes_is_one_block_layout_with_an_o_grid_round_each_hole() {
         let (_d, mut s) = open(json!([
             {"command": "solid.box", "params": {"length": 60, "width": 40, "height": 6, "body_name": "Plate"}},
             {"command": "solid.hole", "params": {"position": [15, 20, 6], "diameter": 8, "depth": 6}},
@@ -1224,7 +1333,6 @@ mod tests {
         let plan = s.execute("mesh.plan", &json!({"body": "Plate"})).unwrap();
         assert_eq!(templates(&plan), pairs(&[("box", "block"), ("hole", "o_grid"), ("hole", "o_grid")]));
         assert_eq!(plan["direction"], json!([0.0, 0.0, 1.0]));
-        assert_eq!(plan["mesher"], "cells");
         // Two O-grid rings, each projecting onto its hole's walls, framed short of the other hole.
         let rings = plan["rings"].as_array().unwrap();
         assert_eq!(rings.len(), 2, "{plan}");
@@ -1233,16 +1341,18 @@ mod tests {
             assert!(!r["faces"].as_array().unwrap().is_empty(), "{r}");
             assert!(r["frame"].as_f64().unwrap() > 4.0);
         }
-        // The cut between the holes, and the frames above and below them.
-        assert!(plan["cuts"].as_array().unwrap().iter().any(|c| c["point"][0] == 30.0 && c["normal"] == json!([1.0, 0.0, 0.0])), "{plan}");
+        // One block layout over the whole plate: no partition cuts.
+        assert_eq!((plan["mesher"].as_str(), plan.get("cuts")), (Some("project"), None), "{plan}");
         let r = apply(&mut s, &plan, 0.5);
-        assert!(r["cells"].as_array().unwrap().len() > 1, "{r}");
-        assert_eq!(r["pending"].as_array().unwrap().len(), 2, "{r}");
+        assert_eq!(r["cells"], json!(["Plate"]), "{r}");
+        assert_eq!(r["pending"], json!([]), "{r}");
+        // The ring nodes lie on the hole walls: the holes are round.
+        assert!(r["mesh"]["max_gap"].as_f64().unwrap() < 1e-6, "{r}");
         volume_matches(&mut s);
-        // Saved: applied again by name it replaces its cuts and mesh.
+        // Saved: applied again by name it replaces its mesh.
         let again = s.execute("mesh.plan.apply", &json!({"plan": "Plan-Plate"})).unwrap();
-        assert_eq!(again["cuts"], r["cuts"]);
-        assert_eq!(s.model.partitions().len(), r["cuts"].as_array().unwrap().len());
+        assert_eq!(again["elements"], r["elements"]);
+        assert!(s.model.partitions().is_empty());
         assert!(!again["replaced"].as_array().unwrap().is_empty(), "{again}");
     }
 
@@ -1266,7 +1376,7 @@ mod tests {
         let (_d, mut s) = open(json!([{"command": "solid.cylinder", "params": {"diameter": 20, "height": 30, "body_name": "Cyl"}}]));
         let plan = s.execute("mesh.plan", &json!({"body": "Cyl"})).unwrap();
         assert_eq!(templates(&plan), pairs(&[("cylinder", "butterfly")]));
-        assert_eq!((plan["mesher"].as_str(), plan.get("cuts")), (Some("sweep"), None));
+        assert_eq!((plan["mesher"].as_str(), plan.get("cuts")), (Some("project"), None));
         assert_eq!(plan["rings"][0]["kind"], "butterfly");
         assert_eq!(plan["rings"][0]["frame"], 5.0);
         apply(&mut s, &plan, 0.7);
@@ -1325,16 +1435,20 @@ mod tests {
     }
 
     #[test]
-    fn fillets_are_unmapped_with_the_reason_and_hostile_plans_are_refused() {
+    fn a_fillet_is_a_blend_layer_and_hostile_plans_are_refused() {
         let (_d, mut s) = open(json!([
             {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 20, "body_name": "B"}},
             {"command": "solid.fillet", "params": {"edges": [[20, 10, 20]], "radius": 2}},
         ]));
         let plan = s.execute("mesh.plan", &json!({"body": "B"})).unwrap();
-        let unmapped = plan["unmapped"].as_array().unwrap();
-        assert_eq!(unmapped.len(), 1, "{plan}");
-        assert_eq!(unmapped[0]["type"], "fillet");
-        assert!(unmapped[0]["reason"].as_str().unwrap().contains("step 3"), "{plan}");
+        assert_eq!(templates(&plan), pairs(&[("box", "block"), ("fillet", "blend")]));
+        assert_eq!(plan["mesher"], "project", "{plan}");
+        let r = apply(&mut s, &plan, 0.5);
+        // The layer along the filleted edge, on the two sides it runs between, at its radius.
+        let layers = r["blend_layers"].as_array().unwrap();
+        assert_eq!(layers.len(), 2, "{r}");
+        assert!(layers.iter().all(|l| (l["depth"].as_f64().unwrap() - 2.0).abs() < 1e-6), "{r}");
+        volume_matches(&mut s);
         let mut bad = plan.clone();
         bad["size"] = json!(-1.0);
         assert!(s.execute("mesh.plan.apply", &json!({"plan": bad})).is_err());
@@ -1377,5 +1491,93 @@ mod tests {
                 assert_eq!(mapped + unmapped, features.len(), "{name}/{body}: {plan}");
             }
         }
+    }
+}
+
+/// Acceptance of the projection layouts (#402 step 3): parts built the way enclosures are, each
+/// meshed all-hex from its plan alone, conforming, holes round.
+#[cfg(test)]
+mod acceptance {
+    use serde_json::{Value, json};
+
+    use super::tests_support::*;
+
+    #[test]
+    fn a_plate_with_four_holes_has_round_o_grid_rings() {
+        let (_d, mut s) = open(json!([
+            {"command": "solid.box", "params": {"length": 80, "width": 60, "height": 8, "body_name": "Plate"}},
+            {"command": "solid.hole", "params": {"position": [15, 15, 8], "diameter": 8, "depth": 8}},
+            {"command": "solid.hole", "params": {"position": [65, 15, 8], "diameter": 8, "depth": 8}},
+            {"command": "solid.hole", "params": {"position": [15, 45, 8], "diameter": 8, "depth": 8}},
+            {"command": "solid.hole", "params": {"position": [65, 45, 8], "diameter": 8, "depth": 8}},
+        ]));
+        let r = plan_and_apply(&mut s, "Plate");
+        assert!(r["layout"].as_str().unwrap().contains("4 circle(s) ringed"), "{r}");
+        accept(&mut s, &r, 0.5, 10.0);
+    }
+
+    #[test]
+    fn a_filleted_box_meshes_structured_round_its_corners() {
+        let (_d, mut s) = open(json!([
+            {"command": "solid.box", "params": {"length": 40, "width": 30, "height": 20, "body_name": "Box"}},
+            {"command": "solid.fillet", "params": {"edges": [[0, 0, 10], [40, 0, 10], [40, 30, 10], [0, 30, 10]], "radius": 4}},
+        ]));
+        let r = plan_and_apply(&mut s, "Box");
+        assert_eq!(r["blend_layers"].as_array().unwrap().len(), 4, "{r}");
+        accept(&mut s, &r, 0.5, 10.0);
+    }
+
+    #[test]
+    fn a_box_filleted_on_every_edge_takes_a_blend_layer_on_every_side() {
+        let recipe: Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/corpus/rounded-box/recipe.json")).unwrap(),
+        )
+        .unwrap();
+        let (_d, mut s) = open(recipe["commands"].clone());
+        let r = plan_and_apply(&mut s, "Box");
+        assert_eq!(r["blend_layers"].as_array().unwrap().len(), 6, "{r}");
+        accept(&mut s, &r, 0.5, 10.0);
+    }
+}
+
+/// What the plan tests share.
+#[cfg(test)]
+mod tests_support {
+    use serde_json::{Value, json};
+
+    use crate::Session;
+
+    pub(super) fn open(commands: Value) -> (crate::tests::TempDir, Session) {
+        let bytes = fieldcraft_geometry::script_design(&json!({"commands": commands}).to_string()).unwrap();
+        let (dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        (dir, s)
+    }
+
+    /// Plan `body` (it must take the projection layout) and apply the plan.
+    pub(super) fn plan_and_apply(s: &mut Session, body: &str) -> Value {
+        let plan = s.execute("mesh.plan", &json!({"body": body})).unwrap();
+        assert_eq!(plan["mesher"], "project", "{plan}");
+        assert!(plan["unmapped"].as_array().is_none_or(Vec::is_empty), "{plan}");
+        s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap()
+    }
+
+    /// All hex, one conforming mesh on the geometry, the volume the body's, no element below
+    /// `min_sj` or above `max_edge_ratio`, no free faces inside.
+    pub(super) fn accept(s: &mut Session, r: &Value, min_sj: f64, max_edge_ratio: f64) {
+        assert_eq!((r["all_hex"].as_bool(), r["conforming"].as_bool()), (Some(true), Some(true)), "{r}");
+        let q = s.execute("mesh.quality", &json!({})).unwrap();
+        let sj = q["metrics"]["scaled_jacobian"]["min"].as_f64().unwrap();
+        let er = q["metrics"]["edge_ratio"]["max"].as_f64().unwrap();
+        assert!(sj >= min_sj, "min scaled Jacobian {sj}: {q}");
+        assert!(er <= max_edge_ratio, "max edge ratio {er}: {q}");
+        assert!(r["mesh"]["max_gap"].as_f64().unwrap() < 0.05, "boundary nodes off the geometry: {r}");
+        let bodies = s.execute("geometry.bodies", &json!({})).unwrap();
+        let geometry: f64 = bodies.as_array().unwrap().iter().map(|b| b["volume"].as_f64().unwrap()).sum();
+        let mesh = q["volume"].as_f64().unwrap();
+        assert!((mesh - geometry).abs() < 0.01 * geometry, "mesh volume {mesh} vs {geometry}");
+        let dup = s.execute("mesh.check.duplicates", &json!({})).unwrap();
+        assert_eq!((dup["counts"]["coincident"].as_u64(), dup["counts"]["cracks"].as_u64()), (Some(0), Some(0)), "{dup}");
     }
 }

@@ -1,0 +1,589 @@
+//! The plan's block topology for the projection blocking mesher (#402 step 3, #399): the
+//! translation of a mesh plan into one block topology over the whole body, so the rings round
+//! its circles and the blend layer along its fillets, chamfers and shell walls come out of one
+//! conforming mesh (no partitions, no ties, one division count per sheet of blocks).
+//!
+//! The body is read in a frame whose third axis is the plan's sweep direction (a principal axis):
+//! - **Grid.** The planes of the body's planar faces square to each axis (its sides, a shell's
+//!   inner walls and floor, a boss's top, a blind hole's bottom) and the frames round its
+//!   circles make a grid of blocks over the body.
+//! - **Rings.** The frame cell round each circle (concentric circles together) is O-gridded
+//!   through every level, square inside square: the frame, then a square with its corners at
+//!   45° on each circle, then a core. Corners on a circle sit on it before projection, so the
+//!   ring's radial block edges meet the cylinder square on.
+//! - **Blend layer.** A side of the body a fillet or chamfer runs along, or that a shell's wall
+//!   stands on, gets a layer of blocks between the grid (on the body shrunk by the blend's
+//!   depth or the wall's thickness) and the side, one block per boundary face of the grid, the
+//!   layer's vertices pushed out square to every side they lie on: diagonally at an edge and a
+//!   corner. Projected, a corner vertex lands on the fillet (or chamfer) at its middle, so the
+//!   two blocks meeting there share the blend's 180° as two right angles; on a shell's inner
+//!   corner, as three 120°-ish ones. The layer's depth is the blend's measured depth (its
+//!   stored radius or distance) or the wall's thickness; its divisions follow the element size.
+//! - **Carving.** Every block whose middle lies outside the body (a cavity, the space round a
+//!   boss, a hole's core) is removed, by the generalized winding number of the body's
+//!   tessellation (solid angles, Van Oosterom and Strackee 1983).
+//!
+//! The projection mesher then projects the outer block faces onto the body's faces (each the
+//! smooth group nearest it) and smooths the grid. Parallel block edges share one division count
+//! across the whole topology, so neighbouring blocks always match: no shear bands, no ties.
+//!
+//! A body this layout does not fit (a face at an angle to the axes that is not a chamfer, a
+//! curved face that is neither a circle's cylinder nor a blend, two circles in one frame) is
+//! reported with the reason; the plan then keeps its frame cuts and swept cells.
+
+use fieldcraft_geometry::{FaceSurface, Shape, SurfaceMesh};
+use fieldcraft_mesh::project::Topology;
+use fieldcraft_model::{PlanRing, RingKind};
+
+type V3 = [f64; 3];
+
+/// Most blocks a plan's layout makes before carving.
+const MAX_LAYOUT_BLOCKS: usize = 20_000;
+/// Most triangles the winding number classification sums over per point.
+const MAX_CLASSIFY_TRIANGLES: usize = 400_000;
+
+/// A body's block layout.
+#[derive(Debug, Clone)]
+pub(crate) struct Layout {
+    pub(crate) topology: Topology,
+    /// Circles ringed (concentric ones each).
+    pub(crate) rings: usize,
+    /// The sides with a blend layer: (side, depth, what).
+    pub(crate) layers: Vec<(String, f64, &'static str)>,
+    /// Grid planes per axis of the frame (across, across, along the sweep).
+    pub(crate) planes: [usize; 3],
+}
+
+impl Layout {
+    pub(crate) fn summary(&self) -> String {
+        let layers: Vec<String> = self.layers.iter().map(|(s, d, w)| format!("{s} {d:.4} mm ({w})")).collect();
+        format!(
+            "projection blocking: {} blocks over a {}×{}×{} grid, {} circle(s) ringed{}",
+            self.topology.blocks.len(),
+            self.planes[0].saturating_sub(1),
+            self.planes[1].saturating_sub(1),
+            self.planes[2].saturating_sub(1),
+            self.rings,
+            if layers.is_empty() { String::new() } else { format!(", a blend layer on {}", layers.join(", ")) }
+        )
+    }
+}
+
+/// What the layout reads.
+pub(crate) struct Input<'a> {
+    pub(crate) shape: &'a Shape,
+    pub(crate) surfaces: &'a [Option<FaceSurface>],
+    pub(crate) mesh: &'a SurfaceMesh,
+    pub(crate) direction: V3,
+    pub(crate) rings: &'a [PlanRing],
+    /// The faces fillets and chamfers made (indices on `shape`).
+    pub(crate) blends: Vec<u32>,
+    /// A shell's wall thickness.
+    pub(crate) shell: Option<f64>,
+    pub(crate) size: f64,
+}
+
+/// The local frame: local axis `a` is world axis `PERM[k][a]`, `k` the sweep's world axis (a
+/// cyclic permutation, so blocks keep their handedness).
+const PERM: [[usize; 3]; 3] = [[1, 2, 0], [2, 0, 1], [0, 1, 2]];
+
+const SIDE_NAMES: [[&str; 2]; 3] = [["-x", "+x"], ["-y", "+y"], ["-z", "+z"]];
+
+fn dot(a: V3, b: V3) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn sub(a: V3, b: V3) -> V3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn norm(a: V3) -> f64 {
+    dot(a, a).sqrt()
+}
+
+fn cross(a: V3, b: V3) -> V3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// Twice the solid angle triangle `a b c` subtends at the origin, signed (Van Oosterom and
+/// Strackee 1983: tan(Ω/2) = a·(b×c) / (|a||b||c| + (a·b)|c| + (a·c)|b| + (b·c)|a|)).
+fn solid_angle(a: V3, b: V3, c: V3) -> f64 {
+    let (la, lb, lc) = (norm(a), norm(b), norm(c));
+    let num = dot(a, cross(b, c));
+    let den = la * lb * lc + dot(a, b) * lc + dot(a, c) * lb + dot(b, c) * la;
+    2.0 * num.atan2(den)
+}
+
+/// The generalized winding number of the closed surface `mesh` at `p`: 1 inside, 0 outside.
+fn winding(mesh: &SurfaceMesh, p: V3) -> f64 {
+    let at = |i: u32| mesh.positions.get(i as usize).map(|q| sub(*q, p));
+    let mut sum = 0.0;
+    for t in mesh.triangles.iter().take(MAX_CLASSIFY_TRIANGLES) {
+        if let (Some(a), Some(b), Some(c)) = (at(t[0]), at(t[1]), at(t[2])) {
+            sum += solid_angle(a, b, c);
+        }
+    }
+    sum / (4.0 * std::f64::consts::PI)
+}
+
+/// A circle's axis point and radius in the local frame, with its kind.
+#[derive(Debug, Clone, Copy)]
+struct Circle {
+    c: [f64; 2],
+    r: f64,
+    kind: RingKind,
+}
+
+/// Concentric circles framed together: radii descending.
+#[derive(Debug, Clone)]
+struct Group {
+    c: [f64; 2],
+    circles: Vec<Circle>,
+    /// The frame's extent per local axis (0, 1): [low, high].
+    frame: [[f64; 2]; 2],
+}
+
+/// Plan the block topology of the body.
+// Axes index several per-axis arrays at once (planes, frames, layers).
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
+    let d = inp.direction;
+    let k = (0..3).find(|&k| (d[k].abs() - 1.0).abs() < 1e-9).ok_or("the sweep direction is not along an axis")?;
+    let perm = PERM[k];
+    let local = |p: V3| -> V3 { [p[perm[0]], p[perm[1]], p[perm[2]]] };
+    let world = |l: V3| -> V3 {
+        let mut w = [0.0; 3];
+        for a in 0..3 {
+            w[perm[a]] = l[a];
+        }
+        w
+    };
+    if inp.mesh.triangles.is_empty() || inp.mesh.triangles.len() > MAX_CLASSIFY_TRIANGLES {
+        return Err(format!("the body's tessellation has {} triangles", inp.mesh.triangles.len()));
+    }
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    let mut face_points: Vec<Vec<V3>> = vec![Vec::new(); inp.surfaces.len()];
+    for (t, &f) in inp.mesh.triangles.iter().zip(&inp.mesh.tri_face) {
+        for &i in t {
+            let Some(p) = inp.mesh.positions.get(i as usize).map(|p| local(*p)) else { continue };
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+            if let Some(list) = face_points.get_mut(f as usize) {
+                list.push(p);
+            }
+        }
+    }
+    let diag = norm(sub(hi, lo));
+    if !(diag.is_finite() && diag > 0.0) {
+        return Err("the body has no extent".into());
+    }
+    let eps = 1e-6 * diag;
+    let name = |f: usize| inp.shape.faces().get(f).map_or_else(|| format!("#{f}"), |x| x.name.clone());
+
+    // Circles: the plan's rings along the sweep, in the local frame.
+    let mut circles: Vec<Circle> = Vec::new();
+    for r in inp.rings {
+        if (dot(r.axis, d).abs() - 1.0).abs() > 1e-6 {
+            return Err(format!("the ring of F{} is not square to the sweep", r.feature));
+        }
+        let c = local(r.center);
+        circles.push(Circle { c: [c[0], c[1]], r: r.radius, kind: r.kind });
+    }
+    let on_circle = |origin: V3, radius: f64| {
+        let o = local(origin);
+        circles.iter().any(|c| (c.r - radius).abs() < 1e-6 * radius.max(1.0) && (c.c[0] - o[0]).hypot(c.c[1] - o[1]) < 1e-6 * radius.max(1.0))
+    };
+
+    // The faces: planes square to an axis (with their outward sign), the circles' cylinders, and
+    // the blends; anything else is not this layout's.
+    let mut planes_on: [Vec<(f64, f64)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let mut blend_faces: Vec<usize> = Vec::new();
+    for (f, s) in inp.surfaces.iter().enumerate() {
+        let blend = inp.blends.contains(&(f as u32));
+        match s {
+            Some(FaceSurface::Plane { normal, point }) => {
+                let n = local(*normal);
+                match (0..3).find(|&a| (n[a].abs() - 1.0).abs() < 1e-6) {
+                    Some(a) => planes_on[a].push((local(*point)[a], n[a].signum())),
+                    None if blend => blend_faces.push(f),
+                    None => return Err(format!("face `{}` is a plane at an angle to the axes", name(f))),
+                }
+            }
+            Some(FaceSurface::Cylinder { origin, axis, radius }) if !blend => {
+                if !((dot(*axis, d).abs() - 1.0).abs() < 1e-6 && on_circle(*origin, *radius)) {
+                    return Err(format!("face `{}` is a cylinder that is not one of the plan's rings", name(f)));
+                }
+            }
+            _ if blend => blend_faces.push(f),
+            _ => return Err(format!("face `{}` is curved and neither a ring's cylinder nor a fillet's", name(f))),
+        }
+    }
+
+    // The blend layer: per side, the depth of the blends along it, or the shell's wall.
+    let mut ring = [[0.0f64; 2]; 3];
+    let mut what = [[""; 2]; 3];
+    for &f in &blend_faces {
+        let pts = face_points.get(f).map_or(&[][..], Vec::as_slice);
+        if pts.is_empty() {
+            continue;
+        }
+        let mut touched = false;
+        for a in 0..3 {
+            for s in 0..2 {
+                let depth = pts.iter().map(|p| if s == 0 { p[a] - lo[a] } else { hi[a] - p[a] }).fold(0.0f64, f64::max);
+                if depth < 0.45 * (hi[a] - lo[a]) {
+                    touched = true;
+                    if depth > ring[a][s] {
+                        ring[a][s] = depth;
+                        what[a][s] = "blend";
+                    }
+                }
+            }
+        }
+        if !touched {
+            return Err(format!("the blend face `{}` does not run along a side of the body", name(f)));
+        }
+    }
+    if let Some(t) = inp.shell.filter(|t| t.is_finite() && *t > 0.0) {
+        // A wall: the inner face of the shell, `t` inside the side and facing away from it.
+        for a in 0..3 {
+            for s in 0..2 {
+                let at = if s == 0 { lo[a] + t } else { hi[a] - t };
+                let inward = if s == 0 { 1.0 } else { -1.0 };
+                if planes_on[a].iter().any(|(v, sign)| (v - at).abs() < 1e-4 * t.max(1.0) && *sign == inward) {
+                    ring[a][s] = t;
+                    what[a][s] = "shell wall";
+                }
+            }
+        }
+    }
+    let ilo: V3 = std::array::from_fn(|a| lo[a] + ring[a][0]);
+    let ihi: V3 = std::array::from_fn(|a| hi[a] - ring[a][1]);
+    if (0..3).any(|a| !(ihi[a] - ilo[a] > eps)) {
+        return Err("the blend layers leave no room inside the body".into());
+    }
+
+    // The fixed planes per axis: faces square to it (a side with a layer moves in by its depth).
+    let mut fixed: [Vec<f64>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for a in 0..3 {
+        for &(v, _) in &planes_on[a] {
+            let v = if ring[a][0] > 0.0 && (v - lo[a]).abs() < eps {
+                ilo[a]
+            } else if ring[a][1] > 0.0 && (v - hi[a]).abs() < eps {
+                ihi[a]
+            } else {
+                v
+            };
+            if v < ilo[a] - eps || v > ihi[a] + eps {
+                return Err(format!("a face square to {} lies inside the blend layer", SIDE_NAMES[perm[a]][0].trim_start_matches('-')));
+            }
+            fixed[a].push(v);
+        }
+        if ring[a][0] > 0.0 {
+            fixed[a].push(ilo[a]);
+        }
+        if ring[a][1] > 0.0 {
+            fixed[a].push(ihi[a]);
+        }
+        fixed[a].sort_by(f64::total_cmp);
+        fixed[a].dedup_by(|x, y| (*x - *y).abs() < eps);
+    }
+
+    // Circles, concentric ones grouped, and their frames.
+    let mut groups: Vec<Group> = Vec::new();
+    for c in &circles {
+        match groups.iter_mut().find(|g| (g.c[0] - c.c[0]).hypot(g.c[1] - c.c[1]) < 1e-6 * c.r.max(1.0)) {
+            Some(g) => {
+                if !g.circles.iter().any(|x| (x.r - c.r).abs() < 1e-6 * c.r.max(1.0)) {
+                    g.circles.push(*c);
+                }
+            }
+            None => groups.push(Group { c: c.c, circles: vec![*c], frame: [[0.0; 2]; 2] }),
+        }
+    }
+    let snap = (0.3 * inp.size).min(0.25 * circles.iter().map(|c| c.r).fold(f64::INFINITY, f64::min));
+    for g in &mut groups {
+        g.circles.sort_by(|a, b| b.r.total_cmp(&a.r));
+        let outer = g.circles.first().copied().ok_or("an empty circle group")?;
+        let r0 = outer.r;
+        for a in 0..2 {
+            let c = g.c[a];
+            if fixed[a].iter().any(|v| (v - c).abs() < r0 - eps) {
+                return Err(format!("a face of the body runs through the circle of radius {r0:.4}"));
+            }
+            for s in 0..2 {
+                let h = match outer.kind {
+                    RingKind::Butterfly => r0 / 2f64.sqrt(),
+                    RingKind::OGrid => {
+                        let dist = fixed[a].iter().map(|v| if s == 0 { c - v } else { v - c }).filter(|x| *x > 0.0).fold(f64::INFINITY, f64::min);
+                        if !dist.is_finite() {
+                            return Err(format!("the hole of radius {r0:.4} has no side of the body round it"));
+                        }
+                        if dist < 1.05 * r0 {
+                            return Err(format!("the hole of radius {r0:.4} is {dist:.4} mm from a face: too close for a ring"));
+                        }
+                        // The side itself frames the ring when a strip narrower than the radius
+                        // would be left between them.
+                        if dist <= 3.0 * r0 + eps { dist } else { 2.0 * r0 }
+                    }
+                };
+                if outer.kind == RingKind::Butterfly && fixed[a].iter().any(|v| (v - c).abs() < h - eps) {
+                    return Err(format!("a face of the body runs through the square inside the circle of radius {r0:.4}"));
+                }
+                g.frame[a][s] = if s == 0 { c - h } else { c + h };
+            }
+        }
+    }
+    // Frames that overlap along an axis share their planes there (a plane may not cut another
+    // frame); two frames that overlap along both are one cell, which the layout does not take.
+    for _ in 0..=groups.len() * groups.len() {
+        let mut changed = false;
+        for a in 0..2 {
+            for i in 0..groups.len() {
+                for j in 0..groups.len() {
+                    if i == j {
+                        continue;
+                    }
+                    let (fi, fj) = (groups[i].frame[a], groups[j].frame[a]);
+                    let overlap = fi[0] < fj[1] - eps && fj[0] < fi[1] - eps;
+                    let same = (fi[0] - fj[0]).abs() < eps && (fi[1] - fj[1]).abs() < eps;
+                    if overlap && !same {
+                        let u = [fi[0].min(fj[0]), fi[1].max(fj[1])];
+                        groups[i].frame[a] = u;
+                        groups[j].frame[a] = u;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for (i, g) in groups.iter().enumerate() {
+        for h in groups.iter().skip(i + 1) {
+            if (0..2).all(|a| g.frame[a][0] < h.frame[a][1] - eps && h.frame[a][0] < g.frame[a][1] - eps) {
+                return Err(format!(
+                    "the circles at ({:.4}, {:.4}) and ({:.4}, {:.4}) are too close for a frame each",
+                    g.c[0], g.c[1], h.c[0], h.c[1]
+                ));
+            }
+        }
+    }
+    // The planes: the fixed ones and the frames, a frame within `snap` of another plane moved
+    // onto it (a fixed plane wins).
+    let mut planes: [Vec<f64>; 3] = fixed.clone();
+    for a in 0..2 {
+        for g in &mut groups {
+            for s in 0..2 {
+                let v = g.frame[a][s];
+                let near = fixed[a].iter().copied().filter(|p| (p - v).abs() < snap).min_by(|p, q| (p - v).abs().total_cmp(&(q - v).abs()));
+                let v = match near {
+                    Some(p) => p,
+                    None => planes[a].iter().copied().find(|p| (p - v).abs() < snap).unwrap_or(v),
+                };
+                g.frame[a][s] = v;
+                planes[a].push(v);
+            }
+        }
+        planes[a].sort_by(f64::total_cmp);
+        planes[a].dedup_by(|x, y| (*x - *y).abs() < eps);
+    }
+    for g in &groups {
+        for a in 0..2 {
+            let r0 = g.circles.first().map_or(0.0, |c| c.r);
+            if !(g.frame[a][0] < g.c[a] - 0.7 * r0 && g.frame[a][1] > g.c[a] + 0.7 * r0) {
+                return Err(format!("the frame round the circle of radius {r0:.4} does not hold it"));
+            }
+            if planes[a].iter().any(|p| *p > g.frame[a][0] + eps && *p < g.frame[a][1] - eps) {
+                return Err(format!("a plane of the body runs through the frame round the circle of radius {r0:.4}"));
+            }
+        }
+    }
+    if planes.iter().any(|p| p.len() < 2) {
+        return Err("the body has no planar sides or circles to lay a grid between".into());
+    }
+    let n = planes.each_ref().map(|p| p.len() - 1);
+    if n.iter().product::<usize>() * (1 + 4 * circles.len()) > MAX_LAYOUT_BLOCKS {
+        return Err(format!("a grid of {n:?} cells is too large for one layout"));
+    }
+
+    // The grid, in the local frame; each block's point that says whether it is material.
+    let mut t = Topology::grid([&planes[0], &planes[1], &planes[2]]).map_err(|e| e.to_string())?;
+    let mid = |p: &[f64], i: usize| 0.5 * (p[i] + p[i + 1]);
+    let mut probe: Vec<V3> = t
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(b, _)| [mid(&planes[0], b % n[0]), mid(&planes[1], (b / n[0]) % n[1]), mid(&planes[2], b / (n[0] * n[1]))])
+        .collect();
+    let index = |p: &[f64], v: f64| p.iter().position(|x| (x - v).abs() < eps);
+    let mut rings = 0;
+    for g in &groups {
+        let (Some(i0), Some(j0)) = (index(&planes[0], g.frame[0][0]), index(&planes[1], g.frame[1][0])) else {
+            return Err("a frame lost its planes".into());
+        };
+        // The squares inside the frame: one per circle (corners at 45° on it), then the core.
+        // Each: half-sides [-u, +u, -v, +v] and the radius it stands for per side.
+        let mut squares: Vec<([f64; 4], [f64; 4])> = Vec::new();
+        let fr = [g.c[0] - g.frame[0][0], g.frame[0][1] - g.c[0], g.c[1] - g.frame[1][0], g.frame[1][1] - g.c[1]];
+        squares.push((fr, fr));
+        for c in &g.circles {
+            let h = c.r / 2f64.sqrt();
+            if squares.last().is_some_and(|(s, _)| s.iter().all(|x| (x - h).abs() < eps)) {
+                continue;
+            }
+            squares.push(([h; 4], [c.r; 4]));
+        }
+        rings += g.circles.len();
+        let inner = g.circles.last().map_or(0.0, |c| c.r);
+        squares.push(([inner / (2.0 * 2f64.sqrt()); 4], [0.0; 4]));
+        if squares.windows(2).any(|w| (0..4).any(|i| !(w[1].0[i] < w[0].0[i] - eps))) {
+            return Err(format!("the frame round the circle of radius {:.4} is too tight for its ring", g.circles.first().map_or(0.0, |c| c.r)));
+        }
+        for w in 0..n[2] {
+            let cell = (w * n[1] + j0) * n[0] + i0;
+            let zmid = mid(&planes[2], w);
+            for pair in squares.windows(2) {
+                let ((_, outer_rho), (half, inner_rho)) = (pair[0], pair[1]);
+                let first = t.blocks.len();
+                t.o_grid(cell, &[1, 2], [0.5; 3]).map_err(|e| e.to_string())?;
+                let corners = t.blocks.get(cell).copied().ok_or("an O-grid lost its block")?;
+                for (bits, v) in [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0], [1, 0], [1, 1], [0, 1]].iter().zip(corners) {
+                    if let Some(p) = t.vertices.get_mut(v as usize) {
+                        p[0] = if bits[0] == 0 { g.c[0] - half[0] } else { g.c[0] + half[1] };
+                        p[1] = if bits[1] == 0 { g.c[1] - half[2] } else { g.c[1] + half[3] };
+                    }
+                }
+                // The four blocks round it, in the O-grid's order: -v, +u, +v, -u.
+                for (q, (dir, side)) in [([0.0, -1.0], 2), ([1.0, 0.0], 1), ([0.0, 1.0], 3), ([-1.0, 0.0], 0)].into_iter().enumerate() {
+                    let rho = 0.5 * (outer_rho[side] + inner_rho[side]);
+                    if first + q < t.blocks.len() {
+                        probe.push([g.c[0] + dir[0] * rho, g.c[1] + dir[1] * rho, zmid]);
+                    }
+                }
+                if let Some(p) = probe.get_mut(cell) {
+                    *p = [g.c[0], g.c[1], zmid];
+                }
+            }
+        }
+    }
+    if probe.len() != t.blocks.len() {
+        return Err("the layout lost track of its blocks".into());
+    }
+    t.merge(eps);
+
+    // The blend layer: a block on every boundary face of the grid on a side with a layer.
+    let mut uses: std::collections::BTreeMap<[u32; 4], usize> = std::collections::BTreeMap::new();
+    for block in &t.blocks {
+        for f in hex_faces(block) {
+            let mut key = f;
+            key.sort_unstable();
+            *uses.entry(key).or_insert(0) += 1;
+        }
+    }
+    let mut moved: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    let original = t.blocks.len();
+    for b in 0..original {
+        let Some(block) = t.blocks.get(b).copied() else { continue };
+        for f in hex_faces(&block) {
+            let mut key = f;
+            key.sort_unstable();
+            if uses.get(&key) != Some(&1) {
+                continue;
+            }
+            let pts = f.map(|v| t.vertices.get(v as usize).copied().unwrap_or_default());
+            let side = (0..3).flat_map(|a| [(a, 0), (a, 1)]).find(|&(a, s)| {
+                let plane = if s == 0 { ilo[a] } else { ihi[a] };
+                ring[a][s] > 0.0 && pts.iter().all(|p| (p[a] - plane).abs() < eps)
+            });
+            let Some((a, s)) = side else { continue };
+            let mut outer = [0u32; 4];
+            for (o, &v) in outer.iter_mut().zip(&f) {
+                *o = match moved.get(&v) {
+                    Some(&w) => w,
+                    None => {
+                        let p = t.vertices.get(v as usize).copied().unwrap_or_default();
+                        let mut q = p;
+                        for aa in 0..3 {
+                            if ring[aa][0] > 0.0 && (p[aa] - ilo[aa]).abs() < eps {
+                                q[aa] -= ring[aa][0];
+                            }
+                            if ring[aa][1] > 0.0 && (p[aa] - ihi[aa]).abs() < eps {
+                                q[aa] += ring[aa][1];
+                            }
+                        }
+                        let w = t.vertices.len() as u32;
+                        t.vertices.push(q);
+                        moved.insert(v, w);
+                        w
+                    }
+                };
+            }
+            let mut nb = [f[0], f[1], f[2], f[3], outer[0], outer[1], outer[2], outer[3]];
+            let at = |v: u32| t.vertices.get(v as usize).copied().unwrap_or_default();
+            if corner_det(&nb.map(at)) < 0.0 {
+                nb = [f[0], f[3], f[2], f[1], outer[0], outer[3], outer[2], outer[1]];
+            }
+            let centre = pts.iter().fold([0.0; 3], |acc, p| [acc[0] + p[0] / 4.0, acc[1] + p[1] / 4.0, acc[2] + p[2] / 4.0]);
+            let mut pr = centre;
+            pr[a] += if s == 0 { -0.5 * ring[a][s] } else { 0.5 * ring[a][s] };
+            t.blocks.push(nb);
+            probe.push(pr);
+        }
+    }
+    if t.blocks.len() > MAX_LAYOUT_BLOCKS {
+        return Err(format!("{} blocks: too many for one layout", t.blocks.len()));
+    }
+
+    // Carve: blocks whose probe lies outside the body.
+    let gone: Vec<usize> = probe.iter().enumerate().filter(|(_, p)| winding(inp.mesh, world(**p)) < 0.5).map(|(b, _)| b).collect();
+    if gone.len() == t.blocks.len() {
+        return Err("every block of the layout lies outside the body".into());
+    }
+    if !gone.is_empty() {
+        t.remove(&gone).map_err(|e| e.to_string())?;
+    }
+    for v in &mut t.vertices {
+        *v = world(*v);
+    }
+    t.check().map_err(|e| format!("the layout's blocks do not fit: {e}"))?;
+    let layers = (0..3)
+        .flat_map(|a| [(a, 0), (a, 1)])
+        .filter(|&(a, s)| ring[a][s] > 0.0)
+        .map(|(a, s)| (SIDE_NAMES[perm[a]][s].to_string(), ring[a][s], what[a][s]))
+        .collect();
+    Ok(Layout { topology: t, rings, layers, planes: planes.each_ref().map(Vec::len) })
+}
+
+/// The six faces of a hex8 block, as corner cycles.
+fn hex_faces(b: &[u32; 8]) -> [[u32; 4]; 6] {
+    [
+        [b[0], b[1], b[2], b[3]],
+        [b[4], b[5], b[6], b[7]],
+        [b[0], b[1], b[5], b[4]],
+        [b[1], b[2], b[6], b[5]],
+        [b[2], b[3], b[7], b[6]],
+        [b[3], b[0], b[4], b[7]],
+    ]
+}
+
+/// The Jacobian determinant at corner 1 of a hex8 block (positive: right-handed).
+fn corner_det(c: &[V3; 8]) -> f64 {
+    dot(sub(c[1], c[0]), cross(sub(c[3], c[0]), sub(c[4], c[0])))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn winding_of_a_cube_is_one_inside_and_zero_outside() {
+        let shape = fieldcraft_geometry::block([0.0; 3], [2.0, 2.0, 2.0]).unwrap();
+        let mesh = shape.tessellate(0.01).unwrap();
+        assert!((winding(&mesh, [1.0, 1.0, 1.0]) - 1.0).abs() < 1e-6);
+        assert!(winding(&mesh, [3.0, 1.0, 1.0]).abs() < 1e-6);
+    }
+}

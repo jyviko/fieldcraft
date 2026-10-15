@@ -40,6 +40,7 @@ pub mod results;
 pub mod results_panel;
 pub mod scene;
 pub mod selection;
+pub mod setup;
 pub mod theme;
 pub mod timeline;
 pub mod titlebar;
@@ -85,6 +86,8 @@ pub struct UiState {
     pub show_tree: bool,
     /// The journal timeline (bottom).
     pub show_timeline: bool,
+    /// The setup checklist at the top of the browser (remembered per user).
+    pub show_setup: bool,
     /// The workspace shown, and its toolbar tab.
     pub workspace: Workspace,
     pub tab: Tab,
@@ -108,6 +111,7 @@ impl Default for UiState {
             dark: true,
             show_tree: true,
             show_timeline: true,
+            show_setup: true,
             workspace: Workspace::default(),
             tab: Tab::default(),
             palette: false,
@@ -341,6 +345,10 @@ pub struct ModelApp {
     pub services: files::Services,
     /// Recently opened and saved files.
     pub recent: files::Recent,
+    /// The user's preferences as last saved.
+    prefs: files::Prefs,
+    /// The setup checklist and what it was worked out for.
+    setup: (Option<(u64, u64, bool, bool)>, std::sync::Arc<Vec<fieldcraft_engine::progress::StageState>>),
     /// The file opening in the background, and files waiting to open after it.
     pub loading: Option<files::Loading>,
     pub queued: std::collections::VecDeque<String>,
@@ -416,6 +424,8 @@ impl ModelApp {
             quit_requested: false,
             services: files::Services::default(),
             recent: files::Recent::default(),
+            prefs: files::Prefs::default(),
+            setup: (None, std::sync::Arc::default()),
             loading: None,
             queued: std::collections::VecDeque::new(),
             prompt: None,
@@ -449,6 +459,8 @@ impl ModelApp {
     /// Use the host's services (file pickers, the recent-files file) and load the recent list.
     pub fn with_services(mut self, services: files::Services) -> Self {
         self.recent = files::Recent::load(services.recent_path.clone());
+        self.prefs = files::Prefs::load(services.prefs_path.as_deref());
+        self.ui.show_setup = self.prefs.show_setup;
         self.services = services;
         self
     }
@@ -1242,11 +1254,31 @@ impl ModelApp {
             browser::browser(self, ui);
         }
         context::panel(self, ui);
+        self.save_prefs();
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| viewport::show(self, ui));
         palette::popup(self, ui.ctx());
         files::show(self, ui.ctx());
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
+        }
+    }
+
+    /// The setup checklist ([`fieldcraft_engine::progress`]), worked out again only when the model
+    /// or its results change.
+    pub fn setup_stages(&mut self) -> std::sync::Arc<Vec<fieldcraft_engine::progress::StageState>> {
+        use fieldcraft_engine::requirement::Requirement;
+        let key = (self.revision, self.session.revision(), Requirement::Result.met(&self.session), Requirement::ResultsShown.met(&self.session));
+        if self.setup.0 != Some(key) {
+            self.setup = (Some(key), std::sync::Arc::new(self.session.progress()));
+        }
+        self.setup.1.clone()
+    }
+
+    /// Save the preferences the window changed (a View menu toggle, `ui.set`).
+    pub(crate) fn save_prefs(&mut self) {
+        if self.ui.show_setup != self.prefs.show_setup {
+            self.prefs.show_setup = self.ui.show_setup;
+            self.prefs.save(self.services.prefs_path.as_deref());
         }
     }
 

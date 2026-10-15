@@ -535,6 +535,7 @@ fn nav_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
             ui.checkbox(&mut app.ui.show_interactions, "Interactions");
             ui.separator();
             ui.checkbox(&mut app.ui.show_tree, "Browser");
+            ui.checkbox(&mut app.ui.show_setup, "Setup checklist");
             ui.checkbox(&mut app.ui.show_timeline, "Timeline");
         });
     }

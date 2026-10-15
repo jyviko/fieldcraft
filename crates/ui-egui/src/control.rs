@@ -585,6 +585,30 @@ mod tests {
         }
     }
 
+    /// The setup checklist shows once there is something to set up, and a click on its next
+    /// stage opens that stage's form (#74).
+    #[test]
+    fn a_setup_stage_click_starts_its_command() {
+        let mut app = ModelApp::new(Session::default());
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx);
+        assert!(!app.layout.contains_key("setup"), "an empty model shows the Start card instead");
+        let cube = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
+        app.run("mesh.block", json!({"body": "B", "kind": "hex8", "corners": cube, "divisions": [1, 1, 1]})).unwrap();
+        frame(&mut app, &ctx);
+        let at = app.layout[crate::setup::region(fieldcraft_engine::progress::Stage::Material)].center();
+        call_in(&mut app, &ctx, "ui.click", json!({"x": at.x, "y": at.y}));
+        for _ in 0..4 {
+            frame(&mut app, &ctx);
+        }
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("model.material.create"));
+        // Hidden from the View menu (or `ui.set`), it stays hidden.
+        assert_eq!(call_in(&mut app, &ctx, "ui.set", json!({"show_setup": false}))["ok"], true);
+        app.layout.clear();
+        frame(&mut app, &ctx);
+        assert!(!app.layout.contains_key("setup"));
+    }
+
     /// The cantilever's free end (x = 100), looked at from +x: picked by a simulated click and
     /// by `ui.select`, made into a set through the set form's Target row, and resolved.
     #[test]

@@ -42,6 +42,8 @@ pub struct Services {
     pub pick_save: Option<PickSave>,
     /// The recent-files list's file (JSON); `None` keeps the list for this run only.
     pub recent_path: Option<PathBuf>,
+    /// The user's preferences file (JSON, [`Prefs`]); `None` keeps them for this run only.
+    pub prefs_path: Option<PathBuf>,
 }
 
 const MODEL: Filter = Filter { name: "FieldCraft model", extensions: &["fieldcraft"] };
@@ -160,6 +162,47 @@ impl Recent {
         };
         if let Err(e) = write() {
             log::warn!("recent files {}: {e}", file.display());
+        }
+    }
+}
+
+/// Largest preferences file read.
+const MAX_PREFS_BYTES: u64 = 64 * 1024;
+
+/// What the window remembers for the user between runs.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Prefs {
+    /// The setup checklist at the top of the browser ([`crate::setup`]).
+    pub show_setup: bool,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs { show_setup: true }
+    }
+}
+
+impl Prefs {
+    /// The preferences kept in `file` (an unreadable or malformed file gives the defaults).
+    pub fn load(file: Option<&Path>) -> Prefs {
+        file.filter(|f| std::fs::metadata(f).is_ok_and(|m| m.is_file() && m.len() <= MAX_PREFS_BYTES))
+            .and_then(|f| std::fs::read(f).ok())
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// Write them to `file`; a failure is logged (the preferences stay for this run).
+    pub fn save(&self, file: Option<&Path>) {
+        let Some(file) = file else { return };
+        let write = || -> std::io::Result<()> {
+            if let Some(dir) = file.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(file, serde_json::to_vec_pretty(self).unwrap_or_default())
+        };
+        if let Err(e) = write() {
+            log::warn!("preferences {}: {e}", file.display());
         }
     }
 }
@@ -960,6 +1003,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Hiding the setup checklist is remembered in the preferences file; a missing or
+    /// malformed file gives the defaults.
+    #[test]
+    fn hiding_the_setup_checklist_is_remembered() {
+        let file = temp("prefs").join("prefs.json");
+        assert!(Prefs::load(Some(&file)).show_setup);
+        let services = || Services { prefs_path: Some(file.clone()), ..Default::default() };
+        let mut app = ModelApp::new(Session::default()).with_services(services());
+        app.ui.show_setup = false;
+        app.save_prefs();
+        let again = ModelApp::new(Session::default()).with_services(services());
+        assert!(!again.ui.show_setup);
+        std::fs::write(&file, b"{nope").unwrap();
+        assert_eq!(Prefs::load(Some(&file)), Prefs::default());
     }
 
     /// A picker that answers `path` and records the filters it was offered.

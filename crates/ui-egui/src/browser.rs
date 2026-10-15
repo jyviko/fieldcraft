@@ -320,6 +320,7 @@ pub fn browser(app: &mut ModelApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(6, 6)))
         .show(ui, |ui| {
             app.place("browser", ui.max_rect());
+            crate::setup::card(app, ui);
             ui.label(RichText::new("BROWSER").font(crate::theme::label_font(ui.ctx(), 10.5)).color(t.text_dim));
             ui.add_space(4.0);
             egui::ScrollArea::vertical().id_salt("fc_browser_scroll").auto_shrink([false, false]).show(ui, |ui| {

@@ -65,8 +65,10 @@ history; `solve.probe` with `points` gives the velocity and pressure in any cell
 blocks by 17 %, held between 1 and 3.5 (a flat plate broadside to the flow is about 1.2 at high
 Reynolds number and rises as it falls); the lattice's mass changes by less than 1 %.
 
-There is no picture yet: the viewport does not draw flow results (velocity slices and
-streamlines are planned in M12), so this example is numbers only for now.
+![The L-bracket the air flows past, as the sample opens](media/examples/flow-past.png)
+
+The picture shows the bracket only: the viewport does not draw flow results yet (velocity
+slices and streamlines are planned in M12), so the results are numbers for now.
 
 ## Heated bracket (`heated-bracket`)
 
@@ -163,3 +165,26 @@ M/Z = 1500 · 141 / (16 · 35.6² / 6) = 62.6 MPa (0.25 %); a 41 815-element tet
 full part gives 62.3 MPa. The pedal bore moves 0.75 mm down (tet10: 0.70–0.75 mm; Euler–Bernoulli
 with a rigid clamp: 0.58 mm, without shear or the boss's compliance), and the spindle carries the
 whole 1500 N and 255 N·m.
+
+## Cantilever (`cantilever`)
+
+![Von Mises stress on the clamped steel beam under its end load, highest at the clamped root](media/examples/cantilever.png)
+
+A steel beam of 160 hex8 elements, clamped at one end with a load on the other: a static step
+and a frequency step. **Look at:** the bending stress, highest at the clamped root, and the
+Modes step's mode shapes.
+
+## Bar impact (`impact`)
+
+![Von Mises stress in the steel beam at the end of its impact on the rigid wall](media/examples/impact.png)
+
+The same beam flying onto a rigid wall: an explicit dynamic step of ten frames. **Look at:** the
+stress wave running back along the bar (Results ▸ Frame) and the energy history in the Results
+panel.
+
+## Hex and tet parts (`parts`)
+
+![A hex8 block beside a tet4 cube](media/examples/parts.png)
+
+A hex8 block beside a tet4 cube: meshes to look at (element types, nodes, picking), nothing to
+solve.

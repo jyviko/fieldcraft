@@ -19,6 +19,10 @@ const THUMBNAILS: &[(&str, &[u8])] = &[
     ("rubber-seal", include_bytes!("../thumbnails/rubber-seal.png")),
     ("heated-bracket", include_bytes!("../thumbnails/heated-bracket.png")),
     ("bracket-hex", include_bytes!("../thumbnails/bracket-hex.png")),
+    ("flow-past", include_bytes!("../thumbnails/flow-past.png")),
+    ("cantilever", include_bytes!("../thumbnails/cantilever.png")),
+    ("impact", include_bytes!("../thumbnails/impact.png")),
+    ("parts", include_bytes!("../thumbnails/parts.png")),
 ];
 
 /// The thumbnails' aspect ratio (height over width).
@@ -164,12 +168,15 @@ mod tests {
         assert_eq!(names.first(), Some(&"crank-arm"));
     }
 
-    /// Every flagship name and every thumbnail names a registered sample, and every thumbnail
-    /// decodes at 320 px wide.
+    /// Every flagship name and every thumbnail names a registered sample, every sample has a
+    /// thumbnail (#294), and every thumbnail decodes at 320 px wide.
     #[test]
     fn thumbnails_and_flagship_names_are_registered_samples() {
         for name in FLAGSHIP.iter().chain(THUMBNAILS.iter().map(|(n, _)| n)) {
             assert!(fieldcraft_engine::sample::find(name).is_some(), "{name}");
+        }
+        for s in SAMPLES {
+            assert!(THUMBNAILS.iter().any(|(n, _)| *n == s.name), "{} has no thumbnail", s.name);
         }
         for (name, bytes) in THUMBNAILS {
             let image = decode(bytes).unwrap_or_else(|| panic!("{name} does not decode"));

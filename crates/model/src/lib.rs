@@ -110,6 +110,10 @@ pub enum Error {
     /// A definition cannot be deleted while another refers to it.
     #[error("in use: {0}")]
     InUse(String),
+    /// The command was cancelled while it ran ([`progress::Progress::cancel`]); it left
+    /// nothing behind.
+    #[error("cancelled")]
+    Cancelled,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -366,6 +370,7 @@ pub(crate) fn context(what: &str, name: &str, e: Error) -> Error {
         Error::NotFound(m) => Error::NotFound(format!("{what} `{shown}`: {m}")),
         Error::Limit(m) => Error::Limit(format!("{what} `{shown}`: {m}")),
         Error::InUse(m) => Error::InUse(format!("{what} `{shown}`: {m}")),
+        Error::Cancelled => Error::Cancelled,
     }
 }
 

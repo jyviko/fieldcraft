@@ -9,8 +9,15 @@
 //!
 //! The reporter is per thread: work handed to a thread pool installs the caller's
 //! ([`current`]) inside it if it reports from there. Reporting never changes a result.
+//!
+//! The same [`Progress`] carries the host's request to stop ([`Progress::cancel`]): the long
+//! loops of the solvers and meshers ask [`check`] at their natural points (an increment, a time
+//! step, a refinement round, a supernode) and return [`crate::Error::Cancelled`] once it is
+//! set. Cancellation is cooperative: the work stops at the next such point, and the caller
+//! discards what it was building, so a cancelled command changes nothing.
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -76,6 +83,7 @@ fn number(x: f64) -> String {
 #[derive(Debug, Default)]
 pub struct Progress {
     state: Mutex<State>,
+    cancelled: AtomicBool,
 }
 
 impl Progress {
@@ -86,6 +94,22 @@ impl Progress {
     /// The state now (the default if a reporter panicked while holding it).
     pub fn snapshot(&self) -> State {
         self.state.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    /// Ask the command to stop at its next check ([`check`]); from any thread.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether [`Progress::cancel`] was called.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+
+    /// `Err(Cancelled)` once cancelled: for work on a thread that does not report (a thread
+    /// pool's), which holds the caller's [`Progress`] from [`current`].
+    pub fn check(&self) -> crate::Result<()> {
+        if self.is_cancelled() { Err(crate::Error::Cancelled) } else { Ok(()) }
     }
 
     fn update(&self, f: impl FnOnce(&mut State)) {
@@ -150,6 +174,12 @@ pub fn count(done: f64) {
     with(|p| p.update(|s| s.done = done));
 }
 
+/// `Err(Cancelled)` when this thread's command was cancelled; `Ok` with no [`Progress`]
+/// installed.
+pub fn check() -> crate::Result<()> {
+    CURRENT.with(|c| c.borrow().as_ref().map_or(Ok(()), |p| p.check()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +200,18 @@ mod tests {
         // Nothing installed: nothing reported, nothing panics.
         count(5.0);
         assert_eq!(p.snapshot().done, 3.0);
+    }
+
+    #[test]
+    fn check_fails_once_cancelled() {
+        assert_eq!(check(), Ok(()));
+        let p = Progress::new();
+        scoped(Some(p.clone()), || {
+            assert_eq!(check(), Ok(()));
+            p.cancel();
+            assert_eq!(check(), Err(crate::Error::Cancelled));
+        });
+        // Not this thread's command any more.
+        assert_eq!(check(), Ok(()));
     }
 }

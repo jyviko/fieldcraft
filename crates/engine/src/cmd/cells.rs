@@ -371,6 +371,27 @@ mod tests {
         assert_eq!(s.model.ties().len(), 1);
     }
 
+    /// The half crank arm (cut on its symmetry plane only) has no cell that maps or sweeps as
+    /// the design gives it; the extrusion decomposes its cross-section into blocks itself, alike
+    /// through mesh.hex.generate (auto) and mesh.cells, with no seeds.
+    #[test]
+    fn the_half_crank_extrudes_in_blocks_without_partitions() {
+        let bytes = fieldcraft_geometry::script_design(crate::sample::CRANK_ARM).unwrap();
+        let (_dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        s.execute("geometry.datum", &json!({"name": "Sym", "by": {"type": "offset", "plane": "zx", "offset": 0}})).unwrap();
+        s.execute("geometry.partition", &json!({"name": "Half", "datum": "Sym"})).unwrap();
+        let r = s.execute("mesh.hex.generate", &json!({"body": "CrankArm/a", "size": 3})).unwrap();
+        let body = &r["bodies"][0];
+        assert_eq!(body["method"], "extrude", "{r}");
+        assert!(body["description"].as_str().unwrap().contains(" 0 free)"), "{r}");
+        assert!(body["quality"]["min_scaled_jacobian"].as_f64().unwrap() >= 0.37, "{r}");
+        let r = s.execute("mesh.cells", &json!({"bodies": ["CrankArm/a"], "default": "extrude", "size": 3})).unwrap();
+        assert_eq!(r["cells"][0]["method"], "extrude", "{r}");
+        assert_eq!(r["elements"], body["elements"], "{r}");
+    }
+
     #[test]
     fn auto_falls_back_to_tet_and_says_why() {
         let (_dir, mut s) = cut_plate();

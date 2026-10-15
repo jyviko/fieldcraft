@@ -156,10 +156,10 @@ impl Local {
         self.keeps_above(before, QUALITY_FLOOR)
     }
 
-    /// Whether this grid is better than `other`: a larger smallest scaled Jacobian, or the same
-    /// and a smaller largest edge ratio.
-    fn beats(self, other: Local) -> bool {
-        if (self.sj - other.sj).abs() <= SAME_QUALITY { self.ratio < other.ratio } else { self.sj > other.sj }
+    /// Whether this grid is no worse than `other`: its smallest scaled Jacobian at least as
+    /// large, and its largest edge ratio no larger unless within [`EDGE_RATIO_CEILING`].
+    fn holds(self, other: Local) -> bool {
+        self.sj >= other.sj - SAME_QUALITY && self.ratio <= other.ratio.max(EDGE_RATIO_CEILING)
     }
 
     /// [`Local::keeps`] with the scaled Jacobian's floor at `floor`.
@@ -317,23 +317,23 @@ fn mesh_quality(x: &[P], hexes: &[[u32; 8]]) -> Local {
 /// The sweeps let a move take an element down to [`SWEEP_FLOOR`] (a sheared block straightens
 /// only when its nodes move together, and a node-by-node rule that never lowers a poor element
 /// stalls halfway), and the compass search then lifts the worst elements. When that does not
-/// beat the grid it started from, smoothing starts again with sweeps that never lower an element
-/// below [`QUALITY_FLOOR`]; and when neither beats it, the grid stays as it was. A grid beats
-/// another when its smallest scaled Jacobian is larger, or the same with a smaller largest edge
-/// ratio, so smoothing never leaves the mesh worse than it found it (a regular grid of graded
-/// layers, which Laplace's equation would even out, is kept).
+/// hold the grid it started from (a smaller smallest scaled Jacobian, or a larger edge ratio
+/// past [`EDGE_RATIO_CEILING`]), smoothing starts again with sweeps that never lower an element
+/// below [`QUALITY_FLOOR`]; and when neither holds it, the grid stays as it was. So smoothing never
+/// leaves the mesh worse than it found it (a regular grid of graded layers, which Laplace's
+/// equation would even out, is kept).
 pub(crate) fn smooth(m: Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing, iterations: usize, tol: f64) -> SmoothReport {
     let start = m.nodes.clone();
     let before = mesh_quality(&start, m.hexes);
     let mut m = m;
     let mut report = pass(&mut m, g, targets, method, iterations, tol, SWEEP_FLOOR);
-    if mesh_quality(m.nodes, m.hexes).beats(before) {
+    if mesh_quality(m.nodes, m.hexes).holds(before) {
         return report;
     }
     m.nodes.clone_from(&start);
     let strict = pass(&mut m, g, targets, method, iterations, tol, QUALITY_FLOOR);
     report = SmoothReport { iterations: report.iterations + strict.iterations, refused: report.refused + strict.refused };
-    if !mesh_quality(m.nodes, m.hexes).beats(before) {
+    if !mesh_quality(m.nodes, m.hexes).holds(before) {
         *m.nodes = start;
     }
     report

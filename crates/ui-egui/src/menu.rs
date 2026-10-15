@@ -45,6 +45,8 @@ pub enum Action {
     Edit,
     /// Rename a definition (`model.rename`'s form, filled in).
     Rename,
+    /// Suppress a datum or partition, or bring it back.
+    Suppress(bool),
     Hide,
     Show,
     Isolate,
@@ -81,6 +83,14 @@ pub fn show(app: &ModelApp, ui: &mut egui::Ui, target: &Target) -> Option<Action
         entry(ui, edit.is_some(), "Edit…", &tip, Action::Edit);
         if def.rename_kind().is_some() {
             entry(ui, true, "Rename…", "model.rename: every definition that refers to it follows", Action::Rename);
+        }
+        if let Some((command, suppressed)) = suppression(app, *def, name) {
+            let (label, tip) = if suppressed {
+                ("Unsuppress", format!("{command} {{\"suppressed\": false}}: back in the model"))
+            } else {
+                ("Suppress", format!("{command}: keep it, but leave it out of the model"))
+            };
+            entry(ui, true, label, &tip, Action::Suppress(!suppressed));
         }
     }
     if let Target::Seed(_) = target {
@@ -157,6 +167,13 @@ pub fn apply(app: &mut ModelApp, target: Target, action: Action) {
             }
             Ok(Value::Null)
         }
+        Action::Suppress(on) => match &target {
+            Target::Def(def, name) => match suppression(app, *def, name) {
+                Some((command, _)) => app.run(command, json!({"name": name, "suppressed": on})),
+                None => Ok(Value::Null),
+            },
+            _ => Ok(Value::Null),
+        },
         Action::Hide => app.run("view.hide", items(&target)),
         Action::Show => app.run("view.show", items(&target)),
         Action::Isolate => app.run("view.isolate", items(&target)),
@@ -177,6 +194,17 @@ pub fn apply(app: &mut ModelApp, target: Target, action: Action) {
             Target::Body(_) | Target::Surface(_) => Ok(Value::Null),
         },
     };
+}
+
+/// The command that suppresses `name` of `kind` (a datum or a partition), and whether it is
+/// suppressed now.
+fn suppression(app: &ModelApp, kind: Def, name: &str) -> Option<(&'static str, bool)> {
+    let model = &app.session.model;
+    match kind {
+        Def::Datum => Some(("geometry.datum.suppress", model.datum_suppressed(name))),
+        Def::Partition => Some(("geometry.partition.suppress", model.partitions().iter().find(|p| p.name == name)?.suppressed)),
+        _ => None,
+    }
 }
 
 /// `mesh.seed.edge`'s parameters that make `seed` as it is: its edit form, filled in.
@@ -309,6 +337,31 @@ mod tests {
         assert_eq!(app.selected, Some((Def::Datum, "Centre".to_string())));
         assert_eq!(app.session.model.partitions()[0].datum, "Centre");
         assert!(Def::Partition.rename_kind().is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Suppress and Unsuppress on a partition's and a datum's menu run their suppress commands:
+    /// the cells merge back and come again; a suppressed datum is not drawn (#291).
+    #[test]
+    fn suppress_from_the_menu_merges_the_cells_back() {
+        let (mut app, dir) = plate();
+        let bodies = |app: &ModelApp| app.session.design.as_ref().map_or(0, |d| d.bodies.len());
+        assert_eq!(bodies(&app), 2);
+        apply(&mut app, Target::Def(Def::Partition, "Half".into()), Action::Suppress(true));
+        assert_eq!(bodies(&app), 1, "{:?}", app.status);
+        assert_eq!(suppression(&app, Def::Partition, "Half"), Some(("geometry.partition.suppress", true)));
+        apply(&mut app, Target::Def(Def::Partition, "Half".into()), Action::Suppress(false));
+        assert_eq!(bodies(&app), 2);
+        apply(&mut app, Target::Def(Def::Datum, "Mid".into()), Action::Suppress(true));
+        assert_eq!(bodies(&app), 1);
+        let drawn = |app: &mut ModelApp| {
+            let b = app.display().bounds;
+            let mut s = fieldcraft_render::Scene::default();
+            fieldcraft_render::glyphs::datums(&app.session.model, &b, &|_| true, None, &crate::theme::Tokens::dark().glyph_colors(), &mut s);
+            s.labels.into_iter().map(|l| l.text).collect::<Vec<_>>()
+        };
+        assert_eq!(drawn(&mut app), ["P"], "the suppressed plane is not drawn");
+        assert_eq!(suppression(&app, Def::Set, "x"), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

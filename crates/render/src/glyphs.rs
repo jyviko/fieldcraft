@@ -973,7 +973,9 @@ pub fn datums(
 ) -> Aabb3 {
     let mut d = Draw { scene, bounds: Aabb3::EMPTY, color: colors.datum, width: OUTLINE_WIDTH, on_top: false };
     let diagonal = if bounds.is_empty() { 1.0 } else { bounds.diagonal().max(1e-9) };
-    for (name, datum) in model.datums().iter().filter(|(n, _)| shown(n) || highlight == Some(n.as_str())) {
+    // A suppressed datum is out of the model: drawn only while selected in the browser.
+    let drawn = |n: &String| (shown(n) && !model.datum_suppressed(n)) || highlight == Some(n.as_str());
+    for (name, datum) in model.datums().iter().filter(|(n, _)| drawn(n)) {
         let picked = highlight == Some(name.as_str());
         let color = if picked { colors.highlight } else { colors.datum };
         let outline = if picked { HIGHLIGHT_WIDTH } else { OUTLINE_WIDTH };

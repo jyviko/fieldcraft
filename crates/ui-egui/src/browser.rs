@@ -888,12 +888,17 @@ fn rows(app: &mut ModelApp, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
                 "point" => "geometry.datum.point",
                 _ => "geometry.datum",
             };
-            let row = Row { depth: 2, icon: Some(icon), label: n, note: Some((*kind).into()), ..Default::default() };
+            let off = app.session.model.datum_suppressed(n);
+            let note = if off { format!("{kind} · suppressed") } else { (*kind).into() };
+            let row = Row { depth: 2, icon: Some(icon), label: n, note: Some(note), dim: off, ..Default::default() };
             item_row(app, ui, egui::Id::new(("fc_row_datum", i)), row, Target::Def(Def::Datum, n.clone()), acts);
         }
-        let partitions: Vec<(String, String)> = app.session.model.partitions().iter().map(|p| (p.name.clone(), p.datum.clone())).collect();
-        for (i, (n, datum)) in partitions.iter().enumerate() {
-            let row = Row { depth: 2, icon: Some("geometry.partition"), label: n, note: Some(format!("by {datum}")), ..Default::default() };
+        let model = &app.session.model;
+        let partitions: Vec<(String, String, bool)> =
+            model.partitions().iter().map(|p| (p.name.clone(), p.datum.clone(), !model.partition_cuts(p))).collect();
+        for (i, (n, datum, off)) in partitions.iter().enumerate() {
+            let note = if *off { format!("by {datum} · suppressed") } else { format!("by {datum}") };
+            let row = Row { depth: 2, icon: Some("geometry.partition"), label: n, note: Some(note), dim: *off, ..Default::default() };
             item_row(app, ui, egui::Id::new(("fc_row_partition", i)), row, Target::Def(Def::Partition, n.clone()), acts);
         }
     }

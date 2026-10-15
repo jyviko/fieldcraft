@@ -384,6 +384,8 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             let action = match (s("action"), s("step")) {
                 (Some("edit"), _) => crate::menu::Action::Edit,
                 (Some("rename"), _) => crate::menu::Action::Rename,
+                (Some("suppress"), _) => crate::menu::Action::Suppress(true),
+                (Some("unsuppress"), _) => crate::menu::Action::Suppress(false),
                 (Some("hide"), _) => crate::menu::Action::Hide,
                 (Some("show"), _) => crate::menu::Action::Show,
                 (Some("isolate"), _) => crate::menu::Action::Isolate,
@@ -393,7 +395,9 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     crate::menu::Action::Active { step: step.to_string(), active: a == "activate" }
                 }
                 (a, _) => {
-                    return err(format!("`action` {a:?}: edit, rename, hide, show, isolate, show_all, delete, or activate/deactivate with `step`"));
+                    return err(format!(
+                        "`action` {a:?}: edit, rename, suppress, unsuppress, hide, show, isolate, show_all, delete, or activate/deactivate with `step`"
+                    ));
                 }
             };
             crate::menu::apply(app, target, action);

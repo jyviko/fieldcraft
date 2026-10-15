@@ -263,6 +263,9 @@ pub enum Prompt {
     Recover,
     /// The samples to open (`file.sample`).
     Samples,
+    /// A mesher's form would replace the mesh of bodies that have one: Replace runs it, Cancel
+    /// leaves the form open.
+    ReplaceMesh(fieldcraft_engine::Replacement),
     /// A design (its path) has none of the bodies the model's mesh and sets are on: start a new
     /// model with it, or keep the model. The opened session waits in [`ModelApp::held`].
     Design(String),
@@ -377,7 +380,29 @@ impl ModelApp {
     /// The form's OK: run its command, in the background for the meshers ([`BACKGROUND`]) so the
     /// window keeps drawing (with Cancel) while a large part meshes; the form closes when the
     /// command succeeds and shows the error when it fails.
+    /// A mesher that would replace a body's mesh asks first ([`Prompt::ReplaceMesh`]).
     pub fn submit_dialog(&mut self) {
+        let Ok((command, params)) = self.dialog_params() else { return };
+        if let Some(r) = fieldcraft_engine::replacement(&self.session, command, &params) {
+            self.prompt = Some(Prompt::ReplaceMesh(r));
+            return;
+        }
+        self.submit_now();
+    }
+
+    /// Answer [`Prompt::ReplaceMesh`]: run the form (replacing the mesh), or leave it open.
+    pub fn answer_replace_mesh(&mut self, replace: bool) {
+        if !matches!(self.prompt, Some(Prompt::ReplaceMesh(_))) {
+            return;
+        }
+        self.prompt = None;
+        if replace {
+            self.submit_now();
+        }
+    }
+
+    /// The form's OK once confirmed.
+    fn submit_now(&mut self) {
         let Some(command) = self.dialog.as_ref().map(|d| d.command) else { return };
         if !BACKGROUND.contains(&command) {
             let _ = self.run_dialog();
@@ -843,6 +868,32 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                 app.answer_design(a);
             }
         }
+        Some(Prompt::ReplaceMesh(r)) => {
+            let mut answer = None;
+            crate::frame::window(ctx, "Replace mesh", crate::frame::Width::Normal).id(egui::Id::new("fc_replace_mesh")).show(ctx, |ui| {
+                ui.label(&r.question);
+                for w in &r.warnings {
+                    ui.label(egui::RichText::new(w).color(t.text_dim));
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Replace").clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                answer = Some(false);
+            } else if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                answer = Some(true);
+            }
+            if let Some(replace) = answer {
+                app.answer_replace_mesh(replace);
+            }
+        }
         Some(Prompt::Recover) => {
             let entries = app.recover_list(ctx);
             let (mut recover, mut discard, mut discard_all, mut close) = (None, None, false, false);
@@ -1301,9 +1352,28 @@ mod tests {
         assert!(matches!(counts.as_slice(), [(fieldcraft_model::ElementKind::Tet4, n)] if *n > 0), "{counts:?}");
         assert_eq!(app.session.journal.len(), 2, "open and mesh, each an undo step");
 
+        // Meshing the meshed body again asks first (#267); Cancel keeps the form and the mesh.
+        app.start("mesh.tet.generate").unwrap();
+        app.submit_dialog();
+        let Some(Prompt::ReplaceMesh(r)) = app.prompt.clone() else { panic!("no question: {:?}", app.prompt) };
+        let tets = counts.first().map_or(0, |c| c.1);
+        assert!(r.question.starts_with("Body1 already has a mesh (") && r.question.ends_with(" tet4). Replace it?"), "{r:?}");
+        assert!(tets > 999 && r.question.contains(','), "thousands are separated: {r:?}");
+        assert!(app.busy().is_none());
+        app.answer_replace_mesh(false);
+        assert!(app.prompt.is_none() && app.dialog.is_some(), "Cancel leaves the form open");
+        assert_eq!(app.session.journal.len(), 2);
+        // Replace meshes it again, in place of the old mesh: as many tets, one undo step.
+        app.submit_dialog();
+        app.answer_replace_mesh(true);
+        app.wait_loaded();
+        assert!(app.dialog.is_none(), "{:?}", app.status);
+        assert_eq!(app.session.model.element_counts(), counts, "replaced, not stacked");
+
         // A plate with a hole is not one mapped block: the form stays with the reason.
         app.start("mesh.hex.mapped").unwrap();
         app.submit_dialog();
+        app.answer_replace_mesh(true);
         app.wait_loaded();
         let error = app.dialog.as_ref().and_then(|d| d.error.clone()).unwrap_or_default();
         assert!(error.contains("not a logical cube"), "{error}");

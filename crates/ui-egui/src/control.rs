@@ -199,6 +199,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 crate::files::Prompt::Recover => json!("recover"),
                 crate::files::Prompt::Samples => json!("samples"),
                 crate::files::Prompt::Design(p) => json!({"design": p}),
+                crate::files::Prompt::ReplaceMesh(r) => json!({"replace_mesh": r.question, "warnings": r.warnings}),
             }),
             "recent": app.recent.paths,
             "version": crate::VERSION,
@@ -293,6 +294,12 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             if b("run") {
                 return wrap(app.run_dialog());
             }
+            // The form's OK button, as a click runs it: a mesher that would replace a mesh asks
+            // first (`ui.inspect`'s `prompt`, answered with `ui.prompt`).
+            if b("submit") {
+                app.submit_dialog();
+                return ok(json!({"prompt": app.prompt.is_some(), "busy": app.busy()}));
+            }
             ok(json!(app.dialog.as_ref().map(|d| json!({"command": d.command, "text": d.text, "error": d.error}))))
         }
         "ui.prompt" => {
@@ -316,6 +323,10 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     app.answer_design(answer);
                     ok(json!({"busy": app.busy()}))
                 }
+                (crate::files::Prompt::ReplaceMesh(_), Some(a @ ("replace" | "cancel"))) => {
+                    app.answer_replace_mesh(a == "replace");
+                    ok(json!({"busy": app.busy()}))
+                }
                 (crate::files::Prompt::Samples, Some("open")) => match s("name") {
                     Some(name) => {
                         app.prompt = None;
@@ -336,7 +347,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     None => err("missing `id` (from file.recovery.list)"),
                 },
                 (_, a) => err(format!(
-                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; recover: recover with id, close; samples: open with name, close)"
+                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; replace_mesh: replace, cancel; recover: recover with id, close; samples: open with name, close)"
                 )),
             }
         }

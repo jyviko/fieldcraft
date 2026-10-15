@@ -8,7 +8,8 @@
 //! - files live in the page ([`fieldcraft_io::fs`] keeps them in memory): File › Open and drops
 //!   read the computer's files into it; Save, Save As and Write Deck hand the written file out as
 //!   a download;
-//! - autosaves for recovery are kept in the browser's local storage ([`storage`]);
+//! - autosaves for recovery and the preferences are kept in the browser's local storage
+//!   ([`storage`], [`usage`]), and anonymous usage (when agreed) goes out with `fetch`;
 //! - no control channel (a page can't listen on a socket);
 //! - background jobs (meshing, solving) run on the page's one thread once the window has shown
 //!   that they run.
@@ -19,6 +20,8 @@
 
 #[cfg(target_arch = "wasm32")]
 mod storage;
+#[cfg(target_arch = "wasm32")]
+mod usage;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

@@ -74,6 +74,7 @@ pub fn start() {
     fieldcraft_io::recovery::set_clock(|| js_sys::Date::now().max(0.0) as u64);
     let Some(window) = web_sys::window() else { return };
     ask_before_unload(&window);
+    crate::usage::send_when_hidden(&window);
     let Some(canvas) = element(CANVAS_ID).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok()) else {
         log::error!("missing <canvas id=\"{CANVAS_ID}\">");
         return;
@@ -86,6 +87,10 @@ pub fn start() {
                 Box::new(|cc| {
                     let inbox = Inbox::default();
                     let mut app = ModelApp::new(Session::default()).with_services(services(inbox.clone(), cc.egui_ctx.clone()));
+                    // Anonymous usage: asked once, recorded only when the user agreed (docs/privacy.md).
+                    if let Some(host) = crate::usage::host() {
+                        app = app.with_usage(host);
+                    }
                     if let Some(rs) = &cc.wgpu_render_state {
                         let info = rs.adapter.get_info();
                         log::info!("fieldcraft-web: graphics {:?} {}, MSAA {}x", info.backend, info.name, rs.msaa_samples);
@@ -102,7 +107,7 @@ pub fn start() {
                     if recoverable > 0 {
                         app.set_status(format!("{recoverable} autosaved model(s) can be recovered: File › Recover…"), false);
                     }
-                    Ok(Box::new(Shell { app, inbox, store, autosaver, autosaved_at: 0.0, storage_error: false }))
+                    Ok(Box::new(Shell { app, inbox, store, autosaver, autosaved_at: 0.0, storage_error: false, sent_at: 0.0 }))
                 }),
             )
             .await;
@@ -188,8 +193,8 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
         pick_save: Some(Box::new(|name: &str, _: &[Filter]| Some(page_path(name)))),
         // The recent list holds the page's files, which go with the page.
         recent_path: None,
-        // Preferences last for the page's run.
-        prefs_path: None,
+        // Preferences are kept in the browser's local storage.
+        prefs: Some(crate::usage::prefs_store()),
         // egui opens links itself in the browser.
         open_url: None,
     }
@@ -206,6 +211,8 @@ struct Shell {
     autosaved_at: f64,
     /// The last autosave did not fit in the browser's storage (said once until one fits).
     storage_error: bool,
+    /// App time usage events were last sent.
+    sent_at: f64,
 }
 
 impl Shell {
@@ -271,6 +278,10 @@ impl eframe::App for Shell {
         self.open_arrived();
         self.app.logic(ctx);
         self.autosave(ctx);
+        if self.app.now - self.sent_at >= crate::usage::INTERVAL {
+            self.sent_at = self.app.now;
+            crate::usage::send();
+        }
         UNSAVED.with(|u| u.set(self.app.session.is_dirty() && !self.app.session.journal.is_empty()));
     }
 

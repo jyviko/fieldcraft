@@ -117,6 +117,76 @@ impl AnalyticSurface {
         out.iter().all(|x| x.is_finite()).then_some(out)
     }
 
+    /// Move a point of the surface by the displacement `d` in the surface's own parameters (UV):
+    /// `p` is first put on the surface, `d` is resolved into the parameter steps along the
+    /// surface's coordinate directions there (the tangential part of `d`; the normal part is
+    /// dropped), and the surface is evaluated at the new parameters, so the result lies exactly
+    /// on the surface. Parameters are local to `p` (angles measured from it), so the chart has no
+    /// seam. A plane translates in its own plane; a cylinder, cone and torus turn about their
+    /// axis (and a torus round its tube) by the arc length over the radius; a sphere follows the
+    /// great circle in the direction of `d`. Angular steps are kept within half a turn. `None`
+    /// where the parameters are singular (on an axis, at an apex) or the data is not finite.
+    pub fn slide(&self, p: P, d: P) -> Option<P> {
+        let q = self.project(p)?;
+        let rotate = |r: P, t: P, angle: f64| {
+            let (s, c) = sin_cos(angle.clamp(-std::f64::consts::PI, std::f64::consts::PI));
+            add(scale(r, c), scale(t, s))
+        };
+        let out = match *self {
+            AnalyticSurface::Plane { normal, .. } => {
+                let n = unit(normal)?;
+                add(q, sub(d, scale(n, dot(d, n))))
+            }
+            AnalyticSurface::Cylinder { origin, axis, radius } => {
+                let a = unit(axis)?;
+                let foot = add(origin, scale(a, dot(sub(q, origin), a)));
+                let r = unit(sub(q, foot))?;
+                let t = cross(a, r);
+                let radial = rotate(r, t, dot(d, t) / radius);
+                add(add(foot, scale(a, dot(d, a))), scale(radial, radius))
+            }
+            AnalyticSurface::Sphere { center, radius } => {
+                let r = unit(sub(q, center))?;
+                let tangent = sub(d, scale(r, dot(d, r)));
+                let Some(t) = unit(tangent) else { return Some(q) };
+                add(center, scale(rotate(r, t, norm(tangent) / radius), radius))
+            }
+            AnalyticSurface::Cone { apex, axis, half_angle } => {
+                let a = unit(axis)?;
+                let g0 = sub(q, apex);
+                let along = norm(g0);
+                let g = unit(g0)?;
+                let r = unit(sub(g0, scale(a, dot(g0, a))))?;
+                let t = cross(a, r);
+                let rho = norm(sub(g0, scale(a, dot(g0, a))));
+                let s = along + dot(d, g);
+                if !(s > 0.0 && rho > 0.0) {
+                    return None;
+                }
+                let r2 = rotate(r, t, dot(d, t) / rho);
+                let (sa, ca) = sin_cos(half_angle);
+                add(apex, scale(add(scale(a, ca), scale(r2, sa)), s))
+            }
+            AnalyticSurface::Torus { center, axis, major, minor } => {
+                let a = unit(axis)?;
+                let c = sub(q, center);
+                let radial = sub(c, scale(a, dot(c, a)));
+                let rho = norm(radial);
+                let r = unit(radial)?;
+                let ring = add(center, scale(r, major));
+                let m = unit(sub(q, ring))?;
+                let around = cross(a, r);
+                let tube = cross(around, m);
+                // Round the tube, then about the axis.
+                let m2 = rotate(m, tube, dot(d, tube) / minor);
+                let r2 = rotate(r, around, dot(d, around) / rho.max(f64::MIN_POSITIVE));
+                let m3 = add(scale(r2, dot(m2, r)), scale(a, dot(m2, a)));
+                add(add(center, scale(r2, major)), scale(m3, minor))
+            }
+        };
+        out.iter().all(|x| x.is_finite()).then_some(out)
+    }
+
     /// The unit normal (up to sign) at a point on the surface, if defined there.
     pub fn normal_at(&self, q: P) -> Option<P> {
         let n = match *self {
@@ -474,6 +544,31 @@ impl BoundaryGeometry for Tessellation {
 }
 
 impl Tessellation {
+    /// Move a point of face `face` by the displacement `d` and keep it on the face: through the
+    /// face's own parameters ([`AnalyticSurface::slide`]) when its exact surface is known and the
+    /// result stays near the face's triangles (not on another part of the surface), else by
+    /// projecting `p + d` onto the face's triangles (free-form faces: accurate to the
+    /// tessellation's chordal tolerance, as [`BoundaryGeometry::project_face`]).
+    pub fn slide_face(&self, face: u32, p: P, d: P) -> Option<P> {
+        let target = add(p, d);
+        let (near, scale_len) = self.on_tessellation(face, target)?;
+        if let Some(q) = self.analytic(face).and_then(|s| s.slide(p, d)) {
+            let tol = (0.5 * scale_len).max(2.0 * measure::dist(target, near));
+            if measure::dist(q, near) <= tol {
+                return Some(q);
+            }
+        }
+        self.project_face(face, target)
+    }
+
+    /// Move a point of the feature curve between faces `faces` by `d` and keep it on the curve
+    /// (the curve's closest point to `p + d`: the move along the curve's parameter).
+    pub fn slide_curve(&self, faces: [u32; 2], p: P, d: P) -> Option<P> {
+        self.project_curve(faces, add(p, d))
+    }
+}
+
+impl Tessellation {
     /// The local thickness at each vertex: the distance to the nearest triangle facing it from
     /// across the solid (a triangle that does not touch the vertex and whose outward normal
     /// points back against the vertex's, by more than 120°). Infinite where nothing faces it.
@@ -736,5 +831,37 @@ mod tests {
         assert!((mid - 3.0).abs() < 0.8, "{mid}");
         assert_eq!(far, 10.0);
         assert!(f.size([f64::NAN, 0.0, 0.0]) > 0.0);
+    }
+
+    /// A slide in UV keeps the point exactly on every kind of surface, moves it by the tangential
+    /// part of the displacement (to first order), and turns a cylinder point by arc / radius.
+    #[test]
+    fn slides_stay_on_the_surface() {
+        let surfaces = [
+            AnalyticSurface::Plane { normal: [0.0, 0.0, 1.0], point: [0.0, 0.0, 2.0] },
+            AnalyticSurface::Cylinder { origin: [0.0; 3], axis: [0.0, 0.0, 1.0], radius: 3.0 },
+            AnalyticSurface::Sphere { center: [1.0, 0.0, 0.0], radius: 2.0 },
+            AnalyticSurface::Cone { apex: [0.0; 3], axis: [0.0, 0.0, 1.0], half_angle: 0.4 },
+            AnalyticSurface::Torus { center: [0.0; 3], axis: [0.0, 0.0, 1.0], major: 5.0, minor: 1.0 },
+        ];
+        let probe = [2.5, 1.5, 2.2];
+        for s in surfaces {
+            let q = s.project(probe).unwrap();
+            for d in [[0.01, 0.0, 0.0], [0.0, 0.02, 0.0], [0.0, 0.0, -0.015], [0.3, -0.2, 0.1]] {
+                let moved = s.slide(q, d).unwrap();
+                let back = s.project(moved).unwrap();
+                assert!(measure::dist(moved, back) < 1e-12, "{s:?} {d:?}: {moved:?} off by {}", measure::dist(moved, back));
+                let n = s.normal_at(q).unwrap();
+                let tangential = sub(d, scale(n, dot(d, n)));
+                if norm(d) < 0.05 {
+                    assert!(measure::dist(moved, add(q, tangential)) < 0.05 * norm(d) + 1e-12, "{s:?} {d:?}");
+                }
+            }
+        }
+        let cyl = AnalyticSurface::Cylinder { origin: [0.0; 3], axis: [0.0, 0.0, 1.0], radius: 2.0 };
+        let q = cyl.slide([2.0, 0.0, 1.0], [0.0, std::f64::consts::PI, 0.5]).unwrap();
+        assert!(measure::dist(q, [0.0, 2.0, 1.5]) < 1e-12, "{q:?}");
+        // On the axis the parameters are singular.
+        assert!(cyl.slide([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]).is_none());
     }
 }

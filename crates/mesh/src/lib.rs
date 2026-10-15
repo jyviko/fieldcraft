@@ -18,6 +18,7 @@ pub mod octree;
 pub mod planar;
 pub mod quad;
 pub mod quality;
+pub mod relax;
 pub mod seeds;
 pub mod size;
 pub mod surface;

@@ -44,6 +44,7 @@ pub mod materials;
 mod mesh;
 pub mod nodal;
 pub mod progress;
+pub mod relaxations;
 pub mod rename;
 pub mod sections;
 pub mod seeds;
@@ -70,6 +71,7 @@ pub use mesh::{
     Element, ElementEdge, ElementFace, ElementKind, MIN_NORMALIZED_JACOBIAN, Node, admissible_jacobian, check_coordinates, normalized_jacobian,
     tet4_jacobian,
 };
+pub use relaxations::{Relaxation, RelaxationCell};
 pub use sections::{BeamProfile, Extent, Formulation, Integration, Section, SectionKind};
 pub use seeds::{Bias, BiasToward, Divisions, Seed, SeedConstraint};
 pub use sets::Set;
@@ -162,6 +164,9 @@ pub struct Model {
     /// Edge seeds, sorted by edge.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     seeds: Vec<Seed>,
+    /// Relaxation fields (`mesh.node.relax`), by name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    relaxations: BTreeMap<String, Relaxation>,
 }
 
 /// A [`Model`] as stored, before it is checked.
@@ -210,6 +215,8 @@ struct ModelData {
     suppressed_datums: BTreeSet<String>,
     #[serde(default)]
     seeds: Vec<Seed>,
+    #[serde(default)]
+    relaxations: BTreeMap<String, Relaxation>,
 }
 
 impl TryFrom<ModelData> for Model {
@@ -292,6 +299,9 @@ impl TryFrom<ModelData> for Model {
         }
         for s in d.seeds {
             m.set_seed(s)?;
+        }
+        for (n, v) in d.relaxations {
+            m.set_relaxation(&n, v)?;
         }
         Ok(m)
     }
@@ -423,7 +433,31 @@ impl Model {
             partitions: self.partitions.clone(),
             suppressed_datums: self.suppressed_datums.clone(),
             seeds: self.seeds.clone(),
+            relaxations: self.relaxations.clone(),
         }
+    }
+
+    /// The relaxation fields, by name.
+    pub fn relaxations(&self) -> &BTreeMap<String, Relaxation> {
+        &self.relaxations
+    }
+
+    pub fn relaxation(&self, name: &str) -> Option<&Relaxation> {
+        self.relaxations.get(name)
+    }
+
+    /// Add a relaxation field, or replace the one of that name.
+    pub fn set_relaxation(&mut self, name: &str, field: Relaxation) -> Result<()> {
+        field.check().map_err(|e| context("relaxation", name, e))?;
+        if self.relaxations.contains_key(name) {
+            replace_existing(&mut self.relaxations, "relaxation", name, field)
+        } else {
+            insert_new(&mut self.relaxations, "relaxation", name, field)
+        }
+    }
+
+    pub fn remove_relaxation(&mut self, name: &str) -> Result<Relaxation> {
+        remove_existing(&mut self.relaxations, "relaxation", name)
     }
 
     /// Counts of each kind of definition, for summaries.

@@ -131,6 +131,9 @@ impl Session {
         // Models without elements (point masses, fluid domains) need no material or section.
         let elementless = analysable && m.elements().is_empty();
         let modal_only = !m.steps().is_empty() && m.steps().iter().all(|st| matches!(st.procedure, Procedure::Frequency { .. }));
+        // Transient dynamics may leave a body free and unloaded (a drop, a flight onto a wall: initial
+        // velocities drive it): no support or load needed.
+        let dynamic_only = !m.steps().is_empty() && m.steps().iter().all(|st| st.procedure.is_dynamic());
         // A model driven by a prescribed displacement or temperature needs no load either.
         let driven = m.boundary_conditions().values().any(|bc| bc.drives());
         let mut next_given = false;
@@ -142,7 +145,8 @@ impl Session {
                 let optional = match stage {
                     Stage::Prepare => true,
                     Stage::Material | Stage::Section => elementless,
-                    Stage::Loads => modal_only || driven,
+                    Stage::BoundaryConditions => dynamic_only,
+                    Stage::Loads => modal_only || driven || dynamic_only,
                     _ => false,
                 };
                 let command = r.provider();
@@ -279,6 +283,22 @@ mod tests {
         s.run_script(&crate::sample::rubber_seal()).unwrap();
         assert!(s.model.loads().is_empty());
         assert_eq!(status(&s, Stage::Loads), Optional);
+        assert_eq!(status(&s, Stage::Solve), Next, "{:?}", s.progress());
+    }
+
+    /// A free body in transient dynamics (drop-test: no support, only gravity and the floor)
+    /// needs no boundary condition, nor a load (impact): the checklist offers the solve next.
+    #[test]
+    fn a_free_body_in_explicit_dynamics_needs_no_boundary_condition() {
+        let mut s = Session::default();
+        s.execute("file.sample", &json!({"name": "drop-test"})).unwrap();
+        assert!(s.model.boundary_conditions().is_empty());
+        assert_eq!(status(&s, Stage::BoundaryConditions), Optional);
+        assert_eq!(status(&s, Stage::Solve), Next, "{:?}", s.progress());
+        // impact: no support and no load, only an initial velocity onto a rigid wall.
+        s.execute("file.sample", &json!({"name": "impact"})).unwrap();
+        assert!(s.model.loads().is_empty() && s.model.boundary_conditions().is_empty());
+        assert_eq!((status(&s, Stage::BoundaryConditions), status(&s, Stage::Loads)), (Optional, Optional));
         assert_eq!(status(&s, Stage::Solve), Next, "{:?}", s.progress());
     }
 

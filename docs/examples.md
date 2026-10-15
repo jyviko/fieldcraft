@@ -11,7 +11,7 @@ the check given below.
 
 ## Drop test (`drop-test`)
 
-![The bracket at 0.1 ms after striking the tilted floor, von Mises stress up to 123 MPa in the bend](media/examples/drop-test.png)
+![The bracket at 0.1 ms after striking the tilted floor, von Mises stress up to 129 MPa in the bend](media/examples/drop-test.png)
 
 An aluminium L-bracket (60 × 40 mm foot, 50 mm upright, 8 mm thick, R6 fillet) falls 2 m onto a
 rigid floor tilted 15°, so the end of its foot strikes first. Explicit dynamics for 1 ms with
@@ -19,7 +19,7 @@ gravity: 1 911 swept hex8 elements (one-point, stiffness hourglass control), bil
 (yield 240 MPa), the floor a rigid wall. About 8 400 increments, a few seconds.
 
 **Look at:** the frames from the strike (Results ▸ Frame): the compression wave leaves the
-struck corner and the upright's inertia bends the fillet, where von Mises peaks near 120 MPa —
+struck corner and the upright's inertia bends the fillet, where von Mises peaks near 130 MPa —
 below yield, so the drop leaves no permanent set. The energies plot shows the kinetic energy
 turning into vibration with a balance under 0.01 %.
 
@@ -85,7 +85,7 @@ solve.
 **Look at:** Contours ▸ Temperature: the upright stays within a few degrees of the heater and
 the foot falls to 95 °C, a steady balance between conduction and the air. Contours ▸ Von Mises
 shows the stress of the growth the clamps hold back: tens of MPa through the legs, peaking at the
-edges of the clamped bores, where a rigid clamp is a stress singularity (about 1 GPa there, a
+edges of the clamped bores, where a rigid clamp is a stress singularity (about 1.5 GPa there, a
 figure that grows as the mesh is refined: read the stress a little away from the bore).
 
 **Check:** the temperatures lie between the air's and the heater's and fall away from the heater.

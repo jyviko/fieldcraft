@@ -18,12 +18,14 @@
 #![forbid(unsafe_code)]
 
 mod design;
+mod edges;
 pub mod partition;
 pub mod sample;
 #[cfg(feature = "scripts")]
 mod script;
 
 pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design};
+pub use edges::Edge;
 pub use partition::{Cut, CutReport};
 pub mod tagged_mesh;
 #[cfg(feature = "scripts")]
@@ -129,6 +131,10 @@ pub struct SurfaceMesh {
     /// the boundary points they share, accurate to the kernel's linear tolerance, so two copies
     /// can differ by up to twice it; boundary surface preparation welds at this distance.
     pub weld_distance: f64,
+    /// The B-rep edges as polylines, by edge index (empty for a surface without B-rep edges).
+    pub edges: Vec<Vec<[f64; 3]>>,
+    /// Per edge: the B-rep faces it bounds (one or two), by face index.
+    pub edge_faces: Vec<Vec<u32>>,
 }
 
 fn xyz(v: solidcraft_geom::Vec3) -> [f64; 3] {
@@ -208,6 +214,8 @@ impl Shape {
             triangles: m.triangles,
             tri_face: m.tri_face,
             weld_distance: 2.0 * LINEAR_TOLERANCE,
+            edges: m.edges.into_iter().map(|e| e.into_iter().map(xyz).collect()).collect(),
+            edge_faces: m.edge_faces,
         })
     }
 }

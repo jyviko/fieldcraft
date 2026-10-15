@@ -1,0 +1,201 @@
+//! Persistent names of a body's B-rep edges.
+//!
+//! An edge is named after the faces it separates: the persistent names of its faces, sorted and
+//! joined by `|` (`F2:side:l1|F2:top`), the scheme SolidCraft names edges by. Where several edges
+//! separate the same faces (the top and bottom rim of a hole's half-cylinder against two caps
+//! cannot repeat, but the two edges between a fillet and a face it splits can), they are numbered
+//! `~0`, `~1`, … in order of position along the axis they spread most along, so the names do not
+//! depend on the order the kernel lists edges in. Because the names come from the face names, an
+//! edge keeps its name through an edit of the design that keeps its faces' names, and the cut
+//! edges of a partition are named after the `partition:<name>:a|b` faces.
+//!
+//! A shape built in code has no face names; its edges are named after the face indices.
+
+use crate::{Result, Shape, SurfaceMesh};
+
+/// Tessellation tolerance (a fraction of the body's size) of [`Shape::edges`]: the edge polylines
+/// are for display, picking and matching edges by position.
+const EDGE_TOLERANCE: f64 = 1e-3;
+
+/// A B-rep edge of a body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Edge {
+    /// The persistent name (see the module docs).
+    pub name: String,
+    /// The faces it bounds, by face index (one or two; both the same for a seam).
+    pub faces: Vec<u32>,
+    /// A polyline along it, start to end.
+    pub points: Vec<[f64; 3]>,
+}
+
+impl Edge {
+    /// The length of its polyline.
+    pub fn length(&self) -> f64 {
+        self.points.windows(2).map(|w| distance(w[0], w[1])).sum()
+    }
+}
+
+fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+/// The length-weighted centre of a polyline (its first point when it has no length).
+fn centre(points: &[[f64; 3]]) -> [f64; 3] {
+    let mut sum = [0.0; 3];
+    let mut weight = 0.0;
+    for w in points.windows(2) {
+        let l = distance(w[0], w[1]);
+        for (k, s) in sum.iter_mut().enumerate() {
+            *s += l * 0.5 * (w[0][k] + w[1][k]);
+        }
+        weight += l;
+    }
+    if weight > 0.0 { sum.map(|s| s / weight) } else { points.first().copied().unwrap_or_default() }
+}
+
+/// Number the repeated names `~0`, `~1`, … by position: along the axis their centres spread most
+/// along, then the other two. Positions are compared on a grid of a millionth of that spread, so
+/// a tessellation within a different tolerance numbers them the same.
+fn number_repeats(names: &mut [String], centres: &[[f64; 3]]) {
+    let mut groups: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
+    for (i, n) in names.iter().enumerate() {
+        groups.entry(n.clone()).or_default().push(i);
+    }
+    for (name, mut same) in groups {
+        if same.len() < 2 {
+            continue;
+        }
+        let at = |i: usize| centres.get(i).copied().unwrap_or([0.0; 3]);
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        for c in same.iter().map(|&i| at(i)) {
+            for k in 0..3 {
+                lo[k] = lo[k].min(c[k]);
+                hi[k] = hi[k].max(c[k]);
+            }
+        }
+        let spread = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+        let axes = if spread[0] >= spread[1] && spread[0] >= spread[2] {
+            [0, 1, 2]
+        } else if spread[1] >= spread[2] {
+            [1, 2, 0]
+        } else {
+            [2, 0, 1]
+        };
+        let grid = spread.iter().fold(0.0f64, |m, s| m.max(*s)).max(1e-9) * 1e-6;
+        let key = |i: usize| axes.map(|k| (at(i)[k] / grid).round() as i64);
+        same.sort_by_key(|&i| (key(i), i));
+        for (k, i) in same.into_iter().enumerate() {
+            if let Some(slot) = names.get_mut(i) {
+                *slot = format!("{name}~{k}");
+            }
+        }
+    }
+}
+
+impl Shape {
+    /// The name of face `f`: its persistent name, or its index for a shape without names.
+    fn face_label(&self, f: u32) -> String {
+        match self.faces.get(f as usize) {
+            Some(face) if !face.name.is_empty() => face.name.clone(),
+            _ => f.to_string(),
+        }
+    }
+
+    /// The persistent names of the edges of `mesh` (a tessellation of this shape), by edge index.
+    pub fn edge_names(&self, mesh: &SurfaceMesh) -> Vec<String> {
+        let mut names: Vec<String> = mesh
+            .edge_faces
+            .iter()
+            .map(|faces| {
+                let mut n: Vec<String> = faces.iter().map(|&f| self.face_label(f)).collect();
+                n.sort();
+                n.join("|")
+            })
+            .collect();
+        names.resize(mesh.edges.len(), String::new());
+        let centres: Vec<[f64; 3]> = mesh.edges.iter().map(|e| centre(e)).collect();
+        number_repeats(&mut names, &centres);
+        names
+    }
+
+    /// The body's edges with their persistent names, from a tessellation fine enough to place them.
+    pub fn edges(&self) -> Result<Vec<Edge>> {
+        let mesh = self.tessellate((self.size()? * EDGE_TOLERANCE).max(1e-4))?;
+        Ok(self.edges_of(&mesh))
+    }
+
+    /// The edges of `mesh` (a tessellation of this shape) with their persistent names.
+    fn edges_of(&self, mesh: &SurfaceMesh) -> Vec<Edge> {
+        let names = self.edge_names(mesh);
+        names
+            .into_iter()
+            .zip(&mesh.edges)
+            .enumerate()
+            .map(|(i, (name, points))| Edge { name, faces: mesh.edge_faces.get(i).cloned().unwrap_or_default(), points: points.clone() })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sample::{self, Plate};
+    use crate::{Cut, open_design};
+
+    fn names(edges: &[super::Edge]) -> Vec<String> {
+        let mut n: Vec<String> = edges.iter().map(|e| e.name.clone()).collect();
+        n.sort();
+        n
+    }
+
+    #[test]
+    fn every_edge_of_the_plate_has_its_own_name_from_its_faces() {
+        let d = open_design(&sample::plate_design(&Plate::default()).unwrap()).unwrap();
+        let body = &d.bodies[0];
+        let edges = body.edges().unwrap();
+        // A box with a through hole split in two half-cylinders: 12 box edges, 2 × 2 rim arcs and
+        // 2 seams.
+        assert_eq!(edges.len(), 18, "{:?}", names(&edges));
+        let mut unique = names(&edges);
+        unique.dedup();
+        assert_eq!(unique.len(), edges.len(), "{unique:?}");
+        let faces: Vec<&str> = body.faces().iter().map(|f| f.name.as_str()).collect();
+        for e in &edges {
+            let base = e.name.split('~').next().unwrap();
+            assert!(base.split('|').all(|f| faces.contains(&f)), "{} is not named after the faces {faces:?}", e.name);
+            assert!(e.length() > 0.0, "{}", e.name);
+        }
+    }
+
+    #[test]
+    fn edge_names_survive_a_parameter_change_and_a_finer_tessellation() {
+        let a = open_design(&sample::plate_design(&Plate::default()).unwrap()).unwrap();
+        let b = open_design(&sample::plate_design(&Plate { width: 70.0, thickness: 15.0, ..Plate::default() }).unwrap()).unwrap();
+        let (ea, eb) = (a.bodies[0].edges().unwrap(), b.bodies[0].edges().unwrap());
+        assert_eq!(names(&ea), names(&eb));
+        // The through-thickness edges are as long as the plate is thick, before and after.
+        for e in &ea {
+            let other = eb.iter().find(|x| x.name == e.name).unwrap();
+            if (e.length() - 10.0).abs() < 1e-6 {
+                assert!((other.length() - 15.0).abs() < 1e-6, "{}: {}", e.name, other.length());
+            }
+        }
+        let fine = a.bodies[0].tessellate(1e-3).unwrap();
+        let mut n = a.bodies[0].edge_names(&fine);
+        n.sort();
+        assert_eq!(n, names(&ea));
+    }
+
+    #[test]
+    fn partition_cut_edges_are_named_after_the_cut_faces() {
+        let d = open_design(&sample::plate_design(&Plate::default()).unwrap()).unwrap();
+        let cut = Cut { name: "Mid".into(), point: [5.0, 15.0, 0.0], normal: [1.0, 0.0, 0.0], bodies: Vec::new() };
+        let p = d.partitioned(&[cut]).unwrap();
+        for (cell, side) in p.bodies.iter().zip(["a", "b"]) {
+            let edges = cell.edges().unwrap();
+            let cut_edges: Vec<&str> = edges.iter().map(|e| e.name.as_str()).filter(|n| n.contains(&format!("partition:Mid:{side}"))).collect();
+            // The cut face is a rectangle: four edges.
+            assert_eq!(cut_edges.len(), 4, "{} {cut_edges:?}", cell.name);
+        }
+    }
+}

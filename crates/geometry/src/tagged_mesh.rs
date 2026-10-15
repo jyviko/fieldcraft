@@ -341,7 +341,11 @@ fn surface(mut o: Object, k: usize, id: u32, xf: &Xf, unit: f64) -> Result<Tagge
     }
     let faces = o.faces.unwrap_or_else(|| o.tags.iter().max().map_or(1, |f| f.saturating_add(1)));
     let name = if o.name.is_empty() { format!("Mesh{}", k + 1) } else { o.name };
-    Ok(TaggedSurface { name, mesh: SurfaceMesh { positions: o.positions, triangles: o.triangles, tri_face: o.tags, weld_distance: 0.0 }, faces })
+    Ok(TaggedSurface {
+        name,
+        mesh: SurfaceMesh { positions: o.positions, triangles: o.triangles, tri_face: o.tags, weld_distance: 0.0, ..SurfaceMesh::default() },
+        faces,
+    })
 }
 
 /// The surfaces of a 3MF package, one per build item, in millimetres.
@@ -475,8 +479,8 @@ mod tests {
         assert_eq!(bytes, write_tagged(&[("Block", &mesh, faces), ("Again", &mesh, faces)]), "deterministic bytes");
         let got = read_3mf(&bytes).unwrap();
         assert_eq!(got.len(), 2);
-        // The file carries no weld distance.
-        let mesh = SurfaceMesh { weld_distance: 0.0, ..mesh };
+        // The file carries no weld distance and no B-rep edges.
+        let mesh = SurfaceMesh { weld_distance: 0.0, edges: Vec::new(), edge_faces: Vec::new(), ..mesh };
         assert_eq!(got[0], TaggedSurface { name: "Block".into(), mesh: mesh.clone(), faces: 6 });
         assert_eq!(got[1].name, "Again");
         assert_eq!(got[1].mesh, mesh);
@@ -574,7 +578,13 @@ mod tests {
         assert!(read_3mf(b"PK\x03\x04garbage").is_err());
         let good = write_tagged(&[(
             "T",
-            &SurfaceMesh { positions: vec![[0.0; 3]; 3], triangles: vec![[0, 1, 2]], tri_face: vec![0], weld_distance: 0.0 },
+            &SurfaceMesh {
+                positions: vec![[0.0; 3]; 3],
+                triangles: vec![[0, 1, 2]],
+                tri_face: vec![0],
+                weld_distance: 0.0,
+                ..SurfaceMesh::default()
+            },
             1,
         )]);
         for cut in [10, good.len() / 2, good.len() - 1] {

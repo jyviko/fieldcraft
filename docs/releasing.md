@@ -159,12 +159,30 @@ git push origin <commit>:main      # fast-forward main to the verified develop c
 ```
 
 `main` holds released code only: it moves only by fast-forwarding to a verified `develop`
-commit (a maintainer push; the branch is protected), never by merges, rewrites or force-pushes. The run builds the three platforms; when
+commit (a maintainer push; the branch is protected), never by merges, rewrites or force-pushes. The run
+first verifies the commit with everything CI has (see below); then it builds the three platforms; when
 all succeed, the last job checks that every file is there, writes `SHA256SUMS.txt` and the notes,
 and creates the draft `FieldCraft v<version>` targeting the pushed commit. Pushing
 `main` again with the same version rebuilds and replaces the draft's files (its notes are
 kept). The job refuses a version whose tag exists or whose release is already published: bump
 the version instead.
+
+## What CI runs when
+
+| When | What runs |
+|---|---|
+| Push to `develop` | `plan` takes the newest `develop` commit whose CI run passed as the base and runs `cargo xtask affected --base <it>`. `cargo xtask ci --affected <base>`: fmt, assets, layers (always, whole tree), then clippy and the tests of the changed crates and every crate that depends on them, and the wasm check when one of them builds for wasm. `heavy` (`cargo xtask test --heavy`) and `oracle` run only when the change reaches the solvers or the oracle (`solver`), or everything. A newer push cancels the run before it; the next one tests everything since the last green run, so nothing is skipped. |
+| Change to `Cargo.toml`, `Cargo.lock`, the toolchain, `xtask/` or `.github/` | Everything: the full gate, heavy and oracle (`everything`). |
+| Pull request from a fork or Dependabot | The same plan against the pull request's merge base; never the heavy job. |
+| Nightly (03:23 UTC) and `gh workflow run CI --ref <branch>` | Everything: the full `cargo xtask ci`, heavy and oracle on Linux (manual runs add the macOS oracle). |
+| Weekly (Sunday) | The oracle on macOS. |
+| Release (`release.yml`, push to `main` and dry runs) | `verify-ci` (full `cargo xtask ci`), `verify-heavy`, and `verify-oracle` on Linux and macOS; every packaging job needs all of them. |
+
+`cargo xtask affected --base <rev> [--head <rev>]` prints the plan for any range, e.g. what a
+commit needs: `cargo xtask affected --base <sha>^ --head <sha>`. A file outside every crate
+(`tests/oracle/…`, `assets/…`) belongs to the crates whose sources name its top-level directory;
+`solver` is set when the affected crates include the oracle's (`fieldcraft-testkit`) or one with
+`#[ignore]`d heavy tests.
 
 ## Verify and publish
 
@@ -189,7 +207,7 @@ Publishing is a maintainer's call; an agent preparing a release stops at the dra
 
 ## Dry runs
 
-`gh workflow run release.yml -R jyviko/fieldcraft --ref <branch>` builds every package and
+`gh workflow run release.yml -R jyviko/fieldcraft --ref <branch>` runs the verify jobs, then builds every package and
 uploads them with the notes as the `release-assets` artifact of the run, without creating a
 release. `-f draft=true` creates or updates the draft, and is accepted on `main` only.
 Locally, `packaging/macos/package.sh --arch aarch64` (or `x86_64`, `universal`) and

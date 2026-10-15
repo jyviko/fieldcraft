@@ -119,17 +119,22 @@ People trust FieldCraft with their models; a crash loses their work. **This outr
      contributors' pull requests wait for the maintainer's review (CONTRIBUTING.md). Never squash.
      Then remove your worktree and delete your local branch.
   5. Never run the full gate locally: no `cargo xtask ci`, no `cargo clippy --workspace`, no
-     `cargo xtask wasm` or `oracle` unless step 2 calls for it. Never watch CI. GitHub CI runs
-     `cargo xtask ci` (fmt, assets, layers, clippy -D warnings, tests, wasm), the
-     oracle, the heavy tests and the dependency licences and advisories once per merge on `develop`; the coordinator
+     `cargo xtask wasm` or `oracle` unless step 2 calls for it. Never watch CI. GitHub CI runs,
+     per merge on `develop`, `cargo xtask ci --affected <last green commit>` (fmt, assets,
+     layers on the whole tree; clippy and tests on the crates the change reaches; wasm when one
+     of them builds for it), the oracle and heavy tests when the change reaches the solvers or
+     the oracle, and the dependency licences and advisories; a change to Cargo.toml, Cargo.lock,
+     xtask or the workflows, the nightly run and every release run all of it (docs/releasing.md,
+     "What CI runs when"). `cargo xtask affected --base origin/develop` shows what your branch
+     reaches. The coordinator
      watches it and sends a failure back to the change that caused it, which is fixed forward
      at once.
 - **Keep the trunk gate fast** (under ~3 minutes on CI). A test that takes more than a few seconds
   (convergence studies, the whole corpus, cross-checks between solvers) is
   `#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]`, with a fast representative
   test left in the trunk gate. The `heavy` CI job runs `cargo xtask test --heavy` (every ignored
-  test, benchmarks included, and the doc tests) on every merge to `develop`, nightly and on
-  demand (`gh workflow run CI --ref <branch>`). Hostile-input tests run commands on sessions with small
+  test, benchmarks included, and the doc tests) on merges to `develop` that reach a crate with
+  heavy tests, nightly, before every release and on demand (`gh workflow run CI --ref <branch>`). Hostile-input tests run commands on sessions with small
   work caps (`Session::limits`) so refusals are instant; never lower the production caps for a
   test.
 - **Publishing**: `origin` is github.com/jyviko/fieldcraft. Changes land through pull requests

@@ -189,6 +189,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "busy": app.busy(),
             "solve": solve_json(app),
             "selected": app.selected.as_ref().map(|(k, n)| json!({"kind": k, "name": n})),
+            "browser": crate::browser::describe(app),
             "nav": app.nav,
             "layout": app.layout.iter().map(|(k, r)| (k.to_string(), json!([r.left(), r.top(), r.width(), r.height()]))).collect::<serde_json::Map<String, Value>>(),
             "prompt": app.prompt.as_ref().map(|p| match p {
@@ -618,6 +619,27 @@ mod tests {
         app.layout.clear();
         frame(&mut app, &ctx);
         assert!(!app.layout.contains_key("setup"));
+    }
+
+    /// A meshed model's Materials node shows a highlighted ghost row; a click on it opens the
+    /// material form, and `ui.inspect` reports each node's state.
+    #[test]
+    fn a_ghost_row_click_starts_its_command() {
+        let mut app = ModelApp::new(Session::default());
+        let ctx = egui::Context::default();
+        let cube = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
+        app.run("mesh.block", json!({"body": "B", "kind": "hex8", "corners": cube, "divisions": [1, 1, 1]})).unwrap();
+        frame(&mut app, &ctx);
+        let browser = call_in(&mut app, &ctx, "ui.inspect", json!({}))["result"]["browser"].clone();
+        let materials = browser.as_array().and_then(|b| b.iter().find(|n| n["node"] == "materials")).cloned().unwrap_or_default();
+        assert_eq!(materials["state"], "next", "{browser}");
+        assert_eq!(materials["add"][0]["command"], "model.material.create");
+        let at = app.layout[crate::browser::ghost_region(fieldcraft_engine::progress::Stage::Material)].center();
+        call_in(&mut app, &ctx, "ui.click", json!({"x": at.x, "y": at.y}));
+        for _ in 0..4 {
+            frame(&mut app, &ctx);
+        }
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("model.material.create"));
     }
 
     /// The cantilever's free end (x = 100), looked at from +x: picked by a simulated click and

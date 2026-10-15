@@ -190,6 +190,8 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
         recent_path: None,
         // Preferences last for the page's run.
         prefs_path: None,
+        // egui opens links itself in the browser.
+        open_url: None,
     }
 }
 

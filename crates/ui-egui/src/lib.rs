@@ -40,6 +40,7 @@ pub mod menu;
 pub mod navigation;
 pub mod palette;
 pub mod reply;
+pub mod report;
 pub mod results;
 pub mod results_panel;
 pub mod samples;
@@ -390,6 +391,10 @@ pub struct ModelApp {
     pub queued: std::collections::VecDeque<String>,
     /// The question the window is asking (unsaved changes, recover).
     pub prompt: Option<files::Prompt>,
+    /// Help › Report a Bug's form, while open ([`files::Prompt::ReportBug`]).
+    pub report: Option<report::ReportForm>,
+    /// The last error the status bar showed (what Report a Bug starts from).
+    pub last_error: Option<String>,
     /// A design opened over a model of another part, waiting for [`files::Prompt::Design`]'s answer.
     pub held: Option<files::Opened>,
     /// The window draws its own title bar and caption buttons (Windows, Linux).
@@ -468,6 +473,8 @@ impl ModelApp {
             loading: None,
             queued: std::collections::VecDeque::new(),
             prompt: None,
+            report: None,
+            last_error: None,
             held: None,
             custom_titlebar: false,
             integrated_titlebar: false,
@@ -783,6 +790,7 @@ impl ModelApp {
         let text = text.into();
         if error {
             log::warn!("{text}");
+            self.last_error = Some(text.clone());
         }
         self.status = Some(Status { text, error });
     }
@@ -1442,6 +1450,7 @@ impl ModelApp {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| viewport::show(self, ui));
         palette::popup(self, ui.ctx());
         files::show(self, ui.ctx());
+        report::show(self, ui.ctx());
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
         }

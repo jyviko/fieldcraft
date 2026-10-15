@@ -255,6 +255,18 @@ pub fn draft(input: &Input, version: &str) -> Draft {
     Draft { title, fields, url, attachments, clipboard }
 }
 
+/// Write a draft's attachments to `bug-reports/<time>/` in the app's data folder (the user
+/// attaches them from there); returns the folder.
+pub fn save_attachments(draft: &Draft) -> Result<std::path::PathBuf, String> {
+    let root = fieldcraft_io::recovery::data_dir().ok_or("no data folder on this system")?;
+    let dir = root.join("bug-reports").join(crate::crash::stamp_now());
+    fieldcraft_io::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    for a in &draft.attachments {
+        fieldcraft_io::fs::write_atomic(&dir.join(&a.name), &a.bytes, false).map_err(|e| e.to_string())?;
+    }
+    Ok(dir)
+}
+
 /// The fields a link carries (for the review, when a field had to be cut).
 fn decode_fields(url: &str) -> Vec<(&'static str, String)> {
     let query = url.split_once('?').map_or("", |(_, q)| q);

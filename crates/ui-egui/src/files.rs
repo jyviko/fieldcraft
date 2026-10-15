@@ -33,6 +33,8 @@ pub struct Filter {
 pub type PickOpen = Box<dyn Fn(&[Filter]) -> Option<String>>;
 /// The host picks where to save, starting from a file name; `None` when the user cancelled.
 pub type PickSave = Box<dyn Fn(&str, &[Filter]) -> Option<String>>;
+/// The host opens a web link in the user's browser.
+pub type OpenUrl = Box<dyn Fn(&str) -> Result<(), String>>;
 
 /// What the host provides: native file pickers and where the recent-files list is kept. The
 /// desktop app installs them; tests answer the pickers with closures.
@@ -44,6 +46,9 @@ pub struct Services {
     pub recent_path: Option<PathBuf>,
     /// The user's preferences file (JSON, [`Prefs`]); `None` keeps them for this run only.
     pub prefs_path: Option<PathBuf>,
+    /// Opens a link in the browser (Help › Report a Bug); without it, egui's own
+    /// `open_url` (the browser build opens the link itself).
+    pub open_url: Option<OpenUrl>,
 }
 
 const MODEL: Filter = Filter { name: "FieldCraft model", extensions: &["fieldcraft"] };
@@ -275,6 +280,10 @@ pub enum Prompt {
     /// Delete a definition (the item menu's Delete…, the Delete key): what uses it is listed, and
     /// the deletion refused or (a datum's partitions) done with it.
     Delete(crate::menu::DeleteAsk),
+    /// The last run crashed (its new crash reports, newest first): report it, or not now.
+    Crashed(Vec<fieldcraft_engine::crash::Summary>),
+    /// Help › Report a Bug ([`crate::report`]; the form is [`ModelApp::report`]).
+    ReportBug,
 }
 
 /// The answer to [`Prompt::Design`].
@@ -376,7 +385,14 @@ impl ModelApp {
         if self.ensure_idle().is_err() {
             return false;
         }
-        let base = if fresh { Session::default() } else { self.session.clone() };
+        // A fresh session is the app's own model too (its commands go into the crash journal).
+        let base = if fresh {
+            let mut s = Session::default();
+            s.crash_journal = self.session.crash_journal;
+            s
+        } else {
+            self.session.clone()
+        };
         let (rx, pending) = spawn(base, command, params);
         self.set_status(format!("{title}…"), false);
         self.loading = Some(Loading { title, done, recent, form: None, rx, pending, shown: false });
@@ -730,6 +746,7 @@ impl ModelApp {
             }
             "file.recover" | "file.recovery.list" => self.prompt = Some(Prompt::Recover),
             "file.sample" => self.prompt = Some(Prompt::Samples),
+            "diagnostics.bug_report" | "diagnostics.crash_reports" | "diagnostics.crash_report" => self.report_bug(None),
             "solve.run" => self.solve_all(),
             "deck.write" if can_save => match preset.get("format").and_then(Value::as_str) {
                 Some(f) => self.write_deck(f),
@@ -989,7 +1006,8 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                 app.prompt = None;
             }
         }
-        None => {}
+        // Drawn by `crate::report::show`.
+        Some(Prompt::Crashed(_) | Prompt::ReportBug) | None => {}
     }
 }
 

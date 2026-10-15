@@ -336,7 +336,14 @@ fn help_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
     ui.label("Left drag orbits (or pans or zooms: the navigation bar), right or middle drag pans, the wheel zooms, F or a double click fits.");
     ui.label(format!("S or {} searches every command; the command line at the bottom runs `id {{json}}`.", shortcut("K")));
     ui.separator();
+    let report = ui
+        .button("Report a Bug…")
+        .on_hover_text("Draft a GitHub issue with the version, the OS and the last error; nothing is sent until you submit it")
+        .clicked();
     ui.label(egui::RichText::new(format!("FieldCraft {}", crate::VERSION)).color(t.text_dim));
+    if report {
+        app.report_bug(None);
+    }
     if let Some(n) = open {
         app.ui.menu = None;
         app.open_sample(n);

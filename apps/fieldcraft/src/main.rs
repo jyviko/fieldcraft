@@ -13,8 +13,8 @@
 
 mod control_server;
 
-use fieldcraft_engine::Session;
 use fieldcraft_engine::autosave::{self, Autosaver};
+use fieldcraft_engine::{Session, crash, logfile};
 use fieldcraft_ui_egui::{Filter, ModelApp, Services};
 
 const USAGE: &str =
@@ -47,6 +47,8 @@ struct App {
     autosaver: Option<Autosaver>,
     /// App time of the last autosave check.
     autosaved_at: f64,
+    /// The first frame was drawn (the crash journal says the app is up).
+    running: bool,
 }
 
 impl App {
@@ -61,6 +63,10 @@ impl App {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.running {
+            self.running = true;
+            crash::activity("running");
+        }
         self.app.logic(ctx);
         if self.app.now - self.autosaved_at >= AUTOSAVE_SECONDS {
             self.autosaved_at = self.app.now;
@@ -76,6 +82,8 @@ impl eframe::App for App {
         {
             log::warn!("autosave: {e}");
         }
+        log::info!("FieldCraft closed");
+        crash::end_session();
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.app.raw_input_hook(raw);
@@ -96,7 +104,53 @@ fn services() -> Services {
         // Beside the recovery folder in the per-user data folder.
         recent_path: fieldcraft_io::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("recent.json"))),
         prefs_path: fieldcraft_io::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("prefs.json"))),
+        open_url: Some(Box::new(open_url)),
     }
+}
+
+/// Open a web link in the default browser, with the system's own opener: `open` (macOS),
+/// `xdg-open` (Linux and the BSDs), `explorer` (Windows). The link is one argument, never
+/// passed through a shell. Only https links are opened.
+fn open_url(url: &str) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err(format!("not a web link: {}", url.chars().take(80).collect::<String>()));
+    }
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let mut child = std::process::Command::new(opener).arg(url).spawn().map_err(|e| format!("{opener}: {e}"))?;
+    // Reaped off the window thread; its exit status says nothing (`explorer` exits with 1 even
+    // when it opened the link).
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+/// Crash reports and the log file (docs/crash-reports.md): reports of earlier runs that crashed
+/// come back, for the window to offer. Both live in the app's data folder (a temporary one in
+/// runs driven by automation); `FIELDCRAFT_CRASH_DIR` moves the crash folder.
+fn start_reporting() -> Vec<crash::Summary> {
+    // First the crash reports: an unclean exit's report takes the dead run's lines from the log.
+    let crashed = crash::default_dir().map(|dir| crash::install(dir, crash::Build::current())).unwrap_or_default();
+    match fieldcraft_io::recovery::data_dir().map(|d| logfile::install(&d.join("logs"), log::LevelFilter::Info)) {
+        Some(Ok(path)) => eprintln!("fieldcraft: log {}", path.display()),
+        Some(Err(e)) => eprintln!("fieldcraft: no log file: {e}"),
+        None => {}
+    }
+    let b = crash::Build::current();
+    log::info!(
+        "FieldCraft {} started ({}), crash reports in {}",
+        b.version,
+        b.version_line(),
+        crash::default_dir().map(|d| d.display().to_string()).unwrap_or_default()
+    );
+    crash::activity("startup");
+    crashed
 }
 
 /// Command-line options.
@@ -152,9 +206,10 @@ fn main() -> eframe::Result {
     };
     if args.control.is_some() {
         // A run driven by automation keeps its autosaves (and recent files and preferences, which
-        // live beside them) in a temporary folder, never the user's.
+        // live beside them), its crash reports and its log in a temporary folder, never the user's.
         fieldcraft_io::recovery::use_automation_dir();
     }
+    let crashed = start_reporting();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("FieldCraft")
@@ -177,12 +232,15 @@ fn main() -> eframe::Result {
         "FieldCraft",
         options,
         Box::new(move |cc| {
-            let mut app = ModelApp::new(Session::default()).with_services(services());
+            let mut session = Session::default();
+            // The window's model: its commands go into the crash journal.
+            session.crash_journal = crash::enabled();
+            let mut app = ModelApp::new(session).with_services(services());
             app.custom_titlebar = CUSTOM_TITLEBAR;
             app.integrated_titlebar = cfg!(target_os = "macos");
             if let Some(rs) = &cc.wgpu_render_state {
                 let info = rs.adapter.get_info();
-                eprintln!("fieldcraft: graphics {:?} {}, MSAA {}x (requested {MSAA}x)", info.backend, info.name, rs.msaa_samples);
+                log::info!("graphics {:?} {} ({}), MSAA {}x (requested {MSAA}x)", info.backend, info.name, info.driver, rs.msaa_samples);
                 app.set_wgpu(rs, DEPTH_BITS, rs.msaa_samples, &cc.egui_ctx);
             }
             if let Some(port) = args.control {
@@ -202,7 +260,8 @@ fn main() -> eframe::Result {
                 }
                 Autosaver::new(&dir).map_err(|e| log::warn!("autosave unavailable: {e}")).ok()
             });
-            Ok(Box::new(App { app, autosaver, autosaved_at: 0.0 }))
+            app.announce_crashes(&crashed);
+            Ok(Box::new(App { app, autosaver, autosaved_at: 0.0, running: false }))
         }),
     )
 }

@@ -164,6 +164,8 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
     let f = |k: &str| p.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
     let b = |k: &str| p.get(k).and_then(Value::as_bool).unwrap_or(false);
     let mods = || egui::Modifiers { shift: b("shift"), ctrl: b("ctrl"), command: b("ctrl"), alt: b("alt"), ..Default::default() };
+    // A crash nothing catches (#248) still says which request came last.
+    fieldcraft_engine::crash::activity(&format!("control {}", req.method));
     match req.method.as_str() {
         "engine.execute" => {
             let Some(id) = s("command") else { return err("missing `command`") };
@@ -202,6 +204,8 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 crate::files::Prompt::Design(p) => json!({"design": p}),
                 crate::files::Prompt::ReplaceMesh(r) => json!({"replace_mesh": r.question, "warnings": r.warnings}),
                 crate::files::Prompt::Delete(d) => json!({"delete": d.question(), "kind": d.kind, "name": d.name, "users": d.users, "allowed": d.allowed()}),
+                crate::files::Prompt::Crashed(r) => json!({"crashed": r}),
+                crate::files::Prompt::ReportBug => json!({"report_bug": app.report.as_ref().and_then(|f| f.drafted_json())}),
             }),
             "recent": app.recent.paths,
             "version": crate::VERSION,
@@ -374,6 +378,21 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     app.prompt = None;
                     ok(Value::Null)
                 }
+                (crate::files::Prompt::Crashed(r), Some("report")) => {
+                    app.report_bug(r.first().map(|c| c.id.clone()));
+                    ok(json!({"prompt": "report_bug"}))
+                }
+                (crate::files::Prompt::Crashed(_), Some("close" | "cancel")) => {
+                    app.prompt = None;
+                    ok(Value::Null)
+                }
+                // The form's fields; sending opens the browser, which only a click does.
+                (crate::files::Prompt::ReportBug, Some("set")) => wrap(app.set_report(p)),
+                (crate::files::Prompt::ReportBug, Some("close" | "cancel")) => {
+                    app.prompt = None;
+                    app.report = None;
+                    ok(Value::Null)
+                }
                 (crate::files::Prompt::Recover, Some("recover")) => match s("id") {
                     Some(id) => {
                         app.recover(id);
@@ -382,7 +401,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     None => err("missing `id` (from file.recovery.list)"),
                 },
                 (_, a) => err(format!(
-                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; replace_mesh: replace, cancel; delete: delete, cancel; recover: recover with id, close; samples: open with name, close)"
+                    "`answer` {a:?} does not answer this prompt (unsaved: save, discard, cancel; design: new, keep, cancel; replace_mesh: replace, cancel; delete: delete, cancel; recover: recover with id, close; samples: open with name, close; crashed: report, close; report_bug: set with title/observed/share_session/include_model, close)"
                 )),
             }
         }

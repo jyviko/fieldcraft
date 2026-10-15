@@ -240,6 +240,7 @@ impl Session {
         opened.history = std::mem::take(&mut self.history);
         opened.limits = self.limits;
         opened.file_access = std::mem::take(&mut self.file_access);
+        opened.crash_journal = self.crash_journal;
         opened.clear_history();
         opened.mark_opened();
         *self = opened;

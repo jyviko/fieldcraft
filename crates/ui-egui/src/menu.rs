@@ -222,6 +222,8 @@ mod tests {
         app.run("geometry.open", json!({"path": design.to_string_lossy()})).unwrap();
         app.run("geometry.datum", json!({"name": "Mid", "by": {"type": "offset", "plane": "yz", "offset": 15}})).unwrap();
         app.run("geometry.partition", json!({"name": "Half", "datum": "Mid"})).unwrap();
+        // The partition hides its plane (#295); shown again here to be picked.
+        app.run("view.show", json!({"items": [{"kind": "datum", "name": "Mid"}]})).unwrap();
         app.run("geometry.datum.point", json!({"name": "P", "by": {"type": "coordinates", "point": [0, 0, 0]}})).unwrap();
         app.viewport.rect = Some(egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(800.0, 600.0)));
         app.set_view(StandardView::Iso);

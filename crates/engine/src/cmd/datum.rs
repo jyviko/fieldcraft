@@ -13,6 +13,7 @@ use crate::schema::ProblemKind;
 use std::sync::Arc;
 
 use fieldcraft_geometry::{Cut, Design};
+use fieldcraft_io::{Item, ItemKind, MAX_HIDDEN};
 use fieldcraft_model::{Datum, Model, Partition};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -443,7 +444,7 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
     let name = super::name(p)?.to_string();
     let datum: String = super::req(p, "datum")?;
     let bodies: Vec<String> = super::opt(p, "bodies")?.unwrap_or_default();
-    s.model.add_partition(Partition { name: name.clone(), datum, bodies })?;
+    s.model.add_partition(Partition { name: name.clone(), datum: datum.clone(), bodies })?;
     recut(s)?;
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
     let feature = format!("partition {name}");
@@ -456,13 +457,19 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
     if split.is_empty() {
         return Err(EngineError::Params(format!("partition `{name}`: the plane divides no body of the design")));
     }
-    let cells: Vec<&str> = design.bodies.iter().map(|b| b.name.as_str()).filter(|b| split.iter().any(|x| b.starts_with(&format!("{x}/")))).collect();
+    let cells: Vec<String> = design.bodies.iter().map(|b| b.name.clone()).filter(|b| split.iter().any(|x| b.starts_with(&format!("{x}/")))).collect();
+    let (faces, bodies): (usize, Vec<String>) = (report.map_or(0, |r| r.faces), design.bodies.iter().map(|b| b.name.clone()).collect());
+    // The cut shows as edges on the cells, so the plane steps out of the way (view state, #295):
+    // selecting it in the browser or its eye shows it again.
+    if s.view.hidden.len() < MAX_HIDDEN {
+        s.view.hidden.insert(Item { kind: ItemKind::Datum, name: datum });
+    }
     Ok(json!({
         "name": name,
         "split": split,
         "cells": cells,
-        "cut_faces": report.map_or(0, |r| r.faces),
-        "bodies": design.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        "cut_faces": faces,
+        "bodies": bodies,
     }))
 }
 
@@ -550,8 +557,13 @@ pub(crate) mod tests {
         let body = r["split"][0].as_str().unwrap().to_string();
         assert_eq!(r["cells"], json!([format!("{body}/a"), format!("{body}/b")]));
         assert_eq!(r["cut_faces"], json!(4));
-        // The datum is in use.
+        // The datum is in use, and hidden: the cut shows as edges on the cells (#295). Its eye
+        // shows it again.
         assert!(s.execute("geometry.datum.delete", &json!({"name": "Mid"})).is_err());
+        assert!(!s.shows(ItemKind::Datum, "Mid"));
+        s.execute("view.show", &json!({"items": [{"kind": "datum", "name": "Mid"}]})).unwrap();
+        assert!(s.shows(ItemKind::Datum, "Mid"));
+        s.execute("view.hide", &json!({"items": [{"kind": "datum", "name": "Mid"}]})).unwrap();
 
         // A set on a cut face selects the cut face's pieces.
         let r = s.execute("geometry.bodies", &json!({})).unwrap();
@@ -564,6 +576,7 @@ pub(crate) mod tests {
         let mut t = Session::default();
         t.execute("file.open", &json!({"path": file.to_str().unwrap()})).unwrap();
         assert_eq!(bodies(&t), bodies(&s));
+        assert!(!t.shows(ItemKind::Datum, "Mid"), "still hidden when opened again");
         // geometry.open again keeps the model, so its partition.
         let design = dir.join("plate.solidcraft");
         let r = t.execute("geometry.open", &json!({"path": design.to_str().unwrap()})).unwrap();

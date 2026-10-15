@@ -879,6 +879,9 @@ mod tests {
             let mut cells: Vec<String> = CRANK_CELLS.iter().map(|c| c.to_string()).collect();
             cells.push("CrankArm/b".into());
             assert_eq!(bodies, cells);
+            // The partitions' datum planes are hidden: the crank opens without a cage of planes.
+            assert!(s.model.datums().len() >= 7 && s.model.datums().keys().all(|d| !s.shows(crate::ItemKind::Datum, d)), "datums shown");
+            assert!(!s.is_dirty(), "a sample just opened has nothing to save");
             assert!(s.model.ties().is_empty(), "every cut merged");
             let elements = s.model.elements().values().filter(|e| e.kind == fieldcraft_model::ElementKind::Hex20).count();
             assert_eq!(elements, s.model.elements().len());

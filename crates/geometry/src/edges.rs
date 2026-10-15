@@ -9,6 +9,10 @@
 //! edge keeps its name through an edit of the design that keeps its faces' names, and the cut
 //! edges of a partition are named after the `partition:<name>:a|b` faces.
 //!
+//! A vertex is named the same way after the faces that meet there (the faces of the edges that
+//! end at it): `F1:top|F2:side:l1|F2:side:l2`, numbered `~0`, `~1`, … where several vertices
+//! touch the same faces.
+//!
 //! A shape built in code has no face names; its edges are named after the face indices.
 
 use crate::{Result, Shape, SurfaceMesh};
@@ -56,6 +60,17 @@ impl Edge {
 fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
+
+/// A B-rep vertex of a body: where edges end.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Vertex {
+    /// The persistent name (see the module docs).
+    pub name: String,
+    pub point: [f64; 3],
+}
+
+/// Most edge ends looked at for vertices (each against the vertices found so far).
+const MAX_EDGE_ENDS: usize = 20_000;
 
 /// The length-weighted centre of a polyline (its first point when it has no length).
 fn centre(points: &[[f64; 3]]) -> [f64; 3] {
@@ -137,6 +152,48 @@ impl Shape {
         names
     }
 
+    /// The vertices of `mesh` (a tessellation of this shape) with their persistent names: the
+    /// ends of its edges, those within the tessellation's weld distance being one vertex. A
+    /// closed edge with no other edge on it (a full circle) has no vertex. Empty for a shape with
+    /// more than [`MAX_EDGE_ENDS`] edge ends.
+    pub fn vertex_names(&self, mesh: &SurfaceMesh) -> Vec<Vertex> {
+        let ends = mesh.edges.iter().enumerate().flat_map(|(i, e)| [e.first(), e.last()].into_iter().flatten().map(move |p| (i, *p)));
+        if mesh.edges.len().saturating_mul(2) > MAX_EDGE_ENDS {
+            return Vec::new();
+        }
+        let close = (2.0 * mesh.weld_distance).max(1e-9);
+        // Per vertex: its point and the edges that end at it.
+        let mut found: Vec<([f64; 3], Vec<usize>)> = Vec::new();
+        for (edge, p) in ends {
+            match found.iter_mut().find(|(q, _)| distance(*q, p) <= close) {
+                Some((_, edges)) => edges.push(edge),
+                None => found.push((p, vec![edge])),
+            }
+        }
+        // A closed edge alone (its two ends one vertex, no other edge there) has no corner.
+        found.retain(|(_, edges)| edges.windows(2).any(|w| w[0] != w[1]) || edges.len() > 2);
+        let mut names: Vec<String> = found
+            .iter()
+            .map(|(_, edges)| {
+                let mut faces: Vec<u32> = edges.iter().filter_map(|e| mesh.edge_faces.get(*e)).flatten().copied().collect();
+                faces.sort_unstable();
+                faces.dedup();
+                let mut n: Vec<String> = faces.into_iter().map(|f| self.face_label(f)).collect();
+                n.sort();
+                n.join("|")
+            })
+            .collect();
+        let points: Vec<[f64; 3]> = found.iter().map(|(p, _)| *p).collect();
+        number_repeats(&mut names, &points);
+        names.into_iter().zip(points).map(|(name, point)| Vertex { name, point }).collect()
+    }
+
+    /// The body's vertices with their persistent names.
+    pub fn vertices(&self) -> Result<Vec<Vertex>> {
+        let mesh = self.tessellate((self.size()? * EDGE_TOLERANCE).max(1e-4))?;
+        Ok(self.vertex_names(&mesh))
+    }
+
     /// The body's edges with their persistent names, from a tessellation fine enough to place them.
     pub fn edges(&self) -> Result<Vec<Edge>> {
         let mesh = self.tessellate((self.size()? * EDGE_TOLERANCE).max(1e-4))?;
@@ -202,6 +259,27 @@ mod tests {
         let mut n = a.bodies[0].edge_names(&fine);
         n.sort();
         assert_eq!(n, names(&ea));
+    }
+
+    #[test]
+    fn every_corner_of_the_plate_has_its_own_name_from_its_faces() {
+        let d = open_design(&sample::plate_design(&Plate::default()).unwrap()).unwrap();
+        let body = &d.bodies[0];
+        let vertices = body.vertices().unwrap();
+        // The box's 8 corners and the ends of the hole's two seams (2 × 2).
+        assert_eq!(vertices.len(), 12, "{vertices:?}");
+        let mut unique: Vec<&str> = vertices.iter().map(|v| v.name.as_str()).collect();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), vertices.len(), "{unique:?}");
+        // A box corner is where three faces meet.
+        let corner = vertices.iter().find(|v| v.point == [0.0, 0.0, 0.0]).unwrap();
+        assert_eq!(corner.name.split('|').count(), 3, "{}", corner.name);
+        // The names survive an edit that keeps the faces.
+        let b = open_design(&sample::plate_design(&Plate { width: 70.0, ..Plate::default() }).unwrap()).unwrap();
+        let mut other: Vec<String> = b.bodies[0].vertices().unwrap().into_iter().map(|v| v.name).collect();
+        other.sort_unstable();
+        assert_eq!(other, unique);
     }
 
     #[test]

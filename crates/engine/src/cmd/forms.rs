@@ -1716,6 +1716,7 @@ mod tests {
 
     const STATE: &[&str] = &[
         "open a design first",
+        "update checks are off",
         "`boundary_conditions` or `loads`",
         "give one of",
         "is not an explicit",

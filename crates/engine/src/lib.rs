@@ -21,6 +21,7 @@ pub mod logfile;
 
 pub use cmd::analytic_surfaces;
 pub use cmd::replace::{MESHERS, Replacement, replacement};
+pub use cmd::update::enable_checks as enable_update_checks;
 pub use fieldcraft_io::{Item as ViewItem, ItemKind};
 pub mod history;
 pub mod progress;

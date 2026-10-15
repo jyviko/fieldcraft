@@ -25,6 +25,7 @@ pub(crate) mod seeds;
 pub(crate) mod solve;
 mod symmetry;
 mod tags;
+pub mod update;
 pub(crate) mod view;
 
 use crate::schema::ProblemKind;
@@ -158,6 +159,7 @@ pub static ALL: &[CommandSpec] = &[
     diagnostics::CRASH_REPORT,
     diagnostics::BUG_REPORT,
     diagnostics::CRASH_TEST,
+    update::CHECK,
 ];
 
 /// The problem with required parameter `key`: [`ProblemKind::Required`] when it is left out,

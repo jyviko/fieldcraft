@@ -1320,6 +1320,7 @@ dependencies = [
  "fieldcraft-parallel",
  "fieldcraft-render",
  "fieldcraft-solver",
+ "fieldcraft-update",
  "log",
  "png",
  "serde",

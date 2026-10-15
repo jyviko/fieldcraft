@@ -1,0 +1,122 @@
+{
+ "title": "Heat through a tie: two blocks of conductivities 10 and 40 with non-matching meshes, 20 and 100 at the ends",
+ "kind": "theory",
+ "source": "Series thermal resistances: steady one-dimensional conduction through two layers in perfect contact, T_i = (k1 T0 + k2 T1)/(k1 + k2) and q = ΔT/(L1/k1 + L2/k2) (F. P. Incropera, D. P. DeWitt, Fundamentals of Heat and Mass Transfer, §3.1, the composite wall). A linear field in each layer is the exact discrete solution, and the dual mortar tie reproduces a linear temperature across non-matching meshes",
+ "quantities": [
+  {
+   "id": "t_interface",
+   "quantity": "T at the tied secondary node (0.5, 0.5, 1)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Heat",
+     "at": [
+      [
+       0.5,
+       0.5,
+       1.0
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/temperature"
+   },
+   "value": 84.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "exact discrete solution: linear in each block, and the tie holds the interface temperature for non-matching meshes"
+  },
+  {
+   "id": "t_lower",
+   "quantity": "T in the lower block at (0, 0, 0.5)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Heat",
+     "at": [
+      [
+       0.0,
+       0.0,
+       0.5
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/temperature"
+   },
+   "value": 52.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "exact discrete solution: linear in each block, and the tie holds the interface temperature for non-matching meshes"
+  },
+  {
+   "id": "t_upper",
+   "quantity": "T in the upper block at (1, 1, 1.5)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Heat",
+     "at": [
+      [
+       1.0,
+       1.0,
+       1.5
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/temperature"
+   },
+   "value": 92.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "exact discrete solution: linear in each block, and the tie holds the interface temperature for non-matching meshes"
+  },
+  {
+   "id": "q_lower",
+   "quantity": "heat flux q_z at (0, 0, 0.5)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Heat",
+     "at": [
+      [
+       0.0,
+       0.0,
+       0.5
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/heat_flux/2"
+   },
+   "value": -640.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "the heat flow ΔT/(1/k1 + 1/k2) = 640 per unit area, −k ∂T/∂z uniform in each block"
+  },
+  {
+   "id": "q_upper",
+   "quantity": "heat flux q_z at (1, 1, 1.5)",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Heat",
+     "at": [
+      [
+       1.0,
+       1.0,
+       1.5
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/heat_flux/2"
+   },
+   "value": -640.0,
+   "tolerance": {
+    "relative": 1e-09
+   },
+   "reason": "the same heat flow crosses the tie: nothing is lost at the interface"
+  }
+ ]
+}

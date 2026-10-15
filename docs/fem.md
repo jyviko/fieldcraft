@@ -109,7 +109,9 @@ A heat conduction element carries one temperature per node (`heat::HEAT_DOFS`, k
 and a source ∫ N Q dV (mass rule), and the heat flux −k∇T at the integration points;
 `heat::face_weights` and `face_film` integrate surface flux and convection on tri3/tri6/quad4/quad8
 faces. The solver (`fieldcraft_solver::heat`) numbers the temperatures with
-`DofLayout::uniform(…, DofSet::TEMPERATURE)` and assembles with the same `sparse::add_block`.
+`DofLayout::uniform(…, DofSet::TEMPERATURE)`, assembles with the same `sparse::add_block`, and
+eliminates prescribed temperatures and ties (see Ties) with the structural solver's
+`constraints::Reduction`.
 
 Thermal strain ε_th = α (T − T_ref) along the material axes enters a solid as the load
 `Solid::thermal_load(d, &ThermalStrain { alpha, delta })` = ∫ Bᵀ D ε_th dV and its stress as
@@ -586,12 +588,26 @@ frequency, buckling and nonlinear steps (small-displacement constraints). Dividi
 keeps rigid motions exact at a surface's edge where a face is only partly covered. Main faces
 count when the secondary face overlaps them along its normal with a mean gap within the position
 tolerance (default half the main element's thickness); uncovered secondary nodes stay free with a
-warning. Heat transfer and explicit dynamics refuse ties by name.
+warning. Explicit dynamics refuses ties by name.
 
-**Verification** (`crates/solver/tests/contact.rs`, `tests/oracle/tie-patch`): a linear field
-across non-matching hex8/tet4 meshes reproduced to round-off (to 10⁻⁶ on distorted quadrilateral
-faces, where the overlap integration is accurate to its degree) in linear and nonlinear static
-steps; uniaxial tension across a tie, σ_zz = Eε in every element to 10⁻⁹.
+**Heat** (`fieldcraft_solver::heat`): the same weights tie temperatures, T_A = Σ_J w_AJ T_J (one row
+per secondary node, `tie::rows_of` with the temperature kind), in steady and transient heat
+transfer and in the heat solution of coupled temperature–displacement steps. The heat solver
+eliminates them with the prescribed temperatures through the same transformation
+(`constraints::Reduction`), so the interface has no resistance, the heat leaving one side enters
+the other, and the reactions at prescribed temperatures (T_pᵀ (K T + C Ṫ − f)) balance the heat
+supplied.
+
+**Verification** (`crates/solver/tests/contact.rs`, `tests/oracle/tie-patch`,
+`tests/oracle/tie-heat-series`): a linear field across non-matching hex8/tet4 meshes reproduced to
+round-off (to 10⁻⁶ on distorted quadrilateral faces, where the overlap integration is accurate to
+its degree) in linear and nonlinear static steps; uniaxial tension across a tie, σ_zz = Eε in
+every element to 10⁻⁹. Heat: steady conduction between held ends through tied hex8/tet4 blocks
+(matching, graded and mixed meshes), the linear profile, the flux and the heat flow k A ΔT / L to
+10⁻⁹; with conductivities k₁ ≠ k₂ the series-resistance interface temperature
+(k₁ T₀ + k₂ T₁)/(k₁ + k₂) and heat flow ΔT/(L₁/k₁ + L₂/k₂); a transient tied bar equal to the
+single-body bar; a coupled step with a tie at a uniform ΔT expands freely (u = α ΔT x, no stress).
+Ties take linear faces only (tet4, wedge6, hex8), for heat as for displacement.
 
 ## Hyperelastic materials in explicit dynamics
 

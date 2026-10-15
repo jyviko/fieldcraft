@@ -1,0 +1,25 @@
+{
+  "note": "FieldCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "q_lower": {
+      "band": 6.400000000000002e-7,
+      "value": -640.0000000000002
+    },
+    "q_upper": {
+      "band": 6.400000000000015e-7,
+      "value": -640.0000000000015
+    },
+    "t_interface": {
+      "band": 8.400000000000002e-8,
+      "value": 84.00000000000001
+    },
+    "t_lower": {
+      "band": 5.2000000000000035e-8,
+      "value": 52.000000000000036
+    },
+    "t_upper": {
+      "band": 9.200000000000008e-8,
+      "value": 92.00000000000007
+    }
+  }
+}

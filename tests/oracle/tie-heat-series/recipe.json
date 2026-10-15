@@ -1,0 +1,19 @@
+[
+ {"command": "mesh.block", "params": {"body": "Lower", "kind": "hex8", "corners": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], "divisions": [3, 3, 2], "faces": {"1": "bottom", "2": "top"}, "bias": [2.0, 0.6, 1.0]}},
+ {"command": "mesh.block", "params": {"body": "Upper", "kind": "hex8", "corners": [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1], [0, 0, 2], [1, 0, 2], [1, 1, 2], [0, 1, 2]], "divisions": [2, 2, 2], "faces": {"1": "bottom", "2": "top"}, "merge": 0}},
+ {"command": "model.set.create", "params": {"name": "lower", "geometry": [{"body": "Lower"}]}},
+ {"command": "model.set.create", "params": {"name": "upper", "geometry": [{"body": "Upper"}]}},
+ {"command": "model.set.create", "params": {"name": "lower_top", "geometry": [{"body": "Lower", "face": "top"}]}},
+ {"command": "model.set.create", "params": {"name": "upper_bottom", "geometry": [{"body": "Upper", "face": "bottom"}]}},
+ {"command": "model.set.create", "params": {"name": "cold", "geometry": [{"body": "Lower", "face": "bottom"}]}},
+ {"command": "model.set.create", "params": {"name": "hot", "geometry": [{"body": "Upper", "face": "top"}]}},
+ {"command": "model.material.create", "params": {"name": "Low", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.3}, "thermal": {"conductivity": 10.0}}},
+ {"command": "model.material.create", "params": {"name": "High", "elastic": {"type": "isotropic", "young": 1000.0, "poisson": 0.3}, "thermal": {"conductivity": 40.0}}},
+ {"command": "model.section.create", "params": {"name": "lower", "set": "lower", "material": "Low", "kind": {"type": "solid"}}},
+ {"command": "model.section.create", "params": {"name": "upper", "set": "upper", "material": "High", "kind": {"type": "solid"}}},
+ {"command": "interaction.tie", "params": {"name": "glue", "main": "lower_top", "secondary": "upper_bottom"}},
+ {"command": "model.boundary_condition.create", "params": {"name": "cold", "type": "temperature", "target": {"set": "cold"}, "value": 20.0}},
+ {"command": "model.boundary_condition.create", "params": {"name": "hot", "type": "temperature", "target": {"set": "hot"}, "value": 100.0}},
+ {"command": "model.step.create", "params": {"name": "Heat", "procedure": {"type": "heat_transfer"}, "boundary_conditions": ["cold", "hot"], "loads": []}},
+ {"command": "solve.heat", "params": {"step": "Heat"}, "id": "heat"}
+]

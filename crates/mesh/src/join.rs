@@ -100,13 +100,23 @@ pub const MAX_MERGE_NODES: usize = 50_000_000;
 /// becomes a survivor (the nearest wins, the lowest label on a tie). Deterministic: the labels
 /// decide, never the order of a hash map.
 pub fn coincident_nodes(model: &Model, candidates: Option<&BTreeSet<u32>>, tol: f64) -> Result<BTreeMap<u32, u32>> {
+    coincident_nodes_from(model, candidates, tol, false)
+}
+
+/// [`coincident_nodes`], taking the nodes in descending label order when `highest` (the highest
+/// label of a group survives, and wins a tie).
+pub fn coincident_nodes_from(model: &Model, candidates: Option<&BTreeSet<u32>>, tol: f64, highest: bool) -> Result<BTreeMap<u32, u32>> {
     if !(tol.is_finite() && tol > 0.0) {
         return Err(Error::Invalid(format!("the merge distance must be a positive number, not {tol}")));
     }
-    let nodes: Vec<(u32, P)> = match candidates {
+    let mut nodes: Vec<(u32, P)> = match candidates {
         Some(c) => c.iter().filter_map(|&l| model.node(l).map(|n| (l, n.xyz))).collect(),
         None => model.nodes().iter().map(|(&l, n)| (l, n.xyz)).collect(),
     };
+    if highest {
+        nodes.reverse();
+    }
+    let first = |a: u32, b: u32| if highest { b.cmp(&a) } else { a.cmp(&b) };
     if nodes.len() > MAX_MERGE_NODES {
         return Err(Error::Invalid(format!("{} nodes to merge; at most {MAX_MERGE_NODES}", nodes.len())));
     }
@@ -118,7 +128,7 @@ pub fn coincident_nodes(model: &Model, candidates: Option<&BTreeSet<u32>>, tol: 
             .near(p)
             .map(|(l, q)| (dot(sub(q, p), sub(q, p)), l))
             .filter(|(d2, _)| *d2 <= tol * tol)
-            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(first(a.1, b.1)))
             .map(|(_, l)| map.get(&l).copied().unwrap_or(l));
         match near {
             Some(survivor) => {

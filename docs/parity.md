@@ -41,7 +41,7 @@ products are run, no documentation text is copied). Status: **done**, **started*
 | Mesh | Octree/grid-dual all-hex for any part | M6 | yes | planned |
 | Mesh | Hex-dominant by recombination; polycube | M6 | yes | planned |
 | Mesh | Smoothing, untangling, boundary padding, layers through thin walls | M6 | yes | planned |
-| Mesh | Mesh editing (move, merge, split, collapse, remesh region), imported orphan meshes | M6 | yes | started (node/element add/remove) |
+| Mesh | Mesh editing (move, merge, split, collapse, remesh region), imported orphan meshes | M6 | yes | started (node/element add/remove, merge coincident nodes, duplicate and crack check, renumber) |
 | Model | Sets and surfaces bound to geometry names | M3 | yes | done |
 | Model | Materials: elastic (isotropic, orthotropic), density, unit-system check | M3 | | done |
 | Model | Materials: plasticity, hyperelasticity, damage, thermal | M8 | | started (von Mises plasticity: bilinear, table, Johnson–Cook; Johnson–Cook damage, erosion; plasticity in explicit and nonlinear static steps; written to Abaqus `*PLASTIC`, Nastran `MATS1`, LS-DYNA plastic materials where expressible; compressible neo-Hookean, Mooney–Rivlin and Yeoh for nonlinear steps, Abaqus `*HYPERELASTIC, NEO HOOKE`, `MOONEY-RIVLIN`, `YEOH`; thermal strain in nonlinear steps) |

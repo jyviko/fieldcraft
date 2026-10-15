@@ -1249,6 +1249,28 @@ pub const ELEMENT_ADD: &[Field] = &[
     labels("nodes", "Nodes", LabelOf::Node).help("The element's node labels in order.").req().hint("labels in order: 1, 2, 3, 4"),
 ];
 
+const MERGE_TOLERANCE: Field =
+    positive("tolerance", "Tolerance", D::Length).help("Nodes closer than this are one node.").hint("a millionth of the mesh's size");
+
+pub const NODE_MERGE: &[Field] = &[
+    MERGE_TOLERANCE,
+    reference("set", "Set", C::Set).help("Merge only the nodes of this set (and of its elements and faces).").hint("every node"),
+    choice("keep", "Keep", &[("lowest", "Lowest label"), ("highest", "Highest label")]).help("Which node of each group survives.").def("\"lowest\""),
+];
+
+pub const CHECK_DUPLICATES: &[Field] = &[MERGE_TOLERANCE];
+
+pub const RENUMBER: &[Field] = &[
+    choice("what", "Renumber", &[("both", "Nodes and elements"), ("nodes", "Nodes"), ("elements", "Elements")])
+        .help("Which labels change.")
+        .def("\"both\""),
+    choice("by", "Order", &[("compact", "Compact (label order)"), ("bandwidth", "Bandwidth (reverse Cuthill–McKee)"), ("body", "Body by body")])
+        .help("The order of the new labels.")
+        .def("\"compact\""),
+    int("start", "Start", 1, 99_999_999).help("The first new label.").def("1"),
+    int("offset", "Offset", -99_999_999, 99_999_999).help("Instead of an order and a start: add this to every label.").hint("none"),
+];
+
 pub const SEED_EDGE: &[Field] = &[
     json("edges", "Edges")
         .help("The edges to seed, as JSON; easiest with Use selection.")

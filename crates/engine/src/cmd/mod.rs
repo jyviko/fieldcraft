@@ -17,8 +17,10 @@ pub(crate) mod mesh;
 pub use datum::edit_params as datum_edit_params;
 pub use datum::preview as datum_preview;
 pub use mesh::analytic_surfaces;
+pub use nodes::merge_preview as node_merge_preview;
 mod mirror;
 mod model;
+pub(crate) mod nodes;
 pub(crate) mod octree;
 pub mod replace;
 mod results;
@@ -80,6 +82,9 @@ pub static ALL: &[CommandSpec] = &[
     seeds::SEED_CLEAR,
     seeds::SEED_LIST,
     mirror::MIRROR,
+    nodes::MERGE,
+    nodes::DUPLICATES,
+    nodes::RENUMBER,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

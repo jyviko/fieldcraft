@@ -128,6 +128,8 @@ impl Session {
         // Models without elements (point masses, fluid domains) need no material or section.
         let elementless = analysable && m.elements().is_empty();
         let modal_only = !m.steps().is_empty() && m.steps().iter().all(|st| matches!(st.procedure, Procedure::Frequency { .. }));
+        // A model driven by a prescribed displacement or temperature needs no load either.
+        let driven = m.boundary_conditions().values().any(|bc| bc.drives());
         let mut next_given = false;
         Stage::ALL
             .into_iter()
@@ -137,7 +139,7 @@ impl Session {
                 let optional = match stage {
                     Stage::Prepare => true,
                     Stage::Material | Stage::Section => elementless,
-                    Stage::Loads => modal_only,
+                    Stage::Loads => modal_only || driven,
                     _ => false,
                 };
                 let command = r.provider();
@@ -232,6 +234,17 @@ mod tests {
         s.execute("results.clear", &json!({})).unwrap();
         assert_eq!(status(&s, Stage::Solve), Done);
         assert_eq!((status(&s, Stage::Results), to_json(&s.progress())["next"]["command"].clone()), (Next, json!("results.contour")));
+    }
+
+    /// A model driven by a prescribed displacement (rubber-seal) needs no load: the checklist
+    /// agrees with the model check and offers the solve next.
+    #[test]
+    fn a_displacement_driven_model_needs_no_load() {
+        let mut s = Session::default();
+        s.run_script(&crate::sample::rubber_seal()).unwrap();
+        assert!(s.model.loads().is_empty());
+        assert_eq!(status(&s, Stage::Loads), Optional);
+        assert_eq!(status(&s, Stage::Solve), Next, "{:?}", s.progress());
     }
 
     #[test]

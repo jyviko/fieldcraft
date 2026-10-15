@@ -172,6 +172,16 @@ impl BoundaryCondition {
         }
     }
 
+    /// Whether it drives the model on its own, as a load does: a non-zero prescribed
+    /// displacement or a non-zero prescribed temperature (a support only holds).
+    pub fn drives(&self) -> bool {
+        match self {
+            BoundaryCondition::Displacement { values, .. } => values.iter().flatten().any(|v| *v != 0.0),
+            BoundaryCondition::Temperature { value, .. } => *value != 0.0,
+            BoundaryCondition::Fixed { .. } | BoundaryCondition::Symmetry { .. } => false,
+        }
+    }
+
     /// Whether it prescribes temperatures (rather than motion).
     pub fn is_thermal(&self) -> bool {
         matches!(self, BoundaryCondition::Temperature { .. })

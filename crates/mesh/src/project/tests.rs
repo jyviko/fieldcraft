@@ -193,6 +193,38 @@ fn o_grid_keeps_neighbours_and_opens_faces() {
     t.check().unwrap();
 }
 
+/// A split runs through the whole sheet of blocks: here a 2×2 grid split across its first
+/// direction, and the reversed neighbour counts its fractions from the shared end.
+#[test]
+fn split_cuts_the_whole_sheet_and_stays_conforming() {
+    let mut t = Topology::grid([&[0.0, 1.0, 2.0], &[0.0, 1.0, 2.0], &[0.0, 1.0]]).unwrap();
+    // Block 1 relabelled so its direction 0 runs the other way (still right-handed).
+    t.blocks[1] = [t.blocks[1][2], t.blocks[1][3], t.blocks[1][0], t.blocks[1][1], t.blocks[1][6], t.blocks[1][7], t.blocks[1][4], t.blocks[1][5]];
+    t.check().unwrap();
+    // Splitting block 0 along Y cuts block 1 (its X neighbour shares the Y edges) but not 2 or 3.
+    let made = t.split(0, 1, &[0.25]).unwrap();
+    assert_eq!(made.len(), 2);
+    assert_eq!(t.blocks.len(), 6);
+    t.check().unwrap();
+    let uses = lattice::face_uses(&t).unwrap();
+    assert!(uses.values().all(|&u| u <= 2));
+    // Every new vertex is a quarter of the way up in Y; the cut faces are shared.
+    assert!(t.vertices.iter().any(|v| (v[1] - 0.25).abs() < 1e-12));
+    assert!(t.vertices.iter().all(|v| [0.0, 0.25, 1.0, 2.0].iter().any(|y| (v[1] - y).abs() < 1e-12)));
+    // Splitting along X goes through the whole grid's X sheet: four more blocks.
+    let made = t.split(2, 0, &[1.0 / 3.0, 2.0 / 3.0]).unwrap();
+    assert_eq!(t.blocks.len(), 6 + 3 * 2);
+    assert!(!made.is_empty());
+    t.check().unwrap();
+    assert!(lattice::face_uses(&t).unwrap().values().all(|&u| u <= 2));
+    let mut u = t.clone();
+    for bad in [vec![], vec![0.0], vec![0.5, 0.4], vec![1.2], vec![f64::NAN]] {
+        assert!(u.split(0, 0, &bad).is_err(), "{bad:?}");
+    }
+    assert!(u.split(0, 3, &[0.5]).is_err() && u.split(99, 0, &[0.5]).is_err());
+    assert_eq!(u, t);
+}
+
 #[test]
 fn hostile_topologies_are_errors() {
     let (s, g) = sphere(1.0, 32);

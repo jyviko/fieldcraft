@@ -20,7 +20,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const HEX_PROJECT: CommandSpec = CommandSpec {
     id: "mesh.hex.project",
     label: "Projection Blocking",
-    params: r#"{"body": "Body1", "size": 2.0 (element size, mm; default 1/25 of the body's diagonal), "template": "grid" (default) | "sphere" | "butterfly" | "blocks", "center": [x, y, z], "radius": r, "axis": [0, 0, 1], "levels": [z0, z1, …] (sphere and butterfly: default from the body's bounding box; butterfly levels are distances along the axis from the centre), "inset": 0.55 (inner square or cube corner at this fraction of the radius), "grid": {"planes": {"x": [...], "y": [...], "z": [...]} or "cells": [ni, nj, nk] (even planes over the bounding box, default [1, 1, 1]), "carve": [{"i": [a, b], "j": [c, d], "k": [e, f]}] (block index ranges, inclusive, removed)}, "blocks": {"vertices": [[x, y, z], ...], "blocks": [[v1..v8], ...] (0-based vertices, hex8 order)}, "operations": [{"op": "o_grid", "block": b, "open": [faces], "inset": 0.5 or [i1, i2, i3], "extrude": {"offset": [dx, dy, dz], "layers": 1, "faces": "all" (the open face's butterfly: a round branch) | "inner" (its inner face: a square stub)}} | {"op": "extrude", "faces": [[block, face], ...], "offset": [dx, dy, dz], "layers": 1} | {"op": "connect", "from": [block, face], "to": [block, face], "layers": 1} (blocks bridging two faces: closes a handle) | {"op": "remove", "blocks": [...]} (carve; later blocks renumber) | {"op": "merge", "distance": d}] (applied in order; blocks are 0-based, new blocks appended, the O-grid's inner block keeping the old index; a face is its hex8 number 1-6 or the direction it faces, "+x" … "-z"), "preview": true (return the topology without meshing), "faces": [{"block": b, "face": 1-6, "to": ["face names"]}] (targets set by hand; other outer block faces go to the smooth group of B-rep faces nearest them), "divisions": [{"block": b, "direction": 1|2|3, "count": n}], "smoothing": "elliptic" (default) | "elliptic-controlled" (Thomas–Middlecoff) | "laplace" | "none", "iterations": 100, "min_quality": 0.2 (smallest scaled Jacobian accepted), "merge": distance (join nodes of other bodies' meshes within it; default 1e-6 of the diagonal, 0 never), "tolerance": chordal tolerance of the tessellation} — replaces the body's mesh with an all-hex mesh of the block topology: outer block faces projected onto their B-rep faces, edges between faces with different targets onto the curve where those meet (tangent-plane iteration), vertices on three onto their point, nodes placed by transfinite interpolation and smoothed with the boundary held on the geometry. Elements are tagged with the body and boundary faces with their B-rep faces. Reports blocks, divisions, targets and quality before and after smoothing; a corner that flattens on a curved face is an error that says to use an O-grid or template there"#,
+    params: r#"{"body": "Body1", "size": 2.0 (element size, mm; default 1/25 of the body's diagonal), "template": "grid" (default) | "sphere" | "butterfly" | "blocks", "center": [x, y, z], "radius": r, "axis": [0, 0, 1], "levels": [z0, z1, …] (sphere and butterfly: default from the body's bounding box; butterfly levels are distances along the axis from the centre), "inset": 0.55 (inner square or cube corner at this fraction of the radius), "grid": {"planes": {"x": [...], "y": [...], "z": [...]} or "cells": [ni, nj, nk] (even planes over the bounding box, default [1, 1, 1]), "carve": [{"i": [a, b], "j": [c, d], "k": [e, f]}] (block index ranges, inclusive, removed)}, "blocks": {"vertices": [[x, y, z], ...], "blocks": [[v1..v8], ...] (0-based vertices, hex8 order)}, "operations": [{"op": "o_grid", "block": b, "open": [faces], "inset": 0.5 or [i1, i2, i3], "extrude": {"offset": [dx, dy, dz], "layers": 1, "faces": "all" (the open face's butterfly: a round branch) | "inner" (its inner face: a square stub)}} | {"op": "extrude", "faces": [[block, face], ...], "offset": [dx, dy, dz], "layers": 1} | {"op": "connect", "from": [block, face], "to": [block, face], "layers": 1} (blocks bridging two faces: closes a handle) | {"op": "remove", "blocks": [...]} (carve; later blocks renumber) | {"op": "merge", "distance": d} | {"op": "split", "block": b, "direction": 1|2|3 or "x"|"y"|"z", "at": [fractions]} (cuts the block and the whole sheet of blocks the cut runs through, so the topology stays conforming; fractions from the block's side-0 face, or from the low end along an axis; the block keeps its first slab, the others are appended)] (applied in order; blocks are 0-based, new blocks appended, the O-grid's inner block keeping the old index; a face is its hex8 number 1-6 or the direction it faces, "+x" … "-z"), "preview": true (return the topology without meshing), "faces": [{"block": b, "face": 1-6, "to": ["face names"]}] (targets set by hand; other outer block faces go to the smooth group of B-rep faces nearest them), "divisions": [{"block": b, "direction": 1|2|3, "count": n}], "smoothing": "elliptic" (default) | "elliptic-controlled" (Thomas–Middlecoff) | "laplace" | "none", "iterations": 100, "min_quality": 0.2 (smallest scaled Jacobian accepted), "merge": distance (join nodes of other bodies' meshes within it; default 1e-6 of the diagonal, 0 never), "tolerance": chordal tolerance of the tessellation} — replaces the body's mesh with an all-hex mesh of the block topology: outer block faces projected onto their B-rep faces, edges between faces with different targets onto the curve where those meet (tangent-plane iteration), vertices on three onto their point, nodes placed by transfinite interpolation and smoothed with the boundary held on the geometry. Elements are tagged with the body and boundary faces with their B-rep faces. Reports blocks, divisions, targets and quality before and after smoothing; a corner that flattens on a curved face is an error that says to use an O-grid or template there"#,
     form: Some(super::forms::HEX_PROJECT),
     kind: CommandKind::Model,
     requires: &[Requirement::Geometry],
@@ -101,6 +101,20 @@ enum Operation {
     Merge {
         distance: f64,
     },
+    Split {
+        block: usize,
+        direction: DirSel,
+        at: Vec<f64>,
+    },
+}
+
+/// A block direction: 1, 2 or 3 (along 1→2, 1→4, 1→5), or the axis it runs nearest ("x", "y",
+/// "z"; fractions then count from its low end).
+#[derive(Deserialize, Clone)]
+#[serde(untagged)]
+enum DirSel {
+    Number(usize),
+    Axis(String),
 }
 
 fn face_of(t: &Topology, block: usize, f: &FaceSel) -> Result<u8> {
@@ -163,6 +177,25 @@ fn operate(t: &mut Topology, ops: &[Operation]) -> Result<()> {
                     return Err(EngineError::invalid("operations.distance", "a distance of 0 or more"));
                 }
                 t.merge(*distance);
+            }
+            Operation::Split { block, direction, at } => {
+                bounded(at, "operations.at")?;
+                let (d, against) = match direction {
+                    DirSel::Number(n @ 1..=3) => (n - 1, false),
+                    DirSel::Number(n) => return Err(EngineError::Params(format!("split direction {n}: 1, 2, 3 or x, y, z"))),
+                    DirSel::Axis(a) => {
+                        let axis = match a.as_str() {
+                            "x" => [1.0, 0.0, 0.0],
+                            "y" => [0.0, 1.0, 0.0],
+                            "z" => [0.0, 0.0, 1.0],
+                            other => return Err(EngineError::Params(format!("split direction `{other}`: 1, 2, 3 or x, y, z"))),
+                        };
+                        t.direction_along(*block, axis)?
+                    }
+                };
+                // Fractions count from the block's side-0 face; along an axis, from its low end.
+                let at: Vec<f64> = if against { at.iter().rev().map(|x| 1.0 - x).collect() } else { at.clone() };
+                t.split(*block, d, &at)?;
             }
         }
     }

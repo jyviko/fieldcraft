@@ -31,6 +31,17 @@ pub(crate) fn face_number(d: usize, s: usize) -> u8 {
     FACE_SIDES.iter().position(|x| *x == (d, s)).map_or(1, |i| i as u8 + 1)
 }
 
+/// The four edges of a block along direction `d`, each from its side-0 corner to its side-1 corner.
+fn edges_along(block: &[u32; 8], d: usize) -> [[u32; 2]; 4] {
+    let mut out = [[0; 2]; 4];
+    for (slot, (k, bits)) in out.iter_mut().zip(CORNERS.iter().enumerate().filter(|(_, bits)| bits[d] == 0)) {
+        let mut e = *bits;
+        e[d] = 1;
+        *slot = [block[k], block[corner_at(e)]];
+    }
+    out
+}
+
 /// Blocks over shared vertices.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Topology {
@@ -322,6 +333,24 @@ impl Topology {
         Ok(best.1)
     }
 
+    /// The direction of block `b` (0 to 2) most nearly along `dir`, and whether it runs against it.
+    pub fn direction_along(&self, b: usize, dir: P) -> Result<(usize, bool)> {
+        let c = self.corners(b)?;
+        let mut best = (f64::NEG_INFINITY, 0, false);
+        for d in 0..3 {
+            let mut v = [0.0; 3];
+            for [p, q] in edges_along(&[0, 1, 2, 3, 4, 5, 6, 7], d) {
+                v = add(v, sub(c[q as usize], c[p as usize]));
+            }
+            let l = crate::vec3::norm(v);
+            let cos = if l > 0.0 { crate::vec3::dot(v, dir) / l } else { 0.0 };
+            if cos.abs() > best.0 {
+                best = (cos.abs(), d, cos < 0.0);
+            }
+        }
+        Ok((best.1, best.2))
+    }
+
     /// The corners of a block face in cyclic order.
     fn face_quad(&self, b: usize, f: u8) -> Result<[u32; 4]> {
         let (d, s) = FACE_SIDES.get(usize::from(f).wrapping_sub(1)).copied().ok_or_else(|| Error::Invalid(format!("face {f} is not a hex8 face")))?;
@@ -387,6 +416,119 @@ impl Topology {
             }
             made.push(self.blocks.len());
             self.blocks.push(block);
+        }
+        Ok(made)
+    }
+
+    /// Split block `b` along its direction `d` (0 to 2) at the fractions `at` (increasing, between
+    /// 0 and 1, measured from its side-0 face), and with it the whole sheet of blocks the cut runs
+    /// through: every block holding an edge parallel to the cut edges (chained through shared
+    /// edges) is split the same way, so the topology stays conforming. Each new vertex lies on its
+    /// edge at the fraction, counted from the end `b`'s side-0 face reaches through the chain. A
+    /// split block keeps its index for its first slab (from its own side 0); the other slabs are
+    /// appended. Returns the appended blocks.
+    pub fn split(&mut self, b: usize, d: usize, at: &[f64]) -> Result<Vec<usize>> {
+        if d > 2 {
+            return Err(Error::Invalid(format!("a block has directions 0 to 2, not {d}")));
+        }
+        if at.is_empty() || at.len() > 1000 || !at.iter().all(|t| *t > 0.0 && *t < 1.0) || at.windows(2).any(|w| !(w[1] > w[0])) {
+            return Err(Error::Invalid(format!("split fractions must be increasing numbers between 0 and 1, got {at:?}")));
+        }
+        let seed = self.blocks.get(b).copied().ok_or_else(|| Error::Invalid(format!("there is no block {b}")))?;
+        let key = |[p, q]: [u32; 2]| [p.min(q), p.max(q)];
+        // The sheet: each cut edge (ascending key) with the vertex its fractions count from, and
+        // each block in it with its cut direction, grown through an edge → blocks index.
+        let mut by_edge: BTreeMap<[u32; 2], Vec<usize>> = BTreeMap::new();
+        for (i, block) in self.blocks.iter().enumerate() {
+            for dd in 0..3 {
+                for e in edges_along(block, dd) {
+                    by_edge.entry(key(e)).or_default().push(i);
+                }
+            }
+        }
+        let mut start: BTreeMap<[u32; 2], u32> = BTreeMap::new();
+        for e in edges_along(&seed, d) {
+            start.insert(key(e), e[0]);
+        }
+        let mut cut: BTreeMap<usize, usize> = BTreeMap::from([(b, d)]);
+        let mut queue = vec![(b, d)];
+        while let Some((i, dd)) = queue.pop() {
+            let block = self.blocks.get(i).copied().unwrap_or([0; 8]);
+            let along = edges_along(&block, dd);
+            // The block runs the sheet's way, or against it: read off an edge already in the
+            // sheet (the one it was reached through), and orient its other edges to match.
+            let against = along.iter().find_map(|e| start.get(&key(*e)).map(|s| *s != e[0])).unwrap_or(false);
+            for e in along {
+                let k = key(e);
+                start.entry(k).or_insert(if against { e[1] } else { e[0] });
+                for &n in by_edge.get(&k).map_or(&[][..], Vec::as_slice) {
+                    if cut.contains_key(&n) {
+                        continue;
+                    }
+                    let nb = self.blocks.get(n).copied().unwrap_or([0; 8]);
+                    if let Some(nd) = (0..3).find(|&x| edges_along(&nb, x).iter().any(|f| key(*f) == k)) {
+                        cut.insert(n, nd);
+                        queue.push((n, nd));
+                    }
+                }
+            }
+        }
+        // Each cut block's four edges must all count from its side-0 face or all from its side-1
+        // face; a sheet that comes back on itself reversed cannot take uneven fractions.
+        let mut flipped: BTreeMap<usize, bool> = BTreeMap::new();
+        for (&i, &dd) in &cut {
+            let block = self.blocks.get(i).copied().unwrap_or([0; 8]);
+            let ways = edges_along(&block, dd).map(|e| start.get(&key(e)) != Some(&e[0]));
+            if ways.iter().any(|w| *w != ways[0]) {
+                return Err(Error::Invalid(format!(
+                    "block {i} would be cut from both ends: the sheet through block {b} comes back on itself reversed; split another block"
+                )));
+            }
+            flipped.insert(i, ways[0]);
+        }
+        if self.blocks.len() + cut.len() * at.len() > MAX_BLOCKS {
+            return Err(Error::Limit(format!("the split makes more than {MAX_BLOCKS} blocks")));
+        }
+        // The vertices along each cut edge, from its start.
+        let mut rows: BTreeMap<[u32; 2], Vec<u32>> = BTreeMap::new();
+        for (k, &s) in &start {
+            let e = if k[0] == s { k[1] } else { k[0] };
+            let (Some(ps), Some(pe)) = (self.vertices.get(s as usize).copied(), self.vertices.get(e as usize).copied()) else {
+                return Err(Error::Invalid(format!("vertex {s} or {e} does not exist")));
+            };
+            let mut row = vec![s];
+            for &t in at {
+                row.push(self.vertices.len() as u32);
+                self.vertices.push(crate::vec3::lerp(ps, pe, t));
+            }
+            row.push(e);
+            rows.insert(*k, row);
+        }
+        let n = at.len() + 1;
+        let mut made = Vec::new();
+        for (&i, &dd) in &cut {
+            let block = self.blocks.get(i).copied().unwrap_or([0; 8]);
+            let rev = flipped.get(&i).copied().unwrap_or(false);
+            // Slab `j`, counted from the block's own side 0.
+            let slab = |j: usize| -> [u32; 8] {
+                let mut out = block;
+                for (k, bits) in CORNERS.iter().enumerate() {
+                    let (mut low, mut high) = (*bits, *bits);
+                    low[dd] = 0;
+                    high[dd] = 1;
+                    let row = rows.get(&key([block[corner_at(low)], block[corner_at(high)]])).map_or(&[][..], Vec::as_slice);
+                    let local = j + bits[dd];
+                    out[k] = row.get(if rev { n - local } else { local }).copied().unwrap_or(block[k]);
+                }
+                out
+            };
+            if let Some(first) = self.blocks.get_mut(i) {
+                *first = slab(0);
+            }
+            for j in 1..n {
+                made.push(self.blocks.len());
+                self.blocks.push(slab(j));
+            }
         }
         Ok(made)
     }

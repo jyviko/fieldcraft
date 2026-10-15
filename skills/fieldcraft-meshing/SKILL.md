@@ -119,6 +119,14 @@ handles, curved caps), lay a block topology over the part and project it (`mesh.
   ops, and close loops with `connect`. Inner corners of a stretched topology follow the
   projection, but keep the initial blocks roughly where the geometry is (offsets measured from
   the block faces, not from the surface).
+- **Footprint margins**: a stub's footprint must sit in the O-gridded block face with roughly even
+  margins all round. A 6 mm footprint in a 30 mm wide petal face with 2 mm above and below leaves
+  ring corners near 170° that twist. Split first (before the O-grid),
+  `{"op": "split", "block", "direction": "y", "at": [0.36, 0.64]}`, so the side margins match the
+  levels' margins; the split runs through the whole sheet of blocks, so preview again for the
+  new indices.
+- A twisted-element error names the block, cell and the block vertex (junction) with the blocks
+  meeting there: fix the topology at that junction (split, move a level, change the inset).
 - Use `"preview": true` to list block indices before meshing; faces can be given as `"+x"` … `"-z"`.
 - Targets default to the smooth group of B-rep faces each outer block face faces; set them with
   `faces: [{block, face, to}]` when a block face is near two surfaces.

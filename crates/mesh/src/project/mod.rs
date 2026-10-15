@@ -516,12 +516,12 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
 
     // Certified quality, the gap to the geometry and the tags.
     let (mut min_sj, mut sum_sj, mut volume) = (f64::INFINITY, 0.0, 0.0);
-    let mut invalid = 0usize;
-    for h in &lat.hexes {
+    let mut invalid: Vec<usize> = Vec::new();
+    for (e, h) in lat.hexes.iter().enumerate() {
         let q = element_quality(ElementKind::Hex8, &corners_of(&nodes, h))?;
         let sj = q.get(Metric::ScaledJacobian).unwrap_or(-1.0);
         if q.validity().is_none_or(|v| v != crate::quality::Validity::Valid) {
-            invalid += 1;
+            invalid.push(e);
         }
         min_sj = min_sj.min(sj);
         sum_sj += sj;
@@ -568,11 +568,12 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
                 format!("worst in block {} near ({:.3}, {:.3}, {:.3})", c.0, x[0], x[1], x[2])
             })
     };
-    if invalid > 0 {
+    if !invalid.is_empty() {
         return Err(Error::Failed(format!(
-            "{invalid} of {} elements are inverted or degenerate after projection (smallest scaled Jacobian {min_sj:.3}, {}): the blocks do not fit the part — add an O-grid or a template where a block corner lands on a curved face",
+            "{} of {} elements are inverted, twisted or degenerate after projection (certified Jacobian; smallest corner scaled Jacobian {min_sj:.3}): {}. The blocks do not fit the part there — add an O-grid or a template where a block corner lands on a curved face, or split the blocks so the faces meeting at that junction are not squeezed",
+            invalid.len(),
             lat.hexes.len(),
-            worst()
+            where_invalid(t, &lat, &nodes, &invalid)
         )));
     }
     if min_sj < opts.min_quality {
@@ -593,6 +594,36 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
         )));
     }
     Ok(ProjectedMesh { nodes, hexes: lat.hexes, boundary, report })
+}
+
+/// Most invalid elements an error names.
+const NAMED_INVALID: usize = 4;
+
+/// Where the invalid elements `invalid` are: per element its block, cell and centre, and when it
+/// touches a block vertex (a junction), the vertex and the blocks that meet there.
+fn where_invalid(t: &Topology, lat: &lattice::Lattice, nodes: &[P], invalid: &[usize]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for &e in invalid.iter().take(NAMED_INVALID) {
+        let (Some(h), Some((b, cell))) = (lat.hexes.get(e), lat.hex_cell.get(e)) else { continue };
+        let x = scale(h.iter().fold([0.0; 3], |a, &v| add(a, nodes.get(v as usize).copied().unwrap_or_default())), 0.125);
+        let mut s = format!("block {b} cell {cell:?} near ({:.3}, {:.3}, {:.3})", x[0], x[1], x[2]);
+        let vertices: BTreeSet<u32> = h
+            .iter()
+            .filter_map(|&v| match lat.entity.get(v as usize) {
+                Some(Entity::Vertex(k)) => Some(*k),
+                _ => None,
+            })
+            .collect();
+        for k in vertices {
+            let around: Vec<String> = t.blocks.iter().enumerate().filter(|(_, blk)| blk.contains(&k)).map(|(i, _)| i.to_string()).collect();
+            s.push_str(&format!(" at block vertex {k} where blocks {} meet", around.join(", ")));
+        }
+        parts.push(s);
+    }
+    if invalid.len() > NAMED_INVALID {
+        parts.push(format!("and {} more", invalid.len() - NAMED_INVALID));
+    }
+    parts.join("; ")
 }
 
 /// The polyline's points redistributed evenly by arc length (ends kept).

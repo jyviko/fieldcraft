@@ -99,6 +99,10 @@ fn hostile_parameters_change_nothing() {
         json!({"body": "Ball", "template": "sphere", "operations": [{"op": "o_grid", "block": 77}]}),
         json!({"body": "Ball", "template": "sphere", "operations": [{"op": "extrude", "faces": [[0, "+w"]], "offset": [0, 0, 1]}]}),
         json!({"body": "Ball", "template": "sphere", "operations": [{"op": "merge", "distance": -1}]}),
+        json!({"body": "Ball", "template": "sphere", "operations": [{"op": "split", "block": 0, "direction": "w", "at": [0.5]}]}),
+        json!({"body": "Ball", "template": "sphere", "operations": [{"op": "split", "block": 0, "direction": 4, "at": [0.5]}]}),
+        json!({"body": "Ball", "template": "sphere", "operations": [{"op": "split", "block": 0, "direction": "x", "at": [1.5]}]}),
+        json!({"body": "Ball", "template": "sphere", "operations": [{"op": "split", "block": 99, "direction": 1, "at": [0.5]}]}),
         json!({"body": "Ball", "template": "blocks"}),
         json!({"body": "Ball", "template": "blocks", "blocks": {"vertices": [[0, 0, 0]], "blocks": [[0, 0, 0, 0, 0, 0, 0, 0]]}}),
         json!({"body": "Ball", "grid": {"cells": [0, 1, 1]}}),
@@ -128,26 +132,66 @@ fn cup_params(size: f64, inset: Value) -> Value {
     json!({"body": "Cup", "template": "butterfly", "center": [0, 0, 0], "axis": [0, 0, 1], "radius": 20, "levels": [0, 4, 6, 14, 18, 26, 30], "size": size,
     "operations": [
         {"op": "o_grid", "block": 0, "open": [1, 2], "inset": 0.6},
-        {"op": "o_grid", "block": 14, "open": ["+x"], "inset": inset},
-        {"op": "o_grid", "block": 22, "open": ["+x"], "inset": inset},
+        {"op": "split", "block": 14, "direction": "y", "at": [0.36, 0.64]},
+        {"op": "o_grid", "block": 54, "open": ["+x"], "inset": inset},
+        {"op": "o_grid", "block": 62, "open": ["+x"], "inset": inset},
+        {"op": "extrude", "faces": [[54, "+x"]], "offset": [12, 0, 0]},
+        {"op": "extrude", "faces": [[84, "+x"]], "offset": [4, 0, 0]},
+        {"op": "extrude", "faces": [[62, "+x"]], "offset": [12, 0, 0]},
+        {"op": "extrude", "faces": [[86, "+x"]], "offset": [4, 0, 0]},
+        {"op": "connect", "from": [85, "+z"], "to": [87, "-z"], "layers": 2},
+        {"op": "remove", "blocks": [1, 2, 3, 4, 5, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45]}
+    ]})
+}
+
+/// A cup with a handle: a double O-grid section (the floor's butterfly inside the wall's), the
+/// cavity carved, the handle a square bar extruded from O-grids in the wall and closed by a
+/// connection. The wall's +x petals are split in three around the handle first, so each arm's
+/// footprint sits in a block face with even margins round it (#399).
+fn cup_with_a_handle_at(size: f64) {
+    let (_d, mut s) = cup_session();
+    let r = s.execute("mesh.hex.project", &cup_params(size, json!(0.5))).unwrap();
+    assert!(sj(&r) >= 0.3, "{r}");
+    let (v, body) = (r["volume"].as_f64().unwrap(), r["body_volume"].as_f64().unwrap());
+    assert!((v - body).abs() < 0.01 * body, "{r}");
+    assert!(r["max_gap"].as_f64().unwrap() < 1e-6, "{r}");
+    let q = s.execute("mesh.quality", &json!({})).unwrap();
+    assert_eq!(q["valid"].as_u64(), Some(s.model.elements().len() as u64), "{q}");
+}
+
+#[test]
+fn cup_with_a_handle() {
+    cup_with_a_handle_at(2.0);
+}
+
+#[test]
+#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+fn cup_with_a_handle_refined() {
+    cup_with_a_handle_at(1.0);
+}
+
+/// Without the split, the ring block under the upper arm is squeezed between the petal's edge
+/// and the window-top plane and folds: the mesher refuses the mesh and names the twisted
+/// elements' block and the block junction they touch.
+#[test]
+fn twisted_junction_elements_are_reported_not_meshed() {
+    let (_d, mut s) = cup_session();
+    let mut p = cup_params(2.0, json!([0.5, 0.3, 0.3]));
+    p["operations"] = json!([
+        {"op": "o_grid", "block": 0, "open": [1, 2], "inset": 0.6},
+        {"op": "o_grid", "block": 14, "open": ["+x"], "inset": [0.5, 0.3, 0.3]},
+        {"op": "o_grid", "block": 22, "open": ["+x"], "inset": [0.5, 0.3, 0.3]},
         {"op": "extrude", "faces": [[14, "+x"]], "offset": [12, 0, 0]},
         {"op": "extrude", "faces": [[44, "+x"]], "offset": [4, 0, 0]},
         {"op": "extrude", "faces": [[22, "+x"]], "offset": [12, 0, 0]},
         {"op": "extrude", "faces": [[46, "+x"]], "offset": [4, 0, 0]},
         {"op": "connect", "from": [45, "+z"], "to": [47, "-z"], "layers": 2},
         {"op": "remove", "blocks": [1, 2, 3, 4, 5]}
-    ]})
-}
-
-/// A cup with a handle: a double O-grid section (the floor's butterfly inside the wall's), the
-/// cavity carved, the handle a square bar extruded from O-grids in the wall and closed by a
-/// connection. Open: a few elements at the upper handle junction stay folded (#399).
-#[test]
-#[ignore = "#399: the upper handle junction leaves a few folded elements"]
-fn cup_with_a_handle() {
-    let (_d, mut s) = cup_session();
-    let r = s.execute("mesh.hex.project", &cup_params(2.0, json!([0.5, 0.3, 0.3]))).unwrap();
-    assert!(sj(&r) >= 0.3, "{r}");
+    ]);
+    let model = s.model.clone();
+    let e = s.execute("mesh.hex.project", &p).unwrap_err().to_string();
+    assert!(e.contains("twisted") && e.contains("where blocks 17, 37, 38, 41 meet"), "{e}");
+    assert_eq!(s.model, model);
 }
 
 /// The cup without its handle: the floor's O-grid inside the wall's butterfly, cavity carved.
@@ -158,8 +202,7 @@ fn cup_floor_double_o_grid() {
         {"command": "solid.cylinder", "params": {"base": [0, 0, 4], "radius": 16, "height": 27, "operation": "cut", "targets": ["Cup"]}}
     ]));
     let mut p = cup_params(2.0, json!(0.5));
-    let ops = p["operations"].as_array().unwrap().clone();
-    p["operations"] = json!([ops[0], ops[8]]);
+    p["operations"] = json!([{"op": "o_grid", "block": 0, "open": [1, 2], "inset": 0.6}, {"op": "remove", "blocks": [1, 2, 3, 4, 5]}]);
     let r = s.execute("mesh.hex.project", &p).unwrap();
     assert!(sj(&r) >= 0.5, "{r}");
     let (v, body) = (r["volume"].as_f64().unwrap(), r["body_volume"].as_f64().unwrap());

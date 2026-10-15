@@ -895,6 +895,7 @@ pub const SAMPLE: &[Field] = &[choice(
         ("heated-bracket", "Heated bracket"),
         ("bracket-hex", "Hex-meshed bracket"),
         ("crank-arm", "Bicycle crank arm"),
+        ("crank-mirror", "Mirrored crank arm"),
     ],
 )
 .req()

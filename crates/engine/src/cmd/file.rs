@@ -97,6 +97,9 @@ fn open_sample(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(recipe) = sample.design {
         opened.design = Some(Arc::new(open_design(&fieldcraft_geometry::script_design(recipe)?)?));
     }
+    if let Some(prepare) = sample.prepare {
+        opened.run_script(&prepare())?;
+    }
     let bodies = opened.design.as_ref().map_or(&[][..], |d| d.bodies.as_slice());
     let script = (sample.script)(bodies);
     opened.run_script(&script)?;

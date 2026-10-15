@@ -27,6 +27,9 @@ pub struct Sample {
     /// The SolidCraft script (`{"commands": [...]}`, the corpus recipe form) that builds the
     /// sample's geometry, opened as its design before [`Sample::script`] runs.
     pub design: Option<&'static str>,
+    /// Commands run on the opened design before [`Sample::script`] (datums and partitions), so
+    /// the script is given the bodies as they cut it.
+    pub prepare: Option<fn() -> Value>,
     /// The model's commands, given the design's bodies (none without a design).
     pub script: fn(&[Shape]) -> Value,
 }
@@ -38,6 +41,7 @@ pub const SAMPLES: &[Sample] = &[
         label: "Hex and Tet Parts",
         about: "A hex8 block beside a tet4 cube: meshes to look at, nothing to solve",
         design: None,
+        prepare: None,
         script: |_| script(),
     },
     Sample {
@@ -45,6 +49,7 @@ pub const SAMPLES: &[Sample] = &[
         label: "Cantilever",
         about: "A clamped steel beam with an end load: a static and a frequency step, ready to solve",
         design: None,
+        prepare: None,
         script: |_| cantilever(),
     },
     Sample {
@@ -52,6 +57,7 @@ pub const SAMPLES: &[Sample] = &[
         label: "Bar Impact",
         about: "The steel beam flying onto a rigid wall: an explicit dynamic step, ready to solve",
         design: None,
+        prepare: None,
         script: |_| impact(),
     },
     Sample {
@@ -59,6 +65,7 @@ pub const SAMPLES: &[Sample] = &[
         label: "Drop Test",
         about: "An aluminium L-bracket dropped 2 m onto a tilted rigid floor: explicit dynamics, the strike and its stress waves",
         design: Some(UPRIGHT_BRACKET),
+        prepare: None,
         script: |_| drop_test(),
     },
     Sample {
@@ -66,6 +73,7 @@ pub const SAMPLES: &[Sample] = &[
         label: "Rubber Seal",
         about: "A rubber gasket ring squeezed 25 % between bonded plates: nonlinear static, Mooney–Rivlin, large strain",
         design: None,
+        prepare: None,
         script: |_| rubber_seal(),
     },
     Sample {
@@ -73,6 +81,7 @@ pub const SAMPLES: &[Sample] = &[
         label: "Flow Past a Bracket",
         about: "Air flowing past an L-bracket on the floor: lattice Boltzmann flow and the force on each face",
         design: Some(UPRIGHT_BRACKET),
+        prepare: None,
         script: |_| flow_past(),
     },
     Sample {
@@ -80,6 +89,7 @@ pub const SAMPLES: &[Sample] = &[
         label: "Heated Bracket",
         about: "A steel bracket clamped at its holes and heated at one end: steady heat conduction and the thermal stress",
         design: Some(FILLETED_BRACKET),
+        prepare: None,
         script: |_| heated_bracket(),
     },
     Sample {
@@ -87,13 +97,23 @@ pub const SAMPLES: &[Sample] = &[
         label: "Hex-Meshed Bracket",
         about: "The filleted bracket split into 30 cells and meshed all-hex (hex20): clamped, loaded, von Mises",
         design: Some(PARTITIONED_BRACKET),
+        prepare: None,
         script: bracket_hex,
+    },
+    Sample {
+        name: "crank-mirror",
+        label: "Mirrored Crank Arm",
+        about: "The crank arm cut on its symmetry plane, one half swept all-hex (hex20) and mirrored into one conforming mesh; loaded as crank-arm",
+        design: Some(CRANK_ARM),
+        prepare: Some(crank_mirror_prepare),
+        script: crank_mirror,
     },
     Sample {
         name: "crank-arm",
         label: "Bicycle Crank Arm",
         about: "An aluminium bicycle crank swept all-hex (hex20): square bore fixed, a rider's weight on the pedal, von Mises",
         design: Some(CRANK_ARM),
+        prepare: None,
         script: crank_arm,
     },
 ];
@@ -484,10 +504,37 @@ pub const PEDAL_LOAD: f64 = 1500.0;
 /// spindle axis and the R1.5 cylinders beside it, the pedal hole is the Ø14 cylinder on the
 /// pedal axis.
 pub fn crank_arm(bodies: &[Shape]) -> Value {
-    let [spindle, pedal] = crank_faces(bodies);
+    crank_model(bodies, vec![json!({"command": "mesh.hex.generate", "params": {"size": 3, "order": 2, "method": "extrude"}})])
+}
+
+/// [`CRANK_ARM`] cut on its symmetry plane (`Sym`, y = 0; partition `Half`) by
+/// [`crank_mirror_prepare`]: the half `CrankArm/b` (y > 0) swept all-hex (hex20 of 3 mm) and
+/// mirrored onto `CrankArm/a`, one conforming mesh; then the model of [`crank_arm`].
+pub fn crank_mirror(bodies: &[Shape]) -> Value {
+    crank_model(
+        bodies,
+        vec![
+            json!({"command": "mesh.hex.generate", "params": {"body": "CrankArm/b", "size": 3, "order": 2, "method": "extrude"}}),
+            json!({"command": "mesh.mirror", "params": {"plane": "Sym", "bodies": ["CrankArm/b"]}}),
+        ],
+    )
+}
+
+/// The crank arm's symmetry plane and the partition by it.
+fn crank_mirror_prepare() -> Value {
     json!([
-        {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
-        {"command": "mesh.hex.generate", "params": {"size": 3, "order": 2, "method": "extrude"}},
+        {"command": "geometry.datum", "params": {"name": "Sym", "by": {"type": "offset", "plane": "zx", "offset": 0}}},
+        {"command": "geometry.partition", "params": {"name": "Half", "datum": "Sym"}},
+    ])
+}
+
+/// The crank's model after the `mesh` commands: material, the spindle fixed, the rider on the
+/// pedal, step `Pedal`.
+fn crank_model(bodies: &[Shape], mesh: Vec<Value>) -> Value {
+    let [spindle, pedal] = crank_faces(bodies);
+    let mut script = vec![json!({"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}})];
+    script.extend(mesh);
+    script.extend(json_array(json!([
         {"command": "model.set.create", "params": {"name": "crank", "geometry": bodies.iter().map(|b| json!({"body": b.name})).collect::<Vec<_>>()}},
         {"command": "model.set.create", "params": {"name": "spindle", "geometry": spindle}},
         {"command": "model.set.create", "params": {"name": "pedal", "geometry": pedal}},
@@ -496,7 +543,15 @@ pub fn crank_arm(bodies: &[Shape]) -> Value {
         {"command": "model.boundary_condition.create", "params": {"name": "Spindle", "type": "fixed", "target": {"set": "spindle"}}},
         {"command": "model.load.create", "params": {"name": "Rider", "type": "force", "target": {"set": "pedal"}, "vector": [0, -PEDAL_LOAD, 0]}},
         {"command": "model.step.create", "params": {"name": "Pedal", "procedure": {"type": "static"}, "boundary_conditions": ["Spindle"], "loads": ["Rider"]}},
-    ])
+    ])));
+    Value::Array(script)
+}
+
+fn json_array(v: Value) -> Vec<Value> {
+    match v {
+        Value::Array(a) => a,
+        other => vec![other],
+    }
 }
 
 /// The crank's square-bore faces and pedal-hole faces as set members, found by their surfaces.
@@ -758,6 +813,57 @@ mod tests {
         for (i, sign) in [(0, -1.0), (1, 1.0)] {
             assert!((sign * sxx(i) - hand).abs() < 0.03 * hand, "{} against {hand} MPa: {probe}", sxx(i));
         }
+        let reaction = s.execute("results.reactions", &json!({"step": "Pedal", "sets": ["spindle"]})).unwrap();
+        assert!((reaction["sets"][0]["force"][1].as_f64().unwrap() - PEDAL_LOAD).abs() < 1e-6, "{reaction}");
+    }
+
+    /// The mirrored crank opens as one conforming all-hex20 mesh: its two halves alike, joined
+    /// on the symmetry plane, every element valid, and the spindle and pedal faces found on both
+    /// halves (the image's faces carry the names of the half they are the image of).
+    #[test]
+    fn the_mirrored_crank_opens_as_one_mesh_of_two_alike_halves() {
+        let mut s = open("crank-mirror");
+        let elements = s.model.elements().values().filter(|e| e.kind == fieldcraft_model::ElementKind::Hex20).count();
+        assert_eq!(elements, s.model.elements().len());
+        let mut half = |body: &str| {
+            let set = format!("half_{}", body.replace('/', "_"));
+            s.execute("model.set.create", &json!({"name": set, "geometry": [{"body": body}]})).unwrap();
+            s.model.resolve_set(&set).unwrap()
+        };
+        let (a, b) = (half("CrankArm/a"), half("CrankArm/b"));
+        assert_eq!(a.elements.len(), b.elements.len());
+        assert_eq!(a.elements.len() + b.elements.len(), elements);
+        assert_eq!(a.faces.len(), b.faces.len(), "the halves' skins are alike");
+        // Joined on the plane: nodes shared by both halves, none duplicated there.
+        let shared = a.nodes.iter().filter(|n| b.nodes.binary_search(n).is_ok()).count();
+        assert!(shared > 100, "{shared}");
+        assert_eq!(a.nodes.len() + b.nodes.len() - shared, s.model.nodes().len());
+        let q = s.execute("mesh.quality", &json!({})).unwrap();
+        assert_eq!(q["valid"].as_u64().unwrap() as usize, elements, "{q}");
+        let members = |set: &str| s.model.sets().get(set).map_or(Vec::new(), |x| x.geometry.iter().map(|g| g.body.clone()).collect::<Vec<_>>());
+        for set in ["spindle", "pedal"] {
+            let bodies = members(set);
+            assert!(bodies.iter().any(|b| b == "CrankArm/a") && bodies.iter().any(|b| b == "CrankArm/b"), "{set}: {bodies:?}");
+            assert!(!s.model.resolve_set(set).unwrap().faces.is_empty(), "{set}");
+        }
+    }
+
+    /// Solved, the mirrored crank bends as the swept whole one does (σxx at the root within 3 % of
+    /// M/Z) and the spindle carries the whole load.
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn the_mirrored_crank_bends_as_the_beam_formula_says() {
+        let mut s = open("crank-mirror");
+        s.execute("solve.run", &json!({})).unwrap();
+        let half_width: f64 = 19.0 - 7.0 * 29.0 / 170.0;
+        let probe = s.execute("solve.probe", &json!({"step": "Pedal", "at": [[29.0, -half_width, 8.0], [29.0, half_width, 8.0]]})).unwrap();
+        let sxx = |i: usize| probe["nodes"][i]["stress"][0].as_f64().unwrap();
+        let hand = PEDAL_LOAD * (170.0 - 29.0) / (16.0 * (2.0 * half_width).powi(2) / 6.0);
+        for (i, sign) in [(0, -1.0), (1, 1.0)] {
+            assert!((sign * sxx(i) - hand).abs() < 0.03 * hand, "{} against {hand} MPa: {probe}", sxx(i));
+        }
+        // Mirror images: the two sides' bending stresses are equal and opposite.
+        assert!((sxx(0) + sxx(1)).abs() < 0.01 * hand, "{probe}");
         let reaction = s.execute("results.reactions", &json!({"step": "Pedal", "sets": ["spindle"]})).unwrap();
         assert!((reaction["sets"][0]["force"][1].as_f64().unwrap() - PEDAL_LOAD).abs() < 1e-6, "{reaction}");
     }

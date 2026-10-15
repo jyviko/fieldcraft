@@ -112,6 +112,24 @@ peaks at 295 MPa at the upright's hole.
 solution of the unpartitioned part (0.5093 mm, `crates/testkit/tests/bracket_blocks.rs`), and the
 clamp carries the whole 1 kN.
 
+## Mirrored crank arm (`crank-mirror`)
+
+![Von Mises stress on the mirrored crank arm: one swept half and its mirror image, one mesh](media/examples/crank-mirror.png)
+
+The crank arm of `crank-arm`, built from a half. A datum plane on its symmetry plane (`Sym`,
+y = 0) partitions it (`Half`) into `CrankArm/a` and `CrankArm/b`; the half `CrankArm/b` is swept
+all-hex (hex20 of 3 mm, 3 330 elements) and `mesh.mirror` reflects it onto `CrankArm/a`, joined
+on the plane: 6 660 hex20 elements, 32 933 nodes, all valid (scaled Jacobian min 0.009, mean 0.91).
+The image's faces carry `CrankArm/a`'s names, so the sets pick the square bore and the pedal hole
+on both halves. Material, supports and load as `crank-arm`.
+
+**Look at:** the two halves' meshes, mirror images of each other across the arm's middle (Mesh
+workspace), and the datum plane `Sym` before solving.
+
+**Check:** σxx on the arm's sides at x = 29 mm is −62.43 and +62.43 MPa, equal and opposite as
+the halves are, against M/Z = 62.5 MPa (0.2 %); the pedal bore moves 0.75 mm down, as on the whole
+swept crank; the spindle carries the whole 1500 N.
+
 ## Bicycle crank arm (`crank-arm`)
 
 ![Von Mises stress on the all-hex crank arm, the arm root and the square bore carrying the most](media/examples/crank-arm.png)

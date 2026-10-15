@@ -23,7 +23,7 @@ pub const DEFORMED: CommandSpec = CommandSpec {
 pub const CONTOUR: CommandSpec = CommandSpec {
     id: "results.contour",
     label: "Contours",
-    params: r#"{"step": "Load", "field": "von_mises", "bands": 12} — contours of a nodal field: displacement, displacement_x/y/z, von_mises, max/mid/min_principal, stress_xx/yy/zz/xy/xz/yz (stresses for static steps), contact_pressure, contact_gap, contact_status (0 open, 1 closed or stick, 2 slip), contact_shear, contact_slip (friction; nonlinear static steps with contact, at the contacts' secondary surfaces); "none" turns them off; 2 to 24 bands"#,
+    params: r#"{"step": "Load", "field": "von_mises", "bands": 12, "range"?: {"min"?: 0, "max"?: 80} | "auto"} — contours of a nodal field: displacement, displacement_x/y/z, von_mises, max/mid/min_principal, stress_xx/yy/zz/xy/xz/yz (stresses for static steps), contact_pressure, contact_gap, contact_status (0 open, 1 closed or stick, 2 slip), contact_shear, contact_slip (friction; nonlinear static steps with contact, at the contacts' secondary surfaces); "none" turns them off; 2 to 24 bands; `range` clamps the legend (a bound left out, null or "auto" follows the field; values above `max` are drawn in the over colour), kept until the field changes"#,
     form: Some(super::forms::CONTOUR),
     kind: CommandKind::Session,
     requires: &[Requirement::Result],
@@ -196,12 +196,50 @@ fn contour(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(EngineError::Params(format!("{} is not available for step `{step}` (mode shapes have no stress scale)", f.label())));
     }
+    let range = match p.get("range") {
+        None => None,
+        Some(r) => Some(legend_range(r)?),
+    };
     let v = view_of(s, &step)?;
+    if v.contour != field {
+        (v.range_min, v.range_max) = (None, None);
+    }
     v.contour = field;
     if let Some(b) = bands {
         v.bands = b;
     }
+    if let Some((lo, hi)) = range {
+        (v.range_min, v.range_max) = (lo, hi);
+    }
     Ok(s.results_report())
+}
+
+/// `results.contour`'s `range`: `"auto"` or null (follow the field), or `{min?, max?}`, each a
+/// finite number, null or `"auto"`; `min` below `max`.
+fn legend_range(r: &Value) -> Result<(Option<f64>, Option<f64>)> {
+    let bound = |k: &str| -> Result<Option<f64>> {
+        match r.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(a)) if a == "auto" => Ok(None),
+            Some(v) => {
+                v.as_f64().filter(|x| x.is_finite()).map(Some).ok_or_else(|| EngineError::Params(format!("`range.{k}` must be a number or \"auto\"")))
+            }
+        }
+    };
+    match r {
+        Value::Null => Ok((None, None)),
+        Value::String(a) if a == "auto" => Ok((None, None)),
+        Value::Object(_) => {
+            let (lo, hi) = (bound("min")?, bound("max")?);
+            if let (Some(a), Some(b)) = (lo, hi)
+                && a >= b
+            {
+                return Err(EngineError::Params(format!("`range.min` ({a}) must be below `range.max` ({b})")));
+            }
+            Ok((lo, hi))
+        }
+        _ => Err(EngineError::Params("`range` must be {\"min\"?, \"max\"?} or \"auto\"".into())),
+    }
 }
 
 fn modes(s: &mut Session, p: &Value) -> Result<Value> {
@@ -344,6 +382,29 @@ mod tests {
         s
     }
 
+    /// `range` clamps the legend (#191): kept with the field, cleared by "auto" or another
+    /// field, reported in the reply; the true range is still there.
+    #[test]
+    fn the_legend_range_can_be_clamped() {
+        let mut s = solved();
+        let r = s.execute("results.contour", &json!({"field": "von_mises", "range": {"max": 10}})).unwrap();
+        let top = r["contour"]["range"]["max"]["value"].as_f64().unwrap();
+        assert!(top > 10.0, "{r}");
+        assert_eq!(r["contour"]["legend"], json!({"min": null, "max": 10.0}), "{r}");
+        let v = s.results_view.clone().unwrap();
+        let b = v.bands(0.0, top);
+        assert!(b.over && b.max == 10.0 && b.band(top) == Some(b.count));
+        s.execute("results.contour", &json!({"field": "von_mises", "bands": 6})).unwrap();
+        assert_eq!(s.results_view.as_ref().unwrap().range_max, Some(10.0), "kept with the field");
+        s.execute("results.contour", &json!({"field": "von_mises", "range": {"max": "auto", "min": 2}})).unwrap();
+        assert_eq!(s.results_view.as_ref().map(|v| (v.range_min, v.range_max)), Some((Some(2.0), None)));
+        s.execute("results.contour", &json!({"field": "displacement"})).unwrap();
+        assert_eq!(s.results_view.as_ref().map(|v| (v.range_min, v.range_max)), Some((None, None)), "another field follows its own range");
+        s.execute("results.contour", &json!({"field": "displacement", "range": {"max": 1e-3}})).unwrap();
+        let r = s.execute("results.contour", &json!({"field": "displacement", "range": "auto"})).unwrap();
+        assert!(r["contour"].get("legend").is_none(), "{r}");
+    }
+
     #[test]
     fn the_display_follows_the_commands_and_is_not_an_edit() {
         let mut s = solved();
@@ -450,6 +511,10 @@ mod tests {
             json!({"field": 3, "bands": 1e300}),
             json!({"field": "von_mises", "bands": 0}),
             json!({"field": "von_mises", "bands": 25}),
+            json!({"field": "von_mises", "range": {"max": "high"}}),
+            json!({"field": "von_mises", "range": {"min": 5, "max": 5}}),
+            json!({"field": "von_mises", "range": {"min": 1e308, "max": -1e308}}),
+            json!({"field": "von_mises", "range": 7}),
             json!({"scale": -1}),
             json!({"scale": -0.0001}),
             json!({"scale": 1e300}),

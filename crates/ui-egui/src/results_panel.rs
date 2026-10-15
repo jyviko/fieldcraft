@@ -124,13 +124,17 @@ fn legend_layout(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) -
     }
     lines.push((step, t.overlay_text));
     lines.push((deformation(plot), t.text_dim));
+    if let Some(l) = plot.contour.as_ref().filter(|_| plot.view.range_min.is_some() || plot.view.range_max.is_some()) {
+        let scale = l.max.1.abs().max(l.min.1.abs());
+        lines.push((format!("Legend clamped to {} … {}", number_in(l.bands.min, scale), number_in(l.bands.max, scale)), t.warm));
+    }
     if plot.stale {
         lines.push(("Stale: the model changed since this step was solved".into(), t.warm));
     }
     let origin = rect.left_top() + vec2(12.0, 12.0);
     let font = FontId::proportional(12.0);
     let line_h = LEGEND_LINE;
-    let bands = plot.contour.as_ref().map_or(0, |l| l.bands.count) as f32;
+    let bands = plot.contour.as_ref().map_or(0, |l| swatches(&l.bands)) as f32;
     // As wide as its longest line (and the extremes' lines under the swatches).
     let extremes = extreme_lines(plot).into_iter().flatten().map(|(text, _)| text);
     let widest = lines
@@ -144,6 +148,11 @@ fn legend_layout(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) -
     // Padding and title, the lines, then the swatches with the range lines under them.
     let height = 36.0 + line_h * lines.len() as f32 + if bands > 0.0 { 16.0 + bands * SWATCH.y + 2.0 * line_h } else { 0.0 };
     Legend { frame: Rect::from_min_size(origin, vec2(width, height)), title, lines }
+}
+
+/// The legend's swatches: the bands, and the "over" band above a clamped maximum.
+fn swatches(b: &fieldcraft_render::contour::Bands) -> u32 {
+    b.count + u32::from(b.over)
 }
 
 /// The legend, top left under the view buttons. Returns the Max and Min lines' rects with their
@@ -165,24 +174,28 @@ fn legend(plot: &Plot, painter: &egui::Painter, rect: Rect, t: &Tokens) -> Vec<(
     let stops = t.contour_stops();
     // Round-off among the levels (a range from -1e-15 to 3) reads as 0.
     let scale = l.max.1.abs().max(l.min.1.abs());
-    // High values on top, each band's lower boundary written beside its swatch's bottom edge.
-    for k in (0..l.bands.count).rev() {
-        let row = (l.bands.count - 1 - k) as f32;
+    // High values on top, each band's lower boundary written beside its swatch's bottom edge;
+    // over a clamped maximum, the "over" band runs up to the field's true maximum.
+    let rows = swatches(&l.bands);
+    let over = crate::theme::rgb(t.contour_over);
+    for k in (0..rows).rev() {
+        let row = (rows - 1 - k) as f32;
         let r = Rect::from_min_size(pos2(origin.x + 10.0, y + row * SWATCH.y), SWATCH);
-        let c = fieldcraft_render::contour::band_color(&stops, k, l.bands.count);
+        let c = fieldcraft_render::contour::bands_color(&stops, over, &l.bands, k);
         painter.rect_filled(r, 0.0, Color32::from_rgb(c.0, c.1, c.2));
-        if k + 1 == l.bands.count {
-            painter.text(pos2(r.right() + 6.0, r.top()), Align2::LEFT_CENTER, number_in(l.bands.level(k + 1), scale), font.clone(), t.overlay_text);
+        if k + 1 == rows {
+            let top = if l.bands.is_over(k) { l.max.1 } else { l.bands.level(k + 1) };
+            painter.text(pos2(r.right() + 6.0, r.top()), Align2::LEFT_CENTER, number_in(top, scale), font.clone(), t.overlay_text);
         }
         painter.text(pos2(r.right() + 6.0, r.bottom()), Align2::LEFT_CENTER, number_in(l.bands.level(k), scale), font.clone(), t.overlay_text);
     }
     painter.rect_stroke(
-        Rect::from_min_size(pos2(origin.x + 10.0, y), vec2(SWATCH.x, SWATCH.y * l.bands.count as f32)),
+        Rect::from_min_size(pos2(origin.x + 10.0, y), vec2(SWATCH.x, SWATCH.y * rows as f32)),
         0.0,
         Stroke::new(1.0, t.border),
         egui::StrokeKind::Outside,
     );
-    y += SWATCH.y * l.bands.count as f32 + 10.0;
+    y += SWATCH.y * rows as f32 + 10.0;
     let mut out = Vec::new();
     for (i, (text, node)) in extremes.into_iter().enumerate() {
         let r = painter.text(pos2(origin.x + 10.0, y + line_h * i as f32), Align2::LEFT_TOP, text, font.clone(), t.text_dim);
@@ -218,6 +231,15 @@ fn markers(app: &ModelApp, plot: &Plot, painter: &egui::Painter, rect: Rect, t: 
         painter.circle(at, 5.0, color, Stroke::new(2.0, t.overlay_text));
         label_beside(painter, at, format!("{what} {}", with_unit(number_in(v, scale), unit.as_deref())), rect, t);
     }
+}
+
+/// `results.contour`'s parameters that change one end of the legend's range (`key` `min` or
+/// `max`), keeping the field and the other end.
+fn legend_params(plot: &Plot, key: &str, value: Value) -> Value {
+    let field = plot.view.contour.map_or("none", Field::id);
+    let mut range = json!({"min": plot.view.range_min, "max": plot.view.range_max});
+    range[key] = value;
+    json!({"step": plot.view.step, "field": field, "range": range})
 }
 
 /// The probed node: a marker on it and its values beside it, inside the viewport.
@@ -258,6 +280,31 @@ pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) 
             }
         });
         ui.end_row();
+        // The legend's range: each end follows the field (Auto) or is clamped, e.g. below a
+        // singular peak (#191).
+        if let Some(l) = &plot.contour {
+            for (label, key, set, value) in [("Legend max", "max", plot.view.range_max, l.max.1), ("Legend min", "min", plot.view.range_min, l.min.1)]
+            {
+                ui.label(label);
+                ui.horizontal(|ui| {
+                    let mut auto = set.is_none();
+                    let tip = format!("Follow the field's {}; untick to clamp the legend", if key == "max" { "maximum" } else { "minimum" });
+                    if ui.checkbox(&mut auto, "Auto").on_hover_text(tip).changed() {
+                        run.push(("results.contour", legend_params(plot, key, if auto { json!("auto") } else { json!(value) })));
+                    }
+                    let mut v = set.unwrap_or(value);
+                    let speed = (l.max.1 - l.min.1).abs().max(1e-9) * 0.005;
+                    let drag = egui::DragValue::new(&mut v)
+                        .speed(speed)
+                        .custom_formatter(|v, _| number(v))
+                        .custom_parser(|s| s.replace(',', "").trim().parse::<f64>().ok());
+                    if ui.add_enabled(set.is_some(), drag).changed() {
+                        run.push(("results.contour", legend_params(plot, key, json!(v))));
+                    }
+                });
+                ui.end_row();
+            }
+        }
         ui.label("Deformed");
         ui.horizontal(|ui| {
             let mut deformed = plot.view.deformed;

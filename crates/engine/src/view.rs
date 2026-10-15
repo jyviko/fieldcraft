@@ -12,7 +12,7 @@
 //! once the camera is known.
 
 use fieldcraft_model::ElementKind;
-use fieldcraft_render::contour::{Bands, band_color, split_triangle};
+use fieldcraft_render::contour::{bands_color, split_triangle};
 use fieldcraft_render::glyphs::{self, GlyphColors, GlyphShow, GlyphView, Glyphs};
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Orientation, Rgb, Scene, SceneLine, SceneTri, Vec3};
 use serde_json::Value;
@@ -39,9 +39,14 @@ pub struct Palette {
     pub no_result: Rgb,
     /// The contour colour scale, low to high.
     pub contour: [Rgb; 5],
+    /// Values above a clamped legend's maximum.
+    pub contour_over: Rgb,
     /// The analysis setup's symbols.
     pub glyphs: GlyphColors,
 }
+
+/// Values above a clamped legend's maximum (both themes): a deep purple apart from the scale's red.
+pub const CONTOUR_OVER: Rgb = Rgb(0x6e, 0x2c, 0x80);
 
 impl Palette {
     /// The desktop app's light theme.
@@ -67,6 +72,7 @@ impl Palette {
         ],
         no_result: Rgb(0x9a, 0xa0, 0xaa),
         contour: [Rgb(0x2b, 0x4f, 0xd8), Rgb(0x2f, 0xb8, 0xe0), Rgb(0x3c, 0xc8, 0x64), Rgb(0xf0, 0xd2, 0x3c), Rgb(0xe0, 0x40, 0x2e)],
+        contour_over: CONTOUR_OVER,
         glyphs: GlyphColors {
             constraint: Rgb(0x00, 0x8a, 0xa8),
             load: Rgb(0xd0, 0x24, 0x24),
@@ -210,12 +216,12 @@ fn picture(s: &Session, p: &Palette) -> Picture {
     });
     if let Some((field, min, max, values)) = contour {
         shown.contour = Some((field.id().to_string(), min, max));
-        let bands = Bands::new(min.1, max.1, view.bands);
+        let bands = view.bands(min.1, max.1);
         let at = |label: u32| nodes.binary_search(&label).ok().and_then(|i| values.get(i).copied()).unwrap_or(f64::NAN);
         scene.tris.clear();
         for tri in &drawn.tris {
             split_triangle(tri.p, tri.nodes.map(at), &bands, &mut |piece, band| {
-                let color = band.map_or(p.no_result, |k| band_color(&p.contour, k, bands.count));
+                let color = band.map_or(p.no_result, |k| bands_color(&p.contour, p.contour_over, &bands, k));
                 for k in 1..piece.len().saturating_sub(1) {
                     if let (Some(&a), Some(&b), Some(&c)) = (piece.first(), piece.get(k), piece.get(k + 1)) {
                         scene.tris.push(SceneTri { p: [a, b, c], normal: tri.normal, color });

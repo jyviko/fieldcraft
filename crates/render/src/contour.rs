@@ -13,6 +13,9 @@ pub struct Bands {
     pub min: f64,
     pub max: f64,
     pub count: u32,
+    /// Values above `max` go to an extra band, [`Bands::count`] (drawn in the "over" colour), not
+    /// to the top band: the range was clamped below the field's maximum.
+    pub over: bool,
 }
 
 impl Bands {
@@ -20,9 +23,25 @@ impl Bands {
     pub fn new(min: f64, max: f64, count: u32) -> Bands {
         let count = count.max(1);
         if !(min.is_finite() && max.is_finite()) {
-            return Bands { min: 0.0, max: 0.0, count };
+            return Bands { min: 0.0, max: 0.0, count, over: false };
         }
-        Bands { min: min.min(max), max: max.max(min), count }
+        Bands { min: min.min(max), max: max.max(min), count, over: false }
+    }
+
+    /// The bands of a field ranging over `[min, max]` drawn over `[lo, hi]` where given (a
+    /// clamped legend): values below `lo` go to the bottom band, values above `hi` to the "over"
+    /// band. A clamp that leaves no range (lo ≥ hi) is ignored.
+    pub fn clamped(min: f64, max: f64, lo: Option<f64>, hi: Option<f64>, count: u32) -> Bands {
+        let (a, b) = (lo.filter(|v| v.is_finite()).unwrap_or(min), hi.filter(|v| v.is_finite()).unwrap_or(max));
+        if !(a < b) {
+            return Bands::new(min, max, count);
+        }
+        Bands { over: max > b, ..Bands::new(a, b, count) }
+    }
+
+    /// Whether band `k` is the "over" band (values above a clamped maximum).
+    pub fn is_over(&self, k: u32) -> bool {
+        self.over && k >= self.count
     }
 
     /// The band a value lies in (values outside the range go to the end bands); `None` for a
@@ -30,6 +49,9 @@ impl Bands {
     pub fn band(&self, v: f64) -> Option<u32> {
         if v.is_nan() {
             return None;
+        }
+        if self.over && v > self.max {
+            return Some(self.count);
         }
         let span = self.max - self.min;
         if !(span > 0.0) {
@@ -60,9 +82,10 @@ pub fn split_triangle(p: [Vec3; 3], v: [f64; 3], bands: &Bands, out: &mut impl F
     }
     let poly: Vec<(Vec3, f64)> = p.into_iter().zip(v).collect();
     for k in lo..=hi {
-        // The end bands also hold the values beyond the range.
-        let below = if k == 0 { f64::NEG_INFINITY } else { bands.level(k) };
-        let above = if k + 1 == bands.count { f64::INFINITY } else { bands.level(k + 1) };
+        // The end bands also hold the values beyond the range, but for the "over" band above a
+        // clamped maximum.
+        let below = if k == 0 { f64::NEG_INFINITY } else { bands.level(k.min(bands.count)) };
+        let above = if k >= bands.count || (k + 1 == bands.count && !bands.over) { f64::INFINITY } else { bands.level(k + 1) };
         let piece = clip(&clip(&poly, below, true), above, false);
         if piece.len() >= 3 {
             let pts: Vec<Vec3> = piece.iter().map(|(q, _)| *q).collect();
@@ -94,6 +117,12 @@ fn clip(poly: &[(Vec3, f64)], level: f64, keep_above: bool) -> Vec<(Vec3, f64)> 
 
 /// The colour of band `k` of `count`: the colour scale `stops` (low to high) sampled at the
 /// band's middle.
+/// The colour of band `k` of `bands`: [`band_color`], or `over` for the band above a clamped
+/// maximum.
+pub fn bands_color(stops: &[Rgb], over: Rgb, bands: &Bands, k: u32) -> Rgb {
+    if bands.is_over(k) { over } else { band_color(stops, k, bands.count) }
+}
+
 pub fn band_color(stops: &[Rgb], k: u32, count: u32) -> Rgb {
     let (Some(first), Some(last)) = (stops.first(), stops.last()) else { return Rgb(128, 128, 128) };
     if stops.len() == 1 {
@@ -160,6 +189,30 @@ mod tests {
             assert_eq!(k, None);
         });
         assert_eq!(n, 2);
+    }
+
+    /// A clamped range puts the values above it in the "over" band, split exactly at the
+    /// clamp; one below it in the bottom band; a clamp leaving no range is ignored.
+    #[test]
+    fn a_clamped_range_has_an_over_band() {
+        let b = Bands::clamped(0.0, 100.0, None, Some(10.0), 5);
+        assert_eq!((b.min, b.max, b.over), (0.0, 10.0, true));
+        assert_eq!((b.band(9.9), b.band(10.0), b.band(10.1), b.band(1e9)), (Some(4), Some(4), Some(5), Some(5)));
+        assert!(b.is_over(5) && !b.is_over(4));
+        let p = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0), Vec3::new(0.0, 20.0, 0.0)];
+        let mut pieces = Vec::new();
+        split_triangle(p, [0.0, 20.0, 0.0], &b, &mut |q, k| pieces.push((q.to_vec(), k.unwrap())));
+        assert_eq!(pieces.iter().map(|(_, k)| *k).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5]);
+        let (over, _) = pieces.last().unwrap();
+        assert!(over.iter().all(|c| c.x >= 10.0 - 1e-9), "{over:?}");
+        assert!((pieces.iter().map(|(q, _)| area(q)).sum::<f64>() - 200.0).abs() < 1e-9);
+        let lo = Bands::clamped(0.0, 100.0, Some(50.0), None, 5);
+        assert_eq!((lo.min, lo.max, lo.over, lo.band(3.0)), (50.0, 100.0, false, Some(0)));
+        assert_eq!(Bands::clamped(0.0, 100.0, Some(50.0), Some(40.0), 5), Bands::new(0.0, 100.0, 5));
+        assert!(!Bands::clamped(0.0, 5.0, None, Some(10.0), 5).over, "a clamp above the maximum clamps nothing");
+        let stops = [Rgb(0, 0, 255), Rgb(255, 0, 0)];
+        assert_eq!(bands_color(&stops, Rgb(1, 2, 3), &b, 5), Rgb(1, 2, 3));
+        assert_eq!(bands_color(&stops, Rgb(1, 2, 3), &b, 4), band_color(&stops, 4, 5));
     }
 
     #[test]

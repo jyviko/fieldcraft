@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use fieldcraft_engine::results::{Field, Kind, Pick, ResultsView, auto_scale, displacements, field_values, range};
 use fieldcraft_engine::{Session, StepResult};
-use fieldcraft_render::contour::{Bands, band_color, split_triangle};
+use fieldcraft_render::contour::{Bands, bands_color, split_triangle};
 use fieldcraft_render::{DisplayMesh, Scene, SceneTri, Vec3};
 
 use crate::Style;
@@ -167,7 +167,7 @@ pub fn prepare(session: &Session, base: &DisplayMesh, pick: Pick) -> Option<Prep
             }
         }
         let (min, max) = range(result.nodes(), &values)?;
-        Some(Arc::new(Contour { field, bands: Bands::new(min.1, max.1, view.bands), min, max, values }))
+        Some(Arc::new(Contour { field, bands: view.bands(min.1, max.1), min, max, values }))
     });
     Some(Prepared { scale: scale(view, result, pick, base), contour })
 }
@@ -208,7 +208,7 @@ pub fn scene(plot: &Plot, style: Style, show: crate::scene::Show, t: &Tokens) ->
     s.tris.clear();
     for tri in &plot.display.tris {
         split_triangle(tri.p, tri.nodes.map(|l| c.at(nodes, l)), &c.bands, &mut |piece, band| {
-            let color = band.map_or(rgb(t.no_result), |k| band_color(&stops, k, c.bands.count));
+            let color = band.map_or(rgb(t.no_result), |k| bands_color(&stops, rgb(t.contour_over), &c.bands, k));
             for k in 1..piece.len().saturating_sub(1) {
                 if let (Some(&a), Some(&b), Some(&cc)) = (piece.first(), piece.get(k), piece.get(k + 1)) {
                     s.tris.push(SceneTri { p: [a, b, cc], normal: tri.normal, color });
@@ -295,6 +295,7 @@ pub(crate) mod tests {
     use serde_json::json;
 
     use fieldcraft_engine::results::{AUTO_FRACTION, magnitude};
+    use fieldcraft_render::contour::band_color;
 
     use super::*;
 

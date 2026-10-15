@@ -1670,6 +1670,15 @@ pub const CONTOUR: &[Field] = &[
     .req()
     .def("\"von_mises\""),
     int("bands", "Bands", 2, 24).help("Number of colour bands.").def("12"),
+    group(
+        "range",
+        "Legend range",
+        &[
+            num("min", "Min", D::None).help("Values below it take the lowest colour.").hint("the field's minimum"),
+            num("max", "Max", D::None).help("Values above it are drawn in the over colour.").hint("the field's maximum"),
+        ],
+    )
+    .help("Clamp the legend, e.g. below a singular peak; empty follows the field."),
 ];
 pub const MODES: &[Field] = &[SOLVED, int("mode", "Mode", 1, 1_000_000).help("The mode shape shown.").def("1")];
 pub const ANIMATE: &[Field] = &[flag("on", "Animate").help("Play the deformation or the frames.").def("true")];

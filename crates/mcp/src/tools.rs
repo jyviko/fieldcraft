@@ -229,7 +229,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "Show results",
             "Choose what the results display shows and read it back: the step, the deformed shape (`deformed`, `scale`: \
              a factor, 0 for the undeformed shape, or \"auto\"), contours of a nodal field (`field`: displacement, displacement_x/y/z, von_mises, \
-             max/mid/min_principal, stress_xx/yy/zz/xy/xz/yz, or none; `bands` 2–24), a frequency step's mode or an \
+             max/mid/min_principal, stress_xx/yy/zz/xy/xz/yz, or none; `bands` 2–24; `range` {min?, max?} or \"auto\" clamps the legend, values above max in the over colour), a frequency step's mode or an \
              explicit step's frame. The reply has the contour's range: its smallest and largest value and their nodes \
              (field displacement gives the largest displacement). Only `step`: show that step.",
             obj(
@@ -237,6 +237,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "step": string("Solved step (default: the one shown)"),
                     "field": string("Contour field, or \"none\""),
                     "bands": integer("Contour bands, 2 to 24"),
+                    "range": {"type": ["object", "string"], "description": "Legend range {\"min\"?, \"max\"?} (each a number or \"auto\"), or \"auto\"; goes with `field`"},
                     "deformed": {"type": "boolean", "description": "Draw the deformed shape"},
                     "scale": {"type": ["number", "string"], "description": "Deformation scale factor (0: undeformed) or \"auto\""},
                     "mode": integer("Mode of a frequency step, from 1"),
@@ -539,9 +540,9 @@ fn show_results(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<Value, St
         last = Some(b.execute("results.deformed", with_step(p))?);
     }
     if a.get("field").is_some_and(|v| !v.is_null()) {
-        last = Some(b.execute("results.contour", with_step(pick(a, &["field", "bands"])))?);
-    } else if a.get("bands").is_some_and(|v| !v.is_null()) {
-        return Err("show_results: `bands` goes with `field`".into());
+        last = Some(b.execute("results.contour", with_step(pick(a, &["field", "bands", "range"])))?);
+    } else if a.get("bands").is_some_and(|v| !v.is_null()) || a.get("range").is_some_and(|v| !v.is_null()) {
+        return Err("show_results: `bands` and `range` go with `field`".into());
     }
     match last {
         Some(v) => Ok(v),

@@ -73,6 +73,8 @@ pub struct Tokens {
     pub contour: [Color32; 5],
     /// Faces with no result at a node.
     pub no_result: Color32,
+    /// Values above a clamped legend's maximum (the same in both themes).
+    pub contour_over: Color32,
     // ---- analysis setup symbols ----
     /// Boundary conditions and rigid walls.
     pub glyph_constraint: Color32,
@@ -159,6 +161,7 @@ impl Tokens {
             ],
             contour: CONTOUR,
             no_result: Color32::from_rgb(0x9a, 0xa0, 0xaa),
+            contour_over: Color32::from_rgb(0x6e, 0x2c, 0x80),
             glyph_constraint: Color32::from_rgb(0x00, 0x8a, 0xa8),
             glyph_load: Color32::from_rgb(0xd0, 0x24, 0x24),
             glyph_interaction: Color32::from_rgb(0x9a, 0x30, 0xc0),

@@ -372,6 +372,12 @@ pub struct ResultsView {
     /// Contours of this field; `None` draws the deformed shape in element colours.
     pub contour: Option<Field>,
     pub bands: u32,
+    /// The legend's range, clamped below the field's smallest or above its largest value (each
+    /// `None` follows the field): a singular peak no longer squeezes the field into one band.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_max: Option<f64>,
     /// The mode shown, from 1 (frequency steps).
     pub mode: usize,
     /// The field frame shown (explicit steps); `None` is the last.
@@ -404,6 +410,8 @@ impl ResultsView {
             scale: true_scale.then_some(1.0),
             contour: Some(contour),
             bands: DEFAULT_BANDS,
+            range_min: None,
+            range_max: None,
             mode: 1,
             frame: None,
             animate: false,
@@ -412,6 +420,11 @@ impl ResultsView {
 
     pub fn pick(&self) -> Pick {
         Pick { mode: self.mode, frame: self.frame }
+    }
+
+    /// The contour bands for a field ranging from `min` to `max`, clamped to the view's range.
+    pub fn bands(&self, min: f64, max: f64) -> fieldcraft_render::contour::Bands {
+        fieldcraft_render::contour::Bands::clamped(min, max, self.range_min, self.range_max, self.bands)
     }
 }
 
@@ -650,6 +663,9 @@ impl Session {
             let ends =
                 range(r.nodes(), &values).map(|((ln, lv), (hn, hv))| json!({"min": {"node": ln, "value": lv}, "max": {"node": hn, "value": hv}}));
             out["contour"] = json!({"field": f, "label": f.label(), "unit": f.unit(r, self.model.units()), "range": ends});
+            if v.range_min.is_some() || v.range_max.is_some() {
+                out["contour"]["legend"] = json!({"min": v.range_min, "max": v.range_max});
+            }
         }
         match r.kind() {
             Kind::Frequency(fr) => {

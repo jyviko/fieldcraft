@@ -8,7 +8,7 @@
 //! their own over the model, a constant size on screen, muted over a results plot.
 
 use fieldcraft_render::glyphs::{Definition, Drawn, GlyphShow, GlyphView, Glyphs};
-use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, SceneLine, ScenePoint, SceneTri, Vec3};
+use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, SceneLabel, SceneLine, ScenePoint, SceneTri, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{Tokens, rgb};
@@ -147,7 +147,9 @@ const SEED_TICK: f64 = 6.0;
 
 /// Draw the model's edge seeds as ticks at the nodes they put along their edges (the drawn
 /// bodies' B-rep edges, [`DisplayMesh::curves`], named by `names`): the seeded count, spaced by
-/// the bias, so a grading shows as ticks crowding toward an end.
+/// the bias, so a grading shows as ticks crowding toward an end. Where the mesh drawn has
+/// another number of element edges along the edge ([`meshed_divisions`]) the ticks are in the
+/// error colour, with a label such as `6 seeded, 20 meshed` (#342).
 pub fn seeds(s: &mut Scene, model: &fieldcraft_model::Model, names: &[crate::selection::BodyNames], display: &DisplayMesh, t: &Tokens) {
     if model.seeds().is_empty() {
         return;
@@ -162,9 +164,18 @@ pub fn seeds(s: &mut Scene, model: &fieldcraft_model::Model, names: &[crate::sel
         if !(total > 0.0 && total.is_finite()) {
             continue;
         }
+        let count = seed.count(total);
+        let divisions = meshed_divisions(display, run, total);
+        let color = if divisions > 0 && divisions != count as usize {
+            let mid = run.get(run.len() / 2).map_or(first.a, |c| (c.a + c.b) * 0.5);
+            s.labels.push(SceneLabel { p: mid, text: format!("{count} seeded, {divisions} meshed"), color: rgb(t.error) });
+            rgb(t.error)
+        } else {
+            color
+        };
         // Walk the polyline to each node's arc length.
         let (mut k, mut walked) = (0, 0.0);
-        for f in seed.spacing(seed.count(total)) {
+        for f in seed.spacing(count) {
             let target = f * total;
             while k + 1 < run.len() && walked + lengths.get(k).copied().unwrap_or(0.0) < target {
                 walked += lengths.get(k).copied().unwrap_or(0.0);
@@ -175,6 +186,29 @@ pub fn seeds(s: &mut Scene, model: &fieldcraft_model::Model, names: &[crate::sel
             s.points.push(ScenePoint { p: c.a + (c.b - c.a) * u, color, size: SEED_TICK });
         }
     }
+}
+
+/// How many element edges of the drawn mesh lie along the geometry edge `run` (its polyline,
+/// `length` long): those whose ends and middle are all on it, counted once per element edge
+/// (a quadratic edge is drawn in pieces). 0 when the mesh has none there (not meshed).
+fn meshed_divisions(display: &DisplayMesh, run: &[fieldcraft_render::SurfaceCurve], length: f64) -> usize {
+    // Within a small part of the edge: a curved edge's polyline is a chord of the true curve.
+    let tol = 0.01 * length;
+    let near = |p: Vec3| run.iter().any(|c| distance_to_segment(p, c.a, c.b) <= tol);
+    let mut on: std::collections::BTreeSet<[u32; 2]> = std::collections::BTreeSet::new();
+    for e in &display.edges {
+        if near(e.p[0]) && near(e.p[1]) && near((e.p[0] + e.p[1]) * 0.5) {
+            on.insert(e.corners);
+        }
+    }
+    on.len()
+}
+
+fn distance_to_segment(p: Vec3, a: Vec3, b: Vec3) -> f64 {
+    let ab = b - a;
+    let len2 = ab.dot(ab);
+    let k = if len2 > 0.0 { ((p - a).dot(ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    p.dist(a + ab * k)
 }
 
 /// The radius around the camera target that holds the bounds (for the clipping planes).
@@ -206,6 +240,34 @@ mod tests {
         assert_eq!(xs.len(), 5);
         assert!(xs.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "{xs:?}");
         assert!(s.points.iter().all(|p| p.p.y == 0.0), "only the seeded edge has ticks");
+        assert!(s.labels.is_empty());
+        // A mesh with other divisions on the edge: the ticks turn to the error colour, labelled;
+        // with as many, they stay as they are.
+        let mesh = |n: u32| {
+            let mut d = d.clone();
+            d.edges = (0..n)
+                .map(|k| {
+                    let x = |k: u32| Vec3::new(10.0 * f64::from(k) / f64::from(n), 0.0, 0.0);
+                    fieldcraft_render::DisplayEdge { p: [x(k), x(k + 1)], nodes: [k, k + 1], corners: [k, k + 1], feature: true }
+                })
+                .collect();
+            // An element edge across the seeded edge is not along it.
+            d.edges.push(fieldcraft_render::DisplayEdge {
+                p: [Vec3::ZERO, Vec3::new(0.0, 10.0, 0.0)],
+                nodes: [0, 99],
+                corners: [0, 99],
+                feature: true,
+            });
+            d
+        };
+        let mut s = Scene::default();
+        seeds(&mut s, &m, &names, &mesh(20), &Tokens::dark());
+        let error = rgb(Tokens::dark().error);
+        assert!(s.points.iter().all(|p| p.color == error));
+        assert_eq!(s.labels.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["4 seeded, 20 meshed"]);
+        let mut s = Scene::default();
+        seeds(&mut s, &m, &names, &mesh(4), &Tokens::dark());
+        assert!(s.labels.is_empty(), "the mesh follows the seed");
     }
 
     /// Over the mesh the geometry's outline is drawn along the element edges on geometry edges,

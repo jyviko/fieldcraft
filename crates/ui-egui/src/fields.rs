@@ -23,20 +23,39 @@ pub struct Style {
 /// Row height.
 pub const ROW_H: f32 = 22.0;
 
-/// A row: `label` (with a mark when `required`) in the label column, then `add`.
-pub fn row<R>(ui: &mut Ui, s: &Style, label: &str, required: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+/// A row: `label` (with a mark when `required`, and [`help_mark`] when there is `help`) in the
+/// label column, then `add`. Hovering the label or the mark shows the label and `help`.
+pub fn row<R>(ui: &mut Ui, s: &Style, label: &str, required: bool, help: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(vec2(s.label_width, ROW_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_width(s.label_width);
             ui.spacing_mut().item_spacing.x = 2.0;
-            ui.add(egui::Label::new(RichText::new(label).color(s.dim)).truncate()).on_hover_text(label);
+            let tip = if help.is_empty() { label.to_string() } else { format!("{label}\n{help}") };
+            // The marks keep their room: a long label truncates before them.
+            let marks = if required { 10.0 } else { 0.0 } + if help.is_empty() { 0.0 } else { 13.0 };
+            ui.scope(|ui| {
+                ui.set_max_width((s.label_width - marks).max(0.0));
+                ui.add(egui::Label::new(RichText::new(label).color(s.dim)).truncate()).on_hover_text(&tip);
+            });
             if required {
                 ui.label(RichText::new("*").color(s.required)).on_hover_text("Required");
+            }
+            if !help.is_empty() {
+                help_mark(ui, s.dim).on_hover_text(&tip);
             }
         });
         add(ui)
     })
     .inner
+}
+
+/// A small circled "i" after a label that has help, drawn (the UI font has no such glyph).
+pub fn help_mark(ui: &mut Ui, color: Color32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(11.0, 11.0), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.circle_stroke(rect.center(), 5.0, egui::Stroke::new(1.0, color));
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, "i", egui::FontId::proportional(8.5), color);
+    response
 }
 
 /// A message under a field, aligned with the fields.
@@ -129,6 +148,11 @@ pub fn combo(ui: &mut Ui, id: Id, selected: &str, options: &[&str], width: f32) 
 /// A one-line text field with a greyed hint, keyed by `id` (see [`number`]); true when it changed.
 pub fn text(ui: &mut Ui, s: &Style, id: Id, value: &mut String, hint: &str, width: f32) -> bool {
     ui.add(egui::TextEdit::singleline(value).id(id).desired_width(width).hint_text(RichText::new(hint).italics().color(s.dim))).changed()
+}
+
+/// A short label before a field ("X"), dim.
+pub fn caption(ui: &mut Ui, s: &Style, text: &str) {
+    ui.label(RichText::new(text).small().color(s.dim));
 }
 
 /// A unit after a field.

@@ -67,6 +67,10 @@ pub fn show(ui: &mut Ui, t: &Tokens, cx: &Context, fields: &'static [Field], par
     let problems = cx.problems.iter().cloned().collect();
     let mut f = Form { cx, style: style(t), problems, names: BTreeMap::new(), out: Outcome::default() };
     ui.spacing_mut().item_spacing.y = 3.0;
+    if cx.units == UnitSystem::Unspecified && has_system_units(fields, 0) {
+        let note = format!("No unit system: numbers are in the model's own consistent units. {}", schema::UNITS_HINT);
+        ui.add(egui::Label::new(RichText::new(note).small().color(f.style.dim)).wrap());
+    }
     f.fields(ui, fields, fields, params, "", 0);
     f.out
 }
@@ -102,10 +106,6 @@ impl Form<'_> {
         self.names.entry(c.label()).or_insert_with(|| (self.cx.names)(c))
     }
 
-    fn unit(&self, dim: schema::Dim) -> Option<String> {
-        dim.unit(self.cx.units)
-    }
-
     /// The fields of one object. `common` are the fields beside a flattened variant (kept when it
     /// switches).
     fn fields(&mut self, ui: &mut Ui, fields: &[Field], common: &[Field], obj: &mut Map<String, Value>, prefix: &str, depth: usize) {
@@ -137,7 +137,8 @@ impl Form<'_> {
         let selected = variants.iter().find(|v| Some(v.tag) == current).map_or(current.unwrap_or("—"), |v| v.label);
         let labels: Vec<&str> = variants.iter().map(|v| v.label).collect();
         let id = self.id(path);
-        let picked = fields::row(ui, &self.style, f.label, f.required, |ui| fields::combo(ui, id, selected, &labels, FIELD_W + 40.0));
+        let help = f.help_text(self.cx.units);
+        let picked = fields::row(ui, &self.style, f.label, f.required, &help, |ui| fields::combo(ui, id, selected, &labels, FIELD_W + 40.0));
         picked.and_then(|i| variants.get(i)).map(|v| v.tag.to_string()).filter(|t| Some(t.as_str()) != current)
     }
 
@@ -148,7 +149,8 @@ impl Form<'_> {
             _ => {
                 let value = obj.get(f.key).cloned();
                 let style = self.style;
-                let new = fields::row(ui, &style, f.label, f.required, |ui| self.scalar(ui, f, value.as_ref(), &path));
+                let help = f.help_text(self.cx.units);
+                let new = fields::row(ui, &style, f.label, f.required, &help, |ui| self.scalar(ui, f, value.as_ref(), &path));
                 if let Some(new) = new {
                     match new {
                         Value::Null => obj.remove(f.key),
@@ -169,8 +171,8 @@ impl Form<'_> {
         let id = self.id(path);
         let s = self.style;
         match f.kind {
-            Kind::Number { dim, .. } => {
-                let unit = self.unit(dim);
+            Kind::Number { .. } => {
+                let unit = f.unit_label(self.cx.units);
                 let out = self.number(ui, id, value, f.hint, false, FIELD_W);
                 fields::unit(ui, &s, unit.as_deref());
                 out
@@ -202,7 +204,7 @@ impl Form<'_> {
                 }
                 fields::combo(ui, id, selected, &labels, FIELD_W + 40.0).map(|i| options.get(i).map_or(Value::Null, |(v, _)| json!(v)))
             }
-            Kind::Vector { dim, labels, nullable } => self.vector(ui, id, value, dim, labels, nullable),
+            Kind::Vector { labels, nullable, .. } => self.vector(ui, id, value, f, labels, nullable),
             Kind::Ref(c) => self.reference(ui, id, path, value, c, f.hint, f.required),
             Kind::RefList(c) => self.reference_list(ui, path, value, c),
             Kind::Either(options) => {
@@ -235,7 +237,8 @@ impl Form<'_> {
         let Some(option) = options.iter().find(|o| o.key == key) else { return };
         let sub = join(path, &key);
         let style = self.style;
-        let new = fields::row(ui, &style, "", false, |ui| self.scalar(ui, option, Some(&value), &sub));
+        let help = option.help_text(self.cx.units);
+        let new = fields::row(ui, &style, "", false, &help, |ui| self.scalar(ui, option, Some(&value), &sub));
         if let Some(new) = new {
             obj.insert(f.key.into(), json!({key: new}));
             self.touch(path);
@@ -260,7 +263,8 @@ impl Form<'_> {
         }
     }
 
-    fn vector(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, dim: schema::Dim, labels: &[&str], nullable: bool) -> Option<Value> {
+    /// A vector: one number per component, each after its caption (X, Y, Z or the field's own).
+    fn vector(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, f: &Field, labels: &[&str], nullable: bool) -> Option<Value> {
         let current: Vec<Value> = match value {
             Some(Value::Array(a)) if a.len() == labels.len() => a.clone(),
             Some(v) if !v.is_null() => {
@@ -272,14 +276,15 @@ impl Form<'_> {
         };
         let mut next = current.clone();
         let mut changed = false;
-        let width = if labels.len() > 3 { 34.0 } else { 44.0 };
-        let unit = self.unit(dim);
+        let width = if labels.len() > 3 { 30.0 } else { 34.0 };
+        let unit = f.unit_label(self.cx.units);
         ui.vertical(|ui| {
             for chunk in (0..labels.len()).collect::<Vec<_>>().chunks(3) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
                     for &i in chunk {
                         let hint = labels.get(i).copied().unwrap_or("");
+                        fields::caption(ui, &self.style, &caption(hint));
                         let slot = current.get(i).cloned().unwrap_or(Value::Null);
                         let shown = (!slot.is_null()).then_some(&slot);
                         if let Some(v) = self.number(ui, id.with(i), shown, hint, false, width) {
@@ -387,10 +392,10 @@ impl Form<'_> {
         let present = obj.get(f.key).is_some_and(|v| !v.is_null());
         let mut on = present;
         ui.add_space(2.0);
-        if f.required {
-            ui.label(RichText::new(f.label).strong());
-        } else {
-            ui.checkbox(&mut on, RichText::new(f.label).strong());
+        let help = f.help_text(self.cx.units);
+        let heading = if f.required { ui.label(RichText::new(f.label).strong()) } else { ui.checkbox(&mut on, RichText::new(f.label).strong()) };
+        if !help.is_empty() {
+            heading.on_hover_text(help);
         }
         if !f.hint.is_empty() && !present {
             fields::note(ui, &Style { label_width: INDENT, ..self.style }, f.hint, self.style.dim);
@@ -466,6 +471,26 @@ impl Form<'_> {
             self.touch(path);
         }
     }
+}
+
+/// A vector component's caption: axis names upper-cased ("x" → "X"), others as they are ("E1").
+fn caption(component: &str) -> String {
+    if component.len() <= 3 && component.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
+        component.to_uppercase()
+    } else {
+        component.to_string()
+    }
+}
+
+/// Whether any of `fields` (nested too) is a number whose unit follows the unit system.
+pub fn has_system_units(fields: &[Field], depth: usize) -> bool {
+    depth <= MAX_DEPTH
+        && fields.iter().any(|f| match f.kind {
+            Kind::Number { dim, .. } | Kind::Vector { dim, .. } => dim.follows_system(),
+            Kind::Group(inner) | Kind::Rows { fields: inner, .. } | Kind::Either(inner) => has_system_units(inner, depth + 1),
+            Kind::Variants { variants, .. } => variants.iter().any(|v| has_system_units(v.fields, depth + 1)),
+            _ => false,
+        })
 }
 
 /// What is missing or wrong in `params`, in the form's order: (field path, message), each
@@ -660,5 +685,37 @@ mod tests {
         assert!(draw(&touched, false, None).contains("Material: choose a material"));
         let refused = draw(&none, false, Some(("name", "names no material")));
         assert!(refused.contains("Material: names no material") && !refused.contains("choose a material"), "{refused}");
+    }
+
+    /// The text a form draws, with `units`.
+    fn drawn(id: &str, units: UnitSystem, params: Value) -> String {
+        let form = fieldcraft_engine::find_command(id).and_then(|c| c.form).unwrap();
+        let ctx = egui::Context::default();
+        let mut params = params.as_object().cloned().unwrap_or_default();
+        let names = |_: Collection| Vec::new();
+        let touched = BTreeSet::new();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let cx = Context { units, names: &names, salt: Id::new("t"), touched: &touched, attempted: false, refused: None, problems: &[] };
+            show(ui, &Tokens::get(false), &cx, form, &mut params);
+        });
+        out.textures_delta.clear();
+        out.shapes
+            .iter()
+            .filter_map(|c| if let egui::Shape::Text(t) = &c.shape { Some(t.galley.text().to_string()) } else { None })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Without a unit system a number shows its dimension and the form says where to set the
+    /// system; with one, the unit. A vector's components are captioned.
+    #[test]
+    fn units_dimensions_and_vector_captions_show() {
+        let bare = drawn("model.material.plasticity", UnitSystem::Unspecified, json!({"plastic": {"type": "bilinear"}}));
+        assert!(bare.contains("[stress]") && bare.contains(schema::UNITS_HINT), "{bare}");
+        let mpa = drawn("model.material.plasticity", UnitSystem::MmTonneS, json!({"plastic": {"type": "bilinear"}}));
+        assert!(mpa.contains("MPa") && !mpa.contains(schema::UNITS_HINT), "{mpa}");
+        let load = drawn("model.load.create", UnitSystem::Unspecified, json!({"type": "force"}));
+        let lines: Vec<&str> = load.lines().collect();
+        assert!(["X", "Y", "Z", "[force]"].iter().all(|w| lines.contains(w)), "{load}");
     }
 }

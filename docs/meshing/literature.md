@@ -1098,6 +1098,22 @@ onto points, then smoothed). No code, manual or text of any commercial mesher wa
   based smoothing, L. A. Freitag, C. Ollivier-Gooch, IJNME 40:3979–4002, 1997; metric: P. M. Knupp,
   SIAM J. Sci. Comput. 23(1):193–218, 2001).
 
+### B10. Extrusion up to a surface (implemented in `fieldcraft-mesh::hex::extrude_to`, `mesh.hex.extrude`)
+
+A quad section is carried along straight per-node paths and its last layer ends on target B-rep
+faces, so a region need not be sweepable between two parallel faces.
+
+- **Path ends**: Newton's method on the tangent plane of the target's closest point (the trimmed
+  projection of B9), one step exact on a plane; side-face corners by alternating projections
+  (J. von Neumann, *Functional Operators, vol. II*, Princeton 1950, ch. 13).
+- **Interior nodes**: straight paths plus the boundary's displacement onto the side faces,
+  interpolated by inverse-distance weights: the boundary-residual correction of P. M. Knupp,
+  *Next-generation sweep tool: a method for generating all-hex meshes on two-and-one-half
+  dimensional geometries*, Proc. 7th International Meshing Roundtable, 1998 (as in B8's sweep);
+  D. Shepard, *A two-dimensional interpolation function for irregularly-spaced data*, Proc. ACM
+  National Conference 1968.
+- **Layer grading**: geometric progression of thicknesses (last over first = bias).
+
 ## Part C: Datasets and benchmarks
 
 | Dataset | Content | Licence | Usable for FieldCraft? |

@@ -78,7 +78,26 @@ Before the first mesh command:
 - Use edge seeds (`mesh.seed.edge`) so counts match across shared edges and so there are enough
   elements through thin walls (at least 2–3 through a wall for bending, 1 for pure conduction only).
 - Tet (`tet10` preferred for stress) only for cells that are not worth blocking, and only where
-  they are far from the region of interest.
+  they are far from the region of interest. Before falling back to tet on a region that ends on a
+  curved face, try extrude-to-surface (§3b).
+
+## 3b. Extrude up to a surface — try it before giving up on a region
+
+A region that is one section carried to a curved or tilted end (a boss or rib meeting a curved
+wall, an air column under a domed lid, a fillet region capped by a curved face) is not sweepable
+between parallel faces, but `mesh.hex.extrude` meshes it:
+
+- `source`: the section's face. If a neighbour (or the cell below) is already meshed there, its
+  quads are reused and the two meshes share nodes; else a planar face is meshed here at `size`.
+  A 2D mesh works too (`source_set`).
+- `to_surface`: the end faces; `sides`: the region's side faces (give them whenever they are not
+  straight along the path, so every layer follows them).
+- `direction` for a straight region, else `normal`; `layers` (or `size`) and `bias` (< 1 grades
+  toward the target, e.g. for a boundary layer under a lid).
+- Check the reply: `max_target_gap` ≈ 0, `min_scaled_jacobian` ≥ 0.5, `section.shared_nodes`
+  equal to the section's nodes when it should conform. An error names the node whose path
+  misses the target or the element that would invert: shorten the region (cut it where the end
+  turns steep) rather than falling back to tets.
 
 ## 3a. Projection blocking
 

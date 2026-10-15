@@ -13,8 +13,11 @@
 #![forbid(unsafe_code)]
 
 pub mod autosave;
+pub mod bug_report;
 pub mod catalogue;
 pub mod cmd;
+pub mod crash;
+pub mod logfile;
 
 pub use cmd::analytic_surfaces;
 pub use cmd::replace::{MESHERS, Replacement, replacement};
@@ -244,6 +247,9 @@ pub struct Session {
     pub view: fieldcraft_io::View,
     /// The view as last saved (or opened): a change to it is unsaved too.
     saved_view: fieldcraft_io::View,
+    /// This is the app's own model: its top-level commands go into the crash journal
+    /// ([`crash`]), so an unclean exit can be replayed. Off for scratch sessions and tests.
+    pub crash_journal: bool,
 }
 
 impl Session {
@@ -256,6 +262,9 @@ impl Session {
         // Session commands (open, save, undo, redo) change the session only in their last step,
         // after everything that can fail, so they need no copy of the model to restore.
         let before = (spec.kind == CommandKind::Model).then(|| (self.snapshot(), self.document()));
+        let scope = crash::Scope::enter();
+        let journaled = crash::command_begin(&scope, self, id, params);
+        let (revision, opened) = (self.revision, self.opened);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
         let result = match outcome {
             Ok(Err(EngineError::Param(p))) => Err(EngineError::Param(match spec.form {
@@ -285,6 +294,8 @@ impl Session {
                 cmd::view::forget_missing(self);
             }
         }
+        drop(scope);
+        crash::command_done(self, journaled, self.revision != revision || self.opened != opened, id, params, &result);
         result
     }
 

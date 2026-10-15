@@ -1,0 +1,277 @@
+use super::*;
+use crate::Session;
+
+fn fresh_dir(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("fieldcraft-crash-test-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    d
+}
+
+fn build() -> Build {
+    Build { version: "9.9.9", commit: "abc1234" }
+}
+
+fn node(label: u32) -> Value {
+    json!({"label": label, "xyz": [f64::from(label), 0.0, 0.0]})
+}
+
+/// The child half of the process tests: does nothing unless a parent asks, then installs the
+/// hook and crashes the way `FIELDCRAFT_CRASH_CHILD` says.
+#[test]
+fn child() {
+    let (Some(dir), Ok(mode)) = (std::env::var_os("FIELDCRAFT_CRASH_CHILD_DIR"), std::env::var("FIELDCRAFT_CRASH_CHILD")) else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    if mode == "replay" {
+        // Replay the one report (in a process of its own: the replay replaces the panic hook).
+        let id = list(&dir)[0].id.clone();
+        let r = replay(&read(&dir, &id).unwrap(), &std::env::temp_dir()).unwrap();
+        let steps: Vec<_> = r.steps.iter().map(|(c, r)| json!({"command": c, "ok": r.is_ok()})).collect();
+        println!("REPLAY {}", json!({"reproduced": r.reproduced, "nodes": r.session.model.nodes().len(), "steps": steps}));
+        return;
+    }
+    let fresh = install(dir.clone(), build());
+    println!("FRESH {}", serde_json::to_string(&fresh).unwrap());
+    if mode == "idle" {
+        end_session();
+        return;
+    }
+    let mut s = Session { crash_journal: true, ..Default::default() };
+    s.execute("mesh.node.add", &node(1)).unwrap();
+    s.execute("mesh.node.add", &node(2)).unwrap();
+    // Commands that only read are not kept.
+    for _ in 0..50 {
+        s.execute("model.info", &json!({})).unwrap();
+    }
+    match mode.as_str() {
+        "command" => {
+            for _ in 0..3 {
+                let r = s.execute("diagnostics.crash_test", &json!({"mode": "panic"}));
+                assert!(matches!(r, Err(crate::EngineError::Internal { .. })), "{r:?}");
+            }
+            assert_eq!(s.model.nodes().len(), 2, "the model is unchanged");
+        }
+        "recovered" => {
+            assert_eq!(s.execute("diagnostics.crash_test", &json!({"mode": "recovered"})).unwrap()["caught"], true);
+        }
+        "thread" => {
+            let r = std::thread::Builder::new()
+                .name("worker".into())
+                .spawn(|| std::panic::panic_any(String::from("worker thread 42 failed")))
+                .unwrap()
+                .join();
+            assert!(r.is_err());
+        }
+        "abort" => {
+            activity("control ui.capture");
+            let _ = s.execute("diagnostics.crash_test", &json!({"mode": "abort"}));
+        }
+        "autosave" => {
+            // The journal starts again from each autosave.
+            let mut a = crate::autosave::Autosaver::new(&dir.join("recovery")).unwrap();
+            assert!(a.save(&s).unwrap());
+            s.execute("mesh.node.add", &node(3)).unwrap();
+            activity("control ui.capture");
+            std::process::abort();
+        }
+        _ => {}
+    }
+    end_session();
+}
+
+/// Run [`child`] in a new process; returns its stdout and whether it succeeded.
+fn run_child(dir: &Path, mode: &str) -> (String, bool) {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "crash::tests::child", "--test-threads=1", "--nocapture"])
+        .env("FIELDCRAFT_CRASH_CHILD_DIR", dir)
+        .env("FIELDCRAFT_CRASH_CHILD", mode)
+        .env("FIELDCRAFT_CRASH_TEST", "1")
+        .env("RUST_BACKTRACE", "0")
+        .output()
+        .unwrap();
+    (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.success())
+}
+
+fn printed(out: &str, tag: &str) -> Value {
+    let line = out.lines().find_map(|l| l.split_once(tag).map(|(_, rest)| rest)).unwrap_or_else(|| panic!("no {tag} in {out}"));
+    serde_json::from_str(line.trim()).unwrap()
+}
+
+fn only_report(dir: &Path) -> (Summary, Value) {
+    let all = list(dir);
+    assert_eq!(all.len(), 1, "{all:?}");
+    let s = all.into_iter().next().unwrap();
+    let v = read(dir, &s.id).unwrap();
+    (s, v)
+}
+
+fn nodes_in(model: &str) -> usize {
+    let mut s = Session::default();
+    s.execute("file.open", &json!({"path": model})).unwrap();
+    s.model.nodes().len()
+}
+
+#[test]
+fn a_command_panic_is_reported_once_with_the_model_and_the_command_and_replays() {
+    let d = fresh_dir("command");
+    let (_, ok) = run_child(&d, "command");
+    assert!(ok, "the panics were caught");
+    let (s, v) = only_report(&d);
+    assert_eq!(s.kind, "command_panic");
+    assert_eq!(s.count, 3, "repeats are counted, not written again");
+    assert_eq!(s.command.as_deref(), Some("diagnostics.crash_test"));
+    assert!(s.replayable);
+    assert_eq!(v["format"], FORMAT);
+    assert_eq!(v["app"]["version"], "9.9.9");
+    assert_eq!(v["system"]["os"], std::env::consts::OS);
+    assert!(v["message"].as_str().unwrap().contains("an internal error in a command"), "{v}");
+    assert!(v["location"].as_str().unwrap().contains("diagnostics.rs"), "{v}");
+    let bt = v["backtrace"].as_array().unwrap();
+    assert!(bt.iter().any(|f| f.as_str().unwrap().contains("crash_test")), "{bt:?}");
+    assert!(!bt.iter().any(|f| f.as_str().unwrap().contains("crash::hook")), "the hook's own frames are dropped: {bt:?}");
+    assert_eq!(v["recent_commands"][0]["command"], "mesh.node.add");
+    assert_eq!(v["recent_commands"].as_array().unwrap().len(), 3, "read-only commands are not kept: {v}");
+    assert_eq!(v["recent_commands"][2]["ok"], false);
+    // The model from before the command, and the command: together they reproduce the crash.
+    assert_eq!(nodes_in(v["model_path"].as_str().unwrap()), 2);
+    let replay: Value = serde_json::from_slice(&fs::read(v["replay_path"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(replay["commands"], json!([{"command": "diagnostics.crash_test", "params": {"mode": "panic"}}]));
+    assert_eq!(v["reproduce"], format!("fieldcraft-cli crashes replay {}", s.id));
+    assert!(fs::read_dir(d.join("sessions")).unwrap().next().is_none(), "a clean exit leaves no journal");
+    // The replay reaches the same internal error, from the same model.
+    let (out, ok) = run_child(&d, "replay");
+    assert!(ok, "{out}");
+    let r = printed(&out, "REPLAY ");
+    assert_eq!(r["reproduced"], true, "{r}");
+    assert_eq!(r["nodes"], 2, "the replay ends in the state the crash left: {r}");
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_panic_caught_inside_a_command_is_reported_as_recovered() {
+    let d = fresh_dir("recovered");
+    let (_, ok) = run_child(&d, "recovered");
+    assert!(ok);
+    let (s, v) = only_report(&d);
+    assert_eq!(s.kind, "recovered_panic");
+    assert!(!s.replayable, "the command did not fail");
+    assert!(v["message"].as_str().unwrap().contains("caught inside"), "{v}");
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_panic_outside_commands_is_reported_from_the_journal() {
+    let d = fresh_dir("thread");
+    let (_, ok) = run_child(&d, "thread");
+    assert!(ok);
+    let (s, v) = only_report(&d);
+    assert_eq!(s.kind, "panic");
+    assert_eq!(v["thread"], "worker");
+    assert!(s.message.contains("worker thread 42 failed"));
+    // The journal's commands from a new model rebuild it.
+    let replay: Value = serde_json::from_slice(&fs::read(v["replay_path"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(replay["commands"].as_array().unwrap().len(), 2, "{replay}");
+    // A panic the hook reported is no unclean exit at the next start.
+    let (out, _) = run_child(&d, "abort");
+    let fresh = printed(&out, "FRESH ");
+    assert_eq!(fresh.as_array().unwrap().len(), 1, "the earlier report, seen once: {fresh}");
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn an_unclean_exit_is_found_at_the_next_start_with_its_commands() {
+    let d = fresh_dir("abort");
+    let (_, ok) = run_child(&d, "abort");
+    assert!(!ok, "the child aborted");
+    assert!(list(&d).is_empty(), "nothing wrote a report while it died");
+    assert_eq!(fs::read_dir(d.join("sessions")).unwrap().count(), 1, "its journal is left behind");
+    let (out, ok) = run_child(&d, "idle");
+    assert!(ok);
+    let fresh = printed(&out, "FRESH ");
+    assert_eq!(fresh[0]["kind"], "unclean_exit", "{fresh}");
+    let (s, v) = only_report(&d);
+    assert_eq!(s.command.as_deref(), Some("diagnostics.crash_test"), "the command in flight");
+    assert!(s.message.contains("ended without a clean exit while running `diagnostics.crash_test`"), "{}", s.message);
+    assert_eq!(v["last_activity"], "control ui.capture");
+    let replay: Value = serde_json::from_slice(&fs::read(v["replay_path"].as_str().unwrap()).unwrap()).unwrap();
+    let ids: Vec<&str> = replay["commands"].as_array().unwrap().iter().map(|c| c["command"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["mesh.node.add", "mesh.node.add", "diagnostics.crash_test"]);
+    assert!(fs::read_dir(d.join("sessions")).unwrap().next().is_none(), "the dead journal is gone");
+    // Told once: the next start offers nothing new.
+    let (out, _) = run_child(&d, "idle");
+    assert_eq!(printed(&out, "FRESH "), json!([]));
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn an_unclean_exit_after_an_autosave_starts_from_the_autosave() {
+    let d = fresh_dir("autosave");
+    let (_, ok) = run_child(&d, "autosave");
+    assert!(!ok);
+    run_child(&d, "idle");
+    let (s, v) = only_report(&d);
+    assert_eq!(s.kind, "unclean_exit");
+    assert!(s.message.contains("between commands (last: control ui.capture)"), "{}", s.message);
+    assert_eq!(nodes_in(v["model_path"].as_str().unwrap()), 2, "the autosaved model");
+    let replay: Value = serde_json::from_slice(&fs::read(v["replay_path"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(replay["commands"], json!([{"command": "mesh.node.add", "params": node(3)}]), "only what came after the autosave");
+    let (out, ok) = run_child(&d, "replay");
+    assert!(ok, "{out}");
+    assert_eq!(printed(&out, "REPLAY ")["nodes"], 3, "the replay rebuilds the model the app had");
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn journals_parse_and_hostile_ids_are_refused() {
+    let text = [
+        r#"{"start":"x","pid":1,"version":"1"}"#,
+        r#"{"base":"new"}"#,
+        r#"{"run":"a","params":{}}"#,
+        r#"{"ok":true}"#,
+        r#"{"activity":"control ui.capture"}"#,
+        r#"{"run":"b","params":{"x":1}}"#,
+        r#"{"ok":false,"error":"no"}"#,
+        "not json",
+        r#"{"run":"c","params":{}}"#,
+    ]
+    .join("\n");
+    let j = parse_journal(&text);
+    assert_eq!(j.replay, vec![json!({"command": "a", "params": {}})]);
+    assert_eq!(j.recent.len(), 2);
+    assert_eq!(j.in_flight, Some(json!({"command": "c", "params": {}})));
+    assert_eq!(j.activity.as_deref(), Some("control ui.capture"));
+    assert!(j.complete && !j.reported);
+    let d = fresh_dir("hostile");
+    fs::create_dir_all(&d).unwrap();
+    for id in ["", "../x", "a/b", &"f".repeat(65)] {
+        assert!(read(&d, id).is_err(), "{id}");
+        assert_eq!(clear(&d, Some(id)), 0);
+    }
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn signatures_ignore_numbers() {
+    assert_eq!(signature("a.rs:1", "node 12 of 400"), signature("a.rs:1", "node 7 of 3"));
+    assert_ne!(signature("a.rs:1", "node 12"), signature("a.rs:2", "node 12"));
+    assert_eq!(utc(0), "1970-01-01T00:00:00Z");
+    assert_eq!(stamp(1_760_436_000), "20251014-100000");
+}
+
+#[test]
+fn reports_are_pruned_to_the_limits() {
+    let d = fresh_dir("prune");
+    for i in 0..(MAX_REPORTS + 5) {
+        let id = format!("20261014-1000{:02}-{:016x}", i % 60, i + 1);
+        fs::create_dir_all(d.join(&id)).unwrap();
+        let kind = if i == MAX_REPORTS + 4 { "recovered_panic" } else { "panic" };
+        fs::write(d.join(&id).join("report.json"), json!({"kind": kind, "message": "m"}).to_string()).unwrap();
+    }
+    prune(&d, now());
+    let left = list(&d);
+    assert_eq!(left.len(), MAX_REPORTS);
+    assert!(left.iter().all(|r| r.kind == "panic"), "recovered ones go first");
+    assert_eq!(clear(&d, None), MAX_REPORTS);
+    let _ = fs::remove_dir_all(&d);
+}

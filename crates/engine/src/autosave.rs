@@ -47,6 +47,7 @@ impl Autosaver {
         let bytes = s.file_bytes(None)?;
         self.slot.write(&bytes, s.path.as_deref(), s.model.nodes().len(), s.model.elements().len())?;
         self.saved = Some(s.revision());
+        crate::crash::autosaved(s, &self.slot.file());
         Ok(true)
     }
 

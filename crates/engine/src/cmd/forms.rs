@@ -1433,6 +1433,23 @@ pub const FILE_SAVE: &[Field] = &[path("path", "File", true).help("Where to save
 pub const FILE_SAVE_AS: &[Field] = &[path("path", "File", true).help("The file to save to.").req()];
 pub const RECOVERY_LIST: &[Field] =
     &[path("dir", "Folder", false).help("The recovery folder; the default one when empty.").hint("the recovery folder")];
+pub const CRASH_REPORTS: &[Field] = &[
+    int("limit", "Limit", 1, 1000).help("At most this many reports, newest first.").hint("20"),
+    path("dir", "Folder", false).help("The crash folder; the default one when empty.").hint("the crash folder"),
+];
+pub const CRASH_REPORT: &[Field] = &[
+    text("id", "Report").help("The crash report to show.").req(),
+    path("dir", "Folder", false).help("The crash folder; the default one when empty.").hint("the crash folder"),
+];
+pub const BUG_REPORT: &[Field] = &[
+    text("title", "Title").help("The issue's title; one is made up when empty."),
+    text("observed", "What happened").help("What went wrong; the last error when empty."),
+    text("crash", "Crash report").help("A crash report to report (its id)."),
+    flag("share_session", "Share my session").help("Attach the commands that built the model (they can name your files).").def("false"),
+    flag("include_model", "Include the model").help("Attach the model file too (with Share my session).").def("false"),
+];
+pub const CRASH_TEST: &[Field] =
+    &[choice("mode", "Mode", &[("panic", "Panic"), ("recovered", "Recovered panic"), ("abort", "Abort")]).help("How to crash.").req()];
 pub const RECOVER: &[Field] = &[
     text("id", "Autosave").help("The autosave to recover.").req(),
     path("dir", "Folder", false).help("The recovery folder; the default one when empty.").hint("the recovery folder"),
@@ -1697,7 +1714,15 @@ mod tests {
         }
     }
 
-    const STATE: &[&str] = &["open a design first", "`boundary_conditions` or `loads`", "give one of", "is not an explicit", "has a result"];
+    const STATE: &[&str] = &[
+        "open a design first",
+        "`boundary_conditions` or `loads`",
+        "give one of",
+        "is not an explicit",
+        "has a result",
+        "no crash report",
+        "FIELDCRAFT_CRASH_TEST",
+    ];
 
     /// Fill top-level required names (a fresh one) and references (the first existing item).
     fn fill_required(s: &Session, form: &[Field], p: &mut Value) {

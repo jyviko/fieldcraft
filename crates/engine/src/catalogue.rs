@@ -591,6 +591,14 @@ pub static CATALOGUE: &[Capability] = &[
     ),
     ready("edit.undo", "Undo", Tools, "History", "Undo the last command that changed the model"),
     ready("edit.redo", "Redo", Tools, "History", "Redo the command undone last"),
+    ready_more(
+        "diagnostics.bug_report",
+        "Report a Bug",
+        Tools,
+        "Help",
+        "Draft a GitHub bug report with the version, the OS and the last error; you review it, and nothing is sent until you submit it",
+        &["diagnostics.crash_reports", "diagnostics.crash_report", "diagnostics.crash_test"],
+    ),
 ];
 
 /// The catalogue entry with this id.

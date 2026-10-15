@@ -6,6 +6,7 @@ mod contact;
 pub(crate) mod datum;
 pub(crate) mod deck;
 pub(crate) mod define;
+pub mod diagnostics;
 mod edit;
 pub(crate) mod file;
 pub(crate) mod forms;
@@ -153,6 +154,10 @@ pub static ALL: &[CommandSpec] = &[
     results::FRAME,
     results::REACTIONS,
     results::CLEAR,
+    diagnostics::CRASH_REPORTS,
+    diagnostics::CRASH_REPORT,
+    diagnostics::BUG_REPORT,
+    diagnostics::CRASH_TEST,
 ];
 
 /// The problem with required parameter `key`: [`ProblemKind::Required`] when it is left out,

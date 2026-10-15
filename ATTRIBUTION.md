@@ -36,6 +36,7 @@ is committed and listed here with its exports.
 | assets/icons/deck.write.abaqus.svg, assets/icons/deck.write.abaqus.vectorcraft | FieldCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/deck.write.abaqus.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
 | assets/icons/deck.write.lsdyna.svg, assets/icons/deck.write.lsdyna.vectorcraft | FieldCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/deck.write.lsdyna.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
 | assets/icons/deck.write.nastran.svg, assets/icons/deck.write.nastran.vectorcraft | FieldCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/deck.write.nastran.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
+| assets/icons/diagnostics.bug_report.svg, assets/icons/diagnostics.bug_report.vectorcraft | FieldCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/diagnostics.bug_report.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
 | assets/icons/edit.redo.svg, assets/icons/edit.redo.vectorcraft | FieldCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/edit.redo.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
 | assets/icons/edit.undo.svg, assets/icons/edit.undo.vectorcraft | FieldCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/edit.undo.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
 | assets/icons/file.open.svg, assets/icons/file.open.vectorcraft | FieldCraft contributors | Original toolbar icon drawn with VectorCraft from `assets/icons/src/file.open.json` (`cargo xtask icons`) | MIT OR Apache-2.0 |
@@ -186,6 +187,7 @@ is committed and listed here with its exports.
 | crates/ui-egui/src/fields.rs (form rows: a label column of fixed width, then the field) | SolidCraft `crates/ui-egui/src/dialogs.rs` | MIT OR Apache-2.0 |
 | crates/io/src/fs.rs (atomic writes) | SolidCraft `crates/io/src/safe_write.rs` | MIT OR Apache-2.0 |
 | crates/io/src/recovery.rs (recovery folder, entries, locks) | SolidCraft `crates/engine/src/recovery.rs` | MIT OR Apache-2.0 |
+| crates/engine/src/crash.rs, crates/engine/src/crash_tests.rs (crash reports: panic hook, locked command journal, unclean-exit detection, report folders and limits, replay), apps/fieldcraft-cli/src/crashes.rs, docs/crash-reports.md (structure) | SolidCraft `crates/engine/src/crash.rs`, `crash_tests.rs`, `apps/solidcraft-cli/src/crashes.rs`, `docs/crash-reports.md` | MIT OR Apache-2.0 |
 | apps/fieldcraft/src/control_server.rs | SolidCraft `apps/solidcraft/src/control_server.rs` | MIT OR Apache-2.0 |
 | crates/mcp/src/ (JSON-RPC framing, MCP lifecycle, tool schema checks, the control-channel backend, base64) | SolidCraft `crates/mcp/src/` | MIT OR Apache-2.0 |
 | crates/io/src/roots.rs (the rules of read and write roots) | VectorCraft's automation roots (docs/mcp.md there) | MIT OR Apache-2.0 |

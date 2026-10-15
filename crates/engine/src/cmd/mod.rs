@@ -24,6 +24,7 @@ pub(crate) mod seeds;
 pub(crate) mod solve;
 mod symmetry;
 mod tags;
+pub(crate) mod view;
 
 use crate::schema::ProblemKind;
 use fieldcraft_model::MAX_LABEL;
@@ -47,6 +48,10 @@ pub static ALL: &[CommandSpec] = &[
     datum::DATUM_AXIS_EDIT,
     datum::DATUM_POINT_EDIT,
     datum::DATUM_DELETE,
+    view::HIDE,
+    view::SHOW,
+    view::ISOLATE,
+    view::SHOW_ALL,
     datum::PARTITION,
     datum::PARTITION_DELETE,
     mesh::NODE_ADD,

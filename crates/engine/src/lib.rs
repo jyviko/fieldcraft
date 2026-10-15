@@ -238,6 +238,11 @@ pub struct Session {
     /// Identifies the open document: it changes when another model, sample or design is opened
     /// in place of the current one, never with an edit (see [`Session::opened`]).
     opened: u64,
+    /// What the viewport hides (`view.*`): saved with the model, but no edit of it, so it is
+    /// neither journalled nor undone, and it leaves results current.
+    pub view: fieldcraft_io::View,
+    /// The view as last saved (or opened): a change to it is unsaved too.
+    saved_view: fieldcraft_io::View,
 }
 
 impl Session {
@@ -275,6 +280,8 @@ impl Session {
                 self.journal.push((id.to_string(), params.clone()));
                 self.revision = next_revision();
                 self.record_undo(before);
+                // An item deleted (or a body cut into cells) is no longer hidden.
+                cmd::view::forget_missing(self);
             }
         }
         result
@@ -315,7 +322,7 @@ impl Session {
     /// Whether the session has changes its file does not hold. Undoing back to the saved state
     /// makes it clean again.
     pub fn is_dirty(&self) -> bool {
-        self.saved_revision.unwrap_or(0) != self.revision
+        self.saved_revision.unwrap_or(0) != self.revision || self.view != self.saved_view
     }
 
     /// The stored result of a step, if it was solved in the current state (an edit makes it stale;
@@ -356,6 +363,7 @@ impl Session {
     pub(crate) fn mark_saved(&mut self, path: String) {
         self.path = Some(path);
         self.saved_revision = Some(self.revision);
+        self.saved_view = self.view.clone();
     }
 }
 

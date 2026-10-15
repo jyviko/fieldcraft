@@ -1392,6 +1392,30 @@ pub const DATUM_POINT: &[Field] = &[
     .req()
     .def(r#"{"type": "coordinates"}"#),
 ];
+pub const VIEW_ITEMS: &[Field] = &[rows(
+    "items",
+    "Items",
+    &[
+        choice(
+            "kind",
+            "Kind",
+            &[
+                ("body", "Body"),
+                ("surface", "Surface"),
+                ("datum", "Datum"),
+                ("boundary_condition", "Boundary condition"),
+                ("load", "Load"),
+                ("reference_point", "Reference point"),
+                ("coupling", "Coupling"),
+            ],
+        )
+        .help("What kind of item it is.")
+        .req(),
+        text("name", "Name").help("The item's name.").req(),
+    ],
+)
+.help("The viewport items.")
+.req()];
 pub const DATUM_DELETE: &[Field] = &[
     reference("name", "Datum", C::Datum).req().help("The Datum to act on, by name."),
     flag("cascade", "Delete its partitions").help("Also delete the partitions that cut by it; without it, a datum in use is refused."),

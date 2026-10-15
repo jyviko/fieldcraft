@@ -121,14 +121,14 @@ pub struct Shown {
 pub fn display(s: &Session) -> (DisplayMesh, Vec<String>) {
     let mut d = DisplayMesh::from_model(&s.model);
     let mut failed = Vec::new();
-    for body in s.design.iter().flat_map(|d| &d.bodies) {
+    for body in s.design.iter().flat_map(|d| &d.bodies).filter(|b| s.shows(fieldcraft_io::ItemKind::Body, &b.name)) {
         let mesh = body.measure().and_then(|m| body.tessellate(display_tolerance(&Aabb3 { min: m.bbox_min.into(), max: m.bbox_max.into() })));
         match mesh {
             Ok(m) => d.add_surface(&m.positions, &m.triangles, &m.tri_face),
             Err(e) => failed.push(format!("{}: {e}", body.name)),
         }
     }
-    for surface in &s.surfaces {
+    for surface in s.surfaces.iter().filter(|x| s.shows(fieldcraft_io::ItemKind::Surface, &x.name)) {
         d.add_surface(&surface.mesh.positions, &surface.mesh.triangles, &surface.mesh.tri_face);
     }
     (d, failed)
@@ -180,13 +180,13 @@ impl Picture {
 
 fn picture(s: &Session, p: &Palette) -> Picture {
     let (base, failed) = display(s);
-    let glyphs = Glyphs::from_model(&s.model);
+    let glyphs = s.glyphs();
     let mut shown = Shown { failed, ..Shown::default() };
     let plot = s.results_view.as_ref().and_then(|v| s.latest_result(&v.step).map(|(r, _)| (v, r)));
     let Some((view, result)) = plot else {
         let mut scene = model_scene(&base, p);
         let mut bounds = base.bounds;
-        bounds.union(fieldcraft_render::glyphs::datums(&s.model, &base.bounds, &p.glyphs, &mut scene));
+        bounds.union(fieldcraft_render::glyphs::datums(&s.model, &base.bounds, &|n| s.shows(fieldcraft_io::ItemKind::Datum, n), &p.glyphs, &mut scene));
         return Picture { scene, drawn: base, bounds, shown, glyphs, colors: p.glyphs };
     };
     shown.step = Some(view.step.clone());

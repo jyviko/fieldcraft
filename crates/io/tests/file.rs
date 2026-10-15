@@ -2,7 +2,7 @@
 
 use std::io::{Cursor, Read, Write};
 
-use fieldcraft_io::{Error, Geometry, ModelFile, SourceFile, mesh, read, write};
+use fieldcraft_io::{Error, Geometry, Item, ItemKind, ModelFile, SourceFile, View, mesh, read, write};
 use fieldcraft_model::{ElementKind, Entity, GeometryRef, Model, UnitSystem};
 use serde_json::{Value, json};
 
@@ -36,11 +36,12 @@ fn sample() -> ModelFile {
     };
     let journal =
         vec![("mesh.node.add".to_string(), json!({"label": 1, "xyz": [0, 0, 0]})), ("model.units".to_string(), json!({"system": "mm-t-s-N-MPa"}))];
-    ModelFile { model: m, geometry, journal }
+    let view = View { hidden: [Item { kind: ItemKind::Datum, name: "Sym".into() }, Item { kind: ItemKind::Body, name: "Body1".into() }].into() };
+    ModelFile { model: m, geometry, journal, view }
 }
 
 fn bytes_of(f: &ModelFile) -> Vec<u8> {
-    write(&f.model, &f.geometry, &f.journal).unwrap()
+    write(&f.model, &f.geometry, &f.journal, &f.view).unwrap()
 }
 
 /// The package's parts, by name.
@@ -247,4 +248,25 @@ fn mesh_part_rejects_what_the_model_rejects() {
     let mut back = f.model.without_mesh();
     mesh::decode_into(&mut back, &good).unwrap();
     assert_eq!(back, f.model);
+}
+
+/// The view's hidden items come back as written; a hostile hidden list is refused.
+#[test]
+fn the_view_state_round_trips_and_is_checked() {
+    let f = sample();
+    let back = read(&bytes_of(&f)).unwrap();
+    assert_eq!(back.view, f.view);
+    assert!(back.view.is_hidden(ItemKind::Datum, "Sym") && !back.view.is_hidden(ItemKind::Load, "Sym"));
+    let bytes = bytes_of(&f);
+    for bad in [json!([{"kind": "body", "name": ""}]), json!([{"kind": "nope", "name": "A"}]), json!("x")] {
+        let mut ps = parts(&bytes);
+        let mut manifest: Value = serde_json::from_slice(&ps[0].1).unwrap();
+        manifest["view"]["hidden"] = bad.clone();
+        ps[0].1 = serde_json::to_vec(&manifest).unwrap();
+        assert!(read(&package(&ps)).is_err(), "{bad}");
+    }
+    let empty = View::default();
+    let plain = write(&f.model, &f.geometry, &f.journal, &empty).unwrap();
+    let manifest: Value = serde_json::from_slice(&parts(&plain)[0].1).unwrap();
+    assert!(manifest.get("view").is_none(), "an empty view writes nothing: {manifest}");
 }

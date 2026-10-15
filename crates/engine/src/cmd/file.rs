@@ -190,7 +190,7 @@ impl Session {
             design: self.sources.design.as_ref().map(stored).transpose()?,
             meshes: self.sources.meshes.iter().map(stored).collect::<fieldcraft_io::Result<_>>()?,
         };
-        Ok(fieldcraft_io::write(&self.model, &geometry, &self.journal)?)
+        Ok(fieldcraft_io::write(&self.model, &geometry, &self.journal, &self.view)?)
     }
 
     /// A session holding what a file holds, its geometry opened again from the paths it names
@@ -220,8 +220,17 @@ impl Session {
             surfaces.extend(opened.into_iter().flatten().map(Arc::new));
             sources.meshes.push(source);
         }
-        let session =
-            Session { model: file.model, design, surfaces, sources, journal: file.journal, revision: next_revision(), ..Session::default() };
+        let session = Session {
+            model: file.model,
+            design,
+            surfaces,
+            sources,
+            journal: file.journal,
+            revision: next_revision(),
+            saved_view: file.view.clone(),
+            view: file.view,
+            ..Session::default()
+        };
         (session, warnings)
     }
 

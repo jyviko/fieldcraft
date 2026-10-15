@@ -722,6 +722,16 @@ impl Glyphs {
         Glyphs { owners: b.owners, groups: b.groups, marks: b.marks, unit }
     }
 
+    /// [`Glyphs::from_model`] without the definitions `hidden` names (the view's hidden items).
+    pub fn from_model_hiding(model: &Model, hidden: &dyn Fn(Definition, &str) -> bool) -> Glyphs {
+        let mut g = Glyphs::from_model(model);
+        let gone: Vec<bool> = g.owners.iter().map(|(d, n)| hidden(*d, n)).collect();
+        let kept = |owner: usize| !gone.get(owner).copied().unwrap_or(false);
+        g.groups.retain(|x| kept(x.owner));
+        g.marks.retain(|(owner, _)| kept(*owner));
+        g
+    }
+
     /// The model's own symbol unit (a fortieth of its bounding box diagonal): the size symbols
     /// are drawn at when no camera gives one.
     pub fn model_unit(&self) -> f64 {
@@ -848,12 +858,12 @@ const DATUM_HATCH: usize = 4;
 
 /// Draw the model's datum planes (an outlined, hatched square around the model, `bounds`), axes
 /// (a line through the model) and points (a small cross), each with its name; returns the box
-/// around them.
-pub fn datums(model: &Model, bounds: &Aabb3, colors: &GlyphColors, scene: &mut Scene) -> Aabb3 {
+/// around them. Only the datums `shown` takes are drawn.
+pub fn datums(model: &Model, bounds: &Aabb3, shown: &dyn Fn(&str) -> bool, colors: &GlyphColors, scene: &mut Scene) -> Aabb3 {
     let mut d = Draw { scene, bounds: Aabb3::EMPTY, color: colors.datum, width: OUTLINE_WIDTH, on_top: false };
     let (centre, diagonal) = if bounds.is_empty() { (Vec3::ZERO, 1.0) } else { (bounds.center(), bounds.diagonal().max(1e-9)) };
     let reach = DATUM_REACH * diagonal;
-    for (name, datum) in model.datums() {
+    for (name, datum) in model.datums().iter().filter(|(n, _)| shown(n)) {
         match *datum {
             fieldcraft_model::Datum::Plane { point, normal } => {
                 let (p, n) = (Vec3::from(point), Vec3::from(normal));
@@ -1137,6 +1147,11 @@ mod tests {
         let (s, _) = drawn_at(&g, &m, &view(GlyphShow::ALL, u));
         assert!(s.tris.is_empty() && s.on_top.is_empty());
         assert_eq!(s.lines.len(), 4 * 3 * 6);
+        // A hidden definition draws nothing; hiding another leaves it.
+        let (hidden, _) = drawn_at(&Glyphs::from_model_hiding(&m, &|d, n| d == Definition::BoundaryCondition && n == "Clamp"), &m, &view(GlyphShow::ALL, u));
+        assert!(hidden.lines.is_empty());
+        let (other, _) = drawn_at(&Glyphs::from_model_hiding(&m, &|d, _| d == Definition::Load), &m, &view(GlyphShow::ALL, u));
+        assert_eq!(other.lines.len(), s.lines.len());
         assert!(s.lines.iter().all(|l| l.color == COLORS.constraint && l.width == LINE_WIDTH));
         // Tip on the node, each triangle along its axis (two crossed bases per axis).
         let b = bases(&s, Vec3::ZERO);
@@ -1510,7 +1525,7 @@ mod tests {
         bounds.add(Vec3::ZERO);
         bounds.add(Vec3::new(10.0, 10.0, 10.0));
         let mut scene = Scene::default();
-        let drawn = datums(&m, &bounds, &COLORS, &mut scene);
+        let drawn = datums(&m, &bounds, &|_| true, &COLORS, &mut scene);
         // A square with its hatch (4 + 2 × 3 lines), the axis line and the point's three arms,
         // each crossing at the point.
         assert_eq!(scene.lines.len(), 14);
@@ -1522,5 +1537,9 @@ mod tests {
         // The plane's lines lie on x = 5, centred on the model.
         assert!(scene.lines.iter().skip(1).take(10).all(|l| (l.a.x - 5.0).abs() < 1e-12 && (l.b.x - 5.0).abs() < 1e-12));
         assert!(drawn.diagonal() > bounds.diagonal());
+        // A datum left out draws nothing.
+        let mut only = Scene::default();
+        datums(&m, &bounds, &|n| n == "Ax", &COLORS, &mut only);
+        assert_eq!((only.lines.len(), only.labels.len()), (1, 1));
     }
 }

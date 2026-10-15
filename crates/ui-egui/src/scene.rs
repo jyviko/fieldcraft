@@ -84,7 +84,7 @@ pub fn symbols(
 
 /// Draw the model's datum planes and axes around `bounds` into `s`; returns the box around them.
 pub fn datums(s: &mut Scene, model: &fieldcraft_model::Model, bounds: &Aabb3, t: &Tokens) -> Aabb3 {
-    fieldcraft_render::glyphs::datums(model, bounds, &t.glyph_colors(), s)
+    fieldcraft_render::glyphs::datums(model, bounds, &|_| true, &t.glyph_colors(), s)
 }
 
 /// The scene for `display` drawn in `style`.

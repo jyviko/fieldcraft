@@ -580,6 +580,15 @@ pub static CATALOGUE: &[Capability] = &[
         "Open a model autosaved by an app that crashed or closed with unsaved changes",
         &["file.recovery.list", "file.recovery.discard"],
     ),
+    // Hide, show and isolate act on the browser's items, from their eyes and item menus.
+    covering(
+        "view.show_all",
+        "Show All",
+        Tools,
+        "View",
+        "Show every item hidden in the viewport (hide, show and isolate items from the browser)",
+        &["view.hide", "view.show", "view.isolate"],
+    ),
     ready("edit.undo", "Undo", Tools, "History", "Undo the last command that changed the model"),
     ready("edit.redo", "Redo", Tools, "History", "Redo the command undone last"),
 ];

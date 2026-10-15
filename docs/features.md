@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-64 ready, 41 coming soon.
+65 ready, 41 coming soon.
 
 ## Geometry
 
@@ -160,5 +160,6 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | File | Save — Save the model to its .fieldcraft file | ready | `file.save` |
 | File | Save As — Save the model to a new .fieldcraft file | ready | `file.save_as` |
 | File | Recover — Open a model autosaved by an app that crashed or closed with unsaved changes | ready | `file.recover`, `file.recovery.list`, `file.recovery.discard` |
+| View | Show All — Show every item hidden in the viewport (hide, show and isolate items from the browser) | ready | `view.show_all`, (`view.hide`), (`view.show`), (`view.isolate`) |
 | History | Undo — Undo the last command that changed the model | ready | `edit.undo` |
 | History | Redo — Redo the command undone last | ready | `edit.redo` |

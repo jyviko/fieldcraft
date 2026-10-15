@@ -5,8 +5,8 @@
 //!
 //! - `fieldcraft.json`: the manifest. The format tag (`fieldcraft/1`), the program that wrote
 //!   it, the geometry the model is built on (the SolidCraft design and the imported 3MF meshes,
-//!   each a path and the SHA-256 of its content, opened again when the model is), and the size
-//!   and SHA-256 of every other part.
+//!   each a path and the SHA-256 of its content, opened again when the model is), the view state
+//!   ([`View`]: what the viewport hides), and the size and SHA-256 of every other part.
 //! - `model.json`: the model definition (unit system, sets, materials, sections, reference
 //!   points, couplings, boundary conditions, loads, steps) as pretty-printed JSON with a stable
 //!   key order, so two versions of a model diff line by line.
@@ -28,7 +28,7 @@ pub mod mesh;
 pub mod recovery;
 pub mod roots;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
 
 use fieldcraft_model::Model;
@@ -176,6 +176,75 @@ pub struct Geometry {
     pub meshes: Vec<SourceFile>,
 }
 
+/// Most items a view hides.
+pub const MAX_HIDDEN: usize = 100_000;
+
+/// Longest name of a hidden item.
+const MAX_HIDDEN_NAME: usize = 1024;
+
+/// The kinds of items the viewport draws one by one, and so can hide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemKind {
+    /// A body of the open design (or a cell of a partitioned one).
+    Body,
+    /// An imported surface.
+    Surface,
+    Datum,
+    BoundaryCondition,
+    Load,
+    ReferencePoint,
+    Coupling,
+}
+
+impl ItemKind {
+    pub const ALL: [ItemKind; 7] = [
+        ItemKind::Body,
+        ItemKind::Surface,
+        ItemKind::Datum,
+        ItemKind::BoundaryCondition,
+        ItemKind::Load,
+        ItemKind::ReferencePoint,
+        ItemKind::Coupling,
+    ];
+}
+
+/// An item of the viewport, by kind and name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Item {
+    pub kind: ItemKind,
+    pub name: String,
+}
+
+/// View state saved with a model (not part of its definition): the items the viewport hides.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct View {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub hidden: BTreeSet<Item>,
+}
+
+impl View {
+    pub fn is_empty(&self) -> bool {
+        self.hidden.is_empty()
+    }
+
+    pub fn is_hidden(&self, kind: ItemKind, name: &str) -> bool {
+        self.hidden.contains(&Item { kind, name: name.to_string() })
+    }
+
+    fn check(&self) -> Result<()> {
+        if self.hidden.len() > MAX_HIDDEN {
+            return Err(Error::Limit(format!("a view hides at most {MAX_HIDDEN} items")));
+        }
+        if self.hidden.iter().any(|i| i.name.is_empty() || i.name.len() > MAX_HIDDEN_NAME) {
+            return invalid(format!("{MANIFEST}: a hidden item's name is 1 to {MAX_HIDDEN_NAME} bytes"));
+        }
+        Ok(())
+    }
+}
+
 /// One journal entry: a command id and its parameters.
 pub type JournalEntry = (String, Value);
 
@@ -185,6 +254,7 @@ pub struct ModelFile {
     pub model: Model,
     pub geometry: Geometry,
     pub journal: Vec<JournalEntry>,
+    pub view: View,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -194,6 +264,8 @@ struct Manifest {
     generator: String,
     #[serde(default)]
     geometry: Geometry,
+    #[serde(default, skip_serializing_if = "View::is_empty")]
+    view: View,
     parts: BTreeMap<String, Part>,
 }
 
@@ -235,11 +307,12 @@ fn journal_text(journal: &[JournalEntry]) -> Result<Vec<u8>> {
 }
 
 /// The bytes of a `.fieldcraft` file holding `model`, built on `geometry` by the commands in
-/// `journal`. The same arguments always give the same bytes.
-pub fn write(model: &Model, geometry: &Geometry, journal: &[JournalEntry]) -> Result<Vec<u8>> {
+/// `journal`, shown with `view`. The same arguments always give the same bytes.
+pub fn write(model: &Model, geometry: &Geometry, journal: &[JournalEntry], view: &View) -> Result<Vec<u8>> {
     if geometry.meshes.len() > MAX_MESH_SOURCES {
         return Err(Error::Limit(format!("a model refers to at most {MAX_MESH_SOURCES} imported meshes")));
     }
+    view.check()?;
     let mut model_json = serde_json::to_vec_pretty(&model.without_mesh()).map_err(|e| json_error(MODEL, e))?;
     model_json.push(b'\n');
     let mesh = mesh::encode(model)?;
@@ -249,6 +322,7 @@ pub fn write(model: &Model, geometry: &Geometry, journal: &[JournalEntry]) -> Re
         format: FORMAT.into(),
         generator: format!("FieldCraft {}", env!("CARGO_PKG_VERSION")),
         geometry: geometry.clone(),
+        view: view.clone(),
         parts: parts.iter().map(|(name, bytes)| (name.to_string(), Part { bytes: bytes.len() as u64, sha256: sha256_hex(bytes) })).collect(),
     };
     let mut manifest_json = serde_json::to_vec_pretty(&manifest).map_err(|e| json_error(MANIFEST, e))?;
@@ -323,6 +397,7 @@ pub fn read(bytes: &[u8]) -> Result<ModelFile> {
     if manifest.geometry.meshes.len() > MAX_MESH_SOURCES {
         return Err(Error::Limit(format!("a model refers to at most {MAX_MESH_SOURCES} imported meshes")));
     }
+    manifest.view.check()?;
     if manifest.parts.len() != 3 {
         return invalid(format!("`{MANIFEST}` must list exactly the parts {MODEL}, {MESH} and {JOURNAL}"));
     }
@@ -347,7 +422,7 @@ pub fn read(bytes: &[u8]) -> Result<ModelFile> {
     mesh::decode_into(&mut model, &mesh_bin)?;
     drop(mesh_bin);
     let journal = read_journal(&journal_json)?;
-    Ok(ModelFile { model, geometry: manifest.geometry, journal })
+    Ok(ModelFile { model, geometry: manifest.geometry, journal, view: manifest.view })
 }
 
 fn read_journal(bytes: &[u8]) -> Result<Vec<JournalEntry>> {

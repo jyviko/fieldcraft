@@ -255,6 +255,7 @@ fn probe(app: &ModelApp, plot: &Plot, painter: &egui::Painter, rect: Rect, t: &T
 /// Every control runs a command or a view setting.
 pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) {
     let mut run: Vec<(&'static str, Value)> = Vec::new();
+    let mut export: Option<Value> = None;
     let steps: Vec<(String, bool)> = app.session.result_steps().map(|(n, c)| (n.to_string(), c)).collect();
     egui::Grid::new("fc_results_grid").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
         ui.label("Step");
@@ -385,26 +386,37 @@ pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) 
     }
     if matches!(plot.result.kind(), Kind::Static(_)) {
         ui.separator();
-        if ui.button("Reaction sums").on_hover_text("Reaction force and moment per boundary-condition set (results.reactions)").clicked() {
-            run.push(("results.reactions", json!({"step": plot.view.step})));
-        }
+        ui.horizontal(|ui| {
+            if ui.button("Reaction sums").on_hover_text("Reaction force and moment per boundary-condition set (results.reactions)").clicked() {
+                run.push(("results.reactions", json!({"step": plot.view.step})));
+            }
+            if ui.button("Export CSV…").on_hover_text("Write the reaction sums to a CSV file (results.export.csv)").clicked() {
+                export = Some(json!({"what": "reactions", "step": plot.view.step}));
+            }
+        });
         if let Some(r) = app.reactions.as_ref().filter(|r| r["step"] == plot.view.step.as_str()) {
             reactions_table(ui, r, plot, t);
         }
     }
     ui.separator();
-    probed(app, plot, ui, t);
+    if let Some(p) = probed(app, plot, ui, t) {
+        export = Some(p);
+    }
+    if let Some(p) = export {
+        app.export_csv(p);
+    }
     for (id, params) in run {
         // The reaction sums land in `app.reactions` (ModelApp::run_form).
         let _ = app.run(id, params);
     }
 }
 
-/// The probed node's values, one row each, or how to probe one.
-fn probed(app: &ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) {
+/// The probed node's values, one row each, or how to probe one; the export's parameters when
+/// its Export CSV… is clicked.
+fn probed(app: &ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) -> Option<Value> {
     let Some(p) = app.probe.as_ref().filter(|p| p.step == plot.view.step && p.mode == plot.pick.mode && p.frame == plot.pick.frame) else {
         ui.label(RichText::new("Click the model to probe a node").small().color(t.text_dim));
-        return;
+        return None;
     };
     ui.label(RichText::new(format!("Node {}", p.node)).strong());
     egui::Grid::new("fc_results_probe").num_columns(2).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
@@ -414,6 +426,16 @@ fn probed(app: &ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) {
             ui.end_row();
         }
     });
+    ui.button("Export CSV…").on_hover_text("Write the node's results to a CSV file (results.export.csv)").clicked().then(|| {
+        let mut params = json!({"what": "probe", "step": p.step, "nodes": [p.node]});
+        if matches!(plot.result.kind(), Kind::Frequency(_)) {
+            params["mode"] = json!(p.mode);
+        }
+        if let Some(f) = p.frame {
+            params["frame"] = json!(f);
+        }
+        params
+    })
 }
 
 /// An explicit step: a frame slider (the deformed shape and contours follow it) and the energy

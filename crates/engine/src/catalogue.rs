@@ -573,7 +573,7 @@ pub static CATALOGUE: &[Capability] = &[
         "Displacement, rotation, reaction and stress at nodes, element section forces, a mode shape, or an explicit field frame (or click the model)",
         &["solve.history"],
     ),
-    ready("results.reactions", "Reactions", Results, "Query", "Reaction force and moment sums per set"),
+    ready_more("results.reactions", "Reactions", Results, "Query", "Reaction force and moment sums per set", &["results.export.csv"]),
     soon("results.free_body", "Free Body", Results, "Query", "M9", "Free-body forces across a cut"),
     soon("results.xy", "XY Plot", Results, "Plots", "M9", "Plot a quantity against time or another"),
     soon("results.path", "Path Plot", Results, "Plots", "M9", "Plot a quantity along a path"),

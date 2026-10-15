@@ -162,6 +162,7 @@ pub static ALL: &[CommandSpec] = &[
     results::ANIMATE,
     results::FRAME,
     results::REACTIONS,
+    results::EXPORT_CSV,
     results::CLEAR,
     diagnostics::CRASH_REPORTS,
     diagnostics::CRASH_REPORT,

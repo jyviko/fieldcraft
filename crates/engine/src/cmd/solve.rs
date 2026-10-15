@@ -565,7 +565,7 @@ fn probe_fluid(r: &FluidResult, p: &Value) -> Result<Value> {
     Ok(json!({"step": r.step, "frame": frame, "time": time, "points": out}))
 }
 
-fn probe(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn probe(s: &mut Session, p: &Value) -> Result<Value> {
     let step = opt::<String>(p, "step")?.ok_or_else(|| EngineError::param("step", ProblemKind::Required))?;
     let result = s.result(&step).ok_or_else(|| {
         EngineError::Params(if s.latest_result(&step).is_some() {

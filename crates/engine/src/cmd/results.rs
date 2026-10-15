@@ -70,6 +70,16 @@ pub const REACTIONS: CommandSpec = CommandSpec {
     run: reactions,
 };
 
+pub const EXPORT_CSV: CommandSpec = CommandSpec {
+    id: "results.export.csv",
+    label: "Export Results (CSV)",
+    params: r#"{"what": "probe" | "reactions", "path": "tip.csv", "step": "Load", …} — writes probe or reaction results as a CSV file (RFC 4180, a header line, numbers in shortest round-trip form); the other parameters are solve.probe's (`nodes`, `at` or `set`, `mode`, `frame`) or results.reactions' (`sets`, `about`). Probe: a row per node with node, x, y, z and the quantities the step has; reactions: a row per set, a total row and an applied row. Replies with the path, rows, columns, step and units"#,
+    form: Some(super::forms::EXPORT_CSV),
+    kind: CommandKind::Session,
+    requires: &[Requirement::Result],
+    run: export_csv,
+};
+
 pub const CLEAR: CommandSpec = CommandSpec {
     id: "results.clear",
     label: "Hide Results",
@@ -369,6 +379,171 @@ fn reactions(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"step": step, "stale": !current, "about": about, "sets": per_set, "total": total, "applied": r.applied_total}))
 }
 
+fn export_csv(s: &mut Session, p: &Value) -> Result<Value> {
+    let what: String = super::req(p, "what")?;
+    let path = super::file_param(s, p, "path", fieldcraft_io::roots::Access::Write)?;
+    let (step, table) = match what.as_str() {
+        "probe" => {
+            let r = super::solve::probe(s, p)?;
+            (r.get("step").cloned().unwrap_or(Value::Null), probe_table(&r, &|label| s.model.node(label).map(|n| n.xyz))?)
+        }
+        "reactions" => {
+            let r = reactions(s, p)?;
+            if r.get("stale").and_then(Value::as_bool).unwrap_or(false) {
+                let step = r.get("step").and_then(Value::as_str).unwrap_or_default();
+                return Err(EngineError::Params(format!(
+                    "the result of step `{step}` is stale (the model changed since it was solved); solve it again"
+                )));
+            }
+            (r.get("step").cloned().unwrap_or(Value::Null), reactions_table(&r))
+        }
+        _ => return Err(EngineError::Params("`what` must be \"probe\" or \"reactions\"".into())),
+    };
+    let text = table.csv();
+    fieldcraft_io::fs::write_atomic(std::path::Path::new(&path), text.as_bytes(), false)?;
+    Ok(json!({"path": path, "rows": table.rows.len(), "columns": table.header, "step": step, "units": s.model.units()}))
+}
+
+/// A table of cells (a number, text, or empty) under a header, written as CSV.
+struct Table {
+    header: Vec<String>,
+    rows: Vec<Vec<Cell>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Cell {
+    Number(f64),
+    Text(String),
+    Empty,
+}
+
+impl Table {
+    /// RFC 4180: comma-separated, CRLF line ends, a field with a comma, quote or line break in
+    /// quotes (its quotes doubled); numbers in Rust's shortest round-trip form.
+    fn csv(&self) -> String {
+        let field = |s: &str| if s.contains([',', '"', '\r', '\n']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
+        let mut out = String::new();
+        let line = |cells: Vec<String>, out: &mut String| {
+            out.push_str(&cells.join(","));
+            out.push_str("\r\n");
+        };
+        line(self.header.iter().map(|h| field(h)).collect(), &mut out);
+        for row in &self.rows {
+            let cells = row
+                .iter()
+                .map(|c| match c {
+                    Cell::Number(v) => format!("{v}"),
+                    Cell::Text(t) => field(t),
+                    Cell::Empty => String::new(),
+                })
+                .collect();
+            line(cells, &mut out);
+        }
+        out
+    }
+
+    /// Rows of named cells into a table whose columns are every name that has a value, in the
+    /// order first met; a column no row has a value in is left out.
+    fn from_named(rows: Vec<Vec<(String, Cell)>>) -> Table {
+        let mut header: Vec<String> = Vec::new();
+        for row in &rows {
+            for (name, c) in row {
+                if *c != Cell::Empty && !header.contains(name) {
+                    header.push(name.clone());
+                }
+            }
+        }
+        let rows = rows
+            .into_iter()
+            .map(|row| header.iter().map(|h| row.iter().find(|(n, _)| n == h).map_or(Cell::Empty, |(_, c)| c.clone())).collect())
+            .collect();
+        Table { header, rows }
+    }
+}
+
+/// The CSV columns of a quantity of a probe's node entry: a vector's components (and a
+/// displacement's magnitude), a stress tensor's six components, a scalar under its own name.
+fn quantity_cells(key: &str, v: &Value, out: &mut Vec<(String, Cell)>) {
+    const VECTORS: [(&str, &[&str]); 7] = [
+        ("displacement", &["ux", "uy", "uz"]),
+        ("rotation", &["rx", "ry", "rz"]),
+        ("reaction", &["rfx", "rfy", "rfz"]),
+        ("reaction_moment", &["rmx", "rmy", "rmz"]),
+        ("velocity", &["vx", "vy", "vz"]),
+        ("shape", &["ux", "uy", "uz", "rx", "ry", "rz"]),
+        ("stress", &["s_xx", "s_yy", "s_zz", "s_xy", "s_xz", "s_yz"]),
+    ];
+    match v {
+        Value::Number(n) => out.push((key.to_string(), n.as_f64().map_or(Cell::Empty, Cell::Number))),
+        Value::Array(items) if items.iter().all(Value::is_number) => {
+            let nums: Vec<f64> = items.iter().filter_map(Value::as_f64).collect();
+            let names: Vec<String> = match VECTORS.iter().find(|(k, _)| *k == key) {
+                Some((_, n)) if n.len() == nums.len() => n.iter().map(|s| (*s).to_string()).collect(),
+                _ => (1..=nums.len()).map(|i| format!("{key}_{i}")).collect(),
+            };
+            out.extend(names.into_iter().zip(nums.iter().map(|&x| Cell::Number(x))));
+            if key == "displacement" && nums.len() == 3 {
+                out.push(("u_mag".into(), Cell::Number(nums.iter().map(|x| x * x).sum::<f64>().sqrt())));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `solve.probe`'s reply as a table: a row per node with its label, undeformed position and
+/// the quantities the step has.
+fn probe_table(r: &Value, position: &dyn Fn(u32) -> Option<[f64; 3]>) -> Result<Table> {
+    let nodes = r.get("nodes").and_then(Value::as_array).ok_or_else(|| EngineError::Params("the probe has no node results to export".into()))?;
+    let rows = nodes
+        .iter()
+        .map(|e| {
+            let label = e.get("node").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+            let mut row = vec![("node".to_string(), label.map_or(Cell::Empty, |l| Cell::Number(f64::from(l))))];
+            if let Some(name) = e.get("reference_point").and_then(Value::as_str) {
+                row.push(("reference_point".into(), Cell::Text(name.to_string())));
+            }
+            let xyz = label.and_then(position);
+            for (k, axis) in ["x", "y", "z"].iter().enumerate() {
+                row.push(((*axis).to_string(), xyz.and_then(|p| p.get(k).copied()).map_or(Cell::Empty, Cell::Number)));
+            }
+            if let Some(o) = e.as_object() {
+                for (k, v) in o.iter().filter(|(k, _)| !matches!(k.as_str(), "node" | "reference_point" | "xyz" | "distance")) {
+                    quantity_cells(k, v, &mut row);
+                }
+            }
+            row
+        })
+        .collect();
+    Ok(Table::from_named(rows))
+}
+
+/// `results.reactions`' reply as a table: a row per set, the total and the applied load.
+fn reactions_table(r: &Value) -> Table {
+    let row = |name: &str, e: &Value| {
+        let mut row = vec![("set".to_string(), Cell::Text(name.to_string()))];
+        row.push(("nodes".into(), e.get("nodes").and_then(Value::as_f64).map_or(Cell::Empty, Cell::Number)));
+        for (key, names) in [("force", ["fx", "fy", "fz"]), ("moment", ["mx", "my", "mz"])] {
+            let v = e.get(key).and_then(Value::as_array);
+            for (k, n) in names.iter().enumerate() {
+                row.push(((*n).to_string(), v.and_then(|a| a.get(k)).and_then(Value::as_f64).map_or(Cell::Empty, Cell::Number)));
+            }
+        }
+        row
+    };
+    let mut rows: Vec<Vec<(String, Cell)>> = r
+        .get("sets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|e| row(e.get("set").and_then(Value::as_str).unwrap_or_default(), e))
+        .collect();
+    rows.push(row("total", r.get("total").unwrap_or(&Value::Null)));
+    if let Some(applied) = r.get("applied").filter(|a| a.is_array()) {
+        rows.push(row("applied", &json!({"force": applied})));
+    }
+    Table::from_named(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,6 +559,75 @@ mod tests {
 
     /// `range` clamps the legend (#191): kept with the field, cleared by "auto" or another
     /// field, reported in the reply; the true range is still there.
+    /// A CSV reader (RFC 4180) for the tests: rows of fields, quotes undone.
+    fn read_csv(text: &str) -> Vec<Vec<String>> {
+        let (mut rows, mut row, mut field, mut quoted, mut chars) = (Vec::new(), Vec::new(), String::new(), false, text.chars().peekable());
+        while let Some(c) = chars.next() {
+            match (quoted, c) {
+                (true, '"') if chars.peek() == Some(&'"') => {
+                    chars.next();
+                    field.push('"');
+                }
+                (true, '"') => quoted = false,
+                (true, c) => field.push(c),
+                (false, '"') => quoted = true,
+                (false, ',') => row.push(std::mem::take(&mut field)),
+                (false, '\r') => {}
+                (false, '\n') => {
+                    row.push(std::mem::take(&mut field));
+                    rows.push(std::mem::take(&mut row));
+                }
+                (false, c) => field.push(c),
+            }
+        }
+        rows
+    }
+
+    fn temp_csv(tag: &str) -> String {
+        std::env::temp_dir().join(format!("fieldcraft-csv-{tag}-{}.csv", std::process::id())).to_string_lossy().into_owned()
+    }
+
+    /// `results.export.csv` writes what results.reactions and solve.probe reply, bit for bit
+    /// after parsing; a set name with a comma and a quote round-trips (#92).
+    #[test]
+    fn results_export_as_csv() {
+        let mut s = solved();
+        let path = temp_csv("reactions");
+        let sets = json!(["root", "tip"]);
+        let reply = s.execute("results.export.csv", &json!({"what": "reactions", "path": path, "step": "Bend", "sets": sets})).unwrap();
+        let sums = s.execute("results.reactions", &json!({"step": "Bend", "sets": sets})).unwrap();
+        let rows = read_csv(&std::fs::read_to_string(&path).unwrap());
+        assert_eq!(rows[0], ["set", "nodes", "fx", "fy", "fz", "mx", "my", "mz"]);
+        assert_eq!((reply["rows"].as_u64(), reply["step"].as_str()), (Some(4), Some("Bend")), "{reply}");
+        // A name with a comma and a quote round-trips through a CSV reader.
+        let named =
+            Table { header: vec!["set".into(), "fx".into()], rows: vec![vec![Cell::Text("the \"root\", clamped".into()), Cell::Number(0.1)]] };
+        assert_eq!(read_csv(&named.csv()), [vec!["set", "fx"], vec!["the \"root\", clamped", "0.1"]]);
+        let total = rows.iter().find(|r| r[0] == "total").unwrap();
+        assert_eq!(total[4].parse::<f64>().unwrap(), sums["total"]["force"][2].as_f64().unwrap(), "bit for bit");
+        let applied = rows.iter().find(|r| r[0] == "applied").unwrap();
+        assert_eq!((applied[1].as_str(), applied[5].as_str()), ("", ""), "the applied load has no nodes or moments");
+        let path = temp_csv("probe");
+        s.execute("results.export.csv", &json!({"what": "probe", "path": path, "step": "Bend", "nodes": [1, 2, 3]})).unwrap();
+        let probe = s.execute("solve.probe", &json!({"step": "Bend", "nodes": [1, 2, 3]})).unwrap();
+        let rows = read_csv(&std::fs::read_to_string(&path).unwrap());
+        assert_eq!(rows.len(), 4);
+        let col = |name: &str| rows[0].iter().position(|h| h == name).unwrap_or_else(|| panic!("no {name}: {:?}", rows[0]));
+        for (i, node) in probe["nodes"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(rows[i + 1][col("node")], node["node"].to_string());
+            assert_eq!(rows[i + 1][col("uz")].parse::<f64>().unwrap(), node["displacement"][2].as_f64().unwrap());
+            assert_eq!(rows[i + 1][col("s_yz")].parse::<f64>().unwrap(), node["stress"][5].as_f64().unwrap());
+            assert_eq!(rows[i + 1][col("von_mises")].parse::<f64>().unwrap(), node["von_mises"].as_f64().unwrap());
+        }
+        assert!(!rows[0].iter().any(|h| h == "temperature"), "columns the step does not have are left out: {:?}", rows[0]);
+        // A stale result is refused.
+        s.execute("mesh.node.add", &json!({"label": 99_999, "xyz": [0, 0, 0]})).unwrap();
+        assert!(s.execute("results.export.csv", &json!({"what": "reactions", "path": temp_csv("stale"), "step": "Bend"})).is_err());
+        for p in ["reactions", "probe"] {
+            let _ = std::fs::remove_file(temp_csv(p));
+        }
+    }
+
     #[test]
     fn the_legend_range_can_be_clamped() {
         let mut s = solved();
@@ -515,6 +759,13 @@ mod tests {
             json!({"field": "von_mises", "range": {"min": 5, "max": 5}}),
             json!({"field": "von_mises", "range": {"min": 1e308, "max": -1e308}}),
             json!({"field": "von_mises", "range": 7}),
+            json!({"what": 7, "path": "x.csv"}),
+            json!({"what": "probe"}),
+            json!({"what": "probe", "path": "", "nodes": [1]}),
+            json!({"what": "probe", "path": "/no/such/dir/x.csv", "nodes": [1]}),
+            json!({"what": "probe", "path": "x.csv", "nodes": vec![1; 1_000_000]}),
+            json!({"what": "reactions", "path": "x.csv", "step": "Modes"}),
+            json!({"what": "reactions", "path": "x.csv", "step": "Nope"}),
             json!({"scale": -1}),
             json!({"scale": -0.0001}),
             json!({"scale": 1e300}),

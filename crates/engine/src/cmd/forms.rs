@@ -1687,6 +1687,13 @@ pub const FRAME: &[Field] = &[
     int("frame", "Frame", 0, 1_000_000_000).help("The frame shown."),
     positive("time", "Time", D::Time).help("Show the frame nearest this time; the last when empty.").hint("the last frame"),
 ];
+pub const EXPORT_CSV: &[Field] = &[
+    choice("what", "Export", &[("reactions", "Reaction sums"), ("probe", "Probed nodes")]).help("What to write.").req().def("\"reactions\""),
+    path("path", "File", true).help("The CSV file to write.").req(),
+    SOLVED,
+    references("sets", "Sets", C::Set).help("Reactions: the sets to sum; the step's BC sets when empty.").hint("the step's BC sets"),
+    json("nodes", "Nodes").help("Probe: the node labels, e.g. [1, 2, 3]."),
+];
 pub const REACTIONS: &[Field] = &[
     SOLVED,
     references("sets", "Sets", C::Set)

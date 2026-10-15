@@ -898,6 +898,29 @@ impl ModelApp {
         let _ = self.run("deck.write", json!({"format": format, "path": path}));
     }
 
+    /// Results › Export CSV… (`results.export.csv` with `params`, its `what` and `step` among
+    /// them): asks the save picker for `<model>-<step>-<what>.csv`; without a picker, the
+    /// command's form opens instead.
+    pub fn export_csv(&mut self, params: Value) {
+        let Some(pick) = self.services.pick_save.as_ref() else {
+            self.open_form("results.export.csv", params);
+            return;
+        };
+        let part = |k: &str| params.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+        let name = format!("{}-{}-{}.csv", self.model_name(), part("step"), part("what"));
+        let Some(path) = pick(&name, &[Filter { name: "CSV", extensions: &["csv"] }]) else { return };
+        let path = if Path::new(&path).extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case("csv")) {
+            path
+        } else {
+            with_extension(path, "csv")
+        };
+        let mut params = params;
+        params["path"] = json!(path);
+        if self.run("results.export.csv", params).is_ok() {
+            self.set_status(format!("Wrote {}", file_name(&path)), false);
+        }
+    }
+
     /// The autosaved models that can be recovered (`file.recovery.list`), newest first.
     pub fn recoverable(&mut self) -> Vec<Value> {
         self.session.execute("file.recovery.list", &json!({})).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default()
@@ -1495,6 +1518,30 @@ mod tests {
         assert!(app.dialog.is_none());
         let text = std::fs::read_to_string(format!("{target}.inp")).unwrap();
         assert!(text.contains("*NODE") || text.contains("*Node"), "{}", &text[..text.len().min(200)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Export CSV… asks the picker for `<model>-<step>-reactions.csv` and writes it; without a
+    /// picker the command's form opens (#92).
+    #[test]
+    fn reactions_export_where_the_picker_says() {
+        let dir = temp("csv");
+        let target = dir.join("sums").to_string_lossy().to_string();
+        let mut app = ModelApp::new(Session::default());
+        app.open_sample("cantilever");
+        app.run("solve.static", json!({})).unwrap();
+        let params = json!({"what": "reactions", "step": "Load"});
+        app.export_csv(params.clone());
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("results.export.csv"), "no picker: the form");
+        app.dialog = None;
+        let t = target.clone();
+        app.services.pick_save = Some(Box::new(move |name: &str, f: &[Filter]| {
+            assert_eq!((name, f.first().map(|f| f.extensions)), ("Cantilever (sample)-Load-reactions.csv", Some(&["csv"][..])));
+            Some(t.clone())
+        }));
+        app.export_csv(params);
+        let text = std::fs::read_to_string(format!("{target}.csv")).unwrap();
+        assert!(text.starts_with("set,nodes,fx,fy,fz,mx,my,mz\r\n") && text.contains("\r\ntotal,"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

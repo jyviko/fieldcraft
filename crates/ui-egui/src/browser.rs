@@ -22,6 +22,10 @@ use crate::theme::Tokens;
 pub const WIDTH: f32 = 250.0;
 const ROW_H: f32 = 22.0;
 const INDENT: f32 = 14.0;
+/// Between a row's label and its note.
+const NOTE_GAP: f32 = 6.0;
+/// Free space kept at a row's right end.
+const ROW_PAD: f32 = 4.0;
 
 /// A kind of model definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
@@ -267,15 +271,25 @@ fn draw_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, row: &Row) -> R
         x += 18.0;
     }
     let col = if row.dim { t.text_dim } else { t.text };
-    let galley = ui.painter().layout_no_wrap(row.label.to_string(), FontId::proportional(12.5), col);
+    // The note (a count, a seed's size and bias) keeps its room; the label gets the rest, elided in
+    // the middle when long, whole on hover.
+    let note = row.note.as_ref().map(|n| ui.painter().layout_no_wrap(n.clone(), FontId::proportional(11.5), t.text_dim));
+    let note_w = note.as_ref().map_or(0.0, |g| g.size().x + NOTE_GAP);
+    let font = FontId::proportional(12.5);
+    let room = (r.right() - ROW_PAD - note_w - x).max(0.0);
+    let label = crate::elide::middle_in(ui, row.label, &font, room);
+    let elided = matches!(label, std::borrow::Cow::Owned(_));
+    let galley = ui.painter().layout_no_wrap(label.into_owned(), font, col);
     let lw = galley.size().x;
     ui.painter().with_clip_rect(r).galley(pos2(x, cy - galley.size().y / 2.0), galley, col);
-    if let Some(n) = &row.note {
-        ui.painter().with_clip_rect(r).text(pos2(x + lw + 6.0, cy), egui::Align2::LEFT_CENTER, n, FontId::proportional(11.5), t.text_dim);
+    if let Some(n) = note {
+        let at = pos2(x + lw + NOTE_GAP, cy - n.size().y / 2.0);
+        ui.painter().with_clip_rect(r).galley(at, n, t.text_dim);
     }
     let tip = match hover_on {
         1 => Some(if row.fold == Some(true) { "Collapse" } else { "Expand" }),
         2 => Some(if row.eye == Some(true) { "Hide" } else { "Show" }),
+        _ if elided => Some(row.label),
         _ => None,
     };
     let resp = match tip {

@@ -82,15 +82,63 @@ impl ModelApp {
     }
 }
 
-/// Text for an item's tooltip: the command, how many, and its first parameters.
-fn tip(item: &Item, reachable: bool) -> String {
-    let label = crate::command_label(&item.command);
-    let mut s = if item.count() > 1 { format!("{label} × {}", item.count()) } else { label.to_string() };
-    let params = item.params.to_string();
-    if params != "{}" {
-        let short: String = params.chars().take(160).collect();
-        s.push_str(&format!("\n{}{short}{}", if item.count() > 1 { "first: " } else { "" }, if params.chars().count() > 160 { "…" } else { "" }));
+/// What an item's commands did, in words: "Delete reference point RP1", "Add Node × 3", "Open
+/// Sample cantilever". Never the parameters' JSON.
+fn describe(item: &Item) -> String {
+    let name = item.params.get("name").and_then(Value::as_str);
+    let def = crate::browser::Def::ALL
+        .into_iter()
+        .find_map(|kind| ["create", "edit", "delete"].into_iter().find(|verb| kind.command(verb) == item.command).map(|verb| (kind, verb)));
+    let text = match (def, name) {
+        (Some((kind, verb)), Some(name)) => {
+            let did = match verb {
+                "create" => "Add",
+                "edit" => "Edit",
+                _ => "Delete",
+            };
+            format!("{did} {} {name}", kind.label().to_lowercase())
+        }
+        (_, Some(name)) => format!("{} {name}", crate::command_label(&item.command)),
+        _ => crate::command_label(&item.command).to_string(),
+    };
+    if item.count() > 1 { format!("{text} × {}", item.count()) } else { text }
+}
+
+/// What a command does to the item its icon shows, when it is not making it: deleting or changing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Badge {
+    Delete,
+    Edit,
+}
+
+fn badge(command: &str) -> Option<Badge> {
+    let verb = command.rsplit('.').next()?;
+    match verb {
+        "delete" | "clear" => Some(Badge::Delete),
+        "edit" => Some(Badge::Edit),
+        _ => None,
     }
+}
+
+/// The badge at an item's top-left corner: a minus on the error colour for a deletion, a pencil
+/// stroke on the accent for an edit.
+fn paint_badge(p: &egui::Painter, item: Rect, b: Badge, t: &Tokens) {
+    let c = item.left_top() + vec2(5.0, 5.0);
+    let (fill, white) = (if b == Badge::Delete { t.error } else { t.accent }, Stroke::new(1.4, Color32::WHITE));
+    p.circle(c, 5.0, fill, Stroke::new(1.0, t.timeline_item));
+    match b {
+        Badge::Delete => {
+            p.line_segment([c - vec2(2.5, 0.0), c + vec2(2.5, 0.0)], white);
+        }
+        Badge::Edit => {
+            p.line_segment([c + vec2(-2.2, 2.2), c + vec2(2.2, -2.2)], white);
+        }
+    }
+}
+
+/// Text for an item's tooltip: what it did, and whether a click reaches it.
+fn tip(item: &Item, reachable: bool) -> String {
+    let mut s = describe(item);
     s.push_str(if reachable { "\nClick to roll the model to here" } else { "\nOlder than the undo history" });
     s
 }
@@ -191,14 +239,17 @@ pub fn timeline(app: &mut ModelApp, ui: &mut egui::Ui) {
                     let icon = fieldcraft_engine::catalogue::entry_of(&item.command).map_or("ui.views", |c| c.id);
                     let tint = if undone || !reachable { Color32::from_white_alpha(110) } else { Color32::WHITE };
                     icons::paint_tinted(app, ui, icon, br.shrink(4.0), Look::of(!undone), tint);
+                    if let Some(b) = badge(&item.command) {
+                        paint_badge(&p, br, b, &t);
+                    }
                     if item.count() > 1 {
                         let text = p.layout_no_wrap(format!("{}", item.count()), FontId::proportional(9.0), t.text);
                         let b = Rect::from_min_size(br.right_bottom() - text.size() - vec2(3.0, 1.0), text.size() + vec2(3.0, 1.0));
                         p.rect_filled(b, 3.0, t.panel_header);
                         p.galley(b.min + vec2(1.5, 0.5), text, t.text);
                     }
-                    let label = crate::command_label(&item.command);
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, reachable, label));
+                    let label = describe(item);
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, reachable, &label));
                     if resp
                         .on_hover_ui(|ui| {
                             ui.label(tip(item, reachable));
@@ -251,5 +302,21 @@ mod tests {
         assert!(app.session.model.materials().contains_key("Steel"));
         app.roll_to(100);
         assert_eq!(app.session.journal.len(), 4, "clamped to what can be redone");
+    }
+
+    /// A deletion or an edit reads apart from the creation it undoes (#359): its own badge, and
+    /// a tooltip in words.
+    #[test]
+    fn deletions_and_edits_read_apart_from_creations() {
+        let item = |command: &str, params: Value| Item { command: command.into(), start: 0, end: 1, params };
+        let create = item("model.reference_point.create", json!({"name": "RP1", "xyz": [0, 0, 0]}));
+        let delete = item("model.reference_point.delete", json!({"name": "RP1"}));
+        assert_eq!((badge(&create.command), badge(&delete.command)), (None, Some(Badge::Delete)));
+        assert_eq!(badge("model.load.edit"), Some(Badge::Edit));
+        assert_eq!(describe(&create), "Add reference point RP1");
+        assert_eq!(describe(&delete), "Delete reference point RP1");
+        assert!(!tip(&delete, true).contains('{'));
+        let nodes = Item { end: 3, ..item("mesh.node.add", json!({"label": 1, "xyz": [0, 0, 0]})) };
+        assert_eq!(describe(&nodes), "Add Node × 3");
     }
 }

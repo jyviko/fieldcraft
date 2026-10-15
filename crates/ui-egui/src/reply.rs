@@ -193,6 +193,8 @@ enum Act {
     Start(&'static str),
     Tab(Tab),
     Rerun,
+    /// Pick a design entity in the viewport (a body, face or edge from the Bodies list).
+    Pick(fieldcraft_model::GeometryRef),
 }
 
 /// The reply's section of the context panel.
@@ -216,6 +218,7 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     match reply.command.as_str() {
         "model.check" => diagnostics(app, ui, t, &reply.value, &mut acts),
         "model.activity" => activity(ui, t, &reply.value),
+        "geometry.bodies" => bodies(ui, t, &reply.value, &mut acts),
         _ => value(ui, t, egui::Id::new("fc_reply"), &reply.value, 0),
     }
     for a in acts {
@@ -229,6 +232,7 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             Act::Rerun => {
                 let _ = app.run(&reply.command, reply.params.clone());
             }
+            Act::Pick(g) => app.select([crate::selection::Item::Geometry(g)], crate::selection::Mode::Replace),
         }
     }
 }
@@ -292,6 +296,107 @@ fn diagnostics(app: &ModelApp, ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &
         if i + 1 < list.len() {
             ui.separator();
         }
+    }
+}
+
+/// Faces or edges listed under a body at most.
+const MAX_ENTITIES: usize = 500;
+
+/// Geometry › Bodies: one entry per body, its name first, then volume, area, face and edge counts
+/// and its size; a click on the name picks the body, and its faces and edges unfold, by
+/// persistent name (edges with their lengths), each picked by a click: the names the seed and set
+/// forms ask for. Design geometry is in millimetres.
+fn bodies(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>) {
+    let q = crate::describe::quantity;
+    let pick = |body: &str, entity: fieldcraft_model::Entity| fieldcraft_model::GeometryRef { body: body.to_string(), entity };
+    for (i, b) in v.as_array().into_iter().flatten().enumerate() {
+        let name = b["name"].as_str().unwrap_or_default();
+        let faces = b["faces"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let edges = b["edges"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let corner = |k: usize| -> Option<[f64; 3]> { serde_json::from_value(b["bbox"][k].clone()).ok() };
+        let size =
+            corner(0).zip(corner(1)).map(|(lo, hi)| format!("{} × {} × {} mm", q(sig(hi[0] - lo[0])), q(sig(hi[1] - lo[1])), q(sig(hi[2] - lo[2]))));
+        let id = egui::Id::new(("fc_reply_body", i));
+        if ui.link(RichText::new(name).strong()).on_hover_text("Pick this body in the viewport").clicked() {
+            acts.push(Act::Pick(pick(name, fieldcraft_model::Entity::Body)));
+        }
+        egui::Grid::new(id.with("grid")).num_columns(2).spacing(vec2(10.0, 2.0)).show(ui, |ui| {
+            let mut row = |k: &str, text: String| {
+                ui.label(RichText::new(k).color(t.text_dim));
+                ui.label(text);
+                ui.end_row();
+            };
+            if let Some(v) = b["volume"].as_f64() {
+                row("Volume", format!("{} mm³", q(sig(v))));
+            }
+            if let Some(a) = b["area"].as_f64() {
+                row("Area", format!("{} mm²", q(sig(a))));
+            }
+            row("Faces, edges", format!("{}, {}", faces.len(), edges.len()));
+            if let Some(size) = size {
+                row("Size", size);
+            }
+        });
+        body_list(ui, t, id.with("faces"), "Faces", faces, &|f| (f["name"].as_str().unwrap_or_default().to_string(), None), name, acts);
+        body_list(
+            ui,
+            t,
+            id.with("edges"),
+            "Edges",
+            edges,
+            &|e| (e["name"].as_str().unwrap_or_default().to_string(), e["length"].as_f64()),
+            name,
+            acts,
+        );
+        ui.separator();
+    }
+}
+
+/// A body's faces or edges, folded: each name picks it in the viewport (edges with their length).
+#[allow(clippy::too_many_arguments)]
+fn body_list(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    id: egui::Id,
+    title: &str,
+    items: &[Value],
+    read: &dyn Fn(&Value) -> (String, Option<f64>),
+    body: &str,
+    acts: &mut Vec<Act>,
+) {
+    if items.is_empty() {
+        return;
+    }
+    egui::CollapsingHeader::new(RichText::new(format!("{title} ({})", items.len())).size(12.0)).id_salt(id).show(ui, |ui| {
+        for item in items.iter().take(MAX_ENTITIES) {
+            let (name, length) = read(item);
+            ui.horizontal(|ui| {
+                if ui.link(&name).on_hover_text("Pick it in the viewport").clicked() {
+                    let entity =
+                        if title == "Edges" { fieldcraft_model::Entity::Edge(name.clone()) } else { fieldcraft_model::Entity::Face(name.clone()) };
+                    acts.push(Act::Pick(fieldcraft_model::GeometryRef { body: body.to_string(), entity }));
+                }
+                if let Some(l) = length {
+                    ui.label(RichText::new(format!("{} mm", crate::describe::quantity(sig(l)))).color(t.text_dim));
+                }
+            });
+        }
+        more_than(ui, t, items.len(), MAX_ENTITIES);
+    });
+}
+
+/// `v` to 3 significant figures.
+fn sig(v: f64) -> f64 {
+    if v == 0.0 || !v.is_finite() {
+        return v;
+    }
+    let scale = 10f64.powi(2 - v.abs().log10().floor() as i32);
+    (v * scale).round() / scale
+}
+
+fn more_than(ui: &mut egui::Ui, t: &Tokens, n: usize, max: usize) {
+    if n > max {
+        ui.label(RichText::new(format!("… {} more", n - max)).small().color(t.text_dim));
     }
 }
 

@@ -583,7 +583,8 @@ pub static CATALOGUE: &[Capability] = &[
     soon("results.read", "Read Results", Results, "Files", "M9", "Read results in public formats"),
     soon("results.convergence", "Convergence", Results, "Files", "M9", "Mesh convergence studies"),
     // ---- Tools ----
-    ready("model.info", "Model Info", Tools, "Model", "Node and element counts and the model summary"),
+    // Renaming starts from a definition's item menu (Rename…); the search finds it here too.
+    ready_more("model.info", "Model Info", Tools, "Model", "Node and element counts and the model summary", &["model.rename"]),
     ready("file.open", "Open Model", Tools, "File", "Open a .fieldcraft model"),
     ready("file.sample", "Samples", Tools, "File", "Open a sample model, ready to solve"),
     ready("file.save", "Save", Tools, "File", "Save the model to its .fieldcraft file"),

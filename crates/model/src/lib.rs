@@ -44,6 +44,7 @@ pub mod materials;
 mod mesh;
 pub mod nodal;
 pub mod progress;
+pub mod rename;
 pub mod sections;
 pub mod seeds;
 pub mod sets;

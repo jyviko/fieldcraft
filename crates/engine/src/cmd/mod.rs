@@ -131,6 +131,7 @@ pub static ALL: &[CommandSpec] = &[
     define::STEP_EDIT,
     define::STEP_DELETE,
     define::STEP_ACTIVATE,
+    define::RENAME,
     define::ACTIVITY,
     file::OPEN,
     file::SAVE,

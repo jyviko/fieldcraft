@@ -834,6 +834,33 @@ pub const STEP_ACTIVATE: &[Field] = &[
     flag("active", "Active").help("On: they act in the step. Off: they are switched off from it on.").def("true"),
 ];
 
+pub const RENAME: &[Field] = &[
+    choice(
+        "kind",
+        "Kind",
+        &[
+            ("set", "Set"),
+            ("material", "Material"),
+            ("section", "Section"),
+            ("step", "Step"),
+            ("boundary_condition", "Boundary condition"),
+            ("load", "Load"),
+            ("reference_point", "Reference point"),
+            ("coupling", "Coupling"),
+            ("contact", "Contact"),
+            ("tie", "Tie"),
+            ("point_mass", "Point mass"),
+            ("spring", "Spring"),
+            ("fluid_domain", "Fluid domain"),
+            ("datum", "Datum"),
+        ],
+    )
+    .help("What kind of definition to rename.")
+    .req(),
+    text("from", "Name").help("Its current name.").req(),
+    text("to", "New name").help("Every definition that refers to it is changed to the new name.").req(),
+];
+
 pub const UNITS: &[Field] = &[choice(
     "system",
     "Unit system",

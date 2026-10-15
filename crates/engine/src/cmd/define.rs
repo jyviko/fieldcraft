@@ -13,6 +13,9 @@ use fieldcraft_model::{
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use fieldcraft_io::{Item, ItemKind};
+use fieldcraft_model::rename::Kind as RenameKind;
+
 use super::{name, opt, req};
 use crate::requirement::Requirement;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
@@ -356,6 +359,60 @@ pub const STEP_ACTIVATE: CommandSpec = CommandSpec {
     run: step_activate,
 };
 
+pub const RENAME: CommandSpec = CommandSpec {
+    id: "model.rename",
+    label: "Rename",
+    params: r#"{"kind": "set" | "material" | "section" | "step" | "boundary_condition" | "load" | "reference_point" | "coupling" | "contact" | "tie" | "point_mass" | "spring" | "fluid_domain" | "datum", "from": "end", "to": "Tip"} — renames the definition and every reference to it (sets in sections, couplings, contacts, ties, discrete elements, boundary conditions, loads and explicit steps; materials in sections and fluid domains; reference points; boundary conditions and loads in the steps they are active in; steps in imperfections; fluid domains in fluid steps; datum planes in partitions). A name already taken is refused; the viewport's hidden items follow the new name"#,
+    form: Some(super::forms::RENAME),
+    kind: CommandKind::Model,
+    requires: &[],
+    run: rename,
+};
+
+/// `model.rename`'s kinds, as the command takes them.
+pub const RENAME_KINDS: &[(&str, RenameKind)] = &[
+    ("set", RenameKind::Set),
+    ("material", RenameKind::Material),
+    ("section", RenameKind::Section),
+    ("step", RenameKind::Step),
+    ("boundary_condition", RenameKind::BoundaryCondition),
+    ("load", RenameKind::Load),
+    ("reference_point", RenameKind::ReferencePoint),
+    ("coupling", RenameKind::Coupling),
+    ("contact", RenameKind::Contact),
+    ("tie", RenameKind::Tie),
+    ("point_mass", RenameKind::PointMass),
+    ("spring", RenameKind::Spring),
+    ("fluid_domain", RenameKind::FluidDomain),
+    ("datum", RenameKind::Datum),
+];
+
+fn rename(s: &mut Session, p: &Value) -> Result<Value> {
+    let kind: &str = req(p, "kind")?;
+    let from: &str = req(p, "from")?;
+    let to: &str = req(p, "to")?;
+    let Some((_, k)) = RENAME_KINDS.iter().find(|(id, _)| *id == kind) else {
+        let kinds: Vec<&str> = RENAME_KINDS.iter().map(|(id, _)| *id).collect();
+        return Err(EngineError::Params(format!("`kind` is one of {}", kinds.join(", "))));
+    };
+    s.model.rename(*k, from, to)?;
+    // What the viewport hides follows the new name.
+    let item = match k {
+        RenameKind::Datum => Some(ItemKind::Datum),
+        RenameKind::BoundaryCondition => Some(ItemKind::BoundaryCondition),
+        RenameKind::Load => Some(ItemKind::Load),
+        RenameKind::ReferencePoint => Some(ItemKind::ReferencePoint),
+        RenameKind::Coupling => Some(ItemKind::Coupling),
+        _ => None,
+    };
+    if let Some(kind) = item
+        && s.view.hidden.remove(&Item { kind, name: from.to_string() })
+    {
+        s.view.hidden.insert(Item { kind, name: to.to_string() });
+    }
+    Ok(json!({"kind": kind, "from": from, "name": to}))
+}
+
 pub const ACTIVITY: CommandSpec = CommandSpec {
     id: "model.activity",
     label: "Step Table",
@@ -471,6 +528,27 @@ pub(crate) mod tests {
             {"command": "model.step.create", "params": {"name": "Modes", "procedure": {"type": "frequency", "modes": 6}, "boundary_conditions": ["clamp"]}},
         ]);
         s.run_script(&script).unwrap();
+    }
+
+    /// A rename rewrites the references, checks clean, is undone in one step, follows the hidden
+    /// state and refuses a name in use (#290).
+    #[test]
+    fn rename_keeps_the_model_whole_and_undoes() {
+        let mut s = Session::default();
+        defined_bar(&mut s);
+        s.execute("view.hide", &json!({"items": [{"kind": "load", "name": "push"}]})).unwrap();
+        s.execute("model.rename", &json!({"kind": "set", "from": "end", "to": "Tip"})).unwrap();
+        s.execute("model.rename", &json!({"kind": "load", "from": "push", "to": "Push"})).unwrap();
+        s.execute("model.rename", &json!({"kind": "step", "from": "Bend", "to": "Load"})).unwrap();
+        assert!(s.model.sets().get("end").is_none() && !s.model.set_users("Tip").is_empty());
+        assert!(s.model.step("Load").is_some_and(|st| st.loads.contains("Push")));
+        assert!(s.view.is_hidden(fieldcraft_io::ItemKind::Load, "Push") && !s.view.is_hidden(fieldcraft_io::ItemKind::Load, "push"));
+        assert_eq!(s.execute("model.check", &json!({})).unwrap()["ready"], true);
+        let e = s.execute("model.rename", &json!({"kind": "set", "from": "Tip", "to": "root"})).unwrap_err().to_string();
+        assert!(e.contains("already exists"), "{e}");
+        assert!(s.execute("model.rename", &json!({"kind": "partition", "from": "a", "to": "b"})).is_err());
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert!(s.model.step("Bend").is_some() && s.model.step("Load").is_none());
     }
 
     #[test]

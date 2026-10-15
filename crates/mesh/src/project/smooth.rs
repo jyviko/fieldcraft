@@ -17,8 +17,11 @@
 //! projected back. Block vertices on three targets stay put.
 //!
 //! Every move is checked: it is kept only when the smallest scaled Jacobian of the elements
-//! around the node stays at or above the lower of its value before and [`QUALITY_FLOOR`], so
-//! smoothing never makes a good element bad nor a bad one worse.
+//! around the node stays at or above the lower of its value before and [`QUALITY_FLOOR`], and
+//! their largest edge ratio at or below the higher of its value before and
+//! [`EDGE_RATIO_CEILING`], so smoothing never makes a good element bad nor a bad one worse. The
+//! scaled Jacobian alone does not see an edge shrinking to nothing (its corners stay square while
+//! the element flattens into a sliver), so both are guarded.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,6 +31,17 @@ use crate::vec3::{P, add, cross, dist, dot, norm, scale, sub};
 
 /// Smoothing never takes an element's scaled Jacobian below this (unless it already was).
 pub const QUALITY_FLOOR: f64 = 0.5;
+
+/// Smoothing never takes an element's edge ratio (longest over shortest edge) above this (unless
+/// it already was).
+pub const EDGE_RATIO_CEILING: f64 = 5.0;
+
+/// During the sweeps, a move may take an element below [`QUALITY_FLOOR`] but never below this
+/// (unless it already was); see [`smooth`].
+const SWEEP_FLOOR: f64 = 0.3;
+
+/// Scaled Jacobians closer than this count as the same when two grids are compared.
+const SAME_QUALITY: f64 = 1e-6;
 
 /// Rounds of the compass search on the worst elements.
 const OPTIMIZE_ROUNDS: usize = 20;
@@ -109,6 +123,49 @@ pub(crate) fn hex_scaled_jacobian(x: &[P; 8]) -> f64 {
         m = m.min(if l > 0.0 && l.is_finite() { dot(a, cross(b, c)) / l } else { -1.0 });
     }
     m
+}
+
+/// The longest over the shortest of a hexahedron's twelve edges (infinite for a collapsed edge).
+pub(crate) fn hex_edge_ratio(x: &[P; 8]) -> f64 {
+    let (mut lo, mut hi) = (f64::INFINITY, 0.0f64);
+    for (k, bits) in CORNERS.iter().enumerate() {
+        for d in 0..3 {
+            if bits[d] == 0 {
+                let mut b = *bits;
+                b[d] = 1;
+                let l = dist(x[k], x[corner_at(b)]);
+                lo = lo.min(l);
+                hi = hi.max(l);
+            }
+        }
+    }
+    if lo > 0.0 { hi / lo } else { f64::INFINITY }
+}
+
+/// The quality around a node: the smallest scaled Jacobian and the largest edge ratio.
+#[derive(Debug, Clone, Copy)]
+struct Local {
+    sj: f64,
+    ratio: f64,
+}
+
+impl Local {
+    /// Whether `self` (after a move) is acceptable against `before`: neither measure worse than
+    /// it was, past its limit.
+    fn keeps(self, before: Local) -> bool {
+        self.keeps_above(before, QUALITY_FLOOR)
+    }
+
+    /// Whether this grid is better than `other`: a larger smallest scaled Jacobian, or the same
+    /// and a smaller largest edge ratio.
+    fn beats(self, other: Local) -> bool {
+        if (self.sj - other.sj).abs() <= SAME_QUALITY { self.ratio < other.ratio } else { self.sj > other.sj }
+    }
+
+    /// [`Local::keeps`] with the scaled Jacobian's floor at `floor`.
+    fn keeps_above(self, before: Local, floor: f64) -> bool {
+        self.sj >= before.sj.min(floor) && self.ratio <= before.ratio.max(EDGE_RATIO_CEILING)
+    }
 }
 
 /// The structured stencil of a regular interior node: `nb[d] = [minus, plus]` and the face
@@ -227,20 +284,10 @@ pub(crate) struct Mesh<'a> {
     pub boundary: &'a [[u32; 4]],
 }
 
-/// Smooth in place: at most `iterations` sweeps, stopping when no node moves more than `tol`.
-pub(crate) fn smooth(m: Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing, iterations: usize, tol: f64) -> SmoothReport {
-    let n = m.nodes.len();
-    let mut around: Vec<Vec<u32>> = vec![Vec::new(); n];
-    for (h, hex) in m.hexes.iter().enumerate() {
-        for &v in hex {
-            if let Some(a) = around.get_mut(v as usize) {
-                a.push(h as u32);
-            }
-        }
-    }
-    // Edge neighbours (all) and boundary neighbours (along boundary quads).
+/// The edge neighbours of every node.
+fn edge_neighbours(n: usize, hexes: &[[u32; 8]]) -> Vec<BTreeSet<u32>> {
     let mut edges: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); n];
-    for hex in m.hexes {
+    for hex in hexes {
         for (k, bits) in CORNERS.iter().enumerate() {
             for d in 0..3 {
                 let mut b = *bits;
@@ -251,6 +298,61 @@ pub(crate) fn smooth(m: Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Sm
             }
         }
     }
+    edges
+}
+
+/// The smallest scaled Jacobian and the largest edge ratio of a mesh.
+fn mesh_quality(x: &[P], hexes: &[[u32; 8]]) -> Local {
+    let mut l = Local { sj: f64::INFINITY, ratio: 1.0 };
+    for hex in hexes {
+        let c = hex.map(|q| at(x, q));
+        l.sj = l.sj.min(hex_scaled_jacobian(&c));
+        l.ratio = l.ratio.max(hex_edge_ratio(&c));
+    }
+    l
+}
+
+/// Smooth in place: at most `iterations` sweeps, stopping when no node moves more than `tol`.
+///
+/// The sweeps let a move take an element down to [`SWEEP_FLOOR`] (a sheared block straightens
+/// only when its nodes move together, and a node-by-node rule that never lowers a poor element
+/// stalls halfway), and the compass search then lifts the worst elements. When that does not
+/// beat the grid it started from, smoothing starts again with sweeps that never lower an element
+/// below [`QUALITY_FLOOR`]; and when neither beats it, the grid stays as it was. A grid beats
+/// another when its smallest scaled Jacobian is larger, or the same with a smaller largest edge
+/// ratio, so smoothing never leaves the mesh worse than it found it (a regular grid of graded
+/// layers, which Laplace's equation would even out, is kept).
+pub(crate) fn smooth(m: Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing, iterations: usize, tol: f64) -> SmoothReport {
+    let start = m.nodes.clone();
+    let before = mesh_quality(&start, m.hexes);
+    let mut m = m;
+    let mut report = pass(&mut m, g, targets, method, iterations, tol, SWEEP_FLOOR);
+    if mesh_quality(m.nodes, m.hexes).beats(before) {
+        return report;
+    }
+    m.nodes.clone_from(&start);
+    let strict = pass(&mut m, g, targets, method, iterations, tol, QUALITY_FLOOR);
+    report = SmoothReport { iterations: report.iterations + strict.iterations, refused: report.refused + strict.refused };
+    if !mesh_quality(m.nodes, m.hexes).beats(before) {
+        *m.nodes = start;
+    }
+    report
+}
+
+/// One smoothing run; sweep moves keep every element at or above the lower of its scaled
+/// Jacobian before and `sweep_floor`.
+fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing, iterations: usize, tol: f64, sweep_floor: f64) -> SmoothReport {
+    let n = m.nodes.len();
+    let mut around: Vec<Vec<u32>> = vec![Vec::new(); n];
+    for (h, hex) in m.hexes.iter().enumerate() {
+        for &v in hex {
+            if let Some(a) = around.get_mut(v as usize) {
+                a.push(h as u32);
+            }
+        }
+    }
+    // Edge neighbours (all) and boundary neighbours (along boundary quads).
+    let edges = edge_neighbours(n, m.hexes);
     let mut along_boundary: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
     for q in m.boundary {
         for i in 0..4 {
@@ -279,10 +381,15 @@ pub(crate) fn smooth(m: Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Sm
             }
         }
     }
-    let quality = |x: &[P], v: u32| -> f64 {
-        around.get(v as usize).map_or(1.0, |hs| {
-            hs.iter().filter_map(|&h| m.hexes.get(h as usize)).map(|hex| hex_scaled_jacobian(&hex.map(|q| at(x, q)))).fold(f64::INFINITY, f64::min)
-        })
+    let hexes = m.hexes;
+    let quality = |x: &[P], v: u32| -> Local {
+        let mut l = Local { sj: f64::INFINITY, ratio: 1.0 };
+        for hex in around.get(v as usize).into_iter().flatten().filter_map(|&h| hexes.get(h as usize)) {
+            let c = hex.map(|q| at(x, q));
+            l.sj = l.sj.min(hex_scaled_jacobian(&c));
+            l.ratio = l.ratio.max(hex_edge_ratio(&c));
+        }
+        l
     };
     let mut report = SmoothReport { iterations: 0, refused: 0 };
     if method == Smoothing::None {
@@ -331,7 +438,7 @@ pub(crate) fn smooth(m: Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Sm
                 if let Some(slot) = m.nodes.get_mut(v as usize) {
                     *slot = x;
                 }
-                if quality(m.nodes, v) >= before.min(QUALITY_FLOOR) {
+                if quality(m.nodes, v).keeps_above(before, sweep_floor) {
                     moved = moved.max(dist(x, p));
                     accepted = true;
                     break;
@@ -370,7 +477,8 @@ pub(crate) fn smooth(m: Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Sm
             if !(reach > 0.0 && reach.is_finite()) {
                 continue;
             }
-            let mut best = (quality(m.nodes, v), p);
+            let start_quality = quality(m.nodes, v);
+            let mut best = (start_quality.sj, p);
             let mut h = 0.25 * reach;
             for _ in 0..6 {
                 let start = best.1;
@@ -380,8 +488,8 @@ pub(crate) fn smooth(m: Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Sm
                         *slot = x;
                     }
                     let qx = quality(m.nodes, v);
-                    if qx > best.0 + 1e-9 {
-                        best = (qx, x);
+                    if qx.sj > best.0 + 1e-9 && qx.keeps(start_quality) {
+                        best = (qx.sj, x);
                     }
                 }
                 if best.1 == start {

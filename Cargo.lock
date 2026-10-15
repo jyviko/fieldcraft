@@ -1237,7 +1237,7 @@ checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 
 [[package]]
 name = "fieldcraft"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "eframe",
  "egui",
@@ -1252,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-cli"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-engine",
  "fieldcraft-io",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-decks"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-model",
  "serde_json",
@@ -1271,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-engine"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-decks",
  "fieldcraft-explicit",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-explicit"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-fem",
  "fieldcraft-model",
@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-fem"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-model",
  "thiserror 2.0.21",
@@ -1313,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-geometry"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-model",
  "quick-xml",
@@ -1329,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-io"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-model",
  "log",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-lbm"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-mesh",
  "fieldcraft-model",
@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-mcp"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-engine",
  "fieldcraft-io",
@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-mesh"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-model",
  "num-bigint",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-model"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -1384,14 +1384,14 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-parallel"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "rayon",
 ]
 
 [[package]]
 name = "fieldcraft-render"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-model",
  "png",
@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-solver"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-fem",
  "fieldcraft-mesh",
@@ -1413,7 +1413,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-testkit"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "fieldcraft-engine",
  "fieldcraft-geometry",
@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-ui-egui"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "craft-ui",
  "egui",
@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "fieldcraft-web"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "base64",
  "eframe",
@@ -4992,7 +4992,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "serde_json",
 ]

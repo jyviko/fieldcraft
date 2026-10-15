@@ -41,6 +41,6 @@ body:
     id: version
     attributes:
       label: Version and platform
-      placeholder: "v0.5.7 (or commit), macOS 15 arm64"
+      placeholder: "v0.5.8 (or commit), macOS 15 arm64"
     validations:
       required: true

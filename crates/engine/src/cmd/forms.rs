@@ -1129,6 +1129,34 @@ pub const CELLS: &[Field] = &[
     TOLERANCE,
 ];
 
+pub const HEX_PROJECT: &[Field] = &[
+    reference("body", "Body", C::Body).help("The body to mesh with a projected block topology.").req(),
+    HEX_SIZE,
+    choice(
+        "template",
+        "Template",
+        &[("grid", "Block grid (carve)"), ("sphere", "Sphere (7 blocks)"), ("butterfly", "Butterfly (5-block disc, extruded)"), ("blocks", "Blocks (given vertices)")],
+    )
+    .help("The block topology projected onto the body: a grid of blocks you may carve, the seven-block sphere, the five-block butterfly for round sections, or blocks you list.")
+    .def("\"grid\""),
+    xyz("center", "Centre", POINT).help("Sphere or butterfly centre.").hint("from the body's bounding box"),
+    positive("radius", "Radius", D::Millimetre).help("Sphere or butterfly radius.").hint("from the body"),
+    xyz("axis", "Axis", D::None).help("Butterfly axis direction.").hint("0, 0, 1"),
+    range("inset", "Inset", D::None, 0.05, 0.95).help("Inner square or cube corner at this fraction of the radius.").def("0.55"),
+    json("grid", "Grid").help("The block grid: planes per axis or a cell count, and blocks to carve away, as JSON.").hint(r#"{"cells": [ni, nj, nk], "carve": [{"i": [a, b], "j": [c, d], "k": [e, f]}]}"#),
+    json("blocks", "Blocks").help("Template Blocks: vertices and hex8 blocks, as JSON.").hint(r#"{"vertices": [[x, y, z], ...], "blocks": [[v1..v8], ...]}"#),
+    json("operations", "Operations").help("O-grids, extrusions, connections, removals and merges applied in order, as JSON.").hint(r#"[{"op": "o_grid", "block": 0, "open": ["+z"]}]"#),
+    json("faces", "Face targets").help("Block faces sent to chosen B-rep faces; other outer faces go to the nearest surfaces.").hint(r#"[{"block": 0, "face": "+x", "to": ["F1:+x"]}]"#),
+    json("divisions", "Divisions").help("Element counts per block direction.").hint(r#"[{"block": 0, "direction": 1, "count": 8}]"#),
+    choice("smoothing", "Smoothing", &[("elliptic", "Elliptic"), ("elliptic-controlled", "Elliptic, controlled (Thomas–Middlecoff)"), ("laplace", "Laplace"), ("none", "None")])
+        .help("How interior nodes are smoothed after projection, with the boundary held on the geometry.")
+        .def("\"elliptic\""),
+    int("iterations", "Iterations", 1, 100_000).help("Smoothing iterations.").def("100"),
+    range("min_quality", "Minimum quality", D::None, 0.0, 1.0).help("Smallest scaled Jacobian accepted.").def("0.2"),
+    flag("preview", "Preview only").help("Return the block topology without meshing."),
+    TOLERANCE,
+];
+
 pub const CLEAR_MESH: &[Field] = &[references("bodies", "Bodies", C::Body)
     .help("The bodies whose meshes go. When none is ticked: the meshes of bodies the open design no longer has because its partitions changed (model.check lists them).")
     .hint("the bodies partitions removed")];

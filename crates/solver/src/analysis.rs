@@ -343,7 +343,14 @@ pub(crate) struct Setup<'a> {
 pub(crate) fn reduction(s: &Setup, values: bool, order: &[usize], budget: Budget, warnings: &mut Vec<String>) -> Result<Reduction> {
     let mut rows = coupling_rows(s.model, s.resolved, s.mesh)?;
     rows.extend(crate::tie::rows(s.model, s.resolved, s.mesh, warnings)?);
-    Reduction::new(s.mesh, order, &rows, |active| prescribed(s.model, s.resolved, s.mesh, s.step, values, active, warnings), budget)
+    Reduction::new(
+        &s.mesh.layout,
+        s.mesh.discrete.dofs(),
+        order,
+        &rows,
+        |active| prescribed(s.model, s.resolved, s.mesh, s.step, values, active, warnings),
+        budget,
+    )
 }
 
 /// The reduced matrices' memory budget: the factorization's.

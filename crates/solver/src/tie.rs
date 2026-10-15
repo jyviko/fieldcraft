@@ -27,8 +27,14 @@
 //! face under it stays free, with a warning. The constraints are small-displacement (linear)
 //! constraints in nonlinear steps too.
 //!
-//! **Scope.** Linear solid faces (tri3, quad4) in 3D models; heat transfer and explicit dynamics
-//! refuse ties by name.
+//! **Temperature.** The same weights tie each secondary node's temperature to the main nodes'
+//! (T_A = Σ_J w_AJ T_J) in heat transfer and in the heat part of coupled temperature–displacement
+//! steps: the temperature analogue of the displacement tie, so a linear temperature field crosses
+//! a flat tie exactly, and since the constraint is eliminated (no interface resistance), the heat
+//! leaving one side enters the other.
+//!
+//! **Scope.** Linear solid faces (tri3, quad4) in 3D models; explicit dynamics refuses ties by
+//! name.
 
 use std::collections::BTreeMap;
 
@@ -38,7 +44,7 @@ use fieldcraft_fem::mortar::integrate;
 use fieldcraft_model::{Model, Resolved};
 
 use crate::constraints::Row;
-use crate::contact::{Face, faces};
+use crate::contact::faces;
 use crate::system::Mesh;
 use crate::{Error, Result};
 
@@ -49,10 +55,6 @@ const GRID_CELLS_PER_FACE: usize = 4;
 
 /// A secondary coefficient below this fraction of its node's total is round-off.
 const NEGLIGIBLE: f64 = 1e-12;
-
-fn corners(mesh: &Mesh, f: &Face) -> Vec<Vec3> {
-    f.nodes.iter().map(|n| mesh.xyz.get(*n).copied().unwrap_or_default()).collect()
-}
 
 /// x = M⁻¹ b for a small symmetric positive definite M (Gauss–Jordan with partial pivoting);
 /// `None` when it is singular.
@@ -105,32 +107,53 @@ fn dual(x: &[Vec3]) -> Option<[[f64; 4]; 4]> {
     Some(out)
 }
 
-/// The constraint rows of every tie (ties by name, secondary nodes by label, directions in
-/// order), and warnings for the secondary nodes left free.
-pub fn rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh, warnings: &mut Vec<String>) -> Result<Vec<Row<'m>>> {
+/// One face of a tie surface: its nodes (slots of the caller's numbering, in the face's order)
+/// and the depth of the element under it (the default position tolerance is half of it).
+pub(crate) struct TieFace {
+    pub nodes: Vec<usize>,
+    pub thickness: f64,
+}
+
+/// The nodes a tie works on: their coordinates and labels by slot, and the faces of a set
+/// (`faces(owner, set)`, refusing what the analysis cannot tie).
+pub(crate) struct TieNodes<'a, F> {
+    pub xyz: &'a [Vec3],
+    pub labels: &'a [u32],
+    pub faces: F,
+}
+
+/// The constraint rows of every tie, one per secondary node and kind in `kinds` (ties by name,
+/// secondary nodes by slot, kinds in order); `dof(slot, kind)` numbers the degrees of freedom.
+/// The same mortar weights tie displacements (the translations) and temperatures (one scalar
+/// per node). Warnings name the secondary nodes left free.
+pub(crate) fn rows_of<'m, F>(
+    model: &'m Model,
+    nodes: &TieNodes<'_, F>,
+    kinds: &[DofKind],
+    dof: impl Fn(usize, DofKind) -> Result<usize>,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<Row<'m>>>
+where
+    F: Fn(&str, &str) -> Result<Vec<TieFace>>,
+{
     let mut out = Vec::new();
-    if model.ties().is_empty() {
-        return Ok(out);
-    }
-    if mesh.theory.is_some() {
-        let name = model.ties().keys().next().map_or("", String::as_str);
-        return Err(Error::NotSupported(format!("ties (tie `{name}`) in 2D models")));
-    }
+    let corners = |f: &TieFace| -> Vec<Vec3> { f.nodes.iter().map(|n| nodes.xyz.get(*n).copied().unwrap_or_default()).collect() };
+    let label = |n: usize| nodes.labels.get(n).copied().unwrap_or(0);
     for (name, tie) in model.ties() {
         let owner = format!("tie `{name}`");
-        let secondary = faces(model, resolved, mesh, &owner, &tie.secondary)?;
-        let main = faces(model, resolved, mesh, &owner, &tie.main)?;
-        let main_x: Vec<Vec<Vec3>> = main.iter().map(|f| corners(mesh, f)).collect();
-        let reach = |f: &Face| tie.position_tolerance.unwrap_or(0.5 * f.thickness);
+        let secondary = (nodes.faces)(&owner, &tie.secondary)?;
+        let main = (nodes.faces)(&owner, &tie.main)?;
+        let main_x: Vec<Vec<Vec3>> = main.iter().map(corners).collect();
+        let reach = |f: &TieFace| tie.position_tolerance.unwrap_or(0.5 * f.thickness);
         let boxes: Vec<Aabb> = main.iter().zip(&main_x).map(|(f, x)| bounds(x, reach(f))).collect();
         let grid = Grid::new(&boxes, GRID_CELLS_PER_FACE * boxes.len() + 64);
-        // Per secondary node (mesh slot), its main nodes' weights M_AJ, in face order.
+        // Per secondary node (slot), its main nodes' weights M_AJ, in face order.
         let mut weights: BTreeMap<usize, BTreeMap<usize, f64>> = BTreeMap::new();
         let mut candidates = Vec::new();
         for f in &secondary {
-            let xs = corners(mesh, f);
-            let coefficients =
-                dual(&xs).ok_or_else(|| Error::Invalid(format!("{owner}: a secondary face at node {} has no area", label(mesh, f))))?;
+            let xs = corners(f);
+            let first = f.nodes.first().map_or(0, |n| label(*n));
+            let coefficients = dual(&xs).ok_or_else(|| Error::Invalid(format!("{owner}: a secondary face at node {first} has no area")))?;
             for n in &f.nodes {
                 weights.entry(*n).or_default();
             }
@@ -167,16 +190,15 @@ pub fn rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh, warnings: &m
         for (node, row) in &weights {
             let total: f64 = row.values().sum();
             if !(total.abs() > 0.0 && total.is_finite()) {
-                free.push(mesh.labels.get(*node).copied().unwrap_or(0));
+                free.push(label(*node));
                 continue;
             }
             let terms: Vec<(usize, f64)> = row.iter().map(|(j, w)| (*j, w / total)).filter(|(_, w)| w.abs() > NEGLIGIBLE).collect();
-            for k in 0..3 {
-                let kind = DofKind::translation(k).ok_or_else(|| Error::Internal("axis".into()))?;
-                let pivot = mesh.dof(*node, kind)?;
+            for &kind in kinds {
+                let pivot = dof(*node, kind)?;
                 let mut row = vec![(pivot, 1.0)];
                 for (j, w) in &terms {
-                    row.push((mesh.dof(*j, kind)?, -w));
+                    row.push((dof(*j, kind)?, -w));
                 }
                 out.push(Row { terms: row, pivot, coupling: name.as_str() });
             }
@@ -191,8 +213,25 @@ pub fn rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh, warnings: &m
     Ok(out)
 }
 
-fn label(mesh: &Mesh, f: &Face) -> u32 {
-    f.nodes.first().and_then(|n| mesh.labels.get(*n)).copied().unwrap_or(0)
+/// The displacement constraint rows of every tie in a structural analysis (three translations
+/// per secondary node).
+pub fn rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh, warnings: &mut Vec<String>) -> Result<Vec<Row<'m>>> {
+    if model.ties().is_empty() {
+        return Ok(Vec::new());
+    }
+    if mesh.theory.is_some() {
+        let name = model.ties().keys().next().map_or("", String::as_str);
+        return Err(Error::NotSupported(format!("ties (tie `{name}`) in 2D models")));
+    }
+    let nodes = TieNodes {
+        xyz: &mesh.xyz,
+        labels: &mesh.labels,
+        faces: |owner: &str, set: &str| -> Result<Vec<TieFace>> {
+            Ok(faces(model, resolved, mesh, owner, set)?.into_iter().map(|f| TieFace { nodes: f.nodes, thickness: f.thickness }).collect())
+        },
+    };
+    let translations = [DofKind::Ux, DofKind::Uy, DofKind::Uz];
+    rows_of(model, &nodes, &translations, |slot, kind| mesh.dof(slot, kind), warnings)
 }
 
 #[cfg(test)]

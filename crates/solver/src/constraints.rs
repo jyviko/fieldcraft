@@ -52,7 +52,7 @@
 use std::collections::BTreeMap;
 
 use fieldcraft_fem::dense::inverse3;
-use fieldcraft_fem::{DofKind, DofSet};
+use fieldcraft_fem::{DofKind, DofLayout, DofSet};
 use fieldcraft_model::{CouplingKind, Model, Resolved};
 
 use crate::sparse::Csr;
@@ -201,11 +201,11 @@ pub fn coupling_rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh) -> 
 }
 
 /// The degrees of freedom that exist: every mesh node's, and the reference point directions
-/// some coupling row or discrete element involves.
-fn active_dofs(mesh: &Mesh, rows: &[Row]) -> Vec<bool> {
-    let mut active = vec![false; mesh.dofs()];
-    active.iter_mut().take(mesh.mesh_dofs()).for_each(|a| *a = true);
-    for dof in mesh.discrete.dofs() {
+/// some constraint row or `extra` (the discrete elements') involves.
+fn active_dofs(layout: &DofLayout, extra: impl Iterator<Item = usize>, rows: &[Row]) -> Vec<bool> {
+    let mut active = vec![false; layout.dofs()];
+    active.iter_mut().take(layout.node_dofs()).for_each(|a| *a = true);
+    for dof in extra {
         if let Some(a) = active.get_mut(dof) {
             *a = true;
         }
@@ -361,21 +361,25 @@ fn gigabytes(bytes: usize) -> String {
 impl Reduction {
     /// Eliminate the prescribed values (`prescribed(active)` gives them) and the constraint rows.
     /// `order` is the mesh nodes' order for numbering the free equations; reference point
-    /// equations follow them.
+    /// equations follow them. `layout` numbers the degrees of freedom (mesh nodes, then reference
+    /// points) and `extra` lists the reference point ones that exist without a row (discrete
+    /// elements); a heat transfer model passes its temperatures and none.
     ///
     /// A distributing coupling whose reference point is held makes one of its nodes depend on
     /// all the others, which couples every coupled degree of freedom with every other: a dense
     /// (3N)² block in the reduced matrix. Its size is checked against `budget` before anything is
     /// built.
     pub fn new(
-        mesh: &Mesh,
+        layout: &DofLayout,
+        extra: impl Iterator<Item = usize>,
         order: &[usize],
         rows: &[Row],
         prescribed: impl FnOnce(&[bool]) -> Result<Vec<Option<f64>>>,
         budget: Budget,
     ) -> Result<Reduction> {
-        let n = mesh.dofs();
-        let active = active_dofs(mesh, rows);
+        let n = layout.dofs();
+        let mesh_dofs = layout.node_dofs();
+        let active = active_dofs(layout, extra, rows);
         let prescribed = prescribed(&active)?;
         let mut state: Vec<State> = (0..n)
             .map(|d| match (active.get(d).copied().unwrap_or(false), prescribed.get(d).copied().flatten()) {
@@ -389,15 +393,15 @@ impl Reduction {
         // reference point, one block per coupling.
         let mut coupled: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
         for row in rows {
-            if row.pivot >= mesh.mesh_dofs() && state.get(row.pivot) == Some(&State::Fixed) {
-                coupled.entry(row.coupling).or_default().extend(row.terms.iter().map(|t| t.0).filter(|d| *d < mesh.mesh_dofs()));
+            if row.pivot >= mesh_dofs && state.get(row.pivot) == Some(&State::Fixed) {
+                coupled.entry(row.coupling).or_default().extend(row.terms.iter().map(|t| t.0).filter(|d| *d < mesh_dofs));
             }
         }
         let mut blocks: Vec<(&str, usize, usize)> = Vec::new();
         for (name, mut dofs) in coupled {
             dofs.sort_unstable();
             dofs.dedup();
-            let mut nodes: Vec<usize> = dofs.iter().filter_map(|d| mesh.layout.locate(*d).map(|(slot, _)| slot)).collect();
+            let mut nodes: Vec<usize> = dofs.iter().filter_map(|d| layout.locate(*d).map(|(slot, _)| slot)).collect();
             nodes.dedup();
             blocks.push((name, nodes.len(), dofs.len().saturating_mul(dofs.len())));
         }
@@ -477,8 +481,8 @@ impl Reduction {
         // Equations: free mesh degrees of freedom in node order, then reference point ones.
         let mut eq = vec![usize::MAX; n];
         let mut eq_dof = Vec::new();
-        let mesh_order = order.iter().flat_map(|node| mesh.layout.range(*node));
-        for dof in mesh_order.chain(mesh.mesh_dofs()..n) {
+        let mesh_order = order.iter().flat_map(|node| layout.range(*node));
+        for dof in mesh_order.chain(mesh_dofs..n) {
             if state.get(dof) == Some(&State::Free)
                 && let Some(e) = eq.get_mut(dof)
                 && *e == usize::MAX

@@ -321,6 +321,12 @@ fn volume(kind: ElementKind, x: &[Vec3]) -> Option<f64> {
     }
 }
 
+/// The depth of element `kind` (corners `element`) under its face or edge `x` of measure `area`:
+/// the element's volume over the area, or the face's size where the volume is unknown.
+pub(crate) fn thickness(kind: ElementKind, element: &[Vec3], x: &[Vec3], area: f64) -> f64 {
+    volume(kind, element).filter(|v| *v > 0.0 && area > 0.0).map_or(size(x), |v| v / area)
+}
+
 /// The overlap integration of a face pair (`extent`: `None`) or an edge pair of a 2D model.
 fn overlap<T: Real>(extent: Option<Extent>, xs: &[[T; 3]], xm: &[[T; 3]], f: impl FnMut(&Sample<T>)) -> Option<()> {
     match extent {
@@ -420,7 +426,7 @@ fn surface_face(mesh: &Mesh, owner: &str, element: u32, labels: Vec<u32>, edge: 
         [a, b] if edge => norm([b[0] - a[0], b[1] - a[1], 0.0]),
         _ => area_vector(&x).map_or(0.0, norm),
     };
-    let thickness = volume(el.kind, &el.xyz).filter(|v| *v > 0.0 && area > 0.0).map_or(size(&x), |v| v / area);
+    let thickness = thickness(el.kind, &el.xyz, &x, area);
     if !(thickness > 0.0 && thickness.is_finite()) {
         return Err(at(format!("the {} has no size", if edge { "edge" } else { "face" })));
     }

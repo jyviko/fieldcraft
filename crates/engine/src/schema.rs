@@ -36,6 +36,9 @@ pub struct Field {
     /// What the field means, in a sentence or two, with a typical value: the form's tooltip and
     /// the JSON Schema description. The unit is added from the field's dimension ([`Field::help_text`]).
     pub help: &'static str,
+    /// For a [`Kind::Choice`]: a one-line note per option value (what it needs), shown under the
+    /// field for the option chosen.
+    pub notes: &'static [(&'static str, &'static str)],
 }
 
 /// What a field holds.
@@ -306,7 +309,7 @@ impl Dim {
 // ---- Building fields (const, so schemas are static tables) ----
 
 const fn field(key: &'static str, label: &'static str, kind: Kind) -> Field {
-    Field { key, label, kind, required: false, default: None, hint: "", help: "" }
+    Field { key, label, kind, required: false, default: None, hint: "", help: "", notes: &[] }
 }
 
 impl Field {
@@ -325,6 +328,16 @@ impl Field {
     /// What it means ([`Field::help`]).
     pub const fn help(self, help: &'static str) -> Field {
         Field { help, ..self }
+    }
+
+    /// A one-line note per option value ([`Field::notes`]).
+    pub const fn notes(self, notes: &'static [(&'static str, &'static str)]) -> Field {
+        Field { notes, ..self }
+    }
+    /// The note for this option value (the default when `None`).
+    pub fn note(&self, value: Option<&str>) -> Option<&'static str> {
+        let value = value.or_else(|| self.default.map(|d| d.trim_matches('"')))?;
+        self.notes.iter().find(|(v, _)| *v == value).map(|(_, n)| *n)
     }
 
     /// Its physical dimension, for a number or a vector of numbers.

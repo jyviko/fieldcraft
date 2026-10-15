@@ -999,12 +999,26 @@ pub const HEX_GENERATE: &[Field] = &[
         "Method",
         &[("auto", "Automatic"), ("swept", "Any sweep"), ("extrude", "Extrude"), ("sweep", "Sweep"), ("revolve", "Revolve"), ("mapped", "Mapped")],
     )
-    .help("How to build the hexes: automatic, or a sweep, extrusion, revolution or mapped mesh.")
+    .help(
+        "How to build the hexes. Automatic tries, in order, an extrusion, a sweep, a revolution and a mapped block, and \
+         uses the first that fits; Any sweep tries the first three.",
+    )
+    .notes(HEX_METHOD_NOTES)
     .def("\"auto\""),
     TOLERANCE,
     WELD,
     WELD_DISTANCE,
     FEATURE_ANGLE,
+];
+
+/// What each structured hex method needs of the body, one line each.
+const HEX_METHOD_NOTES: &[(&str, &str)] = &[
+    ("auto", "Automatic: the first of Extrude, Sweep, Revolve and Mapped that fits the body."),
+    ("swept", "Any sweep: the first of Extrude, Sweep and Revolve that fits the body."),
+    ("extrude", "Extrude: the body must be one cross-section carried along a straight direction (levels allowed)."),
+    ("sweep", "Sweep: a source face carried to a target face through four-sided linking faces."),
+    ("revolve", "Revolve: the body must be one cross-section turned around an axis."),
+    ("mapped", "Mapped: the body must have six sides, each with four edges (curved faces allowed)."),
 ];
 
 pub const HEX_SWEEP: &[Field] = &[
@@ -1014,6 +1028,7 @@ pub const HEX_SWEEP: &[Field] = &[
     HEX_ORDER,
     choice("method", "Method", &[("swept", "Any sweep"), ("extrude", "Extrude"), ("sweep", "Sweep"), ("revolve", "Revolve")])
         .help("How to sweep: any sweep, extrusion, sweep along a path or revolution.")
+        .notes(HEX_METHOD_NOTES)
         .def("\"swept\""),
     TOLERANCE,
     WELD,
@@ -1039,8 +1054,13 @@ pub const CELLS: &[Field] = &[
     json("methods", "Methods")
         .help("The meshing method per cell, as JSON.")
         .hint(r#"{"cell": "auto | hex | swept | extrude | sweep | revolve | mapped | tet"}"#),
-    choice("default", "Other cells", &[("auto", "Auto (hex, else tet)"), ("hex", "Hex"), ("swept", "Swept"), ("mapped", "Mapped"), ("tet", "Tet")])
-        .help("The method for cells not listed in Methods.")
+    choice(
+        "default",
+        "Other cells",
+        &[("auto", "Auto (hex, else tet)"), ("hex", "Hex"), ("swept", "Swept"), ("mapped", "Mapped"), ("tet", "Tet"), ("blocks", "All hex (conforming blocks)")],
+    )
+    .help("The method for cells not listed in Methods. All hex meshes every cell as a mapped block, with the division counts of all cells assigned together so shared faces match (mesh.hex.blocks).")
+    .notes(&[("blocks", "All hex: every cell must have six sides, each with four edges; leave Methods empty.")])
         .def("\"auto\""),
     references("bodies", "Cells", C::Body).help("The cells (bodies) to mesh; every body of the design when empty.").hint("every body of the design"),
     HEX_SIZE,

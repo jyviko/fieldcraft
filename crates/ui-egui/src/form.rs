@@ -226,6 +226,9 @@ impl Form<'_> {
                     };
                     self.touch(&path);
                 }
+                if let Some(note) = f.note(obj.get(f.key).and_then(Value::as_str)) {
+                    fields::note(ui, &self.style, note, self.style.dim);
+                }
                 if let Kind::Either(options) = f.kind {
                     self.either_value(ui, f, options, obj, &path);
                 }

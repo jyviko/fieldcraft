@@ -310,7 +310,7 @@ impl Form<'_> {
         let sub = join(path, &key);
         let style = self.style;
         let help = option.help_text(self.cx.units);
-        let new = fields::row(ui, &style, "", false, &help, |ui| self.scalar(ui, option, Some(&value), &sub));
+        let new = fields::row(ui, &style, option.label, false, &help, |ui| self.scalar(ui, option, Some(&value), &sub));
         if let Some(new) = new {
             obj.insert(f.key.into(), json!({key: new}));
             self.touch(path);

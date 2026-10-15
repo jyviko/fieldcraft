@@ -9,9 +9,9 @@
 //! opens its menu ([`crate::menu`]: edit, hide, isolate, active in step, delete).
 //!
 //! The tree also shows where the model is in the analysis workflow
-//! ([`fieldcraft_engine::progress`]): each top-level node that is a setup stage carries a mark at
-//! the right of its row, beside its count (✓ done, → the next stage, ⚠ when its command cannot
-//! run yet), with the reason and the place in its hover, and a node that still lacks what its
+//! ([`fieldcraft_engine::progress`]): each top-level node that is a setup stage carries a mark in
+//! one column at the tree's left edge, so the state of every stage reads down one line (✓ done,
+//! → the next stage, ⚠ when its command cannot run yet), with the reason and the place in its hover, and a node that still lacks what its
 //! stage needs shows a ghost row ("＋ Add material…") that starts the providing command. Optional
 //! stages (seeds and partitions) carry no mark.
 //!
@@ -38,7 +38,7 @@ const INDENT: f32 = 14.0;
 const NOTE_GAP: f32 = 6.0;
 /// Free space kept at a row's right end.
 const ROW_PAD: f32 = 4.0;
-/// The state mark's slot at a top-level row's right end.
+/// The state marks' column at the tree's left edge (every row keeps it, so the tree lines up).
 const MARK_W: f32 = 14.0;
 
 /// The browser's top-level nodes below the model, in order, with the setup stages each shows
@@ -430,7 +430,7 @@ struct Row<'a> {
     note: Option<String>,
     selected: bool,
     dim: bool,
-    /// The setup state mark at the row's right end (top-level nodes).
+    /// The setup state mark in the left column (top-level nodes).
     mark: Option<Status>,
     /// The hover text (a setup state's reason and place).
     tip: Option<String>,
@@ -459,7 +459,10 @@ fn draw_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, row: &Row) -> R
     } else if resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
-    let mut x = r.left() + 2.0 + row.depth as f32 * INDENT;
+    if let Some(status) = row.mark {
+        paint_mark(ui.painter(), Rect::from_center_size(pos2(r.left() + 1.0 + MARK_W / 2.0, r.center().y), Vec2::splat(9.0)), status, &t);
+    }
+    let mut x = r.left() + 2.0 + MARK_W + row.depth as f32 * INDENT;
     let cy = r.center().y;
     let fold_r = Rect::from_min_max(pos2(x - 4.0, r.top()), pos2(x + 15.0, r.bottom()));
     let eye_r = Rect::from_center_size(pos2(x + 14.0 + 8.0, cy), vec2(19.0, r.height()));
@@ -505,12 +508,7 @@ fn draw_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, row: &Row) -> R
     let col = if row.dim { t.text_dim } else { t.text };
     // The note (a count, a seed's size and bias) keeps its room; the label gets the rest, elided in
     // the middle when long, whole on hover.
-    // The trailing area, right to left: the state mark's slot (top-level rows keep it so their
-    // counts line up), then the note.
-    let right = r.right() - ROW_PAD - if row.depth == 1 { MARK_W } else { 0.0 };
-    if let Some(status) = row.mark {
-        paint_mark(ui.painter(), Rect::from_center_size(pos2(right + MARK_W / 2.0, cy), Vec2::splat(9.0)), status, &t);
-    }
+    let right = r.right() - ROW_PAD;
     let note = row.note.as_ref().map(|n| ui.painter().layout_no_wrap(n.clone(), FontId::proportional(11.5), t.text_dim));
     let note_w = note.as_ref().map_or(0.0, |g| g.size().x + NOTE_GAP);
     let font = FontId::proportional(12.5);
@@ -555,6 +553,14 @@ fn item_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, mut row: Row, t
         row.selected = app.selected.as_ref().is_some_and(|(k, n)| k == kind && n == name);
     }
     let r = draw_row(app, ui, id, &row);
+    // A right click selects the row its menu acts on (another item's highlight would say the
+    // menu is about that one).
+    if r.response.as_ref().is_some_and(egui::Response::secondary_clicked) {
+        acts.push(Act::Focus(match &target {
+            Target::Def(kind, name) => Some((*kind, name.clone())),
+            _ => None,
+        }));
+    }
     if let Some(resp) = &r.response {
         resp.context_menu(|ui| {
             if let Some(a) = menu::show(app, ui, &target) {
@@ -617,7 +623,7 @@ fn draw_ghost(app: &mut ModelApp, ui: &mut egui::Ui, s: &StageState) -> bool {
     }
     let col = if s.status == Status::Next { t.accent } else { t.text_dim };
     // Aligned with the node's children: past the fold arrow, the plus in the icon's place.
-    let x = r.left() + 2.0 + 2.0 * INDENT + 14.0;
+    let x = r.left() + 2.0 + MARK_W + 2.0 * INDENT + 14.0;
     let c = pos2(x + 8.0, r.center().y);
     let plus = Stroke::new(1.3, col);
     ui.painter().line_segment([c - vec2(4.0, 0.0), c + vec2(4.0, 0.0)], plus);
@@ -633,6 +639,8 @@ fn draw_ghost(app: &mut ModelApp, ui: &mut egui::Ui, s: &StageState) -> bool {
 enum Act {
     Fold(String),
     Select(Def, String),
+    /// Select this definition (nothing for an item that is none), as a right click does.
+    Focus(Option<(Def, String)>),
     Edit(Def, String),
     ShowResult(String),
     /// A ghost row's command.
@@ -682,6 +690,7 @@ pub fn browser(app: &mut ModelApp, ui: &mut egui::Ui) {
             Act::Select(kind, name) => {
                 app.selected = if app.selected.as_ref() == Some(&(kind, name.clone())) { None } else { Some((kind, name)) };
             }
+            Act::Focus(selected) => app.selected = selected,
             Act::Edit(kind, name) => {
                 if let Some((command, params)) = kind.edit(&app.session.model, &name) {
                     app.selected = Some((kind, name));

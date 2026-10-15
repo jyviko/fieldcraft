@@ -28,6 +28,7 @@ pub mod browser;
 pub mod capture;
 pub mod context;
 pub mod control;
+pub mod describe;
 pub mod elide;
 pub mod fields;
 pub mod files;
@@ -193,6 +194,9 @@ pub struct ParamsDialog {
     pub opening: u64,
     /// Opened from another form's "Create …" button: the form to go back to.
     pub back: Option<Box<Back>>,
+    /// The set Use selection made of the selection (`model.set.create`'s parameters): created on
+    /// OK when the form still names it, so Cancel leaves the model as it was.
+    pub pending_set: Option<Value>,
 }
 
 /// A command that failed: its message, and the parameter it refused (path, form message).
@@ -565,7 +569,7 @@ impl ModelApp {
             self.follow_stage(id);
         }
         match &r {
-            Ok(v) if v.is_null() || changed || display => self.set_status(format!("{label} done"), false),
+            Ok(v) if v.is_null() || changed || display => self.set_status(reply::done(id, label, &params, v), false),
             // A reply reads as one line; the whole of a rich one shows in the context panel (the
             // reaction sums have their own place in the results panel).
             Ok(v) => {
@@ -687,6 +691,7 @@ impl ModelApp {
                 advanced: spec.form.is_none(),
                 opening: self.forms_opened,
                 back: None,
+                pending_set: None,
             });
         }
     }
@@ -734,12 +739,38 @@ impl ModelApp {
     /// Run the open parameter form; it closes when the command succeeds.
     pub fn run_dialog(&mut self) -> Result<Value, String> {
         let (command, params) = self.dialog_params()?;
+        // The set Use selection made, when the form still names it: created first, and taken back
+        // if the command then fails.
+        let pending = self.dialog.as_ref().and_then(|d| d.pending_set.clone()).filter(|set| {
+            let name = set.get("name").and_then(Value::as_str);
+            name.is_some() && [params.pointer("/target/set"), params.get("set")].into_iter().flatten().any(|v| v.as_str() == name)
+        });
+        if let Some(set) = &pending
+            && let Err(e) = self.session.execute("model.set.create", set)
+        {
+            let message = format!("the selection's set: {e}");
+            if let Some(open) = self.dialog.as_mut() {
+                open.error = Some(message.clone());
+            }
+            return Err(message);
+        }
+        let made = params.get("name").and_then(Value::as_str).map(str::to_string);
         match self.run_form(command, params, true) {
             Ok(v) => {
+                // A definition made in its form is the selection, its properties in the panel.
+                if let (Some(kind), Some(name)) = (browser::Def::ALL.into_iter().find(|k| k.command("create") == command), made)
+                    && kind.exists(&self.session.model, &name)
+                {
+                    self.selected = Some((kind, name));
+                }
                 self.dialog_done();
                 Ok(v)
             }
             Err(Failure { message, refused }) => {
+                if pending.is_some() {
+                    let _ = self.session.execute("edit.undo", &json!({}));
+                    self.model_changed();
+                }
                 if let Some(open) = self.dialog.as_mut() {
                     open.error = Some(message.clone());
                     open.refused = refused;
@@ -1260,8 +1291,15 @@ impl ModelApp {
             selection::Target::Set | selection::Target::TargetSet => {
                 let base = params.get("name").and_then(Value::as_str).map(|n| format!("{n}-set"));
                 let set = self.selection_set(base.as_deref())?;
-                let name = set.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-                self.run("model.set.create", set)?;
+                // A set with exactly these members is used as it is; otherwise the new one is made
+                // on OK ([`ParamsDialog::pending_set`]).
+                let (name, pending) = match selection::same_set(&self.session.model, &set) {
+                    Some(existing) => (existing, None),
+                    None => (set.get("name").and_then(Value::as_str).unwrap_or_default().to_string(), Some(set)),
+                };
+                if let Some(open) = self.dialog.as_mut() {
+                    open.pending_set = pending;
+                }
                 selection::with_set(&params, target, &name)
             }
         };
@@ -1307,9 +1345,14 @@ impl ModelApp {
     }
 
     /// Another model, sample or design opened (or the window's first one): a fresh start's home
-    /// view when the viewport next draws.
+    /// view when the viewport next draws, and nothing of the last document left selected or
+    /// reported in the context panel (a definition of the same name is another one).
     fn frame_new_document(&mut self) {
         if self.framed_document != Some(self.session.opened()) {
+            if self.framed_document.is_some() {
+                self.selected = None;
+                self.reply = None;
+            }
             self.framed_document = Some(self.session.opened());
             self.reframe = framing::Reframe::merge(self.reframe, framing::Reframe::Home);
         }
@@ -1641,6 +1684,33 @@ mod tests {
         assert!(app.status.as_ref().is_some_and(|s| s.text.starts_with("Model Info: 1 node, 0 elements")), "{:?}", app.status);
     }
 
+    /// Status lines say what changed, in words, whatever started the command (#333), and the
+    /// document is named after the sample opened (#334).
+    #[test]
+    fn status_lines_say_what_changed() {
+        let mut app = ModelApp::new(Session::default());
+        assert_eq!(app.model_name(), "Untitled");
+        app.run("file.sample", json!({"name": "cantilever"})).unwrap();
+        assert_eq!(app.model_name(), "Cantilever (sample)");
+        let status = |app: &ModelApp| app.status.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+        app.run("solve.run", json!({})).unwrap();
+        assert_eq!(status(&app), "Solved 2 steps");
+        app.run("results.deformed", json!({"step": "Load", "show": true})).unwrap();
+        assert_eq!(status(&app), "Showing Load deformed");
+        app.run("results.deformed", json!({"step": "Load", "scale": 2})).unwrap();
+        assert_eq!(status(&app), "Showing Load deformed ×2");
+        app.run("results.contour", json!({"step": "Load", "field": "von_mises"})).unwrap();
+        assert_eq!(status(&app), "Showing Von Mises stress on Load");
+        app.run("results.modes", json!({"step": "Modes", "mode": 2})).unwrap();
+        assert!(status(&app).starts_with("Mode 2: ") && status(&app).ends_with(" Hz"), "{}", status(&app));
+        app.run("results.clear", json!({})).unwrap();
+        assert_eq!(status(&app), "Back to the model");
+        app.run("model.material.create", json!({"name": "Al", "elastic": {"type": "isotropic", "young": 70000, "poisson": 0.33}})).unwrap();
+        assert_eq!(status(&app), "Added material Al");
+        app.run("model.material.delete", json!({"name": "Al"})).unwrap();
+        assert_eq!(status(&app), "Deleted material Al");
+    }
+
     /// Every command run from the UI reports one readable line, never its JSON, in every state
     /// tried (empty, a solved sample); a reply with more to it opens in the context panel.
     #[test]
@@ -1797,6 +1867,9 @@ mod tests {
         assert_eq!(params(&app)["material"], "Steel");
         app.close_dialog();
         assert!(app.dialog.is_none());
+        // What a form made is selected (#360); the rest of the test starts with nothing selected.
+        assert_eq!(app.selected, Some((browser::Def::Material, "Steel".into())));
+        app.selected = None;
 
         // One material: Plasticity starts with it.
         app.start("model.material.plasticity").unwrap();

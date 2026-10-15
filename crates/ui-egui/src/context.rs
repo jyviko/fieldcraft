@@ -1,12 +1,13 @@
 //! The context panel (right): shown only while there is context, as in the other Craft apps.
-//! From the top: the open command's form, the results controls while results are shown, and the
-//! properties of the definition selected in the browser (with Edit and Delete). Each section has
+//! From the top: the open command's form, the properties of the definition selected in the
+//! browser (with Edit and Delete), the results controls while results are shown, and last the
+//! reply of a report (Check Model, Model Info), so what the person is working on stays on top. Each section has
 //! a heading band; everything acts through commands.
 
 use egui::{RichText, vec2};
 use serde_json::{Value, json};
 
-use crate::browser::{self, Def};
+use crate::browser::Def;
 use crate::frame::{Level, heading};
 use crate::theme::{Tokens, label_font};
 use crate::{ModelApp, selection};
@@ -36,6 +37,10 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
                     form(app, ui, &t);
                     ui.add_space(10.0);
                 }
+                if let Some((kind, name)) = app.selected.clone() {
+                    properties(app, ui, &t, kind, &name);
+                    ui.add_space(10.0);
+                }
                 if let Some(plot) = app.plot() {
                     let mut close = false;
                     heading(ui, &t, Level::Title, |ui| {
@@ -53,10 +58,6 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
                 }
                 if app.reply.is_some() {
                     crate::reply::show(app, ui, &t);
-                    ui.add_space(10.0);
-                }
-                if let Some((kind, name)) = app.selected.clone() {
-                    properties(app, ui, &t, kind, &name);
                 }
             });
         });
@@ -73,6 +74,8 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     let selected = (!app.pick.selection.is_empty()).then(|| app.pick.selection.summary());
     let units = app.session.model.units();
     let session = &app.session;
+    // The set Use selection will make on OK is offered with the others.
+    let pending = app.dialog.as_ref().and_then(|d| d.pending_set.as_ref()).and_then(|s| s.get("name")).and_then(Value::as_str).map(str::to_string);
     let mut use_selection = false;
     let Some(d) = app.dialog.as_mut() else { return };
     let Some(spec) = fieldcraft_engine::find_command(d.command) else {
@@ -99,7 +102,9 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.horizontal(|ui| {
             let tip = match target {
                 selection::Target::Members => "The selection becomes the set's members (geometry by name, the mesh by label)",
-                selection::Target::Set | selection::Target::TargetSet => "Makes a set of the selection (model.set.create) and names it here",
+                selection::Target::Set | selection::Target::TargetSet => {
+                    "Names a set of the selection here: an existing set with the same members, or a new one made on OK (model.set.create)"
+                }
                 selection::Target::Edges => "The selected design edges (Select: Edges) become the edges seeded",
             };
             use_selection = ui.add_enabled(selected.is_some(), egui::Button::new("Use selection")).on_hover_text(tip).clicked();
@@ -143,7 +148,16 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             let refused = d.refused.as_ref().map(|(k, p)| (k.as_str(), p.as_str()));
             let cx = crate::form::Context {
                 units,
-                names: &|c| session.names(c),
+                names: &|c| {
+                    let mut names = session.names(c);
+                    if c == fieldcraft_engine::schema::Collection::Set
+                        && let Some(p) = &pending
+                        && !names.contains(p)
+                    {
+                        names.push(p.clone());
+                    }
+                    names
+                },
                 salt: form_id,
                 touched: &d.touched,
                 attempted: d.attempted,
@@ -211,7 +225,8 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
-/// The selected definition's fields as (name, short text), read again only when the model changes.
+/// The selected definition's fields as (label, text) in its form's words and units, read again only
+/// when the model changes.
 fn property_rows(app: &mut ModelApp, kind: Def, name: &str) -> Option<std::sync::Arc<Vec<(String, String)>>> {
     let key = (app.session.revision(), kind, name.to_string());
     if let Some((k, rows)) = &app.properties
@@ -219,14 +234,7 @@ fn property_rows(app: &mut ModelApp, kind: Def, name: &str) -> Option<std::sync:
     {
         return Some(rows.clone());
     }
-    let v = browser::definition(&app.session.model, kind, name)?;
-    let rows: Vec<(String, String)> = v
-        .as_object()
-        .into_iter()
-        .flatten()
-        .filter(|(k, _)| k.as_str() != "name")
-        .map(|(k, field)| (k.replace('_', " "), value_text(field)))
-        .collect();
+    let rows = crate::describe::rows(&app.session.model, kind, name)?;
     let rows = std::sync::Arc::new(rows);
     app.properties = Some((key, rows.clone()));
     Some(rows)

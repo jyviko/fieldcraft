@@ -859,6 +859,15 @@ pub fn with_set(params: &Value, target: Target, set: &str) -> Value {
     Value::Object(out)
 }
 
+/// The set of `model` whose members are exactly those of `set` (`model.set.create`'s
+/// parameters), if any.
+pub fn same_set(model: &Model, set: &Value) -> Option<String> {
+    let mut members = set.as_object().cloned()?;
+    members.remove("name");
+    let wanted = serde_json::from_value::<Set>(Value::Object(members)).ok()?.normalized().ok()?;
+    model.sets().iter().find(|(_, s)| **s == wanted).map(|(n, _)| n.clone())
+}
+
 /// A set name not taken in `model`: `<base>`, then `<base>-2`, `<base>-3`, …; `Set` when
 /// `base` is not a valid name.
 pub fn fresh_set_name(model: &Model, base: &str) -> String {

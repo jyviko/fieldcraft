@@ -78,6 +78,65 @@ pub fn summary(command: &str, v: &Value) -> String {
     if line.is_empty() { "done".into() } else { one_line(&line) }
 }
 
+/// The status line after `command` changed the model or the display, written for the person
+/// rather than from the command's label: "Showing Load deformed ×2", "Mode 2: 1637 Hz", "Added
+/// load Push". Commands without a sentence of their own say "<label> done".
+pub fn done(command: &str, label: &str, params: &Value, v: &Value) -> String {
+    let view = v.get("view").filter(|x| x.is_object());
+    let step = view.and_then(|x| x["step"].as_str()).unwrap_or("the step");
+    let line = match command {
+        "results.deformed" if view.is_some_and(|x| x["deformed"] == false) => Some(format!("Showing {step} undeformed")),
+        "results.deformed" => {
+            let scale = view.and_then(|x| x["scale"].as_f64()).map(|f| format!(" ×{}", crate::describe::quantity(f))).unwrap_or_default();
+            Some(format!("Showing {step} deformed{scale}"))
+        }
+        "results.contour" => Some(match v.pointer("/contour/label").and_then(Value::as_str) {
+            Some(field) => format!("Showing {field} on {step}"),
+            None => format!("Contours off on {step}"),
+        }),
+        "results.modes" => {
+            let mode = view.and_then(|x| x["mode"].as_u64()).unwrap_or(1);
+            let hz = v
+                .get("modes")
+                .and_then(Value::as_array)
+                .and_then(|m| m.iter().find(|m| m["mode"].as_u64() == Some(mode)))
+                .and_then(|m| m["frequency"].as_f64());
+            Some(match hz {
+                Some(hz) => format!("Mode {mode}: {} Hz", crate::describe::quantity(hz)),
+                None => format!("Showing mode {mode} of {step}"),
+            })
+        }
+        "results.animate" => Some(if view.is_some_and(|x| x["animate"] == true) { "Animating" } else { "Animation stopped" }.to_string()),
+        "results.frame" => Some(match view.and_then(|x| x["frame"].as_u64()) {
+            Some(f) => format!("Showing {step} frame {f}"),
+            None => format!("Showing {step}, last frame"),
+        }),
+        "results.clear" => Some("Back to the model".to_string()),
+        "solve.run" => v.get("steps").and_then(Value::as_array).map(|s| format!("Solved {}", plural(s.len() as u64, "step"))),
+        c if c.starts_with("solve.") => Some(format!("Solved {step}", step = params["step"].as_str().unwrap_or("the step"))),
+        _ => None,
+    };
+    if let Some(line) = line {
+        return line;
+    }
+    // A definition added, changed or deleted, by its kind and name.
+    let name = params.get("name").and_then(Value::as_str);
+    let def = Def::ALL
+        .into_iter()
+        .find_map(|kind| ["create", "edit", "delete"].into_iter().find(|verb| kind.command(verb) == command).map(|verb| (kind, verb)));
+    match (def, name) {
+        (Some((kind, verb)), Some(name)) => {
+            let did = match verb {
+                "create" => "Added",
+                "edit" => "Changed",
+                _ => "Deleted",
+            };
+            format!("{did} {} {name}", kind.label().to_lowercase())
+        }
+        _ => format!("{label} done"),
+    }
+}
+
 /// Whether the reply says more than its summary line, so it is worth the panel.
 pub fn is_rich(v: &Value) -> bool {
     match v {

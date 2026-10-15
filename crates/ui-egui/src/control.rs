@@ -756,16 +756,33 @@ mod tests {
         assert_eq!(r["ok"], true, "{r}");
         let r = call_in(&mut app, &ctx, "engine.execute", json!({"command": "model.set.resolve", "params": {"name": "end"}}));
         assert_eq!((r["result"]["faces"]["count"].as_u64(), r["result"]["nodes"]["count"].as_u64()), (Some(8), Some(15)), "{r}");
-        // A boundary condition's Target row makes a set of its own and names it.
+        // A boundary condition's Target row names the set that has exactly the selection.
         call_in(&mut app, &ctx, "ui.start", json!({"command": "model.boundary_condition.create"}));
         let r = call_in(&mut app, &ctx, "ui.dialog", json!({"params": {"name": "Hold", "type": "fixed"}, "use_selection": true, "run": true}));
         assert_eq!(r["ok"], true, "{r}");
         let bc = serde_json::to_value(app.session.model.boundary_conditions().get("Hold").unwrap()).unwrap();
-        assert_eq!(bc["target"], json!({"set": "Hold-set"}), "{bc}");
-        assert_eq!(app.session.model.resolve_set("Hold-set").unwrap().faces.len(), 8);
+        assert_eq!(bc["target"], json!({"set": "end"}), "{bc}");
         // Nodes in the box: the end's 3 × 5, none of those behind it.
         let r = call_in(&mut app, &ctx, "ui.select", json!({"filter": "nodes", "box": corners}));
         assert_eq!(r["result"]["count"], 15, "{r}");
+        // A selection no set has: Use selection names a set made only on OK, so Cancel leaves
+        // the model as it was (#337).
+        let r = call_in(&mut app, &ctx, "ui.select", json!({"nodes": [1, 2]}));
+        assert_eq!(r["result"]["count"], 2, "{r}");
+        let sets = app.session.model.sets().len();
+        call_in(&mut app, &ctx, "ui.start", json!({"command": "model.boundary_condition.create"}));
+        let r = call_in(&mut app, &ctx, "ui.dialog", json!({"params": {"name": "Pin", "type": "fixed"}, "use_selection": true}));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(app.session.model.sets().len(), sets);
+        app.close_dialog();
+        assert_eq!(app.session.model.sets().len(), sets, "Cancel leaves no set behind");
+        call_in(&mut app, &ctx, "ui.start", json!({"command": "model.boundary_condition.create"}));
+        let r = call_in(&mut app, &ctx, "ui.dialog", json!({"params": {"name": "Pin", "type": "fixed"}, "use_selection": true, "run": true}));
+        assert_eq!(r["ok"], true, "{r}");
+        let bc = serde_json::to_value(app.session.model.boundary_conditions().get("Pin").unwrap()).unwrap();
+        assert_eq!(bc["target"], json!({"set": "Pin-set"}), "{bc}");
+        assert_eq!(app.session.model.resolve_set("Pin-set").unwrap().nodes, [1, 2]);
+        assert_eq!(app.selected, Some((crate::browser::Def::BoundaryCondition, "Pin".into())), "what OK made is selected");
         // Escape clears the selection.
         call_in(&mut app, &ctx, "ui.key", json!({"key": "Escape"}));
         frame(&mut app, &ctx);

@@ -741,19 +741,16 @@ mod tests {
         assert!(r["mass"]["relative_change"].as_f64().unwrap().abs() < 0.01, "{r}");
     }
 
-    /// The heated bracket's 4 mm tet mesh stays near its 23 000 elements and opens within the
-    /// control channel's 60 s request timeout. #303: refinement piled face vertices against a
-    /// feature curve, and the improvement then grew the mesh to 29 257 elements in about two
-    /// minutes.
+    /// The heated bracket's 4 mm tet mesh stays near its 23 000 elements. #303: refinement piled
+    /// face vertices against a feature curve, and the improvement then grew the mesh to 29 257
+    /// elements in about two minutes. The element count is the check: wall time depends on the
+    /// machine and the build profile (about 5 s in a release build, far longer on CI).
     #[test]
     #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
-    fn the_heated_bracket_opens_quickly_with_its_usual_mesh() {
-        let start = std::time::Instant::now();
+    fn the_heated_bracket_opens_with_its_usual_mesh() {
         let s = open("heated-bracket");
-        let elapsed = start.elapsed();
         let elements = s.model.elements().len();
         assert!((20_000..=26_000).contains(&elements), "{elements} elements");
-        assert!(elapsed < std::time::Duration::from_secs(60), "opened in {elapsed:?}");
     }
 
     /// The heated bracket's temperatures lie between the air's and the heater's, falling along

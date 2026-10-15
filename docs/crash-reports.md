@@ -2,9 +2,9 @@
 
 ## Privacy
 
-FieldCraft sends nothing anywhere on its own: no analytics, no background telemetry, no
-automatic crash upload. Crash reports and the log stay on this computer. The only way anything
-leaves it is **Help › Report a Bug** (or **Report It…** after a crash), which opens a GitHub issue
+No crash report, log line or model is uploaded automatically. Crash reports and the log stay on
+this computer (anonymous usage, if you agreed to share it, never carries them: see
+[privacy.md](privacy.md)). The only way they leave it is **Help › Report a Bug** (or **Report It…** after a crash), which opens a GitHub issue
 form in your browser; you read it there and submit it, or not.
 
 What a bug report carries:

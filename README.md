@@ -137,8 +137,11 @@ Rust 1.95 or later, with the `wasm32-unknown-unknown` target for `cargo xtask ci
 
 ## Privacy
 
-FieldCraft sends nothing anywhere on its own: no analytics, no telemetry, no automatic crash
-upload. Crash reports and the log stay on your computer; Help › Report a Bug opens a GitHub issue
+FieldCraft sends nothing until you agree. The first start asks once whether to share anonymous
+usage (which tools you use, nothing from your models); Help › Settings… changes it, and
+`FIELDCRAFT_TELEMETRY=0` turns it off. File names, paths, geometry, model contents, parameter
+values and messages are never sent: [docs/privacy.md](docs/privacy.md) lists every event and
+property. Crash reports and the log stay on your computer; Help › Report a Bug opens a GitHub issue
 you review and submit yourself, with your session or model attached only if you tick them
 ([docs/crash-reports.md](docs/crash-reports.md)).
 

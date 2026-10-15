@@ -97,6 +97,8 @@ jobs:
       - name: Build, sign, notarize and package (the dmg is mounted and checked)
         id: package
         env:
+          # The analytics project key (docs/privacy.md), built in; never printed.
+          FIELDCRAFT_POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -139,6 +141,9 @@ jobs:
           cargo install --locked --version "$CARGO_DEB_VERSION" cargo-deb
           cargo install --locked --version "$CARGO_GENERATE_RPM_VERSION" cargo-generate-rpm
       - name: Build and package (tar.gz, AppImage, deb, rpm)
+        env:
+          # The analytics project key (docs/privacy.md), built in; never printed.
+          FIELDCRAFT_POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
         run: packaging/linux/package.sh
       - name: Check the packages
         run: |
@@ -211,6 +216,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build and package (zip)
         shell: pwsh
+        env:
+          # The analytics project key (docs/privacy.md), built in; never printed.
+          FIELDCRAFT_POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
         run: ./packaging/windows/package.ps1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

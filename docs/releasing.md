@@ -60,6 +60,13 @@ in the keychain.
 SmartScreen warns about an unsigned download (More info › Run anyway) until a code-signing
 certificate is added.
 
+## Usage analytics key
+
+The release builds (macOS, Linux and Windows jobs) build in the PostHog project key from the
+repository secret `POSTHOG_KEY` as `FIELDCRAFT_POSTHOG_KEY` ([privacy.md](privacy.md)). Without the
+secret the builds ask nothing and send nothing, as local and fork builds do. The web build on
+Pages has no key.
+
 ## Choose and prepare the version
 
 1. Look at the previous published release (`gh release list -R jyviko/fieldcraft`) and the

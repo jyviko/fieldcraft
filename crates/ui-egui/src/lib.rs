@@ -1179,7 +1179,7 @@ impl ModelApp {
         let p = self.relax_preview()?;
         let r = &p.relaxed;
         Some(format!(
-            "Preview: {} nodes move (largest {:.3}); scaled Jacobian min {:.3} → {:.3}, edge ratio max {:.2} → {:.2}, {} → {} invalid",
+            "Preview: {} nodes move (largest {:.3}); scaled Jacobian min {:.3} to {:.3}, edge ratio max {:.2} to {:.2}, invalid {} to {}",
             r.moved,
             r.max_displacement,
             r.before.min_quality,

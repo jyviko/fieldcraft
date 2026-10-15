@@ -347,7 +347,8 @@ const METRICS: [(&str, &str, bool); 4] = [
 const MAX_SELECT: usize = 10_000;
 
 /// `mesh.quality`'s reply: the counts, then each metric's range, histogram and worst element (a
-/// click selects and frames it), and buttons selecting the invalid and undetermined elements.
+/// click selects and frames it), buttons selecting the invalid and undetermined elements, and
+/// Relax around worst element (#398).
 fn quality(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>) {
     let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
     let labels = |k: &str| -> Vec<u32> {
@@ -392,6 +393,15 @@ fn quality(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>) {
             acts.push(Act::Elements(l));
         }
     }
+    if let Some(worst) = v.pointer("/metrics/scaled_jacobian/worst").and_then(Value::as_u64).and_then(|w| u32::try_from(w).ok()) {
+        if ui
+            .button("Relax around worst element")
+            .on_hover_text("Open Relax Nodes with its sphere round the element of smallest scaled Jacobian; preview, then OK")
+            .clicked()
+        {
+            acts.push(Act::Relax(worst));
+        }
+    }
     for (key, label, low_bad) in METRICS {
         let Some(m) = v.pointer(&format!("/metrics/{key}")).filter(|m| m.is_object()) else { continue };
         let f = |k: &str| m.get(k).and_then(Value::as_f64);
@@ -417,16 +427,6 @@ fn quality(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>) {
             if ui.link(text).on_hover_text("Select and frame it in the viewport").clicked() {
                 acts.push(Act::Elements(vec![worst]));
             }
-        }
-    }
-    if let Some(worst) = v.pointer("/metrics/scaled_jacobian/worst").and_then(Value::as_u64).and_then(|w| u32::try_from(w).ok()) {
-        ui.add_space(6.0);
-        if ui
-            .button("Relax around worst element")
-            .on_hover_text("Open Relax Nodes with its sphere round the element of smallest scaled Jacobian; preview, then OK")
-            .clicked()
-        {
-            acts.push(Act::Relax(worst));
         }
     }
     if let Some(skipped) = v.get("skipped").and_then(Value::as_object).filter(|s| !s.is_empty()) {

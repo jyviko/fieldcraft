@@ -374,7 +374,9 @@ pub(crate) fn weights(model: &Model, p: &Value) -> Result<(BTreeMap<u32, f64>, O
         nodes.extend(el.nodes.iter().copied());
     }
     if listed == 0 {
-        return Err(EngineError::Params("say which nodes to relax: give one of `center` and `radius`, `around_element`, `nodes`, `elements` or `set`".into()));
+        return Err(EngineError::Params(
+            "say which nodes to relax: give one of `center` and `radius`, `around_element`, `nodes`, `elements` or `set`".into(),
+        ));
     }
     if let Some(only) = &only {
         nodes.retain(|n| only.contains(n));
@@ -450,7 +452,7 @@ fn relax_nodes(s: &mut Session, p: &Value) -> Result<Value> {
         s.model.set_node(*n, *x)?;
     }
     let summary = format!(
-        "moved {} node{} (largest {:.3e}); scaled Jacobian min {:.3} → {:.3}{}",
+        "moved {} node{} (largest {:.3e}); scaled Jacobian min from {:.3} to {:.3}{}",
         r.moved,
         if r.moved == 1 { "" } else { "s" },
         r.max_displacement,

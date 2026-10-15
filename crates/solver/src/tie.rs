@@ -21,6 +21,15 @@
 //! flat faces exactly (the tie patch test), because the dual mortar conditions are satisfied by
 //! the linear field on both sides.
 //!
+//! **Nodes in several ties.** A node on the secondary surfaces of several ties (two secondary
+//! surfaces meeting at an edge: a partition's cut faces and a body's outer faces, a chip's
+//! underside and its sides) gets one constraint, over the main faces of all of them together, as
+//! if they were one tie. Two constraints, one per tie, would nearly repeat each other, and
+//! eliminating the second divides by round-off: the solution is then silently wrong (#389).
+//! Two ties holding one interface both ways (a node following a node that follows it) are an
+//! error naming them, and so are constraints that still nearly repeat each other (a tie and a
+//! coupling on one node, longer loops; [`crate::constraints`]).
+//!
 //! **Pairing.** Each secondary face takes the main faces whose boxes, grown by the position
 //! tolerance, overlap its own, and that it overlaps along its normal with a mean gap within the
 //! tolerance (by default half the thickness of the main element). A secondary node with no main
@@ -43,7 +52,7 @@ use fieldcraft_fem::contact::{Aabb, Grid, bounds};
 use fieldcraft_fem::mortar::integrate;
 use fieldcraft_model::{Model, Resolved};
 
-use crate::constraints::Row;
+use crate::constraints::{Row, Source};
 use crate::contact::faces;
 use crate::system::Mesh;
 use crate::{Error, Result};
@@ -122,10 +131,10 @@ pub(crate) struct TieNodes<'a, F> {
     pub faces: F,
 }
 
-/// The constraint rows of every tie, one per secondary node and kind in `kinds` (ties by name,
-/// secondary nodes by slot, kinds in order); `dof(slot, kind)` numbers the degrees of freedom.
-/// The same mortar weights tie displacements (the translations) and temperatures (one scalar
-/// per node). Warnings name the secondary nodes left free.
+/// The constraint rows of the ties, one per secondary node (of one tie or several) and kind in
+/// `kinds` (secondary nodes by slot, kinds in order); `dof(slot, kind)` numbers the degrees of
+/// freedom. The same mortar weights tie displacements (the translations) and temperatures (one
+/// scalar per node). Warnings name the secondary nodes left free and those several ties share.
 pub(crate) fn rows_of<'m, F>(
     model: &'m Model,
     nodes: &TieNodes<'_, F>,
@@ -136,7 +145,9 @@ pub(crate) fn rows_of<'m, F>(
 where
     F: Fn(&str, &str) -> Result<Vec<TieFace>>,
 {
-    let mut out = Vec::new();
+    // Per secondary node (slot): the ties it is a secondary node of, and its main nodes'
+    // weights M_AJ summed over them.
+    let mut held: BTreeMap<usize, (Vec<&'m str>, BTreeMap<usize, f64>)> = BTreeMap::new();
     let corners = |f: &TieFace| -> Vec<Vec3> { f.nodes.iter().map(|n| nodes.xyz.get(*n).copied().unwrap_or_default()).collect() };
     let label = |n: usize| nodes.labels.get(n).copied().unwrap_or(0);
     for (name, tie) in model.ties() {
@@ -147,15 +158,16 @@ where
         let reach = |f: &TieFace| tie.position_tolerance.unwrap_or(0.5 * f.thickness);
         let boxes: Vec<Aabb> = main.iter().zip(&main_x).map(|(f, x)| bounds(x, reach(f))).collect();
         let grid = Grid::new(&boxes, GRID_CELLS_PER_FACE * boxes.len() + 64);
-        // Per secondary node (slot), its main nodes' weights M_AJ, in face order.
-        let mut weights: BTreeMap<usize, BTreeMap<usize, f64>> = BTreeMap::new();
         let mut candidates = Vec::new();
         for f in &secondary {
             let xs = corners(f);
             let first = f.nodes.first().map_or(0, |n| label(*n));
             let coefficients = dual(&xs).ok_or_else(|| Error::Invalid(format!("{owner}: a secondary face at node {first} has no area")))?;
             for n in &f.nodes {
-                weights.entry(*n).or_default();
+                let (ties, _) = held.entry(*n).or_default();
+                if ties.last() != Some(&name.as_str()) {
+                    ties.push(name.as_str());
+                }
             }
             grid.candidates_in(&bounds(&xs, 0.0), &mut candidates);
             for &c in &candidates {
@@ -179,36 +191,82 @@ where
                     continue;
                 }
                 for (a, s) in f.nodes.iter().enumerate() {
-                    let row = weights.entry(*s).or_default();
+                    let (_, row) = held.entry(*s).or_default();
                     for (j, mn) in m.nodes.iter().enumerate() {
                         *row.entry(*mn).or_insert(0.0) += local[a][j];
                     }
                 }
             }
         }
-        let mut free = Vec::new();
-        for (node, row) in &weights {
-            let total: f64 = row.values().sum();
-            if !(total.abs() > 0.0 && total.is_finite()) {
-                free.push(label(*node));
-                continue;
-            }
-            let terms: Vec<(usize, f64)> = row.iter().map(|(j, w)| (*j, w / total)).filter(|(_, w)| w.abs() > NEGLIGIBLE).collect();
-            for &kind in kinds {
-                let pivot = dof(*node, kind)?;
-                let mut row = vec![(pivot, 1.0)];
-                for (j, w) in &terms {
-                    row.push((dof(*j, kind)?, -w));
-                }
-                out.push(Row { terms: row, pivot, coupling: name.as_str() });
+    }
+    // One constraint per secondary node, over the main faces of all its ties together: two ties
+    // holding one node (secondary surfaces meeting at an edge) would otherwise give it two
+    // constraints that nearly repeat each other (#389).
+    let mut free: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
+    let mut shared: BTreeMap<Vec<&str>, Vec<u32>> = BTreeMap::new();
+    // Per held node: its ties and the main nodes it follows, with their weights.
+    let mut follows: BTreeMap<usize, (&Vec<&'m str>, Vec<(usize, f64)>)> = BTreeMap::new();
+    for (node, (ties, row)) in &held {
+        let Some(&name) = ties.first() else { continue };
+        let total: f64 = row.values().sum();
+        if !(total.abs() > 0.0 && total.is_finite()) {
+            free.entry(name).or_default().push(label(*node));
+            continue;
+        }
+        if ties.len() > 1 {
+            shared.entry(ties.clone()).or_default().push(label(*node));
+        }
+        let terms: Vec<(usize, f64)> = row.iter().map(|(j, w)| (*j, w / total)).filter(|(_, w)| w.abs() > NEGLIGIBLE).collect();
+        follows.insert(*node, (ties, terms));
+    }
+    // A node may not follow a node that follows it (a tie each way on one interface): the two
+    // constraints would hold both twice.
+    for (node, (ties, terms)) in &follows {
+        for (j, _) in terms {
+            let Some((back, theirs)) = follows.get(j) else { continue };
+            if theirs.iter().any(|(k, _)| k == node) {
+                let names = |t: &Vec<&str>| t.iter().map(|n| format!("tie `{n}`")).collect::<Vec<_>>().join(" and ");
+                let at = nodes.xyz.get(*node).copied().unwrap_or_default();
+                return Err(Error::Invalid(format!(
+                    "{} and {} hold one interface both ways: node {} at ({:.6}, {:.6}, {:.6}) follows node {}, which follows it back, over-constraining both; tie each interface one way only",
+                    names(ties),
+                    names(back),
+                    label(*node),
+                    at[0],
+                    at[1],
+                    at[2],
+                    label(*j)
+                )));
             }
         }
-        if let Some(first) = free.first() {
-            warnings.push(format!(
-                "{owner}: {} secondary node(s) have no main face within the position tolerance and stay free (node {first} first)",
-                free.len()
-            ));
+    }
+    let mut out = Vec::new();
+    for (node, (ties, terms)) in &follows {
+        let Some(&name) = ties.first() else { continue };
+        for &kind in kinds {
+            let pivot = dof(*node, kind)?;
+            let mut row = vec![(pivot, 1.0)];
+            for (j, w) in terms {
+                row.push((dof(*j, kind)?, -w));
+            }
+            out.push(Row { terms: row, pivot, coupling: name, source: Source::Tie });
         }
+    }
+    for (name, list) in &free {
+        warnings.push(format!(
+            "tie `{name}`: {} secondary node(s) have no main face within the position tolerance and stay free (node {} first)",
+            list.len(),
+            list.first().copied().unwrap_or(0)
+        ));
+    }
+    for (ties, list) in &shared {
+        let names: Vec<String> = ties.iter().map(|t| format!("`{t}`")).collect();
+        warnings.push(format!(
+            "ties {}: {} node(s) are secondary nodes of each, and follow their main surfaces together (node {} first)",
+            names.join(", "),
+            list.len(),
+            list.first().copied().unwrap_or(0)
+        ));
     }
     Ok(out)
 }

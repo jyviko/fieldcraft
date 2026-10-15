@@ -64,12 +64,36 @@ use crate::{Error, Result};
 pub struct Row<'m> {
     pub terms: Vec<(usize, f64)>,
     pub pivot: usize,
-    /// The name of the coupling it comes from (for messages).
+    /// The name of the coupling or tie it comes from (for messages).
     pub coupling: &'m str,
+    /// What made it.
+    pub source: Source,
+}
+
+/// What a constraint row comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Coupling,
+    /// A tie: its secondary node follows a weighted average of main nodes.
+    Tie,
+}
+
+impl Source {
+    fn what(self) -> &'static str {
+        match self {
+            Source::Coupling => "coupling",
+            Source::Tie => "tie",
+        }
+    }
 }
 
 /// A coefficient below this fraction of a row's largest one is round-off, not a constraint.
 const NEGLIGIBLE: f64 = 1e-10;
+
+/// A tie row whose free coefficients, once the constraints before it are substituted, are all
+/// below this fraction of the coefficients that cancelled to give them nearly repeats those
+/// constraints: eliminating it would divide by round-off (#389), so it is a conflict.
+const NEARLY_REPEATED: f64 = 1e-4;
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
@@ -133,14 +157,14 @@ pub fn coupling_rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh) -> 
                         if r[a] != 0.0 {
                             terms.push((rp(3 + b)?, r[a]));
                         }
-                        rows.push(Row { terms, pivot, coupling: name });
+                        rows.push(Row { terms, pivot, coupling: name, source: Source::Coupling });
                     }
                     // Shell and beam nodes also turn with the point: θ_s = θ_r.
                     if rotations(n) {
                         for k in coupled(3..6) {
                             let pivot =
                                 DofKind::from_direction(k).ok_or_else(|| Error::Internal("direction".into())).and_then(|kind| mesh.dof(n, kind))?;
-                            rows.push(Row { terms: vec![(pivot, 1.0), (rp(k)?, -1.0)], pivot, coupling: name });
+                            rows.push(Row { terms: vec![(pivot, 1.0), (rp(k)?, -1.0)], pivot, coupling: name, source: Source::Coupling });
                         }
                     }
                 }
@@ -192,7 +216,7 @@ pub fn coupling_rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh) -> 
                             }
                         }
                     }
-                    rows.push(Row { terms, pivot, coupling: name });
+                    rows.push(Row { terms, pivot, coupling: name, source: Source::Coupling });
                 }
             }
         }
@@ -417,6 +441,8 @@ impl Reduction {
         // Dependent expressions in free and prescribed degrees of freedom, and for each free
         // degree of freedom the expressions that use it (possibly listed twice).
         let mut exprs: Vec<Vec<(usize, f64)>> = Vec::new();
+        // The row each expression came from (for messages).
+        let mut made_by: Vec<(Source, &str)> = Vec::new();
         let mut users: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for row in rows {
             let scale = row.terms.iter().fold(0.0f64, |m, t| m.max(t.1.abs()));
@@ -432,6 +458,7 @@ impl Reduction {
                     Some(State::Inactive) | None => return Err(Error::Internal("a constraint on a missing degree of freedom".into())),
                 }
             }
+            let gross: f64 = expanded.iter().map(|t| t.1.abs()).sum();
             let terms = combine(expanded);
             let candidate = |t: &&(usize, f64)| state.get(t.0) == Some(&State::Free) && t.1.abs() > NEGLIGIBLE * scale;
             let intended = terms.iter().filter(candidate).find(|t| t.0 == row.pivot);
@@ -439,6 +466,30 @@ impl Reduction {
                 Some(b) if b.1.abs() >= t.1.abs() => Some(b),
                 _ => Some(t),
             });
+            // A tie whose secondary node is held already: what is left of the row must be a
+            // constraint of its own, not the difference of two near copies of one.
+            if row.source == Source::Tie
+                && intended.is_none()
+                && let Some(&(_, c)) = largest
+                && c.abs() < NEARLY_REPEATED * gross
+            {
+                let mut others: Vec<String> = row
+                    .terms
+                    .iter()
+                    .filter_map(|t| match state.get(t.0) {
+                        Some(State::Dependent(e)) => made_by.get(*e).map(|(k, n)| format!("{} `{n}`", k.what())),
+                        _ => None,
+                    })
+                    .filter(|o| *o != format!("tie `{}`", row.coupling))
+                    .collect();
+                others.sort_unstable();
+                others.dedup();
+                return Err(Error::Invalid(format!(
+                    "tie `{}` conflicts with {}: they hold the same nodes almost alike (a node secondary in two ties, or two ties on one interface), which over-constrains the model; keep one of them there",
+                    row.coupling,
+                    if others.is_empty() { "the constraints before it".to_string() } else { others.join(", ") }
+                )));
+            }
             let Some(&(pivot, cp)) = intended.or(largest) else {
                 // Only prescribed degrees of freedom (or round-off) are left.
                 let value = |t: &(usize, f64)| t.1 * values.get(t.0).copied().unwrap_or(0.0);
@@ -474,6 +525,7 @@ impl Reduction {
                 users.entry(dof).or_default().push(index);
             }
             exprs.push(expr);
+            made_by.push((row.source, row.coupling));
             if let Some(s) = state.get_mut(pivot) {
                 *s = State::Dependent(index);
             }

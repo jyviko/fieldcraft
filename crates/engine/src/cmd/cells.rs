@@ -14,9 +14,11 @@
 //! `partition:P:a` and `partition:P:b`. Where the element faces of the two sides match node for
 //! node (the same divisions and kind on both sides, e.g. a mesh and its mirror image) the
 //! coincident nodes are merged and the mesh is conforming there. Elsewhere — a hex cell next to a
-//! tet cell, or two cells meshed with different divisions — the two surfaces are tied: a set on
-//! each side's partition faces and a tie between them (`interaction.tie`; dual mortar
-//! constraints in the implicit analyses, so a constant stress crosses the interface exactly).
+//! tet cell, or two cells meshed with different divisions — the two surfaces are tied
+//! (`interaction.tie`; dual mortar constraints in the implicit analyses, so a constant stress
+//! crosses the interface exactly). Each tie goes one way, by a fixed order of the cells (hex cells
+//! main to tet cells), and each cell's tied cut faces make one tie, so no node is a secondary
+//! node of two of them and no interface is tied both ways: either would over-constrain it (#389).
 //! The tie is the transition between hex and tet cells; pyramid elements are not used, because
 //! they need their own element formulation in every solver and deck, while the tie works for any
 //! pair of meshes and keeps each cell's mesh as its method made it. The reply lists every
@@ -40,7 +42,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const CELLS: CommandSpec = CommandSpec {
     id: "mesh.cells",
     label: "Partitioned Mesh",
-    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, a set on each side and a tie between them are made (`tie_<partition>_<k>`, sets `<tie>_main` and `<tie>_secondary`: the side with fewer nodes is the main surface), replacing ties of those names from an earlier run. The cells of one design body that may sweep (auto, hex, swept, extrude, revolve) are swept together first: one cross-section and one set of layers for all of them, so they share their nodes across every cut, T-junctions included, with no edge seeds (`swept_together` names the body; `not_swept_together` says why not, and those cells are meshed one by one). Reports each cell's method (and why auto fell back to tet), its `quality` (volume, smallest and mean scaled Jacobian, largest edge ratio), and each interface: `merged` with the nodes merged or shared, or `tied`"#,
+    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, they are tied: each cell's tied cut faces make one tie, `tie_<cell>` (`/` as `_`; sets `<tie>_main`, the facing cells' cut faces, and `<tie>_secondary`, the cell's own), hex cells main to tet cells and otherwise by name, so a node is a secondary node of one such tie only; the ties an earlier run made on these cells are replaced. The cells of one design body that may sweep (auto, hex, swept, extrude, revolve) are swept together first: one cross-section and one set of layers for all of them, so they share their nodes across every cut, T-junctions included, with no edge seeds (`swept_together` names the body; `not_swept_together` says why not, and those cells are meshed one by one). Reports each cell's method (and why auto fell back to tet), its `quality` (volume, smallest and mean scaled Jacobian, largest edge ratio), and each interface: `merged` with the nodes merged or shared, or `tied`"#,
     form: Some(super::forms::CELLS),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -292,7 +294,12 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
             info
         })
         .collect();
-    interfaces.extend(join(model, &names, COINCIDENT * diagonal)?);
+    let tet: BTreeSet<String> = report
+        .iter()
+        .filter(|r| r.get("kind").and_then(Value::as_str).is_some_and(|k| k.starts_with("tet")))
+        .filter_map(|r| r.get("body").and_then(Value::as_str).map(String::from))
+        .collect();
+    interfaces.extend(join(model, &names, &tet, COINCIDENT * diagonal)?);
     let (nodes, elements) = (model.nodes().len(), model.elements().len());
     Ok(cleared.report(s, json!({"cells": report, "interfaces": interfaces, "nodes": nodes, "elements": elements, "size": size})))
 }
@@ -355,17 +362,27 @@ fn swept_interfaces(design: &fieldcraft_geometry::Design, inputs: &[Input], cm: 
             }
         }
     }
-    // The partitions whose cut faces a cell has.
-    let cuts = |c: u32| -> BTreeSet<String> {
+    // The partitions whose cut faces a cell has, with the side: two cells meet across a
+    // partition they are on opposite sides of.
+    let cuts = |c: u32| -> BTreeSet<(String, String)> {
         let name = inputs.get(c as usize).map_or("", |b| b.name.as_str());
         let faces = design.body(name).map(|b| b.faces().iter().map(|f| f.name.clone()).collect::<Vec<_>>()).unwrap_or_default();
-        faces.iter().filter_map(|f| f.strip_prefix("partition:")?.rsplit_once(':').map(|(p, _)| p.to_string())).collect()
+        faces
+            .iter()
+            .filter_map(|f| {
+                let (p, side) = f.strip_prefix("partition:")?.rsplit_once(':')?;
+                let side = side.split_once('#').map_or(side, |(s, _)| s);
+                Some((p.to_string(), side.to_string()))
+            })
+            .collect()
     };
     pairs
         .into_iter()
         .map(|((a, b), nodes)| {
             let (na, nb) = (inputs.get(a as usize).map_or("", |x| x.name.as_str()), inputs.get(b as usize).map_or("", |x| x.name.as_str()));
-            let partition = cuts(a).intersection(&cuts(b)).next().cloned().unwrap_or_default();
+            let theirs = cuts(b);
+            let partition =
+                cuts(a).into_iter().find(|(p, side)| theirs.iter().any(|(q, other)| q == p && other != side)).map(|(p, _)| p).unwrap_or_default();
             json!({"partition": partition, "cells": [na, nb], "joined": "merged", "nodes": nodes.len(), "swept_together": true})
         })
         .collect()
@@ -374,13 +391,15 @@ fn swept_interfaces(design: &fieldcraft_geometry::Design, inputs: &[Input], cm: 
 /// A cell's mesh in numbers: its volume, smallest and mean scaled Jacobian and largest edge
 /// ratio.
 fn cell_quality(model: &Model, body: &str) -> Value {
-    let (mut volume, mut min, mut sum, mut n, mut ratio) = (0.0, f64::INFINITY, 0.0, 0usize, 0.0f64);
+    let (mut volume, mut min, mut sum, mut n, mut ratio) = (0.0, f64::INFINITY, 0.0, 0usize, None::<f64>);
     for label in model.body_elements(body) {
         let Some(e) = model.element(label) else { continue };
         let xyz: Vec<[f64; 3]> = e.nodes.iter().filter_map(|&l| model.node(l).map(|x| x.xyz)).collect();
         let Ok(q) = fieldcraft_mesh::quality::element_quality(e.kind, &xyz) else { continue };
         volume += q.size;
-        ratio = ratio.max(q.get(fieldcraft_mesh::quality::Metric::EdgeRatio).unwrap_or(0.0));
+        if let Some(r) = q.get(fieldcraft_mesh::quality::Metric::EdgeRatio) {
+            ratio = Some(ratio.map_or(r, |x| x.max(r)));
+        }
         if let Some(sj) = q.get(fieldcraft_mesh::quality::Metric::ScaledJacobian) {
             min = min.min(sj);
             sum += sj;
@@ -452,52 +471,112 @@ fn sides(model: &Model, cells: &[String]) -> BTreeMap<String, [Vec<Side>; 2]> {
 
 /// Join the cells across every partition: merge where the two sides match node for node, tie
 /// where they do not. Returns the interfaces.
-fn join(model: &mut Model, cells: &[String], tol: f64) -> Result<Vec<Value>> {
+///
+/// Ties go one way between any two cells, by a fixed order of the cells (hex before tet, then by
+/// name; the earlier one is the main side), so no two ties hold one interface both ways, and
+/// each cell's tied cut faces make one tie, `tie_<cell>` (its secondary surface; the main one is
+/// the facing cells' cut faces), so a node where two of them meet is a secondary node once.
+/// The ties of an earlier run on these cells are replaced.
+fn join(model: &mut Model, cells: &[String], tet: &BTreeSet<String>, tol: f64) -> Result<Vec<Value>> {
+    remove_cut_ties(model, cells)?;
+    let rank = |cell: &str| (tet.contains(cell), cell.to_string());
     let mut out = Vec::new();
+    // Per secondary cell: its cut faces and the facing cells' ones, as (body, face).
+    let mut tied: BTreeMap<String, (BTreeSet<(String, String)>, BTreeSet<(String, String)>)> = BTreeMap::new();
+    let mut tied_pairs: Vec<Value> = Vec::new();
     for (partition, [a_sides, b_sides]) in sides(model, cells) {
-        let mut k = 0;
         for a in &a_sides {
             for b in &b_sides {
-                let overlap = (0..3).all(|i| a.lo[i] <= b.hi[i] + tol && b.lo[i] <= a.hi[i] + tol);
-                if !overlap {
+                // Faces on one plane overlap when their boxes share an area, not just an edge.
+                let shared = (0..3).filter(|&i| a.lo[i].max(b.lo[i]) < a.hi[i].min(b.hi[i]) - tol).count();
+                let touching = (0..3).all(|i| a.lo[i] <= b.hi[i] + tol && b.lo[i] <= a.hi[i] + tol);
+                if !(touching && shared >= 2) {
                     continue;
                 }
-                k += 1;
-                let matched = matching(model, a, b, tol);
-                if let Some(map) = matched {
+                if let Some(map) = matching(model, a, b, tol) {
                     let count = map.len();
                     model.merge_nodes(&map)?;
                     out.push(json!({"partition": partition, "cells": [a.body, b.body], "joined": "merged", "nodes": count}));
-                } else {
-                    let name = format!("tie_{partition}_{k}");
-                    let (main, secondary) = if a.nodes.len() <= b.nodes.len() { (a, b) } else { (b, a) };
-                    let set = |side: &Side| -> Result<Set> { Ok(Set::of_geometry(vec![GeometryRef::face(side.body.as_str(), side.face.as_str())?])) };
-                    let (main_set, secondary_set) = (format!("{name}_main"), format!("{name}_secondary"));
-                    for (n, side) in [(&main_set, main), (&secondary_set, secondary)] {
-                        if model.set(n).is_some() {
-                            model.replace_set(n, set(side)?)?;
-                        } else {
-                            model.add_set(n, set(side)?)?;
-                        }
-                    }
-                    if model.tie(&name).is_some() {
-                        model.remove_tie(&name)?;
-                    }
-                    model.add_tie(&name, Tie::new(&main_set, &secondary_set))?;
-                    out.push(json!({
-                        "partition": partition,
-                        "cells": [a.body, b.body],
-                        "joined": "tied",
-                        "tie": name,
-                        "main": main.body,
-                        "secondary": secondary.body,
-                        "faces": [a.faces.len(), b.faces.len()],
-                    }));
+                    continue;
                 }
+                let (main, secondary) = if rank(&a.body) <= rank(&b.body) { (a, b) } else { (b, a) };
+                let entry = tied.entry(secondary.body.clone()).or_default();
+                entry.0.insert((secondary.body.clone(), secondary.face.clone()));
+                entry.1.insert((main.body.clone(), main.face.clone()));
+                tied_pairs.push(json!({
+                    "partition": partition,
+                    "cells": [a.body, b.body],
+                    "joined": "tied",
+                    "main": main.body,
+                    "secondary": secondary.body,
+                    "faces": [a.faces.len(), b.faces.len()],
+                }));
             }
         }
     }
+    let mut names: BTreeMap<String, String> = BTreeMap::new();
+    for (cell, (own, facing)) in tied {
+        let base = tie_name(&cell);
+        let mut name = base.clone();
+        let mut k = 1;
+        while model.tie(&name).is_some() || model.set(&format!("{name}_main")).is_some() || model.set(&format!("{name}_secondary")).is_some() {
+            k += 1;
+            name = format!("{base}_{k}");
+        }
+        let set = |faces: &BTreeSet<(String, String)>| -> Result<Set> {
+            Ok(Set::of_geometry(faces.iter().map(|(b, f)| GeometryRef::face(b.as_str(), f.as_str())).collect::<fieldcraft_model::Result<_>>()?))
+        };
+        let (main_set, secondary_set) = (format!("{name}_main"), format!("{name}_secondary"));
+        model.add_set(&main_set, set(&facing)?)?;
+        model.add_set(&secondary_set, set(&own)?)?;
+        model.add_tie(&name, Tie::new(&main_set, &secondary_set))?;
+        names.insert(cell, name);
+    }
+    for mut pair in tied_pairs {
+        let name = pair.get("secondary").and_then(Value::as_str).and_then(|c| names.get(c)).cloned();
+        if let (Some(o), Some(name)) = (pair.as_object_mut(), name) {
+            o.insert("tie".into(), json!(name));
+        }
+        out.push(pair);
+    }
     Ok(out)
+}
+
+/// The name of the tie that holds `cell`'s tied cut faces.
+fn tie_name(cell: &str) -> String {
+    let name = format!("tie_{cell}");
+    fieldcraft_model::suggest_name(&name).unwrap_or(name)
+}
+
+/// Remove the ties an earlier run of mesh.cells made on `cells` (and their two sets): ties
+/// between sets `<tie>_main` and `<tie>_secondary` that hold only cut faces of these cells.
+fn remove_cut_ties(model: &mut Model, cells: &[String]) -> Result<()> {
+    let cut_faces_of_cells = |set: &str| {
+        model.set(set).is_some_and(|s| {
+            !s.geometry.is_empty()
+                && s.nodes.is_empty()
+                && s.elements.is_empty()
+                && s.faces.is_empty()
+                && s.edges.is_empty()
+                && s.geometry.iter().all(|g| cells.contains(&g.body) && matches!(&g.entity, Entity::Face(f) if f.starts_with("partition:")))
+        })
+    };
+    let stale: Vec<(String, String, String)> = model
+        .ties()
+        .iter()
+        .filter(|(n, t)| t.main == format!("{n}_main") && t.secondary == format!("{n}_secondary"))
+        .filter(|(_, t)| cut_faces_of_cells(&t.main) && cut_faces_of_cells(&t.secondary))
+        .map(|(n, t)| (n.clone(), t.main.clone(), t.secondary.clone()))
+        .collect();
+    for (tie, main, secondary) in stale {
+        model.remove_tie(&tie)?;
+        for set in [main, secondary] {
+            if model.set_users(&set).is_empty() {
+                model.remove_set(&set)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// When the two sides' nodes coincide one to one (within `tol`) and their faces are the same
@@ -533,14 +612,15 @@ mod tests {
     #[test]
     fn hex_and_tet_cells_are_tied_and_matching_hex_cells_merged() {
         let (_dir, mut s) = cut_plate();
-        // A tet cell next to a hex cell: tied, main the coarser side.
+        // A tet cell next to a hex cell: tied, the hex cell main.
         let r = s.execute("mesh.cells", &json!({"methods": {"Body1/a": "tet", "Body1/b": "mapped"}, "size": 2.5})).unwrap();
         assert_eq!(r["cells"][0]["kind"], "tet4", "{r}");
         assert_eq!(r["cells"][1]["kind"], "hex8", "{r}");
         let i = &r["interfaces"][0];
         assert_eq!(i["joined"], "tied", "{r}");
         assert_eq!(s.model.ties().len(), 1);
-        for set in ["tie_P_1_main", "tie_P_1_secondary"] {
+        assert_eq!((i["main"].as_str(), i["secondary"].as_str(), i["tie"].as_str()), (Some("Body1/b"), Some("Body1/a"), Some("tie_Body1_a")), "{r}");
+        for set in ["tie_Body1_a_main", "tie_Body1_a_secondary"] {
             assert!(s.model.resolve_set(set).unwrap().faces.len() > 4, "{set}");
         }
         // Both cells hex at one size: the plane faces match node for node and merge.
@@ -674,6 +754,71 @@ mod tests {
             let u = n["displacement"][axis].as_f64().unwrap();
             assert!((u - expected).abs() < 1e-6 * expected, "{u} vs {expected}: {n}");
         }
+    }
+
+    /// A box cut by planes into cells, `methods` per cell, a heat source in every cell and
+    /// convection on its outer faces: the heat flows of the steady solve.
+    fn cut_box_heat(cuts: &[(&str, f64)], methods: Value, size: f64) -> (Value, Value) {
+        let commands = json!({"commands": [
+            {"command": "solid.box", "params": {"length": 30, "width": 20, "height": 10, "body_name": "Box"}},
+        ]});
+        let bytes = fieldcraft_geometry::script_design(&commands.to_string()).unwrap();
+        let (_dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        for (i, (plane, offset)) in cuts.iter().enumerate() {
+            let name = format!("D{i}");
+            s.execute("geometry.datum", &json!({"name": name, "by": {"type": "offset", "plane": plane, "offset": offset}})).unwrap();
+            s.execute("geometry.partition", &json!({"name": format!("P{i}"), "datum": name})).unwrap();
+        }
+        let r = s.execute("mesh.cells", &json!({"methods": methods, "default": "hex", "size": size})).unwrap();
+        let bodies = s.execute("geometry.bodies", &json!({})).unwrap();
+        let outer: Vec<Value> = bodies
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|b| {
+                b["faces"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|f| !f["name"].as_str().unwrap().starts_with("partition:"))
+                    .map(|f| json!({"body": b["name"], "face": f["name"]}))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let script = json!([
+            {"command": "model.set.create", "params": {"name": "all", "elements": s.model.elements().keys().collect::<Vec<_>>()}},
+            {"command": "model.set.create", "params": {"name": "skin", "geometry": outer}},
+            {"command": "model.material.create", "params": {"name": "M", "elastic": {"type": "isotropic", "young": 1000, "poisson": 0.3}, "thermal": {"conductivity": 0.5}}},
+            {"command": "model.section.create", "params": {"name": "S", "set": "all", "material": "M", "kind": {"type": "solid"}}},
+            {"command": "model.load.create", "params": {"name": "Q", "type": "heat_source", "set": "all", "power": 1}},
+            {"command": "model.load.create", "params": {"name": "Air", "type": "convection", "set": "skin", "film": 0.01, "sink": 25}},
+            {"command": "model.step.create", "params": {"name": "Steady", "procedure": {"type": "heat_transfer"}, "loads": ["Q", "Air"]}},
+        ]);
+        s.run_script(&script).unwrap();
+        let h = s.execute("solve.heat", &json!({"step": "Steady"})).unwrap();
+        (r, h)
+    }
+
+    /// A tet cell among hex cells (#389, #288): the hex cells sweep together and share their
+    /// nodes, the tet cell is tied once (one tie for all its cut faces, the hex cells main), and
+    /// the heat balances to round-off.
+    #[test]
+    fn a_tet_cell_among_swept_hex_cells_is_tied_once_and_the_heat_balances() {
+        let (r, h) = cut_box_heat(&[("yz", 10.0), ("yz", 20.0), ("zx", 10.0)], json!({"Box/b/a/a": "tet"}), 2.5);
+        let interfaces = r["interfaces"].as_array().unwrap();
+        let tied: Vec<&Value> = interfaces.iter().filter(|i| i["joined"] == "tied").collect();
+        assert_eq!(tied.len(), 3, "{r}");
+        assert!(tied.iter().all(|i| i["secondary"] == "Box/b/a/a" && i["tie"] == "tie_Box_b_a_a"), "{r}");
+        let merged: Vec<&Value> = interfaces.iter().filter(|i| i["joined"] == "merged").collect();
+        assert_eq!(merged.len(), 4, "{r}");
+        // Box/a/a and Box/a/b meet across y = 10, the third cut.
+        assert!(merged.iter().any(|i| i["cells"] == json!(["Box/a/a", "Box/a/b"]) && i["partition"] == "P2"), "{r}");
+        let flows = &h["heat_flows"];
+        let supplied = flows["loads"].as_array().unwrap().iter().find(|l| l["name"] == "Q").unwrap()["heat"].as_f64().unwrap();
+        assert!(flows["imbalance"].as_f64().unwrap().abs() < 1e-9 * supplied, "{flows}");
+        assert!(h["min_temperature"]["value"].as_f64().unwrap() > 25.0, "{h}");
     }
 
     /// Cells cut from one box by planes, one of them (`y = 10`) cutting only the cell left of

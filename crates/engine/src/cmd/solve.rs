@@ -1681,4 +1681,91 @@ pub(crate) mod tests {
         let v = s.execute("results.contour", &json!({"step": "Squeeze", "field": "contact_shear"})).unwrap();
         assert!(v["contour"]["range"]["max"]["value"].as_f64().unwrap() > 1.0, "{v}");
     }
+
+    /// A chip with a pad on it, both in a pocket of air (tet4), the chip and pad hex8 at other
+    /// sizes: tie `air` holds the chip's and the pad's sides on the air, tie `chip` the pad's
+    /// underside on the chip. The pad's bottom edge is on both ties' secondary surfaces, and the
+    /// chip's top edge, the main nodes there, follows the air: two constraints per edge node that
+    /// nearly repeat each other.
+    fn chip_pad_air(s: &mut Session) {
+        let (_dir, opened) = super::super::datum::tests::scripted(json!([
+            {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 6, "corner": [0, 0, 0], "body_name": "Air"}},
+            {"command": "solid.box", "params": {"length": 8, "width": 8, "height": 3, "corner": [6, 6, 0], "operation": "cut"}},
+            {"command": "solid.box", "params": {"length": 8, "width": 8, "height": 2, "corner": [6, 6, 0], "operation": "new_body", "body_name": "Chip"}},
+            {"command": "solid.box", "params": {"length": 8, "width": 8, "height": 1, "corner": [6, 6, 2], "operation": "new_body", "body_name": "Pad"}},
+        ]));
+        *s = opened;
+        std::mem::forget(_dir);
+        s.execute("mesh.tet.generate", &json!({"body": "Air", "size": 2.0})).unwrap();
+        s.execute("mesh.hex.generate", &json!({"body": "Chip", "size": 0.8})).unwrap();
+        s.execute("mesh.hex.generate", &json!({"body": "Pad", "size": 0.45})).unwrap();
+        let m = &s.model;
+        // Element faces of a body all of whose nodes satisfy `on`.
+        let faces = |body: &str, on: &dyn Fn([f64; 3]) -> bool| -> Vec<Value> {
+            m.body_elements(body)
+                .into_iter()
+                .flat_map(|e| (1..=m.element(e).unwrap().kind.faces().len() as u8).map(move |f| (e, f)))
+                .filter(|&(e, f)| {
+                    let ns = m.face_nodes(fieldcraft_model::ElementFace { element: e, face: f }).unwrap();
+                    ns.iter().all(|n| on(m.node(*n).unwrap().xyz))
+                })
+                .map(|(e, f)| json!({"element": e, "face": f}))
+                .collect()
+        };
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        let side = |p: [f64; 3]| near(p[0], 6.0) || near(p[0], 14.0) || near(p[1], 6.0) || near(p[1], 14.0);
+        let pocket = |p: [f64; 3]| {
+            (side(p) && p[2] < 3.0 + 1e-6 && (6.0 - 1e-6..=14.0 + 1e-6).contains(&p[0]) && (6.0 - 1e-6..=14.0 + 1e-6).contains(&p[1]))
+                || (near(p[2], 3.0) && (6.0 - 1e-6..=14.0 + 1e-6).contains(&p[0]) && (6.0 - 1e-6..=14.0 + 1e-6).contains(&p[1]))
+        };
+        let outer = |p: [f64; 3]| near(p[0], 0.0) || near(p[0], 20.0) || near(p[1], 0.0) || near(p[1], 20.0) || near(p[2], 6.0);
+        let mut sides = faces("Chip", &|p| side(p));
+        sides.extend(faces("Pad", &|p| side(p)));
+        let script = json!([
+            {"command": "model.set.create", "params": {"name": "all", "elements": m.elements().keys().collect::<Vec<_>>()}},
+            {"command": "model.set.create", "params": {"name": "chip", "elements": m.body_elements("Chip")}},
+            {"command": "model.set.create", "params": {"name": "pocket", "faces": faces("Air", &pocket)}},
+            {"command": "model.set.create", "params": {"name": "sides", "faces": sides}},
+            {"command": "model.set.create", "params": {"name": "chip_top", "faces": faces("Chip", &|p| near(p[2], 2.0))}},
+            {"command": "model.set.create", "params": {"name": "pad_bottom", "faces": faces("Pad", &|p| near(p[2], 2.0))}},
+            {"command": "model.set.create", "params": {"name": "outside", "faces": faces("Air", &outer)}},
+            {"command": "model.material.create", "params": {"name": "M", "elastic": {"type": "isotropic", "young": 1000, "poisson": 0.3}, "thermal": {"conductivity": 0.5}}},
+            {"command": "model.section.create", "params": {"name": "S", "set": "all", "material": "M", "kind": {"type": "solid"}}},
+            {"command": "interaction.tie", "params": {"name": "air", "main": "pocket", "secondary": "sides", "position_tolerance": 0.1}},
+            {"command": "interaction.tie", "params": {"name": "chip", "main": "chip_top", "secondary": "pad_bottom", "position_tolerance": 0.1}},
+            {"command": "model.load.create", "params": {"name": "Q", "type": "heat_source", "set": "chip", "power": 1}},
+            {"command": "model.load.create", "params": {"name": "Room", "type": "convection", "set": "outside", "film": 0.01, "sink": 25}},
+            {"command": "model.step.create", "params": {"name": "Steady", "procedure": {"type": "heat_transfer"}, "loads": ["Q", "Room"]}},
+        ]);
+        s.run_script(&script).unwrap();
+    }
+
+    /// #389: a node on the secondary surfaces of two ties follows their main surfaces together,
+    /// so the heat balances to round-off and no temperature drops below the surroundings'. (With
+    /// a constraint per tie, this model put 335 W more in than the 128 W supplied, and some
+    /// temperatures below 0.)
+    #[test]
+    fn nodes_in_two_ties_keep_the_heat_balance() {
+        let mut s = Session::default();
+        chip_pad_air(&mut s);
+        let r = s.execute("solve.heat", &json!({"step": "Steady"})).unwrap();
+        let flows = &r["heat_flows"];
+        let supplied = flows["loads"].as_array().unwrap().iter().find(|l| l["name"] == "Q").unwrap()["heat"].as_f64().unwrap();
+        assert!((supplied - 128.0).abs() < 1e-9, "{flows}");
+        assert!(flows["imbalance"].as_f64().unwrap().abs() < 1e-9 * supplied, "{flows}");
+        assert!(r["min_temperature"]["value"].as_f64().unwrap() > 25.0, "{r}");
+        let warnings = r["warnings"].to_string();
+        assert!(warnings.contains("ties `air`, `chip`"), "{warnings}");
+    }
+
+    /// Two ties on one interface in opposite directions hold every node there twice: an error
+    /// naming both, not a field.
+    #[test]
+    fn ties_both_ways_on_one_interface_are_an_error_naming_them() {
+        let mut s = Session::default();
+        chip_pad_air(&mut s);
+        s.execute("interaction.tie", &json!({"name": "back", "main": "pad_bottom", "secondary": "chip_top", "position_tolerance": 0.1})).unwrap();
+        let e = s.execute("solve.heat", &json!({"step": "Steady"})).unwrap_err().to_string();
+        assert!(e.contains("tie `back`") && e.contains("tie `chip`"), "{e}");
+    }
 }

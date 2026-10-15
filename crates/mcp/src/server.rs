@@ -29,7 +29,7 @@ forces in N); Z is up. A typical analysis: `open` a .solidcraft design (or a .fi
 .3mf); `inspect_model` for its bodies and their persistent face names; `mesh` (method tet: {body, tolerance}); \
 then `execute` the model definition commands (model.set.create {name, geometry: [{body, face}]}, \
 model.material.create, model.section.create, model.boundary_condition.create, model.load.create, model.step.create \
-— list_commands shows each one's parameters); `check_model`; `solve` (static, frequency, explicit, fluid); \
+— list_commands shows each one's parameters); `check_model`; `solve` (static, nonlinear, frequency, buckle, explicit, fluid, heat); \
 `show_results` (field: displacement, von_mises…; its reply has the field's range) and `probe` / `reactions` for \
 numbers; `screenshot` to look; `save` or `write_deck` (abaqus, nastran, lsdyna). Partitions: geometry.datum makes a \
 datum plane, geometry.partition cuts the design's bodies into cells by it (cut faces partition:<name>:a|b; kept in \

@@ -30,8 +30,15 @@ const MESHERS: &[(&str, &str, &str)] = &[
 ];
 
 /// The analyses the `solve` tool runs; one whose command this build lacks is left out.
-const ANALYSES: &[(&str, &str)] =
-    &[("static", "solve.static"), ("frequency", "solve.frequency"), ("explicit", "solve.explicit"), ("fluid", "solve.fluid"), ("heat", "solve.heat")];
+const ANALYSES: &[(&str, &str)] = &[
+    ("static", "solve.static"),
+    ("nonlinear", "solve.nonlinear"),
+    ("frequency", "solve.frequency"),
+    ("buckle", "solve.buckle"),
+    ("explicit", "solve.explicit"),
+    ("fluid", "solve.fluid"),
+    ("heat", "solve.heat"),
+];
 
 const VIEWS: &[&str] = &["iso", "home", "fit", "front", "back", "top", "bottom", "left", "right"];
 

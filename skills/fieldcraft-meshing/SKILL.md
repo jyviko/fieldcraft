@@ -58,6 +58,32 @@ Before the first mesh command:
 - Tet (`tet10` preferred for stress) only for cells that are not worth blocking, and only where
   they are far from the region of interest.
 
+## 3a. Projection blocking
+
+When partitioning the real geometry into sweepable cells is awkward (round parts, branches,
+handles, curved caps), lay a block topology over the part and project it (`mesh.hex.project`):
+
+- **Sphere or ball-like region**: `"template": "sphere"` (inner cube + six blocks). Never a single
+  block on a sphere.
+- **Disc, rod, tube, any round section**: `"template": "butterfly"` (centre square + four petals)
+  along the axis, with `levels` at every change along it. A plain grid block projected onto a
+  cylinder flattens its corners to 180° — the command refuses it (`min_quality`).
+- **Holes, bosses, floors of cups**: O-grid the block (`{"op": "o_grid", "block", "open", "inset"}`);
+  open faces let the inner block reach that face. A cup floor needs its own O-grid inside the
+  wall's butterfly (`open: [1, 2]` on the centre block), the cavity is then `remove`d.
+- **Side branch**: O-grid the block under the branch's footprint open toward it and extrude the
+  open face (`"extrude": {"offset", "layers"}`, faces `all` = round branch). The junction edges go
+  onto the curve where the two surfaces meet automatically.
+- **Square stubs, handles, ribs**: O-grid open toward the stub, extrude `inner`, chain `extrude`
+  ops, and close loops with `connect`. Inner corners of a stretched topology follow the
+  projection, but keep the initial blocks roughly where the geometry is (offsets measured from
+  the block faces, not from the surface).
+- Use `"preview": true` to list block indices before meshing; faces can be given as `"+x"` … `"-z"`.
+- Targets default to the smooth group of B-rep faces each outer block face faces; set them with
+  `faces: [{block, face, to}]` when a block face is near two surfaces.
+- Read the reply: `initial_min_scaled_jacobian` (transfinite grid) vs `min_scaled_jacobian`
+  (after elliptic smoothing), `max_gap` (should be ~0). An error names the worst block and where.
+
 ## 4. Verify (every time, before solving)
 
 1. `mesh.quality`: all valid; scaled Jacobian min ≥ 0.3 (≥ 0.5 in the region of interest);

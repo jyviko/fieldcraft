@@ -26,6 +26,11 @@ const MESHERS: &[(&str, &str, &str)] = &[
     ),
     ("mirror", "mesh.mirror", "reflect meshed bodies across a datum plane and join them on it {plane, bodies}"),
     ("block", "mesh.block", "structured hex block"),
+    (
+        "hex_project",
+        "mesh.hex.project",
+        "projection blocking: a block topology (grid with carve, butterfly or 7-block sphere template, O-grids, extruded and connected faces) projected onto the body and elliptically smoothed {body, template, operations, size}",
+    ),
     ("planar", "mesh.planar", "2D elements of a polygon or a planar face"),
 ];
 

@@ -23,6 +23,7 @@ mod mirror;
 mod model;
 pub(crate) mod nodes;
 pub(crate) mod octree;
+mod project;
 pub(crate) mod relax;
 pub mod replace;
 mod results;
@@ -80,6 +81,7 @@ pub static ALL: &[CommandSpec] = &[
     hex::HEX_SWEEP,
     hex::HEX_MAPPED,
     hex::HEX_BLOCKS,
+    project::HEX_PROJECT,
     cells::CELLS,
     seeds::SEED_EDGE,
     seeds::SEED_CLEAR,

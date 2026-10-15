@@ -332,7 +332,14 @@ pub static CATALOGUE: &[Capability] = &[
         "One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions",
         &["mesh.hex.blocks"],
     ),
-    ready("mesh.block", "Mesh Block", Mesh, "Structured Hex", "A mapped block of hex, wedge or quad elements between corner points"),
+    ready_more(
+        "mesh.block",
+        "Mesh Block",
+        Mesh,
+        "Structured Hex",
+        "A mapped block of hex, wedge or quad elements between corner points; projection blocking (a block topology projected onto the part)",
+        &["mesh.hex.project"],
+    ),
     soon(
         "mesh.hex.decompose",
         "Decompose",

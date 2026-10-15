@@ -225,4 +225,3 @@ fn hostile_topologies_are_errors() {
     let mut g3 = Topology::grid([&[0.0, 1.0], &[0.0, 1.0], &[0.0, 1.0]]).unwrap();
     assert!(g3.carve([1, 1, 1], &[[[0, 0], [0, 0], [0, 0]]]).is_err());
 }
-

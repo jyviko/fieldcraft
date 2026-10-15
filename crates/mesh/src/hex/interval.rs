@@ -19,7 +19,8 @@
 //! change in relative error. This module uses that scheme with increments only: start from the
 //! rounded goals, then repeatedly take the first violated constraint and raise the variable whose
 //! increase costs least in squared relative error `((x − g)/g)²`, preferring, for parity, variables that
-//! no equality couples to other faces. Increments only make the counts never coarser than asked
+//! no equality couples to other faces (until a loop keeps coming back: free curves shared only by
+//! loops round a point cannot fix their parity together). Increments only make the counts never coarser than asked
 //! and make termination provable for feasible systems up to the step cap; an infeasible system
 //! (one that only grows) hits the cap and is reported, never looped on.
 
@@ -45,6 +46,10 @@ pub(crate) struct Intervals {
     /// `None`: free.
     pub fixed: Vec<Option<String>>,
 }
+
+/// Repairs of one parity constraint by curves no equality couples, before coupled ones may
+/// move as well.
+const PARITY_PATIENCE: usize = 4;
 
 /// The largest count a variable may reach.
 const MAX_COUNT: usize = 1 << 20;
@@ -135,6 +140,8 @@ impl Intervals {
             let c = x.get(i).copied().unwrap_or(0);
             error(i, c + 1) - error(i, c)
         };
+        // How often each parity constraint has been repaired.
+        let mut repaired = vec![0usize; self.multiple.len()];
         let total: usize = x.iter().sum();
         let constraints = self.equal.len() + self.multiple.len() + self.at_least.len() + self.exceed.len();
         let max_steps = total.saturating_mul(8).saturating_add(64 * (n + constraints)).saturating_add(1000);
@@ -198,7 +205,7 @@ impl Intervals {
                 }
             }
             if raise.is_none() {
-                for (l, m) in &self.multiple {
+                for (k, (l, m)) in self.multiple.iter().enumerate() {
                     if !sum(l, &x).is_multiple_of(*m) {
                         // Only a variable listed a number of times that is not a multiple of the
                         // modulus moves the remainder.
@@ -211,7 +218,12 @@ impl Intervals {
                             return Err(self.conflict(l, &format!("a face's loop needs a multiple of {m} divisions")));
                         }
                         raise = Some(moving);
-                        parity = true;
+                        // Loops whose free curves only feed each other (the triangles round a
+                        // point) cannot all be made even by them: once a loop keeps coming back,
+                        // its curves coupled to other faces may move too.
+                        let r = repaired.get_mut(k).ok_or_else(|| Error::Failed("parity index".into()))?;
+                        *r += 1;
+                        parity = *r <= PARITY_PATIENCE;
                         break;
                     }
                 }
@@ -330,6 +342,25 @@ mod tests {
         let x = p.solve().unwrap();
         assert_eq!(x[a], 6);
         assert!(x[b] + x[c] >= 8, "{x:?}");
+    }
+
+    /// Four triangles round a point (a square cut along both diagonals): each loop must be even.
+    /// The half-diagonals are free but every one of them is in two loops, so they cannot fix an odd
+    /// perimeter; a side, coupled to the face beyond, has to move.
+    #[test]
+    fn parity_round_a_point_moves_a_coupled_side() {
+        let mut p = Intervals::default();
+        let sides: Vec<usize> = [7.0, 7.0, 7.0, 8.0].iter().map(|&g| p.var(g, 1)).collect();
+        let halves: Vec<usize> = (0..4).map(|_| p.var(2.0, 1)).collect();
+        let beyond: Vec<usize> = (0..4).map(|_| p.var(7.0, 1)).collect();
+        for k in 0..4 {
+            p.multiple.push((vec![sides[k], halves[k], halves[(k + 1) % 4]], 2));
+            p.equal.push((vec![sides[k]], vec![beyond[k]]));
+        }
+        let x = p.solve().unwrap();
+        for (l, m) in &p.multiple {
+            assert_eq!(l.iter().map(|&i| x[i]).sum::<usize>() % m, 0, "{x:?}");
+        }
     }
 
     #[test]

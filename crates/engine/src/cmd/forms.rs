@@ -1129,6 +1129,10 @@ pub const CELLS: &[Field] = &[
     TOLERANCE,
 ];
 
+pub const CLEAR_MESH: &[Field] = &[references("bodies", "Bodies", C::Body)
+    .help("The bodies whose meshes go. When none is ticked: the meshes of bodies the open design no longer has because its partitions changed (model.check lists them).")
+    .hint("the bodies partitions removed")];
+
 pub const MIRROR: &[Field] = &[
     json("plane", "Plane")
         .help("The mirror plane: a datum plane's name, or a point and normal as JSON.")

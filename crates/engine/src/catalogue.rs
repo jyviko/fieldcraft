@@ -355,7 +355,7 @@ pub static CATALOGUE: &[Capability] = &[
     soon("mesh.untangle", "Untangle", Mesh, "Improve", "M6", "Repair inverted elements"),
     soon("mesh.layers", "Layers", Mesh, "Improve", "M6", "Boundary padding and layers through thin walls"),
     ready_more("mesh.node.add", "Node", Mesh, "Edit", "Add a node", &["mesh.node.remove"]),
-    ready_more("mesh.element.add", "Element", Mesh, "Edit", "Add an element on existing nodes", &["mesh.element.remove"]),
+    ready_more("mesh.element.add", "Element", Mesh, "Edit", "Add an element on existing nodes", &["mesh.element.remove", "mesh.clear"]),
     ready("mesh.mirror", "Mirror Mesh", Mesh, "Edit", "Mirror a body's mesh across a plane, joined on the plane (mesh half a symmetric part)"),
     ready_more(
         "mesh.node.merge",

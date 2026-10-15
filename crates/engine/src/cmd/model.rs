@@ -56,6 +56,17 @@ fn units(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn check(s: &mut Session, _: &Value) -> Result<Value> {
     let mut diagnostics = s.model.check();
+    if let Some(design) = s.design.as_deref() {
+        for (body, n) in super::replace::stale(&s.model, design) {
+            diagnostics.push(fieldcraft_model::Diagnostic {
+                severity: Severity::Warning,
+                subject: format!("body `{body}`"),
+                message: format!(
+                    "{n} elements mesh a body the open design no longer has (its partitions changed since it was meshed); mesh.clear removes them"
+                ),
+            });
+        }
+    }
     if let Some(why) = s.mesh_outdated() {
         diagnostics.push(fieldcraft_model::Diagnostic { severity: Severity::Warning, subject: "mesh".into(), message: why });
     }

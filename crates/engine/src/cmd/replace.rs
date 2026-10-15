@@ -46,6 +46,11 @@ pub(super) fn clear<'a>(model: &mut Model, bodies: impl IntoIterator<Item = &'a 
 }
 
 impl Cleared {
+    /// [`Cleared::report`] when anything was removed; `reply` as it is otherwise.
+    pub(super) fn report_if_any(self, s: &Session, reply: Value) -> Value {
+        if self.bodies.is_empty() { reply } else { self.report(s, reply) }
+    }
+
     /// Add `replaced`, `stale_sets` and `results_cleared` to a command's reply (an object).
     pub(super) fn report(self, s: &Session, mut reply: Value) -> Value {
         if let Some(o) = reply.as_object_mut() {
@@ -61,6 +66,55 @@ impl Cleared {
         }
         reply
     }
+}
+
+pub const CLEAR: crate::CommandSpec = crate::CommandSpec {
+    id: "mesh.clear",
+    label: "Clear Mesh",
+    params: r#"{"bodies"?: ["Body1/a"]} — removes the meshes of the bodies (their elements and the nodes only they use; sets that listed them are named as `stale_sets`, results solved on them are cleared); without `bodies`, of every body the open design no longer has because its partitions changed since it was meshed (model.check lists them; none: nothing changes). Reports what went as `replaced`"#,
+    form: Some(super::forms::CLEAR_MESH),
+    kind: crate::CommandKind::Model,
+    requires: &[crate::requirement::Requirement::Mesh],
+    run: clear_meshes,
+};
+
+fn clear_meshes(s: &mut Session, p: &Value) -> Result<Value> {
+    let bodies: Vec<String> = match p.get("bodies") {
+        Some(_) => super::req(p, "bodies")?,
+        None => s.design.as_deref().map(|d| stale(&s.model, d).into_iter().map(|(b, _)| b).collect()).unwrap_or_default(),
+    };
+    for b in &bodies {
+        if s.model.body_elements(b).is_empty() {
+            return Err(EngineError::Params(format!("body `{}` has no mesh", b.chars().take(64).collect::<String>())));
+        }
+    }
+    let cleared = clear(&mut s.model, bodies.iter().map(String::as_str));
+    let (nodes, elements) = (s.model.nodes().len(), s.model.elements().len());
+    Ok(cleared.report(s, json!({"nodes": nodes, "elements": elements})))
+}
+
+/// The meshed bodies the open design no longer has because its partitions changed (#385): cells
+/// of a partition that is gone (`Base/a/b`), or a body partitions now cut (`Base`), each with
+/// its element count. Other bodies the design lacks (mirror images, imported surfaces, blocks)
+/// are not stale.
+pub(crate) fn stale(model: &Model, design: &fieldcraft_geometry::Design) -> Vec<(String, usize)> {
+    let cell = |name: &str| -> bool {
+        let Some(source) = design.source_of(name) else { return false };
+        let rest = name.get(source.len()..).unwrap_or_default();
+        rest.split('/').skip(1).all(|seg| seg.strip_prefix(['a', 'b']).is_some_and(|k| k.bytes().all(|c| c.is_ascii_digit())))
+    };
+    model
+        .classification()
+        .entities()
+        .iter()
+        .filter(|g| matches!(g.entity, fieldcraft_model::geometry::Entity::Body))
+        .map(|g| g.body.as_str())
+        .filter(|b| design.body(b).is_none() && cell(b))
+        .filter_map(|b| {
+            let n = model.body_elements(b).len();
+            (n > 0).then(|| (b.to_string(), n))
+        })
+        .collect()
 }
 
 /// The bodies a meshing command fills, from its parameters, without meshing anything.

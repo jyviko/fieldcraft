@@ -84,7 +84,7 @@ pub const DATUM_POINT_EDIT: CommandSpec = CommandSpec {
 pub const DATUM_DELETE: CommandSpec = CommandSpec {
     id: "geometry.datum.delete",
     label: "Delete Datum",
-    params: r#"{"name": "Mid", "cascade"?: false} — deletes a datum plane, axis or point; one a partition cuts by is refused (naming the partitions), unless `cascade` deletes those partitions too"#,
+    params: r#"{"name": "Mid", "cascade"?: false} — deletes a datum plane, axis or point; one a partition cuts by is refused (naming the partitions), unless `cascade` deletes those partitions too (their cells lose their meshes: `replaced`)"#,
     form: Some(super::forms::DATUM_DELETE),
     kind: CommandKind::Model,
     requires: &[Requirement::Datum],
@@ -94,7 +94,7 @@ pub const DATUM_DELETE: CommandSpec = CommandSpec {
 pub const PARTITION: CommandSpec = CommandSpec {
     id: "geometry.partition",
     label: "Partition",
-    params: r#"{"name": "Half", "datum": "Mid", "bodies"?: ["Body1"] (default: every body the plane divides)} — cuts bodies of the open design into cells by a datum plane, in memory (the design file is not changed); the model keeps the partition and applies it again whenever the design is opened, after the partitions before it. A cut body `B` becomes the cells `B/a` (on the plane's negative side) and `B/b` (several pieces on a side: `B/a1`, `B/a2`, …). The two faces of the cut are paired by name: `partition:<name>:a` on the cells on the negative side, `partition:<name>:b` on the positive side (`…#0`, `…#1` where a cell has several); every other face keeps the persistent name of the face it is a piece of (`<face>#k` for several pieces on one cell), so sets by face name still select it. Reports the cells made and the cut faces named; a plane that divides no body, a listed body it does not divide, or a body the kernel fails to cut (its message) is an error"#,
+    params: r#"{"name": "Half", "datum": "Mid", "bodies"?: ["Body1"] (default: every body the plane divides)} — cuts bodies of the open design into cells by a datum plane, in memory (the design file is not changed); the model keeps the partition and applies it again whenever the design is opened, after the partitions before it. A cut body `B` becomes the cells `B/a` (on the plane's negative side) and `B/b` (several pieces on a side: `B/a1`, `B/a2`, …). The two faces of the cut are paired by name: `partition:<name>:a` on the cells on the negative side, `partition:<name>:b` on the positive side (`…#0`, `…#1` where a cell has several); every other face keeps the persistent name of the face it is a piece of (`<face>#k` for several pieces on one cell), so sets by face name still select it. Reports the cells made and the cut faces named; a body it cuts loses its mesh (`replaced`, as a mesher reports it; remesh the cells); a plane that divides no body, a listed body it does not divide, or a body the kernel fails to cut (its message) is an error"#,
     form: Some(super::forms::PARTITION),
     kind: CommandKind::Model,
     requires: &[Requirement::Design, Requirement::DatumPlane],
@@ -114,7 +114,7 @@ pub const DATUM_SUPPRESS: CommandSpec = CommandSpec {
 pub const PARTITION_SUPPRESS: CommandSpec = CommandSpec {
     id: "geometry.partition.suppress",
     label: "Suppress Partition",
-    params: r#"{"name": "Half", "suppressed"?: true} — keeps the partition but leaves it out (false brings it back): the design is cut again without it, so its cells merge back into the bodies they came from"#,
+    params: r#"{"name": "Half", "suppressed"?: true} — keeps the partition but leaves it out (false brings it back): the design is cut again without it, so its cells merge back into the bodies they came from and lose their meshes (`replaced`)"#,
     form: Some(super::forms::PARTITION_SUPPRESS),
     kind: CommandKind::Model,
     requires: &[Requirement::Partition],
@@ -124,7 +124,7 @@ pub const PARTITION_SUPPRESS: CommandSpec = CommandSpec {
 pub const PARTITION_DELETE: CommandSpec = CommandSpec {
     id: "geometry.partition.delete",
     label: "Delete Partition",
-    params: r#"{"name": "Half"} — removes a partition; the design is cut again by the ones left"#,
+    params: r#"{"name": "Half"} — removes a partition; the design is cut again by the ones left, and the cells that are gone lose their meshes (`replaced`)"#,
     form: Some(super::forms::PARTITION_DELETE),
     kind: CommandKind::Model,
     requires: &[Requirement::Partition],
@@ -437,10 +437,9 @@ fn datum_edit(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     }
     let datum = datum_of(s, kind, p)?;
     s.model.replace_datum(name, datum)?;
-    if !s.model.datum_users(name).is_empty() {
-        recut(s)?;
-    }
-    Ok(datum_json(name, s.model.datum(name).unwrap_or(&datum)))
+    let cleared = if s.model.datum_users(name).is_empty() { super::replace::Cleared::default() } else { recut(s)? };
+    let reply = datum_json(name, s.model.datum(name).unwrap_or(&datum));
+    Ok(cleared.report_if_any(s, reply))
 }
 
 fn datum_delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -453,10 +452,9 @@ fn datum_delete(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     s.model.remove_datum(name)?;
-    if cascade && !partitions.is_empty() {
-        recut(s)?;
-    }
-    Ok(json!({"deleted": name, "partitions": if cascade { partitions } else { Vec::new() }}))
+    let cleared = if cascade && !partitions.is_empty() { recut(s)? } else { super::replace::Cleared::default() };
+    let reply = json!({"deleted": name, "partitions": if cascade { partitions } else { Vec::new() }});
+    Ok(cleared.report_if_any(s, reply))
 }
 
 /// The model's partitions as cuts of the geometry.
@@ -477,13 +475,15 @@ pub(crate) fn partitioned(design: &Design, model: &Model) -> Result<Design> {
     Ok(design.partitioned(&cuts(model))?)
 }
 
-/// Cut the session's design by its model's partitions again.
-fn recut(s: &mut Session) -> Result<()> {
-    if let Some(d) = &s.design {
-        let cut = partitioned(d, &s.model)?;
-        s.design = Some(Arc::new(cut));
-    }
-    Ok(())
+/// Cut the session's design by its model's partitions again. The bodies that are gone (cells
+/// whose partition went, a body a new partition cut) take their meshes with them (#385): what
+/// went is in the returned [`super::replace::Cleared`], which the command reports.
+fn recut(s: &mut Session) -> Result<super::replace::Cleared> {
+    let Some(d) = &s.design else { return Ok(super::replace::Cleared::default()) };
+    let cut = partitioned(d, &s.model)?;
+    let gone: Vec<String> = d.bodies.iter().filter(|b| cut.body(&b.name).is_none()).map(|b| b.name.clone()).collect();
+    s.design = Some(Arc::new(cut));
+    Ok(super::replace::clear(&mut s.model, gone.iter().map(String::as_str)))
 }
 
 fn partition(s: &mut Session, p: &Value) -> Result<Value> {
@@ -492,7 +492,7 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
     let bodies: Vec<String> = super::opt(p, "bodies")?.unwrap_or_default();
     datum_plane_of(&s.model, &datum)?;
     s.model.add_partition(Partition { name: name.clone(), datum: datum.clone(), bodies, suppressed: false })?;
-    recut(s)?;
+    let cleared = recut(s)?;
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
     let feature = format!("partition {name}");
     let errors: Vec<&str> = design.errors.iter().filter(|e| e.feature == feature).map(|e| e.message.as_str()).collect();
@@ -511,39 +511,40 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
     if s.view.hidden.len() < MAX_HIDDEN {
         s.view.hidden.insert(Item { kind: ItemKind::Datum, name: datum });
     }
-    Ok(json!({
+    let reply = json!({
         "name": name,
         "split": split,
         "cells": cells,
         "cut_faces": faces,
         "bodies": bodies,
-    }))
+    });
+    Ok(cleared.report_if_any(s, reply))
 }
 
 fn datum_suppress(s: &mut Session, p: &Value) -> Result<Value> {
     let name = super::name(p)?;
     let suppressed = super::opt(p, "suppressed")?.unwrap_or(true);
     s.model.set_datum_suppressed(name, suppressed)?;
-    recut(s)?;
+    let cleared = recut(s)?;
     let bodies: Vec<String> = s.design.iter().flat_map(|d| d.bodies.iter().map(|b| b.name.clone())).collect();
-    Ok(json!({"name": name, "suppressed": suppressed, "bodies": bodies}))
+    Ok(cleared.report_if_any(s, json!({"name": name, "suppressed": suppressed, "bodies": bodies})))
 }
 
 fn partition_suppress(s: &mut Session, p: &Value) -> Result<Value> {
     let name = super::name(p)?;
     let suppressed = super::opt(p, "suppressed")?.unwrap_or(true);
     s.model.set_partition_suppressed(name, suppressed)?;
-    recut(s)?;
+    let cleared = recut(s)?;
     let bodies: Vec<String> = s.design.iter().flat_map(|d| d.bodies.iter().map(|b| b.name.clone())).collect();
-    Ok(json!({"name": name, "suppressed": suppressed, "bodies": bodies}))
+    Ok(cleared.report_if_any(s, json!({"name": name, "suppressed": suppressed, "bodies": bodies})))
 }
 
 fn partition_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let name = super::name(p)?;
     s.model.remove_partition(name)?;
-    recut(s)?;
+    let cleared = recut(s)?;
     let bodies: Vec<String> = s.design.iter().flat_map(|d| d.bodies.iter().map(|b| b.name.clone())).collect();
-    Ok(json!({"deleted": name, "bodies": bodies}))
+    Ok(cleared.report_if_any(s, json!({"deleted": name, "bodies": bodies})))
 }
 
 #[cfg(test)]
@@ -859,5 +860,57 @@ pub(crate) mod tests {
         // Numbered by centroid: the piece below the void first.
         let z = |n: &str| design.body(n).unwrap().measure().unwrap().centroid[2];
         assert!(z(centre[0]) < 9.0 && z(centre[1]) > 11.0, "{centre:?}");
+    }
+
+    /// #385: the cells' meshes go with the cells (deleting, suppressing or replacing their
+    /// partitions), a body's mesh goes when a partition cuts it, and meshes left over from an
+    /// earlier cut are listed by model.check and removed by mesh.clear.
+    #[test]
+    fn meshes_go_with_the_bodies_partitions_remove() {
+        let (mut s, dir) = plate();
+        let whole = s.design.as_ref().unwrap().bodies[0].measure().unwrap().volume;
+        let volume = |s: &mut Session| s.execute("mesh.quality", &json!({})).unwrap()["volume"].as_f64().unwrap();
+        // Partitioning a meshed body takes its mesh.
+        s.execute("mesh.hex.generate", &json!({"size": 2.5})).unwrap();
+        s.execute("geometry.datum", &json!({"name": "X30", "by": {"type": "offset", "plane": "yz", "offset": 30}})).unwrap();
+        let r = s.execute("geometry.partition", &json!({"name": "P", "datum": "X30"})).unwrap();
+        assert_eq!(r["replaced"][0]["body"], "Body1", "{r}");
+        assert!(s.model.elements().is_empty());
+        // Deleting the datum with its partition takes the cells' meshes; the whole body's new
+        // mesh is the only one.
+        s.execute("mesh.cells", &json!({"default": "hex", "size": 2.5})).unwrap();
+        let r = s.execute("geometry.datum.delete", &json!({"name": "X30", "cascade": true})).unwrap();
+        let gone: Vec<&str> = r["replaced"].as_array().unwrap().iter().map(|b| b["body"].as_str().unwrap()).collect();
+        assert_eq!(gone, ["Body1/a", "Body1/b"], "{r}");
+        assert!(s.model.elements().is_empty());
+        s.execute("mesh.hex.generate", &json!({"size": 2.5})).unwrap();
+        let v = volume(&mut s);
+        assert!((v - whole).abs() < 1e-2 * whole, "{v} vs {whole}");
+        // Suppressing or deleting a partition does the same.
+        s.execute("geometry.datum", &json!({"name": "X30", "by": {"type": "offset", "plane": "yz", "offset": 30}})).unwrap();
+        s.execute("geometry.partition", &json!({"name": "P", "datum": "X30"})).unwrap();
+        s.execute("mesh.cells", &json!({"default": "hex", "size": 2.5})).unwrap();
+        let r = s.execute("geometry.partition.suppress", &json!({"name": "P"})).unwrap();
+        assert_eq!(r["replaced"].as_array().map(Vec::len), Some(2), "{r}");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert!(!s.model.elements().is_empty(), "undo brings the cells' meshes back");
+        let r = s.execute("geometry.partition.delete", &json!({"name": "P"})).unwrap();
+        assert_eq!(r["replaced"].as_array().map(Vec::len), Some(2), "{r}");
+        // A mesh left from an earlier cut (a model saved before the cut changed): listed and
+        // cleared.
+        s.execute("geometry.partition", &json!({"name": "P", "datum": "X30"})).unwrap();
+        s.execute("mesh.cells", &json!({"default": "hex", "size": 2.5})).unwrap();
+        s.model.remove_partition("P").unwrap();
+        let d = s.design.clone().unwrap();
+        s.design = Some(Arc::new(partitioned(&d, &s.model).unwrap()));
+        let check = s.execute("model.check", &json!({})).unwrap();
+        let listed: Vec<&str> =
+            check["diagnostics"].as_array().unwrap().iter().filter_map(|d| d["subject"].as_str()).filter(|d| d.starts_with("body")).collect();
+        assert_eq!(listed, ["body `Body1/a`", "body `Body1/b`"], "{check}");
+        let r = s.execute("mesh.clear", &json!({})).unwrap();
+        assert_eq!(r["replaced"].as_array().map(Vec::len), Some(2), "{r}");
+        assert!(s.model.elements().is_empty());
+        assert!(s.execute("mesh.clear", &json!({"bodies": ["Body1"]})).is_err(), "nothing to clear");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

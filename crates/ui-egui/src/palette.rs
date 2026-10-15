@@ -102,6 +102,28 @@ pub fn submit(app: &mut ModelApp, line: &str) {
     }
 }
 
+/// The command line's width: 40 % of the bar, within these.
+const MIN_LINE_W: f32 = 150.0;
+const MAX_LINE_W: f32 = 440.0;
+
+/// The command line's placeholders, longest first: the longest that fits whole is shown.
+const PLACEHOLDERS: [&str; 5] = [
+    r#"Type a command, e.g. mesh.node.add {"label": 1, "xyz": [0, 0, 0]} — or press S to search"#,
+    "Type a command, e.g. mesh.tet.generate — or press S to search",
+    "Type a command — or press S to search",
+    "Command, or S to search",
+    "Command",
+];
+
+/// The longest [`PLACEHOLDERS`] that fits a command line `width` wide, so it is never cut.
+fn placeholder(ui: &egui::Ui, width: f32) -> &'static str {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    // A text field's default margin is 4 points a side.
+    let room = width - 8.0;
+    let shortest = PLACEHOLDERS[PLACEHOLDERS.len() - 1];
+    PLACEHOLDERS.iter().copied().find(|p| crate::elide::width(ui, p, &font) <= room).unwrap_or(shortest)
+}
+
 /// The command line, the status and the model's size, above the timeline.
 pub fn command_line(app: &mut ModelApp, ui: &mut egui::Ui) {
     let t = Tokens::get(app.ui.dark);
@@ -112,11 +134,11 @@ pub fn command_line(app: &mut ModelApp, ui: &mut egui::Ui) {
             app.place("command_line", ui.max_rect());
             ui.horizontal_centered(|ui| {
                 ui.label(RichText::new("›").strong().color(t.accent));
+                // The rest of the bar keeps room for the status and the model's size.
+                let width = (ui.available_width() * 0.4).clamp(MIN_LINE_W, MAX_LINE_W);
+                let hint = if app.command_line.is_empty() { placeholder(ui, width) } else { "" };
                 let r = ui.add(
-                    egui::TextEdit::singleline(&mut app.command_line)
-                        .id(egui::Id::new("fc_command_line_text"))
-                        .hint_text(r#"Type a command, e.g. mesh.node.add {"label": 1, "xyz": [0, 0, 0]} — or press S to search"#)
-                        .desired_width(440.0),
+                    egui::TextEdit::singleline(&mut app.command_line).id(egui::Id::new("fc_command_line_text")).hint_text(hint).desired_width(width),
                 );
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     let line = std::mem::take(&mut app.command_line);
@@ -134,7 +156,13 @@ pub fn command_line(app: &mut ModelApp, ui: &mut egui::Ui) {
                         Some(s) => (s.text.as_str(), if s.error { t.error } else { t.text }),
                         None => ("Ready", t.text_dim),
                     };
-                    ui.add(egui::Label::new(RichText::new(text).size(11.5).color(color)).truncate());
+                    // Elided in the middle (both the subject and the outcome stay), whole on hover.
+                    let font = FontId::proportional(11.5);
+                    let shown = crate::elide::middle_in(ui, text, &font, ui.available_width());
+                    let r = ui.add(egui::Label::new(RichText::new(shown.as_ref()).font(font).color(color)));
+                    if shown != text {
+                        r.on_hover_text(text);
+                    }
                 });
             });
         });

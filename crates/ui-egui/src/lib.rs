@@ -28,6 +28,7 @@ pub mod browser;
 pub mod capture;
 pub mod context;
 pub mod control;
+pub mod elide;
 pub mod fields;
 pub mod files;
 pub mod form;

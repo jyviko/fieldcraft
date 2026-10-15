@@ -359,6 +359,8 @@ pub enum Replace {
     Sample(&'static str),
     /// Restarting to finish installing an update ([`crate::updates`]).
     Update,
+    /// An empty model (`file.new`).
+    New,
 }
 
 impl Replace {
@@ -367,6 +369,7 @@ impl Replace {
             Replace::File(p) => file_name(p),
             Replace::Sample(n) => fieldcraft_engine::sample::find(n).map_or_else(|| (*n).to_string(), |s| format!("the {} sample", s.label)),
             Replace::Update => "the update".into(),
+            Replace::New => "a new model".into(),
         }
     }
 }
@@ -612,7 +615,9 @@ impl ModelApp {
     /// would discard unsaved changes.
     pub fn open_sample(&mut self, name: &str) {
         let Some(sample) = fieldcraft_engine::sample::find(name) else {
-            self.set_status(format!("no sample `{name}`"), true);
+            // An unknown name (a typo, an old `?sample=` link): the samples to choose from (#200).
+            self.set_status(format!("There is no sample `{name}`: choose one of these"), true);
+            self.prompt = Some(Prompt::Samples);
             return;
         };
         if self.has_unsaved_work() {
@@ -620,6 +625,23 @@ impl ModelApp {
             return;
         }
         self.load_sample(sample.name);
+    }
+
+    /// File › New (`file.new`): start an empty model, asking first when that would discard
+    /// unsaved changes.
+    pub fn new_model(&mut self) {
+        if self.has_unsaved_work() {
+            self.prompt = Some(Prompt::Unsaved(Replace::New));
+            return;
+        }
+        self.load_new();
+    }
+
+    fn load_new(&mut self) {
+        if self.run("file.new", json!({})).is_ok() {
+            self.model_changed();
+            self.set_status("New model", false);
+        }
     }
 
     fn load_sample(&mut self, name: &str) {
@@ -897,6 +919,7 @@ impl ModelApp {
                 }
             }
             Replace::Sample(name) => self.load_sample(name),
+            Replace::New => self.load_new(),
             Replace::Update => self.close_to_update(),
         }
     }
@@ -916,6 +939,7 @@ impl ModelApp {
             }
             "file.recover" | "file.recovery.list" => self.prompt = Some(Prompt::Recover),
             "file.sample" => self.prompt = Some(Prompt::Samples),
+            "file.new" => self.new_model(),
             "diagnostics.bug_report" | "diagnostics.crash_reports" | "diagnostics.crash_report" => self.report_bug(None),
             "solve.run" => self.solve_all(),
             "deck.write" if can_save => match preset.get("format").and_then(Value::as_str) {
@@ -1208,6 +1232,9 @@ pub fn file_menu(app: &mut ModelApp, ui: &mut egui::Ui) {
     let key = |k: &str| crate::appbar::shortcut(k);
     let row = |ui: &mut egui::Ui, label: &str, right: Option<&str>| crate::frame::menu_row(ui, &t, label, right, true).clicked();
     let mut act: Option<Box<dyn FnOnce(&mut ModelApp)>> = None;
+    if row(ui, "New", Some(&key("N"))) {
+        act = Some(Box::new(|app| app.new_model()));
+    }
     if row(ui, "Open…", Some(&key("O"))) {
         act = Some(Box::new(|app| app.open_dialog(None)));
     }
@@ -1528,6 +1555,17 @@ mod tests {
         assert_eq!(app.prompt, Some(Prompt::Unsaved(Replace::Sample("impact"))));
         app.answer_unsaved(Answer::Discard);
         assert!(app.session.model.step("Impact").is_some());
+        // An unknown sample name opens the samples to choose from, and says why.
+        app.open_sample("crank-armm");
+        assert_eq!(app.prompt, Some(Prompt::Samples));
+        assert!(app.status.as_ref().is_some_and(|s| s.error && s.text.contains("crank-armm")), "{:?}", app.status);
+        app.prompt = None;
+        // File › New over unsaved changes asks first too, then empties the model.
+        app.run("mesh.node.add", serde_json::json!({"label": 900000, "xyz": [0, 0, 0]})).unwrap();
+        app.start("file.new").unwrap();
+        assert_eq!(app.prompt, Some(Prompt::Unsaved(Replace::New)));
+        app.answer_unsaved(Answer::Discard);
+        assert!(app.session.model.nodes().is_empty() && !app.session.is_dirty());
         // A model without steps says so instead of solving nothing.
         let mut empty = ModelApp::new(Session::default());
         empty.solve_all();

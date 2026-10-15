@@ -157,7 +157,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Panel | Capability | Status | Command |
 |---|---|---|---|
 | Model | Model Info — Node and element counts and the model summary | ready | `model.info`, `model.rename` |
-| File | Open Model — Open a .fieldcraft model | ready | `file.open` |
+| File | Open Model — Open a .fieldcraft model | ready | `file.open`, `file.new` |
 | File | Samples — Open a sample model, ready to solve | ready | `file.sample` |
 | File | Save — Save the model to its .fieldcraft file | ready | `file.save` |
 | File | Save As — Save the model to a new .fieldcraft file | ready | `file.save_as` |

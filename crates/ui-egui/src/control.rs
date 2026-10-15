@@ -248,6 +248,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                     crate::files::Replace::File(p) => p.clone(),
                     crate::files::Replace::Sample(n) => format!("sample {n}"),
                     crate::files::Replace::Update => "update".to_string(),
+                    crate::files::Replace::New => "new".to_string(),
                 }}),
                 crate::files::Prompt::Recover => json!("recover"),
                 crate::files::Prompt::Samples => json!("samples"),

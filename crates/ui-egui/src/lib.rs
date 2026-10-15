@@ -1758,12 +1758,13 @@ impl ModelApp {
         let shortcut = |modifiers, key| egui::KeyboardShortcut::new(modifiers, key);
         let shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
         // Shift first: the plain shortcut matches it too.
-        let (redo, undo, save_as, save, open) = ctx.input_mut(|i| {
+        let (redo, undo, save_as, save, open, new) = ctx.input_mut(|i| {
             let redo = i.consume_shortcut(&shortcut(shift, egui::Key::Z)) || i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::Y));
             let undo = i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::Z));
             let save_as = i.consume_shortcut(&shortcut(shift, egui::Key::S));
             let save = i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::S));
-            (redo, undo, save_as, save, i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::O)))
+            let open = i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::O));
+            (redo, undo, save_as, save, open, i.consume_shortcut(&shortcut(egui::Modifiers::COMMAND, egui::Key::N)))
         });
         if redo {
             let _ = self.run("edit.redo", json!({}));
@@ -1777,6 +1778,8 @@ impl ModelApp {
         }
         if open {
             self.open_dialog(None);
+        } else if new {
+            self.new_model();
         }
         // Delete (or Backspace) deletes the definition selected in the browser, after asking.
         if self.prompt.is_none()

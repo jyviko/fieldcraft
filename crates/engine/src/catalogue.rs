@@ -585,7 +585,8 @@ pub static CATALOGUE: &[Capability] = &[
     // ---- Tools ----
     // Renaming starts from a definition's item menu (Rename…); the search finds it here too.
     ready_more("model.info", "Model Info", Tools, "Model", "Node and element counts and the model summary", &["model.rename"]),
-    ready("file.open", "Open Model", Tools, "File", "Open a .fieldcraft model"),
+    // New starts from the File menu; the search finds it here too.
+    ready_more("file.open", "Open Model", Tools, "File", "Open a .fieldcraft model", &["file.new"]),
     ready("file.sample", "Samples", Tools, "File", "Open a sample model, ready to solve"),
     ready("file.save", "Save", Tools, "File", "Save the model to its .fieldcraft file"),
     ready("file.save_as", "Save As", Tools, "File", "Save the model to a new .fieldcraft file"),

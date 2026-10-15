@@ -19,6 +19,16 @@ use fieldcraft_io::roots::{Access, Roots};
 use super::{file_param, req};
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session, next_revision};
 
+pub const NEW: CommandSpec = CommandSpec {
+    id: "file.new",
+    label: "New Model",
+    params: r#"{} — starts an empty model in place of the current one: no design, mesh, definitions, results or journal; unsaved changes are discarded (the window asks first) and the undo history starts empty"#,
+    form: Some(&[]),
+    kind: CommandKind::Session,
+    requires: &[],
+    run: new_model,
+};
+
 pub const OPEN: CommandSpec = CommandSpec {
     id: "file.open",
     label: "Open Model",
@@ -88,6 +98,15 @@ pub const SAMPLE: CommandSpec = CommandSpec {
     requires: &[],
     run: open_sample,
 };
+
+fn new_model(s: &mut Session, _: &Value) -> Result<Value> {
+    let mut empty = Session::default();
+    // Nothing to save until a command changes it.
+    empty.saved_revision = Some(empty.revision);
+    empty.saved_view = empty.view.clone();
+    s.replace_with(empty);
+    Ok(summary(s, &[]))
+}
 
 fn open_sample(s: &mut Session, p: &Value) -> Result<Value> {
     let name: &str = req(p, "name")?;
@@ -373,6 +392,19 @@ mod tests {
         }
         s.execute("mesh.element.add", &json!({"label": 1, "kind": "tet4", "nodes": [1, 2, 3, 4]})).unwrap();
         s.execute("model.material.create", &json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 210000.0, "poisson": 0.3}})).unwrap();
+    }
+
+    /// `file.new` empties the model, its journal and its undo history, and has nothing to save.
+    #[test]
+    fn new_starts_an_empty_model() {
+        let mut s = Session::default();
+        s.execute("file.sample", &json!({"name": "cantilever"})).unwrap();
+        s.execute("mesh.node.add", &json!({"label": 10_000, "xyz": [0, 0, 0]})).unwrap();
+        let r = s.execute("file.new", &json!({})).unwrap();
+        assert_eq!((r["nodes"].as_u64(), r["elements"].as_u64(), r["journal"].as_u64()), (Some(0), Some(0), Some(0)), "{r}");
+        assert!(s.model.materials().is_empty() && s.model.steps().is_empty() && s.design.is_none() && s.sample.is_none());
+        assert!(!s.is_dirty(), "an empty model has nothing to save");
+        assert!(s.execute("edit.undo", &json!({})).is_err(), "the undo history starts empty");
     }
 
     #[test]

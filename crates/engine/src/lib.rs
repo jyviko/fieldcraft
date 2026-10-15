@@ -28,6 +28,7 @@ pub mod requirement;
 pub mod results;
 pub mod sample;
 pub mod schema;
+pub mod usage;
 pub mod view;
 
 use std::collections::BTreeMap;
@@ -250,6 +251,10 @@ pub struct Session {
     /// This is the app's own model: its top-level commands go into the crash journal
     /// ([`crash`]), so an unclean exit can be replayed. Off for scratch sessions and tests.
     pub crash_journal: bool,
+    /// Where this session's commands come from, for the usage analytics ([`usage`]): the app
+    /// sets it on its own model (and the control channel and the command search while they
+    /// run); `None` (scratch sessions, the CLI, tests) counts nothing.
+    pub origin: Option<usage::Origin>,
 }
 
 impl Session {
@@ -258,7 +263,21 @@ impl Session {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         // An id from hostile input is not echoed in full.
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.chars().take(100).collect()))?;
-        self.availability(spec).map_err(EngineError::Unavailable)?;
+        let timer = usage::Timer::start(self.origin);
+        let elements = self.model.elements().len();
+        let result = self.availability(spec).map_err(EngineError::Unavailable).and_then(|()| self.run_command(spec, params));
+        if timer.counting() {
+            let milestone = usage::milestone(spec.id, (elements, self.model.elements().len()));
+            let sample =
+                (spec.id == "file.sample").then(|| params.get("name").and_then(Value::as_str).and_then(sample::find)).flatten().map(|s| s.name);
+            timer.done(spec.id, spec.kind, result.as_ref().err(), milestone, sample);
+        }
+        result
+    }
+
+    /// [`Session::execute`] once the command is found and can run.
+    fn run_command(&mut self, spec: &'static CommandSpec, params: &Value) -> Result<Value> {
+        let id = spec.id;
         // Session commands (open, save, undo, redo) change the session only in their last step,
         // after everything that can fail, so they need no copy of the model to restore.
         let before = (spec.kind == CommandKind::Model).then(|| (self.snapshot(), self.document()));

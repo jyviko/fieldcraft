@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod control_server;
+mod usage;
 
 use fieldcraft_engine::autosave::{self, Autosaver};
 use fieldcraft_engine::{Session, crash, logfile};
@@ -49,6 +50,8 @@ struct App {
     autosaved_at: f64,
     /// The first frame was drawn (the crash journal says the app is up).
     running: bool,
+    /// Sends the anonymous usage events, when this run may (docs/privacy.md).
+    usage: Option<usage::Sender>,
 }
 
 impl App {
@@ -82,6 +85,10 @@ impl eframe::App for App {
         {
             log::warn!("autosave: {e}");
         }
+        self.app.usage_closing();
+        if let Some(u) = self.usage.take() {
+            u.finish();
+        }
         log::info!("FieldCraft closed");
         crash::end_session();
     }
@@ -103,7 +110,8 @@ fn services() -> Services {
         })),
         // Beside the recovery folder in the per-user data folder.
         recent_path: fieldcraft_io::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("recent.json"))),
-        prefs_path: fieldcraft_io::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("prefs.json"))),
+        prefs: fieldcraft_io::recovery::default_dir()
+            .and_then(|d| d.parent().map(|p| fieldcraft_ui_egui::files::PrefsStore::file(p.join("prefs.json")))),
         open_url: Some(Box::new(open_url)),
     }
 }
@@ -236,6 +244,14 @@ fn main() -> eframe::Result {
             // The window's model: its commands go into the crash journal.
             session.crash_journal = crash::enabled();
             let mut app = ModelApp::new(session).with_services(services());
+            // Anonymous usage: asked once, recorded only when the user agreed (docs/privacy.md).
+            let usage = match usage::host(args.control.is_some()) {
+                Some(host) => {
+                    app = app.with_usage(host);
+                    usage::start()
+                }
+                None => None,
+            };
             app.custom_titlebar = CUSTOM_TITLEBAR;
             app.integrated_titlebar = cfg!(target_os = "macos");
             if let Some(rs) = &cc.wgpu_render_state {
@@ -261,7 +277,7 @@ fn main() -> eframe::Result {
                 Autosaver::new(&dir).map_err(|e| log::warn!("autosave unavailable: {e}")).ok()
             });
             app.announce_crashes(&crashed);
-            Ok(Box::new(App { app, autosaver, autosaved_at: 0.0, running: false }))
+            Ok(Box::new(App { app, autosaver, autosaved_at: 0.0, running: false, usage }))
         }),
     )
 }

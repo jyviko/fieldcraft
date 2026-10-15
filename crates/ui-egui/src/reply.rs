@@ -212,6 +212,8 @@ enum Act {
     Rerun,
     /// Pick a design entity in the viewport (a body, face or edge from the Bodies list).
     Pick(fieldcraft_model::GeometryRef),
+    /// Select elements in the viewport and frame them (Mesh Quality's worst and invalid ones).
+    Elements(Vec<u32>),
 }
 
 /// The reply's section of the context panel.
@@ -238,6 +240,7 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         c if SOLVES.contains(&c) => solve_summary(ui, t, &reply.value, units),
         "model.activity" => activity(ui, t, &reply.value),
         "geometry.bodies" => bodies(ui, t, &reply.value, &mut acts),
+        "mesh.quality" => quality(ui, t, &reply.value, &mut acts),
         _ => value(ui, t, egui::Id::new("fc_reply"), &reply.value, 0),
     }
     for a in acts {
@@ -252,6 +255,7 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
                 let _ = app.run(&reply.command, reply.params.clone());
             }
             Act::Pick(g) => app.select([crate::selection::Item::Geometry(g)], crate::selection::Mode::Replace),
+            Act::Elements(labels) => app.show_elements(&labels),
         }
     }
 }
@@ -325,6 +329,133 @@ const MAX_ENTITIES: usize = 500;
 /// and its size; a click on the name picks the body, and its faces and edges unfold, by
 /// persistent name (edges with their lengths), each picked by a click: the names the seed and set
 /// forms ask for. Design geometry is in millimetres.
+/// Mesh Quality's metrics: key, label, and whether a low value is the bad end.
+const METRICS: [(&str, &str, bool); 4] = [
+    ("scaled_jacobian", "Scaled Jacobian", true),
+    ("jacobian_ratio", "Jacobian ratio", true),
+    ("shape", "Shape", true),
+    ("edge_ratio", "Edge ratio", false),
+];
+
+/// Elements a Select button selects at most.
+const MAX_SELECT: usize = 10_000;
+
+/// `mesh.quality`'s reply: the counts, then each metric's range, histogram and worst element (a
+/// click selects and frames it), and buttons selecting the invalid and undetermined elements.
+fn quality(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>) {
+    let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let labels = |k: &str| -> Vec<u32> {
+        v.pointer(&format!("/{k}/labels"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|l| l.as_u64()?.try_into().ok())
+            .take(MAX_SELECT)
+            .collect()
+    };
+    let (invalid, undetermined) =
+        (v.pointer("/invalid/count").and_then(Value::as_u64).unwrap_or(0), v.pointer("/undetermined/count").and_then(Value::as_u64).unwrap_or(0));
+    egui::Grid::new("fc_quality_counts").num_columns(2).spacing(vec2(10.0, 2.0)).show(ui, |ui| {
+        let mut row = |k: &str, text: RichText| {
+            ui.label(RichText::new(k).color(t.text_dim));
+            ui.label(text);
+            ui.end_row();
+        };
+        row("Elements", RichText::new(count(n("measured"))));
+        row("Valid", RichText::new(count(n("valid"))));
+        row("Invalid", if invalid > 0 { RichText::new(count(invalid)).color(t.error) } else { RichText::new("0") });
+        if undetermined > 0 {
+            row("Undetermined", RichText::new(count(undetermined)).color(t.warm));
+        }
+        if let Some(vol) = v.get("volume").and_then(Value::as_f64).filter(|x| *x > 0.0) {
+            row("Volume", RichText::new(number(vol)));
+        }
+        // A surface mesh's area; a solid mesh has none to show.
+        if let Some(area) = v.get("area").and_then(Value::as_f64).filter(|x| *x > 0.0) {
+            row("Area", RichText::new(number(area)));
+        }
+    });
+    for (key, what) in [("invalid", "invalid"), ("undetermined", "undetermined")] {
+        let l = labels(key);
+        if !l.is_empty()
+            && ui
+                .button(format!("Select the {} {what} elements", count(l.len() as u64)))
+                .on_hover_text("Select and frame them in the viewport")
+                .clicked()
+        {
+            acts.push(Act::Elements(l));
+        }
+    }
+    for (key, label, low_bad) in METRICS {
+        let Some(m) = v.pointer(&format!("/metrics/{key}")).filter(|m| m.is_object()) else { continue };
+        let f = |k: &str| m.get(k).and_then(Value::as_f64);
+        ui.add_space(6.0);
+        ui.label(RichText::new(label).strong());
+        ui.label(
+            RichText::new(format!(
+                "min {} · mean {} · max {}",
+                f("min").map_or("—".into(), number),
+                f("mean").map_or("—".into(), number),
+                f("max").map_or("—".into(), number)
+            ))
+            .color(t.text_dim),
+        );
+        let counts: Vec<u64> = m.pointer("/histogram/counts").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).collect();
+        let range: Vec<f64> = m.pointer("/histogram/range").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_f64).collect();
+        if let ([lo, hi], false) = (range.as_slice(), counts.is_empty()) {
+            histogram(ui, t, &counts, (*lo, *hi), low_bad);
+        }
+        if let Some(worst) = m.get("worst").and_then(Value::as_u64).and_then(|w| u32::try_from(w).ok()) {
+            let value = if low_bad { f("min") } else { f("max") };
+            let text = format!("Worst: element {worst}{}", value.map(|x| format!(" ({})", number(x))).unwrap_or_default());
+            if ui.link(text).on_hover_text("Select and frame it in the viewport").clicked() {
+                acts.push(Act::Elements(vec![worst]));
+            }
+        }
+    }
+    if let Some(skipped) = v.get("skipped").and_then(Value::as_object).filter(|s| !s.is_empty()) {
+        ui.add_space(6.0);
+        let text: Vec<String> = skipped.iter().map(|(k, n)| format!("{k}: {}", n.as_u64().map_or_else(|| n.to_string(), count))).collect();
+        ui.label(RichText::new(format!("Not measured: {}", text.join(", "))).color(t.text_dim));
+    }
+}
+
+/// A histogram of `counts` over `range`, its bars shaded from the bad end (warm) to the good
+/// one (accent); the range's ends under it.
+fn histogram(ui: &mut egui::Ui, t: &Tokens, counts: &[u64], range: (f64, f64), low_bad: bool) {
+    let width = ui.available_width().clamp(120.0, 320.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 48.0), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 2.0, t.panel_header);
+    let top = counts.iter().copied().max().unwrap_or(0).max(1) as f32;
+    let w = rect.width() / counts.len() as f32;
+    let bins = counts.len().max(1) as f32;
+    for (i, c) in counts.iter().enumerate() {
+        let h = (*c as f32 / top).sqrt() * (rect.height() - 2.0);
+        let x = rect.left() + i as f32 * w;
+        let good = if low_bad { (i as f32 + 0.5) / bins } else { 1.0 - (i as f32 + 0.5) / bins };
+        let color = if good < 0.3 { t.warm } else { t.accent };
+        if *c > 0 {
+            p.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(x + 1.0, rect.bottom() - h.max(1.0)), egui::pos2(x + w - 1.0, rect.bottom())),
+                0.0,
+                color,
+            );
+        }
+    }
+    let step = (range.1 - range.0) / bins as f64;
+    resp.on_hover_ui(|ui| {
+        for (i, c) in counts.iter().enumerate() {
+            let a = range.0 + step * i as f64;
+            ui.label(format!("{} – {}: {}", number(a), number(a + step), count(*c)));
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(number(range.0)).small().color(t.text_dim));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(RichText::new(number(range.1)).small().color(t.text_dim)));
+    });
+}
+
 fn bodies(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>) {
     let q = crate::describe::quantity;
     let pick = |body: &str, entity: fieldcraft_model::Entity| fieldcraft_model::GeometryRef { body: body.to_string(), entity };
@@ -665,6 +796,25 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Mesh Quality's reply draws as counts, histograms and worst elements, and a worst element
+    /// is selected and framed (#113).
+    #[test]
+    fn mesh_quality_shows_its_metrics_and_frames_the_worst_element() {
+        let mut app = ModelApp::new(fieldcraft_engine::Session::default());
+        app.open_sample("cantilever");
+        app.run("mesh.quality", json!({})).unwrap();
+        assert_eq!(app.reply.as_ref().map(|r| r.command.as_str()), Some("mesh.quality"));
+        let t = Tokens::get(false);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| show(&mut app, ui, &t));
+        out.textures_delta.clear();
+        let worst = app.reply.as_ref().and_then(|r| r.value.pointer("/metrics/scaled_jacobian/worst")?.as_u64()).unwrap() as u32;
+        let before = app.cam;
+        app.show_elements(&[worst]);
+        assert_eq!(app.pick.selection.summary(), "1 element");
+        assert_ne!(app.cam, before, "framed");
+    }
 
     #[test]
     fn summaries_are_sentences() {

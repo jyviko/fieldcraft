@@ -1595,6 +1595,37 @@ impl ModelApp {
         self.cam.fit_in(&b, aspect, free);
     }
 
+    /// Select elements `labels` in the viewport and frame them.
+    pub fn show_elements(&mut self, labels: &[u32]) {
+        self.select(labels.iter().map(|l| selection::Item::Element(*l)), selection::Mode::Replace);
+        self.frame_elements(labels);
+    }
+
+    /// Frame elements `labels` (as drawn undeformed), keeping the direction of view; a tiny
+    /// element is framed with some of the model around it.
+    pub fn frame_elements(&mut self, labels: &[u32]) {
+        let model = &self.session.model;
+        let mut b = Aabb3::EMPTY;
+        for e in labels.iter().filter_map(|l| model.element(*l)) {
+            for n in e.nodes.iter().filter_map(|n| model.node(*n)) {
+                b.add(Vec3::from(n.xyz));
+            }
+        }
+        if b.is_empty() {
+            return;
+        }
+        self.reframe = None;
+        self.scene();
+        // At least an eighth of the model across.
+        let pad = (self.drawn_bounds().diagonal() / 8.0 - b.diagonal()).max(0.0) / 2.0;
+        let d = Vec3::new(pad, pad, pad);
+        let (lo, hi) = (b.min - d, b.max + d);
+        b.add(lo);
+        b.add(hi);
+        let (aspect, free) = self.free_part();
+        self.cam.fit_in(&b, aspect, free);
+    }
+
     /// The viewport's aspect and the part of it the overlays leave free, as fractions (the whole
     /// of a square view before the viewport is first drawn).
     fn free_part(&self) -> (f64, [f64; 4]) {

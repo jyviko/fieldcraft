@@ -389,11 +389,6 @@ impl Picker<'_> {
         }
     }
 
-    /// Element faces are drawn: the geometry is drawn along the mesh.
-    fn elements_drawn(&self) -> bool {
-        self.elements && !self.display.tris.is_empty()
-    }
-
     /// The drawn faces' triangles (for a depth map).
     fn drawn(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
         let e = self.display.tris.iter().filter(|_| self.elements).map(|t| t.p);
@@ -670,9 +665,10 @@ impl Picker<'_> {
             }
         }
         outline(s, first, color);
-        // Over element faces a design edge is marked along the mesh's edges on it (below), which
-        // lie on the faces; its own polyline lies off them by the tessellation's chord error.
-        if m.edges && self.curves && !self.elements_drawn() {
+        // A design edge is marked along its own polyline, which the scene draws over the mesh too
+        // (most meshes do not tag their element edges with the design's edge names), and along
+        // the mesh's edges a mesh does tag with it (below).
+        if m.edges && self.curves {
             // Which edges of each drawn body are marked, worked out once per edge.
             let marked: Vec<Vec<bool>> = self
                 .names

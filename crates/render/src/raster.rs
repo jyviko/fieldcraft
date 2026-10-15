@@ -67,6 +67,17 @@ pub struct Scene {
     pub radius: f64,
 }
 
+impl Scene {
+    /// Add `other`'s primitives (not its background or radius) to this scene.
+    pub fn append(&mut self, other: Scene) {
+        self.tris.extend(other.tris);
+        self.lines.extend(other.lines);
+        self.points.extend(other.points);
+        self.labels.extend(other.labels);
+        self.on_top.extend(other.on_top);
+    }
+}
+
 /// The lit colour of a surface with normal `n` seen along `view_dir` (toward the eye). The GPU
 /// shader computes the same.
 pub fn shade(n: Vec3, view_dir: Vec3, base: [f64; 3]) -> [f64; 3] {

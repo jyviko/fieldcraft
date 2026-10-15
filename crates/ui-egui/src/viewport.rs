@@ -363,6 +363,14 @@ fn gradient(painter: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) 
 
 fn paint_gpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: Rect) {
     let ppp = ui.ctx().pixels_per_point();
+    // The symbols first: the scene's clipping radius holds them.
+    let symbols_key = app.symbols().0;
+    if app.viewport.symbols_uploaded != Some(symbols_key)
+        && let Ok(mut slot) = app.viewport.symbols_slot.lock()
+    {
+        *slot = Some(GpuScene::from_scene(&app.symbols.1, ppp));
+        app.viewport.symbols_uploaded = Some(symbols_key);
+    }
     let key = app.scene().0;
     let radius = app.scene.1.radius;
     if app.viewport.uploaded != Some(key) {
@@ -385,6 +393,8 @@ fn paint_gpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
     let cb = ViewportCallback {
         key,
         slot: app.viewport.slot.clone(),
+        symbols_key,
+        symbols_slot: app.viewport.symbols_slot.clone(),
         overlay_key,
         overlay_slot: app.viewport.overlay_slot.clone(),
         view_proj: cam.view_proj(aspect, radius).to_f32(),
@@ -405,11 +415,12 @@ fn paint_cpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
     let size = [w, h];
     let cam = app.cam;
     let (overlay_key, overlay) = app.overlay();
-    let key = (app.scene().0, overlay_key);
+    let symbols_key = app.symbols().0;
+    let key = (app.scene().0, symbols_key, overlay_key);
     let fresh = app.viewport.cpu.as_ref().is_some_and(|(_, k, c, s)| *k == key && *c == cam && *s == size);
     // A scene the renderer refused is reported once and not retried until it changes.
     if !fresh && app.viewport.cpu_failed != Some(key.0) {
-        let c = match fieldcraft_render::render_layers(&app.scene.1, &[&overlay], &cam, w, h) {
+        let c = match fieldcraft_render::render_layers(&app.scene.1, &[&app.symbols.1, &overlay], &cam, w, h) {
             Ok(c) => c,
             Err(e) => {
                 app.viewport.cpu = None;
@@ -450,7 +461,9 @@ fn cpu_size(w: usize, h: usize, max_side: usize) -> (usize, usize) {
 /// The scene's labels (reference point names) beside their points, with the interface's font.
 /// The CPU renderer draws them into its image.
 fn labels(app: &mut ModelApp, painter: &egui::Painter, t: &Tokens) {
-    let labels: Vec<(Vec3, String)> = app.scene().1.labels.iter().map(|l| (l.p, l.text.clone())).collect();
+    app.symbols();
+    app.scene();
+    let labels: Vec<(Vec3, String)> = app.scene.1.labels.iter().chain(&app.symbols.1.labels).map(|l| (l.p, l.text.clone())).collect();
     let offset = fieldcraft_render::LABEL_OFFSET as f32;
     for (p, text) in labels {
         if let Some(at) = to_screen(app, p) {
@@ -627,6 +640,9 @@ fn nav_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
             ui.checkbox(&mut app.ui.show_nodes, "Nodes");
             ui.checkbox(&mut app.ui.show_loads, "Loads & BCs");
             ui.checkbox(&mut app.ui.show_interactions, "Interactions");
+            let (lo, hi) = fieldcraft_render::glyphs::SIZE_RANGE;
+            ui.add(egui::Slider::new(&mut app.ui.symbol_size, lo..=hi).step_by(1.0).suffix(" pt").text("Symbol size"))
+                .on_hover_text("The size of boundary condition, load and interaction symbols on screen, at any zoom");
             ui.separator();
             ui.checkbox(&mut app.ui.show_tree, "Browser");
             ui.checkbox(&mut app.ui.show_timeline, "Timeline");

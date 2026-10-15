@@ -1,11 +1,16 @@
 //! Symbols for a model's analysis setup, drawn over the model by the desktop viewport and the
-//! headless renderer alike, so both show the same thing.
+//! headless renderer alike, so both show the same thing. Every symbol is a wireframe: thin lines
+//! and dots, no shaded faces, so it never hides the mesh or a contour plot under it.
 //!
-//! - **Boundary conditions:** a cone per constrained translation, tip on the node, pointing along
-//!   the axis; a second, smaller cone behind it for a constrained rotation (only where the node
-//!   can rotate: shell and beam nodes, reference points). Thermal conditions are dots.
-//! - **Forces:** straight arrows ending on their nodes, along the force. **Moments:** arrows with
-//!   two heads, starting at the node.
+//! - **Boundary conditions:** a wire triangle per constrained translation, tip on the node,
+//!   pointing along that axis from outside the part (where the set's faces tell which side that
+//!   is); a constrained rotation adds a second, smaller triangle behind the first (the double
+//!   mark), only where the node can rotate (shell and beam nodes, reference points). Fixed shows
+//!   all three axes; a symmetry condition only the axis normal to its plane. Thermal conditions
+//!   are dots.
+//! - **Forces:** straight arrows with an open head, ending on their nodes. **Moments:** an axis
+//!   line through the node and a curved arrow three quarters of the way around it, turning
+//!   right-handed about the moment vector.
 //! - **Pressures:** arrows normal to the loaded faces (onto them for a positive pressure, away for
 //!   a suction); **tractions:** arrows onto the faces along the traction. 2D models get them on
 //!   the loaded edges, in the plane.
@@ -13,28 +18,48 @@
 //!   load: its axis and a curved arrow around it). **Initial velocities:** one arrow behind the
 //!   moving set, along its motion.
 //! - **Reference points:** a three-axis cross with the point's name; **couplings:** thin lines
-//!   from the point to some of the coupled nodes; **rigid walls:** a hatched square.
+//!   from the point to some of the coupled nodes; **contact and tie surfaces:** small squares on
+//!   their faces; **rigid walls:** a hatched square.
 //!
-//! Sizes follow the model: one symbol unit is 2.5 % of its bounding box diagonal.
-//! Arrow shafts and outlines are lines of a fixed width in pixels, so they stay visible at any
-//! zoom. Symbols closer than about a symbol apart are thinned on a grid, and each definition
-//! draws at most [`MAX_PER_DEFINITION`] symbols ([`MAX_SYMBOLS`] in all): a definition with more
-//! places than that is drawn with a sample and listed in [`Glyphs::notes`], so the viewer can
-//! say so.
+//! **Size on screen.** Symbols keep a constant size on screen whatever the zoom: [`Glyphs::draw`]
+//! takes the symbol unit (a support triangle's length) in model length, which the caller works
+//! out from the camera with [`symbol_unit`] (a size in pixels, [`DEFAULT_SIZE`] unless the user
+//! chose another, times the model length a pixel spans). Line widths and dots are fixed in pixels
+//! too. Loads are drawn in the same unit as supports, so the two stay in proportion.
 //!
-//! [`Glyphs::from_model`] does the work that depends on the model only (resolving sets, picking
-//! the symbols' nodes); [`Glyphs::draw`] places them at the nodes' current positions (a results
-//! plot's deformed shape) in the given colours.
+//! **Density.** Where a definition covers many nodes or faces, its symbols are thinned on a grid
+//! a few symbol units across, so they are spread evenly at a density that follows the screen,
+//! not the mesh; each definition draws at most [`MAX_PER_DEFINITION`] symbols ([`MAX_SYMBOLS`] in
+//! all), and one with more places than that is listed in [`Drawn::notes`], so the viewer can say
+//! so.
+//!
+//! **Depth.** Symbols are lines, depth-tested against the model with the small bias toward the
+//! eye that keeps lines on the face they lie on: they show on their own surface and hide behind
+//! other parts of the model. A concentrated load (at a reference point or a single node) and a
+//! reference point's cross are [`Scene::on_top`], visible from any side.
+//!
+//! **Colour** is per kind ([`GlyphColors`], from the theme's tokens); the symbols of the
+//! definition selected in the browser ([`GlyphView::highlight`]) are drawn in the highlight
+//! colour, wider.
+//!
+//! [`Glyphs::from_model`] does the work that depends on the model only (resolving sets, the
+//! places symbols may go); [`Glyphs::draw`] chooses among them for the symbol unit and places
+//! them at the nodes' current positions (a results plot's deformed shape) in the given colours.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use fieldcraft_model::{BoundaryCondition, ElementFace, Load, Model, Procedure, ResolvedSet, Target};
+use fieldcraft_model::{BoundaryCondition, ContactSurfaces, ElementFace, Load, Model, Procedure, ResolvedSet, Target};
 
 use crate::display::{centre, polygon_normal};
-use crate::{Aabb3, Rgb, Scene, SceneLabel, SceneLine, ScenePoint, SceneTri, Vec3};
+use crate::{Aabb3, Rgb, Scene, SceneLabel, SceneLine, ScenePoint, Vec3};
 
-/// One symbol unit as a fraction of the model's bounding box diagonal.
+/// The symbol unit drawn when the caller gives none: a fraction of the model's bounding box
+/// diagonal.
 const UNIT_FRACTION: f64 = 0.025;
+/// A symbol unit's default size on screen, in pixels (points on the desktop).
+pub const DEFAULT_SIZE: f64 = 14.0;
+/// The symbol sizes one may choose, in pixels.
+pub const SIZE_RANGE: (f64, f64) = (6.0, 48.0);
 /// Most symbols one definition draws.
 pub const MAX_PER_DEFINITION: usize = 400;
 /// Most symbols drawn in all.
@@ -46,20 +71,23 @@ pub const MUTED: f64 = 0.55;
 /// Most nodes or faces of one set looked at when choosing where symbols go (a larger set is
 /// strided down to this first).
 const MAX_SCAN: usize = 200_000;
-/// Segments around a cone.
-const CONE_SEGMENTS: usize = 10;
-/// Segments of a centrifugal load's curved arrow.
-const ARC_SEGMENTS: usize = 24;
+/// Segments of a curved arrow.
+const ARC_SEGMENTS: usize = 18;
+/// Steps a symbol unit is rounded to per doubling ([`quantise_unit`]).
+const UNIT_STEPS: f64 = 4.0;
 
-/// Arrow shaft, outline and coupling line widths, in output pixels.
-const SHAFT_WIDTH: f64 = 2.5;
+/// Symbol line width, and the selected definition's, in output pixels.
+const LINE_WIDTH: f64 = 1.5;
+const HIGHLIGHT_WIDTH: f64 = 2.5;
+/// Datum outline, datum axis and coupling line widths, in output pixels.
 const OUTLINE_WIDTH: f64 = 1.5;
+const SHAFT_WIDTH: f64 = 2.5;
 const COUPLING_WIDTH: f64 = 1.0;
 /// Reference point and thermal dot sizes, in output pixels.
 const POINT_SIZE: f64 = 8.0;
 const THERMAL_SIZE: f64 = 6.0;
 
-/// The colours symbols are drawn in, by role.
+/// The colours symbols are drawn in, by kind.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlyphColors {
     /// Boundary conditions and rigid walls.
@@ -68,17 +96,21 @@ pub struct GlyphColors {
     pub load: Rgb,
     /// Reference points and couplings.
     pub interaction: Rgb,
+    /// Contact and tie surfaces.
+    pub contact: Rgb,
     /// Temperatures, heat fluxes, convection and heat sources.
     pub thermal: Rgb,
     /// Reference point names.
     pub label: Rgb,
     /// Datum planes and axes.
     pub datum: Rgb,
+    /// The symbols of the definition selected in the browser.
+    pub highlight: Rgb,
 }
 
 impl GlyphColors {
     /// The colours moved a fraction `k` (0..=1) of the way to `toward`: symbols that stay out
-    /// of the way (over a results plot).
+    /// of the way (over a results plot). The highlight stays as it is.
     pub fn muted(self, toward: Rgb, k: f64) -> GlyphColors {
         let k = if k.is_finite() { k.clamp(0.0, 1.0) } else { 0.0 };
         let mix = |c: Rgb| {
@@ -89,9 +121,11 @@ impl GlyphColors {
             constraint: mix(self.constraint),
             load: mix(self.load),
             interaction: mix(self.interaction),
+            contact: mix(self.contact),
             thermal: mix(self.thermal),
             label: mix(self.label),
             datum: mix(self.datum),
+            highlight: self.highlight,
         }
     }
 
@@ -106,12 +140,72 @@ impl GlyphColors {
 pub struct GlyphShow {
     /// Boundary conditions, loads and initial velocities.
     pub loads: bool,
-    /// Reference points, couplings and rigid walls.
+    /// Reference points, couplings, contact, ties and rigid walls.
     pub interactions: bool,
 }
 
 impl GlyphShow {
     pub const ALL: GlyphShow = GlyphShow { loads: true, interactions: true };
+
+    /// Whether a symbol of the Interactions group (`interaction`), or else of Loads & BCs, is shown.
+    fn allows(self, interaction: bool) -> bool {
+        if interaction { self.interactions } else { self.loads }
+    }
+}
+
+/// The kind of definition a symbol draws (with its name, what the browser selects).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Definition {
+    BoundaryCondition,
+    Load,
+    ReferencePoint,
+    Coupling,
+    Contact,
+    Tie,
+    /// A step's initial velocities and rigid walls.
+    Step,
+}
+
+/// How [`Glyphs::draw`] draws: what is shown, in which colours, at which size, and which
+/// definition is highlighted.
+#[derive(Clone, Copy, Debug)]
+pub struct GlyphView<'a> {
+    pub show: GlyphShow,
+    pub colors: &'a GlyphColors,
+    /// One symbol unit (a support triangle's length) in model length, from [`symbol_unit`];
+    /// when it is not a positive finite number, the model's own unit
+    /// ([`Glyphs::model_unit`]).
+    pub unit: f64,
+    /// The definition selected in the browser.
+    pub highlight: Option<(Definition, &'a str)>,
+}
+
+/// What [`Glyphs::draw`] drew.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Drawn {
+    /// The box around the symbols, for framing and clipping.
+    pub bounds: Aabb3,
+    /// Definitions drawn with a sample of their symbols: `Clamp: 400 of 12000 nodes`.
+    pub notes: Vec<String>,
+}
+
+/// The symbol unit for symbols `size` pixels across where one pixel spans `length_per_pixel`
+/// of model length ([`crate::Camera::length_per_pixel`]); the size is held to [`SIZE_RANGE`]
+/// ([`DEFAULT_SIZE`] when it is not a number). `None` when there is no such unit.
+pub fn symbol_unit(length_per_pixel: f64, size: f64) -> Option<f64> {
+    let size = if size.is_finite() { size.clamp(SIZE_RANGE.0, SIZE_RANGE.1) } else { DEFAULT_SIZE };
+    let unit = length_per_pixel * size;
+    (unit.is_finite() && unit > 0.0).then_some(unit)
+}
+
+/// A symbol unit rounded to a quarter of a doubling (within 9 %), and the step it is: a viewer
+/// rebuilds its symbols only when zooming changes the step.
+pub fn quantise_unit(unit: f64) -> Option<(i32, f64)> {
+    if !(unit.is_finite() && unit > 0.0) {
+        return None;
+    }
+    let step = (unit.log2() * UNIT_STEPS).round().clamp(-4000.0, 4000.0) as i32;
+    Some((step, (f64::from(step) / UNIT_STEPS).exp2()))
 }
 
 /// Where a symbol sits: a mesh node, or a reference point (its own node label when a result
@@ -132,40 +226,67 @@ struct Face {
     outward: Vec3,
 }
 
+/// A place a node symbol may go: its anchor, where it is on the undeformed model (for
+/// thinning), the outward direction of the set's faces there (when it has faces) and, for a
+/// constraint, the degrees of freedom held there.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum FaceLoad {
-    /// A pressure: onto the face (positive) or away from it.
-    Pressure { onto: bool },
-    /// A traction along a unit direction.
-    Traction(Vec3),
+struct Spot {
+    at: Anchor,
+    p: Vec3,
+    normal: Option<Vec3>,
+    dofs: u8,
 }
 
+/// What a group of symbols draws at each of its places.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Shape {
+    /// The constrained translations (bits 0..3) and rotations (bits 3..6) of each spot.
+    Constraint,
+    Force(Vec3),
+    Moment(Vec3),
+    Thermal,
+    /// A pressure: onto the face (positive) or away from it.
+    Pressure {
+        onto: bool,
+    },
+    /// A traction along a unit direction.
+    Traction(Vec3),
+    /// A contact or tie surface.
+    Surface,
+}
+
+/// The symbols of one definition at many places, thinned when drawn.
+#[derive(Clone, Debug, PartialEq)]
+struct Group {
+    owner: usize,
+    shape: Shape,
+    /// Node places (or face places, for face shapes), all of them up to [`MAX_SCAN`].
+    nodes: Vec<Spot>,
+    faces: Vec<(Face, Vec3)>,
+    /// How many places the definition has.
+    total: usize,
+    /// The thinning grid's cell, in symbol units.
+    cell: f64,
+    /// A load at one place, or anything at a reference point: concentrated, drawn over the part
+    /// (#78).
+    on_top: bool,
+}
+
+/// A symbol drawn once.
 #[derive(Clone, Debug, PartialEq)]
 enum Mark {
-    /// Constrained translations (bits 0..3) and rotations (bits 3..6).
-    Constraint {
-        at: Anchor,
-        dofs: u8,
-    },
-    /// A force (ending on the node) or moment (starting there), `len` units long.
-    Arrow {
-        at: Anchor,
-        dir: Vec3,
-        len: f64,
-        moment: bool,
-    },
-    FaceArrow {
-        face: Face,
-        load: FaceLoad,
-    },
-    Thermal {
-        at: Anchor,
-    },
-    /// A fixed arrow (gravity, body force, initial velocity) from `tail` along `dir`.
+    /// A fixed arrow over the model (gravity, body forces): the `slot`th beside `base`.
     Free {
-        tail: Vec3,
+        base: Vec3,
+        slot: usize,
         dir: Vec3,
-        len: f64,
+    },
+    /// An initial velocity: an arrow along `dir` ending short of a set centred at `centre`
+    /// reaching `reach` toward it.
+    Velocity {
+        centre: Vec3,
+        reach: f64,
+        dir: Vec3,
     },
     /// A centrifugal load: its axis through `centre` and a curved arrow around it.
     Spin {
@@ -181,12 +302,12 @@ enum Mark {
         from: Anchor,
         to: u32,
     },
-    /// A rigid wall: a square through `point`, `half` units across, hatched on the side away
-    /// from `normal`.
+    /// A rigid wall: a square through `point` normal to `normal`, backing a set of half
+    /// diagonal `reach` (none: a small square), hatched on the side away from `normal`.
     Wall {
         point: Vec3,
         normal: Vec3,
-        half: f64,
+        reach: Option<f64>,
     },
 }
 
@@ -200,11 +321,12 @@ impl Mark {
 /// The symbols of a model's analysis setup, ready to draw.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Glyphs {
-    marks: Vec<Mark>,
-    /// One symbol unit, in model length.
+    /// The definitions drawn: (kind, name).
+    owners: Vec<(Definition, String)>,
+    groups: Vec<Group>,
+    marks: Vec<(usize, Mark)>,
+    /// The model's own symbol unit ([`UNIT_FRACTION`] of its diagonal).
     unit: f64,
-    /// Definitions drawn with a sample of their symbols: `Clamp: 400 of 12000 nodes`.
-    pub notes: Vec<String>,
 }
 
 /// Every element of a long list, strided down to about [`MAX_SCAN`] of them.
@@ -250,14 +372,14 @@ fn perpendiculars(a: Vec3) -> (Vec3, Vec3) {
 
 /// Thin `items` at their positions to one per grid cell of side `cell` (the first in each),
 /// then stride them down to `cap`.
-fn thin<T: Copy>(items: &[(T, Vec3)], cell: f64, cap: usize) -> Vec<T> {
+fn thin<T: Copy>(items: impl IntoIterator<Item = (T, Vec3)>, cell: f64, cap: usize) -> Vec<T> {
     let cell = if cell.is_finite() && cell > 0.0 { cell } else { 1.0 };
     let key = |v: f64| (v / cell).floor().clamp(-1e15, 1e15) as i64;
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::with_capacity(cap.saturating_mul(4).min(MAX_SCAN));
     let mut kept: Vec<T> = Vec::new();
     for (item, p) in items {
         if p.is_finite() && seen.insert((key(p.x), key(p.y), key(p.z))) {
-            kept.push(*item);
+            kept.push(item);
         }
     }
     if kept.len() > cap {
@@ -273,10 +395,10 @@ struct Builder<'m> {
     sets: BTreeMap<String, ResolvedSet>,
     /// The nodes that can rotate, worked out when a constraint needs them.
     rotating: Option<BTreeSet<u32>>,
-    unit: f64,
     bounds: Aabb3,
-    marks: Vec<Mark>,
-    notes: Vec<String>,
+    owners: Vec<(Definition, String)>,
+    groups: Vec<Group>,
+    marks: Vec<(usize, Mark)>,
     /// Free arrows placed so far (each beside the last).
     free: usize,
 }
@@ -290,6 +412,20 @@ impl Builder<'_> {
         self.sets.get(name)
     }
 
+    fn owner(&mut self, def: Definition, name: &str) -> usize {
+        self.owners.push((def, name.to_string()));
+        self.owners.len() - 1
+    }
+
+    fn group(&mut self, owner: usize, shape: Shape, nodes: Vec<Spot>, faces: Vec<(Face, Vec3)>, total: usize, cell: f64) {
+        if !(nodes.is_empty() && faces.is_empty()) {
+            let concentrated =
+                matches!(shape, Shape::Force(_) | Shape::Moment(_)) || matches!(nodes.first(), Some(Spot { at: Anchor::Point { .. }, .. }));
+            let on_top = total == 1 && faces.is_empty() && concentrated;
+            self.groups.push(Group { owner, shape, nodes, faces, total, cell, on_top });
+        }
+    }
+
     /// A set's nodes (a sample of a huge one) with their coordinates, and how many it has.
     fn node_points(&mut self, set: &str) -> (Vec<(u32, Vec3)>, usize) {
         let model = self.model;
@@ -297,44 +433,58 @@ impl Builder<'_> {
         (scan(&r.nodes).filter_map(|&n| Some((n, xyz(model, n)?))).collect(), r.nodes.len())
     }
 
-    fn room(&self) -> usize {
-        MAX_SYMBOLS.saturating_sub(self.marks.len()).min(MAX_PER_DEFINITION)
-    }
-
-    /// Note a definition with more places than one definition draws symbols, drawn with a
-    /// sample (small ones are only thinned where symbols would overlap).
-    fn note(&mut self, name: &str, drawn: usize, total: usize, what: &str) {
-        if drawn < total && total > MAX_PER_DEFINITION {
-            self.notes.push(format!("{name}: {drawn} of {total} {what}"));
-        }
-    }
-
-    /// The anchors of a target, thinned on a grid of `cell` units.
-    fn anchors(&mut self, name: &str, target: &Target, cell: f64) -> Vec<Anchor> {
+    /// The places of a target (a sample of a huge set) and how many it has; a set's nodes carry
+    /// the outward direction of its faces there, when it has faces.
+    fn spots(&mut self, target: &Target) -> (Vec<Spot>, usize) {
         match target {
             Target::ReferencePoint(r) => {
-                self.model.reference_point(r).map(|p| Anchor::Point { label: p.label, xyz: Vec3::from(p.xyz) }).into_iter().collect()
+                let spots: Vec<Spot> = self
+                    .model
+                    .reference_point(r)
+                    .map(|p| {
+                        let xyz = Vec3::from(p.xyz);
+                        Spot { at: Anchor::Point { label: p.label, xyz }, p: xyz, normal: None, dofs: 0 }
+                    })
+                    .into_iter()
+                    .collect();
+                let n = spots.len();
+                (spots, n)
             }
             Target::Set(s) => {
+                let model = self.model;
                 let (at, total) = self.node_points(s);
-                let kept = thin(&at, cell * self.unit, self.room());
-                self.note(name, kept.len(), total, "nodes");
-                kept.into_iter().map(Anchor::Node).collect()
+                let mut normals: BTreeMap<u32, Vec3> = BTreeMap::new();
+                if let Some(r) = self.set(s) {
+                    for &f in scan(&r.faces) {
+                        let Some(labels) = face_corners(model, f) else { continue };
+                        let Some(p) = labels.iter().map(|&n| xyz(model, n)).collect::<Option<Vec<_>>>() else { continue };
+                        let Some(n) = polygon_normal(&p) else { continue };
+                        for l in labels {
+                            let sum = normals.entry(l).or_insert(Vec3::ZERO);
+                            *sum = *sum + n;
+                        }
+                    }
+                }
+                let spots = at
+                    .into_iter()
+                    .map(|(n, p)| Spot { at: Anchor::Node(n), p, normal: normals.get(&n).and_then(|v| v.normalized()), dofs: 0 })
+                    .collect();
+                (spots, total)
             }
         }
     }
 
     /// Dots at a thermal condition's nodes.
-    fn thermal(&mut self, name: &str, target: &Target) {
-        for at in self.anchors(name, target, 1.5) {
-            self.marks.push(Mark::Thermal { at });
-        }
+    fn thermal(&mut self, owner: usize, target: &Target) {
+        let (spots, total) = self.spots(target);
+        self.group(owner, Shape::Thermal, spots, Vec::new(), total, 1.5);
     }
 
-    /// The loaded faces of a set (its element faces, else the edges of its 2D elements), thinned.
-    fn faces(&mut self, name: &str, set: &str) -> Vec<Face> {
+    /// The faces of a set (its element faces, else the edges of its 2D elements) with their
+    /// centres, and how many it has.
+    fn faces(&mut self, set: &str) -> (Vec<(Face, Vec3)>, usize) {
         let model = self.model;
-        let Some(r) = self.set(set) else { return Vec::new() };
+        let Some(r) = self.set(set) else { return (Vec::new(), 0) };
         let face = |labels: &[u32], outward: Vec3| {
             let mut corners = [0u32; 4];
             for (slot, l) in corners.iter_mut().zip(labels) {
@@ -351,28 +501,24 @@ impl Builder<'_> {
                 found.push((face(&labels, n), centre(&p)));
             }
         }
-        let total = if found.is_empty() {
-            // A 2D model's loaded edges (in the XY plane).
-            for &g in scan(&r.edges) {
-                if model.element(g.element).is_none_or(|e| e.kind.dimension() != 2) {
-                    continue;
-                }
-                let Some(labels) = model.edge_nodes(g) else { continue };
-                let labels = labels.get(..2).unwrap_or(&[]);
-                let Some(p) = corners_at(labels) else { continue };
-                let (Some(a), Some(b)) = (p.first(), p.get(1)) else { continue };
-                let t = *b - *a;
-                if let Some(n) = Vec3::new(t.y, -t.x, 0.0).normalized() {
-                    found.push((face(labels, n), centre(&p)));
-                }
+        if !found.is_empty() {
+            return (found, r.faces.len());
+        }
+        // A 2D model's loaded edges (in the XY plane).
+        for &g in scan(&r.edges) {
+            if model.element(g.element).is_none_or(|e| e.kind.dimension() != 2) {
+                continue;
             }
-            r.edges.len()
-        } else {
-            r.faces.len()
-        };
-        let kept = thin(&found, 1.6 * self.unit, self.room());
-        self.note(name, kept.len(), total, "faces");
-        kept
+            let Some(labels) = model.edge_nodes(g) else { continue };
+            let labels = labels.get(..2).unwrap_or(&[]);
+            let Some(p) = corners_at(labels) else { continue };
+            let (Some(a), Some(b)) = (p.first(), p.get(1)) else { continue };
+            let t = *b - *a;
+            if let Some(n) = Vec3::new(t.y, -t.x, 0.0).normalized() {
+                found.push((face(labels, n), centre(&p)));
+            }
+        }
+        (found, r.edges.len())
     }
 
     /// The bounding box of a set's nodes.
@@ -385,72 +531,71 @@ impl Builder<'_> {
     }
 
     /// A fixed arrow over the model (gravity, body forces).
-    fn free_arrow(&mut self, dir: Vec3) {
+    fn free_arrow(&mut self, owner: usize, dir: Vec3) {
         let Some(dir) = dir.normalized() else { return };
-        let len = 5.0;
         let b = self.bounds;
         // Over the model's middle, in front of it, each one beside the last.
-        let at = Vec3::new(b.center().x, b.min.y, b.max.z) + Vec3::new(2.5 * self.free as f64, -4.0, 2.0) * self.unit;
+        let base = Vec3::new(b.center().x, b.min.y, b.max.z);
+        self.marks.push((owner, Mark::Free { base, slot: self.free, dir }));
         self.free += 1;
-        // The arrow's middle sits at the spot, whichever way it points.
-        let tail = at - dir * (0.5 * len * self.unit);
-        self.marks.push(Mark::Free { tail, dir, len });
     }
 
     fn boundary_condition(&mut self, name: &str, bc: &BoundaryCondition) {
+        let owner = self.owner(Definition::BoundaryCondition, name);
         if bc.is_thermal() {
-            return self.thermal(name, bc.target());
+            return self.thermal(owner, bc.target());
         }
-        let dofs = bc.dofs().bits();
+        let mut dofs = bc.dofs().bits();
+        // A symmetry plane shows its normal only: the rotations it holds follow from it.
+        if matches!(bc, BoundaryCondition::Symmetry { .. }) {
+            dofs &= 0b000_111;
+        }
         if dofs == 0 {
             return;
         }
-        let anchors = self.anchors(name, bc.target(), 1.5);
+        let (spots, total) = self.spots(bc.target());
         if dofs & 0b111_000 != 0 && self.rotating.is_none() {
             self.rotating = Some(rotating_nodes(self.model));
         }
         let none = BTreeSet::new();
         let rotating = self.rotating.as_ref().unwrap_or(&none);
-        for at in anchors {
-            let rotates = match at {
-                Anchor::Node(n) => rotating.contains(&n),
-                Anchor::Point { .. } => true,
-            };
-            let dofs = if rotates { dofs } else { dofs & 0b000_111 };
-            if dofs != 0 {
-                self.marks.push(Mark::Constraint { at, dofs });
-            }
-        }
+        let spots = spots
+            .into_iter()
+            .filter_map(|s| {
+                let rotates = match s.at {
+                    Anchor::Node(n) => rotating.contains(&n),
+                    Anchor::Point { .. } => true,
+                };
+                let dofs = if rotates { dofs } else { dofs & 0b000_111 };
+                (dofs != 0).then_some(Spot { dofs, ..s })
+            })
+            .collect();
+        self.group(owner, Shape::Constraint, spots, Vec::new(), total, 2.4);
     }
 
     fn load(&mut self, name: &str, load: &Load) {
+        let owner = self.owner(Definition::Load, name);
         match load {
             Load::Force { target, vector, .. } | Load::Moment { target, vector, .. } => {
                 let Some(dir) = Vec3::from(*vector).normalized() else { return };
-                let moment = matches!(load, Load::Moment { .. });
-                let anchors = self.anchors(name, target, 2.0);
-                let len = if anchors.len() > 1 { 3.0 } else { 5.0 };
-                for at in anchors {
-                    self.marks.push(Mark::Arrow { at, dir, len, moment });
-                }
+                let (shape, cell) = if matches!(load, Load::Moment { .. }) { (Shape::Moment(dir), 3.5) } else { (Shape::Force(dir), 2.8) };
+                let (spots, total) = self.spots(target);
+                self.group(owner, shape, spots, Vec::new(), total, cell);
             }
             Load::Pressure { set, magnitude } => {
                 if !magnitude.is_finite() || *magnitude == 0.0 {
                     return;
                 }
-                let onto = *magnitude > 0.0;
-                for face in self.faces(name, set) {
-                    self.marks.push(Mark::FaceArrow { face, load: FaceLoad::Pressure { onto } });
-                }
+                let (faces, total) = self.faces(set);
+                self.group(owner, Shape::Pressure { onto: *magnitude > 0.0 }, Vec::new(), faces, total, 1.8);
             }
             Load::Traction { set, vector } => {
                 let Some(dir) = Vec3::from(*vector).normalized() else { return };
-                for face in self.faces(name, set) {
-                    self.marks.push(Mark::FaceArrow { face, load: FaceLoad::Traction(dir) });
-                }
+                let (faces, total) = self.faces(set);
+                self.group(owner, Shape::Traction(dir), Vec::new(), faces, total, 1.8);
             }
-            Load::Gravity { acceleration, .. } => self.free_arrow(Vec3::from(*acceleration)),
-            Load::BodyForce { vector, .. } => self.free_arrow(Vec3::from(*vector)),
+            Load::Gravity { acceleration, .. } => self.free_arrow(owner, Vec3::from(*acceleration)),
+            Load::BodyForce { vector, .. } => self.free_arrow(owner, Vec3::from(*vector)),
             Load::Centrifugal { point, axis, .. } => {
                 let (Some(axis), point) = (Vec3::from(*axis).normalized(), Vec3::from(*point)) else { return };
                 if !point.is_finite() {
@@ -459,26 +604,47 @@ impl Builder<'_> {
                 // The axis through the model's middle, as long as the model.
                 let c = self.bounds.center();
                 let centre = point + axis * axis.dot(c - point);
-                let half_length = (0.5 * self.bounds.diagonal()).max(4.0 * self.unit);
-                self.marks.push(Mark::Spin { centre, axis, half_length });
+                self.marks.push((owner, Mark::Spin { centre, axis, half_length: 0.5 * self.bounds.diagonal() }));
             }
-            Load::Temperature { target, .. } => self.thermal(name, target),
+            Load::Temperature { target, .. } => self.thermal(owner, target),
             Load::SurfaceFlux { set, .. } | Load::Convection { set, .. } | Load::HeatSource { set, .. } => {
-                self.thermal(name, &Target::Set(set.clone()))
+                self.thermal(owner, &Target::Set(set.clone()))
             }
         }
     }
 
-    fn interactions(&mut self) {
+    /// Squares on the faces of contact and tie surfaces.
+    fn surfaces(&mut self) {
+        let model = self.model;
+        let contacts = model.contacts().iter().map(|(name, c)| {
+            let sets: Vec<String> = match &c.surfaces {
+                ContactSurfaces::Pair { main, secondary } => vec![main.clone(), secondary.clone()],
+                ContactSurfaces::General { surface } => surface.iter().cloned().collect(),
+            };
+            (Definition::Contact, name, sets)
+        });
+        let ties = model.ties().iter().map(|(name, t)| (Definition::Tie, name, vec![t.main.clone(), t.secondary.clone()]));
+        for (def, name, sets) in contacts.chain(ties).collect::<Vec<_>>() {
+            let owner = self.owner(def, name);
+            for set in sets {
+                let (faces, total) = self.faces(&set);
+                self.group(owner, Shape::Surface, Vec::new(), faces, total, 2.5);
+            }
+        }
+    }
+
+    fn interactions(&mut self, unit: f64) {
         let model = self.model;
         for (name, p) in model.reference_points() {
             let xyz = Vec3::from(p.xyz);
-            if xyz.is_finite() && self.marks.len() < MAX_SYMBOLS {
-                self.marks.push(Mark::ReferencePoint { at: Anchor::Point { label: p.label, xyz }, name: name.clone() });
+            if xyz.is_finite() {
+                let owner = self.owner(Definition::ReferencePoint, name);
+                self.marks.push((owner, Mark::ReferencePoint { at: Anchor::Point { label: p.label, xyz }, name: name.clone() }));
             }
         }
-        for c in model.couplings().values() {
+        for (name, c) in model.couplings() {
             let Some(p) = model.reference_point(&c.reference_point) else { continue };
+            let owner = self.owner(Definition::Coupling, name);
             let from = Anchor::Point { label: p.label, xyz: Vec3::from(p.xyz) };
             let (at, _) = self.node_points(&c.set);
             // Spread over the set: a grid of about four cells across its extent.
@@ -486,10 +652,9 @@ impl Builder<'_> {
             for (_, q) in &at {
                 b.add(*q);
             }
-            let cell = (b.diagonal() / 4.0).max(self.unit);
-            let room = self.room().min(MAX_COUPLING_LINES);
-            for to in thin(&at, cell, room) {
-                self.marks.push(Mark::CouplingLine { from, to });
+            let cell = (b.diagonal() / 4.0).max(unit);
+            for to in thin(at, cell, MAX_COUPLING_LINES) {
+                self.marks.push((owner, Mark::CouplingLine { from, to }));
             }
         }
     }
@@ -498,42 +663,40 @@ impl Builder<'_> {
         let model = self.model;
         for step in model.steps() {
             let Procedure::ExplicitDynamic(e) = &step.procedure else { continue };
+            let owner = self.owner(Definition::Step, &step.name);
             for v in &e.initial_velocities {
                 let Some(dir) = Vec3::from(v.velocity).normalized() else { continue };
                 let b = self.set_bounds(&v.set);
-                if b.is_empty() || self.marks.len() >= MAX_SYMBOLS {
+                if b.is_empty() {
                     continue;
                 }
-                // Behind the set, ending a unit short of it, so it clears what the set moves
-                // toward (a rigid wall).
+                // Behind the set, so it clears what the set moves toward (a rigid wall).
                 let half = (b.max - b.min) * 0.5;
                 let reach = (dir.x * half.x).abs() + (dir.y * half.y).abs() + (dir.z * half.z).abs();
-                let len = 5.0;
-                let tail = b.center() - dir * (reach + (1.0 + len) * self.unit);
-                self.marks.push(Mark::Free { tail, dir, len });
+                self.marks.push((owner, Mark::Velocity { centre: b.center(), reach, dir }));
             }
             for w in &e.rigid_walls {
                 let (Some(normal), point) = (Vec3::from(w.normal).normalized(), Vec3::from(w.point)) else { continue };
-                if !point.is_finite() || self.marks.len() >= MAX_SYMBOLS {
+                if !point.is_finite() {
                     continue;
                 }
                 // Behind the set's nodes and wide enough to back them.
                 let b = self.set_bounds(&w.set);
-                let (point, half) = if b.is_empty() {
-                    (point, 4.0)
+                let (point, reach) = if b.is_empty() {
+                    (point, None)
                 } else {
                     let c = b.center();
-                    (c - normal * normal.dot(c - point), (0.5 * b.diagonal() / self.unit + 1.0).clamp(2.0, 40.0))
+                    (c - normal * normal.dot(c - point), Some(0.5 * b.diagonal()))
                 };
-                self.marks.push(Mark::Wall { point, normal, half });
+                self.marks.push((owner, Mark::Wall { point, normal, reach }));
             }
         }
     }
 }
 
 impl Glyphs {
-    /// The symbols of `model`'s boundary conditions, loads, reference points, couplings and
-    /// explicit steps' initial velocities and rigid walls.
+    /// The symbols of `model`'s boundary conditions, loads, contact and tie surfaces, reference
+    /// points, couplings and explicit steps' initial velocities and rigid walls.
     pub fn from_model(model: &Model) -> Glyphs {
         let mut bounds = Aabb3::EMPTY;
         for n in model.nodes().values() {
@@ -544,7 +707,8 @@ impl Glyphs {
         }
         let d = bounds.diagonal();
         let unit = if d.is_finite() && d > 0.0 { d * UNIT_FRACTION } else { 1.0 };
-        let mut b = Builder { model, sets: BTreeMap::new(), rotating: None, unit, bounds, marks: Vec::new(), notes: Vec::new(), free: 0 };
+        let mut b =
+            Builder { model, sets: BTreeMap::new(), rotating: None, bounds, owners: Vec::new(), groups: Vec::new(), marks: Vec::new(), free: 0 };
         for (name, bc) in model.boundary_conditions() {
             b.boundary_condition(name, bc);
         }
@@ -552,21 +716,22 @@ impl Glyphs {
             b.load(name, load);
         }
         b.steps();
-        b.interactions();
+        b.surfaces();
+        b.interactions(unit);
         b.marks.truncate(MAX_SYMBOLS);
-        Glyphs { marks: b.marks, unit, notes: b.notes }
+        Glyphs { owners: b.owners, groups: b.groups, marks: b.marks, unit }
     }
 
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.marks.len()
+    /// The model's own symbol unit (a fortieth of its bounding box diagonal): the size symbols
+    /// are drawn at when no camera gives one.
+    pub fn model_unit(&self) -> f64 {
+        self.unit
     }
 
-    /// Draw the symbols into `scene`, at the nodes' positions `pos(label)` (the undeformed model,
-    /// or a results plot's deformed shape); a symbol at a node `pos` does not know is left out
-    /// (a reference point falls back to its own coordinates). Returns the box around what was
-    /// drawn, for framing and clipping.
-    pub fn draw(&self, pos: impl Fn(u32) -> Option<Vec3>, show: GlyphShow, colors: &GlyphColors, scene: &mut Scene) -> Aabb3 {
+    /// Draw the symbols into `scene` as `view` says, at the nodes' positions `pos(label)` (the
+    /// undeformed model, or a results plot's deformed shape); a symbol at a node `pos` does not
+    /// know is left out (a reference point falls back to its own coordinates).
+    pub fn draw(&self, pos: impl Fn(u32) -> Option<Vec3>, view: &GlyphView, scene: &mut Scene) -> Drawn {
         let at = |a: Anchor| -> Option<Vec3> {
             match a {
                 Anchor::Node(n) => pos(n),
@@ -574,79 +739,102 @@ impl Glyphs {
             }
             .filter(|p| p.is_finite())
         };
-        let u = self.unit;
-        let mut d = Draw { scene, bounds: Aabb3::EMPTY };
-        for m in &self.marks {
-            if !(if m.interaction() { show.interactions } else { show.loads }) {
+        let u = if view.unit.is_finite() && view.unit > 0.0 { view.unit } else { self.unit };
+        let colors = view.colors;
+        let mut d = Draw { scene, bounds: Aabb3::EMPTY, color: colors.load, width: LINE_WIDTH, on_top: false };
+        let mut notes = Vec::new();
+        let mut drawn = 0usize;
+        // Whether an owner is the highlighted definition.
+        let selected = |owner: usize| view.highlight.is_some_and(|(def, name)| self.owners.get(owner).is_some_and(|(d, n)| *d == def && n == name));
+        for g in &self.groups {
+            if !view.show.allows(g.shape == Shape::Surface) {
                 continue;
             }
+            let color = match g.shape {
+                Shape::Constraint => colors.constraint,
+                Shape::Thermal => colors.thermal,
+                Shape::Surface => colors.contact,
+                _ => colors.load,
+            };
+            d.style(color, selected(g.owner), colors.highlight);
+            let room = MAX_SYMBOLS.saturating_sub(drawn).min(MAX_PER_DEFINITION);
+            let cell = g.cell * u;
+            let kept = if g.faces.is_empty() {
+                let spots = thin(g.nodes.iter().map(|s| (*s, s.p)), cell, room);
+                d.on_top = g.on_top;
+                for s in &spots {
+                    let Some(p) = at(s.at) else { continue };
+                    d.node_symbol(g.shape, p, s, u, g.total > 1);
+                }
+                d.on_top = false;
+                spots.len()
+            } else {
+                let faces = thin(g.faces.iter().copied(), cell, room);
+                for f in &faces {
+                    d.face_symbol(g.shape, f, &pos, u);
+                }
+                faces.len()
+            };
+            drawn += kept;
+            if kept < g.total && g.total > MAX_PER_DEFINITION {
+                let name = self.owners.get(g.owner).map_or("?", |(_, n)| n.as_str());
+                let what = if g.faces.is_empty() { "nodes" } else { "faces" };
+                notes.push(format!("{name}: {kept} of {} {what}", g.total));
+            }
+        }
+        for (owner, m) in &self.marks {
+            if !view.show.allows(m.interaction()) || drawn >= MAX_SYMBOLS {
+                continue;
+            }
+            drawn += 1;
+            let color = match m {
+                Mark::Wall { .. } => colors.constraint,
+                Mark::ReferencePoint { .. } | Mark::CouplingLine { .. } => colors.interaction,
+                _ => colors.load,
+            };
+            let picked = selected(*owner);
+            d.style(color, picked, colors.highlight);
             match m {
-                Mark::Constraint { at: a, dofs } => {
-                    let Some(p) = at(*a) else { continue };
-                    for (i, axis) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().enumerate() {
-                        let (t, r) = (dofs & (1 << i) != 0, dofs & (1 << (i + 3)) != 0);
-                        if t {
-                            d.cone(p, axis, u, 0.4 * u, colors.constraint);
-                        }
-                        if r {
-                            // Behind the translation's cone (or where it would be).
-                            d.cone(p - axis * (1.05 * u), axis, 0.7 * u, 0.3 * u, colors.constraint);
-                        }
-                    }
+                Mark::Free { base, slot, dir } => {
+                    let middle = *base + Vec3::new(2.5 * *slot as f64, -4.0, 2.0) * u;
+                    // The arrow's middle sits at the spot, whichever way it points.
+                    d.arrow(middle - *dir * (2.5 * u), *dir, 5.0 * u, 1.2 * u);
                 }
-                Mark::Arrow { at: a, dir, len, moment } => {
-                    let Some(p) = at(*a) else { continue };
-                    if *moment {
-                        d.arrow(p, *dir, len * u, u, true, colors.load);
-                    } else {
-                        d.arrow(p - *dir * (len * u), *dir, len * u, u, false, colors.load);
-                    }
-                }
-                Mark::FaceArrow { face, load } => {
-                    let mut p = [Vec3::ZERO; 4];
-                    let corners = face.corners.iter().take(face.count).map(|&n| pos(n));
-                    if face.count == 0 || corners.zip(p.iter_mut()).any(|(q, slot)| q.map(|q| *slot = q).is_none()) {
-                        continue;
-                    }
-                    let p = p.get(..face.count).unwrap_or(&[]);
-                    let c = centre(p);
-                    // The face's own normal now (it may be deformed), on the side it pointed.
-                    let outward = if face.count >= 3 { polygon_normal(p).map(|n| if n.dot(face.outward) < 0.0 { -n } else { n }) } else { None };
-                    let outward = outward.unwrap_or(face.outward);
-                    let len = 2.2 * u;
-                    match load {
-                        FaceLoad::Pressure { onto: true } => d.arrow(c + outward * len, -outward, len, 0.7 * u, false, colors.load),
-                        FaceLoad::Pressure { onto: false } => d.arrow(c, outward, len, 0.7 * u, false, colors.load),
-                        FaceLoad::Traction(dir) => d.arrow(c - *dir * len, *dir, len, 0.7 * u, false, colors.load),
-                    }
-                }
-                Mark::Thermal { at: a } => {
-                    if let Some(p) = at(*a) {
-                        d.point(p, colors.thermal, THERMAL_SIZE);
-                    }
-                }
-                Mark::Free { tail, dir, len } => d.arrow(*tail, *dir, len * u, 1.2 * u, false, colors.load),
+                Mark::Velocity { centre, reach, dir } => d.arrow(*centre - *dir * (reach + 6.0 * u), *dir, 5.0 * u, 1.2 * u),
                 Mark::Spin { centre: c, axis, half_length } => {
-                    d.line(*c - *axis * *half_length, *c + *axis * *half_length, colors.load, COUPLING_WIDTH);
-                    d.spin(*c + *axis * (half_length * 0.8), *axis, 2.0 * u, u, colors.load);
+                    let half = half_length.max(4.0 * u);
+                    d.line(*c - *axis * half, *c + *axis * half);
+                    d.curl(*c + *axis * (half * 0.8), *axis, 2.0 * u, u);
                 }
                 Mark::ReferencePoint { at: a, name } => {
                     let Some(p) = at(*a) else { continue };
+                    d.on_top = true;
                     for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
-                        d.line(p - axis * (0.9 * u), p + axis * (0.9 * u), colors.interaction, OUTLINE_WIDTH);
+                        d.line(p - axis * (0.9 * u), p + axis * (0.9 * u));
                     }
-                    d.point(p, colors.interaction, POINT_SIZE);
-                    d.scene.labels.push(SceneLabel { p, text: name.clone(), color: colors.label });
+                    // A dot: a zero-length line drawn round.
+                    let width = d.width;
+                    d.width = POINT_SIZE;
+                    d.line(p, p);
+                    (d.width, d.on_top) = (width, false);
+                    let label = if picked { colors.highlight } else { colors.label };
+                    d.scene.labels.push(SceneLabel { p, text: name.clone(), color: label });
                 }
                 Mark::CouplingLine { from, to } => {
                     if let (Some(a), Some(b)) = (at(*from), pos(*to)) {
-                        d.line(a, b, colors.interaction, COUPLING_WIDTH);
+                        if !picked {
+                            d.width = COUPLING_WIDTH;
+                        }
+                        d.line(a, b);
                     }
                 }
-                Mark::Wall { point, normal, half } => d.wall(*point, *normal, half * u, u, colors.constraint),
+                Mark::Wall { point, normal, reach } => {
+                    let half = reach.map_or(4.0 * u, |r| (r + u).clamp(2.0 * u, 40.0 * u));
+                    d.wall(*point, *normal, half, u, picked);
+                }
             }
         }
-        d.bounds
+        Drawn { bounds: d.bounds, notes }
     }
 }
 
@@ -659,7 +847,7 @@ const DATUM_HATCH: usize = 4;
 /// Draw the model's datum planes (an outlined, hatched square around the model, `bounds`) and
 /// axes (a line through the model), each with its name; returns the box around them.
 pub fn datums(model: &Model, bounds: &Aabb3, colors: &GlyphColors, scene: &mut Scene) -> Aabb3 {
-    let mut d = Draw { scene, bounds: Aabb3::EMPTY };
+    let mut d = Draw { scene, bounds: Aabb3::EMPTY, color: colors.datum, width: OUTLINE_WIDTH, on_top: false };
     let (centre, diagonal) = if bounds.is_empty() { (Vec3::ZERO, 1.0) } else { (bounds.center(), bounds.diagonal().max(1e-9)) };
     let reach = DATUM_REACH * diagonal;
     for (name, datum) in model.datums() {
@@ -673,19 +861,22 @@ pub fn datums(model: &Model, bounds: &Aabb3, colors: &GlyphColors, scene: &mut S
                 let ring = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
                 for (k, a) in ring.iter().enumerate() {
                     let b = ring.get((k + 1) % 4).copied().unwrap_or(*a);
-                    d.line(*a, b, colors.datum, OUTLINE_WIDTH);
+                    d.width = OUTLINE_WIDTH;
+                    d.line(*a, b);
                 }
                 for k in 1..DATUM_HATCH {
                     let t = -1.0 + 2.0 * k as f64 / DATUM_HATCH as f64;
-                    d.line(corner(t, -1.0), corner(t, 1.0), colors.datum, COUPLING_WIDTH);
-                    d.line(corner(-1.0, t), corner(1.0, t), colors.datum, COUPLING_WIDTH);
+                    d.width = COUPLING_WIDTH;
+                    d.line(corner(t, -1.0), corner(t, 1.0));
+                    d.line(corner(-1.0, t), corner(1.0, t));
                 }
                 d.scene.labels.push(SceneLabel { p: corner(1.0, 1.0), text: name.clone(), color: colors.datum });
             }
             fieldcraft_model::Datum::Axis { point, direction } => {
                 let (p, a) = (Vec3::from(point), Vec3::from(direction));
                 let c = p + a * (centre - p).dot(a);
-                d.line(c - a * reach, c + a * reach, colors.datum, SHAFT_WIDTH);
+                d.width = SHAFT_WIDTH;
+                d.line(c - a * reach, c + a * reach);
                 d.scene.labels.push(SceneLabel { p: c + a * reach, text: name.clone(), color: colors.datum });
             }
         }
@@ -693,95 +884,170 @@ pub fn datums(model: &Model, bounds: &Aabb3, colors: &GlyphColors, scene: &mut S
     d.bounds
 }
 
-/// Symbol primitives into a scene.
+/// Symbol primitives into a scene, in the current colour and width, depth-tested or on top.
 struct Draw<'s> {
     scene: &'s mut Scene,
     bounds: Aabb3,
+    color: Rgb,
+    width: f64,
+    on_top: bool,
 }
 
 impl Draw<'_> {
-    fn point(&mut self, p: Vec3, color: Rgb, size: f64) {
-        self.bounds.add(p);
-        self.scene.points.push(ScenePoint { p, color, size });
+    /// Draw in `color` at the line width, or in `highlight`, wider, when `selected`.
+    fn style(&mut self, color: Rgb, selected: bool, highlight: Rgb) {
+        (self.color, self.width) = if selected { (highlight, HIGHLIGHT_WIDTH) } else { (color, LINE_WIDTH) };
     }
 
-    fn line(&mut self, a: Vec3, b: Vec3, color: Rgb, width: f64) {
+    fn point(&mut self, p: Vec3, size: f64) {
+        self.bounds.add(p);
+        self.scene.points.push(ScenePoint { p, color: self.color, size });
+    }
+
+    fn line(&mut self, a: Vec3, b: Vec3) {
         if a.is_finite() && b.is_finite() {
             self.bounds.add(a);
             self.bounds.add(b);
-            self.scene.lines.push(SceneLine { a, b, color, width });
+            let l = SceneLine { a, b, color: self.color, width: self.width };
+            if self.on_top { self.scene.on_top.push(l) } else { self.scene.lines.push(l) }
         }
     }
 
-    fn tri(&mut self, p: [Vec3; 3], color: Rgb) {
-        if let Some(normal) = (p[1] - p[0]).cross(p[2] - p[0]).normalized() {
-            for q in p {
-                self.bounds.add(q);
-            }
-            self.scene.tris.push(SceneTri { p, normal, color });
+    /// Two crossed wire triangles with the tip at `tip`, pointing along unit `dir`, `len` long and
+    /// `half` across at the base, in the planes of `dir` with `e1` and with `e2`: a triangle seen
+    /// from any side.
+    fn triangle(&mut self, tip: Vec3, dir: Vec3, len: f64, half: f64, e1: Vec3, e2: Vec3) {
+        let base = tip - dir * len;
+        for e in [e1, e2] {
+            let (a, b) = (base + e * half, base - e * half);
+            self.line(tip, a);
+            self.line(tip, b);
+            self.line(a, b);
         }
     }
 
-    /// A solid cone with its tip at `tip`, pointing along unit `axis`.
-    fn cone(&mut self, tip: Vec3, axis: Vec3, len: f64, radius: f64, color: Rgb) {
-        let base = tip - axis * len;
-        let (u, v) = perpendiculars(axis);
-        let ring: [Vec3; CONE_SEGMENTS] = std::array::from_fn(|k| {
-            let a = std::f64::consts::TAU * k as f64 / CONE_SEGMENTS as f64;
-            base + (u * a.cos() + v * a.sin()) * radius
-        });
-        for (k, a) in ring.iter().enumerate() {
-            let b = ring.get((k + 1) % CONE_SEGMENTS).copied().unwrap_or(*a);
-            self.tri([tip, *a, b], color);
-            self.tri([base, b, *a], color);
+    /// An open arrowhead: four lines back from `tip` against unit `dir`, `len` long.
+    fn head(&mut self, tip: Vec3, dir: Vec3, len: f64) {
+        let (e1, e2) = perpendiculars(dir);
+        let back = tip - dir * len;
+        for e in [e1, -e1, e2, -e2] {
+            self.line(tip, back + e * (0.4 * len));
         }
     }
 
-    /// An arrow from `tail` along unit `dir`, `len` long, its head `head` long; a moment's has
-    /// two heads.
-    fn arrow(&mut self, tail: Vec3, dir: Vec3, len: f64, head: f64, moment: bool, color: Rgb) {
+    /// An arrow from `tail` along unit `dir`, `len` long, its open head `head` long.
+    fn arrow(&mut self, tail: Vec3, dir: Vec3, len: f64, head: f64) {
         let tip = tail + dir * len;
-        let heads = if moment { 2.0 } else { 1.0 };
-        self.line(tail, tip - dir * (head * heads * 0.9), color, SHAFT_WIDTH);
-        self.cone(tip, dir, head, 0.38 * head, color);
-        if moment {
-            self.cone(tip - dir * (0.75 * head), dir, head, 0.38 * head, color);
-        }
+        self.line(tail, tip);
+        self.head(tip, dir, head);
     }
 
-    /// A curved arrow three quarters of the way around `axis` at `centre`, `radius` across.
-    fn spin(&mut self, centre: Vec3, axis: Vec3, radius: f64, head: f64, color: Rgb) {
+    /// A curved arrow three quarters of the way around unit `axis` at `centre`, `radius` across,
+    /// turning right-handed about the axis, its head `head` long and tangent at its end.
+    fn curl(&mut self, centre: Vec3, axis: Vec3, radius: f64, head: f64) {
         let (u, v) = perpendiculars(axis);
         let at = |a: f64| centre + (u * a.cos() + v * a.sin()) * radius;
         let end = 1.5 * std::f64::consts::PI;
         for k in 0..ARC_SEGMENTS {
             let (a, b) = (end * k as f64 / ARC_SEGMENTS as f64, end * (k + 1) as f64 / ARC_SEGMENTS as f64);
-            self.line(at(a), at(b), color, SHAFT_WIDTH);
+            self.line(at(a), at(b));
         }
-        // The head along the tangent at the arc's end (turning right-handed about the axis).
+        // u × v = axis, so increasing angle turns right-handed about it.
         let tangent = (u * -end.sin() + v * end.cos()).normalized().unwrap_or(u);
-        self.cone(at(end) + tangent * (0.6 * head), tangent, head, 0.38 * head, color);
+        self.head(at(end), tangent, head);
+    }
+
+    /// The symbol of a node group's shape at `p` (`spread`: one of many, drawn smaller).
+    fn node_symbol(&mut self, shape: Shape, p: Vec3, s: &Spot, u: f64, spread: bool) {
+        match shape {
+            Shape::Constraint => {
+                let axes = [Vec3::X, Vec3::Y, Vec3::Z];
+                for (i, axis) in axes.into_iter().enumerate() {
+                    let (t, r) = (s.dofs & (1 << i) != 0, s.dofs & (1 << (i + 3)) != 0);
+                    if !(t || r) {
+                        continue;
+                    }
+                    // From outside the part: pointing against the faces' outward direction
+                    // (along the axis where it lies in the faces).
+                    let dir = match s.normal {
+                        Some(n) if n.dot(axis) > 0.1 => -axis,
+                        _ => axis,
+                    };
+                    let (e1, e2) = (axes[(i + 1) % 3], axes[(i + 2) % 3]);
+                    if t {
+                        self.triangle(p, dir, u, 0.45 * u, e1, e2);
+                    }
+                    if r {
+                        // The double mark: a smaller triangle behind the translation's.
+                        self.triangle(p - dir * u, dir, 0.8 * u, 0.36 * u, e1, e2);
+                    }
+                }
+            }
+            Shape::Force(dir) => {
+                let (len, head) = if spread { (2.5 * u, 0.8 * u) } else { (4.0 * u, u) };
+                self.arrow(p - dir * len, dir, len, head);
+            }
+            Shape::Moment(dir) => {
+                let (radius, head) = if spread { (0.8 * u, 0.6 * u) } else { (1.3 * u, 0.8 * u) };
+                self.line(p - dir * (1.6 * radius), p + dir * (1.6 * radius));
+                self.curl(p, dir, radius, head);
+            }
+            Shape::Thermal => self.point(p, THERMAL_SIZE),
+            Shape::Pressure { .. } | Shape::Traction(_) | Shape::Surface => {}
+        }
+    }
+
+    /// The symbol of a face group's shape on `face` (at its corners' positions `pos`).
+    fn face_symbol(&mut self, shape: Shape, face: &Face, pos: &impl Fn(u32) -> Option<Vec3>, u: f64) {
+        let mut p = [Vec3::ZERO; 4];
+        let corners = face.corners.iter().take(face.count).map(|&n| pos(n));
+        if face.count == 0 || corners.zip(p.iter_mut()).any(|(q, slot)| q.map(|q| *slot = q).is_none()) {
+            return;
+        }
+        let p = p.get(..face.count).unwrap_or(&[]);
+        let c = centre(p);
+        // The face's own normal now (it may be deformed), on the side it pointed.
+        let outward = if face.count >= 3 { polygon_normal(p).map(|n| if n.dot(face.outward) < 0.0 { -n } else { n }) } else { None };
+        let outward = outward.unwrap_or(face.outward);
+        let (len, head) = (2.2 * u, 0.7 * u);
+        match shape {
+            Shape::Pressure { onto: true } => self.arrow(c + outward * len, -outward, len, head),
+            Shape::Pressure { onto: false } => self.arrow(c, outward, len, head),
+            Shape::Traction(dir) => self.arrow(c - dir * len, dir, len, head),
+            Shape::Surface => {
+                // A small square on the face, lifted off it a little.
+                let (e1, e2) = perpendiculars(outward);
+                let at = |a: f64, b: f64| c + outward * (0.1 * u) + (e1 * a + e2 * b) * (0.35 * u);
+                let ring = [at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)];
+                for (k, a) in ring.iter().enumerate() {
+                    self.line(*a, ring.get((k + 1) % 4).copied().unwrap_or(*a));
+                }
+            }
+            Shape::Constraint | Shape::Force(_) | Shape::Moment(_) | Shape::Thermal => {}
+        }
     }
 
     /// A rigid wall: a square through `point` normal to `normal`, `half` across, with hatching
     /// on its back.
-    fn wall(&mut self, point: Vec3, normal: Vec3, half: f64, unit: f64, color: Rgb) {
+    fn wall(&mut self, point: Vec3, normal: Vec3, half: f64, unit: f64, selected: bool) {
         let (u, v) = perpendiculars(normal);
         let c = |a: f64, b: f64| point + u * (a * half) + v * (b * half);
         let corners = [c(-1.0, -1.0), c(1.0, -1.0), c(1.0, 1.0), c(-1.0, 1.0)];
         for (k, a) in corners.iter().enumerate() {
-            let b = corners.get((k + 1) % 4).copied().unwrap_or(*a);
-            self.line(*a, b, color, SHAFT_WIDTH);
+            self.line(*a, corners.get((k + 1) % 4).copied().unwrap_or(*a));
         }
         // Slanted ticks behind the square, on a grid about two symbol units apart.
         let ticks = ((half / unit).floor() as usize).clamp(2, 20);
         let slant = (u + v).normalized().unwrap_or(u);
+        let width = self.width;
+        self.width = if selected { width } else { COUPLING_WIDTH };
         for i in 0..=ticks {
             for j in 0..=ticks {
                 let at = c(-1.0 + 2.0 * i as f64 / ticks as f64, -1.0 + 2.0 * j as f64 / ticks as f64);
-                self.line(at, at - normal * (0.8 * unit) + slant * (0.4 * unit), color, COUPLING_WIDTH);
+                self.line(at, at - normal * (0.8 * unit) + slant * (0.4 * unit));
             }
         }
+        self.width = width;
     }
 }
 
@@ -790,14 +1056,17 @@ mod tests {
     use fieldcraft_model::{Coupling, CouplingKind, Dofs, ElementKind, ReferencePoint, Set};
 
     use super::*;
+    use crate::{Camera, StandardView};
 
     const COLORS: GlyphColors = GlyphColors {
         constraint: Rgb(0, 0, 255),
         load: Rgb(255, 0, 0),
         interaction: Rgb(0, 255, 0),
+        contact: Rgb(200, 200, 0),
         thermal: Rgb(255, 128, 0),
         label: Rgb(0, 0, 0),
         datum: Rgb(0, 128, 128),
+        highlight: Rgb(255, 0, 255),
     };
 
     /// A row of `n` unit hex8 cells along x.
@@ -820,52 +1089,196 @@ mod tests {
         m
     }
 
-    fn drawn(g: &Glyphs, m: &Model, show: GlyphShow) -> Scene {
+    fn view(show: GlyphShow, unit: f64) -> GlyphView<'static> {
+        GlyphView { show, colors: &COLORS, unit, highlight: None }
+    }
+
+    fn drawn_at(g: &Glyphs, m: &Model, v: &GlyphView) -> (Scene, Drawn) {
         let mut s = Scene::default();
-        g.draw(|l| m.node(l).map(|n| Vec3::from(n.xyz)), show, &COLORS, &mut s);
-        s
+        let d = g.draw(|l| m.node(l).map(|n| Vec3::from(n.xyz)), v, &mut s);
+        (s, d)
+    }
+
+    fn drawn(g: &Glyphs, m: &Model, show: GlyphShow) -> Scene {
+        drawn_at(g, m, &view(show, g.model_unit())).0
+    }
+
+    /// The midpoints of the triangles' bases drawn with their tip at `tip` (the lines that do not
+    /// touch it and whose ends are each joined to it).
+    fn bases(s: &Scene, tip: Vec3) -> Vec<Vec3> {
+        let joined = |p: Vec3| s.lines.iter().any(|l| (l.a == tip && l.b.dist(p) < 1e-9) || (l.b == tip && l.a.dist(p) < 1e-9));
+        s.lines.iter().filter(|l| l.a != tip && l.b != tip && joined(l.a) && joined(l.b)).map(|l| (l.a + l.b) * 0.5).collect()
+    }
+
+    fn near(v: &[Vec3], p: Vec3) -> usize {
+        v.iter().filter(|q| q.dist(p) < 1e-9).count()
     }
 
     #[test]
-    fn constraints_draw_a_cone_per_translation_and_rotations_only_where_nodes_rotate() {
+    fn constraints_draw_a_wire_triangle_per_held_degree_of_freedom() {
+        let u = 0.1;
         let mut m = bar(4);
         m.add_boundary_condition("Clamp", BoundaryCondition::Fixed { target: Target::Set("root".into()) }).unwrap();
         let g = Glyphs::from_model(&m);
-        assert!((g.unit - m_diag(&m) * UNIT_FRACTION).abs() < 1e-12);
-        // Solid nodes have no rotations: three cones on each of the four nodes, 2 × 10 triangles
-        // a cone.
-        let s = drawn(&g, &m, GlyphShow::ALL);
-        assert_eq!(s.tris.len(), 4 * 3 * 2 * CONE_SEGMENTS);
-        assert!(s.tris.iter().all(|t| t.color == COLORS.constraint));
-        // A cone's tip is on its node; the cones reach a symbol unit below the root.
-        assert!(s.tris.iter().any(|t| t.p[0] == Vec3::ZERO));
-        let mut again = Scene::default();
-        let b = g.draw(|l| m.node(l).map(|n| Vec3::from(n.xyz)), GlyphShow::ALL, &COLORS, &mut again);
-        assert!((b.min.x + g.unit).abs() < 1e-9 && b.max.x > 0.3 * g.unit && b.max.x <= 0.4 * g.unit + 1e-12, "{b:?}");
+        assert!((g.model_unit() - m_diag(&m) * UNIT_FRACTION).abs() < 1e-12);
+        // Solid nodes have no rotations: three crossed triangles (six lines each) on each of the
+        // four nodes, wireframe only, in the constraint colour.
+        let (s, _) = drawn_at(&g, &m, &view(GlyphShow::ALL, u));
+        assert!(s.tris.is_empty() && s.on_top.is_empty());
+        assert_eq!(s.lines.len(), 4 * 3 * 6);
+        assert!(s.lines.iter().all(|l| l.color == COLORS.constraint && l.width == LINE_WIDTH));
+        // Tip on the node, each triangle along its axis (two crossed bases per axis).
+        let b = bases(&s, Vec3::ZERO);
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            assert_eq!(near(&b, -axis * u), 2, "{axis:?}: {b:?}");
+        }
         // Hidden with Loads & BCs.
         let s = drawn(&g, &m, GlyphShow { loads: false, interactions: true });
-        assert!(s.tris.is_empty() && s.lines.is_empty());
-        // A beam node can rotate: six cones.
-        let mut m = Model::default();
-        m.set_node(1, [0.0; 3]).unwrap();
-        m.set_node(2, [10.0, 0.0, 0.0]).unwrap();
-        m.set_element(1, ElementKind::Beam2, vec![1, 2]).unwrap();
-        m.add_set("end", Set { nodes: vec![1], ..Set::default() }).unwrap();
-        m.add_boundary_condition(
-            "Pin",
-            BoundaryCondition::Displacement { target: Target::Set("end".into()), values: [Some(0.0), None, None, Some(0.0), None, None] },
-        )
-        .unwrap();
-        let s = drawn(&Glyphs::from_model(&m), &m, GlyphShow::ALL);
-        assert_eq!(s.tris.len(), 2 * 2 * CONE_SEGMENTS, "one translation and one rotation");
+        assert!(s.lines.is_empty());
+        // One held translation: one triangle a node, along x.
+        let mut m = bar(4);
+        let values = [Some(0.0), None, None, None, None, None];
+        m.add_boundary_condition("Slide", BoundaryCondition::Displacement { target: Target::Set("root".into()), values }).unwrap();
+        let (s, _) = drawn_at(&Glyphs::from_model(&m), &m, &view(GlyphShow::ALL, u));
+        assert_eq!(s.lines.len(), 4 * 6);
+        assert_eq!(near(&bases(&s, Vec3::ZERO), -Vec3::X * u), 2);
     }
 
-    fn m_diag(m: &Model) -> f64 {
-        let mut b = Aabb3::EMPTY;
-        for n in m.nodes().values() {
-            b.add(Vec3::from(n.xyz));
+    #[test]
+    fn rotations_are_double_marks_and_symmetry_shows_its_normal_only() {
+        let u = 0.5;
+        let beam = |bc: BoundaryCondition| {
+            let mut m = Model::default();
+            m.set_node(1, [0.0; 3]).unwrap();
+            m.set_node(2, [10.0, 0.0, 0.0]).unwrap();
+            m.set_element(1, ElementKind::Beam2, vec![1, 2]).unwrap();
+            m.add_set("end", Set { nodes: vec![1], ..Set::default() }).unwrap();
+            m.add_boundary_condition("BC", bc).unwrap();
+            let (s, _) = drawn_at(&Glyphs::from_model(&m), &m, &view(GlyphShow::ALL, u));
+            s
+        };
+        let end = || Target::Set("end".into());
+        // Encastre on a beam node: three translations and three rotations.
+        let s = beam(BoundaryCondition::Fixed { target: end() });
+        assert_eq!(s.lines.len(), 6 * 6);
+        // The rotation's triangle sits behind the translation's: its tip at the first's base.
+        assert_eq!(near(&bases(&s, -Vec3::X * u), -Vec3::X * (1.8 * u)), 2);
+        // A symmetry plane normal to y holds u2, ur1 and ur3, and shows u2 alone.
+        let s = beam(BoundaryCondition::Symmetry { target: end(), plane: fieldcraft_model::Symmetry::Y });
+        assert_eq!(s.lines.len(), 6);
+        assert_eq!(near(&bases(&s, Vec3::ZERO), -Vec3::Y * u), 2);
+        // A rotation alone keeps its place behind the node, apart from it.
+        let s = beam(BoundaryCondition::Displacement { target: end(), values: [None, None, None, Some(0.0), None, None] });
+        assert_eq!(s.lines.len(), 6);
+        assert!(s.lines.iter().all(|l| l.a.x <= -u + 1e-9 && l.b.x <= -u + 1e-9));
+    }
+
+    /// Supports on a face come at it from outside the part.
+    #[test]
+    fn supports_on_faces_point_in_from_outside() {
+        let u = 0.2;
+        let mut m = bar(4);
+        // The end face at x = 4, outward +x.
+        m.add_set("end", Set { faces: vec![ElementFace { element: 4, face: 4 }], ..Set::default() }).unwrap();
+        m.add_boundary_condition(
+            "Hold",
+            BoundaryCondition::Displacement { target: Target::Set("end".into()), values: [Some(0.0), None, None, None, None, None] },
+        )
+        .unwrap();
+        let (s, _) = drawn_at(&Glyphs::from_model(&m), &m, &view(GlyphShow::ALL, u));
+        assert_eq!(s.lines.len(), 4 * 6);
+        assert!(s.lines.iter().all(|l| l.a.x >= 4.0 - 1e-9 && l.b.x >= 4.0 - 1e-9), "every triangle outside x = 4");
+    }
+
+    /// The same symbol measures the same number of pixels on screen at any zoom, orthographic or
+    /// perspective.
+    #[test]
+    fn symbols_keep_their_size_on_screen_at_any_zoom() {
+        let mut m = bar(4);
+        m.add_set("one", Set { nodes: vec![1], ..Set::default() }).unwrap();
+        m.add_boundary_condition(
+            "Down",
+            BoundaryCondition::Displacement { target: Target::Set("one".into()), values: [None, None, Some(0.0), None, None, None] },
+        )
+        .unwrap();
+        let g = Glyphs::from_model(&m);
+        let (w, h) = (800.0, 600.0);
+        for fov in [0.0, 0.6] {
+            for distance in [3.0, 30.0, 3000.0] {
+                let mut cam = Camera { distance, fov, target: Vec3::ZERO, ..Default::default() };
+                cam.set_view(StandardView::Front);
+                cam.target = Vec3::ZERO;
+                let unit = symbol_unit(cam.length_per_pixel(h).unwrap(), DEFAULT_SIZE).unwrap();
+                let (s, _) = drawn_at(&g, &m, &view(GlyphShow::ALL, unit));
+                let base = bases(&s, Vec3::ZERO);
+                let at = |p: Vec3| cam.to_screen(p, w, h, 10.0 * distance).unwrap();
+                let (a, b) = (at(Vec3::ZERO), at(base[0]));
+                let px = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+                assert!((px - DEFAULT_SIZE).abs() < 0.05 * DEFAULT_SIZE, "fov {fov} distance {distance}: {px} px");
+            }
         }
-        b.diagonal()
+        // The size setting is held to its range; no camera gives no unit.
+        assert_eq!(symbol_unit(1.0, 1e9), Some(SIZE_RANGE.1));
+        assert_eq!(symbol_unit(1.0, f64::NAN), Some(DEFAULT_SIZE));
+        assert_eq!(symbol_unit(f64::INFINITY, 10.0), None);
+        assert_eq!(Camera::default().length_per_pixel(0.0), None);
+        // Units round to a quarter of a doubling.
+        let (k, q) = quantise_unit(1.1).unwrap();
+        assert!(k == 1 && (q - 2f64.powf(0.25)).abs() < 1e-12, "{k} {q}");
+        assert_eq!(quantise_unit(1.0).map(|x| x.0), Some(0));
+        assert!(quantise_unit(-1.0).is_none() && quantise_unit(f64::NAN).is_none());
+        assert!(quantise_unit(f64::MAX).is_some_and(|(_, q)| q.is_finite()));
+    }
+
+    /// Symbols spread over a set at a density that follows the screen, never more than the cap.
+    #[test]
+    fn sampling_follows_the_screen_density_and_is_bounded() {
+        let mut m = Model::default();
+        let n = 101u32;
+        for i in 0..n {
+            for j in 0..n {
+                m.set_node(1 + i * n + j, [i as f64, j as f64, 0.0]).unwrap();
+            }
+        }
+        m.add_set("all", Set { nodes: (1..=n * n).collect(), ..Set::default() }).unwrap();
+        m.add_boundary_condition(
+            "Clamp",
+            BoundaryCondition::Displacement { target: Target::Set("all".into()), values: [None, None, Some(0.0), None, None, None] },
+        )
+        .unwrap();
+        let g = Glyphs::from_model(&m);
+        let count = |u: f64| {
+            let (s, d) = drawn_at(&g, &m, &view(GlyphShow::ALL, u));
+            (s.lines.len() / 6, d.notes)
+        };
+        // Zoomed in, the cap; zoomed out, one per grid cell of 2.4 units.
+        let (close, notes) = count(0.01);
+        assert!(close <= MAX_PER_DEFINITION && close > MAX_PER_DEFINITION * 9 / 10, "{close}");
+        assert_eq!(notes, vec![format!("Clamp: {close} of {} nodes", n * n)]);
+        for u in [2.0f64, 5.0, 20.0] {
+            let cells = (100.0 / (2.4 * u)).floor() + 1.0;
+            let (k, _) = count(u);
+            assert!(k as f64 <= cells * cells && k > 0, "unit {u}: {k}");
+        }
+        assert!(count(20.0).0 < count(5.0).0 && count(5.0).0 < count(2.0).0);
+    }
+
+    #[test]
+    fn colours_come_from_the_view_and_the_selected_definition_is_highlighted() {
+        let mut m = bar(4);
+        m.add_boundary_condition("Clamp", BoundaryCondition::Fixed { target: Target::Set("root".into()) }).unwrap();
+        m.add_load("Push", Load::Force { target: Target::Set("tip".into()), vector: [0.0, 0.0, -10.0], distribution: Default::default() }).unwrap();
+        let g = Glyphs::from_model(&m);
+        let v = GlyphView { highlight: Some((Definition::Load, "Push")), ..view(GlyphShow::ALL, 0.1) };
+        let (s, _) = drawn_at(&g, &m, &v);
+        let of = |c: Rgb| s.lines.iter().filter(|l| l.color == c).collect::<Vec<_>>();
+        assert_eq!(of(COLORS.constraint).len(), 4 * 3 * 6);
+        assert_eq!(of(COLORS.highlight).len(), 4 * 5, "the push's arrows: a shaft and four head lines");
+        assert!(of(COLORS.highlight).iter().all(|l| l.width == HIGHLIGHT_WIDTH));
+        assert!(of(COLORS.load).is_empty() && s.tris.is_empty());
+        // Another definition of the same name and another kind is not highlighted.
+        let v = GlyphView { highlight: Some((Definition::BoundaryCondition, "Push")), ..view(GlyphShow::ALL, 0.1) };
+        assert!(drawn_at(&g, &m, &v).0.lines.iter().all(|l| l.color != COLORS.highlight));
     }
 
     #[test]
@@ -874,19 +1287,22 @@ mod tests {
         m.add_load("Push", Load::Force { target: Target::Set("tip".into()), vector: [0.0, 0.0, -10.0], distribution: Default::default() }).unwrap();
         let g = Glyphs::from_model(&m);
         let s = drawn(&g, &m, GlyphShow::ALL);
-        // One shaft per tip node, coming down onto it.
-        assert_eq!(s.lines.len(), 4);
-        for l in &s.lines {
+        // A shaft per tip node coming down onto it, and an open head; set loads are depth-tested.
+        let shafts: Vec<&SceneLine> = s.lines.iter().filter(|l| l.a.x == l.b.x && l.a.y == l.b.y).collect();
+        assert_eq!(shafts.len(), 4);
+        for l in shafts {
             assert!(l.a.z > l.b.z && l.a.x == 4.0 && l.color == COLORS.load, "{l:?}");
         }
+        assert_eq!(s.lines.len(), 4 * 5);
+        assert!(s.on_top.is_empty());
         // A pressure on the end face (x = 4): one arrow onto it, from outside (x > 4).
         let mut m = bar(4);
-        m.add_set("end", Set { faces: vec![fieldcraft_model::ElementFace { element: 4, face: 4 }], ..Set::default() }).unwrap();
+        m.add_set("end", Set { faces: vec![ElementFace { element: 4, face: 4 }], ..Set::default() }).unwrap();
         m.add_load("Press", Load::Pressure { set: "end".into(), magnitude: 2.0 }).unwrap();
         let s = drawn(&Glyphs::from_model(&m), &m, GlyphShow::ALL);
         let l = s.lines.first().unwrap();
-        assert_eq!(s.lines.len(), 1);
-        assert!(l.a.x > 4.0 && l.b.x > 4.0 && l.b.x < l.a.x, "{l:?}");
+        assert_eq!(s.lines.len(), 5);
+        assert!(l.a.x > 4.0 && (l.b.x - 4.0).abs() < 1e-9, "{l:?}");
         // A suction points away.
         m.replace_load("Press", Load::Pressure { set: "end".into(), magnitude: -2.0 }).unwrap();
         let s = drawn(&Glyphs::from_model(&m), &m, GlyphShow::ALL);
@@ -894,39 +1310,97 @@ mod tests {
         assert!((l.a.x - 4.0).abs() < 1e-9 && l.b.x > l.a.x, "{l:?}");
     }
 
+    /// A load at a reference point or a single node is drawn over the part; its support-sized
+    /// arrow is four symbol units long.
     #[test]
-    fn reference_points_couplings_gravity_and_moments() {
+    fn concentrated_loads_draw_on_top() {
+        let mut m = bar(4);
+        // Inside the bar: the part would hide it.
+        m.add_reference_point("Mid", ReferencePoint { xyz: [2.0, 0.5, 0.5], label: 0 }).unwrap();
+        m.add_load("F", Load::Force { target: Target::ReferencePoint("Mid".into()), vector: [0.0, 0.0, -1.0], distribution: Default::default() })
+            .unwrap();
+        m.add_set("one", Set { nodes: vec![5], ..Set::default() }).unwrap();
+        m.add_load("G", Load::Force { target: Target::Set("one".into()), vector: [1.0, 0.0, 0.0], distribution: Default::default() }).unwrap();
+        let g = Glyphs::from_model(&m);
+        let (s, _) = drawn_at(&g, &m, &view(GlyphShow { loads: true, interactions: false }, 0.1));
+        assert!(s.lines.is_empty());
+        assert_eq!(s.on_top.len(), 2 * 5);
+        let shaft = s.on_top.iter().find(|l| l.b == Vec3::new(2.0, 0.5, 0.5)).unwrap();
+        assert!((shaft.a.z - (0.5 + 0.4)).abs() < 1e-9, "{shaft:?}");
+        // The reference point's cross and dot too.
+        let (s, _) = drawn_at(&g, &m, &view(GlyphShow { loads: false, interactions: true }, 0.1));
+        assert_eq!(s.on_top.len(), 3 + 1);
+        assert!(s.lines.is_empty());
+    }
+
+    #[test]
+    fn moments_curl_right_handed_about_their_vector() {
+        let mut m = bar(4);
+        let c = Vec3::new(6.0, 0.5, 0.5);
+        m.add_reference_point("RP", ReferencePoint { xyz: [c.x, c.y, c.z], label: 0 }).unwrap();
+        m.add_load("Twist", Load::Moment { target: Target::ReferencePoint("RP".into()), vector: [3.0, 0.0, 0.0], distribution: Default::default() })
+            .unwrap();
+        let u = 0.2;
+        let (s, _) = drawn_at(&Glyphs::from_model(&m), &m, &view(GlyphShow { loads: true, interactions: false }, u));
+        let lines = &s.on_top;
+        assert_eq!(lines.len(), 1 + ARC_SEGMENTS + 4);
+        // The axis line through the point along x.
+        let axis = lines.first().unwrap();
+        assert!((axis.a + axis.b) * 0.5 == c && axis.a.y == c.y && axis.a.z == c.z && axis.a.x < axis.b.x, "{axis:?}");
+        // The arc lies in the plane x = 6, a radius from the point.
+        let radius = 1.3 * u;
+        let arc = lines.get(1..1 + ARC_SEGMENTS).unwrap();
+        for l in arc {
+            for p in [l.a, l.b] {
+                assert!((p.x - c.x).abs() < 1e-12 && (p.dist(c) - radius).abs() < 1e-9, "{p:?}");
+            }
+        }
+        // The head at the arc's end points along the right-handed tangent, x × r.
+        let end = arc.last().unwrap().b;
+        let head = lines.get(1 + ARC_SEGMENTS..).unwrap();
+        assert!(head.iter().all(|l| l.a == end));
+        let back = head.iter().fold(Vec3::ZERO, |s, l| s + l.b) * 0.25;
+        let pointing = (end - back).normalized().unwrap();
+        let want = Vec3::X.cross(end - c).normalized().unwrap();
+        assert!(pointing.dist(want) < 1e-9, "{pointing:?} vs {want:?}");
+    }
+
+    #[test]
+    fn reference_points_couplings_contact_and_gravity() {
         let mut m = bar(4);
         m.add_reference_point("RP-1", ReferencePoint { xyz: [6.0, 0.5, 0.5], label: 0 }).unwrap();
         m.add_coupling("Tie", Coupling { reference_point: "RP-1".into(), set: "tip".into(), kind: CouplingKind::Kinematic, dofs: Dofs::all() })
             .unwrap();
-        m.add_load(
-            "Twist",
-            Load::Moment { target: Target::ReferencePoint("RP-1".into()), vector: [1.0, 0.0, 0.0], distribution: Default::default() },
-        )
-        .unwrap();
         m.add_load("g", Load::Gravity { acceleration: [0.0, 0.0, -9810.0], set: None }).unwrap();
+        m.add_set("end", Set { faces: vec![ElementFace { element: 4, face: 4 }], ..Set::default() }).unwrap();
+        m.add_set("start", Set { faces: vec![ElementFace { element: 1, face: 6 }], ..Set::default() }).unwrap();
+        m.add_contact("Touch", fieldcraft_model::Contact::new(ContactSurfaces::Pair { main: "end".into(), secondary: "start".into() })).unwrap();
         let g = Glyphs::from_model(&m);
         let s = drawn(&g, &m, GlyphShow::ALL);
         assert_eq!(s.labels, vec![SceneLabel { p: Vec3::new(6.0, 0.5, 0.5), text: "RP-1".into(), color: COLORS.label }]);
         assert_eq!(s.lines.iter().filter(|l| l.color == COLORS.interaction && l.width == COUPLING_WIDTH).count(), 4, "a line to each tip node");
-        // The moment's two heads and gravity's one: three cones.
-        assert_eq!(s.tris.len(), 3 * 2 * CONE_SEGMENTS);
-        // The moment starts at the point.
-        assert!(s.lines.iter().any(|l| l.a == Vec3::new(6.0, 0.5, 0.5) && l.b.x > 6.0 && l.color == COLORS.load));
-        // Interactions hidden: no point, cross or lines to the nodes; the loads stay.
+        // A square on each contact face.
+        assert_eq!(s.lines.iter().filter(|l| l.color == COLORS.contact).count(), 2 * 4);
+        // Gravity: one arrow.
+        assert_eq!(s.lines.iter().filter(|l| l.color == COLORS.load).count(), 5);
+        // Interactions hidden: no point, cross, coupling or contact; the loads stay.
         let s = drawn(&g, &m, GlyphShow { loads: true, interactions: false });
-        assert!(s.labels.is_empty() && s.points.is_empty() && s.lines.iter().all(|l| l.color == COLORS.load));
+        assert!(s.labels.is_empty() && s.on_top.is_empty() && s.lines.iter().all(|l| l.color == COLORS.load));
         // A results plot moves the symbols with the nodes; the reference point keeps its place
         // when the plot does not know it.
         let mut s = Scene::default();
-        g.draw(|l| m.node(l).map(|n| Vec3::from(n.xyz) + Vec3::new(0.0, 0.0, 1.0)), GlyphShow::ALL, &COLORS, &mut s);
-        assert!(s.lines.iter().filter(|l| l.width == COUPLING_WIDTH).all(|l| l.a == Vec3::new(6.0, 0.5, 0.5) && l.b.z >= 1.0));
+        g.draw(|l| m.node(l).map(|n| Vec3::from(n.xyz) + Vec3::new(0.0, 0.0, 1.0)), &view(GlyphShow::ALL, g.model_unit()), &mut s);
+        assert!(
+            s.lines
+                .iter()
+                .filter(|l| l.width == COUPLING_WIDTH && l.color == COLORS.interaction)
+                .all(|l| l.a == Vec3::new(6.0, 0.5, 0.5) && l.b.z >= 1.0)
+        );
     }
 
     #[test]
     fn rigid_walls_back_their_set_and_initial_velocities_leave_it() {
-        use fieldcraft_model::{ExplicitDynamic, Friction, InitialVelocity, Procedure, RigidWall, Step};
+        use fieldcraft_model::{ExplicitDynamic, Friction, InitialVelocity, RigidWall, Step};
         let mut m = bar(4);
         m.add_set("all", Set { nodes: m.nodes().keys().copied().collect(), ..Set::default() }).unwrap();
         let e = ExplicitDynamic {
@@ -938,7 +1412,7 @@ mod tests {
         let g = Glyphs::from_model(&m);
         let s = drawn(&g, &m, GlyphShow { loads: false, interactions: true });
         // The wall: in the plane x = 0, centred behind the root face, hatched toward -x.
-        let outline: Vec<&SceneLine> = s.lines.iter().filter(|l| l.width == SHAFT_WIDTH).collect();
+        let outline: Vec<&SceneLine> = s.lines.iter().filter(|l| l.width == LINE_WIDTH).collect();
         assert_eq!(outline.len(), 4);
         assert!(outline.iter().all(|l| l.a.x.abs() < 1e-9 && l.b.x.abs() < 1e-9));
         let mid = outline.iter().fold(Vec3::ZERO, |a, l| a + l.a) * 0.25;
@@ -947,19 +1421,23 @@ mod tests {
         // The velocity: one arrow behind the bar's +x end, pointing along -x toward it.
         let s = drawn(&g, &m, GlyphShow { loads: true, interactions: false });
         let shaft = s.lines.first().unwrap();
-        assert_eq!(s.lines.len(), 1);
+        assert_eq!(s.lines.len(), 5);
         assert!(shaft.b.x > 4.0 && shaft.b.x < shaft.a.x, "{shaft:?}");
+        // Selecting the step highlights both.
+        let v = GlyphView { highlight: Some((Definition::Step, "Impact")), ..view(GlyphShow::ALL, g.model_unit()) };
+        assert!(drawn_at(&g, &m, &v).0.lines.iter().all(|l| l.color == COLORS.highlight));
     }
 
     #[test]
     fn colours_mute_toward_the_background() {
         let m = COLORS.muted(Rgb(255, 255, 255), 0.5);
         assert_eq!(m.constraint, Rgb(128, 128, 255));
+        assert_eq!(m.highlight, COLORS.highlight);
         assert_eq!(COLORS.muted(Rgb(1, 2, 3), f64::NAN), COLORS);
     }
 
-    /// A set of a quarter million nodes draws a capped sample and says so; hostile coordinates and
-    /// vectors draw nothing rather than fail.
+    /// A set of a quarter million nodes draws a capped sample and says so; hostile coordinates,
+    /// vectors and units draw nothing rather than fail.
     #[test]
     fn huge_and_hostile_setups_are_sampled_and_bounded() {
         let mut m = Model::default();
@@ -973,32 +1451,42 @@ mod tests {
         m.add_boundary_condition("Clamp", BoundaryCondition::Fixed { target: Target::Set("all".into()) }).unwrap();
         m.add_load("Push", Load::Force { target: Target::Set("all".into()), vector: [0.0, 0.0, -1.0], distribution: Default::default() }).unwrap();
         let g = Glyphs::from_model(&m);
-        assert!(g.len() <= 2 * MAX_PER_DEFINITION, "{}", g.len());
-        assert!(g.notes.iter().any(|n| n.starts_with("Clamp: ") && n.ends_with(" of 250000 nodes")), "{:?}", g.notes);
-        let s = drawn(&g, &m, GlyphShow::ALL);
-        assert!(s.tris.len() <= MAX_PER_DEFINITION * (3 + 1) * 2 * CONE_SEGMENTS);
-        // Positions that are not finite are left out.
+        let (s, d) = drawn_at(&g, &m, &view(GlyphShow::ALL, 1e-3));
+        assert!(d.notes.iter().any(|n| n.starts_with("Clamp: ") && n.ends_with(" of 250000 nodes")), "{:?}", d.notes);
+        assert!(s.lines.len() <= MAX_PER_DEFINITION * (3 * 6 + 5));
+        // Positions that are not finite are left out; a unit that is not a length is the model's.
         let mut s = Scene::default();
-        g.draw(|_| Some(Vec3::new(f64::NAN, 0.0, 0.0)), GlyphShow::ALL, &COLORS, &mut s);
+        g.draw(|_| Some(Vec3::new(f64::NAN, 0.0, 0.0)), &view(GlyphShow::ALL, f64::NAN), &mut s);
         assert!(s.tris.is_empty() && s.lines.is_empty());
+        for unit in [f64::INFINITY, -1.0, 0.0, 1e300, 1e-300] {
+            let _ = drawn_at(&g, &m, &view(GlyphShow::ALL, unit));
+        }
         // An empty model, and one with a reference point only.
-        assert_eq!(Glyphs::from_model(&Model::default()).len(), 0);
+        assert!(Glyphs::from_model(&Model::default()).groups.is_empty());
         let mut m = Model::default();
         m.add_reference_point("RP", ReferencePoint { xyz: [1e9, -1e9, 0.0], label: 0 }).unwrap();
         let g = Glyphs::from_model(&m);
         let mut s = Scene::default();
-        g.draw(|_| None, GlyphShow::ALL, &COLORS, &mut s);
+        g.draw(|_| None, &view(GlyphShow::ALL, 1.0), &mut s);
         assert_eq!(s.labels.len(), 1);
     }
 
     #[test]
     fn grid_thinning_keeps_one_per_cell_and_respects_the_cap() {
         let items: Vec<(u32, Vec3)> = (0..100).map(|i| (i, Vec3::new(f64::from(i) * 0.1, 0.0, 0.0))).collect();
-        assert_eq!(thin(&items, 1.0, 1000).len(), 10);
-        assert_eq!(thin(&items, 1e-9, 7).len(), 7);
-        assert_eq!(thin(&items, f64::NAN, 1000).len(), 10);
-        assert!(thin::<u32>(&[], 1.0, 10).is_empty());
-        assert!(thin(&[(1u32, Vec3::new(f64::INFINITY, 0.0, 0.0))], 1.0, 10).is_empty());
+        assert_eq!(thin(items.iter().copied(), 1.0, 1000).len(), 10);
+        assert_eq!(thin(items.iter().copied(), 1e-9, 7).len(), 7);
+        assert_eq!(thin(items.iter().copied(), f64::NAN, 1000).len(), 10);
+        assert!(thin::<u32>([], 1.0, 10).is_empty());
+        assert!(thin([(1u32, Vec3::new(f64::INFINITY, 0.0, 0.0))], 1.0, 10).is_empty());
+    }
+
+    fn m_diag(m: &Model) -> f64 {
+        let mut b = Aabb3::EMPTY;
+        for n in m.nodes().values() {
+            b.add(Vec3::from(n.xyz));
+        }
+        b.diagonal()
     }
 
     #[test]

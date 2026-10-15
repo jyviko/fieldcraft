@@ -80,6 +80,8 @@ pub struct Tokens {
     pub glyph_load: Color32,
     /// Reference points and couplings.
     pub glyph_interaction: Color32,
+    /// Contact and tie surface symbols.
+    pub glyph_contact: Color32,
     /// Temperatures, heat fluxes, convection and heat sources.
     pub glyph_thermal: Color32,
     /// Datum planes and axes.
@@ -160,6 +162,7 @@ impl Tokens {
             glyph_constraint: Color32::from_rgb(0x00, 0x8a, 0xa8),
             glyph_load: Color32::from_rgb(0xd0, 0x24, 0x24),
             glyph_interaction: Color32::from_rgb(0x9a, 0x30, 0xc0),
+            glyph_contact: Color32::from_rgb(0x6a, 0x8a, 0x00),
             glyph_thermal: Color32::from_rgb(0xe8, 0x4c, 0x00),
             glyph_datum: Color32::from_rgb(0x1e, 0x8c, 0x6e),
             pick_selected: Color32::from_rgb(0xd6, 0x00, 0x7f),
@@ -223,6 +226,7 @@ impl Tokens {
         t.glyph_constraint = Color32::from_rgb(0x3c, 0xdc, 0xf0);
         t.glyph_load = Color32::from_rgb(0xff, 0x5a, 0x4c);
         t.glyph_interaction = Color32::from_rgb(0xd2, 0x82, 0xff);
+        t.glyph_contact = Color32::from_rgb(0xa0, 0xe6, 0x28);
         t.glyph_thermal = Color32::from_rgb(0xff, 0x8c, 0x00);
         t.glyph_datum = Color32::from_rgb(0x5a, 0xd8, 0xaa);
         t.pick_selected = Color32::from_rgb(0xff, 0x3f, 0xb4);
@@ -235,12 +239,15 @@ impl Tokens {
         self.contour.map(rgb)
     }
 
-    /// The colours of the analysis setup's symbols; their names in the overlay text colour.
+    /// The colours of the analysis setup's symbols; their names in the overlay text colour, the
+    /// selected definition's in the selection colour.
     pub fn glyph_colors(&self) -> GlyphColors {
         GlyphColors {
             constraint: rgb(self.glyph_constraint),
             load: rgb(self.glyph_load),
             interaction: rgb(self.glyph_interaction),
+            contact: rgb(self.glyph_contact),
+            highlight: rgb(self.pick_selected),
             thermal: rgb(self.glyph_thermal),
             label: rgb(self.overlay_text),
             datum: rgb(self.glyph_datum),
@@ -368,7 +375,7 @@ mod tests {
         };
         for dark in [true, false] {
             let t = Tokens::get(dark);
-            let symbols = [t.glyph_constraint, t.glyph_load, t.glyph_interaction, t.glyph_thermal];
+            let symbols = [t.glyph_constraint, t.glyph_load, t.glyph_interaction, t.glyph_contact, t.glyph_thermal];
             for (i, s) in symbols.iter().enumerate() {
                 assert!((luma(*s) - luma(t.viewport_bottom)).abs() > 400 || far(*s, t.viewport_bottom) > 250, "{s:?} dark={dark}");
                 for k in ElementKind::ALL {
@@ -392,8 +399,17 @@ mod tests {
             let t = Tokens::get(dark);
             assert!(far(t.pick_selected, t.pick_hover) > 90, "dark={dark}");
             for c in [t.pick_selected, t.pick_hover] {
-                let others =
-                    [t.geometry, t.node, t.glyph_constraint, t.glyph_load, t.glyph_interaction, t.glyph_thermal, t.viewport_bottom, t.mesh_edge];
+                let others = [
+                    t.geometry,
+                    t.node,
+                    t.glyph_constraint,
+                    t.glyph_load,
+                    t.glyph_interaction,
+                    t.glyph_contact,
+                    t.glyph_thermal,
+                    t.viewport_bottom,
+                    t.mesh_edge,
+                ];
                 for o in others.into_iter().chain(ElementKind::ALL.map(|k| t.element(k))) {
                     assert!(far(c, o) > 100, "{c:?} vs {o:?} dark={dark}");
                 }

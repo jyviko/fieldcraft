@@ -1285,6 +1285,7 @@ dependencies = [
  "fieldcraft-render",
  "fieldcraft-solver",
  "log",
+ "png",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

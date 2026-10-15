@@ -1,9 +1,11 @@
 //! GPU viewport: lit triangles and screen-space wide lines with a depth buffer, drawn in an
 //! `egui_wgpu` paint callback. Geometry is uploaded when the scene changes; each frame only the
 //! camera uniform changes. Nodes are drawn as zero-length lines, which the line shader turns
-//! into squares. The selection highlight is a second, small scene (the overlay) drawn over the
-//! first: its faces pass the depth test over the faces they repeat, so a hover change uploads
-//! only the overlay.
+//! into squares. The setup's symbols are a second scene, uploaded on their own, so zooming
+//! (which resizes them) never uploads the mesh again. The selection highlight is a third, small
+//! scene (the overlay) drawn over the first: its faces pass the depth test over the faces they
+//! repeat, so a hover change uploads only the overlay. Every layer's `on_top` lines are drawn
+//! last, with no depth test.
 //!
 //! A large mesh does not fit one vertex buffer (wgpu's default `max_buffer_size`, which eframe
 //! requests, is 256 MiB): geometry is split into batches of at most [`MAX_BATCH_BYTES`] and the
@@ -38,13 +40,15 @@ pub type GpuErrors = Arc<Mutex<Option<String>>>;
 pub struct GpuScene {
     pub tris: Vec<u8>,
     pub lines: Vec<u8>,
+    /// Lines drawn over everything ([`Scene::on_top`]).
+    pub top_lines: Vec<u8>,
 }
 
 impl GpuScene {
     /// The scene's triangles, lines and points; widths and sizes scaled by `pixels_per_point`
     /// (the scene gives them in points).
     pub fn from_scene(scene: &Scene, pixels_per_point: f32) -> GpuScene {
-        let mut g = GpuScene { tris: Vec::with_capacity(scene.tris.len() * 3 * TRI_SIZE), lines: Vec::new() };
+        let mut g = GpuScene { tris: Vec::with_capacity(scene.tris.len() * 3 * TRI_SIZE), lines: Vec::new(), top_lines: Vec::new() };
         for t in &scene.tris {
             for p in t.p {
                 g.vertex(p.to_f32(), t.normal.to_f32(), t.color);
@@ -56,6 +60,9 @@ impl GpuScene {
         for p in &scene.points {
             g.line(p.p.to_f32(), p.p.to_f32(), p.color, p.size as f32 * pixels_per_point);
         }
+        for l in &scene.on_top {
+            push_line(&mut g.top_lines, l.a.to_f32(), l.b.to_f32(), l.color, l.width as f32 * pixels_per_point);
+        }
         g
     }
     fn vertex(&mut self, p: [f32; 3], n: [f32; 3], c: Rgb) {
@@ -65,12 +72,17 @@ impl GpuScene {
         self.tris.extend_from_slice(&[c.0, c.1, c.2, 255]);
     }
     fn line(&mut self, a: [f32; 3], b: [f32; 3], c: Rgb, width: f32) {
-        for v in a.iter().chain(&b) {
-            self.lines.extend_from_slice(&v.to_le_bytes());
-        }
-        self.lines.extend_from_slice(&[c.0, c.1, c.2, 255]);
-        self.lines.extend_from_slice(&width.to_le_bytes());
+        push_line(&mut self.lines, a, b, c, width);
     }
+}
+
+/// A line instance into `buf`.
+fn push_line(buf: &mut Vec<u8>, a: [f32; 3], b: [f32; 3], c: Rgb, width: f32) {
+    for v in a.iter().chain(&b) {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    buf.extend_from_slice(&[c.0, c.1, c.2, 255]);
+    buf.extend_from_slice(&width.to_le_bytes());
 }
 
 /// Where the UI hands a new scene to the renderer (taken on the next frame's `prepare`).
@@ -81,6 +93,9 @@ pub struct ViewportCallback {
     /// Changes whenever the scene does; the slot holds the scene for a new key.
     pub key: u64,
     pub slot: SceneSlot,
+    /// The same for the setup's symbols.
+    pub symbols_key: u64,
+    pub symbols_slot: SceneSlot,
     /// The same for the overlay (the selection highlight).
     pub overlay_key: u64,
     pub overlay_slot: SceneSlot,
@@ -105,6 +120,7 @@ struct Layer {
     key: Option<u64>,
     tris: Vec<Batch>,
     lines: Vec<Batch>,
+    top_lines: Vec<Batch>,
 }
 
 impl Layer {
@@ -116,9 +132,11 @@ impl Layer {
             // The old buffers go first, so the new ones don't have to fit beside them.
             self.tris.clear();
             self.lines.clear();
+            self.top_lines.clear();
             let max = device.limits().max_buffer_size;
             self.tris = upload(device, queue, "fc_tris", &sc.tris, TRI_SIZE, 3, max);
             self.lines = upload(device, queue, "fc_lines", &sc.lines, LINE_SIZE, 1, max);
+            self.top_lines = upload(device, queue, "fc_top_lines", &sc.top_lines, LINE_SIZE, 1, max);
             self.key = Some(key);
         }
     }
@@ -132,14 +150,14 @@ impl Layer {
             }
         }
     }
+}
 
-    fn paint_lines(&self, pass: &mut wgpu::RenderPass<'static>, line: &wgpu::RenderPipeline) {
-        if !self.lines.is_empty() {
-            pass.set_pipeline(line);
-            for b in &self.lines {
-                pass.set_vertex_buffer(0, b.buffer.slice(..));
-                pass.draw(0..6, 0..b.count);
-            }
+fn paint_line_batches(batches: &[Batch], pass: &mut wgpu::RenderPass<'static>, line: &wgpu::RenderPipeline) {
+    if !batches.is_empty() {
+        pass.set_pipeline(line);
+        for b in batches {
+            pass.set_vertex_buffer(0, b.buffer.slice(..));
+            pass.draw(0..6, 0..b.count);
         }
     }
 }
@@ -149,10 +167,13 @@ struct Resources {
     /// The overlay's faces: pulled toward the eye and depth-tested without writing depth.
     overlay_tri: wgpu::RenderPipeline,
     line: wgpu::RenderPipeline,
+    /// Lines over everything: no depth test.
+    top_line: wgpu::RenderPipeline,
     uniform: wgpu::Buffer,
     bind: wgpu::BindGroup,
     linear_out: bool,
     scene: Layer,
+    symbols: Layer,
     overlay: Layer,
 }
 
@@ -367,10 +388,19 @@ impl Resources {
                 depth(wgpu::CompareFunction::LessEqual, false),
                 Some(wgpu::BlendState::ALPHA_BLENDING),
             ),
+            top_line: pipeline(
+                "fc_top_lines",
+                "vs_line",
+                "fs_line",
+                line_layout(),
+                depth(wgpu::CompareFunction::Always, false),
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+            ),
             uniform,
             bind,
             linear_out: t.format.is_srgb(),
             scene: Layer::default(),
+            symbols: Layer::default(),
             overlay: Layer::default(),
         }
     }
@@ -440,6 +470,7 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
         res.scene.take(device, queue, self.key, &self.slot);
+        res.symbols.take(device, queue, self.symbols_key, &self.symbols_slot);
         res.overlay.take(device, queue, self.overlay_key, &self.overlay_slot);
         queue.write_buffer(&res.uniform, 0, &uniform_bytes(self, res.linear_out));
         Vec::new()
@@ -454,11 +485,16 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         pass.set_viewport(vp.left_px as f32, vp.top_px as f32, vp.width_px as f32, vp.height_px as f32, 0.0, 1.0);
         pass.set_bind_group(0, &res.bind, &[]);
         // Faces first, the overlay's over the scene's, then every line, so the mesh edges stay on
-        // highlighted faces (as the CPU renderer draws them).
+        // highlighted faces, then the lines over everything (as the CPU renderer draws them).
         res.scene.paint_tris(pass, &res.tri);
+        res.symbols.paint_tris(pass, &res.tri);
         res.overlay.paint_tris(pass, &res.overlay_tri);
-        res.scene.paint_lines(pass, &res.line);
-        res.overlay.paint_lines(pass, &res.line);
+        for layer in [&res.scene, &res.symbols, &res.overlay] {
+            paint_line_batches(&layer.lines, pass, &res.line);
+        }
+        for layer in [&res.scene, &res.symbols, &res.overlay] {
+            paint_line_batches(&layer.top_lines, pass, &res.top_line);
+        }
     }
 }
 
@@ -524,11 +560,13 @@ mod tests {
             tris: vec![SceneTri { p: [Vec3::ZERO, Vec3::X, Vec3::Y], normal: Vec3::Z, color: Rgb(1, 2, 3) }],
             lines: vec![SceneLine { a: Vec3::ZERO, b: Vec3::Z, color: Rgb(4, 5, 6), width: 1.5 }],
             points: vec![ScenePoint { p: Vec3::X, color: Rgb(7, 8, 9), size: 4.0 }],
+            on_top: vec![SceneLine { a: Vec3::ZERO, b: Vec3::X, color: Rgb(1, 1, 1), width: 2.0 }],
             ..Default::default()
         };
         let g = GpuScene::from_scene(&scene, 2.0);
         assert_eq!(g.tris.len(), 3 * TRI_SIZE);
         assert_eq!(g.lines.len(), 2 * LINE_SIZE);
+        assert_eq!(g.top_lines.len(), LINE_SIZE);
         assert_eq!(&g.tris[24..28], &[1, 2, 3, 255]);
         // Widths are in physical pixels.
         assert_eq!(f32::from_le_bytes([g.lines[28], g.lines[29], g.lines[30], g.lines[31]]), 3.0);
@@ -536,6 +574,8 @@ mod tests {
         let cb = ViewportCallback {
             key: 0,
             slot: SceneSlot::default(),
+            symbols_key: 0,
+            symbols_slot: SceneSlot::default(),
             overlay_key: 0,
             overlay_slot: SceneSlot::default(),
             view_proj: [[0.0; 4]; 4],

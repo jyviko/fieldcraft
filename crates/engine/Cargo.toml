@@ -27,4 +27,5 @@ thiserror = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+png = { workspace = true }
 zip = { workspace = true }

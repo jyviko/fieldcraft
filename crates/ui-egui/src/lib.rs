@@ -55,7 +55,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use fieldcraft_engine::catalogue::{self, Tab, Workspace};
 use fieldcraft_engine::{EngineError, Session};
-use fieldcraft_render::glyphs::Glyphs;
+use fieldcraft_render::glyphs::{self, Definition, Drawn, Glyphs};
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView, Vec3};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -63,6 +63,9 @@ use serde_json::{Value, json};
 pub use control::ControlRequest;
 pub use files::{Filter, Services};
 pub use scene::Style;
+
+/// The viewport height symbols are sized for before the viewport is first drawn (points).
+const DEFAULT_VIEW_HEIGHT: f64 = 800.0;
 
 /// The version shown in Help and over the control channel.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -82,6 +85,9 @@ pub struct UiState {
     pub show_loads: bool,
     /// Reference point, coupling and rigid wall symbols.
     pub show_interactions: bool,
+    /// The setup symbols' size on screen, in points (held to
+    /// [`fieldcraft_render::glyphs::SIZE_RANGE`]).
+    pub symbol_size: f64,
     pub perspective: bool,
     pub dark: bool,
     /// The browser (left).
@@ -111,6 +117,7 @@ impl Default for UiState {
             show_mesh: true,
             show_loads: true,
             show_interactions: true,
+            symbol_size: glyphs::DEFAULT_SIZE,
             perspective: false,
             dark: true,
             show_tree: true,
@@ -252,8 +259,12 @@ pub struct Viewport {
     /// The selection highlight for the GPU, and the overlay key last handed to it.
     pub overlay_slot: gpu::SceneSlot,
     pub overlay_uploaded: Option<u64>,
-    /// CPU fallback: the texture and what it shows (scene and overlay keys, camera, size).
-    cpu: Option<(egui::TextureHandle, (u64, u64), Camera, [usize; 2])>,
+    /// The setup's symbols for the GPU, and the symbols key last handed to it.
+    pub symbols_slot: gpu::SceneSlot,
+    pub symbols_uploaded: Option<u64>,
+    /// CPU fallback: the texture and what it shows (scene, symbols and overlay keys, camera,
+    /// size).
+    cpu: Option<(egui::TextureHandle, (u64, u64, u64), Camera, [usize; 2])>,
     /// CPU fallback: the scene key the renderer last refused.
     cpu_failed: Option<u64>,
     /// GPU errors reported by the device (see [`gpu::GpuErrors`]), shown in the status bar.
@@ -340,8 +351,11 @@ pub struct ModelApp {
     bodies: (Option<Arc<fieldcraft_geometry::Design>>, Vec<(selection::BodyNames, fieldcraft_geometry::SurfaceMesh)>),
     /// The frame-independent part of the results plot (scale, contour) and what it was built for.
     prepared: (Option<PlotKey>, results::Prepared),
-    /// The built scene, its key and the box around its symbols (they reach beyond the model).
+    /// The built scene, its key and the box around its datums (they reach beyond the model).
     scene: (Option<u64>, Scene, Aabb3),
+    /// The setup's symbols, a layer of their own drawn at the camera's scale, its key and what
+    /// it drew.
+    symbols: (Option<u64>, Scene, Drawn),
     /// The theme last applied to the context.
     styled: Option<bool>,
     /// Input injected by the control channel, fed to egui one pointer event per frame.
@@ -432,6 +446,7 @@ impl ModelApp {
             bodies: (None, Vec::new()),
             prepared: (None, results::Prepared::default()),
             scene: (None, Scene::default(), Aabb3::EMPTY),
+            symbols: (None, Scene::default(), Drawn::default()),
             styled: None,
             synthetic: Vec::new(),
             synthetic_mods: egui::Modifiers::default(),
@@ -844,9 +859,9 @@ impl ModelApp {
         &self.display.1
     }
 
-    /// Definitions whose symbols are a sample (`Clamp: 400 of 12000 nodes`).
+    /// Definitions whose symbols are a sample (`Clamp: 400 of 12000 nodes`), as drawn last.
     pub fn glyph_notes(&self) -> &[String] {
-        &self.glyphs.notes
+        &self.symbols.2.notes
     }
 
     /// The key of the current scene: the model revision, every setting the scene depends on and
@@ -898,27 +913,74 @@ impl ModelApp {
                 Some(p) => results::scene(p, style, show, &t),
                 None => scene::build(&self.display.1, style, show, &t),
             };
-            // Symbols follow the drawn nodes: the deformed shape of a results plot.
-            let drawn = self.plot.1.as_ref().map_or(&self.display.1, |p| &p.display);
-            let mut symbols = scene::symbols(&mut s, &self.glyphs, |n| drawn.node_position(n), show, self.plot.1.is_some(), &t);
+            let mut datums = Aabb3::EMPTY;
             if show.geometry && self.plot.1.is_none() {
-                symbols.union(scene::datums(&mut s, &self.session.model, &self.display.1.bounds, &t));
+                datums = scene::datums(&mut s, &self.session.model, &self.display.1.bounds, &t);
                 scene::seeds(&mut s, &self.session.model, &self.pick.names, &self.display.1, &t);
             }
-            self.scene = (Some(key), s, symbols);
+            self.scene = (Some(key), s, datums);
         }
-        self.scene.1.radius = scene::radius(&self.drawn_bounds(), &self.cam);
+        // The clipping radius holds the symbols too (framing leaves them out: their size in the
+        // model follows the zoom).
+        let mut bounds = self.drawn_bounds();
+        bounds.union(self.symbols.2.bounds);
+        self.scene.1.radius = scene::radius(&bounds, &self.cam);
         (key, &self.scene.1)
     }
 
-    /// What the scene built last draws: the model, a results plot's (deformed) shape and the
-    /// setup's symbols.
+    /// The definition selected in the browser, when it has symbols.
+    fn highlighted(&self) -> Option<(Definition, &str)> {
+        let (def, name) = self.selected.as_ref()?;
+        let def = def.symbols()?;
+        Some((def, name.as_str()))
+    }
+
+    /// The setup's symbols for the viewport as drawn last frame (its height in points).
+    pub fn symbols(&mut self) -> (u64, &Scene) {
+        let height = self.viewport.rect.map_or(DEFAULT_VIEW_HEIGHT, |r| f64::from(r.height()));
+        self.symbols_for(height)
+    }
+
+    /// The setup's symbols at the size setting on screen, for a view `height` points (or
+    /// pixels) high with the current camera: a layer of their own, rebuilt when the model, what
+    /// is shown, the plot, the highlighted definition or the size changes, and while zooming
+    /// only when the symbol unit moves to another quarter of a doubling (the mesh's scene is
+    /// never rebuilt for it). Their nodes follow the drawn shape (a results plot's deformed one).
+    pub fn symbols_for(&mut self, height: f64) -> (u64, &Scene) {
+        self.display();
+        self.plot();
+        let unit = self.cam.length_per_pixel(height).and_then(|l| glyphs::symbol_unit(l, self.ui.symbol_size)).and_then(glyphs::quantise_unit);
+        let mut h = std::hash::DefaultHasher::new();
+        let plot = self.plot.1.as_ref().map(|p| Arc::as_ptr(p) as usize);
+        (self.revision, self.ui.show_loads, self.ui.show_interactions, self.ui.dark, plot, unit.map(|u| u.0), self.highlighted()).hash(&mut h);
+        let key = h.finish();
+        if self.symbols.0 != Some(key) {
+            let t = theme::Tokens::get(self.ui.dark);
+            let drawn = self.plot.1.as_ref().map_or(&self.display.1, |p| &p.display);
+            let mut s = Scene::default();
+            let unit = unit.map_or(f64::NAN, |u| u.1);
+            let d =
+                scene::symbols(&mut s, &self.glyphs, |n| drawn.node_position(n), self.ui.show(), self.plot.1.is_some(), unit, self.highlighted(), &t);
+            self.symbols = (Some(key), s, d);
+        }
+        (key, &self.symbols.1)
+    }
+
+    /// What the scene built last draws, as framing sees it: the model, a results plot's
+    /// (deformed) shape, the datums and the reference points.
     fn drawn_bounds(&self) -> Aabb3 {
         let mut bounds = self.display.1.bounds;
         if let Some(p) = &self.plot.1 {
             bounds.union(p.display.bounds);
         }
         bounds.union(self.scene.2);
+        // Reference points are places in the model, framed with it (their symbols are not).
+        for p in self.session.model.reference_points().values() {
+            let p = Vec3::from(p.xyz);
+            if p.is_finite() {
+                bounds.add(p);
+            }
+        }
         bounds
     }
 
@@ -927,8 +989,9 @@ impl ModelApp {
     pub fn render_png(&mut self, w: usize, h: usize) -> Result<Vec<u8>, fieldcraft_render::RenderError> {
         let cam = self.cam;
         let (_, overlay) = self.overlay();
-        let (_, scene) = self.scene();
-        fieldcraft_render::render_layers_png(scene, &[&overlay], &cam, w, h)
+        self.symbols_for(h as f64);
+        self.scene();
+        fieldcraft_render::render_layers_png(&self.scene.1, &[&self.symbols.1, &overlay], &cam, w, h)
     }
 
     /// The geometry tags behind the drawn mesh, read again when the model changed.
@@ -1776,22 +1839,74 @@ mod tests {
         let mut app = ModelApp::new(Session::default());
         app.run_script(&fieldcraft_engine::sample::cantilever()).unwrap();
         let t = theme::Tokens::get(app.ui.dark);
-        let count = |app: &mut ModelApp, c: egui::Color32| app.scene().1.tris.iter().filter(|x| x.color == theme::rgb(c)).count();
-        assert!(count(&mut app, t.glyph_constraint) > 0, "the clamp's cones");
-        assert!(app.scene().1.lines.iter().any(|l| l.color == theme::rgb(t.glyph_load)), "the push's arrows");
+        let count = |app: &mut ModelApp, c: egui::Color32| app.symbols().1.lines.iter().filter(|x| x.color == theme::rgb(c)).count();
+        assert!(count(&mut app, t.glyph_constraint) > 0, "the clamp's triangles");
+        assert!(count(&mut app, t.glyph_load) > 0, "the push's arrows");
+        // Wireframes, in a layer of their own.
+        assert!(app.symbols().1.tris.is_empty());
+        assert!(!app.scene().1.lines.iter().any(|l| l.color == theme::rgb(t.glyph_constraint)));
         // The symbols reach beyond the model: the clipping radius holds them.
         let radius = app.scene().1.radius;
         app.ui.show_loads = false;
         assert_eq!(count(&mut app, t.glyph_constraint), 0);
         assert!(app.scene().1.radius <= radius);
         app.ui.show_loads = true;
+        // Selecting the clamp in the browser highlights its symbols.
+        app.selected = Some((browser::Def::BoundaryCondition, "Clamp".into()));
+        assert_eq!(count(&mut app, t.glyph_constraint), 0);
+        assert!(count(&mut app, t.pick_selected) > 0);
+        assert!(count(&mut app, t.glyph_load) > 0);
+        app.selected = None;
         // Over a results plot they are muted.
         app.run("solve.static", json!({})).unwrap();
         app.run("results.deformed", json!({"step": "Load"})).unwrap();
         assert_eq!(count(&mut app, t.glyph_constraint), 0);
         let muted = t.glyph_colors().over_results(theme::rgb(t.viewport_bottom));
-        assert!(app.scene().1.tris.iter().any(|x| x.color == muted.constraint));
+        assert!(app.symbols().1.lines.iter().any(|x| x.color == muted.constraint));
         assert!(app.glyph_notes().is_empty());
+    }
+
+    /// Zooming resizes the symbols (a layer of their own) and leaves the mesh's scene alone; the
+    /// symbols measure the size setting on screen at any zoom.
+    #[test]
+    fn zooming_rebuilds_the_symbols_only_and_keeps_their_size_on_screen() {
+        let mut app = ModelApp::new(Session::default());
+        app.run_script(&fieldcraft_engine::sample::cantilever()).unwrap();
+        app.set_view(StandardView::Front);
+        let h = 600.0;
+        // The length of the longest constraint line on screen: a triangle's side, about its
+        // length (a symbol unit) long.
+        let measure = |app: &mut ModelApp| {
+            let cam = app.cam;
+            let lines = app.symbols_for(h).1.lines.clone();
+            let t = theme::Tokens::get(app.ui.dark);
+            let at = |p: Vec3| cam.to_screen(p, 800.0, h, 1e6).unwrap();
+            lines
+                .iter()
+                .filter(|l| l.color == theme::rgb(t.glyph_constraint))
+                .map(|l| {
+                    let (a, b) = (at(l.a), at(l.b));
+                    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
+                })
+                .fold(0.0, f64::max)
+        };
+        let scene = app.scene_key();
+        let (symbols, _) = app.symbols_for(h);
+        let mut sizes = Vec::new();
+        for distance in [40.0, 150.0, 900.0, 5000.0] {
+            app.cam.distance = distance;
+            sizes.push(measure(&mut app));
+        }
+        assert_eq!(app.scene_key(), scene, "the camera is not in the scene's key");
+        assert_ne!(app.symbols_for(h).0, symbols, "zooming resizes the symbols");
+        let (lo, hi) = sizes.iter().fold((f64::MAX, 0.0f64), |(lo, hi), s| (lo.min(*s), hi.max(*s)));
+        assert!(lo > 10.0 && hi / lo < 1.2, "{sizes:?}");
+        // The size setting scales them.
+        let before = measure(&mut app);
+        app.ui.symbol_size = 2.0 * glyphs::DEFAULT_SIZE;
+        let after = measure(&mut app);
+        assert!((after / before - 2.0).abs() < 0.2, "{before} -> {after}");
+        assert_eq!(app.scene_key(), scene);
     }
 
     #[test]

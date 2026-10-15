@@ -4,10 +4,10 @@
 //! Geometry (the open design, imported surfaces) draws as faces with their boundaries while
 //! the model has no element faces; once it is meshed, as its boundaries drawn along the mesh
 //! (the element edges on geometry edges), so the mesh is not hidden behind coincident faces and
-//! every line lies on the element faces. The analysis setup's symbols ([`symbols`]) go over the model,
-//! muted over a results plot.
+//! every line lies on the element faces. The analysis setup's symbols ([`symbols`]) are a layer of
+//! their own over the model, a constant size on screen, muted over a results plot.
 
-use fieldcraft_render::glyphs::{GlyphShow, Glyphs};
+use fieldcraft_render::glyphs::{Definition, Drawn, GlyphShow, GlyphView, Glyphs};
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, SceneLine, ScenePoint, SceneTri, Vec3};
 use serde::{Deserialize, Serialize};
 
@@ -62,12 +62,24 @@ impl Show {
     pub const DEFAULT: Show = Show { geometry: true, mesh: true, nodes: false, loads: true, interactions: true };
 }
 
-/// Draw the analysis setup's symbols into `s` at the nodes' positions `pos`, muted over a
-/// results plot; returns the box around them.
-pub fn symbols(s: &mut Scene, glyphs: &Glyphs, pos: impl Fn(u32) -> Option<Vec3>, show: Show, results: bool, t: &Tokens) -> Aabb3 {
+/// Draw the analysis setup's symbols into `s` at the nodes' positions `pos` and symbol unit
+/// `unit` (model length, [`fieldcraft_render::glyphs::symbol_unit`]), muted over a results plot,
+/// the `highlight`ed definition's in the selection colour.
+#[allow(clippy::too_many_arguments)]
+pub fn symbols(
+    s: &mut Scene,
+    glyphs: &Glyphs,
+    pos: impl Fn(u32) -> Option<Vec3>,
+    show: Show,
+    results: bool,
+    unit: f64,
+    highlight: Option<(Definition, &str)>,
+    t: &Tokens,
+) -> Drawn {
     let colors = t.glyph_colors();
     let colors = if results { colors.over_results(rgb(t.viewport_bottom)) } else { colors };
-    glyphs.draw(pos, GlyphShow { loads: show.loads, interactions: show.interactions }, &colors, s)
+    let view = GlyphView { show: GlyphShow { loads: show.loads, interactions: show.interactions }, colors: &colors, unit, highlight };
+    glyphs.draw(pos, &view, s)
 }
 
 /// Draw the model's datum planes and axes around `bounds` into `s`; returns the box around them.

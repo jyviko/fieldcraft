@@ -164,6 +164,20 @@ pub enum Def {
 }
 
 impl Def {
+    /// The kind of setup symbols a definition of this kind draws, if any.
+    pub fn symbols(self) -> Option<fieldcraft_render::glyphs::Definition> {
+        use fieldcraft_render::glyphs::Definition;
+        Some(match self {
+            Def::BoundaryCondition => Definition::BoundaryCondition,
+            Def::Load => Definition::Load,
+            Def::ReferencePoint => Definition::ReferencePoint,
+            Def::Coupling => Definition::Coupling,
+            Def::Contact => Definition::Contact,
+            Def::Step => Definition::Step,
+            Def::Set | Def::Material | Def::Section | Def::FluidDomain => return None,
+        })
+    }
+
     /// The reference fields that name one of these.
     pub fn collection(self) -> Collection {
         match self {

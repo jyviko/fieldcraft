@@ -8,11 +8,11 @@
 //! deformed shape (automatic or chosen scale) with its contour bands. Animation is not drawn: a
 //! picture shows the full deformation (a mode at its positive shape). The analysis setup's
 //! symbols ([`fieldcraft_render::glyphs`]) are drawn over the model as the viewport draws them,
-//! muted over a results plot.
+//! muted over a results plot, at their default size on screen once the camera is known.
 
 use fieldcraft_model::ElementKind;
 use fieldcraft_render::contour::{Bands, band_color, split_triangle};
-use fieldcraft_render::glyphs::{GlyphColors, GlyphShow, Glyphs};
+use fieldcraft_render::glyphs::{self, GlyphColors, GlyphShow, GlyphView, Glyphs};
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Orientation, Rgb, Scene, SceneLine, SceneTri, Vec3};
 use serde_json::Value;
 
@@ -73,6 +73,8 @@ impl Palette {
             thermal: Rgb(0xe8, 0x4c, 0x00),
             label: Rgb(0x26, 0x2a, 0x32),
             datum: Rgb(0x1e, 0x8c, 0x6e),
+            contact: Rgb(0x6a, 0x8a, 0x00),
+            highlight: Rgb(0xd6, 0x00, 0x7f),
         },
     };
 
@@ -153,18 +155,39 @@ fn model_scene(d: &DisplayMesh, p: &Palette) -> Scene {
     s
 }
 
-/// The scene of the session: the model, or the results view's plot, and what it shows.
-pub fn scene(s: &Session, p: &Palette) -> (Scene, Aabb3, Shown) {
+/// The model part of a picture: the model or the results view's plot, the shape the symbols sit
+/// on (the deformed one of a plot), the box around it and what it shows.
+struct Picture {
+    scene: Scene,
+    drawn: DisplayMesh,
+    bounds: Aabb3,
+    shown: Shown,
+    glyphs: Glyphs,
+    colors: GlyphColors,
+}
+
+impl Picture {
+    /// The setup's symbols at symbol unit `unit` ([`glyphs::symbol_unit`]), in a scene of their
+    /// own; notes the definitions drawn with a sample. Returns the box around them.
+    fn symbols(&mut self, unit: f64, into: &mut Scene) -> Aabb3 {
+        let drawn = &self.drawn;
+        let view = GlyphView { show: GlyphShow::ALL, colors: &self.colors, unit, highlight: None };
+        let d = self.glyphs.draw(|label| drawn.node_position(label), &view, into);
+        self.shown.sampled = d.notes;
+        d.bounds
+    }
+}
+
+fn picture(s: &Session, p: &Palette) -> Picture {
     let (base, failed) = display(s);
     let glyphs = Glyphs::from_model(&s.model);
-    let mut shown = Shown { failed, sampled: glyphs.notes.clone(), ..Shown::default() };
+    let mut shown = Shown { failed, ..Shown::default() };
     let plot = s.results_view.as_ref().and_then(|v| s.latest_result(&v.step).map(|(r, _)| (v, r)));
     let Some((view, result)) = plot else {
-        let mut bounds = base.bounds;
         let mut scene = model_scene(&base, p);
-        bounds.union(glyphs.draw(|label| base.node_position(label), GlyphShow::ALL, &p.glyphs, &mut scene));
+        let mut bounds = base.bounds;
         bounds.union(fieldcraft_render::glyphs::datums(&s.model, &base.bounds, &p.glyphs, &mut scene));
-        return (scene, bounds, shown);
+        return Picture { scene, drawn: base, bounds, shown, glyphs, colors: p.glyphs };
     };
     shown.step = Some(view.step.clone());
     let pick = view.pick();
@@ -206,11 +229,21 @@ pub fn scene(s: &Session, p: &Palette) -> (Scene, Aabb3, Shown) {
             });
         }
     }
-    let symbols = glyphs.draw(|label| drawn.node_position(label), GlyphShow::ALL, &p.glyphs.over_results(p.background.1), &mut scene);
     let mut bounds = base.bounds;
     bounds.union(drawn.bounds);
-    bounds.union(symbols);
-    (scene, bounds, shown)
+    Picture { scene, drawn, bounds, shown, glyphs, colors: p.glyphs.over_results(p.background.1) }
+}
+
+/// The scene of the session (the model, or the results view's plot) with the setup's symbols
+/// at the model's own symbol unit, the box around it, and what it shows.
+pub fn scene(s: &Session, p: &Palette) -> (Scene, Aabb3, Shown) {
+    let mut pic = picture(s, p);
+    let mut symbols = Scene::default();
+    let b = pic.symbols(pic.glyphs.model_unit(), &mut symbols);
+    let mut scene = pic.scene;
+    scene.append(symbols);
+    pic.bounds.union(b);
+    (scene, pic.bounds, pic.shown)
 }
 
 /// A camera orientation from JSON, `{"yaw": …, "pitch": …, "distance"?: …}`: degrees, and the
@@ -231,16 +264,28 @@ pub fn orientation(p: &Value) -> Result<Orientation> {
 }
 
 /// A PNG of the session seen from `at`, `w` × `h` pixels: framing everything drawn, or from
-/// `at`'s distance when it has one.
+/// `at`'s distance when it has one. The symbols are drawn at their default size on screen
+/// ([`glyphs::DEFAULT_SIZE`] pixels) for that camera.
 pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette) -> Result<(Vec<u8>, Shown)> {
-    let (mut scene, bounds, shown) = scene(s, p);
+    let mut pic = picture(s, p);
     let mut cam = Camera::default();
+    let aspect = w as f64 / h.max(1) as f64;
+    let unit = |cam: &Camera| cam.length_per_pixel(h as f64).and_then(|l| glyphs::symbol_unit(l, glyphs::DEFAULT_SIZE)).unwrap_or(f64::NAN);
+    // Framed on the model, then again with its symbols at that camera's size, which reach a
+    // little beyond it.
     cam.orient(&Orientation { distance: None, ..*at });
-    cam.fit_in(&bounds, w as f64 / h.max(1) as f64, fieldcraft_render::FULL_VIEW);
+    cam.fit_in(&pic.bounds, aspect, fieldcraft_render::FULL_VIEW);
+    let mut symbols = Scene::default();
+    let mut framed = pic.bounds;
+    framed.union(pic.symbols(unit(&cam), &mut symbols));
+    cam.fit_in(&framed, aspect, fieldcraft_render::FULL_VIEW);
     cam.orient(at);
-    scene.radius = if bounds.is_empty() { 1.0 } else { (cam.target.dist(bounds.center()) + bounds.diagonal() * 0.5).max(1e-3) };
-    let png = fieldcraft_render::render_png(&scene, &cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;
-    Ok((png, shown))
+    symbols = Scene::default();
+    let mut bounds = pic.bounds;
+    bounds.union(pic.symbols(unit(&cam), &mut symbols));
+    pic.scene.radius = if bounds.is_empty() { 1.0 } else { (cam.target.dist(bounds.center()) + bounds.diagonal() * 0.5).max(1e-3) };
+    let png = fieldcraft_render::render_layers_png(&pic.scene, &[&symbols], &cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;
+    Ok((png, pic.shown))
 }
 
 #[cfg(test)]
@@ -259,10 +304,14 @@ mod tests {
         s.run_script(&crate::sample::cantilever()).unwrap();
         let (model, shown) = render_png(&s, &iso, 64, 48, &Palette::LIGHT).unwrap();
         assert_eq!(shown, Shown::default());
-        // The clamp's cones and the push's arrows are drawn in their colours.
+        // The clamp's triangles and the push's arrows are drawn in their colours, as wireframes.
         let (scene, ..) = super::scene(&s, &Palette::LIGHT);
-        assert!(scene.tris.iter().any(|t| t.color == Palette::LIGHT.glyphs.constraint));
+        assert!(scene.lines.iter().any(|l| l.color == Palette::LIGHT.glyphs.constraint));
         assert!(scene.lines.iter().any(|l| l.color == Palette::LIGHT.glyphs.load));
+        assert!(!scene.tris.iter().any(|t| t.color == Palette::LIGHT.glyphs.constraint));
+        // And in the picture: pixels of the clamp's colour.
+        let (png, _) = render_png(&s, &iso, 320, 240, &Palette::LIGHT).unwrap();
+        assert!(count_color(&png, Palette::LIGHT.glyphs.constraint) > 20);
         s.execute("solve.static", &json!({})).unwrap();
         let (plot, shown) = render_png(&s, &iso, 64, 48, &Palette::LIGHT).unwrap();
         assert_ne!(model, plot);
@@ -275,8 +324,30 @@ mod tests {
         // Over the plot the symbols are muted.
         let (scene, ..) = super::scene(&s, &Palette::LIGHT);
         let muted = Palette::LIGHT.glyphs.over_results(Palette::LIGHT.background.1);
-        assert!(scene.tris.iter().any(|t| t.color == muted.constraint));
-        assert!(!scene.tris.iter().any(|t| t.color == Palette::LIGHT.glyphs.constraint));
+        assert!(scene.lines.iter().any(|l| l.color == muted.constraint));
+        assert!(!scene.lines.iter().any(|l| l.color == Palette::LIGHT.glyphs.constraint));
+    }
+
+    /// Pixels of colour `c` (within a few levels) in a PNG.
+    fn count_color(png: &[u8], c: Rgb) -> usize {
+        let d = png::Decoder::new(std::io::Cursor::new(png));
+        let mut r = d.read_info().unwrap();
+        let mut buf = vec![0; r.output_buffer_size().unwrap()];
+        let info = r.next_frame(&mut buf).unwrap();
+        let close = |a: u8, b: u8| a.abs_diff(b) <= 6;
+        buf[..info.buffer_size()].chunks(4).filter(|p| close(p[0], c.0) && close(p[1], c.1) && close(p[2], c.2)).count()
+    }
+
+    /// The symbols are as large on screen in a close-up as in a distant view.
+    #[test]
+    fn symbols_keep_their_size_in_pictures_at_any_distance() {
+        let mut s = Session::default();
+        s.run_script(&crate::sample::cantilever()).unwrap();
+        let at = |d: f64| orientation(&json!({"yaw": -45, "pitch": 30, "distance": d})).unwrap();
+        let clamp = |d: f64| count_color(&render_png(&s, &at(d), 400, 300, &Palette::LIGHT).unwrap().0, Palette::LIGHT.glyphs.constraint);
+        let (near, far) = (clamp(120.0), clamp(1200.0));
+        // Zoomed out ten times, the symbols are as large (a few overlap and thin out).
+        assert!(far > 30 && far * 4 > near, "near {near}, far {far}");
     }
 
     #[test]

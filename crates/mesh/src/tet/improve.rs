@@ -23,7 +23,7 @@ use crate::predicates::Point3;
 use super::complex::{EDGES, IdMap, NONE, Step, TetComplex, VertexKind, Walk, face_toward, sorted4};
 use super::measure::{self, P};
 use super::ops::{self, Site, remove_edge_at, remove_face, tet_quality};
-use super::refine::{Context, MAX_CAVITY};
+use super::refine::{Context, MAX_CAVITY, MIN_GAP};
 use super::smooth::smooth_vertex;
 
 /// Settings of the schedule.
@@ -293,7 +293,11 @@ fn attempt_insert(cx: &mut TetComplex, ctx: &Context, p: Point3, kind: VertexKin
     cx.journal.recording = true;
     let len = cx.journal.steps.len();
     let kept = (|| -> Result<bool> {
-        let Some(v) = ops::insert_delaunay(cx, p, kind, site, MAX_CAVITY)? else { return Ok(false) };
+        // Refused within MIN_GAP of the local size of an existing vertex, as in refinement: a
+        // tetrahedron that stays below the target would otherwise draw an insertion every pass
+        // and pile vertices around one of its own, whose star then grows without bound (#311).
+        let gap = MIN_GAP * ctx.h(p.coords(), 0.0);
+        let Some(v) = ops::insert_delaunay_apart(cx, p, kind, site, MAX_CAVITY, gap)? else { return Ok(false) };
         for _ in 0..4 {
             smooth_vertex(cx, ctx, v)?;
             if !cx.is_used(v) {
@@ -501,4 +505,55 @@ pub fn improve(cx: &mut TetComplex, ctx: &Context, o: &ImproveOptions) -> Result
         stats.stopped = Some(format!("improvement stopped at {} inserted vertices", o.max_insertions));
     }
     Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cdt::tests::{surface, uv_sphere};
+    use crate::cdt::{CdtOptions, tetrahedralize};
+    use crate::size::UniformSize;
+    use crate::surface::{BoundarySurface, SurfaceOptions};
+    use crate::tet::geometry::Tessellation;
+    use crate::tet::{QualityOptions, complex_from_cdt};
+
+    /// An insertion closer than `MIN_GAP` × the local size to an existing vertex is refused,
+    /// whatever it would do to the quality (#311): a stubborn tetrahedron must not draw vertex
+    /// after vertex onto one of its own.
+    #[test]
+    fn an_insertion_beside_an_existing_vertex_is_refused() {
+        const H: f64 = 100.0;
+        let (p, t) = uv_sphere(6, 10);
+        let p: Vec<[f64; 3]> = p.iter().map(|c| c.map(|x| 5.0 * x)).collect();
+        let s = surface(&p, &t, [0.0; 3]);
+        let faces = vec![0u32; s.triangles().len()];
+        let s = BoundarySurface::new(s.points(), s.triangles(), &faces, &SurfaceOptions::default()).unwrap();
+        let cdt = tetrahedralize(&s, &CdtOptions::default()).unwrap();
+        let (mut cx, curve_faces) = complex_from_cdt(&s, &cdt, &QualityOptions::default()).unwrap();
+        let (geometry, size) = (Tessellation::new(&s, Vec::new()), UniformSize(H));
+        let ctx = Context { size: &size, geometry: &geometry, curve_faces: &curve_faces };
+        let (points, live) = (cx.point_count(), cx.live_count());
+        let mut tried = 0;
+        for (t, vs) in cx.live_tets().collect::<Vec<_>>() {
+            if !cx.is_live(t) {
+                continue;
+            }
+            // A point half the gap from each vertex toward the centroid: unguarded, the coarse
+            // sphere keeps some of these.
+            let g = measure::centroid(&cx.coords(vs).unwrap());
+            for v in vs {
+                let x = cx.xyz(v).unwrap();
+                let d = measure::sub(g, x);
+                let q = measure::add(x, measure::scale(d, 0.5 * MIN_GAP * H / measure::norm(d)));
+                let q = Point3::try_from(q).unwrap();
+                if let Some(Walk::Inside(at)) = cx.walk(t, &q, 1 << 12).unwrap() {
+                    tried += 1;
+                    assert!(!attempt_insert(&mut cx, &ctx, q, VertexKind::Interior, Site::Interior(at)).unwrap());
+                }
+            }
+        }
+        assert!(tried > 0);
+        assert_eq!((cx.point_count(), cx.live_count()), (points, live));
+        cx.validate().unwrap();
+    }
 }

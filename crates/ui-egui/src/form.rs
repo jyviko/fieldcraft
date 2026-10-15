@@ -100,6 +100,14 @@ fn wrapped_width(ui: &Ui, label: &str, required: bool, help: bool, mut lo: f32, 
     hi.ceil()
 }
 
+/// Narrowest box of a vector component on a shared line: wide enough for `-12000.5`.
+const VECTOR_MIN: f32 = 64.0;
+
+/// A definition's name field (`name`, `new_name`), whose text must be a deck-safe name.
+fn is_name(f: &Field) -> bool {
+    matches!(f.kind, Kind::Text) && matches!(f.key, "name" | "new_name")
+}
+
 /// A field's width: the rest of its row.
 fn fill(ui: &Ui) -> f32 {
     ui.available_width().max(FIELD_MIN)
@@ -227,6 +235,9 @@ impl Form<'_> {
                     };
                     self.touch(&path);
                 }
+                if is_name(f) && ui.data(|d| d.get_temp::<bool>(self.id(&path).with("spaced"))).unwrap_or(false) {
+                    fields::note(ui, &self.style, "Spaces become _ (names go into solver decks).", self.style.dim);
+                }
                 if let Some(note) = f.note(obj.get(f.key).and_then(Value::as_str)) {
                     fields::note(ui, &self.style, note, self.style.dim);
                 }
@@ -253,10 +264,18 @@ impl Form<'_> {
             Kind::Integer { .. } => self.number(ui, id, value, f.hint, true, fill(ui)),
             Kind::Text | Kind::Path { .. } => {
                 let mut text = value.and_then(Value::as_str).unwrap_or_default().to_string();
-                fields::text(ui, &s, id, &mut text, f.hint, fill(ui)).then(|| if text.is_empty() && !f.required { Value::Null } else { json!(text) })
+                let changed = fields::text(ui, &s, id, &mut text, f.hint, fill(ui));
+                // Definition names go into solver decks, which take no spaces: a typed space
+                // becomes `_`, and the field says so.
+                if changed && is_name(f) && text.contains(' ') {
+                    text = text.replace(' ', "_");
+                    ui.data_mut(|d| d.insert_temp(id.with("spaced"), true));
+                }
+                changed.then(|| if text.is_empty() && !f.required { Value::Null } else { json!(text) })
             }
             Kind::Bool => {
-                let mut on = value.and_then(Value::as_bool).unwrap_or(false);
+                // An unset key runs with the field's default, so the box shows that.
+                let mut on = value.and_then(Value::as_bool).unwrap_or(f.default == Some("true"));
                 let r = ui.checkbox(&mut on, "");
                 if !f.hint.is_empty() {
                     r.clone().on_hover_text(f.hint);
@@ -297,7 +316,7 @@ impl Form<'_> {
                     None => Some(Value::Null),
                 })
             }
-            Kind::Json => self.json(ui, id, value),
+            Kind::Json => self.json(ui, id, value, f.hint),
             Kind::Unit | Kind::Group(_) | Kind::Variants { .. } | Kind::Rows { .. } => None,
         }
     }
@@ -348,12 +367,20 @@ impl Form<'_> {
         };
         let mut next = current.clone();
         let mut changed = false;
-        let width = if labels.len() > 3 { 30.0 } else { 34.0 };
         let unit = f.unit_label(self.cx.units);
+        // Up to three components share a line when each still shows a value such as -12000
+        // whole; otherwise each takes a line of its own.
+        let gap = 3.0;
+        let small = egui::TextStyle::Small.resolve(ui.style());
+        let caption_w = labels.iter().map(|l| crate::elide::width(ui, &caption(l), &small)).fold(0.0, f32::max) + 2.0 * gap;
+        let room = fill(ui) - fields::unit_width(ui, unit.as_deref());
+        let three = labels.len().clamp(1, 3);
+        let per_line = if (room / three as f32 - caption_w) >= VECTOR_MIN { three } else { 1 };
+        let width = (room / per_line as f32 - caption_w - 1.0).max(34.0);
         ui.vertical(|ui| {
-            for chunk in (0..labels.len()).collect::<Vec<_>>().chunks(3) {
+            for chunk in (0..labels.len()).collect::<Vec<_>>().chunks(per_line) {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
+                    ui.spacing_mut().item_spacing.x = gap;
                     for &i in chunk {
                         let hint = labels.get(i).copied().unwrap_or("");
                         fields::caption(ui, &self.style, &caption(hint));
@@ -366,7 +393,7 @@ impl Form<'_> {
                             changed = true;
                         }
                     }
-                    if chunk.first() == Some(&0) {
+                    if chunk.first() == Some(&0) || per_line == 1 {
                         fields::unit(ui, &self.style, unit.as_deref());
                     }
                 });
@@ -435,11 +462,16 @@ impl Form<'_> {
     }
 
     /// A JSON value typed as text: kept while it does not parse.
-    fn json(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>) -> Option<Value> {
+    /// Empty, it shows `hint` (the expected format) greyed.
+    fn json(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, hint: &str) -> Option<Value> {
         let shown = value.map(Value::to_string).unwrap_or_default();
         let mut text = ui.data(|d| d.get_temp::<(String, String)>(id)).filter(|(_, over)| *over == shown).map_or_else(|| shown.clone(), |(t, _)| t);
         let bad = !text.trim().is_empty() && serde_json::from_str::<Value>(&text).is_err();
-        let mut edit = egui::TextEdit::singleline(&mut text).id(id).code_editor().desired_width(fill(ui));
+        let mut edit = egui::TextEdit::singleline(&mut text)
+            .id(id)
+            .code_editor()
+            .desired_width(fill(ui))
+            .hint_text(RichText::new(hint).italics().color(self.style.dim));
         if bad {
             edit = edit.text_color(self.style.error);
             self.out.invalid += 1;

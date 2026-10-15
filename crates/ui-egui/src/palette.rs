@@ -76,16 +76,33 @@ pub fn submit(app: &mut ModelApp, line: &str) {
     app.with_origin(fieldcraft_engine::usage::Origin::Palette, |app| submit_line(app, line));
 }
 
+/// A line split into its first word and the rest (`id {json}`).
+fn split_line(line: &str) -> (&str, &str) {
+    let line = line.trim();
+    match line.find(|c: char| c.is_whitespace() || c == '{') {
+        Some(i) => (line.get(..i).unwrap_or(line), line.get(i..).unwrap_or("").trim()),
+        None => (line, ""),
+    }
+}
+
+fn is_command(id: &str) -> bool {
+    fieldcraft_engine::find_command(id).is_some() || catalogue::find(id).is_some()
+}
+
+/// The command a line typed into the search names with its parameters (`id {json}`), which the
+/// search offers to run as typed instead of searching for it.
+pub fn typed_command(line: &str) -> Option<&str> {
+    let (id, rest) = split_line(line);
+    (is_command(id) && !rest.is_empty()).then_some(id)
+}
+
 fn submit_line(app: &mut ModelApp, line: &str) {
     let line = line.trim();
     if line.is_empty() {
         return;
     }
-    let (id, rest) = match line.find(|c: char| c.is_whitespace() || c == '{') {
-        Some(i) => (line.get(..i).unwrap_or(line), line.get(i..).unwrap_or("").trim()),
-        None => (line, ""),
-    };
-    if fieldcraft_engine::find_command(id).is_some() || catalogue::find(id).is_some() {
+    let (id, rest) = split_line(line);
+    if is_command(id) {
         if rest.is_empty() {
             let _ = app.start(id);
         } else {
@@ -180,6 +197,7 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
     }
     let t = Tokens::get(app.ui.dark);
     let mut picked: Option<&'static str> = None;
+    let mut run_typed = false;
     let mut open = true;
     let center = ctx.content_rect().center();
     let r = crate::frame::window(ctx, "Search commands", crate::frame::Width::Normal)
@@ -202,11 +220,36 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
                 app.search = Some((app.palette_text.clone(), std::sync::Arc::new(matches(&app.palette_text))));
             }
             let list = app.search.as_ref().map(|(_, l)| l.clone()).unwrap_or_default();
+            // `id {json}` typed here (say, typing began with no field focused) runs as typed.
+            let typed = typed_command(&app.palette_text).is_some();
             if entered {
-                picked = list.iter().find(|h| h.soon.is_none() && app.unavailable(h.id).is_none()).map(|h| h.id);
+                if typed {
+                    run_typed = true;
+                } else {
+                    picked = list.iter().find(|h| h.soon.is_none() && app.unavailable(h.id).is_none()).map(|h| h.id);
+                }
             }
             egui::ScrollArea::vertical().max_height(320.0).auto_shrink([false, true]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
+                if typed {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+                    ui.painter().rect_filled(rect, 3.0, t.hover);
+                    let font = FontId::proportional(13.0);
+                    let text = format!("Run {}", app.palette_text.trim());
+                    let shown = crate::elide::middle_in(ui, &text, &font, rect.width() - 80.0);
+                    ui.painter().text(pos2(rect.left() + 8.0, rect.center().y), Align2::LEFT_CENTER, shown.as_ref(), font, t.text);
+                    ui.painter().text(
+                        pos2(rect.right() - 6.0, rect.center().y),
+                        Align2::RIGHT_CENTER,
+                        "Enter",
+                        FontId::proportional(11.0),
+                        t.text_dim,
+                    );
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Run as typed"));
+                    if resp.on_hover_text("Run the command with these parameters").clicked() {
+                        run_typed = true;
+                    }
+                }
                 for h in list.iter().take(MAX_RESULTS) {
                     // Coming soon, or missing what its command needs: listed, greyed, with why.
                     let missing = app.unavailable(h.id);
@@ -248,7 +291,11 @@ pub fn popup(app: &mut ModelApp, ctx: &egui::Context) {
     if let Some(r) = r {
         app.place("palette", r.response.rect);
     }
-    if let Some(id) = picked {
+    if run_typed {
+        let line = std::mem::take(&mut app.palette_text);
+        app.ui.palette = false;
+        submit(app, &line);
+    } else if let Some(id) = picked {
         app.palette_text.clear();
         app.ui.palette = false;
         let _ = app.with_origin(fieldcraft_engine::usage::Origin::Palette, |app| app.start(id));
@@ -294,5 +341,13 @@ mod tests {
         assert!(app.status.as_ref().is_some_and(|s| s.error));
         submit(&mut app, "zzzz qqqq");
         assert!(app.status.as_ref().is_some_and(|s| s.error && s.text.contains("no command")));
+    }
+
+    #[test]
+    fn the_search_offers_to_run_a_typed_command() {
+        assert_eq!(typed_command(r#"results.contour {"field":"von_mises"}"#), Some("results.contour"));
+        assert_eq!(typed_command(r#"  mesh.node.add{"label": 1}"#), Some("mesh.node.add"));
+        assert_eq!(typed_command("mesh.node.add"), None, "an id alone is searched for");
+        assert_eq!(typed_command("material steel"), None);
     }
 }

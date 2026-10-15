@@ -393,14 +393,13 @@ fn quality(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>) {
             acts.push(Act::Elements(l));
         }
     }
-    if let Some(worst) = v.pointer("/metrics/scaled_jacobian/worst").and_then(Value::as_u64).and_then(|w| u32::try_from(w).ok()) {
-        if ui
+    if let Some(worst) = v.pointer("/metrics/scaled_jacobian/worst").and_then(Value::as_u64).and_then(|w| u32::try_from(w).ok())
+        && ui
             .button("Relax around worst element")
             .on_hover_text("Open Relax Nodes with its sphere round the element of smallest scaled Jacobian; preview, then OK")
             .clicked()
-        {
-            acts.push(Act::Relax(worst));
-        }
+    {
+        acts.push(Act::Relax(worst));
     }
     for (key, label, low_bad) in METRICS {
         let Some(m) = v.pointer(&format!("/metrics/{key}")).filter(|m| m.is_object()) else { continue };

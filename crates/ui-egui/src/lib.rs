@@ -36,6 +36,7 @@ pub mod frame;
 pub mod framing;
 pub mod gpu;
 pub mod icons;
+pub mod navigation;
 pub mod palette;
 pub mod reply;
 pub mod results;
@@ -55,7 +56,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use fieldcraft_engine::catalogue::{self, Tab, Workspace};
 use fieldcraft_engine::{EngineError, Session};
 use fieldcraft_render::glyphs::Glyphs;
-use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView};
+use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView, Vec3};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -87,6 +88,10 @@ pub struct UiState {
     pub show_tree: bool,
     /// The journal timeline (bottom).
     pub show_timeline: bool,
+    /// The mouse navigation preset ([`navigation::NAV_PRESETS`] id; remembered per user).
+    pub nav_preset: String,
+    /// The wheel zooms the other way (remembered per user).
+    pub reverse_zoom: bool,
     /// The workspace shown, and its toolbar tab.
     pub workspace: Workspace,
     pub tab: Tab,
@@ -110,6 +115,8 @@ impl Default for UiState {
             dark: true,
             show_tree: true,
             show_timeline: true,
+            nav_preset: navigation::DEFAULT_PRESET.into(),
+            reverse_zoom: false,
             workspace: Workspace::default(),
             tab: Tab::default(),
             palette: false,
@@ -254,6 +261,10 @@ pub struct Viewport {
     /// The overlays drawn over the viewport last frame (legend, selection bar, gizmo, navigation
     /// bar): a fit leaves them free ([`framing::free_part`]).
     pub overlays: Vec<egui::Rect>,
+    /// What the current drag does to the camera, chosen when it starts.
+    pub drag: Option<NavMode>,
+    /// The point the current orbit turns about (drawn as a marker while orbiting).
+    pub orbit_pivot: Option<Vec3>,
 }
 
 /// A probed node: its values as lines of text, for the step, mode and frame they were read from.
@@ -352,6 +363,8 @@ pub struct ModelApp {
     /// Recently opened and saved files.
     pub recent: files::Recent,
     /// The user's preferences as last saved.
+    prefs: files::Prefs,
+    /// The user's preferences as last saved.
     /// The setup progress the browser marks, and what it was worked out for.
     setup: (Option<(u64, u64, bool, bool)>, std::sync::Arc<Vec<fieldcraft_engine::progress::StageState>>),
     /// The file opening in the background, and files waiting to open after it.
@@ -431,6 +444,7 @@ impl ModelApp {
             quit_requested: false,
             services: files::Services::default(),
             recent: files::Recent::default(),
+            prefs: files::Prefs::default(),
             setup: (None, std::sync::Arc::default()),
             loading: None,
             queued: std::collections::VecDeque::new(),
@@ -463,6 +477,9 @@ impl ModelApp {
     /// Use the host's services (file pickers, the recent-files file) and load the recent list.
     pub fn with_services(mut self, services: files::Services) -> Self {
         self.recent = files::Recent::load(services.recent_path.clone());
+        self.prefs = files::Prefs::load(services.prefs_path.as_deref());
+        self.ui.nav_preset = self.prefs.nav_preset.clone();
+        self.ui.reverse_zoom = self.prefs.reverse_zoom;
         self.services = services;
         self
     }
@@ -950,6 +967,32 @@ impl ModelApp {
         Some(fieldcraft_render::pick::Projector::new(&self.cam, f64::from(rect.width()), f64::from(rect.height()), radius))
     }
 
+    /// The nearest drawn point under window point `at`: the pick ray's first hit on the results
+    /// plot when one shows, else on the shown elements' faces or the design's surfaces.
+    pub fn surface_point(&mut self, at: egui::Pos2) -> Option<Vec3> {
+        let rect = self.viewport.rect.filter(|r| r.contains(at))?;
+        let (o, d) = self.cam.ray(f64::from(at.x - rect.left()), f64::from(at.y - rect.top()), f64::from(rect.width()), f64::from(rect.height()));
+        let t = if let Some(plot) = self.plot() {
+            plot.display.hit_element_face(o, d).map(|h| h.t)
+        } else {
+            let (mesh, geometry) = (self.ui.show_mesh, self.ui.show_geometry);
+            let display = self.display();
+            let faces = mesh.then(|| display.hit_element_face(o, d)).flatten().map(|h| h.t);
+            let surface = geometry.then(|| display.hit_surface(o, d)).flatten().map(|h| h.t);
+            faces.into_iter().chain(surface).min_by(f64::total_cmp)
+        }?;
+        let p = o + d * t;
+        p.is_finite().then_some(p)
+    }
+
+    /// What an orbit that starts on empty space turns about: the centre of what is drawn (the
+    /// target when nothing is).
+    pub fn drawn_centre(&mut self) -> Vec3 {
+        self.scene();
+        let b = self.drawn_bounds();
+        if b.is_empty() || !b.center().is_finite() { self.cam.target } else { b.center() }
+    }
+
     /// What a click at window point `at` would pick with the current filter.
     pub fn pick_at(&mut self, at: egui::Pos2) -> Option<selection::Item> {
         let rect = self.viewport.rect.filter(|r| r.contains(at))?;
@@ -1325,6 +1368,7 @@ impl ModelApp {
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
         }
+        self.save_prefs();
     }
 
     /// The setup progress ([`fieldcraft_engine::progress`]) the browser marks, worked out again
@@ -1336,6 +1380,14 @@ impl ModelApp {
             self.setup = (Some(key), std::sync::Arc::new(self.session.progress()));
         }
         self.setup.1.clone()
+    }
+
+    /// Save the preferences the window changed (a View menu toggle, `ui.set`).
+    pub(crate) fn save_prefs(&mut self) {
+        if self.ui.nav_preset != self.prefs.nav_preset || self.ui.reverse_zoom != self.prefs.reverse_zoom {
+            self.prefs = files::Prefs { nav_preset: self.ui.nav_preset.clone(), reverse_zoom: self.ui.reverse_zoom };
+            self.prefs.save(self.services.prefs_path.as_deref());
+        }
     }
 
     /// Remember where a region of the window was drawn (`ui.inspect`'s `layout`).
@@ -2102,5 +2154,34 @@ mod tests {
         app.show_gpu_errors();
         assert_eq!(app.status, Some(Status { text: "Graphics: Out of Memory".into(), error: true }));
         assert!(app.viewport.gpu_errors.lock().unwrap().is_none(), "each error is shown once");
+    }
+
+    /// An orbit pivots on the model point under the press (the pick ray's first hit, on the
+    /// face toward the eye) and keeps it still on screen; from empty space it pivots on the
+    /// centre of what is drawn (#262).
+    #[test]
+    fn orbit_pivots_on_the_point_under_the_cursor_or_the_drawn_centre() {
+        let corners = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 10], [10, 0, 10], [10, 10, 10], [0, 10, 10]];
+        let mut app = ModelApp::new(Session::default());
+        app.run("mesh.block", json!({"body": "Bar", "kind": "hex8", "corners": corners, "divisions": [2, 2, 2]})).unwrap();
+        app.viewport.rect = Some(egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(800.0, 600.0)));
+        app.set_view(StandardView::Right);
+        app.fit_view();
+        // The right view looks along −X: the face under the cursor is x = 10.
+        let on = Vec3::new(10.0, 7.0, 3.0);
+        let at = viewport::to_screen(&app, on).unwrap();
+        let pivot = app.surface_point(at).unwrap();
+        assert!(pivot.dist(on) < 1e-6, "{pivot:?}");
+        app.cam.orbit_about(pivot, 60.0, -30.0);
+        let after = viewport::to_screen(&app, pivot).unwrap();
+        assert!((after - at).length() < 1e-3, "{at:?} -> {after:?}");
+        // Empty space: the centre of the drawn bounds.
+        let pivot = app.drawn_centre();
+        assert!(pivot.dist(Vec3::new(5.0, 5.0, 5.0)) < 1e-6, "{pivot:?}");
+        assert!(app.surface_point(egui::pos2(105.0, 55.0)).is_none());
+        // Nothing drawn: the target.
+        let mut empty = ModelApp::new(Session::default());
+        empty.cam.target = Vec3::new(1.0, 2.0, 3.0);
+        assert_eq!(empty.drawn_centre(), Vec3::new(1.0, 2.0, 3.0));
     }
 }

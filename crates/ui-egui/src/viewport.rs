@@ -1,9 +1,12 @@
 //! The 3D viewport: the model drawn on the GPU (or on the CPU without one), camera navigation,
 //! the navigation bar (bottom centre) and the orientation gizmo (top right), as in SolidCraft.
 //!
-//! Navigation: left drag orbits (or pans or zooms: the navigation bar's modes), right or middle
-//! drag (or Shift + left drag) pans, the wheel or a pinch zooms at the cursor, a double click or F
-//! frames the model. The gizmo's axis tips turn the view to look along them. The bar and the gizmo
+//! Navigation ([`crate::navigation`] presets, chosen in the display menu): by default left drag
+//! orbits (or pans or zooms: the navigation bar's modes), right or middle drag (or Shift + left
+//! drag) pans, Ctrl + left drag from empty space orbits. An orbit turns about the model point
+//! under the press (marked while orbiting), or the centre of what is drawn from empty space. The
+//! wheel or a pinch zooms toward the model point under the cursor; a double click or F frames
+//! the model. The gizmo's axis tips turn the view to look along them. The bar and the gizmo
 //! follow SolidCraft's `viewport.rs` (MIT OR Apache-2.0), see ATTRIBUTION.md.
 //!
 //! Selection ([`crate::selection`]): what a click would pick is highlighted under the pointer; a
@@ -17,6 +20,7 @@ use fieldcraft_render::{StandardView, Vec3};
 
 use crate::gpu::{GpuScene, ViewportCallback};
 use crate::icons::{self, Look};
+use crate::navigation::{self, NavButton};
 use crate::selection::{Filter, Mode};
 use crate::theme::Tokens;
 use crate::{ModelApp, NavMode, Style};
@@ -34,7 +38,7 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let boxing = app.pick.box_mode && app.pick.filter.boxes();
     navigate(app, ui, &response, rect, boxing);
-    if boxing {
+    if boxing && app.viewport.drag.is_none() {
         box_drag(app, ui, &response);
     }
     if response.clicked()
@@ -57,6 +61,7 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     }
     sampled_note(app, &painter, rect, &t);
     hover_label(app, &painter, &t);
+    pivot_marker(app, &painter, &t);
     if let Some((a, b)) = app.pick.dragging {
         let r = Rect::from_two_pos(a, b);
         painter.rect(r, 0.0, t.pick_selected.gamma_multiply(0.12), Stroke::new(1.0, t.pick_selected), egui::StrokeKind::Inside);
@@ -252,30 +257,95 @@ fn selection_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) 
     app.place("selection_bar", shown.response.rect);
 }
 
+/// Camera navigation. A drag's effect is chosen when it starts ([`navigation::drag_mode`]: the
+/// preset's bindings, the bar's mode for the left button); an orbit turns about the model point
+/// under the press, or the centre of what is drawn when it starts on empty space, and keeps that
+/// point still on screen. The wheel (raw, so a notch zooms in full on the frame it arrives) and a
+/// pinch zoom toward the model point under the cursor, or the point at the target's depth.
 fn navigate(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response, rect: Rect, boxing: bool) {
     let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
+    let (mods, press) = ui.input(|i| (i.modifiers, i.pointer.press_origin()));
+    for (pressed, button) in [
+        (egui::PointerButton::Primary, NavButton::Left),
+        (egui::PointerButton::Middle, NavButton::Middle),
+        (egui::PointerButton::Secondary, NavButton::Right),
+    ] {
+        if response.drag_started_by(pressed) {
+            let at = press.or(response.interact_pointer_pos());
+            let preset = navigation::preset(&app.ui.nav_preset);
+            // The pick is needed only for an orbit's pivot and an unbound Ctrl + left drag.
+            let picked = preset.mode(button, mods).is_none() && button == NavButton::Left && (mods.ctrl || mods.command);
+            let hit = if picked { at.and_then(|a| app.surface_point(a)) } else { None };
+            app.viewport.drag = navigation::drag_mode(preset, button, mods, app.nav, boxing, hit.is_some());
+            app.viewport.orbit_pivot = None;
+            if app.viewport.drag == Some(NavMode::Orbit) {
+                let hit = if picked { hit } else { at.and_then(|a| app.surface_point(a)) };
+                app.viewport.orbit_pivot = Some(hit.unwrap_or_else(|| app.drawn_centre()));
+            }
+        }
+    }
     let d = response.drag_delta();
     let (dx, dy) = (f64::from(d.x), f64::from(d.y));
-    let shift = ui.input(|i| i.modifiers.shift);
-    // In box selection a left drag draws the box.
-    let left = response.dragged_by(egui::PointerButton::Primary) && !boxing;
-    if left && !shift && app.nav == NavMode::Orbit {
-        app.cam.orbit(dx, dy);
-    } else if left && !shift && app.nav == NavMode::Zoom {
-        app.cam.zoom_at((dy * ZOOM_PER_POINT * 4.0).exp(), None);
-    } else if response.dragged_by(egui::PointerButton::Secondary) || response.dragged_by(egui::PointerButton::Middle) || left {
-        app.cam.pan(dx, dy, h);
+    if response.dragged() && (dx != 0.0 || dy != 0.0) {
+        match app.viewport.drag {
+            Some(NavMode::Orbit) => match app.viewport.orbit_pivot {
+                Some(p) => app.cam.orbit_about(p, dx, dy),
+                None => app.cam.orbit(dx, dy),
+            },
+            Some(NavMode::Pan) => app.cam.pan(dx, dy, h),
+            Some(NavMode::Zoom) => app.cam.zoom_at((dy * ZOOM_PER_POINT * 4.0 * zoom_sign(app)).exp(), None),
+            None => {}
+        }
+    }
+    if !response.dragged() {
+        app.viewport.drag = None;
+        app.viewport.orbit_pivot = None;
     }
     if response.double_clicked() || (response.hovered() && ui.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.is_none())) {
         app.fit_view();
     }
     if response.hovered() {
-        let (scroll, pinch, at) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta(), i.pointer.hover_pos()));
-        let factor = (-f64::from(scroll) * ZOOM_PER_POINT).exp() / f64::from(pinch).max(1e-3);
+        let options = ui.ctx().options(|o| o.input_options);
+        let (scroll, pinch, at) = ui.input(|i| (wheel_points(i, &options), i.zoom_delta(), i.pointer.hover_pos()));
+        let factor = (-f64::from(scroll) * ZOOM_PER_POINT * zoom_sign(app)).exp() / f64::from(pinch).max(1e-3);
         if (factor - 1.0).abs() > 1e-9 {
-            let anchor = at.and_then(|p| app.cam.target_plane_point(f64::from(p.x - rect.left()), f64::from(p.y - rect.top()), w, h));
+            let anchor = at.and_then(|p| {
+                app.surface_point(p).or_else(|| app.cam.target_plane_point(f64::from(p.x - rect.left()), f64::from(p.y - rect.top()), w, h))
+            });
             app.cam.zoom_at(factor, anchor);
         }
+    }
+}
+
+/// This frame's wheel and trackpad scrolling, vertical, in points, as it arrived: egui's smoothed
+/// delta spreads a notch over the next frames and loses its tail when no more frames come (a
+/// hidden window). Lines count as egui counts them; scrolling with the zoom modifier is egui's
+/// zoom ([`egui::InputState::zoom_delta`]) and left out.
+fn wheel_points(i: &egui::InputState, options: &egui::InputOptions) -> f32 {
+    i.events
+        .iter()
+        .filter_map(|e| match e {
+            egui::Event::MouseWheel { unit, delta, modifiers, .. } if !modifiers.matches_any(options.zoom_modifier) => Some(match unit {
+                egui::MouseWheelUnit::Point => delta.y,
+                egui::MouseWheelUnit::Line => delta.y * options.line_scroll_speed,
+                egui::MouseWheelUnit::Page => delta.y * i.viewport_rect().height(),
+            }),
+            _ => None,
+        })
+        .filter(|d| d.is_finite())
+        .sum()
+}
+
+/// −1 when the wheel is reversed (the preference), else 1.
+fn zoom_sign(app: &ModelApp) -> f64 {
+    if app.ui.reverse_zoom { -1.0 } else { 1.0 }
+}
+
+/// The orbit's pivot, while orbiting: a small ring with a dot.
+fn pivot_marker(app: &ModelApp, painter: &egui::Painter, t: &Tokens) {
+    if let Some(at) = app.viewport.orbit_pivot.and_then(|p| to_screen(app, p)) {
+        painter.circle_filled(at, 2.5, t.accent);
+        painter.circle_stroke(at, 6.0, Stroke::new(1.5, t.accent));
     }
 }
 
@@ -560,6 +630,22 @@ fn nav_bar(app: &mut ModelApp, ui: &mut egui::Ui, rect: Rect, t: &Tokens) {
             ui.separator();
             ui.checkbox(&mut app.ui.show_tree, "Browser");
             ui.checkbox(&mut app.ui.show_timeline, "Timeline");
+            ui.separator();
+            crate::frame::menu_heading(ui, &t, "NAVIGATION");
+            let current = navigation::preset(&app.ui.nav_preset);
+            egui::ComboBox::from_id_salt("fc_nav_preset")
+                .selected_text(current.label)
+                .show_ui(ui, |ui| {
+                    for p in &navigation::NAV_PRESETS {
+                        if ui.selectable_label(p.id == current.id, p.label).on_hover_text(p.help).clicked() {
+                            app.ui.nav_preset = p.id.into();
+                            app.ui.reverse_zoom = p.reverse_zoom;
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(current.help);
+            ui.checkbox(&mut app.ui.reverse_zoom, "Reverse zoom").on_hover_text("The wheel zooms the other way");
         });
     }
 }

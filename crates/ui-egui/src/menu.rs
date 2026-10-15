@@ -1,7 +1,8 @@
 //! The item menu: what a right click on a browser row offers, and on a datum or a partition's cut
 //! face in the viewport. Edit… opens the item's edit form, Hide/Show and Isolate change the view
 //! (`view.*`), Active in step switches a boundary condition or load on or off per step
-//! (`model.step.activate`), and Delete… asks first (a seed's Delete clears it at once: undo brings
+//! (`model.step.activate`), Rename… opens `model.rename` (every reference follows the new
+//! name), and Delete… asks first (a seed's Delete clears it at once: undo brings
 //! it back) ([`crate::files::Prompt::Delete`]): it lists
 //! the definitions that use the item, and refuses, or for a datum deletes its partitions with it.
 //! Every entry runs the same command as the ribbon, the forms and scripts.
@@ -42,6 +43,8 @@ impl Target {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Edit,
+    /// Rename a definition (`model.rename`'s form, filled in).
+    Rename,
     Hide,
     Show,
     Isolate,
@@ -76,6 +79,9 @@ pub fn show(app: &ModelApp, ui: &mut egui::Ui, target: &Target) -> Option<Action
         let edit = def.edit_command(&app.session.model, name);
         let tip = edit.clone().unwrap_or_else(|| "Not editable: delete it and make it again".to_string());
         entry(ui, edit.is_some(), "Edit…", &tip, Action::Edit);
+        if def.rename_kind().is_some() {
+            entry(ui, true, "Rename…", "model.rename: every definition that refers to it follows", Action::Rename);
+        }
     }
     if let Target::Seed(_) = target {
         entry(ui, true, "Edit…", "mesh.seed.edge", Action::Edit);
@@ -139,6 +145,15 @@ pub fn apply(app: &mut ModelApp, target: Target, action: Action) {
             {
                 app.select_seed(edge);
                 app.open_form("mesh.seed.edge", params);
+            }
+            Ok(Value::Null)
+        }
+        Action::Rename => {
+            if let Target::Def(def, name) = &target
+                && let Some(kind) = def.rename_kind()
+            {
+                app.select_definition(Some((*def, name.clone())));
+                app.open_form("model.rename", json!({"kind": kind, "from": name, "to": name}));
             }
             Ok(Value::Null)
         }
@@ -277,6 +292,23 @@ mod tests {
         let one = cut.first().cloned().unwrap();
         app.open_form("geometry.partition", json!({"name": "Q", "datum": "Cut", "bodies": [one.clone()]}));
         assert_eq!(app.partition_preview(), vec![one]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Rename… opens `model.rename` filled in; running it renames the datum, its partition
+    /// follows and the browser keeps it selected under the new name (#290).
+    #[test]
+    fn rename_from_the_menu_follows_the_selection() {
+        let (mut app, dir) = plate();
+        apply(&mut app, Target::Def(Def::Datum, "Mid".into()), Action::Rename);
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("model.rename"));
+        let params: Value = serde_json::from_str(&app.dialog.as_ref().unwrap().text).unwrap();
+        assert_eq!((params["kind"].as_str(), params["from"].as_str()), (Some("datum"), Some("Mid")));
+        app.dialog = None;
+        app.run("model.rename", json!({"kind": "datum", "from": "Mid", "to": "Centre"})).unwrap();
+        assert_eq!(app.selected, Some((Def::Datum, "Centre".to_string())));
+        assert_eq!(app.session.model.partitions()[0].datum, "Centre");
+        assert!(Def::Partition.rename_kind().is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 

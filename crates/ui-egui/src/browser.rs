@@ -190,6 +190,26 @@ impl Def {
         Def::Partition,
     ];
 
+    /// The kind `model.rename` takes for it; `None` for a partition (its cut faces are named
+    /// after it).
+    pub fn rename_kind(self) -> Option<&'static str> {
+        Some(match self {
+            Def::Set => "set",
+            Def::Material => "material",
+            Def::Section => "section",
+            Def::Step => "step",
+            Def::BoundaryCondition => "boundary_condition",
+            Def::Load => "load",
+            Def::ReferencePoint => "reference_point",
+            Def::Coupling => "coupling",
+            Def::Contact => "contact",
+            Def::Tie => "tie",
+            Def::FluidDomain => "fluid_domain",
+            Def::Datum => "datum",
+            Def::Partition => return None,
+        })
+    }
+
     /// The kind of setup symbols a definition of this kind draws, if any.
     pub fn symbols(self) -> Option<fieldcraft_render::glyphs::Definition> {
         use fieldcraft_render::glyphs::Definition;

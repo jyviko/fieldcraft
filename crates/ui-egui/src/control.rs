@@ -383,6 +383,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             };
             let action = match (s("action"), s("step")) {
                 (Some("edit"), _) => crate::menu::Action::Edit,
+                (Some("rename"), _) => crate::menu::Action::Rename,
                 (Some("hide"), _) => crate::menu::Action::Hide,
                 (Some("show"), _) => crate::menu::Action::Show,
                 (Some("isolate"), _) => crate::menu::Action::Isolate,
@@ -391,7 +392,9 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 (Some(a @ ("activate" | "deactivate")), Some(step)) => {
                     crate::menu::Action::Active { step: step.to_string(), active: a == "activate" }
                 }
-                (a, _) => return err(format!("`action` {a:?}: edit, hide, show, isolate, show_all, delete, or activate/deactivate with `step`")),
+                (a, _) => {
+                    return err(format!("`action` {a:?}: edit, rename, hide, show, isolate, show_all, delete, or activate/deactivate with `step`"));
+                }
             };
             crate::menu::apply(app, target, action);
             ok(json!({"status": app.status, "prompt": app.prompt.is_some(), "dialog": app.dialog.as_ref().map(|d| d.command)}))

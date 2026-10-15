@@ -601,6 +601,16 @@ impl ModelApp {
             e => Failure { message: e.to_string(), refused: None },
         });
         let changed = self.session.revision() != revision;
+        // The definition selected in the browser keeps its selection under its new name.
+        if id == "model.rename"
+            && let Ok(v) = &r
+            && let Some((def, name)) = &mut self.selected
+            && def.rename_kind() == v["kind"].as_str()
+            && v["from"].as_str() == Some(name.as_str())
+            && let Some(to) = v["name"].as_str()
+        {
+            *name = to.to_string();
+        }
         // A view change (hide, show) draws the model again, as an edit does.
         if changed || self.session.view != view {
             self.model_changed();

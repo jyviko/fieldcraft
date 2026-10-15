@@ -114,42 +114,52 @@ clamp carries the whole 1 kN.
 
 ## Mirrored crank arm (`crank-mirror`)
 
-![Von Mises stress on the mirrored crank arm: one swept half and its mirror image, one mesh](media/examples/crank-mirror.png)
+![Von Mises stress on the crank arm from below: the pocket ringed by mapped rows, the half and its mirror image one mesh](media/examples/crank-mirror.png)
 
-The crank arm of `crank-arm`, built from a half. A datum plane on its symmetry plane (`Sym`,
-y = 0) partitions it (`Half`) into `CrankArm/a` and `CrankArm/b`; the half `CrankArm/b` is swept
-all-hex (hex20 of 3 mm, 3 330 elements) and `mesh.mirror` reflects it onto `CrankArm/a`, joined
-on the plane: 6 660 hex20 elements, 32 933 nodes, all valid (scaled Jacobian min 0.009, mean 0.91).
-The image's faces carry `CrankArm/a`'s names, so the sets pick the square bore and the pedal hole
-on both halves. Material, supports and load as `crank-arm`.
+The model of `crank-arm` under the name of its mirror workflow (the sample kept so scripts and
+links made with it still open): seen from below, where the pocket is. How the half is cut,
+meshed and mirrored is told under `crank-arm`.
 
-**Look at:** the two halves' meshes, mirror images of each other across the arm's middle (Mesh
-workspace), and the datum plane `Sym` before solving.
+**Look at:** the pocket from below: straight mapped rows along its sides and floor, and at each
+end its corner fillets cut off by the diagonal partitions into three-sided triangle primitives;
+the two halves, mirror images across the arm's middle.
 
-**Check:** σxx on the arm's sides at x = 29 mm is −62.43 and +62.43 MPa, equal and opposite as
-the halves are, against M/Z = 62.5 MPa (0.2 %); the pedal bore moves 0.75 mm down, as on the whole
-swept crank; the spindle carries the whole 1500 N.
+**Check:** as `crank-arm`.
 
 ## Bicycle crank arm (`crank-arm`)
 
-![Von Mises stress on the all-hex crank arm, the arm root and the square bore carrying the most](media/examples/crank-arm.png)
+![Von Mises stress on the structured all-hex crank arm, the arm root and the square bore carrying the most](media/examples/crank-arm.png)
 
 A 170 mm aluminium crank built in SolidCraft (`crates/engine/samples/crank-arm.json`): a 16 mm
 arm tapering from 38 to 24 mm, root arcs into a Ø46 × 22 spindle boss with a 12.7 mm square bore
 (R1.5 corners) and a Ø30 × 20 pedal boss with a Ø14 hole, and an 82 × 14 × 8 pocket in its back
-(R5 corners). It is a stack of extrusions along z, so `mesh.hex.generate` sweeps it all-hex:
-7 274 hex20 elements of 3 mm, all valid, scaled Jacobian min 0.17, mean 0.83. To keep it
-sweepable the hex variant leaves out the pocket's floor fillet and the bosses' 1.5 mm chamfers,
-and its root arcs meet the bosses about 20° off tangent (a tangent meeting leaves a zero-angle
-cusp on the arm's top face, where any hex is degenerate). 6061-T6 (E = 68 900 MPa, ν = 0.33); the
-square bore's faces fixed, 1500 N on the pedal hole in the crank's plane, across the arm (−y).
-Linear static: about 4 s to open and 7 s to solve.
+(R5 corners). It is a stack of extrusions along z, so it sweeps all-hex. To keep it sweepable the
+hex variant leaves out the pocket's floor fillet and the bosses' 1.5 mm chamfers, and its root
+arcs meet the bosses about 20° off tangent (a tangent meeting leaves a zero-angle cusp on the
+arm's top face, where any hex is degenerate). 6061-T6 (E = 68 900 MPa, ν = 0.33); the square
+bore's faces fixed, 1500 N on the pedal hole in the crank's plane, across the arm (−y). Linear
+static: about 5 s to open and 7 s to solve.
 
-**Look at:** the swept mesh (Prepare ▸ Mesh), eight layers through the arm, and the von Mises
-contours: the bending stress grows along the arm toward the root; the peak, 129 MPa, sits at a
-square-bore corner where the rigid clamp meets the free face, a support singularity.
+The mesh is built as an analyst builds a structured one. A datum plane on the symmetry plane
+(`Sym`, y = 0) partitions the crank (`Half`); the half `CrankArm/a` is cut into seven cells:
+across the arm at x = 30 (the root, beyond the spindle boss), 60 and 110 (the pocket's straight
+middle) and 148 (before the pedal boss), and on two diagonals (`D1`, `D2`) through the centres
+of the pocket's corner fillets, radial to them so they meet the pocket wall square. Every
+cell's cross-section then splits into regions that map: the half ring round each bore (an
+O-grid), four-sided blocks (transfinite), and the pocket's four corners, three-sided, as
+triangle primitives. Exact edge seeds (`mesh.seed.edge`) give every cut the same divisions on
+its two sides, so `mesh.cells` sweeps each cell (`extrude`, hex20 of 3 mm) and merges all six
+cuts node for node, and `mesh.mirror` reflects the half onto `CrankArm/b`: 7 710 hex20
+elements, 37 938 nodes, all valid, scaled Jacobian min 0.37, mean 0.92, edge ratio at most 7.0
+(the swept crank before: min 0.17, its free-paved middle at the pocket the worst).
 
-**Check:** σxx on the arm's sides at x = 29 mm is ±62.4 MPa against the beam formula
+**Look at:** the mesh (Prepare ▸ Mesh): rows running straight along the arm, the O-grids round
+the bores, eight layers through the arm, and the von Mises contours: the bending stress grows
+along the arm toward the root; the peak, 145 MPa, sits at a square-bore corner where the rigid
+clamp meets the free face, a support singularity.
+
+**Check:** σxx on the arm's sides at x = 29 mm is −62.43 and +62.43 MPa, equal and opposite as
+the mirror-image halves are, against the beam formula
 M/Z = 1500 · 141 / (16 · 35.6² / 6) = 62.6 MPa (0.3 %); a 41 815-element tet10 solution of the
 full part gives 62.3 MPa. The pedal bore moves 0.75 mm down (tet10: 0.70–0.75 mm; Euler–Bernoulli
 with a rigid clamp: 0.58 mm, without shear or the boss's compliance), and the spindle carries the

@@ -103,17 +103,17 @@ pub const SAMPLES: &[Sample] = &[
     Sample {
         name: "crank-mirror",
         label: "Mirrored Crank Arm",
-        about: "The crank arm cut on its symmetry plane, one half swept all-hex (hex20) and mirrored into one conforming mesh; loaded as crank-arm",
+        about: "The crank arm of crank-arm under the name of its mirror workflow: a partitioned half meshed structured all-hex (hex20) and mirrored into one conforming mesh",
         design: Some(CRANK_ARM),
-        prepare: Some(crank_mirror_prepare),
-        script: crank_mirror,
+        prepare: Some(crank_prepare),
+        script: crank_arm,
     },
     Sample {
         name: "crank-arm",
         label: "Bicycle Crank Arm",
-        about: "An aluminium bicycle crank swept all-hex (hex20): square bore fixed, a rider's weight on the pedal, von Mises",
+        about: "An aluminium bicycle crank meshed structured all-hex (hex20) from a partitioned half and its mirror image: square bore fixed, a rider's weight on the pedal, von Mises",
         design: Some(CRANK_ARM),
-        prepare: None,
+        prepare: Some(crank_prepare),
         script: crank_arm,
     },
 ];
@@ -497,35 +497,101 @@ pub const CRANK_ARM: &str = include_str!("../samples/crank-arm.json");
 /// The crank arm's pedal load (N): a standing rider's weight on one pedal.
 pub const PEDAL_LOAD: f64 = 1500.0;
 
-/// [`CRANK_ARM`] swept all-hex (hex20 of 3 mm), in 6061-T6 aluminium: the square bore's faces
-/// and corner fillets (set `spindle`) fixed, [`PEDAL_LOAD`] on the pedal hole (set `pedal`), in
-/// the crank's plane and across the arm (−y). Step `Pedal` (linear static). The faces are picked
-/// by their surfaces, not their names: the square bore's are the vertical planes 6.35 mm from the
-/// spindle axis and the R1.5 cylinders beside it, the pedal hole is the Ø14 cylinder on the
-/// pedal axis.
+/// The cells of the half `CrankArm/a` (y < 0) after [`crank_prepare`], from the spindle to the
+/// pedal: the spindle boss and the arm's root (`X30`), the pocket's spindle end below the
+/// diagonal `D1`, the arm between `D1` and `X60`, the middle of the arm (`X60` to `X110`), the arm
+/// between `X110` and `D2`, the pocket's pedal end beyond `D2`, and the pedal boss (`X148`).
+pub const CRANK_CELLS: [&str; 7] = [
+    "CrankArm/a/a",
+    "CrankArm/a/b/a",
+    "CrankArm/a/b/b/a",
+    "CrankArm/a/b/b/b/a",
+    "CrankArm/a/b/b/b/b/a",
+    "CrankArm/a/b/b/b/b/b/a",
+    "CrankArm/a/b/b/b/b/b/b",
+];
+
+/// The diagonals' angles from the arm's axis (degrees): `D1` through the centre of the pocket's
+/// spindle-end corner fillet (53, −2), `D2` through the pedal-end one (125, −2), each radial to
+/// its fillet so it meets the pocket wall square. Steeper than 45° from the pocket's floor edge
+/// (y = 0) on its inner side and shallower than 45° from the arm's edge on its outer side, so the
+/// pocket's middle keeps its corners there and the cells beyond it do not gain one.
+const CRANK_DIAGONALS: [f64; 2] = [40.0, 32.0];
+
+/// [`CRANK_ARM`] meshed structured all-hex (hex20 of 3 mm) from a partitioned half and mirrored,
+/// in 6061-T6 aluminium: the square bore's faces and corner fillets (set `spindle`) fixed,
+/// [`PEDAL_LOAD`] on the pedal hole (set `pedal`), in the crank's plane and across the arm (−y).
+/// Step `Pedal` (linear static). The faces are picked by their surfaces, not their names: the
+/// square bore's are the vertical planes 6.35 mm from the spindle axis and the R1.5 cylinders
+/// beside it, the pedal hole is the Ø14 cylinder on the pedal axis.
+///
+/// The mesh: [`crank_prepare`] cuts the crank on its symmetry plane and the half `CrankArm/a`
+/// into the seven [`CRANK_CELLS`], each a stack of extrusions whose cross-section splits into
+/// regions that map: four-sided regions (transfinite), the half ring round each bore, and the
+/// pocket's four corners cut off by the partitions, three-sided (the triangle primitive). Exact
+/// edge seeds give each cut the same divisions in the two cells it divides, so `mesh.cells`
+/// sweeps every cell (`extrude`) and merges them node for node; `mesh.mirror` reflects the half
+/// onto `CrankArm/b`, joined on the plane.
 pub fn crank_arm(bodies: &[Shape]) -> Value {
-    crank_model(bodies, vec![json!({"command": "mesh.hex.generate", "params": {"size": 3, "order": 2, "method": "extrude"}})])
+    let cells = CRANK_CELLS;
+    let mut mesh = crank_seeds();
+    mesh.push(json!({"command": "mesh.cells", "params": {"bodies": cells, "default": "extrude", "size": 3, "order": 2}}));
+    // Each cell's image is part of the uncut half.
+    let images: serde_json::Map<String, Value> = cells.iter().map(|c| (c.to_string(), json!("CrankArm/b"))).collect();
+    mesh.push(json!({"command": "mesh.mirror", "params": {"plane": "Sym", "bodies": cells, "as": images}}));
+    crank_model(bodies, mesh)
 }
 
-/// [`CRANK_ARM`] cut on its symmetry plane (`Sym`, y = 0; partition `Half`) by
-/// [`crank_mirror_prepare`]: the half `CrankArm/b` (y > 0) swept all-hex (hex20 of 3 mm) and
-/// mirrored onto `CrankArm/a`, one conforming mesh; then the model of [`crank_arm`].
-pub fn crank_mirror(bodies: &[Shape]) -> Value {
-    crank_model(
-        bodies,
-        vec![
-            json!({"command": "mesh.hex.generate", "params": {"body": "CrankArm/b", "size": 3, "order": 2, "method": "extrude"}}),
-            json!({"command": "mesh.mirror", "params": {"plane": "Sym", "bodies": ["CrankArm/b"]}}),
-        ],
-    )
+/// The edge seeds that make every cut's divisions alike on its two sides: each cut's line in
+/// the arm's cross-section (its bottom edge, z = 0) and, for the diagonals and the cuts across the
+/// pocket, its line on the pocket's floor (z = 8); and the 16 mm walls of the end cells on their
+/// cuts, in six layers as the pocket's floor level splits the cells between them (3 + 3). The
+/// counts are those the cells' mapped regions need: the cut `X30` faces the spindle boss's arc
+/// across the root (7), the arm between the diagonals is one block of five rows.
+fn crank_seeds() -> Vec<Value> {
+    let [c1, c2, c3, c4, c5, c6, c7] = CRANK_CELLS;
+    let cut = |name: &str, a: &str, b: &str, face: &str, count: u32| {
+        json!({"command": "mesh.seed.edge", "params": {"edges": [
+            {"body": a, "edge": format!("{face}|partition:{name}:a")},
+            {"body": b, "edge": format!("{face}|partition:{name}:b")},
+        ], "count": count}})
+    };
+    let mut seeds = vec![cut("X30", c1, c2, "F2:start", 7), cut("X148", c6, c7, "F2:start", 5)];
+    for (name, a, b) in [("D1", c2, c3), ("X60", c3, c4), ("X110", c4, c5), ("D2", c5, c6)] {
+        seeds.push(cut(name, a, b, "F2:start", 5));
+        seeds.push(cut(name, a, b, "F6:top", 3));
+    }
+    seeds.push(json!({"command": "mesh.seed.edge", "params": {"edges": [
+        {"body": c1, "edge": "F2:side:lo|partition:X30:a"},
+        {"body": c7, "edge": "F2:side:lo|partition:X148:b"},
+    ], "count": 6}}));
+    seeds
 }
 
-/// The crank arm's symmetry plane and the partition by it.
-fn crank_mirror_prepare() -> Value {
-    json!([
-        {"command": "geometry.datum", "params": {"name": "Sym", "by": {"type": "offset", "plane": "zx", "offset": 0}}},
-        {"command": "geometry.partition", "params": {"name": "Half", "datum": "Sym"}},
-    ])
+/// The crank arm's symmetry plane (`Sym`, y = 0) and the partition by it (`Half`), then the
+/// half `CrankArm/a` cut into [`CRANK_CELLS`]: across the arm at x = 30 (the root, beyond the
+/// spindle boss), 60 and 110 (the pocket's straight middle) and 148 (before the pedal boss), and
+/// on the diagonals of [`CRANK_DIAGONALS`]. Each cut names the one cell it divides.
+fn crank_prepare() -> Value {
+    let [d1, d2] = CRANK_DIAGONALS.map(f64::to_radians);
+    let across = |x: f64| json!({"type": "offset", "plane": "yz", "offset": x});
+    let cuts = [
+        ("X30", across(30.0), "CrankArm/a"),
+        ("D1", json!({"type": "point_normal", "point": [53, -2, 0], "normal": [d1.sin(), -d1.cos(), 0]}), "CrankArm/a/b"),
+        ("X60", across(60.0), "CrankArm/a/b/b"),
+        ("X110", across(110.0), "CrankArm/a/b/b/b"),
+        ("D2", json!({"type": "point_normal", "point": [125, -2, 0], "normal": [d2.sin(), d2.cos(), 0]}), "CrankArm/a/b/b/b/b"),
+        ("X148", across(148.0), "CrankArm/a/b/b/b/b/b"),
+    ];
+    let mut script = vec![
+        json!({"command": "geometry.datum", "params": {"name": "Sym", "by": {"type": "offset", "plane": "zx", "offset": 0}}}),
+        json!({"command": "geometry.partition", "params": {"name": "Half", "datum": "Sym"}}),
+    ];
+    for (name, by, body) in cuts {
+        script.push(json!({"command": "geometry.datum", "params": {"name": name, "by": by}}));
+        script.push(json!({"command": "geometry.partition", "params": {"name": name, "datum": name, "bodies": [body]}}));
+    }
+    Value::Array(script)
 }
 
 /// The crank's model after the `mesh` commands: material, the spindle fixed, the rider on the
@@ -793,18 +859,65 @@ mod tests {
         assert!(r["max_von_mises"]["value"].as_f64().unwrap() > 200.0, "{r}");
     }
 
-    /// The crank arm opens swept all-hex20 with every bore face found, and its root bends as a
-    /// beam: σxx on the arm's sides at x = 29 mm (35.6 mm wide, 16 thick, 141 mm from the pedal)
-    /// within 3 % of M/Z = 1500 · 141 / (16 · 35.6² / 6) = 62.6 MPa, the spindle carrying the
+    /// The crank opens as one conforming structured hex20 mesh: the
+    /// half's seven cells, every cut merged node for node (no ties), the half and its mirror
+    /// image alike and joined on the symmetry plane, the spindle and pedal faces found on both
+    /// halves (the image's faces carry the names of the half they are the image of), and the
+    /// quality floor: scaled Jacobian at least 0.3, edge ratio at most 10.
+    #[test]
+    fn the_crank_opens_as_one_structured_mesh_of_two_alike_halves() {
+        let (arm, mirror) = (find("crank-arm").unwrap(), find("crank-mirror").unwrap());
+        let prepared = |x: &Sample| x.prepare.map(|f| f());
+        assert!(
+            arm.design == mirror.design && prepared(arm) == prepared(mirror) && (arm.script)(&[]) == (mirror.script)(&[]),
+            "one model under two names"
+        );
+        {
+            let name = "crank-arm";
+            let mut s = open(name);
+            let bodies: Vec<String> = s.design.as_ref().unwrap().bodies.iter().map(|b| b.name.clone()).collect();
+            let mut cells: Vec<String> = CRANK_CELLS.iter().map(|c| c.to_string()).collect();
+            cells.push("CrankArm/b".into());
+            assert_eq!(bodies, cells);
+            assert!(s.model.ties().is_empty(), "every cut merged");
+            let elements = s.model.elements().values().filter(|e| e.kind == fieldcraft_model::ElementKind::Hex20).count();
+            assert_eq!(elements, s.model.elements().len());
+            let mut set = |name: &str, bodies: &[&str]| {
+                s.execute("model.set.create", &json!({"name": name, "geometry": bodies.iter().map(|b| json!({"body": b})).collect::<Vec<_>>()}))
+                    .unwrap();
+                s.model.resolve_set(name).unwrap()
+            };
+            let (a, b) = (set("half_a", &CRANK_CELLS), set("half_b", &["CrankArm/b"]));
+            assert_eq!(a.elements.len(), b.elements.len());
+            assert_eq!(a.elements.len() + b.elements.len(), elements);
+            assert_eq!(a.faces.len(), b.faces.len(), "the halves' skins are alike");
+            let shared = a.nodes.iter().filter(|n| b.nodes.binary_search(n).is_ok()).count();
+            assert!(shared > 100, "{shared}");
+            assert_eq!(a.nodes.len() + b.nodes.len() - shared, s.model.nodes().len());
+            let q = s.execute("mesh.quality", &json!({})).unwrap();
+            assert_eq!(q["valid"].as_u64().unwrap() as usize, elements, "{q}");
+            let metric = |m: &str, k: &str| q["metrics"][m][k].as_f64().unwrap();
+            assert!(metric("scaled_jacobian", "min") >= 0.3, "{q}");
+            assert!(metric("edge_ratio", "max") <= 10.0, "{q}");
+            let members = |set: &str| s.model.sets().get(set).map_or(Vec::new(), |x| x.geometry.iter().map(|g| g.body.clone()).collect::<Vec<_>>());
+            for set in ["spindle", "pedal"] {
+                let bodies = members(set);
+                assert!(bodies.iter().any(|b| b.starts_with("CrankArm/a/")) && bodies.iter().any(|b| b == "CrankArm/b"), "{set}: {bodies:?}");
+                assert!(!s.model.resolve_set(set).unwrap().faces.is_empty(), "{set}");
+            }
+            let faces = |set: &str| s.model.sets().get(set).map_or(0, |x| x.geometry.len());
+            assert_eq!((faces("spindle"), faces("pedal")), (10, 4), "{name}");
+        }
+    }
+
+    /// Solved, the crank's root bends as a beam: σxx on the arm's sides at x = 29 mm (35.6 mm
+    /// wide, 16 thick, 141 mm from the pedal) within 3 % of M/Z = 1500 · 141 / (16 · 35.6² / 6) =
+    /// 62.6 MPa, equal and opposite on the two mirror-image sides, and the spindle carries the
     /// whole load.
     #[test]
     #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
     fn the_crank_arm_root_bends_as_the_beam_formula_says() {
         let mut s = open("crank-arm");
-        let elements = s.model.elements().values().filter(|e| e.kind == fieldcraft_model::ElementKind::Hex20).count();
-        assert_eq!(elements, s.model.elements().len());
-        let faces = |set: &str| s.model.sets().get(set).map_or(0, |x| x.geometry.len());
-        assert_eq!((faces("spindle"), faces("pedal")), (8, 2));
         s.execute("solve.run", &json!({})).unwrap();
         let half_width: f64 = 19.0 - 7.0 * 29.0 / 170.0;
         let probe = s.execute("solve.probe", &json!({"step": "Pedal", "at": [[29.0, -half_width, 8.0], [29.0, half_width, 8.0]]})).unwrap();
@@ -813,6 +926,7 @@ mod tests {
         for (i, sign) in [(0, -1.0), (1, 1.0)] {
             assert!((sign * sxx(i) - hand).abs() < 0.03 * hand, "{} against {hand} MPa: {probe}", sxx(i));
         }
+        assert!((sxx(0) + sxx(1)).abs() < 0.01 * hand, "{probe}");
         let reaction = s.execute("results.reactions", &json!({"step": "Pedal", "sets": ["spindle"]})).unwrap();
         assert!((reaction["sets"][0]["force"][1].as_f64().unwrap() - PEDAL_LOAD).abs() < 1e-6, "{reaction}");
     }
@@ -824,67 +938,13 @@ mod tests {
         fieldcraft_mesh::quality::conformity(&nodes, elements, 1e-6).unwrap()
     }
 
-    /// The crank arm swept all-hex20 has no crack (#260): its free faces close up, no two nodes
-    /// coincide and every element edge has one mid-side node.
+    /// The crank arm's hex20 mesh has no crack (#260): its free faces close up across the cells
+    /// and the mirror plane, no two nodes coincide and every element edge has one mid-side node.
     #[test]
     fn the_crank_arm_hex20_mesh_is_conforming() {
         let s = open("crank-arm");
         let c = conformity(&s);
-        // The count differs between platforms (#115: 7274 on macOS, 7334 on Linux), so check
-        // that the mesh is all hex20 rather than its size.
-        assert!(s.model.elements().values().all(|e| e.kind == fieldcraft_model::ElementKind::Hex20));
         assert!(c.is_conforming(), "{:?} {:?} {:?}", c.open_edges.first(), c.coincident.first(), c.midside_mismatches.first());
-    }
-
-    /// The mirrored crank opens as one conforming all-hex20 mesh: its two halves alike, joined
-    /// on the symmetry plane, every element valid, and the spindle and pedal faces found on both
-    /// halves (the image's faces carry the names of the half they are the image of).
-    #[test]
-    fn the_mirrored_crank_opens_as_one_mesh_of_two_alike_halves() {
-        let mut s = open("crank-mirror");
-        let elements = s.model.elements().values().filter(|e| e.kind == fieldcraft_model::ElementKind::Hex20).count();
-        assert_eq!(elements, s.model.elements().len());
-        let mut half = |body: &str| {
-            let set = format!("half_{}", body.replace('/', "_"));
-            s.execute("model.set.create", &json!({"name": set, "geometry": [{"body": body}]})).unwrap();
-            s.model.resolve_set(&set).unwrap()
-        };
-        let (a, b) = (half("CrankArm/a"), half("CrankArm/b"));
-        assert_eq!(a.elements.len(), b.elements.len());
-        assert_eq!(a.elements.len() + b.elements.len(), elements);
-        assert_eq!(a.faces.len(), b.faces.len(), "the halves' skins are alike");
-        // Joined on the plane: nodes shared by both halves, none duplicated there.
-        let shared = a.nodes.iter().filter(|n| b.nodes.binary_search(n).is_ok()).count();
-        assert!(shared > 100, "{shared}");
-        assert_eq!(a.nodes.len() + b.nodes.len() - shared, s.model.nodes().len());
-        let q = s.execute("mesh.quality", &json!({})).unwrap();
-        assert_eq!(q["valid"].as_u64().unwrap() as usize, elements, "{q}");
-        let members = |set: &str| s.model.sets().get(set).map_or(Vec::new(), |x| x.geometry.iter().map(|g| g.body.clone()).collect::<Vec<_>>());
-        for set in ["spindle", "pedal"] {
-            let bodies = members(set);
-            assert!(bodies.iter().any(|b| b == "CrankArm/a") && bodies.iter().any(|b| b == "CrankArm/b"), "{set}: {bodies:?}");
-            assert!(!s.model.resolve_set(set).unwrap().faces.is_empty(), "{set}");
-        }
-    }
-
-    /// Solved, the mirrored crank bends as the swept whole one does (σxx at the root within 3 % of
-    /// M/Z) and the spindle carries the whole load.
-    #[test]
-    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
-    fn the_mirrored_crank_bends_as_the_beam_formula_says() {
-        let mut s = open("crank-mirror");
-        s.execute("solve.run", &json!({})).unwrap();
-        let half_width: f64 = 19.0 - 7.0 * 29.0 / 170.0;
-        let probe = s.execute("solve.probe", &json!({"step": "Pedal", "at": [[29.0, -half_width, 8.0], [29.0, half_width, 8.0]]})).unwrap();
-        let sxx = |i: usize| probe["nodes"][i]["stress"][0].as_f64().unwrap();
-        let hand = PEDAL_LOAD * (170.0 - 29.0) / (16.0 * (2.0 * half_width).powi(2) / 6.0);
-        for (i, sign) in [(0, -1.0), (1, 1.0)] {
-            assert!((sign * sxx(i) - hand).abs() < 0.03 * hand, "{} against {hand} MPa: {probe}", sxx(i));
-        }
-        // Mirror images: the two sides' bending stresses are equal and opposite.
-        assert!((sxx(0) + sxx(1)).abs() < 0.01 * hand, "{probe}");
-        let reaction = s.execute("results.reactions", &json!({"step": "Pedal", "sets": ["spindle"]})).unwrap();
-        assert!((reaction["sets"][0]["force"][1].as_f64().unwrap() - PEDAL_LOAD).abs() < 1e-6, "{reaction}");
     }
 
     #[test]

@@ -106,7 +106,7 @@ against a closed form or a reference solution ([docs/examples.md](docs/examples.
 </tr>
 <tr>
 <td width="33%" valign="top"><img src="docs/media/examples/bracket-hex.png" alt="Hex-meshed bracket" width="100%"><br><b>Hex-meshed bracket</b> (<code>bracket-hex</code>): the bracket split into 30 cells, meshed all-hex (hex20), von Mises</td>
-<td width="33%" valign="top"><img src="docs/media/examples/crank-arm.png" alt="Bicycle crank arm" width="100%"><br><b>Bicycle crank arm</b> (<code>crank-arm</code>): an aluminium crank swept all-hex (hex20), a rider's weight on the pedal; root bending within 0.3 % of M/Z</td>
+<td width="33%" valign="top"><img src="docs/media/examples/crank-arm.png" alt="Bicycle crank arm" width="100%"><br><b>Bicycle crank arm</b> (<code>crank-arm</code>): an aluminium crank meshed structured all-hex (hex20) from a partitioned half and its mirror image, a rider's weight on the pedal; root bending within 0.3 % of M/Z</td>
 <td width="33%" valign="top"><i>No picture yet: the viewport does not draw flow results (M12).</i><br><b>Flow past a bracket</b> (<code>flow-past</code>): air past an L-bracket on the floor; lattice Boltzmann flow, the drag and the force on each face</td>
 </tr>
 </table>

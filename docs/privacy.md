@@ -11,6 +11,12 @@ Change it any time in **Help › Settings… › Privacy**, which also has **Inc
 agents (MCP)**: commands run by scripts, the control channel and AI agents are counted apart from
 yours (`from`), and this leaves them out.
 
+Checking for updates is separate from usage sharing: at start-up, at most once a day (and from
+Help › Check for Updates), the desktop app asks GitHub for the latest release, which sends the
+request itself (FieldCraft's version in the `User-Agent`; GitHub sees the IP address) and nothing
+else. Turn it off in **Help › Settings… › Updates** (or with the first run's question): then no
+request is made ([updates.md](updates.md)).
+
 Crash reports and the log never leave your computer on their own; Help › Report a Bug sends only
 what you submit yourself ([crash-reports.md](crash-reports.md)).
 

@@ -14,7 +14,7 @@ are in `packaging/` and run the same way on a developer machine.
 | Linux x86_64, glibc 2.35+ | `fieldcraft-<v>-linux-x86_64.tar.gz` (`bin/`, `share/`), `fieldcraft-<v>-linux-x86_64.AppImage`, `fieldcraft_<v>_amd64.deb` (Debian, Ubuntu 22.04+), `fieldcraft-<v>.x86_64.rpm` (Fedora, RHEL, openSUSE) | `packaging/linux/package.sh` |
 | Windows x64 | `fieldcraft-<v>-windows-x64.zip` (`fieldcraft.exe`, `fieldcraft-cli.exe`) | `packaging/windows/package.ps1` |
 
-Plus `SHA256SUMS.txt` and the notes from `.github/release-notes.md` followed by GitHub's
+Plus `SHA256SUMS.txt`, its signature `SHA256SUMS.txt.minisig` (below), and the notes from `.github/release-notes.md` followed by GitHub's
 generated list of changes. Every package carries `README.md`, `LICENSE-MIT`, `LICENSE-APACHE`,
 `NOTICE` and `THIRD-PARTY-LICENSES.txt` (on macOS in `FieldCraft.app/Contents/Resources/Licenses`).
 The application id is `io.github.jyviko.fieldcraft`: the macOS bundle id, the Linux `.desktop`
@@ -55,6 +55,44 @@ Add them with `gh secret set <NAME> -R jyviko/fieldcraft`. With the certificate 
 three notarization secrets the app is signed and not notarized. A dmg made locally with
 `packaging/macos/package.sh` is ad-hoc signed unless `MACOS_SIGN_IDENTITY` names an identity
 in the keychain.
+
+**The release key (updates).** The app installs a release only when `SHA256SUMS.txt` is signed
+with the FieldCraft release key ([updates.md](updates.md)): an Ed25519 key in minisign's format.
+Its public half is built into the app (`fieldcraft_update::PUBLIC_KEY` in
+`crates/update/src/lib.rs`):
+
+```
+untrusted comment: minisign public key: FEF410EFEF5BAB21
+RWQhq1vv7xD0/uAOt8fqERP1hP+1UCM9U9QHTDYTYytWKiuedTkT7Lgr
+```
+
+The secret half is the repository secret `FIELDCRAFT_SIGNING_KEY`: the whole secret key file
+(two lines), made without a password. With it, the release job signs `SHA256SUMS.txt` with
+[rsign2](https://github.com/jedisct1/rsign2) (pinned in `release.yml`), checks the signature
+against the public key in the source, and uploads `SHA256SUMS.txt.minisig`. Without it the
+draft is built unsigned, the run warns, and the notes say the app cannot install that release
+itself (users download it from the page). Anyone can check a release by hand with `minisign -Vm
+SHA256SUMS.txt -P RWQhq1vv7xD0/uAOt8fqERP1hP+1UCM9U9QHTDYTYytWKiuedTkT7Lgr`.
+
+Setting it up, once:
+
+```sh
+cargo install --locked rsign2 --version 0.6.7
+rsign generate -W -p fieldcraft-release.pub -s fieldcraft-release.key   # -W: no password
+gh secret set FIELDCRAFT_SIGNING_KEY -R jyviko/fieldcraft < fieldcraft-release.key
+```
+
+Keep an offline copy of the secret key file (a password manager, an encrypted backup) and
+delete it from the working machine. Never commit it.
+
+Rotating it (a key that leaked, or a planned change): generate a new pair, put the new public
+key into `PUBLIC_KEY` and the block above, re-sign `crates/update/tests/data/SHA256SUMS.txt`
+with it (`rsign sign -W -s <new key> -x crates/update/tests/data/SHA256SUMS.txt.minisig
+crates/update/tests/data/SHA256SUMS.txt`, which a test checks), release that version, and only
+then replace the secret. Copies that still carry the old public key cannot verify releases
+signed with the new one: they still show the update, but Install refuses it ("not signed by the
+FieldCraft release key"), and a download from the release page brings the new key. If the old key leaked, also delete the secret at once (releases go out
+unsigned until the new one is in place) and say so in the next release notes.
 
 **Linux and Windows** builds are not signed; the checksums are the integrity check. On Windows
 SmartScreen warns about an unsigned download (More info › Run anyway) until a code-signing
@@ -100,7 +138,9 @@ Publishing is a maintainer's call; an agent preparing a release stops at the dra
 1. Check the run succeeded for the intended commit and the draft targets it
    (`gh release view v<version> -R jyviko/fieldcraft`).
 2. Download the assets into an empty folder (`gh release download v<version> -R jyviko/fieldcraft`),
-   run `shasum -a 256 -c SHA256SUMS.txt`, and check every platform's files are there.
+   run `shasum -a 256 -c SHA256SUMS.txt`, check the signature
+   (`minisign -Vm SHA256SUMS.txt -P <the public key above>`, or `rsign verify -P …`), and check
+   every platform's files are there.
 3. Smoke-test what you can run: open the dmg, drag the app to Applications, launch it with
    `--sample cantilever`; run `fieldcraft-cli --version` from the zip or tar.gz; on Linux run the
    AppImage, or install the `.deb` (`sudo apt install ./fieldcraft_<v>_amd64.deb`) or `.rpm`

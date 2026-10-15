@@ -49,6 +49,7 @@ The browser has no file system the app can reach, so files live in the page
 | Autosave to the recovery folder, File › Recover… | Autosaves are kept in the browser's local storage; a page closed or crashed with unsaved changes offers them at the next visit (File › Recover…) |
 | Leaving with unsaved changes asks first | The browser's "leave site?" prompt |
 | Recent files | This visit's files only |
+| Help › Check for Updates installs a new release (docs/updates.md) | A new deployment shows **Reload to update** in the status bar |
 
 A `.fieldcraft` model refers to its design and meshes by path. Paths in the model's own folder
 are stored relative to it, so picking or dropping the model with those files opens them again; a

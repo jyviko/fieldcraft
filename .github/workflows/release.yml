@@ -3,7 +3,8 @@
 #
 # A push to `main` (fast-forwarded from a verified `develop` commit; main holds released code only)
 # builds every package and creates or updates the
-# DRAFT GitHub Release "FieldCraft v<version>", with SHA256SUMS.txt and generated notes. The
+# DRAFT GitHub Release "FieldCraft v<version>", with SHA256SUMS.txt (signed with the release key
+# into SHA256SUMS.txt.minisig when the FIELDCRAFT_SIGNING_KEY secret exists) and generated notes. The
 # version is [workspace.package] version in Cargo.toml; a suffix (0.2.0-rc.1) makes a
 # pre-release. A person verifies the draft and publishes it; this workflow never publishes,
 # and pushes to develop or tags never start it.
@@ -245,7 +246,7 @@ jobs:
           pattern: release-*
           path: artifacts
           merge-multiple: true
-      - name: Check the set, checksums and notes
+      - name: Check the set and write the checksums
         run: |
           for f in "fieldcraft-$VERSION-macos-universal.dmg" "fieldcraft-cli-$VERSION-macos-universal.zip" \
             "fieldcraft-$VERSION-linux-x86_64.tar.gz" "fieldcraft-$VERSION-linux-x86_64.AppImage" \
@@ -254,13 +255,45 @@ jobs:
             test -s "artifacts/$f" || { echo "::error::missing $f"; exit 1; }
           done
           (cd artifacts && sha256sum -- * | tee SHA256SUMS.txt)
+      - name: Sign SHA256SUMS.txt with the release key (skipped without FIELDCRAFT_SIGNING_KEY)
+        id: sign
+        env:
+          FIELDCRAFT_SIGNING_KEY: ${{ secrets.FIELDCRAFT_SIGNING_KEY }}
+          # rsign2 (MIT), a minisign-compatible signer, pinned.
+          RSIGN_VERSION: 0.6.7
+        run: |
+          if [ -z "$FIELDCRAFT_SIGNING_KEY" ]; then
+            echo "::warning::FIELDCRAFT_SIGNING_KEY is not set: SHA256SUMS.txt is not signed, so the app cannot install this release itself (docs/releasing.md)"
+            echo "signed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo install --locked --quiet --root "$RUNNER_TEMP/rsign" rsign2 --version "$RSIGN_VERSION"
+          rsign="$RUNNER_TEMP/rsign/bin/rsign"
+          key="$RUNNER_TEMP/release.key"
+          (umask 077 && printf '%s\n' "$FIELDCRAFT_SIGNING_KEY" >"$key")
+          "$rsign" sign -W -s "$key" -t "FieldCraft v$VERSION SHA256SUMS.txt" -x artifacts/SHA256SUMS.txt.minisig artifacts/SHA256SUMS.txt
+          rm -f "$key"
+          # The signature must verify with the public key the app is built with.
+          public="$(sed -n 's/^pub const PUBLIC_KEY: &str = "\(.*\)";$/\1/p' crates/update/src/lib.rs)"
+          "$rsign" verify -q -P "$public" -x artifacts/SHA256SUMS.txt.minisig artifacts/SHA256SUMS.txt
+          echo "signed=true" >>"$GITHUB_OUTPUT"
+      - name: Write the notes
+        env:
+          SIGNED: ${{ steps.sign.outputs.signed }}
+        run: |
           # The macOS paragraph says how the app was signed (packaging/macos/package.sh).
           case "$MACOS_SIGNING" in
             notarized) macos="The macOS app is signed with a Developer ID and notarized by Apple." ;;
             signed) macos="The macOS app is signed with a Developer ID but **not notarized**: the first time, right-click \`FieldCraft.app\` in Applications and choose **Open**." ;;
             *) macos="The macOS app is **ad-hoc signed and not notarized**: macOS blocks the first launch. Right-click \`FieldCraft.app\` in Applications and choose **Open** (then **Open** again), or run \`xattr -dr com.apple.quarantine /Applications/FieldCraft.app\`." ;;
           esac
-          awk -v v="$VERSION" -v m="$macos" '{ gsub(/\{version\}/, v); gsub(/\{macos_signing\}/, m); print }' \
+          # The updates paragraph says whether the app can install this release itself.
+          if [ "$SIGNED" = true ]; then
+            updates="\`SHA256SUMS.txt\` is signed with the FieldCraft release key (\`SHA256SUMS.txt.minisig\`), so FieldCraft's Help › Check for Updates can verify and install this release."
+          else
+            updates="This release's \`SHA256SUMS.txt\` is **not signed**: FieldCraft's in-app updates can't verify it and won't install it; download it from this page instead."
+          fi
+          awk -v v="$VERSION" -v m="$macos" -v u="$updates" '{ gsub(/\{version\}/, v); gsub(/\{macos_signing\}/, m); gsub(/\{update_signing\}/, u); print }' \
             .github/release-notes.md >notes.md
           cat notes.md >>"$GITHUB_STEP_SUMMARY"
       - name: Upload the dry-run artifacts

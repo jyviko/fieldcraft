@@ -21,6 +21,8 @@ modal problems with its own solver. AI agents can drive it over MCP (`fieldcraft
 To start with a sample model, run the app with `--sample cantilever` (macOS:
 `/Applications/FieldCraft.app/Contents/MacOS/FieldCraft --sample cantilever`).
 
+**Updates.** {update_signing}
+
 **Signing.** {macos_signing} The Linux and Windows builds are not signed; on Windows, SmartScreen
 may say "Windows protected your PC": choose **More info**, then **Run anyway**.
 

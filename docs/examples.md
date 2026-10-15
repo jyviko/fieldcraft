@@ -121,7 +121,7 @@ links made with it still open): seen from below, where the pocket is. How the ha
 meshed and mirrored is told under `crank-arm`.
 
 **Look at:** the pocket from below: straight mapped rows along its sides and floor, and at each
-end its corner fillets cut off by the diagonal partitions into three-sided triangle primitives;
+end its corner fillets as three-sided triangle primitives, cut off by the mesher's own blocks;
 the two halves, mirror images across the arm's middle.
 
 **Check:** as `crank-arm`.
@@ -140,27 +140,25 @@ arm's top face, where any hex is degenerate). 6061-T6 (E = 68 900 MPa, ν = 0.33
 bore's faces fixed, 1500 N on the pedal hole in the crank's plane, across the arm (−y). Linear
 static: about 5 s to open and 7 s to solve.
 
-The mesh is built as an analyst builds a structured one. A datum plane on the symmetry plane
-(`Sym`, y = 0) partitions the crank (`Half`); the half `CrankArm/a` is cut into seven cells:
-across the arm at x = 30 (the root, beyond the spindle boss), 60 and 110 (the pocket's straight
-middle) and 148 (before the pedal boss), and on two diagonals (`D1`, `D2`) through the centres
-of the pocket's corner fillets, radial to them so they meet the pocket wall square. Every
-cell's cross-section then splits into regions that map: the half ring round each bore (an
-O-grid), four-sided blocks (transfinite), and the pocket's four corners, three-sided, as
-triangle primitives. Exact edge seeds (`mesh.seed.edge`) give every cut the same divisions on
-its two sides, so `mesh.cells` sweeps each cell (`extrude`, hex20 of 3 mm) and merges all six
-cuts node for node, and `mesh.mirror` reflects the half onto `CrankArm/b`: 7 710 hex20
-elements, 37 938 nodes, all valid, scaled Jacobian min 0.37, mean 0.92, edge ratio at most 7.0
-(the swept crank before: min 0.17, its free-paved middle at the pocket the worst).
+The mesh needs one datum. A datum plane on the symmetry plane (`Sym`, y = 0) partitions the
+crank (`Half`); `mesh.hex.generate` extrudes the half `CrankArm/a` (hex20 of 3 mm) and cuts its
+cross-section into mappable blocks itself, inside the mesher (nothing is added to the model):
+the half ring round each bore as four-sided blocks, the pocket's R5 corners as three-sided
+triangle primitives, and four-sided blocks along the arm, split where the pocket's fillets meet
+it. Interval assignment gives every block's sides matching counts, with no seeds.
+`mesh.mirror` reflects the half onto `CrankArm/b`: 8 664 hex20 elements, all valid, scaled
+Jacobian min 0.37 (at the corners where the root arcs meet the bosses 20° off tangent), mean
+0.91. Before the mesher cut blocks itself the same crank took seven partitions and eleven exact
+seeds for 0.37 (and the swept half without them: min 0.009, its middle free-paved).
 
 **Look at:** the mesh (Prepare ▸ Mesh): rows running straight along the arm, the O-grids round
 the bores, eight layers through the arm, and the von Mises contours: the bending stress grows
-along the arm toward the root; the peak, 145 MPa, sits at a square-bore corner where the rigid
+along the arm toward the root; the peak, 117 MPa, sits at a square-bore corner where the rigid
 clamp meets the free face, a support singularity.
 
-**Check:** σxx on the arm's sides at x = 29 mm is −62.43 and +62.43 MPa, equal and opposite as
+**Check:** σxx on the arm's sides at x = 29 mm is −62.44 and +62.44 MPa, equal and opposite as
 the mirror-image halves are, against the beam formula
-M/Z = 1500 · 141 / (16 · 35.6² / 6) = 62.6 MPa (0.3 %); a 41 815-element tet10 solution of the
+M/Z = 1500 · 141 / (16 · 35.6² / 6) = 62.6 MPa (0.25 %); a 41 815-element tet10 solution of the
 full part gives 62.3 MPa. The pedal bore moves 0.75 mm down (tet10: 0.70–0.75 mm; Euler–Bernoulli
 with a rigid clamp: 0.58 mm, without shear or the boss's compliance), and the spindle carries the
 whole 1500 N and 255 N·m.

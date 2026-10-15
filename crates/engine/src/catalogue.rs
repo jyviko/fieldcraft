@@ -325,7 +325,14 @@ pub static CATALOGUE: &[Capability] = &[
         "One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions",
         &["mesh.hex.blocks"],
     ),
-    soon("mesh.hex.decompose", "Decompose", Mesh, "Structured Hex", "M5", "Find sweepable and mappable regions and propose the splits"),
+    soon(
+        "mesh.hex.decompose",
+        "Decompose",
+        Mesh,
+        "Structured Hex",
+        "M5",
+        "Find sweepable and mappable regions of 3D parts (extruded cross-sections are already cut into blocks by Hex Mesh)",
+    ),
     soon("mesh.transition", "Transition", Mesh, "Structured Hex", "M5", "Conforming tet–hex interfaces with pyramids"),
     ready(
         "mesh.hex.octree",

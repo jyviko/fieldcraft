@@ -128,7 +128,9 @@ and `mesh` (each one's parameters: `list_commands`):
    `partition:<name>:a` and `partition:<name>:b`; every other face keeps the name of the face it
    is a piece of. The partition is part of the model: saving and opening it, or opening the
    design again after an edit, cuts the design again. `inspect_model` lists the cells.
-3. `mesh` with method `hex`, `hex_sweep`, `hex_mapped` or `tet` on one cell (`{"body":
+3. `mesh` with method `hex` on an extruded cell needs no further cuts: its cross-section is cut
+   into mappable blocks inside the mesher (O-grids round holes, triangle primitives at fillets,
+   four-sided blocks), so a symmetric part takes one datum. Or `mesh` with method `hex`, `hex_sweep`, `hex_mapped` or `tet` on one cell (`{"body":
    "Part/b"}`), or method `cells` for all cells with a method each (`{"methods": {"Part/a":
    "tet"}, "default": "auto"}`): cells whose faces match on a partition are merged, others are
    tied (the reply lists each interface).
@@ -138,7 +140,8 @@ and `mesh` (each one's parameters: `list_commands`):
 5. Or keep the half: `model.boundary_condition.symmetry {name, datum}` holds it on the plane
    (zero normal displacement), with half the load.
 
-`file.sample {"name": "crank-mirror"}` opens the crank arm built this way (docs/examples.md).
+`file.sample {"name": "crank-mirror"}` opens the crank arm built this way: one datum (`Sym`), its
+partition, `hex` on the half and `mirror` (docs/examples.md).
 
 ## Edge seeds
 

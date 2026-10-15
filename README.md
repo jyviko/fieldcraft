@@ -135,6 +135,13 @@ Rust 1.95 or later, with the `wasm32-unknown-unknown` target for `cargo xtask ci
 - [Releasing](docs/releasing.md): how a release is built, verified and published
 - [Contributing](CONTRIBUTING.md) and [agent instructions](AGENTS.md)
 
+## Privacy
+
+FieldCraft sends nothing anywhere on its own: no analytics, no telemetry, no automatic crash
+upload. Crash reports and the log stay on your computer; Help › Report a Bug opens a GitHub issue
+you review and submit yourself, with your session or model attached only if you tick them
+([docs/crash-reports.md](docs/crash-reports.md)).
+
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. Notices

@@ -1001,8 +1001,8 @@ record or the publisher; the others are cited by venue only.
 - **Citation.** M. Whiteley, D. White, S. Benzley, T. Blacker. *Two and three-quarter dimensional meshing
   facilitators.* Engineering with Computers 12:144–154, 1996.
 - **Use.** Corners by interior angle (≤ 135° end, ≥ 225° reflex); cross-section regions are cut from
-  their reflex corners to the boundary, which decomposes rectilinear sections into rectangles (an explicit
-  form of submapping's virtual decomposition), then mapped.
+  their reflex corners to the boundary (B8.6b), which decomposes rectilinear sections into rectangles (an
+  explicit form of submapping's virtual decomposition), then mapped.
 
 **B8.6a Midpoint subdivision: Tam and Armstrong 1991; Li, Armstrong, McKeag 1997.** **Verdict: BUILD ON
 (triangle primitive).**
@@ -1016,6 +1016,24 @@ record or the publisher; the others are cited by venue only.
   that end beside it, so each line has `m_k = (n_{k+1} + n_{k+2} − n_k)/2` (an even loop, each side
   shorter than the other two together). The centre is the mean of the split nodes; the interior is then
   smoothed (`quad::smooth`) and every quadrilateral checked; a fold falls back to the free mesher.
+
+**B8.6b Automatic cross-section decomposition (medial-axis subdivision).** **Verdict: BUILD ON (blocks
+of 2.5D bodies).**
+- **Citations.** Tam and Armstrong 1991 (B8.6a): a region is subdivided at its concave features and the
+  branches of its medial axis into simple primitives. Li, Armstrong, McKeag 1997 (B8.6a): the primitives.
+  Whiteley et al. 1996 (B8.6): vertex classification.
+- **Use.** `hex::decompose` cuts the regions of a multi-level sweep's cross-section that no structured
+  scheme fits into blocks, before interval assignment (B8.5), so the cuts are curves of the arrangement
+  and their counts are assigned with the rest; nothing reaches the model. Per region: several holes are
+  separated by lines across the gaps between neighbouring holes; a piece with one hole gets an O-grid,
+  the layout (lines from the outer corners towards the hole or along their bisectors, from the hole's
+  corners, or along four directions from the hole) chosen by the score of its pieces; pieces without
+  holes are cut by a two-ply search over lines from concave corners and fillets (bisector, edge
+  extensions, normals of strongly turning curves) and convex corners' bisectors. In place of the
+  medial axis's geometric rules each candidate is scored by meshing its pieces with their schemes (the
+  smallest corner scaled Jacobian), preferring fewer free pieces, then less shortfall from 0.9, then
+  fewer pieces. A region's blocks are kept when fair (≥ 0.5) or no worse than its free mesh; cuts never
+  end inside a seeded curve.
 
 **B8.7 Gordon and Thiel 1982, trivariate transfinite interpolation.** **Verdict: BUILD ON (mapped blocks).**
 - **Citation.** W. J. Gordon, L. C. Thiel. *Transfinite mappings and their application to grid generation.*

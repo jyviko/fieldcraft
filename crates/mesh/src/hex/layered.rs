@@ -17,6 +17,10 @@
 //! dimensional geometries*, Proc. 7th International Meshing Roundtable, 1998). Which intervals a
 //! region fills is decided by the inside test at its centre ([`super::geom::Inside`]).
 //!
+//! **Blocks.** Regions no structured scheme fits are cut into blocks that fit
+//! ([`super::decompose`]: holes apart, O-grids, cuts from concave corners and fillets), and the
+//! arrangement is laid out again with the cuts, so they are curves like the others.
+//!
 //! **Meshing.** Interval assignment ([`super::interval`]) gives every curve its count so that
 //! every region's scheme fits ([`super::section`]: four-sided regions mapped with opposite sides
 //! equal, three-sided ones the triangle primitive, rings and disks O-grids, the rest even loops
@@ -30,6 +34,7 @@ use std::f64::consts::{FRAC_PI_4, PI, TAU};
 
 use super::arrangement::{self, Arrangement, Q};
 use super::brep::{Brep, Face};
+use super::decompose;
 use super::geom::{Inside, Surface, add, dist, scale, unit};
 use super::interval::Intervals;
 use super::region::Scheme;
@@ -351,7 +356,7 @@ impl SizeField for PlaneField<'_> {
     }
 }
 
-/// The cross-section of a frame the body sweeps in: the arrangement (cut at reflex corners),
+/// The cross-section of a frame the body sweeps in: the arrangement (cut into blocks),
 /// the level intervals and which of them each region fills. It does not depend on the element
 /// size, so refinement retries reuse it.
 pub(crate) struct Prepared {
@@ -403,17 +408,20 @@ pub(crate) fn prepare(ctx: &Ctx, setup: Setup) -> Result<Prepared> {
     let ends: Vec<f64> = if frame.periodic() { rest.iter().copied().chain(std::iter::once(first_level + TAU)).collect() } else { rest.to_vec() };
     let intervals: Vec<(f64, f64)> = levels.iter().copied().zip(ends).collect();
     let mut inside = Inside::new(brep.surface);
-    let first = arrangement::build(&vertices, &polylines, tol, coincide)?;
-    let (_, used_first) = occupancy(&first, frame, &intervals, &mut inside)?;
-    // Cut the filled regions at their reflex corners, then lay the arrangement out again.
-    let cut_lines = cuts(&first, &used_first, tol);
-    let arr = if cut_lines.is_empty() {
-        first
-    } else {
-        polylines.extend(cut_lines);
-        arrangement::build(&vertices, &polylines, tol, coincide)?
-    };
-    let (filled, used) = occupancy(&arr, frame, &intervals, &mut inside)?;
+    let mut arr = arrangement::build(&vertices, &polylines, tol, coincide)?;
+    let (mut filled, mut used) = occupancy(&arr, frame, &intervals, &mut inside)?;
+    // Cut the filled regions into blocks the structured schemes fit, and lay the arrangement out
+    // again with the cuts.
+    let h_ref = levels.first().copied().unwrap_or(0.0);
+    let plane = PlaneField { field: ctx.field, frame: *frame, h: h_ref };
+    let settings = decompose::Settings { field: &plane, tol, opts: &ctx.opts.quad };
+    let locked = seeded_curves(ctx, frame, h_ref, &intervals, setup.h_tol, &arr);
+    let cut_lines = decompose::cuts(&arr, &used, &locked, &settings)?;
+    if !cut_lines.is_empty() {
+        polylines.extend(cut_lines.into_iter().map(|c| (c, decompose::CUT)));
+        arr = arrangement::build(&vertices, &polylines, tol, coincide)?;
+        (filled, used) = occupancy(&arr, frame, &intervals, &mut inside)?;
+    }
     Ok(Prepared { setup, arr, intervals, filled, used })
 }
 
@@ -717,95 +725,19 @@ fn occupancy(arr: &Arrangement, frame: &Frame, intervals: &[(f64, f64)], inside:
     Ok((filled, used))
 }
 
-/// The tag of cut lines (no wall behind them).
-const CUT: usize = usize::MAX;
-
-/// Straight cuts from the reflex corners of the filled regions into them, each along one of the
-/// corner's edges (the shorter way) to the first boundary it meets. A rectilinear region falls
-/// into rectangles this way; others lose their reflex corners. This is the explicit form of the
-/// virtual decomposition behind submapping (Whiteley, White, Benzley, Blacker 1996), done in the
-/// arrangement so that interval assignment sees every piece.
-fn cuts(arr: &Arrangement, used: &[bool], tol: f64) -> Vec<(Vec<Q>, usize)> {
-    let at = |p: usize| arr.points.get(p).copied().unwrap_or([0.0; 2]);
-    let segments: Vec<(usize, usize)> = arr.curves.iter().flat_map(|c| c.points.windows(2).map(|w| (w[0], w[1]))).collect();
-    // The nearest boundary hit of the ray from point v along unit d (ignoring segments at v).
-    let hit = |v: usize, d: Q| -> Option<(f64, Q, Option<usize>)> {
-        let o = at(v);
-        let mut best: Option<(f64, Q, Option<usize>)> = None;
-        for &(a, b) in &segments {
-            if a == v || b == v {
-                continue;
-            }
-            let (pa, pb) = (at(a), at(b));
-            let e = [pb[0] - pa[0], pb[1] - pa[1]];
-            let den = d[0] * e[1] - d[1] * e[0];
-            if den.abs() <= f64::EPSILON * (e[0].abs() + e[1].abs()) {
-                continue;
-            }
-            let w = [pa[0] - o[0], pa[1] - o[1]];
-            let t = (w[0] * e[1] - w[1] * e[0]) / den;
-            let u = (w[0] * d[1] - w[1] * d[0]) / den;
-            if t > tol && (-1e-12..=1.0 + 1e-12).contains(&u) && best.is_none_or(|(bt, _, _)| t < bt) {
-                let x = [o[0] + t * d[0], o[1] + t * d[1]];
-                // End at a segment end that is this close to the hit.
-                let near = [(a, pa), (b, pb)].into_iter().find(|(_, p)| ((p[0] - x[0]).powi(2) + (p[1] - x[1]).powi(2)).sqrt() <= 0.1 * t);
-                best = Some((t, near.map_or(x, |n| n.1), near.map(|n| n.0)));
-            }
-        }
-        best
-    };
-    let mut out: Vec<(Vec<Q>, usize)> = Vec::new();
-    let mut seen: Vec<(usize, usize)> = Vec::new();
-    for (r, region) in arr.regions.iter().enumerate() {
-        if !used.get(r).copied().unwrap_or(false) {
-            continue;
-        }
-        for lp in &region.loops {
-            let n = lp.len();
-            for k in 0..n {
-                let (Some(&(pc, pf)), Some(&(nc, nf))) = (lp.get((k + n - 1) % n), lp.get(k)) else { continue };
-                let pts = |c: usize, f: bool| {
-                    let mut v = arr.curves.get(c).map(|x| x.points.clone()).unwrap_or_default();
-                    if !f {
-                        v.reverse();
-                    }
-                    v
-                };
-                let (prev, next) = (pts(pc, pf), pts(nc, nf));
-                let (Some(&a), Some(&v), Some(&b)) = (prev.get(prev.len().wrapping_sub(2)), next.first(), next.get(1)) else { continue };
-                let (pa, pv, pb) = (at(a), at(v), at(b));
-                let (u, w) = ([pv[0] - pa[0], pv[1] - pa[1]], [pb[0] - pv[0], pb[1] - pv[1]]);
-                let turn = (u[0] * w[1] - u[1] * w[0]).atan2(u[0] * w[0] + u[1] * w[1]);
-                // The region is on the left: a right turn of more than 45° is a reflex corner.
-                if PI - turn < 1.25 * PI {
-                    continue;
-                }
-                let norm2 = |x: Q| (x[0] * x[0] + x[1] * x[1]).sqrt();
-                let (lu, lw) = (norm2(u), norm2(w));
-                if !(lu > 0.0 && lw > 0.0) {
-                    continue;
-                }
-                let rays = [[u[0] / lu, u[1] / lu], [-w[0] / lw, -w[1] / lw]];
-                let best = rays.iter().filter_map(|&d| hit(v, d)).min_by(|x, y| x.0.total_cmp(&y.0));
-                if let Some((_, end, end_point)) = best {
-                    if let Some(e) = end_point {
-                        let key = (v.min(e), v.max(e));
-                        if seen.contains(&key) {
-                            continue;
-                        }
-                        seen.push(key);
-                    }
-                    out.push((vec![pv, end], CUT));
-                }
-            }
-        }
+/// Which curves of `arr` carry an edge seed (a cut may not end inside them).
+fn seeded_curves(ctx: &Ctx, frame: &Frame, h_ref: f64, intervals: &[(f64, f64)], h_tol: f64, arr: &Arrangement) -> Vec<bool> {
+    let curves: Vec<Vec<P>> =
+        arr.curves.iter().map(|cv| cv.points.iter().map(|&p| frame.point(arr.points.get(p).copied().unwrap_or([0.0; 2]), h_ref)).collect()).collect();
+    match Seeds::of(ctx, frame, h_ref, intervals, h_tol, &curves) {
+        Ok(seeds) => seeds.curves.iter().map(Option::is_some).collect(),
+        Err(_) => vec![false; arr.curves.len()],
     }
-    out
 }
 
 /// A point well inside a region: off the middle of one of its outer edges, inside the outer
 /// loop, outside the holes and clear of every boundary segment.
-fn interior_point(arr: &Arrangement, region: &arrangement::Region) -> Result<Q> {
+pub(crate) fn interior_point(arr: &Arrangement, region: &arrangement::Region) -> Result<Q> {
     let at = |p: usize| arr.points.get(p).copied().unwrap_or([0.0; 2]);
     let polygon = |lp: &[(usize, bool)]| -> Vec<Q> {
         let mut out = Vec::new();

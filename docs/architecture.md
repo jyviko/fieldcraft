@@ -95,8 +95,10 @@ Rules beyond the layer order:
    (`fieldcraft-mesh::size`) sets interior sizes and edge divisions, with even counts per loop.
    Mapped and swept hex build on these face meshes (`fieldcraft-mesh::hex`, `mesh.hex.generate`):
    the B-rep topology is recovered from the face-tagged surface; a body is extruded (straight
-   multi-level sweep: the levels' outlines imprinted into one cross-section, cut at reflex corners,
-   regions mapped, O-gridded or free-meshed, then stacked), revolved (the same in a rotating
+   multi-level sweep: the levels' outlines imprinted into one cross-section, cut automatically
+   into blocks (holes apart, O-grids, cuts from concave corners and fillets chosen by the quality
+   of the blocks they leave), regions mapped, triangle primitives, O-gridded or free-meshed, then
+   stacked), revolved (the same in a rotating
    frame), swept one-to-one through rings of linking faces (least-squares affine layers, Roca and
    Sarrate 2010), or mapped as a logical cube (Gordon and Thiel 1982); interval assignment
    couples the counts of shared curves. Nodes on analytic faces (`Shape::face_surfaces`) are

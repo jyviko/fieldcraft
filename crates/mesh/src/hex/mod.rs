@@ -37,6 +37,7 @@
 mod arrangement;
 mod brep;
 mod cells;
+mod decompose;
 pub(crate) mod geom;
 mod interval;
 mod layered;

@@ -236,7 +236,7 @@ pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette
     let (mut scene, bounds, shown) = scene(s, p);
     let mut cam = Camera::default();
     cam.orient(&Orientation { distance: None, ..*at });
-    cam.fit(&bounds);
+    cam.fit_in(&bounds, w as f64 / h.max(1) as f64, fieldcraft_render::FULL_VIEW);
     cam.orient(at);
     scene.radius = if bounds.is_empty() { 1.0 } else { (cam.target.dist(bounds.center()) + bounds.diagonal() * 0.5).max(1e-3) };
     let png = fieldcraft_render::render_png(&scene, &cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;

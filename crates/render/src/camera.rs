@@ -134,6 +134,19 @@ impl Orientation {
     }
 }
 
+/// The whole view, as the `free` part of [`Camera::fit_in`].
+pub const FULL_VIEW: [f64; 4] = [0.0, 0.0, 1.0, 1.0];
+
+/// The share of the free part's width and height a fit leaves empty on each side.
+pub const FIT_MARGIN: f64 = 0.06;
+
+/// `free` checked: finite, within the view, at least a tenth of it wide and high (else the whole
+/// view).
+fn checked_free(free: [f64; 4]) -> [f64; 4] {
+    let [x0, y0, x1, y1] = free.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { f64::NAN });
+    if x1 - x0 >= 0.1 && y1 - y0 >= 0.1 { [x0, y0, x1, y1] } else { FULL_VIEW }
+}
+
 /// Orbit camera around `target`, Z up.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
@@ -284,15 +297,79 @@ impl Camera {
             self.distance = d.clamp(Orientation::DISTANCE.0, Orientation::DISTANCE.1);
         }
     }
-    /// Frame a bounding box.
+    /// Frame a bounding box in the whole view of a square viewport (see [`Camera::fit_in`]).
     pub fn fit(&mut self, b: &Aabb3) {
-        if b.is_empty() {
+        self.fit_in(b, 1.0, FULL_VIEW);
+    }
+
+    /// Frame a bounding box in part of the view, keeping the direction of view: the smallest
+    /// distance (zoom, in orthographic views) at which all eight corners of `b` project inside
+    /// `free` shrunk by [`FIT_MARGIN`] on each side, and the target moved across the view so the
+    /// box sits centred in it. `free` is `[x0, y0, x1, y1]` as fractions of the view's width and
+    /// height, y down (the part overlays leave free); `aspect` is the view's width over height.
+    ///
+    /// The corners' projections are exact, for orthographic and perspective cameras alike, so
+    /// a long beam seen side on fills the width instead of a sphere around it the height. With
+    /// `s(z) = α·d − β·z` the half height of the view at depth `z` toward the eye (orthographic
+    /// α = 0.4, β = 0; perspective α = β = tan(fov/2)), a corner at `(x, z)` in view
+    /// coordinates (relative to the box centre) shows at `(x − t)/(aspect·s(z))` in normalized
+    /// device coordinates for a target offset `t`. Keeping every corner between the free part's
+    /// edges `a0 … a1` is linear in `(t, d)`: a pair of corners `i`, `j` needs
+    /// `d ≥ ((x_i − x_j)/aspect + β·(a1·z_i − a0·z_j)) / (α·(a1 − a0))`; the largest over all
+    /// pairs and both axes is the distance, and `t` is the middle of what is then allowed.
+    pub fn fit_in(&mut self, b: &Aabb3, aspect: f64, free: [f64; 4]) {
+        if b.is_empty() || !(b.min.is_finite() && b.max.is_finite()) {
             return;
         }
-        self.target = b.center();
-        let r = (b.diagonal() * 0.5).max(1e-3);
-        self.distance = if self.fov > 0.0 { r / (self.fov * 0.5).sin() * 1.1 } else { r / 0.4 * 1.15 };
+        let aspect = if aspect.is_finite() && aspect > 1e-6 { aspect.min(1e6) } else { 1.0 };
+        let [x0, y0, x1, y1] = checked_free(free);
+        // The free part's edges in normalized device coordinates (y up), inside the margin.
+        let (mx, my) = ((x1 - x0) * FIT_MARGIN, (y1 - y0) * FIT_MARGIN);
+        let ax = (2.0 * (x0 + mx) - 1.0, 2.0 * (x1 - mx) - 1.0);
+        let ay = (1.0 - 2.0 * (y1 - my), 1.0 - 2.0 * (y0 + my));
+        let (r, u, back) = self.basis();
+        let c = b.center();
+        let corners = b.corners().map(|p| {
+            let p = p - c;
+            [p.dot(r), p.dot(u), p.dot(back)]
+        });
+        // The half height per unit of distance (`half_height`), and its change with depth.
+        let alpha = Camera { distance: 1.0, ..*self }.half_height();
+        let beta = if self.fov > 0.0 { alpha } else { 0.0 };
+        let size = (b.diagonal() * 0.5).max(1e-3);
+        // Nearest distance: a tiny box still has a size, and in perspective every corner is in
+        // front of the eye (an orthographic distance is only a zoom).
+        let mut d = size * 1e-3 / alpha;
+        if beta > 0.0 {
+            d = corners.iter().map(|q| q[2] + size * 1e-3).fold(d, f64::max);
+        }
+        for (axis, (a0, a1), k) in [(0, ax, aspect), (1, ay, 1.0)] {
+            for i in &corners {
+                for j in &corners {
+                    let need = ((i[axis] - j[axis]) / k + beta * (a1 * i[2] - a0 * j[2])) / (alpha * (a1 - a0));
+                    d = d.max(need);
+                }
+            }
+        }
+        let d = d.clamp(Orientation::DISTANCE.0, Orientation::DISTANCE.1);
+        // The target offset along each axis: the middle of the offsets that keep every corner in.
+        let offset = |axis: usize, (a0, a1): (f64, f64), k: f64| {
+            let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+            for q in &corners {
+                let s = k * (alpha * d - beta * q[2]);
+                lo = lo.max(q[axis] - a1 * s);
+                hi = hi.min(q[axis] - a0 * s);
+            }
+            0.5 * (lo + hi)
+        };
+        let (tx, ty) = (offset(0, ax, aspect), offset(1, ay, 1.0));
+        let target = c + r * tx + u * ty;
+        if target.is_finite() && d.is_finite() {
+            self.target = target;
+            self.distance = d;
+        }
     }
+
     pub fn is_valid(&self) -> bool {
         self.target.is_finite() && self.yaw.is_finite() && self.pitch.is_finite() && self.distance.is_finite() && self.distance > 0.0
     }
@@ -366,6 +443,70 @@ mod tests {
         for v in StandardView::ALL {
             assert_eq!(StandardView::parse(v.label()), Some(v));
         }
+    }
+
+    /// Every corner of the box projects inside `free` (in pixels of a `w` × `h` view), and the
+    /// fit is tight: the corners reach the margin on one axis.
+    fn assert_framed(c: &Camera, b: &Aabb3, w: f64, h: f64, free: [f64; 4], what: &str) {
+        let [x0, y0, x1, y1] = free;
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        let proj = crate::pick::Projector::new(c, w, h, b.diagonal());
+        for (k, p) in b.corners().into_iter().enumerate() {
+            let [x, y, z] = proj.screen(p).unwrap();
+            assert!((0.0..=1.0).contains(&z), "{what}: corner {k} clipped (depth {z})");
+            let eps = 1e-6 * (w + h);
+            assert!(
+                x >= x0 * w - eps && x <= x1 * w + eps && y >= y0 * h - eps && y <= y1 * h + eps,
+                "{what}: corner {k} at ({x}, {y}) outside {free:?} of {w}×{h}"
+            );
+            lo = [lo[0].min(x), lo[1].min(y)];
+            hi = [hi[0].max(x), hi[1].max(y)];
+        }
+        // Tight: the box spans the free width or height less the margins.
+        let span = ((hi[0] - lo[0]) / ((x1 - x0) * w)).max((hi[1] - lo[1]) / ((y1 - y0) * h));
+        assert!((span - (1.0 - 2.0 * FIT_MARGIN)).abs() < 1e-6, "{what}: spans {span} of the free part");
+    }
+
+    #[test]
+    fn fit_in_frames_every_corner_in_the_free_part() {
+        let boxes = [
+            ("long beam", Aabb3 { min: Vec3::new(0.0, -5.0, -10.0), max: Vec3::new(200.0, 5.0, 10.0) }),
+            ("cube off the origin", Aabb3 { min: Vec3::new(100.0, 50.0, -20.0), max: Vec3::new(140.0, 90.0, 20.0) }),
+            ("tall post", Aabb3 { min: Vec3::new(-2.0, -2.0, 0.0), max: Vec3::new(2.0, 2.0, 300.0) }),
+            ("flat plate", Aabb3 { min: Vec3::ZERO, max: Vec3::new(120.0, 80.0, 0.0) }),
+        ];
+        // Whole view; right of a legend and above the navigation bar; a narrow middle strip.
+        let frees = [FULL_VIEW, [0.22, 0.0, 0.85, 0.93], [0.3, 0.1, 0.7, 0.9]];
+        let sizes = [(1280.0, 800.0), (400.0, 1000.0), (800.0, 800.0), (2400.0, 600.0)];
+        for (name, b) in &boxes {
+            for v in StandardView::ALL {
+                for fov in [0.0, 0.7] {
+                    for (w, h) in sizes {
+                        for free in frees {
+                            let mut c = Camera { fov, ..Default::default() };
+                            c.set_view(v);
+                            c.fit_in(b, w / h, free);
+                            assert!(c.is_valid());
+                            assert_framed(&c, b, w, h, free, &format!("{name}, {} view, fov {fov}, {w}×{h}, {free:?}", v.label()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fit_in_refuses_hostile_input() {
+        let b = Aabb3 { min: Vec3::ZERO, max: Vec3::new(10.0, 10.0, 10.0) };
+        let mut c = Camera::default();
+        c.fit_in(&b, f64::NAN, [f64::NAN, 0.0, 2.0, -1.0]);
+        assert!(c.is_valid());
+        let before = c;
+        c.fit_in(&Aabb3 { min: Vec3::new(f64::NEG_INFINITY, 0.0, 0.0), max: Vec3::ZERO }, 1.0, FULL_VIEW);
+        assert_eq!(c, before);
+        // A point: framed at a tiny distance, still valid.
+        c.fit_in(&Aabb3 { min: Vec3::ZERO, max: Vec3::ZERO }, 1.0, FULL_VIEW);
+        assert!(c.is_valid());
     }
 
     #[test]

@@ -121,6 +121,16 @@ impl Aabb3 {
     pub fn diagonal(&self) -> f64 {
         if self.is_empty() { 0.0 } else { self.max.dist(self.min) }
     }
+    /// The eight corners (bit 0 picks x, bit 1 y, bit 2 z: min or max).
+    pub fn corners(&self) -> [Vec3; 8] {
+        std::array::from_fn(|k| {
+            Vec3::new(
+                if k & 1 == 0 { self.min.x } else { self.max.x },
+                if k & 2 == 0 { self.min.y } else { self.max.y },
+                if k & 4 == 0 { self.min.z } else { self.max.z },
+            )
+        })
+    }
 }
 
 #[cfg(test)]

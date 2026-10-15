@@ -35,6 +35,8 @@ pub struct Outcome {
     pub changed: bool,
     /// Fields whose typed text is not a value yet (OK waits for them).
     pub invalid: usize,
+    /// A reference field's "Create …" was clicked: the collection to add to and the field's path.
+    pub create: Option<(Collection, String)>,
 }
 
 struct Form<'a> {
@@ -173,8 +175,8 @@ impl Form<'_> {
                 fields::combo(ui, id, selected, &labels, FIELD_W + 40.0).map(|i| options.get(i).map_or(Value::Null, |(v, _)| json!(v)))
             }
             Kind::Vector { dim, labels, nullable } => self.vector(ui, id, value, dim, labels, nullable),
-            Kind::Ref(c) => self.reference(ui, id, value, c, f.hint, f.required),
-            Kind::RefList(c) => self.reference_list(ui, value, c, f.hint),
+            Kind::Ref(c) => self.reference(ui, id, path, value, c, f.hint, f.required),
+            Kind::RefList(c) => self.reference_list(ui, path, value, c),
             Kind::Either(options) => {
                 let key = match value {
                     Some(Value::String(s)) => Some(s.as_str()),
@@ -268,14 +270,19 @@ impl Form<'_> {
         changed.then_some(Value::Array(next))
     }
 
-    fn reference(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, c: Collection, hint: &str, required: bool) -> Option<Value> {
-        let current = value.and_then(Value::as_str).map(str::to_string);
+    /// A drop-down of the collection's items; never free text. With none, the drop-down is
+    /// greyed and a button opens the command that makes one ([`Outcome::create`]).
+    #[allow(clippy::too_many_arguments)]
+    fn reference(&mut self, ui: &mut Ui, id: Id, path: &str, value: Option<&Value>, c: Collection, hint: &str, required: bool) -> Option<Value> {
+        let current = value.and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string);
         let names = self.names(c).to_vec();
         if names.is_empty() {
-            let mut text = current.unwrap_or_default();
-            let hint = format!("no {} yet", c.label());
-            return fields::text(ui, &self.style, id, &mut text, &hint, FIELD_W + 40.0)
-                .then(|| if text.is_empty() { Value::Null } else { json!(text) });
+            ui.vertical(|ui| {
+                let none = format!("No {} yet", plural(c.label()));
+                ui.add_enabled_ui(false, |ui| fields::combo(ui, id, current.as_deref().unwrap_or(&none), &[], FIELD_W + 40.0));
+                self.create_button(ui, c, path);
+            });
+            return None;
         }
         let empty = if hint.is_empty() { "—" } else { hint };
         let selected = current.clone().unwrap_or_else(|| empty.to_string());
@@ -286,15 +293,15 @@ impl Form<'_> {
         fields::combo(ui, id, &selected, &labels, FIELD_W + 40.0).map(|i| names.get(i).map_or(Value::Null, |n| json!(n)))
     }
 
-    fn reference_list(&mut self, ui: &mut Ui, value: Option<&Value>, c: Collection, hint: &str) -> Option<Value> {
+    fn reference_list(&mut self, ui: &mut Ui, path: &str, value: Option<&Value>, c: Collection) -> Option<Value> {
         let chosen: Vec<String> =
             value.and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
         let names = self.names(c).to_vec();
         let mut changed = None;
         ui.vertical(|ui| {
             if names.is_empty() {
-                let text = if hint.is_empty() { format!("no {} yet", c.label()) } else { hint.to_string() };
-                ui.label(RichText::new(text).color(self.style.dim));
+                ui.label(RichText::new(format!("No {} yet", plural(c.label()))).color(self.style.dim));
+                self.create_button(ui, c, path);
             }
             for n in names.iter().take(MAX_ROWS) {
                 let mut on = chosen.contains(n);
@@ -306,6 +313,18 @@ impl Form<'_> {
             }
         });
         changed
+    }
+
+    /// "Create material…": opens the command that makes an item of `c`, then returns here.
+    fn create_button(&mut self, ui: &mut Ui, c: Collection, path: &str) {
+        let r = c.requirement();
+        let text = match r.provider().ends_with(".create") {
+            true => format!("Create {}…", c.label()),
+            false => format!("{}…", fieldcraft_engine::catalogue::entry_of(r.provider()).map_or(r.provider(), |e| e.label)),
+        };
+        if ui.button(text).on_hover_text(format!("{} ({})", r.place(), r.provider())).clicked() {
+            self.out.create = Some((c, path.to_string()));
+        }
     }
 
     /// A JSON value typed as text: kept while it does not parse.
@@ -417,19 +436,74 @@ impl Form<'_> {
     }
 }
 
+/// A collection's label in the plural: "materials", "point masses", "bodies".
+fn plural(label: &str) -> String {
+    if let Some(stem) = label.strip_suffix('y') {
+        format!("{stem}ies")
+    } else if label.ends_with('s') {
+        format!("{label}es")
+    } else {
+        format!("{label}s")
+    }
+}
+
+/// Fill each empty required reference that has one obvious candidate, `pick(collection)` (the
+/// browser's selection, or a collection's only item). The form starts with it, so the fields and
+/// the JSON view agree. Returns whether anything was filled.
+pub fn preselect(fields: &[Field], obj: &mut Map<String, Value>, pick: &dyn Fn(Collection) -> Option<String>) -> bool {
+    preselect_in(fields, obj, pick, 0)
+}
+
+fn preselect_in(fields: &[Field], obj: &mut Map<String, Value>, pick: &dyn Fn(Collection) -> Option<String>, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    let mut changed = false;
+    for f in fields {
+        match f.kind {
+            Kind::Variants { tag, .. } if f.key.is_empty() => {
+                if let Some(v) = obj.get(tag).and_then(Value::as_str).and_then(|t| f.kind.variant(t)) {
+                    changed |= preselect_in(v.fields, obj, pick, depth + 1);
+                }
+            }
+            Kind::Group(inner) => {
+                if let Some(Value::Object(child)) = obj.get_mut(f.key) {
+                    changed |= preselect_in(inner, child, pick, depth + 1);
+                }
+            }
+            Kind::Variants { tag, .. } => {
+                if let Some(Value::Object(child)) = obj.get_mut(f.key)
+                    && let Some(v) = child.get(tag).and_then(Value::as_str).and_then(|t| f.kind.variant(t))
+                {
+                    changed |= preselect_in(v.fields, child, pick, depth + 1);
+                }
+            }
+            Kind::Ref(c) if f.required && obj.get(f.key).is_none_or(Value::is_null) => {
+                if let Some(name) = pick(c) {
+                    obj.insert(f.key.into(), json!(name));
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Every command's form draws, with its defaults and with hostile parameters, without
-    /// panicking, and drawing alone changes nothing.
+    /// Every command's form draws, with its defaults and with hostile parameters, with and without
+    /// items to reference, without panicking, and drawing alone changes nothing.
     #[test]
     fn every_form_draws() {
         let ctx = egui::Context::default();
-        let names = |c: Collection| vec![format!("{}1", c.label())];
+        let one = |c: Collection| vec![format!("{}1", c.label())];
+        let none = |_: Collection| Vec::new();
         let hostile =
             [json!({}), json!({"type": 7, "name": [], "elastic": "x", "target": {"set": 1, "reference_point": 2}, "values": [1], "geometry": {}})];
-        for c in fieldcraft_engine::commands() {
+        for (c, names) in fieldcraft_engine::commands().iter().flat_map(|c| [(c, &one as &dyn Fn(Collection) -> Vec<String>), (c, &none)]) {
             let Some(form) = c.form else { continue };
             for start in hostile.iter().chain([&schema::prefill(form, &json!({}))]) {
                 let mut params = start.as_object().cloned().unwrap_or_default();
@@ -438,7 +512,7 @@ mod tests {
                 let width = crate::context::WIDTH - 16.0;
                 let mut used = 0.0;
                 let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    let cx = Context { units: UnitSystem::MmTonneS, names: &names, salt: Id::new(c.id) };
+                    let cx = Context { units: UnitSystem::MmTonneS, names, salt: Id::new(c.id) };
                     ui.vertical(|ui| {
                         ui.set_max_width(width);
                         outcome = show(ui, &Tokens::get(false), &cx, form, &mut params);

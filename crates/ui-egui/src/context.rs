@@ -118,6 +118,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     });
     let mut invalid = 0;
+    let mut create = None;
     // The typed fields edit the JSON text's object; text that is not an object stays in the
     // JSON view until it is.
     let object = params.as_object().cloned();
@@ -135,6 +136,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             let cx = crate::form::Context { units, names: &|c| session.names(c), salt: form_id };
             let out = crate::form::show(ui, t, &cx, fields, &mut obj);
             invalid = out.invalid;
+            create = out.create;
             if out.changed {
                 d.text = Value::Object(obj).to_string();
                 d.error = None;
@@ -167,7 +169,9 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         cancel = true;
     }
     if cancel {
-        app.dialog = None;
+        app.close_dialog();
+    } else if let Some((collection, path)) = create {
+        app.create_from_form(collection, path);
     } else if run {
         app.submit_dialog();
     } else if use_selection

@@ -278,7 +278,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 return err("no command form is open (ui.start opens one)");
             }
             if b("cancel") {
-                app.dialog = None;
+                app.close_dialog();
                 return ok(Value::Null);
             }
             if let (Some(d), Some(params)) = (app.dialog.as_mut(), p.get("params")) {

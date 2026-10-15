@@ -163,6 +163,19 @@ pub struct ParamsDialog {
     /// Which opening of a form this is (counts up): a form opened over another one, even of the
     /// same command, gets fresh widget ids, so nothing typed into the one it replaces carries over.
     pub opening: u64,
+    /// Opened from another form's "Create …" button: the form to go back to.
+    pub back: Option<Box<Back>>,
+}
+
+/// The form a "Create …" button left, and where the item made goes in it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Back {
+    pub dialog: ParamsDialog,
+    pub collection: fieldcraft_engine::schema::Collection,
+    /// The reference field's path in its parameters (`a/b`).
+    pub path: String,
+    /// The collection's names before: the one added is the new item.
+    pub before: Vec<String>,
 }
 
 /// A status bar message.
@@ -550,7 +563,17 @@ impl ModelApp {
     pub fn open_form(&mut self, command: &str, params: Value) {
         if let Some(spec) = fieldcraft_engine::find_command(command) {
             // The schema's defaults are filled in, so the form starts as the command would run.
-            let params = spec.form.map_or(params.clone(), |form| fieldcraft_engine::schema::prefill(form, &params));
+            let mut params = spec.form.map_or(params.clone(), |form| fieldcraft_engine::schema::prefill(form, &params));
+            // A required reference with one obvious candidate starts picked.
+            if let (Some(form), Some(obj)) = (spec.form, params.as_object_mut()) {
+                let selected = self.selected.clone();
+                let session = &self.session;
+                let pick = |c| match &selected {
+                    Some((kind, name)) if kind.collection() == c => Some(name.clone()),
+                    _ => Some(session.names(c)).filter(|n| n.len() == 1).and_then(|n| n.into_iter().next()),
+                };
+                form::preselect(form, obj, &pick);
+            }
             self.forms_opened = self.forms_opened.wrapping_add(1);
             self.dialog = Some(ParamsDialog {
                 command: spec.id,
@@ -558,8 +581,46 @@ impl ModelApp {
                 error: None,
                 advanced: spec.form.is_none(),
                 opening: self.forms_opened,
+                back: None,
             });
         }
+    }
+
+    /// A reference field's "Create …": open the command that makes an item of `collection` over
+    /// the open form, which comes back (with the new item at `path`) when that command runs or
+    /// is cancelled. A provider that opens no form (a file picker, a missing requirement) leaves
+    /// the form as it was.
+    pub fn create_from_form(&mut self, collection: fieldcraft_engine::schema::Collection, path: String) {
+        let Some(parent) = self.dialog.take() else { return };
+        let before = self.session.names(collection);
+        let provider = collection.requirement().provider();
+        let _ = self.start(provider);
+        match self.dialog.as_mut() {
+            Some(d) if d.command == provider && d.back.is_none() => d.back = Some(Box::new(Back { dialog: parent, collection, path, before })),
+            _ => self.dialog = Some(parent),
+        }
+    }
+
+    /// Close the open form: back to the form it was opened from, if any.
+    pub fn close_dialog(&mut self) {
+        self.dialog = self.dialog.take().and_then(|d| d.back).map(|b| b.dialog);
+    }
+
+    /// The open form's command ran: back to the form it was opened from, with the item it made
+    /// in the reference field.
+    fn dialog_done(&mut self) {
+        let Some(back) = self.dialog.take().and_then(|d| d.back) else { return };
+        let Back { mut dialog, collection, path, before } = *back;
+        let made = self.session.names(collection).into_iter().find(|n| !before.contains(n));
+        if let (Some(name), Ok(mut params)) = (made, serde_json::from_str::<Value>(&dialog.text)) {
+            let (parent, key) = path.rsplit_once('/').unwrap_or(("", &path));
+            let pointer = if parent.is_empty() { String::new() } else { format!("/{parent}") };
+            if let Some(Value::Object(obj)) = params.pointer_mut(&pointer) {
+                obj.insert(key.into(), json!(name));
+            }
+            dialog.text = params.to_string();
+        }
+        self.dialog = Some(dialog);
     }
 
     /// Run the open parameter form; it closes when the command succeeds.
@@ -567,7 +628,7 @@ impl ModelApp {
         let (command, params) = self.dialog_params()?;
         let r = self.run(command, params);
         match &r {
-            Ok(_) => self.dialog = None,
+            Ok(_) => self.dialog_done(),
             Err(e) => {
                 if let Some(open) = self.dialog.as_mut() {
                     open.error = Some(e.clone());
@@ -1368,6 +1429,53 @@ mod tests {
         assert!(app.dialog.is_none());
         assert!(app.session.model.node(7).is_some());
         assert!(app.start("no.such").is_err());
+    }
+
+    /// A required reference with one candidate starts picked (the browser's selection wins); with
+    /// none, "Create …" opens the providing command over the form, which comes back with the new
+    /// item picked (or as it was, when that command is cancelled).
+    #[test]
+    fn reference_fields_pick_the_only_candidate_and_create_a_missing_one() {
+        use fieldcraft_engine::schema::Collection;
+        let params = |app: &ModelApp| serde_json::from_str::<Value>(&app.dialog.as_ref().unwrap().text).unwrap();
+        let steel = json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}});
+        let mut app = ModelApp::new(Session::default());
+        app.run("mesh.node.add", json!({"label": 1, "xyz": [0, 0, 0]})).unwrap();
+        app.run("model.set.create", json!({"name": "all", "nodes": [1]})).unwrap();
+        // (Opened directly: from the toolbar, Section waits for a material.)
+        app.open_form("model.section.create", json!({}));
+        let opened = params(&app);
+        assert_eq!(opened["set"], "all");
+        assert!(opened.get("material").is_none());
+
+        // Cancelled: back to the section form as it was.
+        app.create_from_form(Collection::Material, "material".into());
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("model.material.create"));
+        app.close_dialog();
+        assert_eq!(app.dialog.as_ref().map(|d| d.command), Some("model.section.create"));
+        assert_eq!(params(&app), opened);
+
+        // Made: back with it picked.
+        app.create_from_form(Collection::Material, "material".into());
+        app.dialog.as_mut().unwrap().text = steel.to_string();
+        app.run_dialog().unwrap();
+        let d = app.dialog.as_ref().unwrap();
+        assert_eq!(d.command, "model.section.create");
+        assert!(d.back.is_none());
+        assert_eq!(params(&app)["material"], "Steel");
+        app.close_dialog();
+        assert!(app.dialog.is_none());
+
+        // One material: Plasticity starts with it.
+        app.start("model.material.plasticity").unwrap();
+        assert_eq!(params(&app)["name"], "Steel");
+        // Two: the one selected in the browser, else nothing.
+        app.run("model.material.create", json!({"name": "Al", "elastic": {"type": "isotropic", "young": 70000, "poisson": 0.33}})).unwrap();
+        app.start("model.material.plasticity").unwrap();
+        assert!(params(&app).get("name").is_none());
+        app.selected = Some((browser::Def::Material, "Steel".into()));
+        app.start("model.material.plasticity").unwrap();
+        assert_eq!(params(&app)["name"], "Steel");
     }
 
     #[test]

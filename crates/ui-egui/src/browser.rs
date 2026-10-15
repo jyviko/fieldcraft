@@ -9,6 +9,7 @@
 //! ATTRIBUTION.md.
 
 use egui::{Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2, pos2, vec2};
+use fieldcraft_engine::schema::Collection;
 use fieldcraft_model::Model;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -39,6 +40,22 @@ pub enum Def {
 }
 
 impl Def {
+    /// The reference fields that name one of these.
+    pub fn collection(self) -> Collection {
+        match self {
+            Def::Set => Collection::Set,
+            Def::Material => Collection::Material,
+            Def::Section => Collection::Section,
+            Def::Step => Collection::Step,
+            Def::BoundaryCondition => Collection::BoundaryCondition,
+            Def::Load => Collection::Load,
+            Def::ReferencePoint => Collection::ReferencePoint,
+            Def::Coupling => Collection::Coupling,
+            Def::Contact => Collection::Contact,
+            Def::FluidDomain => Collection::FluidDomain,
+        }
+    }
+
     /// The commands' stem: `model.<stem>.create|edit|delete`.
     pub fn stem(self) -> &'static str {
         match self {

@@ -294,8 +294,28 @@ pub fn check_name(what: &str, name: &str) -> Result<()> {
         Ok(())
     } else {
         let shown: String = name.chars().take(MAX_NAME_LEN).collect();
-        Err(Error::Invalid(format!("{what} name `{shown}` must be 1 to {MAX_NAME_LEN} characters: a letter, then letters, digits, `_` or `-`")))
+        let rule = format!("{what} name `{shown}` must be 1 to {MAX_NAME_LEN} characters: a letter, then letters, digits, `_` or `-`");
+        Err(Error::Invalid(match suggest_name(name) {
+            Some(fixed) => format!("{rule} (try `{fixed}`)"),
+            None => rule,
+        }))
     }
+}
+
+/// The valid name closest to `name`: spaces and other characters become `_`, a leading
+/// non-letter gets an `N` before it, and it is cut to [`MAX_NAME_LEN`]. `None` when nothing of it
+/// is usable (empty, or no letter or digit at all).
+pub fn suggest_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if !trimmed.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let mut fixed: String = trimmed.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    if !fixed.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        fixed.insert(0, 'N');
+    }
+    fixed.truncate(MAX_NAME_LEN);
+    Some(fixed)
 }
 
 /// Check that a value is a finite number, naming it in the error.
@@ -410,5 +430,19 @@ impl Model {
             ("partitions", self.partitions.len()),
             ("seeds", self.seeds.len()),
         ]
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn a_bad_name_suggests_a_fixed_one() {
+        let e = check_name("load", "Hot air").unwrap_err().to_string();
+        assert!(e.contains("try `Hot_air`"), "{e}");
+        assert_eq!(suggest_name("1st load"), Some("N1st_load".into()));
+        assert_eq!(suggest_name("  "), None);
+        assert!(check_name("load", &suggest_name(&"x ".repeat(80)).unwrap()).is_ok());
     }
 }

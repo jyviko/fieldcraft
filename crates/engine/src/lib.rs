@@ -171,6 +171,16 @@ pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
     commands().iter().find(|c| c.id == id)
 }
 
+/// Refuse a parameter the command does not take, naming the ones it does: a script that sets
+/// `deformed` on `results.contour` learns it belongs elsewhere instead of being ignored.
+fn check_keys(spec: &CommandSpec, params: &Value) -> Result<()> {
+    match spec.form.and_then(|form| schema::unknown_key(form, params)) {
+        Some((key, accepted)) if accepted.is_empty() => Err(EngineError::Params(format!("{} takes no parameters (got `{key}`)", spec.id))),
+        Some((key, accepted)) => Err(EngineError::Params(format!("{} has no parameter `{key}`; it takes {}", spec.id, accepted.join(", ")))),
+        None => Ok(()),
+    }
+}
+
 /// A new revision number, unique in the process: every state of every session has its own.
 pub(crate) fn next_revision() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -269,7 +279,11 @@ impl Session {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.chars().take(100).collect()))?;
         let timer = usage::Timer::start(self.origin);
         let elements = self.model.elements().len();
-        let result = self.availability(spec).map_err(EngineError::Unavailable).and_then(|()| self.run_command(spec, params));
+        let result = self
+            .availability(spec)
+            .map_err(EngineError::Unavailable)
+            .and_then(|()| check_keys(spec, params))
+            .and_then(|()| self.run_command(spec, params));
         if timer.counting() {
             let milestone = usage::milestone(spec.id, (elements, self.model.elements().len()));
             let sample =

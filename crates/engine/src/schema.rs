@@ -777,6 +777,38 @@ pub fn object_problems(fields: &'static [Field], obj: &Map<String, Value>) -> Ve
     out
 }
 
+/// The top-level keys `params` may hold for these fields: each field's key, and for a flattened
+/// one-of (a load's `type`) its tag and the fields of the variant `params` picks (of every
+/// variant when it picks none).
+pub fn accepted_keys(fields: &[Field], params: &Value) -> Vec<&'static str> {
+    let mut keys = Vec::new();
+    for f in fields {
+        match f.kind {
+            Kind::Variants { tag, variants } if f.key.is_empty() => {
+                keys.push(tag);
+                let picked = params.get(tag).and_then(Value::as_str).and_then(|t| variants.iter().find(|v| v.tag == t));
+                for v in variants.iter().filter(|v| picked.is_none_or(|p| p.tag == v.tag)) {
+                    for key in accepted_keys(v.fields, params) {
+                        if !keys.contains(&key) {
+                            keys.push(key);
+                        }
+                    }
+                }
+            }
+            _ => keys.push(f.key),
+        }
+    }
+    keys
+}
+
+/// The first top-level key of `params` that `fields` do not describe, with the keys they do:
+/// a misspelt or misplaced parameter is refused rather than silently ignored.
+pub fn unknown_key(fields: &[Field], params: &Value) -> Option<(String, Vec<&'static str>)> {
+    let obj = params.as_object()?;
+    let accepted = accepted_keys(fields, params);
+    obj.keys().find(|k| !accepted.contains(&k.as_str())).map(|k| (k.chars().take(64).collect(), accepted))
+}
+
 /// The path of field `key` inside `prefix` (`elastic/young`).
 pub fn join(prefix: &str, key: &str) -> String {
     if prefix.is_empty() {
@@ -1105,5 +1137,28 @@ mod tests {
         assert_eq!(s["required"], json!(["name", "type"]));
         assert_eq!(s["oneOf"][1]["properties"]["type"]["const"], "pressure");
         assert_eq!(s["oneOf"][1]["required"], json!(["magnitude", "set", "type"]));
+    }
+
+    #[test]
+    fn unknown_keys_are_found_per_variant() {
+        assert_eq!(unknown_key(LOADISH, &json!({"name": "P", "type": "pressure", "magnitude": 1})), None);
+        let (key, accepted) = unknown_key(LOADISH, &json!({"name": "P", "type": "pressure", "magnitud": 1})).unwrap();
+        assert_eq!(key, "magnitud");
+        assert!(accepted.contains(&"magnitude") && accepted.contains(&"name"));
+    }
+
+    #[test]
+    fn every_command_refuses_an_unknown_parameter() {
+        for spec in crate::commands() {
+            let mut s = Session::default();
+            let e = s.execute(spec.id, &json!({"bogus_param": 1})).unwrap_err().to_string();
+            // A command that cannot run yet says so first; otherwise the key is named.
+            assert!(e.contains("bogus_param") || s.availability(spec).is_err(), "{}: {e}", spec.id);
+        }
+        let mut s = Session::default();
+        crate::cmd::solve::tests::cantilever(&mut s);
+        s.execute("solve.run", &json!({})).unwrap();
+        let e = s.execute("results.contour", &json!({"field": "displacement", "deformed": true})).unwrap_err().to_string();
+        assert!(e.contains("`deformed`") && e.contains("field"), "{e}");
     }
 }

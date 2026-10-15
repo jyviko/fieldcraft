@@ -228,6 +228,9 @@ pub struct Session {
     /// The folders commands may read and write files in (an automation client's roots,
     /// docs/mcp.md); unconfined by default. A file replacing the session keeps them.
     pub file_access: fieldcraft_io::roots::Roots,
+    /// Identifies the open document: it changes when another model, sample or design is opened
+    /// in place of the current one, never with an edit (see [`Session::opened`]).
+    opened: u64,
 }
 
 impl Session {
@@ -278,6 +281,19 @@ impl Session {
             outputs.push(self.execute(id, &params).map_err(|e| EngineError::Params(format!("step {} ({id}): {e}", i + 1)))?);
         }
         Ok(outputs)
+    }
+
+    /// Identifies the open document: it changes when `file.open`, `file.recover` or `file.sample`
+    /// replaces the session and when `geometry.open` opens another design file or starts a new
+    /// model with one; an edit, a solve, undo, redo or opening the same design again after an
+    /// edit keep it. A view frames the model again when it changes.
+    pub fn opened(&self) -> u64 {
+        self.opened
+    }
+
+    /// Make the session another document (see [`Session::opened`]).
+    pub(crate) fn mark_opened(&mut self) {
+        self.opened = next_revision();
     }
 
     /// Identifies the current state (see [`Session::is_dirty`]).
@@ -697,6 +713,32 @@ mod tests {
         ]);
         s.run_script(&script).unwrap();
         s
+    }
+
+    /// `opened` changes with another document (a sample, another design file, a new model) and
+    /// stays with an edit, a solve or the same design opened again: views frame on that change.
+    #[test]
+    fn the_open_document_changes_only_when_another_is_opened() {
+        let mut s = Session::default();
+        let start = s.opened();
+        s.execute("file.sample", &json!({"name": "cantilever"})).unwrap();
+        let cantilever = s.opened();
+        assert_ne!(cantilever, start);
+        s.execute("solve.run", &json!({})).unwrap();
+        s.execute("model.material.create", &json!({"name": "Al", "elastic": {"type": "isotropic", "young": 70000, "poisson": 0.33}})).unwrap();
+        assert_eq!(s.opened(), cantilever, "edits and solves keep the document");
+        s.execute("file.sample", &json!({"name": "cantilever"})).unwrap();
+        assert_ne!(s.opened(), cantilever, "a sample opened again is a fresh start");
+
+        let (_dir, path) = sample_design_file(&Plate::default());
+        let before = s.opened();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        let design = s.opened();
+        assert_ne!(design, before, "another design file");
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        assert_eq!(s.opened(), design, "the same design opened again after an edit");
+        s.execute("geometry.open", &json!({"path": path, "model": "new"})).unwrap();
+        assert_ne!(s.opened(), design, "a new model");
     }
 
     #[test]

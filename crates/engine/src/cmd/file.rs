@@ -232,6 +232,7 @@ impl Session {
         opened.limits = self.limits;
         opened.file_access = std::mem::take(&mut self.file_access);
         opened.clear_history();
+        opened.mark_opened();
         *self = opened;
     }
 }

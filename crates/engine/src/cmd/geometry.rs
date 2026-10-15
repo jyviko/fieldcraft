@@ -90,6 +90,11 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
         "related": fit.related,
         "stale": {"mesh_bodies": fit.mesh_bodies, "sets": fit.sets, "seeds": fit.seeds},
     });
+    // Another design file (or a new model) is another document; the same file opened again after
+    // an edit is the same one.
+    if new_model || s.sources.design.as_ref().is_none_or(|d| d.path() != source.path()) {
+        s.mark_opened();
+    }
     s.design = Some(Arc::new(design));
     s.sources.design = Some(source);
     Ok(out)

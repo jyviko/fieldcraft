@@ -1,6 +1,7 @@
 //! Geometry tags on the mesh: which body, face, edge or vertex each mesh entity lies on. Meshers
 //! write them; these commands set them by hand (for a mesh from elsewhere) and clear them.
 
+use crate::schema::ProblemKind;
 use fieldcraft_model::{ElementFace, GeometryRef, MAX_ELEMENTS};
 use serde_json::{Value, json};
 
@@ -38,7 +39,7 @@ struct ElementEdge {
 /// An optional list parameter of at most [`MAX_ELEMENTS`] entries.
 fn list<'a, T: serde::Deserialize<'a>>(p: &'a Value, key: &str) -> Result<Vec<T>> {
     if p.get(key).and_then(Value::as_array).is_some_and(|a| a.len() > MAX_ELEMENTS) {
-        return Err(EngineError::param(key, format!("must be a list of at most {MAX_ELEMENTS} entries")));
+        return Err(EngineError::param(key, ProblemKind::NotAList { max: MAX_ELEMENTS, what: "entries" }));
     }
     Ok(opt(p, key)?.unwrap_or_default())
 }

@@ -1,5 +1,6 @@
 //! Structured hexahedral meshing of the open design's bodies or of imported surfaces.
 
+use crate::schema::ProblemKind;
 use std::borrow::Cow;
 
 use fieldcraft_geometry::{FaceSurface, Shape, SurfaceMesh};
@@ -56,9 +57,7 @@ fn analytic(s: FaceSurface) -> Surface {
 pub(super) fn number(p: &Value, key: &str) -> Result<Option<f64>> {
     match p.get(key) {
         None => Ok(None),
-        Some(v) => {
-            v.as_f64().filter(|x| x.is_finite() && *x > 0.0).map(Some).ok_or_else(|| EngineError::param(key, "must be a positive number (mm)"))
-        }
+        Some(v) => v.as_f64().filter(|x| x.is_finite() && *x > 0.0).map(Some).ok_or_else(|| EngineError::param(key, ProblemKind::NotPositive)),
     }
 }
 
@@ -81,7 +80,7 @@ pub(super) fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
     let tolerance = number(p, "tolerance")?;
     match (p.get("body"), p.get("surface")) {
         (Some(b), None) => {
-            let name = b.as_str().ok_or_else(|| EngineError::param("body", "must be a body name"))?;
+            let name = b.as_str().ok_or_else(|| EngineError::param("body", ProblemKind::NotAName))?;
             let shape = s
                 .design
                 .as_deref()
@@ -155,14 +154,14 @@ fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
     let shapes: Vec<&Shape> = match p.get("bodies") {
         None => design.bodies.iter().collect(),
         Some(v) => {
-            let names = v.as_array().ok_or_else(|| EngineError::param("bodies", "must be a list of body names"))?;
+            let names = v.as_array().ok_or_else(|| EngineError::param("bodies", ProblemKind::NotNames))?;
             // Bounded before the duplicate check, which is quadratic in the list.
             if names.len() > MAX_CELLS {
                 return Err(EngineError::Params(format!("`bodies` lists {} bodies; at most {MAX_CELLS} are meshed together", names.len())));
             }
             let mut out: Vec<&Shape> = Vec::with_capacity(names.len());
             for n in names {
-                let name = n.as_str().ok_or_else(|| EngineError::param("bodies", "must be a list of body names"))?;
+                let name = n.as_str().ok_or_else(|| EngineError::param("bodies", ProblemKind::NotNames))?;
                 let shape = design.body(name).ok_or_else(|| EngineError::Params(format!("no body `{name}`")))?;
                 if out.iter().any(|b| b.name == shape.name) {
                     return Err(EngineError::Params(format!("body `{name}` is listed twice")));
@@ -264,7 +263,7 @@ fn order(p: &Value) -> Result<bool> {
         Some(v) => match v.as_u64() {
             Some(1) => Ok(false),
             Some(2) => Ok(true),
-            _ => Err(EngineError::param("order", "must be 1 (hex8) or 2 (hex20)")),
+            _ => Err(EngineError::invalid("order", "must be 1 (hex8) or 2 (hex20)")),
         },
     }
 }

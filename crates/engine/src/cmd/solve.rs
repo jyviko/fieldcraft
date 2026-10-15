@@ -1,6 +1,7 @@
 //! `solve.*`: run the model's steps with the implicit, the explicit or the lattice Boltzmann
 //! solver, keep the results in the session, and read them back.
 
+use crate::schema::ProblemKind;
 use fieldcraft_explicit::{ExplicitResult, solve_explicit};
 use fieldcraft_lbm::{FluidResult, Obstacle};
 use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
@@ -134,7 +135,7 @@ fn cap<T: Copy + TryInto<u64> + TryFrom<u64> + std::fmt::Display>(p: &Value, key
             .as_u64()
             .filter(|n| (1..=most).contains(n))
             .and_then(|n| T::try_from(n).ok())
-            .ok_or_else(|| EngineError::param(key, format!("must be a whole number from 1 to {default}"))),
+            .ok_or_else(|| EngineError::param(key, ProblemKind::NotAWholeNumber { min: 1, max: i64::try_from(most).unwrap_or(i64::MAX) })),
     }
 }
 
@@ -390,7 +391,7 @@ fn history(s: &mut Session, p: &Value) -> Result<Value> {
     let h = &r.history;
     let samples = h.time.len();
     let every = match opt::<u64>(p, "every")? {
-        Some(0) => return Err(EngineError::param("every", "must be at least 1")),
+        Some(0) => return Err(EngineError::param("every", ProblemKind::Below(1.0))),
         Some(k) => usize::try_from(k).unwrap_or(usize::MAX),
         None => samples.div_ceil(MAX_HISTORY_SAMPLES).max(1),
     };
@@ -541,7 +542,7 @@ fn probe_fluid(r: &FluidResult, p: &Value) -> Result<Value> {
 }
 
 fn probe(s: &mut Session, p: &Value) -> Result<Value> {
-    let step = opt::<String>(p, "step")?.ok_or_else(|| EngineError::param("step", "is required"))?;
+    let step = opt::<String>(p, "step")?.ok_or_else(|| EngineError::param("step", ProblemKind::Required))?;
     let result = s.result(&step).ok_or_else(|| {
         EngineError::Params(if s.latest_result(&step).is_some() {
             format!("the result of step `{step}` is stale (the model changed since it was solved); solve it again")

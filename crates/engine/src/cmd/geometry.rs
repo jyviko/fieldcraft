@@ -1,3 +1,4 @@
+use crate::schema::ProblemKind;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -156,14 +157,14 @@ fn bodies(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 fn body<'a>(s: &'a Session, p: &Value) -> Result<&'a Shape> {
-    let name = p.get("body").and_then(Value::as_str).ok_or_else(|| EngineError::param("body", "must be a body name"))?;
+    let name = p.get("body").and_then(Value::as_str).ok_or_else(|| EngineError::param("body", ProblemKind::NotAName))?;
     s.design.as_deref().and_then(|d| d.body(name)).ok_or_else(|| EngineError::Params(format!("no body `{name}` (open a design first)")))
 }
 
 /// The body named by `body`, tessellated within `tolerance`.
 pub(crate) fn body_mesh<'a>(s: &'a Session, p: &Value) -> Result<(&'a Shape, SurfaceMesh)> {
     let shape = body(s, p)?;
-    let tolerance = p.get("tolerance").and_then(Value::as_f64).ok_or_else(|| EngineError::param("tolerance", "must be a number (mm)"))?;
+    let tolerance = p.get("tolerance").and_then(Value::as_f64).ok_or_else(|| EngineError::param("tolerance", ProblemKind::NotANumber))?;
     Ok((shape, shape.tessellate(tolerance)?))
 }
 

@@ -1,3 +1,4 @@
+use crate::schema::ProblemKind;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
@@ -123,12 +124,15 @@ const TET_MAX_PASSES: u64 = 200;
 pub(super) fn optional_count(p: &Value, key: &str, default: u64, range: std::ops::RangeInclusive<u64>) -> Result<usize> {
     let v = match p.get(key) {
         None => default,
-        Some(v) => v
-            .as_u64()
-            .filter(|n| range.contains(n))
-            .ok_or_else(|| EngineError::param(key, format!("must be a whole number in {}..={}", range.start(), range.end())))?,
+        Some(v) => v.as_u64().filter(|n| range.contains(n)).ok_or_else(|| EngineError::param(key, whole_in(&range)))?,
     };
-    usize::try_from(v).map_err(|_| EngineError::param(key, "is too large"))
+    usize::try_from(v).map_err(|_| EngineError::param(key, whole_in(&range)))
+}
+
+/// A whole number in `range`, as a problem's kind.
+fn whole_in(range: &std::ops::RangeInclusive<u64>) -> ProblemKind {
+    let int = |n: u64| i64::try_from(n).unwrap_or(i64::MAX);
+    ProblemKind::NotAWholeNumber { min: int(*range.start()), max: int(*range.end()) }
 }
 
 /// The boundary options of `mesh.surface.check`, `mesh.tet.generate` and the hex meshers.
@@ -144,7 +148,7 @@ pub(super) fn surface_options(p: &Value, mesh: &SurfaceMesh) -> Result<SurfaceOp
 /// An optional number in `range`.
 fn number_in(p: &Value, key: &str, default: f64, range: std::ops::RangeInclusive<f64>) -> Result<f64> {
     let v = optional_number(p, key, default)?;
-    if range.contains(&v) { Ok(v) } else { Err(EngineError::param(key, format!("must be a number in {}..={}", range.start(), range.end()))) }
+    if range.contains(&v) { Ok(v) } else { Err(EngineError::param(key, ProblemKind::NotInRange { min: *range.start(), max: *range.end() })) }
 }
 
 /// The quality options of `mesh.tet.generate`, and whether the quality stage runs at all.
@@ -155,7 +159,7 @@ pub(super) fn quality_options(p: &Value, max_tets: u64) -> Result<(QualityOption
         Some(v) => Some(
             v.as_f64()
                 .filter(|h| *h > 0.0 && h.is_finite() && *h <= fieldcraft_model::MAX_COORD)
-                .ok_or_else(|| EngineError::param("size", "must be a positive number (mm)"))?,
+                .ok_or_else(|| EngineError::param("size", ProblemKind::NotPositive))?,
         ),
     };
     let order = match p.get("order") {
@@ -163,7 +167,7 @@ pub(super) fn quality_options(p: &Value, max_tets: u64) -> Result<(QualityOption
         Some(v) => match v.as_str() {
             Some("linear") => Order::Linear,
             Some("quadratic") => Order::Quadratic,
-            _ => return Err(EngineError::param("order", "must be \"linear\" or \"quadratic\"")),
+            _ => return Err(EngineError::param("order", ProblemKind::NotAChoice)),
         },
     };
     let target = number_in(p, "quality_target", 40.0, 5.0..=60.0)?;
@@ -395,14 +399,14 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
         .get("size")
         .and_then(Value::as_f64)
         .filter(|v| *v > 0.0 && v.is_finite())
-        .ok_or_else(|| EngineError::param("size", "must be a positive number (the element size)"))?;
+        .ok_or_else(|| super::wrong(p, "size", ProblemKind::NotPositive))?;
     let kind = match p.get("kind") {
         None => ElementKind::Quad4,
         Some(k) => k
             .as_str()
             .and_then(ElementKind::from_name)
             .filter(|k| k.dimension() == 2)
-            .ok_or_else(|| EngineError::param("kind", "must be quad4, quad8, tri3 or tri6"))?,
+            .ok_or_else(|| EngineError::param("kind", ProblemKind::NotAChoice))?,
     };
     let opts = fieldcraft_mesh::quad::QuadOptions {
         max_elements: optional_count(p, "max_elements", 1_000_000, 1..=PLANAR_MAX_ELEMENTS)?,
@@ -424,7 +428,7 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let name = match p.get("name") {
                 None => "Plane".to_string(),
-                Some(n) => n.as_str().map(str::to_string).ok_or_else(|| EngineError::param("name", "must be a body name"))?,
+                Some(n) => n.as_str().map(str::to_string).ok_or_else(|| EngineError::param("name", ProblemKind::NotAName))?,
             };
             GeometryRef::body(name.clone())?;
             let mut id = 0u32;
@@ -444,7 +448,7 @@ fn planar(s: &mut Session, p: &Value) -> Result<Value> {
             (loops, name, "area".to_string(), names)
         }
         (None, Some(_)) => {
-            let face_name = p.get("face").and_then(Value::as_str).ok_or_else(|| EngineError::param("face", "must be a face name"))?;
+            let face_name = p.get("face").and_then(Value::as_str).ok_or_else(|| EngineError::param("face", ProblemKind::NotAName))?;
             let (shape, mesh) = super::geometry::body_mesh(s, p)?;
             let face = shape.face_index(face_name).ok_or_else(|| EngineError::Params(format!("body `{}` has no face `{face_name}`", shape.name)))?;
             let b = face_boundary(&mesh.positions, &mesh.triangles, &mesh.tri_face, face, mesh.weld_distance)?;
@@ -534,7 +538,7 @@ fn number(v: f64) -> Value {
 fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
     let bins = match p.get("bins") {
         None => 10,
-        Some(v) => v.as_u64().and_then(|b| usize::try_from(b).ok()).ok_or_else(|| EngineError::param("bins", "must be a whole number"))?,
+        Some(v) => v.as_u64().and_then(|b| usize::try_from(b).ok()).ok_or_else(|| EngineError::invalid("bins", "must be a whole number"))?,
     };
     let selection = match p.get("elements") {
         None => None,

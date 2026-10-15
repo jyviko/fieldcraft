@@ -5,6 +5,7 @@
 //! in order, whenever the design is opened (`geometry.open`, `file.open`, samples), so an edit
 //! of the design followed by a re-open replays them.
 
+use crate::schema::ProblemKind;
 use std::sync::Arc;
 
 use fieldcraft_geometry::{Cut, Design};
@@ -126,7 +127,7 @@ fn plane_datum(by: PlaneBy) -> Result<Datum> {
     Ok(match by {
         PlaneBy::Offset { plane, offset } => {
             if !offset.is_finite() {
-                return Err(EngineError::param("offset", "must be a finite number"));
+                return Err(EngineError::param("offset", ProblemKind::NotANumber));
             }
             let normal = match plane {
                 Principal::Yz => [1.0, 0.0, 0.0],

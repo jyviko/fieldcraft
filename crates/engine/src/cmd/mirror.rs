@@ -6,6 +6,7 @@
 //! on (found by position). Without such a body the image is `<body>/mirror` with the source's
 //! face names.
 
+use crate::schema::ProblemKind;
 use std::collections::{BTreeMap, BTreeSet};
 
 use fieldcraft_geometry::Shape;
@@ -34,6 +35,10 @@ const SAME_PLACE: f64 = 1e-4;
 /// Distance (relative to the mesh's bounding-box diagonal) within which nodes are on the plane.
 const ON_PLANE: f64 = 1e-7;
 
+fn not_a_plane() -> EngineError {
+    EngineError::invalid("plane", r#"must be a datum plane's name or {"point": [x, y, z], "normal": [x, y, z]}"#)
+}
+
 /// The plane: a datum plane by name, or a point and a normal.
 fn plane(s: &Session, p: &Value) -> Result<([f64; 3], [f64; 3])> {
     match p.get("plane") {
@@ -42,8 +47,12 @@ fn plane(s: &Session, p: &Value) -> Result<([f64; 3], [f64; 3])> {
             .datum(name)
             .and_then(|d| d.plane())
             .ok_or_else(|| EngineError::Params(format!("no datum plane `{}`", name.chars().take(64).collect::<String>()))),
-        Some(v @ Value::Object(_)) => Ok((super::xyz(v, "point")?, super::xyz(v, "normal")?)),
-        _ => Err(EngineError::param("plane", "must be a datum plane's name or {\"point\", \"normal\"}")),
+        Some(v @ Value::Object(_)) => match (super::xyz(v, "point"), super::xyz(v, "normal")) {
+            (Ok(point), Ok(normal)) => Ok((point, normal)),
+            _ => Err(not_a_plane()),
+        },
+        None | Some(Value::Null) => Err(EngineError::param("plane", ProblemKind::Required)),
+        _ => Err(not_a_plane()),
     }
 }
 

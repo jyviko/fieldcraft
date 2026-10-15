@@ -42,11 +42,11 @@ pub enum EngineError {
     UnknownCommand(String),
     #[error("{0}")]
     Params(String),
-    /// One parameter is missing or wrong: its key (a JSON path, `elastic/young`) and what is
-    /// wrong with it. The message names the key (agents need it); a form shows the problem
-    /// beside the field, by its label.
-    #[error("`{key}` {problem}")]
-    Param { key: String, problem: String },
+    /// One parameter is missing or wrong: the schema's [`schema::Problem`], at the field's JSON
+    /// path (`elastic/young`). The message names the key ([`schema::Problem::for_agents`]); a
+    /// form shows it beside the field, by its label ([`schema::Problem::for_form`]).
+    #[error("{}", .0.for_agents())]
+    Param(schema::Problem),
     #[error(transparent)]
     Model(#[from] fieldcraft_model::Error),
     #[error(transparent)]
@@ -72,9 +72,15 @@ pub enum EngineError {
 }
 
 impl EngineError {
-    /// A problem with parameter `key`.
-    pub fn param(key: impl Into<String>, problem: impl Into<String>) -> Self {
-        Self::Param { key: key.into(), problem: problem.into() }
+    /// A problem with the parameter at `path` (`elastic/young`).
+    pub fn param(path: impl Into<String>, kind: schema::ProblemKind) -> Self {
+        Self::Param(schema::Problem::at(path, kind))
+    }
+
+    /// A parameter problem with something wrong that the schema does not describe: what the
+    /// value must be or do instead.
+    pub fn invalid(path: impl Into<String>, why: impl Into<String>) -> Self {
+        Self::param(path, schema::ProblemKind::Invalid(why.into()))
     }
 }
 
@@ -245,6 +251,10 @@ impl Session {
         let before = (spec.kind == CommandKind::Model).then(|| (self.snapshot(), self.document()));
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
         let result = match outcome {
+            Ok(Err(EngineError::Param(p))) => Err(EngineError::Param(match spec.form {
+                Some(form) => schema::refine(form, params, p),
+                None => p,
+            })),
             Ok(r) => r,
             Err(p) => {
                 let message = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();

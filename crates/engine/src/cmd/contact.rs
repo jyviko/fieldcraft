@@ -12,6 +12,7 @@
 //! touch there. Each touching pair is reported with the faces of each side that are close to the
 //! other; with `create`, each becomes two face sets and a contact pair.
 
+use crate::schema::ProblemKind;
 use std::collections::BTreeMap;
 
 use fieldcraft_fem::contact::{Grid, bounds, closest_point};
@@ -34,7 +35,7 @@ fn contact(p: &Value, surfaces: ContactSurfaces) -> Result<Contact> {
 
 /// A required name-valued parameter.
 fn text<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
-    p.get(key).and_then(Value::as_str).ok_or_else(|| EngineError::param(key, "must be a set name"))
+    p.get(key).and_then(Value::as_str).ok_or_else(|| EngineError::param(key, ProblemKind::NotAName))
 }
 
 pub const PAIR: CommandSpec = CommandSpec {

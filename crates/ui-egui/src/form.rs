@@ -33,7 +33,8 @@ pub struct Context<'a> {
     pub touched: &'a BTreeSet<String>,
     /// OK was tried: every problem shows.
     pub attempted: bool,
-    /// The command refused a parameter: its path and the problem, shown beside the field.
+    /// The command refused a parameter: its path and the problem as the form phrases it, shown
+    /// beside the field.
     pub refused: Option<(&'a str, &'a str)>,
     /// What is missing or wrong in the parameters ([`messages`]).
     pub problems: &'a [(String, String)],
@@ -146,9 +147,9 @@ pub fn show(ui: &mut Ui, t: &Tokens, cx: &Context, fields: &'static [Field], par
 impl Form<'_> {
     /// The problem with the field at `path`, under it: the command's refusal at once, the
     /// form's own once the field was edited or OK was tried.
-    fn problem_note(&self, ui: &mut Ui, path: &str, label: &str) {
+    fn problem_note(&self, ui: &mut Ui, path: &str) {
         let message = match self.cx.refused {
-            Some((key, problem)) if key == path => Some(format!("{label}: {problem}")),
+            Some((key, message)) if key == path => Some(message.to_string()),
             _ => self.problems.get(path).filter(|_| self.cx.attempted || self.cx.touched.contains(path)).cloned(),
         };
         if let Some(message) = message {
@@ -190,7 +191,7 @@ impl Form<'_> {
                     *obj = schema::switch_variant(f, common, obj, &t);
                     self.touch(&path);
                 }
-                self.problem_note(ui, &path, f.label);
+                self.problem_note(ui, &path);
                 if let Some(v) = obj.get(tag).and_then(Value::as_str).and_then(|t| f.kind.variant(t)) {
                     self.fields(ui, v.fields, common, obj, prefix, depth + 1);
                 }
@@ -231,7 +232,7 @@ impl Form<'_> {
                 }
             }
         }
-        self.problem_note(ui, &path, f.label);
+        self.problem_note(ui, &path);
     }
 
     /// A one-row field; returns its new value (`Null` removes it).
@@ -501,7 +502,7 @@ impl Form<'_> {
                         *child = schema::switch_variant(f, &[], child, &t);
                         self.touch(&tag_path);
                     }
-                    self.problem_note(ui, &tag_path, row.label);
+                    self.problem_note(ui, &tag_path);
                     if let Some(v) = child.get(tag).and_then(Value::as_str).and_then(|t| f.kind.variant(t)) {
                         self.fields(ui, v.fields, v.fields, child, path, depth + 1);
                     }
@@ -827,7 +828,7 @@ mod tests {
         assert!(draw(&none, true, None).contains("Material: choose a material"));
         let touched: BTreeSet<String> = ["name".to_string()].into();
         assert!(draw(&touched, false, None).contains("Material: choose a material"));
-        let refused = draw(&none, false, Some(("name", "names no material")));
+        let refused = draw(&none, false, Some(("name", "Material: names no material")));
         assert!(refused.contains("Material: names no material") && !refused.contains("choose a material"), "{refused}");
     }
 

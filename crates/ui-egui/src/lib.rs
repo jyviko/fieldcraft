@@ -164,7 +164,8 @@ pub struct ParamsDialog {
     /// The parameters as JSON text.
     pub text: String,
     pub error: Option<String>,
-    /// The command refused one parameter: its path and the problem, shown beside its field.
+    /// The command refused one parameter: its path and the problem phrased for the form, shown
+    /// beside its field.
     pub refused: Option<(String, String)>,
     /// The paths of the fields edited: their problems show; the others wait for OK.
     pub touched: std::collections::BTreeSet<String>,
@@ -179,7 +180,7 @@ pub struct ParamsDialog {
     pub back: Option<Box<Back>>,
 }
 
-/// A command that failed: its message, and the parameter it refused (path, problem).
+/// A command that failed: its message, and the parameter it refused (path, form message).
 struct Failure {
     message: String,
     refused: Option<(String, String)>,
@@ -486,22 +487,20 @@ impl ModelApp {
     /// Run a command with JSON parameters: what every panel, the control channel and scripts
     /// do. The result or the error goes to the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        self.run_form(id, params, None).map_err(|f| f.message)
+        self.run_form(id, params, false).map_err(|f| f.message)
     }
 
-    /// [`Self::run`] from a form with `fields`: a refused parameter is named by its field's label
-    /// (the engine's message names its key, which agents need).
-    fn run_form(&mut self, id: &str, params: Value, fields: Option<&'static [fieldcraft_engine::schema::Field]>) -> Result<Value, Failure> {
+    /// [`Self::run`], from a form when `form`: a refused parameter is then named by its field's
+    /// label (the engine's message names its key, which agents need).
+    fn run_form(&mut self, id: &str, params: Value, form: bool) -> Result<Value, Failure> {
         self.ensure_idle().map_err(|message| Failure { message, refused: None })?;
         let revision = self.session.revision();
         let label = command_label(id);
         let r = self.session.execute(id, &params).map_err(|e| match e {
-            EngineError::Param { key, problem } => {
-                let message = match fields.and_then(|f| fieldcraft_engine::schema::field_at(f, &key)) {
-                    Some(f) => format!("{}: {problem}", f.label),
-                    None => format!("`{key}` {problem}"),
-                };
-                Failure { message, refused: Some((key, problem)) }
+            EngineError::Param(p) => {
+                let message = if form { p.for_form() } else { p.for_agents() };
+                let shown = p.for_form();
+                Failure { refused: Some((p.path, shown)), message }
             }
             e => Failure { message: e.to_string(), refused: None },
         });
@@ -677,8 +676,7 @@ impl ModelApp {
     /// Run the open parameter form; it closes when the command succeeds.
     pub fn run_dialog(&mut self) -> Result<Value, String> {
         let (command, params) = self.dialog_params()?;
-        let fields = fieldcraft_engine::find_command(command).and_then(|c| c.form);
-        match self.run_form(command, params, fields) {
+        match self.run_form(command, params, true) {
             Ok(v) => {
                 self.dialog_done();
                 Ok(v)
@@ -1597,7 +1595,7 @@ mod tests {
         let e = app.run_dialog().unwrap_err();
         assert_eq!(e, "Material: must be a name");
         let d = app.dialog.as_ref().unwrap();
-        assert_eq!(d.refused, Some(("name".to_string(), "must be a name".to_string())));
+        assert_eq!(d.refused, Some(("name".to_string(), "Material: must be a name".to_string())));
         assert!(app.status.as_ref().is_some_and(|s| s.text == "Plasticity: Material: must be a name"));
         let raw = app.session.execute("model.material.plasticity", &json!({"name": 7})).unwrap_err();
         assert_eq!(raw.to_string(), "`name` must be a name");

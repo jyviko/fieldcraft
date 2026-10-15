@@ -81,14 +81,14 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => match v.as_u64() {
             Some(1) => false,
             Some(2) => true,
-            _ => return Err(EngineError::param("order", "must be 1 or 2")),
+            _ => return Err(EngineError::invalid("order", "must be 1 or 2")),
         },
     };
     let default = p.get("default").map(Method::parse).transpose()?.unwrap_or(Method::Auto);
     let methods: BTreeMap<String, Method> = match p.get("methods") {
         None => BTreeMap::new(),
         Some(Value::Object(m)) => m.iter().map(|(k, v)| Ok((k.clone(), Method::parse(v)?))).collect::<Result<_>>()?,
-        Some(_) => return Err(EngineError::param("methods", "must map cell names to methods")),
+        Some(_) => return Err(EngineError::invalid("methods", "must map cell names to methods")),
     };
     let design = s.design.clone().ok_or_else(|| EngineError::Params("open a design first".into()))?;
     let names: Vec<String> = match p.get("bodies") {

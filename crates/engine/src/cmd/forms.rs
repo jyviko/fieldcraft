@@ -1496,15 +1496,10 @@ mod tests {
                     fill_required(&s, form, &mut p);
                 }
                 let missing: Vec<String> = problems(form, &p).into_iter().filter(|p| p.kind == ProblemKind::Required).map(|p| p.path).collect();
-                // The engine names a missing nested field by its path, its own key, or the group
-                // that holds it.
-                let is_missing = |key: &str| {
-                    missing.iter().any(|m| m == key || m.rsplit('/').next() == Some(key) || m.strip_prefix(key).is_some_and(|r| r.starts_with('/')))
-                };
                 match s.execute(c.id, &p) {
-                    Err(EngineError::Param { key, .. }) if is_missing(&key) => {}
-                    Err(EngineError::Param { key, problem }) => {
-                        failures.push(format!("{}: {p} refused for `{key}` {problem}, but only {missing:?} were missing", c.id));
+                    Err(EngineError::Param(e)) if e.kind == ProblemKind::Required && missing.contains(&e.path) => {}
+                    Err(EngineError::Param(e)) => {
+                        failures.push(format!("{}: {p} refused: {}, but only {missing:?} were missing", c.id, e.for_agents()));
                     }
                     // State, not parameters: the meshers' default is the open design's bodies, the
                     // bar has no explicit step; activation and probes need one of several fields.
@@ -1519,6 +1514,56 @@ mod tests {
         }
         assert!(failures.is_empty(), "{failures:#?}");
         assert!(checked > 20, "{checked}");
+    }
+
+    /// Every parameter the engine refuses is a field of the command's form: the problem's path
+    /// leads to a field, so a form can show it beside that field, by its label. Each field of
+    /// each form is given a value of the wrong kind in turn, over the form's starting values.
+    #[test]
+    fn every_param_error_names_a_field_of_its_form() {
+        let hostile = [json!("x"), json!(-1), json!(0), json!(1e300), json!([]), json!({}), json!(null), json!([1, "x"])];
+        let (mut seen, mut failures) = (0, Vec::new());
+        for c in crate::commands() {
+            let Some(form) = c.form else { continue };
+            if c.id.starts_with("file.") || c.id.starts_with("edit.") || form.iter().any(|f| matches!(f.kind, Kind::Path { .. })) {
+                continue; // they replace the session's model or write files
+            }
+            let base = prefill(form, &json!({}));
+            let mut tries = vec![json!({}), base.clone()];
+            for f in form.iter().filter(|f| !f.key.is_empty()) {
+                for v in &hostile {
+                    let mut p = base.clone();
+                    if let Some(o) = p.as_object_mut() {
+                        o.insert(f.key.into(), v.clone());
+                    }
+                    tries.push(p);
+                }
+            }
+            for p in tries {
+                let limits = crate::Limits { max_steiner: 10, max_tets: 100, max_hex_elements: 100, threads: 1 };
+                let mut s = Session { limits, ..Session::default() };
+                crate::cmd::define::tests::defined_bar(&mut s);
+                if let Err(EngineError::Param(e)) = s.execute(c.id, &p) {
+                    seen += 1;
+                    if e.field.is_none() || field_at(form, &e.path).is_none() {
+                        failures.push(format!("{}: {p} refused `{}`, not a field of the form ({})", c.id, e.path, e.for_agents()));
+                    }
+                }
+            }
+        }
+        failures.sort();
+        failures.dedup();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert!(seen > 50, "{seen}");
+    }
+
+    /// A required field left empty says what to do by its kind: a name, a path, else "required".
+    #[test]
+    fn required_fields_are_phrased_by_kind() {
+        let form = |fields: &'static [Field]| problems(fields, &json!({})).iter().map(Problem::for_form).collect::<Vec<_>>();
+        assert_eq!(form(RECOVER), ["Autosave: required"]);
+        assert_eq!(form(FILE_SAVE_AS), ["File: enter a path"]);
+        assert!(form(MATERIAL).contains(&"Name: enter a name".to_string()), "{:?}", form(MATERIAL));
     }
 
     /// The commands whose form is the JSON text alone (no schema yet). None: keep it that way.

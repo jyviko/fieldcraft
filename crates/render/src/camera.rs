@@ -279,6 +279,24 @@ impl Camera {
         self.yaw = (self.yaw + dx * 0.008) % std::f64::consts::TAU;
         self.pitch = (self.pitch + dy * 0.008).clamp(-lim, lim);
     }
+    /// Orbit by pixel deltas about `pivot`, which keeps its place on screen: the eye turns
+    /// about the pivot and the target follows, so the pivot's view coordinates (and so its
+    /// screen position, in perspective and orthographic views) are the same after the turn.
+    pub fn orbit_about(&mut self, pivot: Vec3, dx: f64, dy: f64) {
+        if !pivot.is_finite() {
+            self.orbit(dx, dy);
+            return;
+        }
+        let (r, u, b) = self.basis();
+        let v = pivot - self.eye();
+        let (vx, vy, vz) = (v.dot(r), v.dot(u), v.dot(b));
+        self.orbit(dx, dy);
+        let (r, u, b) = self.basis();
+        let target = pivot - (r * vx + u * vy + b * vz) - b * self.distance;
+        if target.is_finite() {
+            self.target = target;
+        }
+    }
     pub fn set_view(&mut self, v: StandardView) {
         let lim = std::f64::consts::FRAC_PI_2 - 1e-6;
         let (y, p) = v.angles();
@@ -425,6 +443,49 @@ mod tests {
         c.zoom_at(0.5, Some(a));
         let (x, y, _) = c.to_screen(a, 800.0, 600.0, 10.0).unwrap();
         assert!((x - 600.0).abs() < 1e-6 && (y - 200.0).abs() < 1e-6, "{x} {y}");
+    }
+
+    /// Orbiting about a pivot off the target keeps the pivot where it was on screen, in both
+    /// projections and from any view.
+    #[test]
+    fn orbit_about_keeps_the_pivot_on_screen() {
+        let pivot = Vec3::new(37.0, -12.0, 8.0);
+        for fov in [0.0, 0.7] {
+            for v in StandardView::ALL {
+                let mut c = Camera { target: Vec3::new(5.0, 3.0, -2.0), distance: 150.0, fov, ..Default::default() };
+                c.set_view(v);
+                let before = c.to_screen(pivot, 800.0, 600.0, 100.0).unwrap();
+                for (dx, dy) in [(40.0, 0.0), (0.0, -25.0), (-60.0, 33.0)] {
+                    c.orbit_about(pivot, dx, dy);
+                    let after = c.to_screen(pivot, 800.0, 600.0, 100.0).unwrap();
+                    assert!(
+                        (after.0 - before.0).abs() < 1e-6 && (after.1 - before.1).abs() < 1e-6,
+                        "{} fov {fov}: {before:?} -> {after:?}",
+                        v.label()
+                    );
+                }
+                assert!(c.is_valid());
+            }
+        }
+        let mut c = Camera::default();
+        c.orbit_about(Vec3::new(f64::NAN, 0.0, 0.0), 10.0, 10.0);
+        assert!(c.is_valid() && c.target == Vec3::ZERO);
+    }
+
+    /// A wheel notch zooms by the same factor in orthographic and perspective views: the visible
+    /// height scales by it, and the point under the cursor stays put (#273).
+    #[test]
+    fn zoom_scales_the_view_alike_in_both_projections() {
+        for fov in [0.0, 0.7] {
+            let mut c = Camera { distance: 300.0, fov, ..Default::default() };
+            c.set_view(StandardView::Front);
+            let h0 = c.half_height();
+            let a = c.target_plane_point(650.0, 120.0, 800.0, 600.0).unwrap();
+            c.zoom_at(0.8, Some(a));
+            assert!((c.half_height() / h0 - 0.8).abs() < 1e-12, "fov {fov}");
+            let (x, y, _) = c.to_screen(a, 800.0, 600.0, 10.0).unwrap();
+            assert!((x - 650.0).abs() < 1e-6 && (y - 120.0).abs() < 1e-6, "fov {fov}: {x} {y}");
+        }
     }
 
     #[test]

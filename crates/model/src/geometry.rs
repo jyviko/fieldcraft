@@ -16,9 +16,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Model, Result};
 
-/// Longest body or entity name accepted (persistent names can be long; they are not written to
-/// decks as such).
-pub const MAX_GEOMETRY_NAME_LEN: usize = 256;
+/// Longest body or entity name accepted, in bytes. Persistent names grow with the design's split
+/// history (a face cut by a groove, then split by joined bosses, names every step), so a real
+/// design can produce names of hundreds or thousands of characters; this cap only bounds hostile
+/// input (control channel, model files). The same cap holds wherever a geometry name is taken:
+/// opening, mesh tags, sets, ties, loads, partitions and saved views. Names are not written to
+/// decks as such.
+pub const MAX_GEOMETRY_NAME_LEN: usize = 64 * 1024;
 
 /// Most distinct geometry entities a mesh can be tagged with.
 pub const MAX_ENTITIES: usize = 1_000_000;
@@ -114,7 +118,7 @@ impl From<GeometryRef> for GeometryRefRepr {
 fn check_geometry_name(what: &str, name: &str) -> Result<()> {
     if name.is_empty() || name.len() > MAX_GEOMETRY_NAME_LEN || name.chars().any(char::is_control) {
         let shown: String = name.chars().take(64).filter(|c| !c.is_control()).collect();
-        return Err(Error::Invalid(format!("{what} name `{shown}` must be 1 to {MAX_GEOMETRY_NAME_LEN} characters with no control characters")));
+        return Err(Error::Invalid(format!("{what} name `{shown}` must be 1 to {MAX_GEOMETRY_NAME_LEN} bytes with no control characters")));
     }
     Ok(())
 }

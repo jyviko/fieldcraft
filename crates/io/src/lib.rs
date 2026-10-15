@@ -179,8 +179,8 @@ pub struct Geometry {
 /// Most items a view hides.
 pub const MAX_HIDDEN: usize = 100_000;
 
-/// Longest name of a hidden item.
-const MAX_HIDDEN_NAME: usize = 1024;
+/// Longest name of a hidden item (a body's name is a geometry name).
+const MAX_HIDDEN_NAME: usize = fieldcraft_model::geometry::MAX_GEOMETRY_NAME_LEN;
 
 /// The kinds of items the viewport draws one by one, and so can hide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

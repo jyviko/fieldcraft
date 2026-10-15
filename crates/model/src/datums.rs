@@ -11,14 +11,13 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::geometry::MAX_GEOMETRY_NAME_LEN;
 use crate::{Error, Model, Result, check_name, context, insert_new, not_in_use, remove_existing, replace_existing};
 
 /// Most partitions a model holds.
 pub const MAX_PARTITIONS: usize = 256;
 /// Most bodies one partition names.
 pub const MAX_PARTITION_BODIES: usize = 1000;
-/// Longest body name a partition holds.
-const MAX_BODY_NAME: usize = 256;
 
 /// A datum plane, axis or point.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -163,8 +162,8 @@ impl Model {
             return Err(invalid(format!("at most {MAX_PARTITION_BODIES} bodies")));
         }
         for (i, b) in partition.bodies.iter().enumerate() {
-            if b.trim().is_empty() || b.len() > MAX_BODY_NAME {
-                return Err(invalid(format!("body names are 1 to {MAX_BODY_NAME} characters")));
+            if b.trim().is_empty() || b.len() > MAX_GEOMETRY_NAME_LEN {
+                return Err(invalid(format!("body names are 1 to {MAX_GEOMETRY_NAME_LEN} bytes")));
             }
             if partition.bodies.get(..i).is_some_and(|before| before.contains(b)) {
                 return Err(invalid(format!("body `{b}` is listed twice")));

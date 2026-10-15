@@ -896,6 +896,35 @@ mod tests {
         assert!(e.starts_with("body `Box"), "{e}");
     }
 
+    /// Persistent names grow with the design's split history: a tray floor split by joined ribs
+    /// names every split, past the old 256-character cap. Such a design meshes, and a set on that
+    /// face resolves by its full name, again after a remesh (#374).
+    #[test]
+    fn long_persistent_face_names_mesh_and_resolve() {
+        let mut commands = vec![
+            json!({"command": "solid.box", "params": {"length": 40, "width": 30, "height": 20, "corner": [0, 0, 0], "body_name": "Case"}}),
+            json!({"command": "solid.shell", "params": {"faces": [[20, 15, 20]], "thickness": 2, "direction": "inside", "body": "Case"}}),
+        ];
+        // Ribs across the floor split it into strips, each named by every split before it.
+        for x in (3..=36).step_by(3) {
+            commands.push(json!({"command": "solid.box", "params": {"length": 1, "width": 26, "height": 5, "corner": [x, 2, 2], "operation": "join", "targets": ["Case"]}}));
+        }
+        let bytes = fieldcraft_geometry::script_design(&json!({"commands": commands}).to_string()).unwrap();
+        let (_dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        let bodies = s.execute("geometry.bodies", &json!({})).unwrap();
+        let long = bodies[0]["faces"].as_array().unwrap().iter().filter_map(|f| f["name"].as_str()).max_by_key(|n| n.len()).unwrap().to_string();
+        assert!(long.len() > 256, "the fixture needs a face name past the old cap: {long}");
+        s.execute("mesh.tet.generate", &json!({"body": "Case"})).unwrap();
+        s.execute("model.set.create", &json!({"name": "floor", "geometry": [{"body": "Case", "face": long}]})).unwrap();
+        let first = s.model.resolve_set("floor").unwrap();
+        assert!(!first.faces.is_empty());
+        s.execute("mesh.tet.generate", &json!({"body": "Case", "tolerance": 0.5})).unwrap();
+        let again = s.model.resolve_set("floor").unwrap();
+        assert!(!again.faces.is_empty(), "the set follows the remesh by the full name");
+    }
+
     /// The quality report's one-line summary counts the inverted elements.
     #[test]
     fn quality_summary_counts_invalid_elements() {

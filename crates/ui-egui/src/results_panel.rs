@@ -212,6 +212,9 @@ pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) 
                 }
             }
         });
+    } else if let Kind::Heat(h) = plot.result.kind() {
+        ui.separator();
+        heat_flows(ui, &fieldcraft_engine::results::heat_flows(h), t);
     } else {
         ui.separator();
         if ui.button("Reaction sums").on_hover_text("Reaction force and moment per boundary-condition set (results.reactions)").clicked() {
@@ -284,6 +287,24 @@ fn explicit(ui: &mut egui::Ui, e: &ExplicitResult, plot: &Plot, t: &Tokens, run:
         ui.label(RichText::new("Balance").color(t.text_dim));
         ui.label(number(at_now.balance));
         ui.end_row();
+    });
+}
+
+/// A heat step's balance: the heat each heat load carries in (negative: out), the prescribed
+/// temperatures' total, and what is left over (about 0 when steady).
+fn heat_flows(ui: &mut egui::Ui, flows: &Value, t: &Tokens) {
+    ui.label(RichText::new("Heat flow into the body").color(t.text_dim));
+    egui::Grid::new("fc_results_heat").num_columns(2).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
+        let row = |ui: &mut egui::Ui, name: &str, v: Option<f64>| {
+            ui.label(name);
+            ui.label(v.map_or("—".into(), number));
+            ui.end_row();
+        };
+        for l in flows["loads"].as_array().into_iter().flatten() {
+            row(ui, &format!("{} ({})", l["name"].as_str().unwrap_or("?"), l["type"].as_str().unwrap_or("").replace('_', " ")), l["heat"].as_f64());
+        }
+        row(ui, "Prescribed temperatures", flows["reactions"].as_f64());
+        row(ui, "Imbalance", flows["imbalance"].as_f64());
     });
 }
 

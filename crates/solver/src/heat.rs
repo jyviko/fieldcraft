@@ -126,6 +126,16 @@ pub struct ElementFlux {
     pub points: Vec<PointFlux>,
 }
 
+/// The heat flow through one heat load.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadFlow {
+    pub name: String,
+    /// `surface_flux`, `convection` or `heat_source`.
+    pub kind: &'static str,
+    /// Heat per time into the body (negative: out of it).
+    pub heat: f64,
+}
+
 /// The result of a heat transfer step.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeatResult {
@@ -143,6 +153,9 @@ pub struct HeatResult {
     /// The heat each prescribed temperature supplies to the body at the end of the step
     /// (negative where it takes heat away; zero at free nodes).
     pub reaction: Vec<f64>,
+    /// The heat each heat load carries into the body at the end of the step, in the step's
+    /// order (negative where it takes heat away, as a convection to a colder sink does).
+    pub loads: Vec<LoadFlow>,
     /// Heat supplied by fluxes, convection and sources (at the end temperatures), and the total
     /// reaction heat flow; in a steady state they cancel.
     pub applied_total: f64,
@@ -189,24 +202,7 @@ fn assemble(model: &Model, resolved: &Resolved, mesh: &HeatMesh, graph: &NodeGra
     };
     for name in &step.loads {
         let load = model.load(name).ok_or_else(|| Error::Invalid(format!("load `{name}` is missing")))?;
-        let faces = || -> Result<Vec<(u32, Vec<usize>, Vec<[f64; 3]>)>> {
-            let set = load.set().unwrap_or_default();
-            resolved
-                .sets
-                .get(set)
-                .map(|s| s.faces.as_slice())
-                .unwrap_or_default()
-                .iter()
-                .map(|fc| {
-                    let labels = model
-                        .face_nodes(*fc)
-                        .ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} face {} is missing", fc.element, fc.face)))?;
-                    let idx: Vec<usize> = labels.iter().map(|l| mesh.node_of(&format!("load `{name}`"), *l)).collect::<Result<_>>()?;
-                    let xyz = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
-                    Ok((fc.element, idx, xyz))
-                })
-                .collect()
-        };
+        let faces = || load_faces(model, resolved, mesh, name, load);
         match load {
             Load::SurfaceFlux { flux, .. } => {
                 for (label, idx, xyz) in faces()? {
@@ -234,6 +230,60 @@ fn assemble(model: &Model, resolved: &Resolved, mesh: &HeatMesh, graph: &NodeGra
         }
     }
     Ok(HeatSystem { k, c, f })
+}
+
+/// The element faces of heat load `name`'s set: each face's element, node indices and
+/// coordinates.
+fn load_faces(model: &Model, resolved: &Resolved, mesh: &HeatMesh, name: &str, load: &Load) -> Result<Vec<(u32, Vec<usize>, Vec<[f64; 3]>)>> {
+    let set = load.set().unwrap_or_default();
+    resolved
+        .sets
+        .get(set)
+        .map(|s| s.faces.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .map(|fc| {
+            let labels =
+                model.face_nodes(*fc).ok_or_else(|| Error::Invalid(format!("load `{name}`: element {} face {} is missing", fc.element, fc.face)))?;
+            let idx: Vec<usize> = labels.iter().map(|l| mesh.node_of(&format!("load `{name}`"), *l)).collect::<Result<_>>()?;
+            let xyz = idx.iter().filter_map(|i| mesh.xyz.get(*i).copied()).collect();
+            Ok((fc.element, idx, xyz))
+        })
+        .collect()
+}
+
+/// The heat each of the step's heat loads carries into the body at temperatures `t`: a flux
+/// ∫q dA, a source ∫Q dV, a convection h ∫(T∞ − T) dA (negative where it carries heat away).
+fn load_flows(model: &Model, resolved: &Resolved, mesh: &HeatMesh, step: &Step, t: &[f64]) -> Result<Vec<LoadFlow>> {
+    let mut out = Vec::new();
+    for name in &step.loads {
+        let Some(load) = model.load(name).filter(|l| l.is_thermal()) else { continue };
+        let mut heat = 0.0;
+        match load {
+            Load::SurfaceFlux { flux, .. } => {
+                for (label, _, xyz) in load_faces(model, resolved, mesh, name, load)? {
+                    heat += flux * face_weights(&xyz).map_err(|e| Error::element(label, e))?.iter().sum::<f64>();
+                }
+            }
+            // h Σ w_j (T∞ − T_j): the film matrix's columns sum to h w_j (Σ N = 1).
+            Load::Convection { film, sink, .. } => {
+                for (label, idx, xyz) in load_faces(model, resolved, mesh, name, load)? {
+                    let w = face_weights(&xyz).map_err(|e| Error::element(label, e))?;
+                    heat += film * w.iter().zip(&idx).map(|(w, i)| w * (sink - t.get(*i).copied().unwrap_or(*sink))).sum::<f64>();
+                }
+            }
+            Load::HeatSource { set, power } => {
+                for label in resolved.sets.get(set).map(|s| s.elements.as_slice()).unwrap_or_default() {
+                    if let Some(e) = mesh.element(*label) {
+                        heat += e.kernel()?.source(*power).map_err(|err| Error::element(e.label, err))?.iter().sum::<f64>();
+                    }
+                }
+            }
+            _ => continue,
+        }
+        out.push(LoadFlow { name: name.clone(), kind: load.kind(), heat });
+    }
+    Ok(out)
 }
 
 /// The prescribed temperature of every node (`None` = free) under the step's boundary
@@ -445,6 +495,7 @@ pub fn solve_heat(model: &Model, step: Option<&str>, limits: &Limits) -> Result<
     let applied_total: f64 = kt.iter().zip(&s.f).map(|(a, b)| b - a).sum();
     let reaction_total: f64 = reaction.iter().sum();
     let (flux, elements) = fluxes(&s.mesh, t)?;
+    let loads = load_flows(model, &resolved, &s.mesh, step, t)?;
     // Measured against the gross heat flows, which cancel in the net sums.
     let scale = reaction.iter().chain(&s.f).map(|v| v.abs()).sum::<f64>();
     if s.c.is_none() && scale > 0.0 && (applied_total + reaction_total).abs() > 1e-6 * scale {
@@ -459,6 +510,7 @@ pub fn solve_heat(model: &Model, step: Option<&str>, limits: &Limits) -> Result<
         flux,
         elements,
         reaction,
+        loads,
         applied_total,
         reaction_total,
         stats,

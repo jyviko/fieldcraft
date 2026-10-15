@@ -303,6 +303,7 @@ fn run_heat(s: &mut Session, p: &Value) -> Result<Value> {
         "max_temperature": largest(r.nodes.iter().copied().zip(t.iter().copied())),
         "heat_supplied": r.applied_total,
         "heat_removed": r.reaction_total,
+        "heat_flows": crate::results::heat_flows(&r),
         "warnings": r.warnings,
     });
     s.store_result(StepResult::Implicit(ImplicitResult::Heat(r)));
@@ -1475,6 +1476,30 @@ pub(crate) mod tests {
         ] {
             assert!(s.execute("solve.probe", &p).is_err(), "{p}");
         }
+    }
+
+    /// A heat balance per load: the convection `Air` carries away what the heater's prescribed
+    /// temperature supplies (#362).
+    #[test]
+    fn heat_flows_balance_per_load() {
+        let mut s = Session::default();
+        cantilever(&mut s);
+        let script = json!([
+            {"command": "model.material.edit", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000, "poisson": 0}, "density": 1, "thermal": {"conductivity": 2}}},
+            {"command": "model.boundary_condition.create", "params": {"name": "Heater", "type": "temperature", "target": {"set": "root"}, "value": 100}},
+            {"command": "model.set.create", "params": {"name": "skin", "faces": (1..=6).map(|f| json!({"element": 10, "face": f})).collect::<Vec<_>>()}},
+            {"command": "model.load.create", "params": {"name": "Air", "type": "convection", "set": "skin", "film": 0.5, "sink": 20}},
+            {"command": "model.step.create", "params": {"name": "Therm", "procedure": {"type": "heat_transfer"}, "boundary_conditions": ["Heater"], "loads": ["Air"]}},
+        ]);
+        s.run_script(&script).unwrap();
+        let r = s.execute("solve.heat", &json!({"step": "Therm"})).unwrap();
+        let flows = &r["heat_flows"];
+        let air = flows["loads"].as_array().unwrap().iter().find(|l| l["name"] == "Air").unwrap();
+        assert_eq!(air["type"], "convection");
+        let (out, supplied) = (air["heat"].as_f64().unwrap(), flows["reactions"].as_f64().unwrap());
+        assert!(out < 0.0 && supplied > 0.0, "{flows}");
+        assert!(flows["imbalance"].as_f64().unwrap().abs() < 1e-6 * supplied, "{flows}");
+        assert_eq!(s.results_report()["heat_flows"], *flows);
     }
 
     #[test]

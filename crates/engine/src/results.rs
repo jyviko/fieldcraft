@@ -497,6 +497,7 @@ impl Session {
                 out["frames"] = f.frames.iter().map(|f| f.time).collect();
             }
             Kind::Heat(h) => {
+                out["heat_flows"] = heat_flows(h);
                 out["frames"] = json!(h.times);
                 if let Ok((t, _)) = heat_frame(h, v.pick()) {
                     out["time"] = json!(t);
@@ -517,6 +518,16 @@ impl Session {
     pub fn result_steps(&self) -> impl Iterator<Item = (&str, bool)> {
         self.results.iter().map(|(name, (revision, _))| (name.as_str(), *revision == self.revision))
     }
+}
+
+/// The heat balance of a heat transfer result: each heat load's flow into the body (`loads`:
+/// `{name, type, heat}`, negative out of it), the prescribed temperatures' total (`reactions`),
+/// and `imbalance`, their sum: about 0 in a steady state, the heat stored per time in a
+/// transient one.
+pub fn heat_flows(h: &HeatResult) -> Value {
+    let loads: Vec<Value> = h.loads.iter().map(|l| json!({"name": l.name, "type": l.kind, "heat": l.heat})).collect();
+    let applied: f64 = h.loads.iter().map(|l| l.heat).sum();
+    json!({"loads": loads, "reactions": h.reaction_total, "imbalance": applied + h.reaction_total})
 }
 
 #[cfg(test)]

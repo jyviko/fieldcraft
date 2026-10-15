@@ -497,101 +497,36 @@ pub const CRANK_ARM: &str = include_str!("../samples/crank-arm.json");
 /// The crank arm's pedal load (N): a standing rider's weight on one pedal.
 pub const PEDAL_LOAD: f64 = 1500.0;
 
-/// The cells of the half `CrankArm/a` (y < 0) after [`crank_prepare`], from the spindle to the
-/// pedal: the spindle boss and the arm's root (`X30`), the pocket's spindle end below the
-/// diagonal `D1`, the arm between `D1` and `X60`, the middle of the arm (`X60` to `X110`), the arm
-/// between `X110` and `D2`, the pocket's pedal end beyond `D2`, and the pedal boss (`X148`).
-pub const CRANK_CELLS: [&str; 7] = [
-    "CrankArm/a/a",
-    "CrankArm/a/b/a",
-    "CrankArm/a/b/b/a",
-    "CrankArm/a/b/b/b/a",
-    "CrankArm/a/b/b/b/b/a",
-    "CrankArm/a/b/b/b/b/b/a",
-    "CrankArm/a/b/b/b/b/b/b",
-];
+/// The half of the crank [`crank_prepare`] cuts off on the symmetry plane (y < 0), the one
+/// meshed; its mirror image is `CrankArm/b`.
+pub const CRANK_HALF: &str = "CrankArm/a";
 
-/// The diagonals' angles from the arm's axis (degrees): `D1` through the centre of the pocket's
-/// spindle-end corner fillet (53, −2), `D2` through the pedal-end one (125, −2), each radial to
-/// its fillet so it meets the pocket wall square. Steeper than 45° from the pocket's floor edge
-/// (y = 0) on its inner side and shallower than 45° from the arm's edge on its outer side, so the
-/// pocket's middle keeps its corners there and the cells beyond it do not gain one.
-const CRANK_DIAGONALS: [f64; 2] = [40.0, 32.0];
-
-/// [`CRANK_ARM`] meshed structured all-hex (hex20 of 3 mm) from a partitioned half and mirrored,
-/// in 6061-T6 aluminium: the square bore's faces and corner fillets (set `spindle`) fixed,
+/// [`CRANK_ARM`] meshed structured all-hex (hex20 of 3 mm) from its half and mirrored, in
+/// 6061-T6 aluminium: the square bore's faces and corner fillets (set `spindle`) fixed,
 /// [`PEDAL_LOAD`] on the pedal hole (set `pedal`), in the crank's plane and across the arm (−y).
 /// Step `Pedal` (linear static). The faces are picked by their surfaces, not their names: the
 /// square bore's are the vertical planes 6.35 mm from the spindle axis and the R1.5 cylinders
 /// beside it, the pedal hole is the Ø14 cylinder on the pedal axis.
 ///
-/// The mesh: [`crank_prepare`] cuts the crank on its symmetry plane and the half `CrankArm/a`
-/// into the seven [`CRANK_CELLS`], each a stack of extrusions whose cross-section splits into
-/// regions that map: four-sided regions (transfinite), the half ring round each bore, and the
-/// pocket's four corners cut off by the partitions, three-sided (the triangle primitive). Exact
-/// edge seeds give each cut the same divisions in the two cells it divides, so `mesh.cells`
-/// sweeps every cell (`extrude`) and merges them node for node; `mesh.mirror` reflects the half
-/// onto `CrankArm/b`, joined on the plane.
+/// The mesh: [`crank_prepare`] cuts the crank on its symmetry plane only; `mesh.hex.generate`
+/// extrudes the half [`CRANK_HALF`], decomposing its cross-section into blocks itself (half
+/// rings round both bores, the pocket's corners as triangle primitives, four-sided blocks along
+/// the arm), with no seeds; `mesh.mirror` reflects it onto `CrankArm/b`, joined on the plane.
 pub fn crank_arm(bodies: &[Shape]) -> Value {
-    let cells = CRANK_CELLS;
-    let mut mesh = crank_seeds();
-    mesh.push(json!({"command": "mesh.cells", "params": {"bodies": cells, "default": "extrude", "size": 3, "order": 2}}));
-    // Each cell's image is part of the uncut half.
-    let images: serde_json::Map<String, Value> = cells.iter().map(|c| (c.to_string(), json!("CrankArm/b"))).collect();
-    mesh.push(json!({"command": "mesh.mirror", "params": {"plane": "Sym", "bodies": cells, "as": images}}));
+    let mesh = vec![
+        json!({"command": "mesh.hex.generate", "params": {"body": CRANK_HALF, "method": "extrude", "size": 3, "order": 2}}),
+        json!({"command": "mesh.mirror", "params": {"plane": "Sym", "bodies": [CRANK_HALF], "as": {CRANK_HALF: "CrankArm/b"}}}),
+    ];
     crank_model(bodies, mesh)
 }
 
-/// The edge seeds that make every cut's divisions alike on its two sides: each cut's line in
-/// the arm's cross-section (its bottom edge, z = 0) and, for the diagonals and the cuts across the
-/// pocket, its line on the pocket's floor (z = 8); and the 16 mm walls of the end cells on their
-/// cuts, in six layers as the pocket's floor level splits the cells between them (3 + 3). The
-/// counts are those the cells' mapped regions need: the cut `X30` faces the spindle boss's arc
-/// across the root (7), the arm between the diagonals is one block of five rows.
-fn crank_seeds() -> Vec<Value> {
-    let [c1, c2, c3, c4, c5, c6, c7] = CRANK_CELLS;
-    let cut = |name: &str, a: &str, b: &str, face: &str, count: u32| {
-        json!({"command": "mesh.seed.edge", "params": {"edges": [
-            {"body": a, "edge": format!("{face}|partition:{name}:a")},
-            {"body": b, "edge": format!("{face}|partition:{name}:b")},
-        ], "count": count}})
-    };
-    let mut seeds = vec![cut("X30", c1, c2, "F2:start", 7), cut("X148", c6, c7, "F2:start", 5)];
-    for (name, a, b) in [("D1", c2, c3), ("X60", c3, c4), ("X110", c4, c5), ("D2", c5, c6)] {
-        seeds.push(cut(name, a, b, "F2:start", 5));
-        seeds.push(cut(name, a, b, "F6:top", 3));
-    }
-    seeds.push(json!({"command": "mesh.seed.edge", "params": {"edges": [
-        {"body": c1, "edge": "F2:side:lo|partition:X30:a"},
-        {"body": c7, "edge": "F2:side:lo|partition:X148:b"},
-    ], "count": 6}}));
-    seeds
-}
-
-/// The crank arm's symmetry plane (`Sym`, y = 0) and the partition by it (`Half`), then the
-/// half `CrankArm/a` cut into [`CRANK_CELLS`]: across the arm at x = 30 (the root, beyond the
-/// spindle boss), 60 and 110 (the pocket's straight middle) and 148 (before the pedal boss), and
-/// on the diagonals of [`CRANK_DIAGONALS`]. Each cut names the one cell it divides.
+/// The crank arm's symmetry plane (`Sym`, y = 0) and the partition by it (`Half`): the one datum
+/// the structured mesh needs.
 fn crank_prepare() -> Value {
-    let [d1, d2] = CRANK_DIAGONALS.map(f64::to_radians);
-    let across = |x: f64| json!({"type": "offset", "plane": "yz", "offset": x});
-    let cuts = [
-        ("X30", across(30.0), "CrankArm/a"),
-        ("D1", json!({"type": "point_normal", "point": [53, -2, 0], "normal": [d1.sin(), -d1.cos(), 0]}), "CrankArm/a/b"),
-        ("X60", across(60.0), "CrankArm/a/b/b"),
-        ("X110", across(110.0), "CrankArm/a/b/b/b"),
-        ("D2", json!({"type": "point_normal", "point": [125, -2, 0], "normal": [d2.sin(), d2.cos(), 0]}), "CrankArm/a/b/b/b/b"),
-        ("X148", across(148.0), "CrankArm/a/b/b/b/b/b"),
-    ];
-    let mut script = vec![
-        json!({"command": "geometry.datum", "params": {"name": "Sym", "by": {"type": "offset", "plane": "zx", "offset": 0}}}),
-        json!({"command": "geometry.partition", "params": {"name": "Half", "datum": "Sym"}}),
-    ];
-    for (name, by, body) in cuts {
-        script.push(json!({"command": "geometry.datum", "params": {"name": name, "by": by}}));
-        script.push(json!({"command": "geometry.partition", "params": {"name": name, "datum": name, "bodies": [body]}}));
-    }
-    Value::Array(script)
+    json!([
+        {"command": "geometry.datum", "params": {"name": "Sym", "by": {"type": "offset", "plane": "zx", "offset": 0}}},
+        {"command": "geometry.partition", "params": {"name": "Half", "datum": "Sym"}},
+    ])
 }
 
 /// The crank's model after the `mesh` commands: material, the spindle fixed, the rider on the
@@ -859,11 +794,11 @@ mod tests {
         assert!(r["max_von_mises"]["value"].as_f64().unwrap() > 200.0, "{r}");
     }
 
-    /// The crank opens as one conforming structured hex20 mesh: the
-    /// half's seven cells, every cut merged node for node (no ties), the half and its mirror
+    /// The crank opens as one conforming structured hex20 mesh: the half meshed in blocks
+    /// without partitions or seeds, no ties, the half and its mirror
     /// image alike and joined on the symmetry plane, the spindle and pedal faces found on both
     /// halves (the image's faces carry the names of the half they are the image of), and the
-    /// quality floor: scaled Jacobian at least 0.3, edge ratio at most 10.
+    /// quality floor: scaled Jacobian at least 0.37, edge ratio at most 10.
     #[test]
     fn the_crank_opens_as_one_structured_mesh_of_two_alike_halves() {
         let (arm, mirror) = (find("crank-arm").unwrap(), find("crank-mirror").unwrap());
@@ -876,13 +811,11 @@ mod tests {
             let name = "crank-arm";
             let mut s = open(name);
             let bodies: Vec<String> = s.design.as_ref().unwrap().bodies.iter().map(|b| b.name.clone()).collect();
-            let mut cells: Vec<String> = CRANK_CELLS.iter().map(|c| c.to_string()).collect();
-            cells.push("CrankArm/b".into());
-            assert_eq!(bodies, cells);
-            // The partitions' datum planes are hidden: the crank opens without a cage of planes.
-            assert!(s.model.datums().len() >= 7 && s.model.datums().keys().all(|d| !s.shows(crate::ItemKind::Datum, d)), "datums shown");
+            assert_eq!(bodies, [CRANK_HALF, "CrankArm/b"]);
+            // One datum, the symmetry plane, hidden.
+            assert!(s.model.datums().len() == 1 && s.model.datums().keys().all(|d| !s.shows(crate::ItemKind::Datum, d)), "datums shown");
             assert!(!s.is_dirty(), "a sample just opened has nothing to save");
-            assert!(s.model.ties().is_empty(), "every cut merged");
+            assert!(s.model.ties().is_empty(), "no ties");
             let elements = s.model.elements().values().filter(|e| e.kind == fieldcraft_model::ElementKind::Hex20).count();
             assert_eq!(elements, s.model.elements().len());
             let mut set = |name: &str, bodies: &[&str]| {
@@ -890,7 +823,7 @@ mod tests {
                     .unwrap();
                 s.model.resolve_set(name).unwrap()
             };
-            let (a, b) = (set("half_a", &CRANK_CELLS), set("half_b", &["CrankArm/b"]));
+            let (a, b) = (set("half_a", &[CRANK_HALF]), set("half_b", &["CrankArm/b"]));
             assert_eq!(a.elements.len(), b.elements.len());
             assert_eq!(a.elements.len() + b.elements.len(), elements);
             assert_eq!(a.faces.len(), b.faces.len(), "the halves' skins are alike");
@@ -900,12 +833,12 @@ mod tests {
             let q = s.execute("mesh.quality", &json!({})).unwrap();
             assert_eq!(q["valid"].as_u64().unwrap() as usize, elements, "{q}");
             let metric = |m: &str, k: &str| q["metrics"][m][k].as_f64().unwrap();
-            assert!(metric("scaled_jacobian", "min") >= 0.3, "{q}");
+            assert!(metric("scaled_jacobian", "min") >= 0.37, "{q}");
             assert!(metric("edge_ratio", "max") <= 10.0, "{q}");
             let members = |set: &str| s.model.sets().get(set).map_or(Vec::new(), |x| x.geometry.iter().map(|g| g.body.clone()).collect::<Vec<_>>());
             for set in ["spindle", "pedal"] {
                 let bodies = members(set);
-                assert!(bodies.iter().any(|b| b.starts_with("CrankArm/a/")) && bodies.iter().any(|b| b == "CrankArm/b"), "{set}: {bodies:?}");
+                assert!(bodies.iter().any(|b| b == CRANK_HALF) && bodies.iter().any(|b| b == "CrankArm/b"), "{set}: {bodies:?}");
                 assert!(!s.model.resolve_set(set).unwrap().faces.is_empty(), "{set}");
             }
             let faces = |set: &str| s.model.sets().get(set).map_or(0, |x| x.geometry.len());

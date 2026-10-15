@@ -496,10 +496,14 @@ impl Tessellation {
     }
 }
 
+/// How far off a plane face's triangles, in triangle sizes, a point of the plane may lie and
+/// still be on the face (rounding only: the triangles lie on the plane).
+const PLANE_SLACK: f64 = 1e-6;
+
 impl Tessellation {
     /// The closest point to `p` on the trimmed face `face`: the exact surface's closest point
     /// when it lies on the face (within a fifth of the local triangle size of the face's
-    /// triangles), else the closest point of the face's triangles. Unlike
+    /// triangles, or on them for a plane, whose triangles can span the whole face), else the closest point of the face's triangles. Unlike
     /// [`BoundaryGeometry::project_face`] it never returns a point of the surface's extension
     /// beyond the face's boundary, whatever the distance from `p`.
     pub fn project_trimmed(&self, face: u32, p: P) -> Option<P> {
@@ -517,9 +521,13 @@ impl Tessellation {
             self.tri_tree.nearest4(x, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
         };
         let (near, _) = nearest(p)?;
-        let Some(q) = self.analytic(face).and_then(|s| s.project(p)) else { return Some(near) };
+        let Some(surface) = self.analytic(face) else { return Some(near) };
+        let Some(q) = surface.project(p) else { return Some(near) };
         let (back, size) = nearest(q)?;
-        Some(if measure::dist(back, q) <= 0.2 * size { q } else { near })
+        // A plane's triangles lie on it, so a point of the plane off them is off the face; a
+        // curved face's triangles are chords, a fraction of their size off the surface.
+        let slack = if matches!(surface, AnalyticSurface::Plane { .. }) { PLANE_SLACK } else { 0.2 };
+        Some(if measure::dist(back, q) <= slack * size { q } else { near })
     }
 
     /// The outward unit normal of B-rep face `face` near `p`: the exact surface's (oriented like

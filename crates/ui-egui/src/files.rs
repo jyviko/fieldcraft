@@ -676,9 +676,12 @@ impl ModelApp {
         );
     }
 
-    /// Stop waiting for the background job; the model stays as it was.
+    /// Cancel the background job: its command stops at its next check
+    /// ([`fieldcraft_model::progress::check`]) and what it made is dropped; the model stays as
+    /// it was.
     pub fn cancel_loading(&mut self) {
         if let Some(l) = self.loading.take() {
+            l.progress.cancel();
             self.queued.clear();
             for w in &l.waiters {
                 let _ = w.send(json!({"ok": false, "error": format!("cancelled: {}", l.title), "cancelled": true}));

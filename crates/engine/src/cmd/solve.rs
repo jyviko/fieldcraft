@@ -201,7 +201,9 @@ fn run_all(s: &mut Session, _: &Value) -> Result<Value> {
     let count = steps.len();
     for (index, (name, procedure, solve)) in steps.into_iter().enumerate() {
         fieldcraft_model::progress::step(&name, index + 1, count);
-        let summary = solve(s, &json!({"step": name})).map_err(|e| EngineError::Params(format!("step `{name}`: {e}")))?;
+        fieldcraft_model::progress::check()?;
+        let summary =
+            solve(s, &json!({"step": name})).map_err(|e| if e.is_cancelled() { e } else { EngineError::Params(format!("step `{name}`: {e}")) })?;
         done.push(json!({"step": name, "procedure": procedure, "summary": summary}));
     }
     Ok(json!({"steps": done}))

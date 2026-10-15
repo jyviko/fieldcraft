@@ -60,7 +60,7 @@ fn hex_octree(s: &mut Session, p: &Value) -> Result<Value> {
         let surface = BoundarySurface::new(&b.mesh.positions, &b.mesh.triangles, &b.mesh.tri_face, &surface_options)
             .map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?;
         let left = OctreeOptions { max_elements: options.max_elements.saturating_sub(total).max(1), ..options.clone() };
-        let mesh = octree_hex_mesh(&surface, &UniformSize(h), &left).map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))?;
+        let mesh = octree_hex_mesh(&surface, &UniformSize(h), &left).map_err(|e| EngineError::of_body(&b.name, e))?;
         total += mesh.hexes.len();
         meshes.push((b, mesh));
     }

@@ -79,6 +79,29 @@ pub enum EngineError {
 }
 
 impl EngineError {
+    /// Whether the command stopped because it was cancelled
+    /// ([`fieldcraft_model::progress::Progress::cancel`]).
+    pub fn is_cancelled(&self) -> bool {
+        use fieldcraft_model::Error::Cancelled;
+        matches!(
+            self,
+            EngineError::Model(Cancelled)
+                | EngineError::Mesh(fieldcraft_mesh::Error::Model(Cancelled))
+                | EngineError::Solver(fieldcraft_solver::Error::Model(Cancelled))
+                | EngineError::Explicit(fieldcraft_explicit::Error::Model(Cancelled))
+                | EngineError::Fluid(fieldcraft_lbm::Error::Model(Cancelled) | fieldcraft_lbm::Error::Mesh(fieldcraft_mesh::Error::Model(Cancelled)))
+        )
+    }
+
+    /// A body's mesher failure as a parameter problem naming the body, or the cancellation as
+    /// it is.
+    pub(crate) fn of_body(body: &str, e: fieldcraft_mesh::Error) -> Self {
+        match e {
+            fieldcraft_mesh::Error::Model(fieldcraft_model::Error::Cancelled) => EngineError::Model(fieldcraft_model::Error::Cancelled),
+            e => EngineError::Params(format!("body `{body}`: {e}")),
+        }
+    }
+
     /// A problem with the parameter at `path` (`elastic/young`).
     pub fn param(path: impl Into<String>, kind: schema::ProblemKind) -> Self {
         Self::Param(schema::Problem::at(path, kind))
@@ -439,6 +462,9 @@ impl Session {
         self.saved_view = self.view.clone();
     }
 }
+
+#[cfg(test)]
+mod cancel_tests;
 
 #[cfg(test)]
 mod tests {

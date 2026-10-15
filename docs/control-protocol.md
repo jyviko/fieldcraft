@@ -28,7 +28,7 @@ checked and clamped (drag steps, wheel lines, window size); `ui.render` refuses 
 | `engine.execute` | `command`: command id, `params`: JSON object, `wait?` (default true) | the command's result; a solve or a mesher runs as a [job](#jobs) |
 | `job.status` | — | `job`: the running job (`title`, `command`, `elapsed` seconds, `progress` `{step: {name, index, count}, stage, done, total}`, `fraction` 0–1 when bounded, `line` as the window shows it), or null |
 | `job.wait` | — | the running job's result when it ends (null `job` when none runs) |
-| `job.cancel` | — | stops waiting for the job (`cancelled`: what it was); the model stays as it was and every request waiting for it gets `{"ok": false, "cancelled": true}` |
+| `job.cancel` | — | cancels the job (`cancelled`: what it was): its solver or mesher stops at its next increment, time step, supernode or refinement pass and what it made is dropped; the model stays as it was and every request waiting for it gets `{"ok": false, "cancelled": true}` |
 | `engine.script` | `commands`: `[{command, params}, …]` | stops at the first error; `journal`: commands that changed the model so far |
 | `engine.commands` | — | every command: `id`, `label`, `params` (the parameter documentation), `schema` (its parameters as JSON Schema) and `requires` (what the session must hold before it runs: `design`, `geometry`, `nodes`, `mesh`, `analysable`, `material`, `step`, `result`, …; `engine.execute` of a command missing one fails without doing anything, naming each missing piece and its toolbar entry) |
 
@@ -132,6 +132,10 @@ files named on the command line go through native file pickers and open in the b
 `mesh.hex.*`) runs it off the window thread, as the Solve button and a mesher form's OK do: the
 window keeps drawing its progress (step, stage and count, elapsed time) with Cancel. The reply is
 the command's result when it ends, however long that takes; with `"wait": false` it is
-`{"job": n}` at once, and `job.status`, `job.wait` and `job.cancel` follow it. One job runs at a
+`{"job": n}` at once, and `job.status`, `job.wait` and `job.cancel` follow it. Cancel (the button
+or `job.cancel`) interrupts the running command: every solver and mesher checks for it at its
+natural points (increments and Newton iterations, time steps, fluid steps, Lanczos blocks, the
+factorization's supernodes, the tet mesher's refinement and improvement passes, the hex meshers'
+attempts) and stops with `cancelled`, leaving the model unchanged. One job runs at a
 time; another long command meanwhile is refused, naming the job. The MCP server's `solve` and
 `mesh` tools wait for the reply.

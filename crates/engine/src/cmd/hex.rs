@@ -220,7 +220,10 @@ pub(super) fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
         seeds: super::seeds::edge_seeds(s)?,
         ..HexOptions::default()
     };
-    let cm = hex_mesh_cells(&cells, &UniformSize(h), &options).map_err(|e| EngineError::Params(e.to_string()))?;
+    let cm = hex_mesh_cells(&cells, &UniformSize(h), &options).map_err(|e| match e {
+        fieldcraft_mesh::Error::Model(fieldcraft_model::Error::Cancelled) => EngineError::Model(fieldcraft_model::Error::Cancelled),
+        e => EngineError::Params(e.to_string()),
+    })?;
     let m = &cm.mesh;
     // Replace the cells' meshes (replace.rs); other bodies and the definitions stay.
     let model = &mut s.model;
@@ -349,7 +352,7 @@ pub(super) fn hex_body(p: &Value, b: &Input, method: HexMethod, quadratic: bool,
         seeds: b.seeds.clone(),
         ..HexOptions::default()
     };
-    hex_mesh(&surface, &b.surfaces, &UniformSize(h), &options).map_err(|e| EngineError::Params(format!("body `{}`: {e}", b.name)))
+    hex_mesh(&surface, &b.surfaces, &UniformSize(h), &options).map_err(|e| EngineError::of_body(&b.name, e))
 }
 
 /// Add one body's hex mesh after the model's largest labels, tagging the elements with the body

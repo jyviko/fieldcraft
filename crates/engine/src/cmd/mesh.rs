@@ -271,7 +271,7 @@ pub(super) fn mesh_body(
             surface_volume: surface.volume(),
         })
     };
-    mesh().map_err(|e| if several { EngineError::Params(format!("body `{}`: {e}", input.name)) } else { e })
+    mesh().map_err(|e| if several && !e.is_cancelled() { EngineError::Params(format!("body `{}`: {e}", input.name)) } else { e })
 }
 
 fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {

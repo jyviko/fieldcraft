@@ -1045,12 +1045,17 @@ mod tests {
                 if fill_refs {
                     fill_required(&s, form, &mut p);
                 }
-                let missing: Vec<String> = problems(form, &p).into_iter().filter(|p| p.message == "required").map(|p| p.path).collect();
-                let r = s.execute(c.id, &p).map_err(|e| match e {
-                    EngineError::Param { .. } => EngineError::Params(e.to_string()),
-                    e => e,
-                });
-                match r {
+                let missing: Vec<String> = problems(form, &p).into_iter().filter(|p| p.kind == ProblemKind::Required).map(|p| p.path).collect();
+                // The engine names a missing nested field by its path, its own key, or the group
+                // that holds it.
+                let is_missing = |key: &str| {
+                    missing.iter().any(|m| m == key || m.rsplit('/').next() == Some(key) || m.strip_prefix(key).is_some_and(|r| r.starts_with('/')))
+                };
+                match s.execute(c.id, &p) {
+                    Err(EngineError::Param { key, .. }) if is_missing(&key) => {}
+                    Err(EngineError::Param { key, problem }) => {
+                        failures.push(format!("{}: {p} refused for `{key}` {problem}, but only {missing:?} were missing", c.id));
+                    }
                     // State, not parameters: the meshers' default is the open design's bodies, the
                     // bar has no explicit step; activation and probes need one of several fields.
                     Err(EngineError::Params(e)) if STATE.iter().any(|m| e.contains(m)) => {}

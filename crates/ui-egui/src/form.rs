@@ -469,83 +469,15 @@ impl Form<'_> {
 }
 
 /// What is missing or wrong in `params`, in the form's order: (field path, message), each
-/// phrased with the field's label as the form shows it ("Material: choose a material"), never
-/// its JSON key.
+/// phrased with the field's label as the form shows it ([`schema::Problem::for_form`]).
 pub fn messages(fields: &'static [Field], params: &Map<String, Value>) -> Vec<(String, String)> {
     schema::object_problems(fields, params)
         .into_iter()
         .map(|p| {
-            let message = field_at(fields, &p.path).map_or_else(|| format!("{}: {}", p.path, p.message), |f| phrase(f, &p.message));
-            (p.path, message)
+            let m = p.for_form();
+            (p.path, m)
         })
         .collect()
-}
-
-/// The field at `path` (`elastic/young`, `rows/0/name`). A variant's tag gives its
-/// [`Kind::Variants`] field; an [`Kind::Either`] option's value gives the option.
-pub fn field_at(fields: &'static [Field], path: &str) -> Option<&'static Field> {
-    let mut segments = path.split('/');
-    let mut field = find(fields, segments.next()?)?;
-    for (depth, segment) in segments.enumerate() {
-        if depth > MAX_DEPTH {
-            return None;
-        }
-        field = match field.kind {
-            Kind::Rows { .. } if segment.parse::<usize>().is_ok() => field,
-            Kind::Group(inner) | Kind::Rows { fields: inner, .. } => find(inner, segment)?,
-            Kind::Variants { tag, .. } if tag == segment => field,
-            Kind::Variants { variants, .. } => variants.iter().find_map(|v| find(v.fields, segment))?,
-            Kind::Either(options) => options.iter().find(|o| o.key == segment)?,
-            _ => return None,
-        };
-    }
-    Some(field)
-}
-
-/// The field of `fields` with key `key`, looking into flattened variants.
-fn find(fields: &'static [Field], key: &str) -> Option<&'static Field> {
-    fields.iter().find_map(|f| match f.kind {
-        Kind::Variants { tag, variants } if f.key.is_empty() => {
-            if tag == key {
-                Some(f)
-            } else {
-                variants.iter().find_map(|v| find(v.fields, key))
-            }
-        }
-        _ => (f.key == key).then_some(f),
-    })
-}
-
-/// A schema problem ([`schema::Problem::message`]) of field `f`, as the form says it.
-fn phrase(f: &Field, problem: &str) -> String {
-    let required = problem == "required";
-    let text = match f.kind {
-        Kind::Ref(c) if required => format!("choose {}", article(c.label())),
-        Kind::RefList(c) if required => format!("choose at least one {}", c.label()),
-        Kind::Either(options) => format!("choose {}", options.iter().map(|o| article(&lower(o.label))).collect::<Vec<_>>().join(" or ")),
-        Kind::Choice(options) => format!("choose one of {}", options.iter().map(|(_, l)| *l).collect::<Vec<_>>().join(", ")),
-        Kind::Variants { .. } => format!("choose {}", article(&lower(f.label))),
-        Kind::Path { .. } if required => "choose a file".into(),
-        Kind::Text if required && f.key.ends_with("name") => "enter a name".into(),
-        _ if required => "enter a value".into(),
-        _ => format!("must be {problem}"),
-    };
-    format!("{}: {text}", f.label)
-}
-
-/// "a material", "an element".
-fn article(noun: &str) -> String {
-    let an = noun.starts_with(['a', 'e', 'i', 'o', 'u']);
-    format!("{} {noun}", if an { "an" } else { "a" })
-}
-
-/// A label lower-cased, but not its acronyms ("Reference point" → "reference point", "RBE2" stays).
-fn lower(label: &str) -> String {
-    let mut chars = label.chars();
-    match (chars.next(), chars.next()) {
-        (Some(c), Some(d)) if d.is_lowercase() => c.to_lowercase().chain(label.chars().skip(1)).collect(),
-        _ => label.to_string(),
-    }
 }
 
 /// A collection's label in the plural: "materials", "point masses", "bodies".

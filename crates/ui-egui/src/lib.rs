@@ -476,7 +476,7 @@ impl ModelApp {
         let label = command_label(id);
         let r = self.session.execute(id, &params).map_err(|e| match e {
             EngineError::Param { key, problem } => {
-                let message = match fields.and_then(|f| form::field_at(f, &key)) {
+                let message = match fields.and_then(|f| fieldcraft_engine::schema::field_at(f, &key)) {
                     Some(f) => format!("{}: {problem}", f.label),
                     None => format!("`{key}` {problem}"),
                 };

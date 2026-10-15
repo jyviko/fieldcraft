@@ -450,26 +450,145 @@ pub fn switch_variant(f: &Field, common: &[Field], old: &Map<String, Value>, tag
     out
 }
 
-/// A problem with a field's value, for the form to show beside it.
-#[derive(Debug, Clone, PartialEq)]
+/// A problem with a field's value: the field, where it is, and what is wrong. [`Problem::for_form`]
+/// phrases it by the field's label (the form), [`Problem::for_agents`] by its JSON path (agents,
+/// the engine's messages).
+#[derive(Debug, Clone)]
 pub struct Problem {
-    /// The JSON path of the field (`elastic/young`).
+    /// The JSON path of the field (`elastic/young`, `rows/0/name`); empty for the parameters as a
+    /// whole.
     pub path: String,
-    pub message: String,
+    /// The field it is about; `None` for the parameters as a whole. For a variant's tag, the
+    /// [`Kind::Variants`] field.
+    pub field: Option<&'static Field>,
+    pub kind: ProblemKind,
+}
+
+/// What is wrong with a value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProblemKind {
+    /// Left out (or empty text).
+    Required,
+    /// Not a finite number.
+    NotANumber,
+    /// A number below the field's minimum.
+    Below(f64),
+    /// A number above the field's maximum.
+    Above(f64),
+    /// Not a whole number in `min..=max`.
+    NotAWholeNumber {
+        min: i64,
+        max: i64,
+    },
+    NotText,
+    NotABool,
+    /// Not one of the field's choices (or, for [`Kind::Either`], of its options).
+    NotAChoice,
+    /// Not a list of `len` numbers.
+    NotAVector {
+        len: usize,
+    },
+    NotNames,
+    NotAnObject,
+    /// A variant tag the field does not have (`None`: no tag at all).
+    UnknownVariant(Option<String>),
+    /// More rows than `max`, or not a list.
+    TooManyRows {
+        max: usize,
+    },
+}
+
+impl Problem {
+    fn new(path: String, field: &'static Field, kind: ProblemKind) -> Self {
+        Problem { path, field: Some(field), kind }
+    }
+
+    /// What the value must be, without the field's name ("required", "at least 0").
+    pub fn expected(&self) -> String {
+        let f = self.field;
+        match &self.kind {
+            ProblemKind::Required => "required".into(),
+            ProblemKind::NotANumber => "a number".into(),
+            ProblemKind::Below(lo) => format!("at least {lo}"),
+            ProblemKind::Above(hi) => format!("at most {hi}"),
+            ProblemKind::NotAWholeNumber { min, max } => format!("a whole number in {min}..={max}"),
+            ProblemKind::NotText => "text".into(),
+            ProblemKind::NotABool => "true or false".into(),
+            ProblemKind::NotAChoice => match f.map(|f| f.kind) {
+                Some(Kind::Choice(options)) => format!("one of {}", options.iter().map(|(o, _)| *o).collect::<Vec<_>>().join(", ")),
+                Some(Kind::Either(options)) => format!("one of {}", options.iter().map(|o| o.key).collect::<Vec<_>>().join(", ")),
+                _ => "one of the choices".into(),
+            },
+            ProblemKind::NotAVector { len } => format!("{len} numbers"),
+            ProblemKind::NotNames => "a list of names".into(),
+            ProblemKind::NotAnObject if f.is_none() => "a JSON object".into(),
+            ProblemKind::NotAnObject => "an object".into(),
+            ProblemKind::UnknownVariant(Some(t)) => format!("a known {} (not `{t}`)", f.map_or("type".into(), |f| f.label.to_lowercase())),
+            ProblemKind::UnknownVariant(None) => match f.map(|f| f.kind) {
+                Some(Kind::Variants { tag, .. }) => format!("an object with a known `{tag}`"),
+                _ => "an object with a known type".into(),
+            },
+            ProblemKind::TooManyRows { max } => format!("a list of at most {max} rows"),
+        }
+    }
+
+    /// The problem as agents read it, naming the field by its JSON path:
+    /// "`elastic/young` is required", "`bands` must be a whole number in 2..=24".
+    pub fn for_agents(&self) -> String {
+        let what = if self.path.is_empty() { "the parameters".to_string() } else { format!("`{}`", self.path) };
+        match self.kind {
+            ProblemKind::Required => format!("{what} is required"),
+            _ => format!("{what} must be {}", self.expected()),
+        }
+    }
+
+    /// The problem as a form shows it, naming the field by its label and saying what to do:
+    /// "Material: choose a material", "Young's modulus: must be at least 0".
+    pub fn for_form(&self) -> String {
+        let Some(f) = self.field else { return format!("The parameters must be {}", self.expected()) };
+        let required = self.kind == ProblemKind::Required;
+        let text = match f.kind {
+            Kind::Ref(c) if required => format!("choose {}", article(c.label())),
+            Kind::RefList(c) if required => format!("choose at least one {}", c.label()),
+            Kind::Either(options) => format!("choose {}", options.iter().map(|o| article(&lower(o.label))).collect::<Vec<_>>().join(" or ")),
+            Kind::Choice(options) => format!("choose one of {}", options.iter().map(|(_, l)| *l).collect::<Vec<_>>().join(", ")),
+            Kind::Variants { .. } => format!("choose {}", article(&lower(f.label))),
+            Kind::Path { .. } if required => "choose a file".into(),
+            Kind::Text if required => format!("enter {}", article(&lower(f.label))),
+            _ if required => "enter a value".into(),
+            _ => format!("must be {}", self.expected()),
+        };
+        format!("{}: {text}", f.label)
+    }
+}
+
+/// "a material", "an element".
+fn article(noun: &str) -> String {
+    let an = noun.starts_with(['a', 'e', 'i', 'o', 'u']);
+    format!("{} {noun}", if an { "an" } else { "a" })
+}
+
+/// A label lower-cased, but not its acronyms ("Reference point" → "reference point", "RBE2" stays).
+fn lower(label: &str) -> String {
+    let mut chars = label.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), Some(d)) if d.is_lowercase() => c.to_lowercase().chain(label.chars().skip(1)).collect(),
+        _ => label.to_string(),
+    }
 }
 
 /// What is missing or out of range in `params`: required fields left out, numbers outside
 /// their range, values of the wrong kind. An empty list does not promise the command accepts
 /// them (it checks more); a problem means it would not.
-pub fn problems(fields: &[Field], params: &Value) -> Vec<Problem> {
+pub fn problems(fields: &'static [Field], params: &Value) -> Vec<Problem> {
     match params.as_object() {
         Some(obj) => object_problems(fields, obj),
-        None => vec![Problem { path: String::new(), message: "the parameters must be a JSON object".into() }],
+        None => vec![Problem { path: String::new(), field: None, kind: ProblemKind::NotAnObject }],
     }
 }
 
 /// [`problems`] of an object's fields.
-pub fn object_problems(fields: &[Field], obj: &Map<String, Value>) -> Vec<Problem> {
+pub fn object_problems(fields: &'static [Field], obj: &Map<String, Value>) -> Vec<Problem> {
     let mut out = Vec::new();
     check(fields, obj, "", &mut out, 0);
     out
@@ -486,7 +605,42 @@ pub fn join(prefix: &str, key: &str) -> String {
     }
 }
 
-fn check(fields: &[Field], obj: &Map<String, Value>, prefix: &str, out: &mut Vec<Problem>, depth: usize) {
+/// The field at `path` (`elastic/young`, `rows/0/name`), for a key the engine names. A variant's
+/// tag gives its [`Kind::Variants`] field; an [`Kind::Either`] option's key gives the option.
+pub fn field_at(fields: &'static [Field], path: &str) -> Option<&'static Field> {
+    let mut segments = path.split('/');
+    let mut field = find(fields, segments.next()?)?;
+    for (depth, segment) in segments.enumerate() {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        field = match field.kind {
+            Kind::Rows { .. } if segment.parse::<usize>().is_ok() => field,
+            Kind::Group(inner) | Kind::Rows { fields: inner, .. } => find(inner, segment)?,
+            Kind::Variants { tag, .. } if tag == segment => field,
+            Kind::Variants { variants, .. } => variants.iter().find_map(|v| find(v.fields, segment))?,
+            Kind::Either(options) => options.iter().find(|o| o.key == segment)?,
+            _ => return None,
+        };
+    }
+    Some(field)
+}
+
+/// The field of `fields` with key `key`, looking into flattened variants.
+fn find(fields: &'static [Field], key: &str) -> Option<&'static Field> {
+    fields.iter().find_map(|f| match f.kind {
+        Kind::Variants { tag, variants } if f.key.is_empty() => {
+            if tag == key {
+                Some(f)
+            } else {
+                variants.iter().find_map(|v| find(v.fields, key))
+            }
+        }
+        _ => (f.key == key).then_some(f),
+    })
+}
+
+fn check(fields: &'static [Field], obj: &Map<String, Value>, prefix: &str, out: &mut Vec<Problem>, depth: usize) {
     if depth > MAX_DEPTH || out.len() > MAX_ROWS {
         return;
     }
@@ -497,20 +651,20 @@ fn check(fields: &[Field], obj: &Map<String, Value>, prefix: &str, out: &mut Vec
             match obj.get(tag).and_then(Value::as_str) {
                 Some(t) => match f.kind.variant(t) {
                     Some(v) => check(v.fields, obj, prefix, out, depth + 1),
-                    None => out.push(Problem { path: join(prefix, tag), message: format!("`{t}` is not a {}", f.label.to_lowercase()) }),
+                    None => out.push(Problem::new(join(prefix, tag), f, ProblemKind::UnknownVariant(Some(t.to_string())))),
                 },
-                None if f.required => out.push(Problem { path: join(prefix, tag), message: "required".into() }),
+                None if f.required => out.push(Problem::new(join(prefix, tag), f, ProblemKind::Required)),
                 None => {}
             }
             continue;
         }
         let path = join(prefix, f.key);
         match obj.get(f.key) {
-            None | Some(Value::Null) if f.required => out.push(Problem { path, message: "required".into() }),
+            None | Some(Value::Null) if f.required => out.push(Problem::new(path, f, ProblemKind::Required)),
             None | Some(Value::Null) => {}
             Some(v) => {
-                if let Some(message) = value_problem(f, v, &path, out, depth) {
-                    out.push(Problem { path, message });
+                if let Some(kind) = value_problem(f, v, &path, out, depth) {
+                    out.push(Problem::new(path, f, kind));
                 }
             }
         }
@@ -518,39 +672,39 @@ fn check(fields: &[Field], obj: &Map<String, Value>, prefix: &str, out: &mut Vec
 }
 
 /// What is wrong with `v` as the value of `f`; nested problems go to `out`.
-fn value_problem(f: &Field, v: &Value, path: &str, out: &mut Vec<Problem>, depth: usize) -> Option<String> {
+fn value_problem(f: &'static Field, v: &Value, path: &str, out: &mut Vec<Problem>, depth: usize) -> Option<ProblemKind> {
     match f.kind {
         Kind::Number { min, max, .. } => match (v.as_f64().filter(|x| x.is_finite()), min, max) {
-            (None, ..) => Some("a number".into()),
-            (Some(x), Some(lo), _) if x < lo => Some(format!("at least {lo}")),
-            (Some(x), _, Some(hi)) if x > hi => Some(format!("at most {hi}")),
+            (None, ..) => Some(ProblemKind::NotANumber),
+            (Some(x), Some(lo), _) if x < lo => Some(ProblemKind::Below(lo)),
+            (Some(x), _, Some(hi)) if x > hi => Some(ProblemKind::Above(hi)),
             _ => None,
         },
         Kind::Integer { min, max } => match v.as_i64() {
             Some(x) if (min..=max).contains(&x) => None,
-            _ => Some(format!("a whole number in {min}..={max}")),
+            _ => Some(ProblemKind::NotAWholeNumber { min, max }),
         },
         Kind::Text | Kind::Path { .. } | Kind::Ref(_) => match v.as_str() {
-            Some(s) if f.required && s.trim().is_empty() => Some("required".into()),
+            Some(s) if f.required && s.trim().is_empty() => Some(ProblemKind::Required),
             Some(_) => None,
-            None => Some("text".into()),
+            None => Some(ProblemKind::NotText),
         },
-        Kind::Bool => (!v.is_boolean()).then(|| "true or false".into()),
+        Kind::Bool => (!v.is_boolean()).then_some(ProblemKind::NotABool),
         Kind::Choice(options) => match v.as_str() {
             Some(s) if options.iter().any(|(o, _)| *o == s) => None,
-            _ => Some(format!("one of {}", options.iter().map(|(o, _)| *o).collect::<Vec<_>>().join(", "))),
+            _ => Some(ProblemKind::NotAChoice),
         },
         Kind::Vector { labels, nullable, .. } => match v.as_array() {
             Some(a) if a.len() == labels.len() && a.iter().all(|x| x.as_f64().is_some_and(f64::is_finite) || (nullable && x.is_null())) => None,
-            _ => Some(format!("{} numbers", labels.len())),
+            _ => Some(ProblemKind::NotAVector { len: labels.len() }),
         },
-        Kind::RefList(_) => (!v.as_array().is_some_and(|a| a.iter().all(Value::is_string))).then(|| "a list of names".into()),
+        Kind::RefList(_) => (!v.as_array().is_some_and(|a| a.iter().all(Value::is_string))).then_some(ProblemKind::NotNames),
         Kind::Group(fields) => match v.as_object() {
             Some(o) => {
                 check(fields, o, path, out, depth + 1);
                 None
             }
-            None => Some("an object".into()),
+            None => Some(ProblemKind::NotAnObject),
         },
         Kind::Variants { tag, .. } => match v.as_object() {
             Some(o) => match o.get(tag).and_then(Value::as_str).and_then(|t| f.kind.variant(t)) {
@@ -558,9 +712,9 @@ fn value_problem(f: &Field, v: &Value, path: &str, out: &mut Vec<Problem>, depth
                     check(var.fields, o, path, out, depth + 1);
                     None
                 }
-                None => Some(format!("needs a known `{tag}`")),
+                None => Some(ProblemKind::UnknownVariant(None)),
             },
-            None => Some("an object".into()),
+            None => Some(ProblemKind::NotAnObject),
         },
         Kind::Either(options) => {
             let ok = match v {
@@ -570,20 +724,21 @@ fn value_problem(f: &Field, v: &Value, path: &str, out: &mut Vec<Problem>, depth
                 }),
                 _ => false,
             };
-            (!ok).then(|| format!("one of {}", options.iter().map(|o| o.key).collect::<Vec<_>>().join(", ")))
+            (!ok).then_some(ProblemKind::NotAChoice)
         }
         Kind::Unit | Kind::Json => None,
         Kind::Rows { fields, max } => match v.as_array() {
             Some(a) if a.len() <= max => {
                 for (i, row) in a.iter().enumerate() {
+                    let row_path = format!("{path}/{i}");
                     match row.as_object() {
-                        Some(o) => check(fields, o, &format!("{path}/{i}"), out, depth + 1),
-                        None => out.push(Problem { path: format!("{path}/{i}"), message: "an object".into() }),
+                        Some(o) => check(fields, o, &row_path, out, depth + 1),
+                        None => out.push(Problem::new(row_path, f, ProblemKind::NotAnObject)),
                     }
                 }
                 None
             }
-            _ => Some(format!("a list of at most {max} rows")),
+            _ => Some(ProblemKind::TooManyRows { max }),
         },
     }
 }
@@ -735,6 +890,24 @@ mod tests {
         assert_eq!(Value::Object(switched), json!({"name": "a", "type": "pressure"}));
         assert!(super::problems(LOADISH, &json!({"name": "a", "type": "force", "vector": [1, "x", 3]})).iter().any(|p| p.path == "vector"));
         assert!(super::problems(LOADISH, &json!([1])).len() == 1);
+    }
+
+    /// One problem, two phrasings: by label for the form, by path for agents.
+    #[test]
+    fn problems_carry_their_field_and_kind() {
+        let p = problems(LOADISH, &json!({"type": "pressure", "magnitude": "x"}));
+        let kinds: Vec<(&str, &ProblemKind)> = p.iter().map(|p| (p.path.as_str(), &p.kind)).collect();
+        assert_eq!(kinds, [("name", &ProblemKind::Required), ("magnitude", &ProblemKind::NotANumber), ("set", &ProblemKind::Required)]);
+        assert_eq!(p.iter().map(Problem::for_form).collect::<Vec<_>>(), ["Name: enter a name", "Magnitude: must be a number", "Set: choose a set"]);
+        assert_eq!(
+            p.iter().map(Problem::for_agents).collect::<Vec<_>>(),
+            ["`name` is required", "`magnitude` must be a number", "`set` is required"]
+        );
+        let unknown = problems(LOADISH, &json!({"name": "a", "type": "spin"}));
+        assert_eq!(unknown.first().map(Problem::for_form).as_deref(), Some("Type: choose a type"));
+        assert_eq!(unknown.first().map(Problem::for_agents).as_deref(), Some("`type` must be a known type (not `spin`)"));
+        assert_eq!(problems(LOADISH, &json!([1])).first().map(Problem::for_agents).as_deref(), Some("the parameters must be a JSON object"));
+        assert!(field_at(LOADISH, "magnitude").is_some_and(|f| f.label == "Magnitude"));
     }
 
     #[test]

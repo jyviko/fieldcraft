@@ -63,6 +63,11 @@ mod browser {
         FILES.with(|f| f.borrow().list(dir))
     }
 
+    /// Files in memory keep no modification time.
+    pub fn modified(_path: &Path) -> Option<u64> {
+        None
+    }
+
     /// Folders are implied by the files' paths.
     pub fn create_dir_all(_dir: &Path) -> Result<()> {
         Ok(())
@@ -226,6 +231,12 @@ mod disk {
 
     pub fn create_dir_all(dir: &Path) -> Result<()> {
         fs::create_dir_all(dir).map_err(|e| io_error(dir, e))
+    }
+
+    /// When a regular file was last modified (seconds since 1970), if the platform says.
+    pub fn modified(path: &Path) -> Option<u64> {
+        let meta = fs::metadata(path).ok().filter(fs::Metadata::is_file)?;
+        meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
     }
 
     #[cfg(test)]

@@ -23,8 +23,25 @@ use crate::{EXTENSION, Error, MAX_FILE_BYTES, Result};
 /// The recovery folder of the browser build.
 pub const BROWSER_DIR: &str = "/recovery";
 
-/// The recovery folder: `FIELDCRAFT_RECOVERY_DIR`, else `FieldCraft/recovery` (`fieldcraft/` on
-/// Linux) in the platform's per-user data folder; [`BROWSER_DIR`] in the browser.
+/// The recovery folder of automated runs (a control channel, CI): a temporary folder, so their
+/// autosaves never reach the user's own recovery folder.
+pub fn automation_dir() -> PathBuf {
+    std::env::temp_dir().join("fieldcraft-automation").join("recovery")
+}
+
+/// Set by [`use_automation_dir`].
+static AUTOMATED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// This process is driven by automation (a control channel): unless `FIELDCRAFT_RECOVERY_DIR`
+/// names a folder, [`default_dir`] is [`automation_dir`] from now on.
+pub fn use_automation_dir() {
+    let _ = AUTOMATED.set(());
+}
+
+/// The recovery folder: `FIELDCRAFT_RECOVERY_DIR`, else [`automation_dir`] in automated runs
+/// ([`use_automation_dir`], or the `CI` environment variable set), else `recovery` in
+/// the platform's per-user data folder (`FieldCraft/recovery`, `fieldcraft/recovery` on Linux);
+/// [`BROWSER_DIR`] in the browser.
 pub fn default_dir() -> Option<PathBuf> {
     if cfg!(target_arch = "wasm32") {
         return Some(PathBuf::from(BROWSER_DIR));
@@ -32,6 +49,9 @@ pub fn default_dir() -> Option<PathBuf> {
     let env = |k: &str| std::env::var_os(k).filter(|d| !d.is_empty()).map(PathBuf::from);
     if let Some(d) = env("FIELDCRAFT_RECOVERY_DIR") {
         return Some(d);
+    }
+    if AUTOMATED.get().is_some() || env("CI").is_some() {
+        return Some(automation_dir());
     }
     let (root, name) = if cfg!(windows) {
         (env("LOCALAPPDATA")?, "FieldCraft")
@@ -42,6 +62,9 @@ pub fn default_dir() -> Option<PathBuf> {
     };
     Some(root.join(name).join("recovery"))
 }
+
+/// Entries older than this many days are pruned ([`prune`]).
+pub const MAX_AGE_DAYS: u64 = 14;
 
 /// What an entry's `<id>.json` holds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +101,13 @@ fn unix_now_ms() -> u64 {
 /// Seconds since 1970 (0 without a clock).
 fn unix_now() -> u64 {
     unix_now_ms() / 1000
+}
+
+impl Entry {
+    /// Seconds since the autosave (0 without a clock).
+    pub fn age(&self) -> u64 {
+        unix_now().saturating_sub(self.saved_at)
+    }
 }
 
 fn valid_id(id: &str) -> bool {
@@ -224,6 +254,22 @@ pub fn orphans(dir: &Path) -> Vec<Entry> {
     out
 }
 
+/// Delete the entries nobody needs any more: those older than [`MAX_AGE_DAYS`] and those whose
+/// model was saved to its own file after the autosave (the file is newer than the entry).
+/// Entries held by running apps stay. Returns the ids deleted.
+pub fn prune(dir: &Path) -> Vec<String> {
+    prune_at(dir, unix_now())
+}
+
+fn prune_at(dir: &Path, now: u64) -> Vec<String> {
+    let stale = |e: &Entry| {
+        let old = now.saturating_sub(e.saved_at) > MAX_AGE_DAYS * 86_400;
+        let saved_since = e.path.as_deref().and_then(|p| crate::fs::modified(Path::new(p))).is_some_and(|m| m > e.saved_at);
+        old || saved_since
+    };
+    orphans(dir).into_iter().filter(stale).filter(|e| remove(dir, &e.id).is_ok()).map(|e| e.id).collect()
+}
+
 /// An entry's autosaved file bytes and its description.
 pub fn load(dir: &Path, id: &str) -> Result<(Vec<u8>, Entry)> {
     if !valid_id(id) {
@@ -262,6 +308,7 @@ impl Slot {
     pub fn new(dir: &Path) -> Result<Slot> {
         create_dir_all(dir)?;
         lock::sweep(dir);
+        prune(dir);
         // Unique within the process too: an app started again in the same second (tests that
         // "crash" and restart) must not take over the crashed app's entry.
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -359,6 +406,58 @@ mod tests {
         a.close();
         assert_eq!(orphans(&d).len(), 1);
         let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Write a left-behind entry saved at `saved_at` for `path`.
+    fn left_behind(d: &Path, id: &str, path: Option<&Path>, saved_at: u64) {
+        fs::create_dir_all(d).unwrap();
+        let entry = Entry { id: id.into(), path: path.map(|p| p.to_string_lossy().to_string()), saved_at, nodes: 0, elements: 0 };
+        fs::write(file(d, id, "json"), serde_json::to_vec(&entry).unwrap()).unwrap();
+        fs::write(file(d, id, EXTENSION), b"x").unwrap();
+    }
+
+    #[test]
+    fn old_entries_and_entries_saved_since_are_pruned() {
+        let d = dir("prune");
+        let now = unix_now();
+        let day = 86_400;
+        let model = d.join("model.fieldcraft");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(&model, b"saved").unwrap();
+        let written = crate::fs::modified(&model).unwrap();
+        left_behind(&d, "1-1-1", None, now - (MAX_AGE_DAYS + 1) * day);
+        left_behind(&d, "2-2-2", None, now - (MAX_AGE_DAYS - 1) * day);
+        left_behind(&d, "3-3-3", Some(&model), written - 60);
+        left_behind(&d, "4-4-4", Some(&model), written + 60);
+        left_behind(&d, "5-5-5", Some(&d.join("gone.fieldcraft")), now);
+        let mut pruned = prune_at(&d, now);
+        pruned.sort();
+        assert_eq!(pruned, ["1-1-1", "3-3-3"], "too old, and saved since");
+        let listed = orphans(&d);
+        assert!(listed.windows(2).all(|w| w[0].saved_at >= w[1].saved_at), "newest first");
+        let mut kept: Vec<String> = listed.into_iter().map(|e| e.id).collect();
+        kept.sort();
+        assert_eq!(kept, ["2-2-2", "4-4-4", "5-5-5"]);
+        // A running app's entry stays however old it is.
+        let mut a = Slot::new(&d).unwrap();
+        a.write(b"x", None, 0, 0).unwrap();
+        assert!(!prune_at(&d, now + 365 * day).contains(&a.id().to_string()));
+        // Taking a slot prunes.
+        left_behind(&d, "6-6-6", None, 1);
+        let _b = Slot::new(&d).unwrap();
+        assert!(!file(&d, "6-6-6", "json").exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn automated_runs_use_the_temporary_folder() {
+        // `FIELDCRAFT_RECOVERY_DIR` wins when the test runner sets it.
+        if std::env::var_os("FIELDCRAFT_RECOVERY_DIR").is_some_and(|d| !d.is_empty()) {
+            return;
+        }
+        use_automation_dir();
+        assert_eq!(default_dir(), Some(automation_dir()));
+        assert!(automation_dir().starts_with(std::env::temp_dir()));
     }
 
     #[test]

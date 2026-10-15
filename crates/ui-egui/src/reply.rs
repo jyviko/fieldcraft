@@ -9,9 +9,11 @@ use serde_json::{Map, Value};
 
 use crate::browser::{self, Def};
 use crate::frame::{Level, heading};
-use crate::results::number;
+use crate::results::{components, count, number, with_unit};
 use crate::theme::{Tokens, label_font};
 use crate::{ModelApp, Tab};
+use fieldcraft_engine::results::Quantity;
+use fieldcraft_model::UnitSystem;
 
 /// The reply shown in the context panel.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +23,9 @@ pub struct Reply {
     pub params: Value,
     pub value: Value,
 }
+
+/// The solvers whose reply is a step's summary ([`solve_summary`]).
+const SOLVES: [&str; 6] = ["solve.static", "solve.nonlinear", "solve.heat", "solve.frequency", "solve.buckle", "solve.explicit"];
 
 /// Replies that only read the model, refreshed when it changes; any other reply closes then.
 pub const LIVE: [&str; 2] = ["model.check", "model.activity"];
@@ -37,8 +42,16 @@ const MAX_DEPTH: usize = 4;
 /// One line saying what `command` answered: the reply's own `summary`, a sentence for the
 /// commands with a well-known reply, otherwise its top-level numbers and words. Never JSON.
 pub fn summary(command: &str, v: &Value) -> String {
+    summary_in(command, v, UnitSystem::Unspecified)
+}
+
+/// [`summary`] with the numbers' units in `units`.
+pub fn summary_in(command: &str, v: &Value, units: UnitSystem) -> String {
     if let Some(s) = v.get("summary").and_then(Value::as_str) {
         return one_line(s);
+    }
+    if SOLVES.contains(&command) {
+        return one_line(&solve_line(v, units));
     }
     let count = |key: &str| v.get(key).map_or(0, |x| x.as_array().map(Vec::len).or_else(|| x.as_object().map(Map::len)).unwrap_or(0));
     let line = match command {
@@ -69,10 +82,10 @@ pub fn summary(command: &str, v: &Value) -> String {
         "interaction.contact.find" => {
             format!("{} among {}", plural(count("touching") as u64, "touching pair"), plural(v["parts"].as_u64().unwrap_or(0), "part"))
         }
-        "results.reactions" => {
-            let f = |k: usize| v.pointer(&format!("/total/force/{k}")).and_then(Value::as_f64).map_or("—".into(), number);
-            format!("total reaction force ({}, {}, {})", f(0), f(1), f(2))
-        }
+        "results.reactions" => match serde_json::from_value::<Vec<f64>>(v["total"]["force"].clone()) {
+            Ok(f) => format!("total reaction force ({})", with_unit(components(&f, 0.0), Quantity::Force.unit(units).as_deref())),
+            Err(_) => scalars(v),
+        },
         _ => scalars(v),
     };
     if line.is_empty() { "done".into() } else { one_line(&line) }
@@ -217,10 +230,12 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         });
     });
     ui.add_space(4.0);
-    ui.add(egui::Label::new(RichText::new(summary(&reply.command, &reply.value)).color(t.text_dim)).wrap());
+    ui.add(egui::Label::new(RichText::new(summary_in(&reply.command, &reply.value, app.session.model.units())).color(t.text_dim)).wrap());
     ui.add_space(4.0);
+    let units = app.session.model.units();
     match reply.command.as_str() {
         "model.check" => diagnostics(app, ui, t, &reply.value, &mut acts),
+        c if SOLVES.contains(&c) => solve_summary(ui, t, &reply.value, units),
         "model.activity" => activity(ui, t, &reply.value),
         "geometry.bodies" => bodies(ui, t, &reply.value, &mut acts),
         _ => value(ui, t, egui::Id::new("fc_reply"), &reply.value, 0),
@@ -432,6 +447,138 @@ fn activity(ui: &mut egui::Ui, t: &Tokens, v: &Value) {
     });
 }
 
+/// A solved step's peaks in one line: `max |U| 0.05063 mm, max Mises 1,368 MPa, 115,665 DOFs`.
+fn solve_line(v: &Value, units: UnitSystem) -> String {
+    let mut parts = Vec::new();
+    let peak = |key: &str| v.get(key).and_then(|p| p.get("value")).and_then(Value::as_f64);
+    for (key, what, q) in [
+        ("max_displacement", "max |U|", Quantity::Length),
+        ("max_von_mises", "max Mises", Quantity::Stress),
+        ("max_temperature", "max T", Quantity::Temperature),
+    ] {
+        if let Some(x) = peak(key) {
+            parts.push(format!("{what} {}", with_unit(number(x), q.unit(units).as_deref())));
+        }
+    }
+    if let Some(m) = v["modes"].as_array().and_then(|m| m.first()) {
+        if let Some(f) = m["frequency"].as_f64() {
+            parts.push(format!("mode 1 at {} Hz", number(f)));
+        } else if let Some(l) = m["load_factor"].as_f64() {
+            parts.push(format!("first load factor {}", number(l)));
+        }
+    }
+    if let Some(n) = v["dofs"].as_u64() {
+        parts.push(format!("{} DOFs", count(n)));
+    }
+    parts.join(", ")
+}
+
+/// What a solve summary's row shows: a number of a quantity, a node's peak, a vector, a count,
+/// or text.
+enum Row {
+    Number(Quantity),
+    Peak(Quantity),
+    Vector(Quantity),
+    Count,
+    Text,
+}
+
+/// A solve's summary: the step's peaks and totals with their units first, round-off as 0, rows
+/// that do not apply left out (a steady step's end time), counts with thousands separators;
+/// lists (modes, contacts) as tables, and the solver's internals folded under Details.
+fn solve_summary(ui: &mut egui::Ui, t: &Tokens, v: &Value, units: UnitSystem) {
+    let Some(m) = v.as_object() else { return value(ui, t, egui::Id::new("fc_reply_solve"), v, 0) };
+    let steady = m.get("frames").and_then(Value::as_u64).is_some_and(|n| n <= 1);
+    let rows: [(&str, &str, Row); 18] = [
+        ("step", "Step", Row::Text),
+        ("max_displacement", "Max |U|", Row::Peak(Quantity::Length)),
+        ("max_von_mises", "Max Mises", Row::Peak(Quantity::Stress)),
+        ("max_temperature", "Max T", Row::Peak(Quantity::Temperature)),
+        ("min_temperature", "Min T", Row::Peak(Quantity::Temperature)),
+        ("max_plastic_strain", "Max plastic strain", Row::Peak(Quantity::None)),
+        ("applied_total", "Applied force", Row::Vector(Quantity::Force)),
+        ("reaction_total", "Reaction force", Row::Vector(Quantity::Force)),
+        ("heat_supplied", "Heat flow through", Row::Number(Quantity::HeatFlow)),
+        ("total_mass", "Total mass", Row::Number(Quantity::Mass)),
+        ("load_factor", "Load factor", Row::Number(Quantity::None)),
+        ("time", "Time reached", Row::Number(Quantity::Time)),
+        ("end_time", "End time", Row::Number(Quantity::Time)),
+        ("completed", "Completed", Row::Text),
+        ("energy_balance", "Energy balance error", Row::Number(Quantity::None)),
+        ("dofs", "Degrees of freedom", Row::Count),
+        ("elements", "Elements", Row::Count),
+        ("frames", "Frames", Row::Count),
+    ];
+    let mut shown: Vec<&str> = Vec::new();
+    egui::Grid::new("fc_reply_solve").num_columns(2).spacing(vec2(10.0, 3.0)).show(ui, |ui| {
+        for (key, label, row) in &rows {
+            let Some(x) = m.get(*key).filter(|x| !x.is_null()) else { continue };
+            shown.push(key);
+            // A steady step has no time, and one frame.
+            if steady && matches!(*key, "end_time" | "frames") {
+                continue;
+            }
+            let text = match row {
+                Row::Number(q) => x.as_f64().map(|f| with_unit(number(f), q.unit(units).as_deref())),
+                Row::Peak(q) => x["value"].as_f64().map(|f| {
+                    let at = x["node"].as_u64().map_or_else(String::new, |n| format!(" at node {n}"));
+                    format!("{}{at}", with_unit(number(f), q.unit(units).as_deref()))
+                }),
+                Row::Vector(q) => {
+                    serde_json::from_value::<Vec<f64>>(x.clone()).ok().map(|c| with_unit(components(&c, 0.0), q.unit(units).as_deref()))
+                }
+                Row::Count => x.as_u64().map(count),
+                Row::Text => inline(x),
+            };
+            if let Some(text) = text {
+                ui.label(RichText::new(*label).color(t.text_dim));
+                ui.add(egui::Label::new(text).wrap());
+                ui.end_row();
+            }
+        }
+    });
+    // Heat removed is the supplied flow with the other sign: one row says it.
+    shown.push("heat_removed");
+    if let Some(modes) = m.get("modes").and_then(Value::as_array).filter(|a| !a.is_empty()) {
+        shown.push("modes");
+        egui::CollapsingHeader::new(RichText::new(format!("Modes ({})", modes.len())).size(12.0))
+            .id_salt("fc_reply_solve_modes")
+            .default_open(true)
+            .show(ui, |ui| {
+                egui::Grid::new("fc_reply_solve_modes_grid").striped(true).spacing(vec2(10.0, 2.0)).show(ui, |ui| {
+                    let buckling = modes.iter().any(|x| x.get("load_factor").is_some());
+                    ui.label(RichText::new("Mode").small().color(t.text_dim));
+                    ui.label(RichText::new(if buckling { "Load factor" } else { "Frequency [Hz]" }).small().color(t.text_dim));
+                    ui.end_row();
+                    for x in modes.iter().take(MAX_ROWS) {
+                        ui.label(x["mode"].as_u64().map_or_else(String::new, |n| n.to_string()));
+                        ui.label(x.get(if buckling { "load_factor" } else { "frequency" }).and_then(Value::as_f64).map_or("—".into(), number));
+                        ui.end_row();
+                    }
+                });
+                more(ui, t, modes.len());
+            });
+    }
+    if let Some(w) = m.get("warnings").and_then(Value::as_array) {
+        shown.push("warnings");
+        for x in w {
+            ui.add(egui::Label::new(RichText::new(format!("⚠ {}", inline(x).unwrap_or_else(|| crate::context::value_text(x)))).color(t.warm)).wrap());
+        }
+    }
+    // The rest: the solver's internals (equations, factor entries, Lanczos vectors…) and lists.
+    let rest: serde_json::Map<String, Value> = m
+        .iter()
+        .filter(|(k, x)| !shown.contains(&k.as_str()) && !x.is_null() && x.as_array().is_none_or(|a| !a.is_empty()))
+        .map(|(k, x)| (k.clone(), x.clone()))
+        .collect();
+    if !rest.is_empty() {
+        egui::CollapsingHeader::new(RichText::new("Details").size(12.0)).id_salt("fc_reply_solve_details").default_open(false).show(ui, |ui| {
+            let rest = Value::Object(rest.into_iter().map(|(k, x)| (k, x.as_u64().map_or(x.clone(), |n| Value::String(count(n))))).collect());
+            value(ui, t, egui::Id::new("fc_reply_solve_details"), &rest, 1);
+        });
+    }
+}
+
 /// Any reply: objects as labelled rows, lists of objects as tables, nested parts folded.
 fn value(ui: &mut egui::Ui, t: &Tokens, id: egui::Id, v: &Value, depth: usize) {
     match v {
@@ -496,7 +643,9 @@ fn table(ui: &mut egui::Ui, t: &Tokens, id: egui::Id, rows: &[Value]) {
             ui.end_row();
             for r in rows.iter().take(MAX_ROWS) {
                 for c in &columns {
-                    ui.label(r.get(*c).map_or_else(String::new, |x| inline(x).unwrap_or_else(|| crate::context::value_text(x))));
+                    ui.add(
+                        egui::Label::new(r.get(*c).map_or_else(String::new, |x| inline(x).unwrap_or_else(|| crate::context::value_text(x)))).extend(),
+                    );
                 }
                 ui.end_row();
             }
@@ -526,7 +675,9 @@ mod tests {
         assert_eq!(summary("model.activity", &activity), "1 step, 1 boundary condition, 0 loads");
         assert_eq!(summary("geometry.bodies", &json!([])), "no bodies (open a design first)");
         assert_eq!(summary("geometry.bodies", &json!([{}, {}])), "2 bodies");
-        assert_eq!(summary("solve.static", &json!({"dofs": 945, "modes": [1, 2], "x": {"y": 1}})), "dofs 945, modes 2");
+        assert_eq!(summary("mesh.info", &json!({"dofs": 945, "modes": [1, 2], "x": {"y": 1}})), "dofs 945, modes 2");
+        let solved = json!({"dofs": 115665, "max_displacement": {"node": 17, "value": 0.0506333}, "max_von_mises": {"node": 3, "value": 1368.07}});
+        assert_eq!(summary_in("solve.static", &solved, UnitSystem::MmTonneS), "max |U| 0.05063 mm, max Mises 1,368 MPa, 115,665 DOFs");
         assert_eq!(summary("any", &json!({"summary": "a\nb"})), "a b");
         assert_eq!(summary("any", &json!({})), "done");
         assert!(summary("any", &json!({"s": "x".repeat(500)})).chars().count() <= MAX_LINE + 1);

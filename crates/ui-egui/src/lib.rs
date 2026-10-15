@@ -61,6 +61,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use fieldcraft_engine::catalogue::{self, Tab, Workspace};
 use fieldcraft_engine::{EngineError, Session};
+use fieldcraft_model::UnitSystem;
 use fieldcraft_render::glyphs::{self, Definition, Drawn, Glyphs};
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, StandardView, Vec3};
 use serde::{Deserialize, Serialize};
@@ -91,6 +92,11 @@ pub struct UiState {
     pub show_loads: bool,
     /// Reference point, coupling and rigid wall symbols.
     pub show_interactions: bool,
+    /// The setup's symbols over a results plot (those of the step shown); off by default, so
+    /// they do not cover the contours.
+    pub result_symbols: bool,
+    /// Markers at a contour's largest and smallest value.
+    pub result_extremes: bool,
     /// The setup symbols' size on screen, in points (held to
     /// [`fieldcraft_render::glyphs::SIZE_RANGE`]).
     pub symbol_size: f64,
@@ -123,6 +129,8 @@ impl Default for UiState {
             show_mesh: true,
             show_loads: true,
             show_interactions: true,
+            result_symbols: false,
+            result_extremes: true,
             symbol_size: glyphs::DEFAULT_SIZE,
             perspective: false,
             dark: true,
@@ -294,7 +302,8 @@ pub struct Viewport {
     pub menu_target: Option<menu::Target>,
 }
 
-/// A probed node: its values as lines of text, for the step, mode and frame they were read from.
+/// A probed node: its values as (what, value) rows and as lines of text, for the step, mode
+/// and frame they were read from.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Probe {
     pub node: u32,
@@ -302,6 +311,7 @@ pub struct Probe {
     pub mode: usize,
     /// The explicit field frame (`None`: the last).
     pub frame: Option<usize>,
+    pub rows: Vec<(String, String)>,
     pub lines: Vec<String>,
 }
 
@@ -377,6 +387,8 @@ pub struct ModelApp {
     /// The setup's symbols, a layer of their own drawn at the camera's scale, its key and what
     /// it drew.
     symbols: (Option<u64>, Scene, Drawn),
+    /// The symbols of the step a results plot shows, and the model revision and step they are of.
+    step_glyphs: (Option<(u64, String)>, Glyphs),
     /// The theme last applied to the context.
     styled: Option<bool>,
     /// Input injected by the control channel, fed to egui one pointer event per frame.
@@ -490,6 +502,7 @@ impl ModelApp {
             prepared: (None, results::Prepared::default()),
             scene: (None, Scene::default(), Aabb3::EMPTY),
             symbols: (None, Scene::default(), Drawn::default()),
+            step_glyphs: (None, Glyphs::default()),
             styled: None,
             synthetic: Vec::new(),
             synthetic_mods: egui::Modifiers::default(),
@@ -587,6 +600,12 @@ impl ModelApp {
         }
         // The results display commands reply with what is shown, which the viewport shows.
         let display = (id.starts_with("results.") && id != "results.reactions") || id == "solve.run";
+        // The reaction sums show in the results panel, however they were asked for.
+        if id == "results.reactions"
+            && let Ok(v) = &r
+        {
+            self.reactions = Some(v.clone());
+        }
         if r.is_ok() && (changed || display) {
             self.follow_stage(id);
         }
@@ -595,7 +614,7 @@ impl ModelApp {
             // A reply reads as one line; the whole of a rich one shows in the context panel (the
             // reaction sums have their own place in the results panel).
             Ok(v) => {
-                let mut line = format!("{label}: {}", reply::summary(id, v));
+                let mut line = format!("{label}: {}", reply::summary_in(id, v, self.session.model.units()));
                 if reply::is_rich(v) && !(id == "results.reactions" && self.plot().is_some()) {
                     line.push_str(" (details in the panel)");
                     self.reply = Some(reply::Reply { command: id.to_string(), label: label.to_string(), params: params.clone(), value: v.clone() });
@@ -879,31 +898,15 @@ impl ModelApp {
                 return Err(e);
             }
         };
-        let at = reply.pointer("/nodes/0").cloned().unwrap_or(Value::Null);
-        let vector = |key: &str| at.get(key).and_then(|v| serde_json::from_value::<[f64; 3]>(v.clone()).ok());
-        let triple = |v: [f64; 3]| format!("{}, {}, {}", results::number(v[0]), results::number(v[1]), results::number(v[2]));
-        let mut lines = vec![format!("Node {node}")];
-        if let Some(u) = vector("displacement") {
-            lines.push(format!("U {}  |U| {}", triple(u), results::number(fieldcraft_engine::results::magnitude(u))));
+        // The probe shows in the results panel and beside the node, not as a reply.
+        if self.reply.as_ref().is_some_and(|r| r.command == "solve.probe") {
+            self.reply = None;
         }
-        if let Some(rf) = vector("reaction").filter(|r| r.iter().any(|c| *c != 0.0)) {
-            lines.push(format!("RF {}", triple(rf)));
-        }
-        if let Some(m) = at.get("von_mises").and_then(Value::as_f64) {
-            lines.push(format!("Von Mises {}", results::number(m)));
-        }
-        if let Some(v) = vector("velocity") {
-            lines.push(format!("V {}  |V| {}", triple(v), results::number(fieldcraft_engine::results::magnitude(v))));
-        }
-        if let Some(shape) = vector("shape") {
-            lines.push(format!("Mode {} shape {}", pick.mode, triple(shape)));
-        }
-        let contour = self.plot().and_then(|p| p.contour.as_ref().map(|c| (c.field, c.at(p.result.nodes(), node))));
-        if let Some((field, v)) = contour.filter(|(f, _)| *f != fieldcraft_engine::results::Field::VonMises) {
-            lines.push(format!("{} {}", field.label(), results::number(v)));
-        }
+        let plot = self.plot();
+        let rows = probe_rows(&reply, plot.as_deref(), self.session.model.units(), node, pick.mode);
+        let lines: Vec<String> = std::iter::once(format!("Node {node}")).chain(rows.iter().map(|(what, value)| format!("{what} {value}"))).collect();
         self.set_status(lines.join("   "), false);
-        self.probe = Some(Probe { node, step: view.step, mode: pick.mode, frame: pick.frame, lines });
+        self.probe = Some(Probe { node, step: view.step, mode: pick.mode, frame: pick.frame, rows, lines });
         Ok(())
     }
 
@@ -941,7 +944,7 @@ impl ModelApp {
     /// to appear is framed.
     pub fn display(&mut self) -> &DisplayMesh {
         if self.display.0 != Some(self.revision) {
-            let mut d = DisplayMesh::from_model(&self.session.model);
+            let mut d = DisplayMesh::from_model_hiding(&self.session.model, &self.session.hidden_elements());
             let design = self.session.design.clone();
             if !match (&design, &self.bodies.0) {
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -1120,15 +1123,29 @@ impl ModelApp {
         let unit = self.cam.length_per_pixel(height).and_then(|l| glyphs::symbol_unit(l, self.ui.symbol_size)).and_then(glyphs::quantise_unit);
         let mut h = std::hash::DefaultHasher::new();
         let plot = self.plot.1.as_ref().map(|p| Arc::as_ptr(p) as usize);
-        (self.revision, self.ui.show_loads, self.ui.show_interactions, self.ui.dark, plot, unit.map(|u| u.0), self.highlighted()).hash(&mut h);
+        let show = self.ui.show();
+        (self.revision, show.loads, show.interactions, self.ui.result_symbols, self.ui.dark, plot, unit.map(|u| u.0), self.highlighted())
+            .hash(&mut h);
         let key = h.finish();
         if self.symbols.0 != Some(key) {
+            // Over a results plot: only when asked for, and only the shown step's.
+            let step = self.plot.1.as_ref().map(|p| p.view.step.clone());
+            if let Some(step) = step.as_ref().filter(|_| self.ui.result_symbols) {
+                let for_plot = Some((self.revision, step.clone()));
+                if self.step_glyphs.0 != for_plot {
+                    self.step_glyphs = (for_plot, self.session.step_glyphs(step));
+                }
+            }
+            let glyphs = if step.is_some() { &self.step_glyphs.1 } else { &self.glyphs };
             let t = theme::Tokens::get(self.ui.dark);
             let drawn = self.plot.1.as_ref().map_or(&self.display.1, |p| &p.display);
             let mut s = Scene::default();
             let unit = unit.map_or(f64::NAN, |u| u.1);
-            let d =
-                scene::symbols(&mut s, &self.glyphs, |n| drawn.node_position(n), self.ui.show(), self.plot.1.is_some(), unit, self.highlighted(), &t);
+            let d = if step.is_some() && !self.ui.result_symbols {
+                Drawn::default()
+            } else {
+                scene::symbols(&mut s, glyphs, |n| drawn.node_position(n), show, step.is_some(), unit, self.highlighted(), &t)
+            };
             self.symbols = (Some(key), s, d);
         }
         (key, &self.symbols.1)
@@ -1516,6 +1533,9 @@ impl ModelApp {
                 }
             }
             self.framed_document = Some(self.session.opened());
+            // The probe and the reaction sums were of the old document's results.
+            self.probe = None;
+            self.reactions = None;
             self.reframe = framing::Reframe::merge(self.reframe, framing::Reframe::Home);
         }
     }
@@ -1861,6 +1881,64 @@ pub fn command_label(id: &str) -> &str {
     fieldcraft_engine::find_command(id).map_or(id, |c| c.label)
 }
 
+/// What a probe of `node` read (`solve.probe`'s reply), as (what, value) rows with units from
+/// `units`: displacement, reaction, stresses, temperature, velocity or a mode's shape, and the
+/// contour shown when it is none of those. Round-off beside the result's largest value is 0.
+fn probe_rows(reply: &Value, plot: Option<&results::Plot>, units: UnitSystem, node: u32, mode: usize) -> Vec<(String, String)> {
+    use fieldcraft_engine::results::{Field, Pick, Quantity, displacements, magnitude, with_unit as titled};
+    let at = reply.pointer("/nodes/0").cloned().unwrap_or(Value::Null);
+    let vector = |key: &str| at.get(key).and_then(|v| serde_json::from_value::<[f64; 3]>(v.clone()).ok());
+    let unit = |q: Quantity| q.unit(units);
+    // The largest displacement of the result shown: the scale round-off is read against.
+    let largest = plot
+        .and_then(|p| displacements(&p.result, Pick { mode, frame: p.pick.frame }).ok())
+        .map_or(0.0, |u| u.iter().map(|v| magnitude(*v)).filter(|m| m.is_finite()).fold(0.0, f64::max));
+    let mut rows = Vec::new();
+    let vector_row = |rows: &mut Vec<(String, String)>, name: &str, v: [f64; 3], q: Quantity, scale: f64| {
+        let u = unit(q);
+        rows.push((titled(name, u.as_deref()), results::components(&v, scale)));
+        rows.push((format!("|{name}|"), results::with_unit(results::number_in(magnitude(v), scale), u.as_deref())));
+    };
+    if let Some(u) = vector("displacement") {
+        vector_row(&mut rows, "U", u, Quantity::Length, largest);
+    }
+    if let Some(rf) = vector("reaction").filter(|r| r.iter().any(|c| *c != 0.0)) {
+        rows.push((titled("RF", unit(Quantity::Force).as_deref()), results::components(&rf, 0.0)));
+    }
+    let stress = at.get("stress").and_then(|v| serde_json::from_value::<[f64; 6]>(v.clone()).ok());
+    let mises = at.get("von_mises").and_then(Value::as_f64);
+    let stress_unit = unit(Quantity::Stress);
+    if let Some(m) = mises {
+        rows.push(("Mises".into(), results::with_unit(results::number(m), stress_unit.as_deref())));
+    }
+    if let Some(t) = stress {
+        let scale = mises.unwrap_or(0.0);
+        rows.push((titled("S xx, yy, zz", stress_unit.as_deref()), results::components(&t[..3], scale)));
+        rows.push((titled("S xy, xz, yz", stress_unit.as_deref()), results::components(&t[3..], scale)));
+        let p = fieldcraft_engine::results::principal(&t);
+        rows.push((titled("Principal", stress_unit.as_deref()), results::components(&p, scale)));
+    }
+    if let Some(t) = at.get("temperature").and_then(Value::as_f64) {
+        rows.push(("T".into(), results::with_unit(results::number(t), unit(Quantity::Temperature).as_deref())));
+    }
+    if let Some(q) = vector("heat_flux") {
+        rows.push((titled("q", unit(Quantity::HeatFlux).as_deref()), results::components(&q, 0.0)));
+    }
+    if let Some(v) = vector("velocity") {
+        vector_row(&mut rows, "V", v, Quantity::Velocity, 0.0);
+    }
+    if let Some(shape) = vector("shape") {
+        rows.push((format!("Mode {mode} shape (normalised)"), results::components(&shape, largest)));
+    }
+    let contour = plot.and_then(|p| p.contour.as_ref().map(|c| (c.field, c.at(p.result.nodes(), node), &p.result)));
+    if let Some((field, v, result)) =
+        contour.filter(|(f, ..)| !matches!(f, Field::VonMises | Field::Temperature) && !f.label().starts_with("Displacement"))
+    {
+        rows.push((field.label().to_string(), results::with_unit(results::number(v), field.unit(result, units).as_deref())));
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use fieldcraft_render::Vec3;
@@ -2196,9 +2274,11 @@ mod tests {
         assert!(count(&mut app, t.pick_selected) > 0);
         assert!(count(&mut app, t.glyph_load) > 0);
         app.selected = None;
-        // Over a results plot they are muted.
+        // Over a results plot they are off until asked for (#327), then muted.
         app.run("solve.static", json!({})).unwrap();
         app.run("results.deformed", json!({"step": "Load"})).unwrap();
+        assert!(app.symbols().1.lines.is_empty());
+        app.ui.result_symbols = true;
         assert_eq!(count(&mut app, t.glyph_constraint), 0);
         let muted = t.glyph_colors().over_results(theme::rgb(t.viewport_bottom));
         assert!(app.symbols().1.lines.iter().any(|x| x.color == muted.constraint));
@@ -2486,7 +2566,9 @@ mod tests {
         app.probe_node(tip).unwrap();
         let probe = app.probe.clone().unwrap();
         assert_eq!((probe.node, probe.step.as_str()), (tip, "Load"));
-        assert!(probe.lines.iter().any(|l| l.starts_with("U ")) && probe.lines.iter().any(|l| l.starts_with("Von Mises")), "{probe:?}");
+        assert!(probe.lines.iter().any(|l| l.starts_with("U ")) && probe.lines.iter().any(|l| l.starts_with("Mises")), "{probe:?}");
+        // Units, and round-off shown as 0 (#329).
+        assert!(probe.lines.iter().any(|l| l.starts_with("U [mm] ")) && probe.lines.iter().any(|l| l.ends_with(" MPa")), "{probe:?}");
         // A root node carries a reaction.
         app.probe_node(node_at(&app, [0.0, 0.0, 0.0])).unwrap();
         assert!(app.probe.as_ref().unwrap().lines.iter().any(|l| l.starts_with("RF ")));

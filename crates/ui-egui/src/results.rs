@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use fieldcraft_engine::results::{Field, Kind, Pick, ResultsView, displacements, field_values, magnitude, range};
+use fieldcraft_engine::results::{Field, Kind, Pick, ResultsView, auto_scale, displacements, field_values, range};
 use fieldcraft_engine::{Session, StepResult};
 use fieldcraft_render::contour::{Bands, band_color, split_triangle};
 use fieldcraft_render::{DisplayMesh, Scene, SceneTri, Vec3};
@@ -19,8 +19,10 @@ use crate::theme::{Tokens, rgb};
 /// Animation frames per cycle, and the cycle's length in seconds.
 pub const FRAMES: u64 = 24;
 pub const PERIOD: f64 = 2.0;
-/// The automatic scale draws the largest displacement this fraction of the model's size.
-const AUTO_FRACTION: f64 = 0.1;
+/// Significant digits of the numbers the results show.
+const DIGITS: i32 = 4;
+/// A value below this fraction of the largest it is read with is round-off, shown as 0.
+const ROUND_OFF: f64 = 1e-9;
 
 /// A contour plot: its field, bands, extremes and the value at every node.
 #[derive(Clone, Debug, PartialEq)]
@@ -48,13 +50,16 @@ pub struct Plot {
     pub result: Arc<StepResult>,
     /// Whether the model changed since the step was solved.
     pub stale: bool,
-    /// The scale factor the deformation is drawn with (0: undeformed), before animation.
+    /// The deformation scale factor, before animation: the view's or the automatic one, also
+    /// while the view is undeformed (what ticking Deformed would draw it with).
     pub scale: f64,
     /// The elements as drawn (deformed at the current animation frame).
     pub display: DisplayMesh,
     pub contour: Option<Arc<Contour>>,
     /// The mode and field frame drawn.
     pub pick: Pick,
+    /// The model's unit system, which the numbers shown with the plot are in.
+    pub units: fieldcraft_model::UnitSystem,
 }
 
 /// The part of a plot that does not change with the animation frame.
@@ -143,18 +148,10 @@ pub fn pick(view: &ResultsView, result: &StepResult, frame: Option<u64>) -> Pick
     p
 }
 
-/// The deformation scale factor: the view's, or automatic (the largest displacement a tenth of
-/// the model's size); 0 when the view is undeformed or nothing moves.
+/// The deformation scale factor: the view's, or automatic ([`auto_scale`]), whether or not the
+/// view is deformed.
 pub fn scale(view: &ResultsView, result: &StepResult, pick: Pick, base: &DisplayMesh) -> f64 {
-    if !view.deformed {
-        return 0.0;
-    }
-    if let Some(s) = view.scale {
-        return s;
-    }
-    let largest = displacements(result, pick).map_or(0.0, |u| u.iter().map(|v| magnitude(*v)).filter(|m| m.is_finite()).fold(0.0, f64::max));
-    let size = base.bounds.diagonal();
-    if largest > 0.0 && size.is_finite() && size > 0.0 { AUTO_FRACTION * size / largest } else { 0.0 }
+    view.scale.unwrap_or_else(|| auto_scale(result, pick, base.bounds.diagonal()))
 }
 
 /// The part of the session's results plot that depends on what is drawn (`pick`), not on the
@@ -162,7 +159,13 @@ pub fn scale(view: &ResultsView, result: &StepResult, pick: Pick, base: &Display
 pub fn prepare(session: &Session, base: &DisplayMesh, pick: Pick) -> Option<Prepared> {
     let (view, result, _) = shown(session)?;
     let contour = view.contour.and_then(|field| {
-        let values = field_values(&session.model, result, field, pick).ok()?;
+        let mut values = field_values(&session.model, result, field, pick).ok()?;
+        // The range (and the bands) follow what is drawn: a hidden body's nodes have no value.
+        for (v, label) in values.iter_mut().zip(result.nodes()) {
+            if base.node_position(*label).is_none() {
+                *v = f64::NAN;
+            }
+        }
         let (min, max) = range(result.nodes(), &values)?;
         Some(Arc::new(Contour { field, bands: Bands::new(min.1, max.1, view.bands), min, max, values }))
     });
@@ -175,7 +178,7 @@ pub fn plot(session: &Session, base: &DisplayMesh, frame: Option<u64>, prepared:
     let (view, result, current) = shown(session)?;
     let nodes = result.nodes();
     let pick = pick(view, result, frame);
-    let factor = prepared.scale * swing(result, frame);
+    let factor = if view.deformed { prepared.scale * swing(result, frame) } else { 0.0 };
     let u = displacements(result, pick).unwrap_or(&[]);
     let display = base.displaced(|label| {
         let i = nodes.binary_search(&label).ok()?;
@@ -189,12 +192,15 @@ pub fn plot(session: &Session, base: &DisplayMesh, frame: Option<u64>, prepared:
         display,
         contour: prepared.contour.clone(),
         pick,
+        units: session.model.units(),
     })
 }
 
 /// The scene of a plot: the deformed elements drawn as the model is ([`scene::build`]), with
-/// their faces split into contour bands when a field is shown.
+/// their faces split into contour bands when a field is shown. Over a plot, hiding the mesh hides
+/// the element edges: the result itself never vanishes with them.
 pub fn scene(plot: &Plot, style: Style, show: crate::scene::Show, t: &Tokens) -> Scene {
+    let (style, show) = if show.mesh { (style, show) } else { (Style::Shaded, crate::scene::Show { mesh: true, ..show }) };
     let mut s = crate::scene::build(&plot.display, style, show, t);
     let Some(c) = plot.contour.as_ref().filter(|_| style != Style::Wireframe && show.mesh) else { return s };
     let nodes = plot.result.nodes();
@@ -213,26 +219,82 @@ pub fn scene(plot: &Plot, style: Style, show: crate::scene::Show, t: &Tokens) ->
     s
 }
 
-/// A number for the legend and probe: four significant digits, scientific when very large or
-/// small.
+/// A number as the results show it (legend, probe, reaction sums, solve summary): four
+/// significant digits, thousands separators, scientific notation when very large or small.
 pub fn number(v: f64) -> String {
     if !v.is_finite() {
         return "—".into();
     }
     let a = v.abs();
     if a == 0.0 {
-        "0".into()
-    } else if !(1e-3..1e5).contains(&a) {
-        format!("{v:.3e}")
-    } else {
-        let decimals = (3 - a.log10().floor() as i32).clamp(0, 6) as usize;
-        format!("{v:.decimals$}")
+        return "0".into();
     }
+    if !(1e-3..1e6).contains(&a) {
+        return format!("{:.*e}", (DIGITS - 1) as usize, v);
+    }
+    let decimals = (DIGITS - 1 - a.log10().floor() as i32).clamp(0, 6) as usize;
+    let text = format!("{v:.decimals$}");
+    // Rounding can make it -0.000.
+    if text.trim_start_matches('-').chars().all(|c| c == '0' || c == '.') {
+        return "0".into();
+    }
+    let (sign, digits) = text.strip_prefix('-').map_or(("", text.as_str()), |d| ("-", d));
+    let (whole, fraction) = digits.split_once('.').map_or((digits, None), |(w, f)| (w, Some(f)));
+    let grouped = grouped(whole);
+    match fraction {
+        Some(f) => format!("{sign}{grouped}.{f}"),
+        None => format!("{sign}{grouped}"),
+    }
+}
+
+/// `v` read among values as large as `scale` (the largest magnitude beside it): round-off below
+/// a billionth of it is 0.
+pub fn clean(v: f64, scale: f64) -> f64 {
+    if scale.is_finite() && v.abs() <= ROUND_OFF * scale.abs() { 0.0 } else { v }
+}
+
+/// [`number`] of `v` [`clean`]ed against `scale`.
+pub fn number_in(v: f64, scale: f64) -> String {
+    number(clean(v, scale))
+}
+
+/// A count with thousands separators: `221,850,309`.
+pub fn count(n: u64) -> String {
+    grouped(&n.to_string())
+}
+
+/// Digits with a comma between each group of three from the right.
+fn grouped(digits: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A number with its unit: `0.1048 mm` (the number alone without one).
+pub fn with_unit(text: String, unit: Option<&str>) -> String {
+    match unit {
+        Some(u) => format!("{text} {u}"),
+        None => text,
+    }
+}
+
+/// A vector's components, round-off among them (against the largest, or `scale` when larger)
+/// shown as 0: `0, 0, -0.1048`.
+pub fn components(v: &[f64], scale: f64) -> String {
+    let largest = v.iter().map(|c| c.abs()).filter(|c| c.is_finite()).fold(scale.abs(), f64::max);
+    v.iter().map(|c| number_in(*c, largest)).collect::<Vec<_>>().join(", ")
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use serde_json::json;
+
+    use fieldcraft_engine::results::{AUTO_FRACTION, magnitude};
 
     use super::*;
 
@@ -274,9 +336,13 @@ pub(crate) mod tests {
         s.execute("results.deformed", &json!({"scale": "auto"})).unwrap();
         let p = plot_at(&s, &base, None).unwrap();
         let largest = r.displacement.iter().map(|v| magnitude(*v)).fold(0.0, f64::max);
-        assert!((p.scale * largest / base.bounds.diagonal() - AUTO_FRACTION).abs() < 1e-12, "{}", p.scale);
+        let auto = AUTO_FRACTION * base.bounds.diagonal() / largest;
+        assert!((p.scale / auto - 1.0).abs() < 1e-12, "{}", p.scale);
+        // Undeformed, the plot still knows the scale ticking Deformed would draw (#325).
         s.execute("results.deformed", &json!({"show": false})).unwrap();
-        assert_eq!(plot_at(&s, &base, None).unwrap().display.tris, base.tris);
+        let p = plot_at(&s, &base, None).unwrap();
+        assert_eq!(p.display.tris, base.tris);
+        assert!((p.scale / auto - 1.0).abs() < 1e-12, "{}", p.scale);
     }
 
     #[test]
@@ -303,6 +369,10 @@ pub(crate) mod tests {
             assert!(scene.tris.iter().any(|tri| tri.color == band_color(&stops, k, 4)), "band {k}");
         }
         assert!(scene.tris.len() > base.tris.len());
+        // Hiding the mesh hides the element edges, not the contours (#317).
+        let hidden = super::scene(&p, Style::ShadedEdges, crate::scene::Show { mesh: false, ..crate::scene::Show::DEFAULT }, &t);
+        assert_eq!(hidden.tris, scene.tris);
+        assert!(hidden.lines.iter().all(|l| l.color != rgb(t.mesh_edge)), "no element edges");
     }
 
     #[test]
@@ -340,5 +410,16 @@ pub(crate) mod tests {
         assert_eq!(number(1.5e-6), "1.500e-6");
         assert_eq!(number(2.5e7), "2.500e7");
         assert_eq!(number(f64::NAN), "—");
+        assert_eq!(number(123_456.7), "123,457");
+        assert_eq!(number(-4_321.06), "-4,321");
+        assert_eq!(number(-0.000_000_4), "-4.000e-7");
+        assert_eq!(count(221_850_309), "221,850,309");
+        assert_eq!(count(945), "945");
+        // Round-off beside larger values is 0.
+        assert_eq!(number_in(-3.16e-11, 1000.0), "0");
+        assert_eq!(number_in(4.34e-9, 1e5), "0");
+        assert_eq!(number_in(0.5, 1000.0), "0.5000");
+        assert_eq!(components(&[9.497e-17, -3.463e-14, -0.2415], 0.0), "0, 0, -0.2415");
+        assert_eq!(with_unit(number(0.1048), Some("mm")), "0.1048 mm");
     }
 }

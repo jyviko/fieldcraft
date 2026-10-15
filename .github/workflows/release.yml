@@ -6,8 +6,9 @@
 # DRAFT GitHub Release "FieldCraft v<version>", with SHA256SUMS.txt (signed with the release key
 # into SHA256SUMS.txt.minisig when the FIELDCRAFT_SIGNING_KEY secret exists) and generated notes. The
 # version is [workspace.package] version in Cargo.toml; a suffix (0.2.0-rc.1) makes a
-# pre-release. A person verifies the draft and publishes it; this workflow never publishes,
-# and pushes to develop or tags never start it.
+# pre-release. Every package, and the release itself, carries THIRD-PARTY-LICENSES.txt, generated
+# here by `cargo xtask licences` (it is not committed). A person verifies the draft and publishes
+# it; this workflow never publishes, and pushes to develop or tags never start it.
 #
 #   macOS universal (arm64 + x86_64)   .dmg with FieldCraft.app, the CLI as a .zip   packaging/macos
 #   Linux x86_64 (glibc 2.35+)         .tar.gz, .AppImage, .deb and .rpm              packaging/linux
@@ -92,6 +93,8 @@ jobs:
           key: release-macos-universal
           # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Generate THIRD-PARTY-LICENSES.txt (fails when a crate's licence can't be resolved)
+        run: cargo xtask licences
       - name: Import the signing certificate (skipped without APPLE_CERTIFICATE)
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -143,6 +146,8 @@ jobs:
           key: release-linux-x86_64
           # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Generate THIRD-PARTY-LICENSES.txt (fails when a crate's licence can't be resolved)
+        run: cargo xtask licences
       - name: Install cargo-deb and cargo-generate-rpm
         run: |
           cargo install --locked --version "$CARGO_DEB_VERSION" cargo-deb
@@ -224,6 +229,8 @@ jobs:
           key: release-windows-x64
           # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Generate THIRD-PARTY-LICENSES.txt (fails when a crate's licence can't be resolved)
+        run: cargo xtask licences
       - name: Build and package (zip)
         shell: pwsh
         env:
@@ -258,12 +265,16 @@ jobs:
           pattern: release-*
           path: artifacts
           merge-multiple: true
+      - uses: dtolnay/rust-toolchain@stable
+      # The same file every package carries, attached to the release on its own.
+      - name: Generate THIRD-PARTY-LICENSES.txt
+        run: cargo xtask licences && cp THIRD-PARTY-LICENSES.txt artifacts/
       - name: Check the set and write the checksums
         run: |
           for f in "fieldcraft-$VERSION-macos-universal.dmg" "fieldcraft-cli-$VERSION-macos-universal.zip" \
             "fieldcraft-$VERSION-linux-x86_64.tar.gz" "fieldcraft-$VERSION-linux-x86_64.AppImage" \
             "fieldcraft_${VERSION}_amd64.deb" "fieldcraft-$VERSION.x86_64.rpm" \
-            "fieldcraft-$VERSION-windows-x64.zip"; do
+            "fieldcraft-$VERSION-windows-x64.zip" THIRD-PARTY-LICENSES.txt; do
             test -s "artifacts/$f" || { echo "::error::missing $f"; exit 1; }
           done
           (cd artifacts && sha256sum -- * | tee SHA256SUMS.txt)

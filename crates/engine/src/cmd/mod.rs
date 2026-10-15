@@ -19,6 +19,7 @@ mod model;
 pub(crate) mod octree;
 mod results;
 pub(crate) mod solve;
+mod symmetry;
 mod tags;
 
 use fieldcraft_model::MAX_LABEL;
@@ -96,6 +97,7 @@ pub static ALL: &[CommandSpec] = &[
     define::BOUNDARY_CONDITION_CREATE,
     define::BOUNDARY_CONDITION_EDIT,
     define::BOUNDARY_CONDITION_DELETE,
+    symmetry::SYMMETRY,
     define::LOAD_CREATE,
     define::LOAD_EDIT,
     define::LOAD_DELETE,

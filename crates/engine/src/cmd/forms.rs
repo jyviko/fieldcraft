@@ -716,6 +716,13 @@ pub const MIRROR: &[Field] = &[
     json("as", "Images").hint(r#"{"body": "image body"}; default: the design's body at the reflected place"#),
 ];
 
+pub const SYMMETRY: &[Field] = &[
+    NAME,
+    reference("datum", "Datum plane", C::DatumPlane).req(),
+    reference("set", "Set", C::Set).hint("the faces of the design on the plane"),
+    references("bodies", "Bodies", C::Body).hint("every body"),
+];
+
 pub const HEX_OCTREE: &[Field] = &[
     BODY,
     SURFACE,

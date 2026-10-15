@@ -387,7 +387,7 @@ pub static CATALOGUE: &[Capability] = &[
         Loads,
         "Boundary Conditions",
         "Fixed, displacement or symmetry condition on a set or reference point",
-        &["model.boundary_condition.edit", "model.boundary_condition.delete"],
+        &["model.boundary_condition.edit", "model.boundary_condition.delete", "model.boundary_condition.symmetry"],
     ),
     ready_more(
         "model.load.create",

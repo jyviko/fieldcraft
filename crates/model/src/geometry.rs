@@ -10,7 +10,7 @@
 //! Sets defined by geometry names resolve through these tags ([`crate::sets`]), so they follow a
 //! remesh: the new mesh carries new tags for the same names.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -184,6 +184,13 @@ pub struct ElementTags {
     pub edges: BTreeMap<u8, u32>,
 }
 
+/// The elements and nodes [`Model::remove_body_mesh`] removed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BodyMesh {
+    pub elements: BTreeSet<u32>,
+    pub nodes: BTreeSet<u32>,
+}
+
 /// Where the mesh lies on the geometry. Tags are indices into [`Classification::entities`].
 ///
 /// It is read back from a file through [`Model`]'s deserializer, which replays every tag through
@@ -335,6 +342,44 @@ impl Model {
         Ok(())
     }
 
+    /// The elements that fill `body` (their region is the body or one of its faces or edges), in
+    /// label order.
+    pub fn body_elements(&self, body: &str) -> Vec<u32> {
+        let c = &self.classification;
+        let tags: BTreeSet<u32> = c.entities.iter().enumerate().filter(|(_, e)| e.body == body).filter_map(|(t, _)| u32::try_from(t).ok()).collect();
+        c.elements.iter().filter(|(_, t)| t.region.is_some_and(|r| tags.contains(&r))).map(|(&label, _)| label).collect()
+    }
+
+    /// The mesh of `body`: its elements ([`Model::body_elements`]) and the nodes no other
+    /// element uses.
+    pub fn body_mesh(&self, body: &str) -> BodyMesh {
+        let elements: BTreeSet<u32> = self.body_elements(body).into_iter().collect();
+        let mut nodes: BTreeSet<u32> = elements.iter().filter_map(|l| self.elements.get(l)).flat_map(|e| e.nodes.iter().copied()).collect();
+        if !nodes.is_empty() {
+            for e in self.elements.iter().filter(|(l, _)| !elements.contains(l)).map(|(_, e)| e) {
+                for n in &e.nodes {
+                    nodes.remove(n);
+                }
+            }
+        }
+        BodyMesh { elements, nodes }
+    }
+
+    /// Remove the mesh of `body` ([`Model::body_mesh`]) with its geometry tags. Other bodies'
+    /// elements, their nodes and every definition stay. Returns what was removed.
+    pub fn remove_body_mesh(&mut self, body: &str) -> BodyMesh {
+        let mesh = self.body_mesh(body);
+        for l in &mesh.elements {
+            self.elements.remove(l);
+            self.classification.forget_element(*l);
+        }
+        for n in &mesh.nodes {
+            self.nodes.remove(n);
+            self.classification.forget_node(*n);
+        }
+        mesh
+    }
+
     /// Drop every geometry tag (before a remesh writes new ones).
     pub fn clear_geometry_tags(&mut self) {
         self.classification = Classification::default();
@@ -373,5 +418,38 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<GeometryRef>(bad.clone()).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn removing_a_body_mesh_keeps_shared_nodes_and_other_bodies() {
+        use crate::{ElementKind, Set};
+        // Two tets sharing face 2-3-4: A = 1-2-3-4, B = 2-3-4-5, plus an untagged one.
+        let mut m = Model::default();
+        for (i, x) in [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [1., 1., 1.], [5., 0., 0.]].into_iter().enumerate() {
+            m.set_node(i as u32 + 1, x).unwrap();
+        }
+        m.set_element(1, ElementKind::Tet4, vec![1, 2, 3, 4]).unwrap();
+        m.set_element(2, ElementKind::Tet4, vec![2, 3, 4, 5]).unwrap();
+        m.set_element(3, ElementKind::Tet4, vec![2, 3, 4, 6]).unwrap();
+        let a = m.geometry_tag(&GeometryRef::body("A").unwrap()).unwrap();
+        let a_face = m.geometry_tag(&GeometryRef::face("A", "top").unwrap()).unwrap();
+        let b = m.geometry_tag(&GeometryRef::body("B").unwrap()).unwrap();
+        m.tag_element(1, a).unwrap();
+        m.tag_element_face(1, 1, a_face).unwrap();
+        m.tag_element(2, b).unwrap();
+        m.add_set("labels", Set { nodes: vec![1], ..Set::default() }).unwrap();
+        m.add_set("other", Set { nodes: vec![5], ..Set::default() }).unwrap();
+        m.add_set("geometry", Set::of_geometry(vec![GeometryRef::body("A").unwrap()])).unwrap();
+
+        assert_eq!(m.body_elements("A"), vec![1]);
+        let removed = m.remove_body_mesh("A");
+        assert_eq!(removed.elements.iter().copied().collect::<Vec<_>>(), vec![1]);
+        // Node 1 was only A's; 2, 3 and 4 are B's too.
+        assert_eq!(removed.nodes.iter().copied().collect::<Vec<_>>(), vec![1]);
+        assert_eq!(m.elements().keys().copied().collect::<Vec<_>>(), vec![2, 3]);
+        assert!(m.classification().elements().get(&1).is_none());
+        assert_eq!(m.sets_using(&removed), vec!["labels".to_string()]);
+        assert!(m.remove_body_mesh("A").elements.is_empty());
+        assert!(m.remove_body_mesh("nobody").elements.is_empty());
     }
 }

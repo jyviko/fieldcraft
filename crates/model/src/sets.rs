@@ -112,6 +112,22 @@ impl Model {
         replace_existing(&mut self.sets, "set", name, set)
     }
 
+    /// The sets that list, by label, a node or an element of `removed` (after a remesh they
+    /// name labels that are gone or now mean other mesh entities; sets by geometry re-resolve).
+    pub fn sets_using(&self, removed: &crate::BodyMesh) -> Vec<String> {
+        let element = |e: &u32| removed.elements.contains(e);
+        self.sets
+            .iter()
+            .filter(|(_, s)| {
+                s.nodes.iter().any(|n| removed.nodes.contains(n))
+                    || s.elements.iter().any(element)
+                    || s.faces.iter().any(|f| element(&f.element))
+                    || s.edges.iter().any(|e| element(&e.element))
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
     pub fn remove_set(&mut self, name: &str) -> Result<()> {
         not_in_use("set", name, self.set_users(name))?;
         remove_existing(&mut self.sets, "set", name).map(|_| ())

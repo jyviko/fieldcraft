@@ -179,6 +179,18 @@ fn scalar(f: &Field, v: &Value, units: UnitSystem) -> String {
             _ => crate::context::value_text(v),
         },
         Kind::Rows { .. } => v.as_array().map_or_else(|| crate::context::value_text(v), |a| plural(a.len(), "row")),
+        Kind::Labels(_) => match v.as_array().and_then(|a| a.iter().map(Value::as_u64).collect::<Option<Vec<_>>>()) {
+            Some(l) => crate::fields::format_labels(&l),
+            None => crate::context::value_text(v),
+        },
+        Kind::Points { .. } => v.as_array().map_or_else(|| crate::context::value_text(v), |a| plural(a.len(), "point")),
+        Kind::Multi(options) => {
+            list(v, |x| options.iter().find(|(o, _)| fieldcraft_engine::schema::multi_value(o) == *x).map(|(_, l)| (*l).to_string()))
+        }
+        Kind::NumberOrAuto { .. } => match v {
+            Value::String(s) => s.clone(),
+            _ => v.as_f64().map_or_else(|| crate::context::value_text(v), |x| with_unit(x, unit.as_deref())),
+        },
         Kind::Json | Kind::Unit | Kind::Group(_) | Kind::Variants { .. } => crate::context::value_text(v),
     }
 }

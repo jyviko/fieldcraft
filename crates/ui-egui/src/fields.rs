@@ -188,6 +188,46 @@ pub fn text(ui: &mut Ui, s: &Style, id: Id, value: &mut String, hint: &str, widt
     ui.add(egui::TextEdit::singleline(value).id(id).desired_width(width).hint_text(RichText::new(hint).italics().color(s.dim))).changed()
 }
 
+/// Labels as typed: runs of consecutive labels as `a-b`, the rest by commas ("1-5, 8, 10-12").
+pub fn format_labels(labels: &[u64]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while let Some(&a) = labels.get(i) {
+        let mut j = i;
+        while labels.get(j + 1).is_some_and(|&n| Some(n) == labels.get(j).and_then(|m| m.checked_add(1))) {
+            j += 1;
+        }
+        let b = labels.get(j).copied().unwrap_or(a);
+        out.push(match j - i {
+            0 => a.to_string(),
+            1 => format!("{a}, {b}"),
+            _ => format!("{a}-{b}"),
+        });
+        i = j + 1;
+    }
+    out.join(", ")
+}
+
+/// Labels typed as numbers and `a-b` ranges, separated by commas or spaces, in the order typed;
+/// `None` when something is not a label from 1, or when there would be more than `max`.
+pub fn parse_labels(text: &str, max: usize) -> Option<Vec<u64>> {
+    let mut out = Vec::new();
+    for part in text.split(|c: char| c == ',' || c.is_whitespace()).filter(|p| !p.is_empty()) {
+        let (a, b) = match part.split_once('-') {
+            Some((a, b)) => (a.parse::<u64>().ok()?, b.parse::<u64>().ok()?),
+            None => {
+                let n = part.parse::<u64>().ok()?;
+                (n, n)
+            }
+        };
+        if a == 0 || b < a || out.len() as u64 + (b - a) >= max as u64 {
+            return None;
+        }
+        out.extend(a..=b);
+    }
+    Some(out)
+}
+
 /// A short label before a field ("X"), dim.
 pub fn caption(ui: &mut Ui, s: &Style, text: &str) {
     ui.label(RichText::new(text).small().color(s.dim));
@@ -203,6 +243,19 @@ pub fn unit(ui: &mut Ui, s: &Style, unit: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn labels_print_and_parse_as_ranges() {
+        assert_eq!(format_labels(&[1, 2, 3, 4, 5, 8, 10, 11]), "1-5, 8, 10, 11");
+        assert_eq!(format_labels(&[]), "");
+        assert_eq!(format_labels(&[7, 3, 4, 5]), "7, 3-5", "the order is kept");
+        assert_eq!(parse_labels("1-5, 8 10,11", 100), Some(vec![1, 2, 3, 4, 5, 8, 10, 11]));
+        assert_eq!(parse_labels("", 100), Some(vec![]));
+        for bad in ["0", "x", "5-3", "1-", "-4", "1-1000"] {
+            assert_eq!(parse_labels(bad, 100), None, "{bad}");
+        }
+        assert_eq!(parse_labels(&format_labels(&[3, 4, 5, 9]), 100), Some(vec![3, 4, 5, 9]));
+    }
 
     #[test]
     fn numbers_print_as_typed() {

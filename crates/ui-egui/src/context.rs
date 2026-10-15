@@ -171,6 +171,15 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             };
         });
     }
+    // The nodes and elements picked in the viewport, for the label lists' Use selection.
+    let mut picked = crate::form::Picked::default();
+    for item in app.pick.selection.items() {
+        match item {
+            selection::Item::Node(n) => picked.nodes.push(u64::from(*n)),
+            selection::Item::Element(e) => picked.elements.push(u64::from(*e)),
+            _ => {}
+        }
+    }
     let mut advanced = d.advanced;
     heading(ui, t, Level::Section, |ui| {
         ui.label(RichText::new("Parameters").size(12.0));
@@ -221,6 +230,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
                 attempted: d.attempted,
                 refused,
                 problems: &problems,
+                picked: picked.clone(),
             };
             let out = crate::form::show(ui, t, &cx, fields, &mut obj);
             invalid = out.invalid;

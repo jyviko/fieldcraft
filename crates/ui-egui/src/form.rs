@@ -38,6 +38,15 @@ pub struct Context<'a> {
     pub refused: Option<(&'a str, &'a str)>,
     /// What is missing or wrong in the parameters ([`messages`]).
     pub problems: &'a [(String, String)],
+    /// The nodes and the elements picked in the viewport, for a label list's Use selection.
+    pub picked: Picked,
+}
+
+/// The mesh labels picked in the viewport.
+#[derive(Clone, Debug, Default)]
+pub struct Picked {
+    pub nodes: Vec<u64>,
+    pub elements: Vec<u64>,
 }
 
 /// What a frame of the form did.
@@ -320,6 +329,10 @@ impl Form<'_> {
                 })
             }
             Kind::Json => self.json(ui, id, value, f.hint),
+            Kind::Labels(of) => self.labels(ui, id, value, of, f.hint),
+            Kind::Points { max, .. } => self.points(ui, id, value, f, max),
+            Kind::Multi(options) => self.multi(ui, value, options),
+            Kind::NumberOrAuto { .. } => self.number_or_auto(ui, id, value, f),
             Kind::Unit | Kind::Group(_) | Kind::Variants { .. } | Kind::Rows { .. } => None,
         }
     }
@@ -518,6 +531,142 @@ impl Form<'_> {
         if ui.button(text).on_hover_text(format!("{} ({})", r.place(), r.provider())).clicked() {
             self.out.create = Some((c, path.to_string()));
         }
+    }
+
+    /// A list of node or element labels typed as numbers and ranges (`1-5, 8`), kept while it
+    /// does not parse; Use selection takes the labels picked in the viewport.
+    fn labels(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, of: schema::LabelOf, hint: &str) -> Option<Value> {
+        let current: Option<Vec<u64>> = match value {
+            None | Some(Value::Null) => Some(Vec::new()),
+            Some(v) => v.as_array().and_then(|a| a.iter().map(Value::as_u64).collect()),
+        };
+        let Some(current) = current else {
+            self.json_only(ui);
+            return None;
+        };
+        let shown = fields::format_labels(&current);
+        let mut text = ui.data(|d| d.get_temp::<(String, String)>(id)).filter(|(_, over)| *over == shown).map_or_else(|| shown.clone(), |(t, _)| t);
+        let picked = match of {
+            schema::LabelOf::Node => self.cx.picked.nodes.clone(),
+            schema::LabelOf::Element => self.cx.picked.elements.clone(),
+        };
+        let mut out = None;
+        ui.vertical(|ui| {
+            let parsed = fields::parse_labels(&text, schema::MAX_LABELS);
+            let mut edit =
+                egui::TextEdit::singleline(&mut text).id(id).desired_width(fill(ui)).hint_text(RichText::new(hint).italics().color(self.style.dim));
+            if parsed.is_none() {
+                edit = edit.text_color(self.style.error);
+                self.out.invalid += 1;
+            }
+            if ui.add(edit).changed()
+                && let Some(l) = fields::parse_labels(&text, schema::MAX_LABELS)
+            {
+                out = Some(if l.is_empty() { Value::Null } else { json!(l) });
+            }
+            let label = format!("Use selection ({} {}{})", picked.len(), of.label(), if picked.len() == 1 { "" } else { "s" });
+            let tip = format!("The {}s picked in the viewport (Select: {}s)", of.label(), of.label());
+            if ui
+                .add_enabled(!picked.is_empty(), egui::Button::new(RichText::new(label).small()))
+                .on_hover_text(&tip)
+                .on_disabled_hover_text(&tip)
+                .clicked()
+            {
+                text = fields::format_labels(&picked);
+                out = Some(json!(picked));
+            }
+        });
+        let over = out.as_ref().map_or(shown, |v| {
+            v.as_array().map_or_else(String::new, |a| fields::format_labels(&a.iter().filter_map(Value::as_u64).collect::<Vec<_>>()))
+        });
+        ui.data_mut(|d| d.insert_temp(id, (text, over)));
+        out
+    }
+
+    /// A list of points: a row of x, y, z each, removable, and Add point.
+    fn points(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, f: &Field, max: usize) -> Option<Value> {
+        let current: Vec<Value> = match value {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(a)) if a.iter().all(Value::is_array) => a.clone(),
+            Some(_) => {
+                self.json_only(ui);
+                return None;
+            }
+        };
+        if current.len() > MAX_ROWS {
+            self.json_only(ui);
+            return None;
+        }
+        let mut next = current.clone();
+        let (mut changed, mut remove) = (false, None);
+        ui.vertical(|ui| {
+            for (i, p) in current.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.small_button("×").on_hover_text("Remove this point").clicked() {
+                        remove = Some(i);
+                    }
+                    if let Some(v) = self.vector(ui, id.with(i), Some(p), f, &["x", "y", "z"], false)
+                        && let Some(slot) = next.get_mut(i)
+                    {
+                        *slot = v;
+                        changed = true;
+                    }
+                });
+            }
+            if ui.add_enabled(current.len() < max.min(MAX_ROWS), egui::Button::new(RichText::new("Add point").small())).clicked() {
+                next.push(json!([0.0, 0.0, 0.0]));
+                changed = true;
+            }
+        });
+        if let Some(i) = remove {
+            next.remove(i);
+            changed = true;
+        }
+        changed.then_some(if next.is_empty() { Value::Null } else { Value::Array(next) })
+    }
+
+    /// Any of `options`: a checkbox each; none ticked leaves the key out.
+    fn multi(&mut self, ui: &mut Ui, value: Option<&Value>, options: &[(&str, &str)]) -> Option<Value> {
+        let chosen: Vec<Value> = value.and_then(Value::as_array).cloned().unwrap_or_default();
+        let mut out = None;
+        ui.horizontal_wrapped(|ui| {
+            for (o, label) in options {
+                let v = schema::multi_value(o);
+                let mut on = chosen.contains(&v);
+                if ui.checkbox(&mut on, *label).changed() {
+                    // In the options' order.
+                    let next: Vec<Value> =
+                        options.iter().map(|(x, _)| schema::multi_value(x)).filter(|x| if *x == v { on } else { chosen.contains(x) }).collect();
+                    out = Some(if next.is_empty() { Value::Null } else { Value::Array(next) });
+                }
+            }
+        });
+        out
+    }
+
+    /// A number, or Auto: the checkbox, then the number when it is off.
+    fn number_or_auto(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, f: &Field) -> Option<Value> {
+        let auto = match value {
+            None | Some(Value::Null) => f.default.is_some_and(|d| d.contains("auto")),
+            Some(Value::String(s)) => s == "auto",
+            Some(_) => false,
+        };
+        let mut on = auto;
+        let mut out = None;
+        ui.horizontal(|ui| {
+            if ui.checkbox(&mut on, "Auto").changed() {
+                out = Some(if on { json!("auto") } else { json!(1.0) });
+            }
+            if !auto {
+                let unit = f.unit_label(self.cx.units);
+                let width = (fill(ui) - fields::unit_width(ui, unit.as_deref())).max(FIELD_MIN);
+                if let Some(v) = self.number(ui, id, value, f.hint, false, width) {
+                    out = Some(v);
+                }
+                fields::unit(ui, &self.style, unit.as_deref());
+            }
+        });
+        out
     }
 
     /// A JSON value typed as text: kept while it does not parse.
@@ -755,6 +904,7 @@ mod tests {
                         attempted: true,
                         refused: None,
                         problems: &messages(form, &params),
+                        picked: Picked::default(),
                     };
                     ui.vertical(|ui| {
                         ui.set_max_width(width);
@@ -799,6 +949,7 @@ mod tests {
                         attempted: false,
                         refused: None,
                         problems: &[],
+                        picked: Picked::default(),
                     };
                     ui.vertical(|ui| {
                         ui.set_max_width(width);
@@ -904,6 +1055,7 @@ mod tests {
                     attempted,
                     refused,
                     problems: &messages(form, &params),
+                    picked: Picked::default(),
                 };
                 show(ui, &Tokens::get(false), &cx, form, &mut params);
             });
@@ -934,7 +1086,16 @@ mod tests {
         let names = |_: Collection| Vec::new();
         let touched = BTreeSet::new();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let cx = Context { units, names: &names, salt: Id::new("t"), touched: &touched, attempted: false, refused: None, problems: &[] };
+            let cx = Context {
+                units,
+                names: &names,
+                salt: Id::new("t"),
+                touched: &touched,
+                attempted: false,
+                refused: None,
+                problems: &[],
+                picked: Picked { nodes: vec![4, 5], elements: Vec::new() },
+            };
             show(ui, &Tokens::get(false), &cx, form, &mut params);
         });
         out.textures_delta.clear();
@@ -956,5 +1117,22 @@ mod tests {
         let load = drawn("model.load.create", UnitSystem::Unspecified, json!({"type": "force"}));
         let lines: Vec<&str> = load.lines().collect();
         assert!(["X", "Y", "Z", "[force]"].iter().all(|w| lines.contains(w)), "{load}");
+    }
+
+    /// Label lists, point lists, multi-choices and number-or-auto are typed fields (#169): a
+    /// label list shows its ranges and offers the picked nodes, points show their coordinates,
+    /// output choices are checkboxes, the scale an Auto box.
+    #[test]
+    fn typed_lists_choices_and_auto_show() {
+        let probe = drawn("solve.probe", UnitSystem::MmTonneS, json!({"nodes": [1, 2, 3, 7], "at": [[1.5, 0, 0]]}));
+        assert!(
+            probe.contains("1-3, 7") && probe.contains("Use selection (2 nodes)") && probe.contains("1.5") && probe.contains("Add point"),
+            "{probe}"
+        );
+        assert!(!probe.contains("set in JSON"), "{probe}");
+        let step = drawn("model.step.create", UnitSystem::MmTonneS, json!({"name": "S", "procedure": {"type": "static"}, "output": ["stress"]}));
+        assert!(step.contains("Reaction force") && step.contains("Heat flux"), "{step}");
+        let deformed = drawn("results.deformed", UnitSystem::MmTonneS, json!({"scale": "auto"}));
+        assert!(deformed.contains("Auto"), "{deformed}");
     }
 }

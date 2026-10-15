@@ -95,9 +95,43 @@ pub enum Kind {
         fields: &'static [Field],
         max: usize,
     },
+    /// A list of mesh labels, nodes or elements (at most [`MAX_LABELS`]).
+    Labels(LabelOf),
+    /// A list of points `[x, y, z]`, at most `max`.
+    Points {
+        dim: Dim,
+        max: usize,
+    },
+    /// Any of these values, as a list: (the value as JSON text, label), e.g. `("1", "UX")` or
+    /// `("\"stress\"", "Stress")`.
+    Multi(&'static [(&'static str, &'static str)]),
+    /// A number at least `min`, or the string `"auto"`.
+    NumberOrAuto {
+        dim: Dim,
+        min: Option<f64>,
+    },
     /// Any JSON: what the schema does not describe.
     Json,
 }
+
+/// What a [`Kind::Labels`] list labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelOf {
+    Node,
+    Element,
+}
+
+impl LabelOf {
+    pub fn label(self) -> &'static str {
+        match self {
+            LabelOf::Node => "node",
+            LabelOf::Element => "element",
+        }
+    }
+}
+
+/// Most labels a [`Kind::Labels`] list holds.
+pub const MAX_LABELS: usize = 1_000_000;
 
 /// One variant of [`Kind::Variants`].
 #[derive(Debug, Clone, Copy)]
@@ -354,7 +388,7 @@ impl Field {
     /// Its physical dimension, for a number or a vector of numbers.
     pub fn dim(&self) -> Option<Dim> {
         match self.kind {
-            Kind::Number { dim, .. } | Kind::Vector { dim, .. } => Some(dim),
+            Kind::Number { dim, .. } | Kind::Vector { dim, .. } | Kind::Points { dim, .. } | Kind::NumberOrAuto { dim, .. } => Some(dim),
             _ => None,
         }
     }
@@ -451,6 +485,22 @@ pub const fn unit(key: &'static str, label: &'static str) -> Field {
 pub const fn rows(key: &'static str, label: &'static str, fields: &'static [Field]) -> Field {
     field(key, label, Kind::Rows { fields, max: MAX_ROWS })
 }
+/// A list of node or element labels.
+pub const fn labels(key: &'static str, label: &'static str, of: LabelOf) -> Field {
+    field(key, label, Kind::Labels(of))
+}
+/// A list of points `[x, y, z]`.
+pub const fn points(key: &'static str, label: &'static str, dim: Dim, max: usize) -> Field {
+    field(key, label, Kind::Points { dim, max })
+}
+/// Any of `options` (each a value as JSON text, and a label), as a list.
+pub const fn multi(key: &'static str, label: &'static str, options: &'static [(&'static str, &'static str)]) -> Field {
+    field(key, label, Kind::Multi(options))
+}
+/// A number at least `min`, or "auto".
+pub const fn number_or_auto(key: &'static str, label: &'static str, dim: Dim, min: Option<f64>) -> Field {
+    field(key, label, Kind::NumberOrAuto { dim, min })
+}
 pub const fn json(key: &'static str, label: &'static str) -> Field {
     field(key, label, Kind::Json)
 }
@@ -460,6 +510,11 @@ pub const fn variant(tag: &'static str, label: &'static str, fields: &'static [F
 
 /// The `name` of a new or edited definition.
 pub const NAME: Field = text("name", "Name").req().help("A name for it, unique among its kind; other definitions refer to it by this name.");
+
+/// A [`Kind::Multi`] option's value: its JSON text parsed (text that is not JSON is a string).
+pub fn multi_value(option: &str) -> Value {
+    serde_json::from_str(option).unwrap_or_else(|_| Value::String(option.to_string()))
+}
 
 impl Kind {
     /// The variant of `tag`, for [`Kind::Variants`].
@@ -670,6 +725,7 @@ impl Problem {
                     format!("one of {}", options.iter().map(|(o, _)| *o).collect::<Vec<_>>().join(", "))
                 }
                 Some(Kind::Either(options)) => format!("one of {}", options.iter().map(|o| o.key).collect::<Vec<_>>().join(", ")),
+                Some(Kind::Multi(options)) => format!("a list of {}", options.iter().map(|(o, _)| *o).collect::<Vec<_>>().join(", ")),
                 _ => "one of the choices".into(),
             },
             ProblemKind::NotAVector { len } => format!("{len} numbers"),
@@ -956,6 +1012,29 @@ fn value_problem(f: &'static Field, v: &Value, path: &str, out: &mut Vec<Problem
             (!ok).then_some(ProblemKind::NotAChoice)
         }
         Kind::Unit | Kind::Json => None,
+        Kind::Labels(_) => match v.as_array() {
+            Some(a) if a.len() <= MAX_LABELS && a.iter().all(|x| x.as_u64().is_some_and(|n| n >= 1 && n <= u64::from(u32::MAX))) => None,
+            _ => Some(ProblemKind::NotAList { max: MAX_LABELS, what: "labels" }),
+        },
+        Kind::Points { max, .. } => match v.as_array() {
+            Some(a)
+                if a.len() <= max
+                    && a.iter().all(|p| p.as_array().is_some_and(|c| c.len() == 3 && c.iter().all(|x| x.as_f64().is_some_and(f64::is_finite)))) =>
+            {
+                None
+            }
+            _ => Some(ProblemKind::NotAList { max, what: "points [x, y, z]" }),
+        },
+        Kind::Multi(options) => match v.as_array() {
+            Some(a) if a.iter().all(|x| options.iter().any(|(o, _)| multi_value(o) == *x)) => None,
+            _ => Some(ProblemKind::NotAChoice),
+        },
+        Kind::NumberOrAuto { min, .. } => match (v, v.as_f64().filter(|x| x.is_finite())) {
+            (Value::String(s), _) if s == "auto" => None,
+            (_, Some(x)) if min.is_none_or(|lo| x >= lo) => None,
+            (_, Some(_)) => Some(ProblemKind::Below(min.unwrap_or(0.0))),
+            _ => Some(ProblemKind::Invalid("a number or \"auto\"".into())),
+        },
         Kind::Rows { fields, max } => match v.as_array() {
             Some(a) if a.len() <= max => {
                 for (i, row) in a.iter().enumerate() {
@@ -1062,6 +1141,26 @@ fn field_schema(f: &Field, depth: usize) -> Value {
         }).collect::<Vec<_>>()}),
         Kind::Rows { fields, max } if depth <= MAX_DEPTH => json!({"type": "array", "items": object_schema(fields, depth + 1), "maxItems": max}),
         Kind::Unit => json!({"const": f.key}),
+        Kind::Labels(of) => {
+            json!({"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": u32::MAX}, "maxItems": MAX_LABELS, "x-labels": of.label()})
+        }
+        Kind::Points { dim, max } => {
+            let mut item = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
+            if dim != Dim::None {
+                item["x-dimension"] = json!(format!("{dim:?}").to_lowercase());
+            }
+            json!({"type": "array", "items": item, "maxItems": max})
+        }
+        Kind::Multi(options) => {
+            json!({"type": "array", "items": {"enum": options.iter().map(|(o, _)| multi_value(o)).collect::<Vec<_>>()}, "uniqueItems": true})
+        }
+        Kind::NumberOrAuto { min, .. } => {
+            let mut n = json!({"type": "number"});
+            if let Some(lo) = min {
+                n["minimum"] = json!(lo);
+            }
+            json!({"oneOf": [n, {"const": "auto"}]})
+        }
         _ => json!({}),
     };
     s["title"] = json!(f.label);
@@ -1112,6 +1211,40 @@ mod tests {
         .req()
         .def("\"force\""),
     ];
+
+    /// The typed lists check their values and describe themselves in JSON Schema (#169).
+    #[test]
+    fn labels_points_multi_and_auto_check() {
+        const F: &[Field] = &[
+            labels("nodes", "Nodes", LabelOf::Node),
+            points("at", "Points", Dim::Length, 2),
+            multi("dofs", "DOFs", &[("1", "UX"), ("2", "UY")]),
+            multi("output", "Output", &[("\"stress\"", "Stress")]),
+            number_or_auto("scale", "Scale", Dim::None, Some(0.0)),
+        ];
+        assert!(problems(F, &json!({"nodes": [1, 5], "at": [[0, 0, 1e3]], "dofs": [2], "output": ["stress"], "scale": "auto"})).is_empty());
+        assert!(problems(F, &json!({"scale": 2.5})).is_empty());
+        for bad in [
+            json!({"nodes": [0]}),
+            json!({"nodes": [1.5]}),
+            json!({"nodes": [u64::from(u32::MAX) + 1]}),
+            json!({"at": [[0, 0]]}),
+            json!({"at": [[0, 0, 0], [0, 0, 0], [0, 0, 0]]}),
+            json!({"at": [[0, 0, "x"]]}),
+            json!({"dofs": [3]}),
+            json!({"dofs": ["1"]}),
+            json!({"output": ["strain"]}),
+            json!({"scale": -1}),
+            json!({"scale": "big"}),
+        ] {
+            assert_eq!(problems(F, &bad).len(), 1, "{bad}");
+        }
+        let s = json_schema(F);
+        assert_eq!(s["properties"]["dofs"]["items"]["enum"], json!([1, 2]));
+        assert_eq!(s["properties"]["output"]["items"]["enum"], json!(["stress"]));
+        assert_eq!(s["properties"]["at"]["maxItems"], 2);
+        assert_eq!(s["properties"]["scale"]["oneOf"][1]["const"], "auto");
+    }
 
     #[test]
     fn prefill_switch_and_check() {

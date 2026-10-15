@@ -54,8 +54,10 @@ pub const SET: &[Field] = &[
     )
     .help("Bodies of the design, or their named faces, edges or vertices. Kept by name, so the set survives remeshing.")
     .hint("whole bodies, or their faces, edges or vertices"),
-    json("nodes", "Nodes").help("Mesh node labels, as a JSON list.").hint("[labels]"),
-    json("elements", "Elements").help("Mesh element labels, as a JSON list.").hint("[labels]"),
+    labels("nodes", "Nodes", LabelOf::Node).help("Mesh node labels; Use selection takes the picked nodes.").hint("labels: 1, 2, 10-20"),
+    labels("elements", "Elements", LabelOf::Element)
+        .help("Mesh element labels; Use selection takes the picked elements.")
+        .hint("labels: 1, 2, 10-20"),
     json("faces", "Element faces").help("Element faces, as a JSON list of element label and local face number.").hint("[{\"element\", \"face\"}]"),
     json("edges", "Element edges").help("Element edges, as a JSON list of element label and local edge number.").hint("[{\"element\", \"edge\"}]"),
 ];
@@ -351,9 +353,9 @@ pub const REFERENCE_POINT: &[Field] = &[
     int("label", "Node label", 0, u32::MAX as i64).help("The node label written to decks.").hint("0: the highest free label"),
 ];
 
-const DOFS: Field = json("dofs", "Degrees of freedom")
+const DOFS: Field = multi("dofs", "Degrees of freedom", &[("1", "UX"), ("2", "UY"), ("3", "UZ"), ("4", "URX"), ("5", "URY"), ("6", "URZ")])
     .help("Which of the six DOFs to couple (1–3 translations, 4–6 rotations); all when empty.")
-    .hint("[1, …, 6], default all");
+    .hint("all");
 
 pub const COUPLING: &[Field] = &[
     NAME,
@@ -809,9 +811,20 @@ const PROCEDURE: Field = variants(
 )
 .help("What the step solves: linear or nonlinear static, buckling, frequencies, explicit dynamics, heat transfer or flow.");
 
-const OUTPUT: Field = json("output", "Output")
-    .help("Which results to keep, as JSON; by procedure when empty.")
-    .hint("[\"displacement\", \"stress\", …]; by procedure when empty");
+const OUTPUT: Field = multi(
+    "output",
+    "Output",
+    &[
+        ("\"displacement\"", "Displacement"),
+        ("\"reaction_force\"", "Reaction force"),
+        ("\"stress\"", "Stress"),
+        ("\"strain\"", "Strain"),
+        ("\"temperature\"", "Temperature"),
+        ("\"heat_flux\"", "Heat flux"),
+    ],
+)
+.help("Which results to keep; by procedure when none is ticked.")
+.hint("by procedure");
 const STEP_BCS: Field =
     references("boundary_conditions", "Boundary conditions", C::BoundaryCondition).help("The boundary conditions active in the step.");
 const STEP_LOADS: Field = references("loads", "Loads", C::Load).help("The loads active in the step.");
@@ -1168,7 +1181,7 @@ pub const BLOCK: &[Field] = &[
     .help("The element type of the block.")
     .req()
     .def("\"hex8\""),
-    json("corners", "Corners").help("The eight corner points (four for 2D), as JSON.").req().hint("[[x, y, z] × 8] (2D: × 4 at z = 0)"),
+    points("corners", "Corners", D::Length, 8).help("The eight corner points (four for 2D, at z = 0).").req(),
     json("divisions", "Divisions").help("Elements along each edge direction, as JSON.").req().hint("[n12, n14, n15] (2D: [n12, n14])"),
     json("bias", "Bias").help("Element size ratio along each direction, as JSON; 1 is uniform.").hint("[1, 1, 1]"),
     json("edges", "Curved and named edges").help("Edge curves and names, as JSON."),
@@ -1193,7 +1206,7 @@ pub const PLANAR: &[Field] = &[
 ];
 
 pub const QUALITY: &[Field] = &[
-    json("elements", "Elements").help("The elements to measure, as JSON labels; all when empty.").hint("[labels]; all when empty"),
+    labels("elements", "Elements", LabelOf::Element).help("The elements to measure; all when empty.").hint("all"),
     int("bins", "Histogram bins", 1, 1000).help("Number of bars in the quality histogram.").def("10"),
 ];
 
@@ -1233,7 +1246,7 @@ pub const ELEMENT_ADD: &[Field] = &[
     .help("The element type.")
     .req()
     .def("\"hex8\""),
-    json("nodes", "Nodes").help("The element's node labels in order, as JSON.").req().hint("[labels]"),
+    labels("nodes", "Nodes", LabelOf::Node).help("The element's node labels in order.").req().hint("labels in order: 1, 2, 3, 4"),
 ];
 
 pub const SEED_EDGE: &[Field] = &[
@@ -1262,7 +1275,7 @@ pub const SEED_EDGE: &[Field] = &[
 
 pub const SEED_CLEAR: &[Field] = &[json("edges", "Edges").help("The edges to clear, as JSON; every seed when empty.").hint("every seed")];
 
-pub const DELAUNAY_POINTS: &[Field] = &[json("points", "Points").help("The points to triangulate, as JSON.").req().hint("[[x, y, z], …]")];
+pub const DELAUNAY_POINTS: &[Field] = &[points("points", "Points", D::Length, 20_000).help("The points to triangulate.").req()];
 
 pub const TAG: &[Field] = &[
     group(
@@ -1277,10 +1290,10 @@ pub const TAG: &[Field] = &[
     )
     .help("The geometry the mesh entities are tagged with.")
     .req(),
-    json("elements", "Elements").help("Element labels, as JSON."),
+    labels("elements", "Elements", LabelOf::Element).help("Element labels."),
     json("faces", "Element faces").help("Element faces, as JSON."),
     json("edges", "Element edges").help("Element edges, as JSON."),
-    json("nodes", "Nodes").help("Node labels, as JSON."),
+    labels("nodes", "Nodes", LabelOf::Node).help("Node labels."),
 ];
 
 // ---- Geometry and files ----
@@ -1419,7 +1432,7 @@ pub const CENTRE: &[Field] = &[
         ],
     )
     .help("Faces or edges (a hole's faces or rim give its centre), or one vertex."),
-    json("nodes", "Nodes").help("Mesh node labels, as a JSON list: their mean.").hint("[labels]"),
+    labels("nodes", "Nodes", LabelOf::Node).help("Mesh node labels: their mean.").hint("labels: 1, 2, 10-20"),
 ];
 pub const DATUM_POINT: &[Field] = &[
     NAME,
@@ -1621,13 +1634,13 @@ pub const SOLVE_FLUID: &[Field] = &[
 ];
 pub const SOLVE_PROBE: &[Field] = &[
     SOLVED.req(),
-    json("nodes", "Nodes").help("Node labels to read, as JSON.").hint("[labels]"),
+    labels("nodes", "Nodes", LabelOf::Node).help("Node labels to read.").hint("labels: 1, 2, 10-20"),
     reference("set", "Set", C::Set).help("A set whose nodes to read."),
-    json("at", "Points").help("Points to read at the nearest nodes, as JSON.").hint("[[x, y, z], …]: nearest nodes"),
+    points("at", "Points", D::Length, 10_000).help("Points to read at the nearest nodes."),
     int("mode", "Mode", 1, 1_000_000).help("The mode to read, for frequency and buckling steps."),
     int("frame", "Frame", 0, 1_000_000_000).help("The frame to read, for explicit and transient steps."),
     flag("elements", "Element results").help("Also read element results (stresses) around the nodes."),
-    json("points", "Fluid points").help("Points in the fluid to read, as JSON.").hint("[[x, y, z], …]"),
+    points("points", "Fluid points", D::Length, 10_000).help("Points in the fluid to read."),
     json("forces", "Fluid walls").help("Walls whose fluid forces to sum, as JSON.").hint("[\"x_min\", \"F2:top\"]"),
 ];
 
@@ -1636,7 +1649,7 @@ pub const SOLVE_PROBE: &[Field] = &[
 pub const DEFORMED: &[Field] = &[
     SOLVED,
     flag("show", "Show").help("Show the deformed shape.").def("true"),
-    json("scale", "Scale").help("Displacement magnification: auto, or a factor (1 is true scale).").def("\"auto\"").hint("\"auto\" or a factor"),
+    number_or_auto("scale", "Scale", D::None, Some(0.0)).help("Displacement magnification: auto, or a factor (1 is true scale).").def("\"auto\""),
 ];
 pub const CONTOUR: &[Field] = &[
     SOLVED,
@@ -1692,7 +1705,7 @@ pub const EXPORT_CSV: &[Field] = &[
     path("path", "File", true).help("The CSV file to write.").req(),
     SOLVED,
     references("sets", "Sets", C::Set).help("Reactions: the sets to sum; the step's BC sets when empty.").hint("the step's BC sets"),
-    json("nodes", "Nodes").help("Probe: the node labels, e.g. [1, 2, 3]."),
+    labels("nodes", "Nodes", LabelOf::Node).help("Probe: the node labels."),
 ];
 pub const REACTIONS: &[Field] = &[
     SOLVED,

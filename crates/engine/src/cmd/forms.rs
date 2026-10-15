@@ -1727,7 +1727,12 @@ pub const EXPORT_CSV: &[Field] = &[
     path("path", "File", true).help("The CSV file to write.").req(),
     SOLVED,
     references("sets", "Sets", C::Set).help("Reactions: the sets to sum; the step's BC sets when empty.").hint("the step's BC sets"),
+    xyz("about", "About point", D::Length).help("Reactions: the point moments are taken about."),
     labels("nodes", "Nodes", LabelOf::Node).help("Probe: the node labels."),
+    reference("set", "Set", C::Set).help("Probe: a set whose nodes to read."),
+    points("at", "Points", D::Length, 10_000).help("Probe: points to read at the nearest nodes."),
+    int("mode", "Mode", 1, 1_000_000).help("Probe: the mode to read, for frequency and buckling steps."),
+    int("frame", "Frame", 0, 1_000_000_000).help("Probe: the frame to read, for explicit and transient steps."),
 ];
 pub const REACTIONS: &[Field] = &[
     SOLVED,

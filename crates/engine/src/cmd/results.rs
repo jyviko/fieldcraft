@@ -621,6 +621,11 @@ mod tests {
         }
         assert!(!rows[0].iter().any(|h| h == "temperature"), "columns the step does not have are left out: {:?}", rows[0]);
         // A stale result is refused.
+        // Every parameter the description names is taken: a set's nodes, points, a moment point.
+        let set = s.execute("results.export.csv", &json!({"what": "probe", "path": path, "step": "Bend", "set": "tip"})).unwrap();
+        assert!(set["rows"].as_u64().unwrap_or(0) > 0, "{set}");
+        s.execute("results.export.csv", &json!({"what": "probe", "path": path, "step": "Bend", "at": [[0, 0, 0]]})).unwrap();
+        s.execute("results.export.csv", &json!({"what": "reactions", "path": path, "step": "Bend", "about": [1, 0, 0]})).unwrap();
         s.execute("mesh.node.add", &json!({"label": 99_999, "xyz": [0, 0, 0]})).unwrap();
         assert!(s.execute("results.export.csv", &json!({"what": "reactions", "path": temp_csv("stale"), "step": "Bend"})).is_err());
         for p in ["reactions", "probe"] {

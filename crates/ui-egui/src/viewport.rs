@@ -550,7 +550,8 @@ fn labels(app: &mut ModelApp, painter: &egui::Painter, t: &Tokens) {
     }
 }
 
-/// Bottom left: the definitions whose symbols are a sample of their nodes or faces.
+/// Bottom left: the definitions whose symbols are a sample of their nodes or faces, wrapped to
+/// the room left of the navigation bar (lines are added upwards).
 fn sampled_note(app: &ModelApp, painter: &egui::Painter, rect: Rect, t: &Tokens) {
     let show = app.ui.show();
     let notes = &app.glyph_notes();
@@ -558,7 +559,16 @@ fn sampled_note(app: &ModelApp, painter: &egui::Painter, rect: Rect, t: &Tokens)
         return;
     }
     let text = format!("Symbols sampled: {}", notes.join("; "));
-    painter.text(rect.left_bottom() + vec2(10.0, -10.0), egui::Align2::LEFT_BOTTOM, text, egui::FontId::proportional(11.0), t.text_dim);
+    let room = sampled_note_width(rect);
+    let galley = painter.layout(text, egui::FontId::proportional(11.0), t.text_dim, room);
+    painter.galley(rect.left_bottom() + vec2(10.0, -10.0 - galley.size().y), galley, t.text_dim);
+}
+
+/// How wide the sampled-symbols note may be: up to the navigation bar, with a gap.
+fn sampled_note_width(rect: Rect) -> f32 {
+    let bar = nav_bar_rect(rect);
+    let right = if rect.contains_rect(bar) { bar.left() - 12.0 } else { rect.right() - 10.0 };
+    (right - rect.left() - 10.0).max(80.0)
 }
 
 /// The orientation gizmo's arm length and tip radius (points).
@@ -751,7 +761,7 @@ pub fn to_screen(app: &ModelApp, p: Vec3) -> Option<Pos2> {
 
 #[cfg(test)]
 mod tests {
-    use super::cpu_size;
+    use super::{cpu_size, nav_bar_rect, sampled_note_width};
 
     /// The CPU viewport never asks for a texture larger than the context takes (#237: a Retina
     /// window 2300 pixels wide on a 2048 limit).
@@ -763,5 +773,13 @@ mod tests {
         assert_eq!(cpu_size(800, 600, 0), (800, 600));
         let (w, h) = cpu_size(100_000, 3, 2048);
         assert!(w <= 2048 && h >= 1);
+    }
+
+    /// The sampled-symbols note stops short of the navigation bar (#206).
+    #[test]
+    fn the_sampled_note_stays_left_of_the_navigation_bar() {
+        let view = egui::Rect::from_min_size(egui::pos2(300.0, 80.0), egui::vec2(900.0, 700.0));
+        let w = sampled_note_width(view);
+        assert!(view.left() + 10.0 + w < nav_bar_rect(view).left());
     }
 }

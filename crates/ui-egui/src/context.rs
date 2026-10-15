@@ -164,8 +164,14 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
                 selection::Target::Position => "Puts the point at what is selected: a vertex or node, the centre of a hole (its faces or rim), or the centroid of faces and edges",
                 selection::Target::DatumPoint => "Puts the point on what is selected: a vertex, an edge's midpoint, a face's centre, or the centre of a hole or of several items",
                 selection::Target::Bodies => "The selected bodies (Select: Bodies), or the bodies of the selected faces, become the cells",
+                selection::Target::ExtrudeFaces => "Pick the source face and use it, then pick the target surface and use it",
             };
-            use_selection = ui.add_enabled(selected.is_some(), egui::Button::new("Use selection")).on_hover_text(tip).clicked();
+            let button = match target {
+                selection::Target::ExtrudeFaces if selection::extrude_key(&params) == "source" => "Use as source",
+                selection::Target::ExtrudeFaces => "Use as target surface",
+                _ => "Use selection",
+            };
+            use_selection = ui.add_enabled(selected.is_some(), egui::Button::new(button)).on_hover_text(tip).clicked();
             match &selected {
                 Some(text) => ui.add(egui::Label::new(RichText::new(text).color(t.pick_selected)).wrap()),
                 None => ui.add(egui::Label::new(RichText::new("Pick in the viewport, or choose below").color(t.text_dim)).wrap()),

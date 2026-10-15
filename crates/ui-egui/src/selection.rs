@@ -852,6 +852,9 @@ pub enum Target {
     /// The selected bodies (or the bodies of the selected faces, edges and vertices) as the
     /// `bodies` list (the cells of a partitioned mesh).
     Bodies,
+    /// The selected faces as an extrusion's `source` while it has none, then as its
+    /// `to_surface`: pick the source face, then the target surface.
+    ExtrudeFaces,
 }
 
 /// Where command `id`'s form takes the selection, if it does. `params` (the form's current
@@ -863,6 +866,7 @@ pub fn target(id: &str, params: &Value) -> Option<Target> {
         "model.reference_point.create" | "model.reference_point.edit" => Some(Target::Position),
         "geometry.datum.point" | "geometry.datum.point.edit" => Some(Target::DatumPoint),
         "mesh.cells" => Some(Target::Bodies),
+        "mesh.hex.extrude" => Some(Target::ExtrudeFaces),
         "model.boundary_condition.create" | "model.boundary_condition.edit" => Some(Target::TargetSet),
         "model.section.create" | "model.section.edit" | "model.coupling.create" | "model.coupling.edit" | "interaction.rigid_wall" => {
             Some(Target::Set)
@@ -878,8 +882,10 @@ pub fn target(id: &str, params: &Value) -> Option<Target> {
 /// The filter command `id`'s form picks with, when its target is one kind of entity: edges for
 /// edge seeds, and the vertex, edge or face a datum point is defined on.
 pub fn form_filter(id: &str, params: &Value) -> Option<Filter> {
-    if target(id, params) == Some(Target::Edges) {
-        return Some(Filter::Edges);
+    match target(id, params) {
+        Some(Target::Edges) => return Some(Filter::Edges),
+        Some(Target::ExtrudeFaces) => return Some(Filter::Faces),
+        _ => {}
     }
     match id {
         "geometry.datum.point" | "geometry.datum.point.edit" => match params.pointer("/by/type").and_then(Value::as_str) {
@@ -923,6 +929,36 @@ pub fn with_edges(params: &Value, selection: &Selection) -> Option<Value> {
     Some(Value::Object(out))
 }
 
+/// The key of an extrusion's form the selected faces go into: `source` while it names no face
+/// (and no `source_set`), then `to_surface`.
+pub fn extrude_key(params: &Value) -> &'static str {
+    let named = |k: &str| {
+        params
+            .get(k)
+            .is_some_and(|v| v.as_array().is_some_and(|a| a.iter().any(|f| f.get("face").and_then(Value::as_str).is_some_and(|n| !n.is_empty()))))
+    };
+    if named("source") || params.get("source_set").and_then(Value::as_str).is_some_and(|s| !s.is_empty()) { "to_surface" } else { "source" }
+}
+
+/// `params` with the selection's faces as an extrusion's source or target surface
+/// ([`extrude_key`]); `None` when no face is selected.
+pub fn with_extrude_faces(params: &Value, selection: &Selection) -> Option<Value> {
+    let faces: Vec<Value> = selection
+        .items()
+        .iter()
+        .filter_map(|i| match i {
+            Item::Geometry(g) if matches!(g.entity, Entity::Face(_)) => Some(json!(g)),
+            _ => None,
+        })
+        .collect();
+    if faces.is_empty() {
+        return None;
+    }
+    let mut out = params.as_object().cloned().unwrap_or_default();
+    out.insert(extrude_key(params).into(), Value::Array(faces));
+    Some(Value::Object(out))
+}
+
 /// `params` with the set `set` as the target.
 pub fn with_set(params: &Value, target: Target, set: &str) -> Value {
     let mut out = params.as_object().cloned().unwrap_or_default();
@@ -933,7 +969,7 @@ pub fn with_set(params: &Value, target: Target, set: &str) -> Value {
         Target::Set => {
             out.insert("set".into(), json!(set));
         }
-        Target::Members | Target::Edges | Target::Position | Target::DatumPoint | Target::Bodies => {}
+        Target::Members | Target::Edges | Target::Position | Target::DatumPoint | Target::Bodies | Target::ExtrudeFaces => {}
     }
     Value::Object(out)
 }
@@ -1235,6 +1271,26 @@ mod tests {
         // A whole body: every skin triangle.
         sel.apply([Item::Geometry(GeometryRef::body("Bar").unwrap())], Mode::Replace);
         assert_eq!(p.overlay(&sel, None, sel_c, hov_c).tris.len(), s.display.tris.len());
+    }
+
+    /// An extrusion's form takes the source face first, then the target surface (#400).
+    #[test]
+    fn an_extrusion_takes_its_source_then_its_target_surface() {
+        assert_eq!(target("mesh.hex.extrude", &json!({})), Some(Target::ExtrudeFaces));
+        assert_eq!(form_filter("mesh.hex.extrude", &json!({})), Some(Filter::Faces));
+        let mut s = Selection::default();
+        s.apply([Item::Geometry(GeometryRef::face("Post", "F1:-z").unwrap()), Item::Node(4)], Mode::Replace);
+        let form = with_extrude_faces(&json!({"layers": 4, "source": [{"body": "", "face": ""}]}), &s).unwrap();
+        assert_eq!(form, json!({"layers": 4, "source": [{"body": "Post", "face": "F1:-z"}]}));
+        s.apply([Item::Geometry(GeometryRef::face("Wall", "F7").unwrap())], Mode::Replace);
+        let form = with_extrude_faces(&form, &s).unwrap();
+        assert_eq!(form["to_surface"], json!([{"body": "Wall", "face": "F7"}]));
+        assert_eq!(form["source"], json!([{"body": "Post", "face": "F1:-z"}]), "the source stays");
+        // Picking again replaces the target surface; a source set counts as a source.
+        assert_eq!(extrude_key(&form), "to_surface");
+        assert_eq!(extrude_key(&json!({"source_set": "Section"})), "to_surface");
+        s.apply([Item::Node(4)], Mode::Replace);
+        assert!(with_extrude_faces(&form, &s).is_none(), "no face selected");
     }
 
     #[test]

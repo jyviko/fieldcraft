@@ -1723,6 +1723,8 @@ impl ModelApp {
                 }
                 Value::Object(out)
             }
+            selection::Target::ExtrudeFaces => selection::with_extrude_faces(&params, &self.pick.selection)
+                .ok_or("no face is selected: pick the source face, then the target surface (Select: Faces)")?,
             selection::Target::Bodies => {
                 let bodies = selection::bodies(&self.pick.selection).ok_or("no geometry is selected: pick cells with Select: Bodies")?;
                 let mut out = params.as_object().cloned().unwrap_or_default();

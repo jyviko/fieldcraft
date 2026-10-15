@@ -830,7 +830,9 @@ mod tests {
     fn the_crank_arm_hex20_mesh_is_conforming() {
         let s = open("crank-arm");
         let c = conformity(&s);
-        assert_eq!(s.model.elements().len(), 7274);
+        // The count differs between platforms (#115: 7274 on macOS, 7334 on Linux), so check
+        // that the mesh is all hex20 rather than its size.
+        assert!(s.model.elements().values().all(|e| e.kind == fieldcraft_model::ElementKind::Hex20));
         assert!(c.is_conforming(), "{:?} {:?} {:?}", c.open_edges.first(), c.coincident.first(), c.midside_mismatches.first());
     }
 

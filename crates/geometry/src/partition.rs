@@ -1,8 +1,8 @@
 //! Partitions: a design's bodies cut into cells by planes, for meshing cell by cell.
 //!
-//! A partition cuts bodies of the open design by a plane with SolidCraft's kernel
-//! (`split_by_plane`, the operation behind SolidCraft's split body), in memory: the design file is
-//! never changed. The partitions live in the FieldCraft model and are applied again, in order,
+//! A partition cuts bodies of the open design by a plane with SolidCraft's kernel (the body's
+//! intersections with a box on each side of the plane, as SolidCraft's split body does), in
+//! memory: the design file is never changed. The partitions live in the FieldCraft model and are applied again, in order,
 //! whenever the design is opened, so an edit of the design followed by a re-open replays them.
 //!
 //! Names are FieldCraft's own, so they do not depend on the order of the design's timeline:
@@ -52,6 +52,8 @@ pub struct CutReport {
     pub split: Vec<String>,
     /// How many cut faces it named.
     pub faces: usize,
+    /// What may make its cells hard to mesh: the plane lying on a face of a body it cut.
+    pub warnings: Vec<String>,
 }
 
 fn vec3(p: [f64; 3]) -> Vec3 {
@@ -107,7 +109,7 @@ impl Design {
                     errors.push(FeatureError { feature: feature.clone(), message: format!("no body `{b}` to cut"), bodies: vec![b.clone()] });
                 }
             }
-            let mut report = CutReport { name: cut.name.clone(), split: Vec::new(), faces: 0 };
+            let mut report = CutReport { name: cut.name.clone(), split: Vec::new(), faces: 0, warnings: Vec::new() };
             let mut next = Vec::with_capacity(bodies.len() + 1);
             for body in bodies {
                 let listed = cut.bodies.iter().any(|b| b == &body.name);
@@ -116,9 +118,10 @@ impl Design {
                     continue;
                 }
                 match split(&body, plane, *n, cut)? {
-                    Split::Cells(cells, faces) => {
+                    Split::Cells(cells, faces, warnings) => {
                         report.split.push(body.name.clone());
                         report.faces += faces;
+                        report.warnings.extend(warnings);
                         next.extend(cells);
                     }
                     Split::Misses => {
@@ -153,10 +156,63 @@ impl Design {
     }
 }
 
+/// The parts of `body` on either side of `plane` (only the non-empty ones): its intersections
+/// with two boxes, one on each side, whose faces in the plane are squares as wide as the body's
+/// bounding-box diagonal and that reach that far from it. SolidCraft's `split_by_plane` uses boxes
+/// several times the body's size, and its boolean then puts the cut up to a few micrometres off
+/// the plane (1.8 µm on a 140 mm body), off the faces it should meet (#384); boxes of the body's own
+/// size keep the cut on the plane.
+fn halves(body: &Shape, plane: &Plane) -> solidcraft_kernel::Result<Vec<solidcraft_kernel::Body>> {
+    let bbox = solidcraft_kernel::measure(&body.body)?.bbox;
+    let reach = bbox.diagonal().max(LINEAR_REACH);
+    let c = plane.to_local(bbox.center());
+    let square = solidcraft_geom::Region2 {
+        outer: solidcraft_geom::Loop2::polygon(&[
+            solidcraft_geom::Vec2::new(c.x - reach, c.y - reach),
+            solidcraft_geom::Vec2::new(c.x + reach, c.y - reach),
+            solidcraft_geom::Vec2::new(c.x + reach, c.y + reach),
+            solidcraft_geom::Vec2::new(c.x - reach, c.y + reach),
+        ]),
+        holes: vec![],
+    };
+    let mut out = Vec::with_capacity(2);
+    for (lo, hi) in [(0.0, reach), (-reach, 0.0)] {
+        let Some(side) = solidcraft_kernel::extrude(plane, std::slice::from_ref(&square), lo, hi)?.pop() else { continue };
+        out.extend(solidcraft_kernel::boolean(&body.body, &side, solidcraft_kernel::BoolOp::Intersect)?);
+    }
+    Ok(out)
+}
+
+/// Planar faces of `body` the cut's plane lies on (within [`COINCIDENT`] of the body's size),
+/// as warnings: the kernel may leave micrometre slivers where a cut runs along a face (#384).
+fn coincident(body: &Shape, parent: &Faces, cut: &Cut, n: [f64; 3], size: f64) -> Vec<String> {
+    let reach = COINCIDENT * size.max(1.0);
+    let mut out = Vec::new();
+    for (i, surface) in parent.surfaces.iter().enumerate() {
+        let Some(FaceSurface::Plane { normal, point }) = surface else { continue };
+        let along = dot(*normal, n).abs();
+        let distance = dot(sub(*point, cut.point), n).abs();
+        if (along - 1.0).abs() < 1e-9 && distance <= reach {
+            let name = parent.names.get(i).map_or_else(|| i.to_string(), |f| f.name.clone());
+            out.push(format!(
+                "partition `{}`: the plane lies on face `{name}` of `{}` ({distance:.2e} mm from it); a cut along an existing face can leave micrometre slivers that no mesher takes: move the plane off the face (by a fraction of the element size)",
+                cut.name, body.name
+            ));
+        }
+    }
+    out
+}
+
+/// A plane within this fraction of a body's size of one of its faces lies on it.
+const COINCIDENT: f64 = 1e-5;
+
+/// The least reach of the boxes [`halves`] cuts with (mm), for bodies with no extent.
+const LINEAR_REACH: f64 = 1.0;
+
 /// What cutting one body gave.
 enum Split {
-    /// Its cells, named, and how many cut faces they have.
-    Cells(Vec<Shape>, usize),
+    /// Its cells, named, how many cut faces they have, and warnings.
+    Cells(Vec<Shape>, usize, Vec<String>),
     /// The plane does not divide it.
     Misses,
     /// The kernel failed to cut it: its message.
@@ -165,7 +221,7 @@ enum Split {
 
 /// Cut one body.
 fn split(body: &Shape, plane: &Plane, n: [f64; 3], cut: &Cut) -> Result<Split> {
-    let sides = match guard("partition", || solidcraft_kernel::split_by_plane(&body.body, plane)) {
+    let sides = match guard("partition", || halves(body, plane)) {
         Ok(p) if p.len() >= 2 => p,
         Ok(_) => return Ok(Split::Misses),
         Err(e) => return Ok(Split::Failed(e.to_string())),
@@ -209,7 +265,7 @@ fn split(body: &Shape, plane: &Plane, n: [f64; 3], cut: &Cut) -> Result<Split> {
         faces += name_faces(&mut shape, &parent, cut, n, size, tol)?;
         out.push(shape);
     }
-    Ok(Split::Cells(out, faces))
+    Ok(Split::Cells(out, faces, coincident(body, &parent, cut, n, size)))
 }
 
 /// A body's faces as matching needs them: each face's analytic surface, name and triangles.
@@ -437,7 +493,7 @@ mod tests {
         assert_eq!(p.bodies.len(), 2, "{:?}", p.bodies.iter().map(|b| &b.name).collect::<Vec<_>>());
         let volume: f64 = p.bodies.iter().map(|b| b.measure().unwrap().volume).sum();
         assert!((volume - whole).abs() < 1e-6 * whole, "{volume} vs {whole}");
-        assert_eq!(p.cuts, vec![CutReport { name: "Mid".into(), split: vec![d.bodies[0].name.clone()], faces: 4 }]);
+        assert_eq!(p.cuts, vec![CutReport { name: "Mid".into(), split: vec![d.bodies[0].name.clone()], faces: 4, warnings: Vec::new() }]);
         let mut sides = Vec::new();
         for b in &p.bodies {
             let m = b.measure().unwrap();

@@ -94,7 +94,7 @@ pub const DATUM_DELETE: CommandSpec = CommandSpec {
 pub const PARTITION: CommandSpec = CommandSpec {
     id: "geometry.partition",
     label: "Partition",
-    params: r#"{"name": "Half", "datum": "Mid", "bodies"?: ["Body1"] (default: every body the plane divides)} — cuts bodies of the open design into cells by a datum plane, in memory (the design file is not changed); the model keeps the partition and applies it again whenever the design is opened, after the partitions before it. A cut body `B` becomes the cells `B/a` (on the plane's negative side) and `B/b` (several pieces on a side: `B/a1`, `B/a2`, …). The two faces of the cut are paired by name: `partition:<name>:a` on the cells on the negative side, `partition:<name>:b` on the positive side (`…#0`, `…#1` where a cell has several); every other face keeps the persistent name of the face it is a piece of (`<face>#k` for several pieces on one cell), so sets by face name still select it. Reports the cells made and the cut faces named; a body it cuts loses its mesh (`replaced`, as a mesher reports it; remesh the cells); a plane that divides no body, a listed body it does not divide, or a body the kernel fails to cut (its message) is an error"#,
+    params: r#"{"name": "Half", "datum": "Mid", "bodies"?: ["Body1"] (default: every body the plane divides)} — cuts bodies of the open design into cells by a datum plane, in memory (the design file is not changed); the model keeps the partition and applies it again whenever the design is opened, after the partitions before it. A cut body `B` becomes the cells `B/a` (on the plane's negative side) and `B/b` (several pieces on a side: `B/a1`, `B/a2`, …). The two faces of the cut are paired by name: `partition:<name>:a` on the cells on the negative side, `partition:<name>:b` on the positive side (`…#0`, `…#1` where a cell has several); every other face keeps the persistent name of the face it is a piece of (`<face>#k` for several pieces on one cell), so sets by face name still select it. Reports the cells made and the cut faces named, and `warnings` when the plane lies on a face of a body it cuts or a cell's boundary does not tessellate into one a mesher takes (a cut through existing edges or vertices, such as a hole's axis), naming the plane, the cell and where; a body it cuts loses its mesh (`replaced`, as a mesher reports it; remesh the cells); a plane that divides no body, a listed body it does not divide, or a body the kernel fails to cut (its message) is an error"#,
     form: Some(super::forms::PARTITION),
     kind: CommandKind::Model,
     requires: &[Requirement::Design, Requirement::DatumPlane],
@@ -506,19 +506,42 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let cells: Vec<String> = design.bodies.iter().map(|b| b.name.clone()).filter(|b| split.iter().any(|x| b.starts_with(&format!("{x}/")))).collect();
     let (faces, bodies): (usize, Vec<String>) = (report.map_or(0, |r| r.faces), design.bodies.iter().map(|b| b.name.clone()).collect());
+    let mut warnings: Vec<String> = report.map(|r| r.warnings.clone()).unwrap_or_default();
+    for cell in &cells {
+        if let Some(why) = design.body(cell).and_then(|shape| unmeshable(shape).err()) {
+            warnings.push(format!(
+                "partition `{name}`: cell `{cell}` has a boundary no mesher takes ({why}): the plane passes within the kernel's tolerance of a face, edge or vertex it cut (along a face, through the axis of a hole); move the plane off it (by a fraction of the element size)"
+            ));
+        }
+    }
     // The cut shows as edges on the cells, so the plane steps out of the way (view state, #295):
     // selecting it in the browser or its eye shows it again.
     if s.view.hidden.len() < MAX_HIDDEN {
         s.view.hidden.insert(Item { kind: ItemKind::Datum, name: datum });
     }
-    let reply = json!({
+    let mut reply = json!({
         "name": name,
         "split": split,
         "cells": cells,
         "cut_faces": faces,
         "bodies": bodies,
     });
+    if !warnings.is_empty()
+        && let Some(o) = reply.as_object_mut()
+    {
+        o.insert("warnings".into(), json!(warnings));
+    }
     Ok(cleared.report_if_any(s, reply))
+}
+
+/// Whether a cell's boundary, tessellated as the meshers take it by default, bounds a volume mesh:
+/// the defects (open edges, edges on three triangles) when it does not.
+fn unmeshable(shape: &fieldcraft_geometry::Shape) -> Result<()> {
+    let input = super::hex::shape_input(shape, None)?;
+    let options = fieldcraft_mesh::surface::SurfaceOptions { weld_distance: input.mesh.weld_distance, ..Default::default() };
+    fieldcraft_mesh::surface::BoundarySurface::new(&input.mesh.positions, &input.mesh.triangles, &input.mesh.tri_face, &options)
+        .map(|_| ())
+        .map_err(|e| EngineError::Params(e.to_string()))
 }
 
 fn datum_suppress(s: &mut Session, p: &Value) -> Result<Value> {
@@ -912,5 +935,51 @@ pub(crate) mod tests {
         assert!(s.model.elements().is_empty());
         assert!(s.execute("mesh.clear", &json!({"bodies": ["Body1"]})).is_err(), "nothing to clear");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Raspberry Pi 5 enclosure analysis design (base, lid, heat sink, board, chips and the
+    /// air inside), its SolidCraft recipe.
+    pub(crate) fn pi5() -> (crate::tests::TempDir, Session) {
+        scripted(serde_json::from_str(include_str!("../../tests/designs/pi5-enclosure.json")).unwrap())
+    }
+
+    /// #384: cuts stay on their plane (the kernel's own split put them 1.8 µm off it on the air
+    /// of the enclosure, so the cut faces were not even recognized), and a plane along an
+    /// existing face or through a hole's axis is a warning naming the plane, the body and where.
+    #[test]
+    fn cuts_stay_on_the_plane_and_risky_ones_are_named() {
+        let (_dir, mut s) = pi5();
+        let plane = |s: &mut Session, name: &str, x: f64| {
+            s.execute("geometry.datum", &json!({"name": name, "by": {"type": "offset", "plane": "yz", "offset": x}})).unwrap();
+            s.execute("geometry.partition", &json!({"name": format!("P{name}"), "datum": name, "bodies": ["Air"]})).unwrap()
+        };
+        // Beside the board's mounting holes: clean cells, cut faces on the plane.
+        let r = plane(&mut s, "X", 16.5);
+        assert!(r.get("warnings").is_none(), "{r}");
+        let design = s.design.clone().unwrap();
+        for cell in ["Air/a", "Air/b"] {
+            let shape = design.body(cell).unwrap();
+            let cut: Vec<f64> = shape
+                .faces()
+                .iter()
+                .zip(shape.face_surfaces().unwrap())
+                .filter(|(f, _)| f.name.starts_with("partition:PX:"))
+                .filter_map(|(_, srf)| match srf {
+                    Some(fieldcraft_geometry::FaceSurface::Plane { point, .. }) => Some(point[0]),
+                    _ => None,
+                })
+                .collect();
+            assert!(!cut.is_empty() && cut.iter().all(|x| (x - 16.5).abs() < 1e-9), "{cell}: {cut:?}");
+        }
+        s.execute("edit.undo", &json!({})).unwrap();
+        // Along the side of the heat sink's pedestal: named.
+        let r = plane(&mut s, "Side", 34.0);
+        let warnings = r["warnings"].to_string();
+        assert!(warnings.contains("partition `PSide`: the plane lies on face `F45:-x` of `Air`"), "{r}");
+        s.execute("edit.undo", &json!({})).unwrap();
+        // Through a standoff's hole: the cell whose boundary breaks at the hole's edge is named.
+        let r = plane(&mut s, "Axis", 74.5);
+        let warnings = r["warnings"].to_string();
+        assert!(warnings.contains("partition `PAxis`: cell `Air/") && warnings.contains("boundary no mesher takes"), "{r}");
     }
 }

@@ -251,7 +251,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "probe",
             "Probe results",
-            "Stored results at nodes (solve.probe): displacement, reaction, stress and von Mises (static), the shape of \
+            "Stored results at nodes, or at the nodes nearest to points `at` (solve.probe): displacement, reaction, stress and von Mises (static), the shape of \
              mode `mode` (frequency), displacement and velocity in field frame `frame` (explicit) and, with `elements`, \
              explicit element values; for a fluid step, the flow at `points` and the force histories of `forces`.",
             obj(
@@ -259,6 +259,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "step": string("Solved step"),
                     "nodes": {"type": "array", "items": {"type": "integer"}, "description": "Node labels"},
                     "elements": {"type": "array", "items": {"type": "integer"}, "description": "Element labels (explicit)"},
+                    "at": {"type": "array", "items": {"type": "array"}, "description": "Points [x, y, z]; the nearest nodes are probed (structural steps)"},
                     "points": {"type": "array", "items": {"type": "array"}, "description": "Points [x, y, z] (fluid)"},
                     "forces": {"type": "array", "items": {"type": "string"}, "description": "Walls or faces whose force histories to return (fluid)"},
                     "mode": integer("Mode, from 1 (frequency)"),
@@ -497,7 +498,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Map<String, Value>) -> Result<V
             b.execute(command, params)
         }
         "show_results" => show_results(b, a),
-        "probe" => b.execute("solve.probe", pick(a, &["step", "nodes", "elements", "points", "forces", "mode", "frame"])),
+        "probe" => b.execute("solve.probe", pick(a, &["step", "nodes", "at", "elements", "points", "forces", "mode", "frame"])),
         "reactions" => b.execute("results.reactions", pick(a, &["step", "sets", "about"])),
         "select" => {
             let p = pick(a, &["filter", "box_mode", "mode", "clear", "geometry", "nodes", "elements", "faces", "at", "box"]);

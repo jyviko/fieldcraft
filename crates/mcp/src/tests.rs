@@ -224,6 +224,22 @@ fn screenshot_takes_a_camera_orientation() {
     assert_eq!(again, turned);
 }
 
+/// `probe {at}` reads a structural result at the nodes nearest to points (#105); hostile points
+/// are refused without a panic.
+#[test]
+fn probe_takes_points_at() {
+    let mut s = server();
+    ok(&mut s, "execute", json!({"command": "file.sample", "params": {"name": "cantilever"}}));
+    ok(&mut s, "solve", json!({"analysis": "static", "step": "Load"}));
+    let r = ok(&mut s, "probe", json!({"step": "Load", "at": [[0, 0, 0]]}));
+    let node = &r["nodes"][0];
+    assert!(node["xyz"].is_array() && node["distance"].is_number(), "{r}");
+    for at in [json!([[1e308, "x"]]), json!(vec![json!([0, 0, 0]); 20_000])] {
+        let (text, err) = call(&mut s, "probe", json!({"step": "Load", "at": at}));
+        assert!(err && text.len() < 100_000, "{text}");
+    }
+}
+
 #[test]
 fn a_batch_stops_at_the_first_error() {
     let mut s = server();

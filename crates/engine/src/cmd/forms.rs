@@ -1543,6 +1543,7 @@ pub const SAMPLE: &[Field] = &[choice(
         ("cantilever", "Cantilever"),
         ("impact", "Impact"),
         ("parts", "Parts"),
+        ("ibeam", "I-beam cantilever"),
         ("drop-test", "Drop test"),
         ("rubber-seal", "Rubber seal"),
         ("flow-past", "Flow past a bracket"),

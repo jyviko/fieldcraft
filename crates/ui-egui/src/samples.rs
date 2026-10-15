@@ -23,6 +23,7 @@ const THUMBNAILS: &[(&str, &[u8])] = &[
     ("cantilever", include_bytes!("../thumbnails/cantilever.png")),
     ("impact", include_bytes!("../thumbnails/impact.png")),
     ("parts", include_bytes!("../thumbnails/parts.png")),
+    ("ibeam", include_bytes!("../thumbnails/ibeam.png")),
 ];
 
 /// The thumbnails' aspect ratio (height over width).

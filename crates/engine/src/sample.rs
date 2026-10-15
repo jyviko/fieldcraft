@@ -11,7 +11,7 @@
 //! explicit dynamic step.
 //!
 //! The examples gallery (docs/examples.md), each ready to solve with `solve.run`:
-//! [`drop_test`], [`rubber_seal`], [`flow_past`], [`heated_bracket`], [`bracket_hex`] and [`crank_arm`]. Their
+//! [`ibeam`], [`drop_test`], [`rubber_seal`], [`flow_past`], [`heated_bracket`], [`bracket_hex`] and [`crank_arm`]. Their
 //! geometry is a SolidCraft script run when the sample opens ([`Sample::design`]): a corpus
 //! recipe (`tests/corpus`) or [`UPRIGHT_BRACKET`].
 
@@ -59,6 +59,14 @@ pub const SAMPLES: &[Sample] = &[
         design: None,
         prepare: None,
         script: |_| impact(),
+    },
+    Sample {
+        name: "ibeam",
+        label: "I-Beam Cantilever",
+        about: "A 200 mm steel I-beam swept all-hex, clamped at one end with 1 kN on the other through a coupling: static, ready to solve",
+        design: Some(CANTILEVER_I_BEAM),
+        prepare: None,
+        script: |_| ibeam(),
     },
     Sample {
         name: "drop-test",
@@ -288,6 +296,36 @@ pub fn impact() -> Value {
         json!({"command": "model.step.create", "params": {"name": "Impact", "procedure": step}}),
     ]);
     Value::Array(steps)
+}
+
+/// The 200 mm I-beam lying along x, web upright (`tests/corpus/cantilever-i-beam`): 40 × 40 mm,
+/// 3 mm flanges, a 2 mm web. Body `Beam`; its end faces are `F2:start` (x = 0) and `F2:top`
+/// (x = 200).
+pub const CANTILEVER_I_BEAM: &str = include_str!("../../../tests/corpus/cantilever-i-beam/recipe.json");
+
+/// The I-beam's tip load (N).
+pub const IBEAM_LOAD: f64 = 1000.0;
+
+/// [`CANTILEVER_I_BEAM`] swept all-hex (hex8 of 4 mm, incompatible modes) in steel, clamped at
+/// x = 0 (set `root`), [`IBEAM_LOAD`] down (−z) on a reference point on the beam's axis at the
+/// free end, kinematically coupled to the end face (set `tip`) so the section stays plane. Step
+/// `Load` (linear static). The README demo's model (tools/demo-video).
+pub fn ibeam() -> Value {
+    let face = |f: &str| json!([{"body": "Beam", "face": f}]);
+    json!([
+        {"command": "model.units", "params": {"system": "mm-t-s-N-MPa"}},
+        {"command": "mesh.hex.sweep", "params": {"body": "Beam", "size": 4}},
+        {"command": "model.set.create", "params": {"name": "beam", "geometry": [{"body": "Beam"}]}},
+        {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}, "density": 7.85e-9}},
+        {"command": "model.section.create", "params": {"name": "Beam", "set": "beam", "material": "Steel", "kind": {"type": "solid"}, "formulation": {"incompatible_modes": true}}},
+        {"command": "model.set.create", "params": {"name": "root", "geometry": face("F2:start")}},
+        {"command": "model.boundary_condition.create", "params": {"name": "Clamp", "type": "fixed", "target": {"set": "root"}}},
+        {"command": "model.set.create", "params": {"name": "tip", "geometry": face("F2:top")}},
+        {"command": "model.reference_point.create", "params": {"name": "End", "xyz": [200, 0, 20]}},
+        {"command": "model.coupling.create", "params": {"name": "EndPlate", "reference_point": "End", "set": "tip", "kind": "kinematic"}},
+        {"command": "model.load.create", "params": {"name": "Push", "type": "force", "target": {"reference_point": "End"}, "vector": [0, 0, -IBEAM_LOAD]}},
+        {"command": "model.step.create", "params": {"name": "Load", "procedure": {"type": "static"}, "boundary_conditions": ["Clamp"], "loads": ["Push"]}},
+    ])
 }
 
 /// An L-bracket standing on its foot, Z up, as a SolidCraft script: a 60 × 40 mm foot and a 50 mm
@@ -644,6 +682,21 @@ mod tests {
         assert!(tip > beam && tip < 1.1 * beam, "{tip} vs {beam}");
         let f = s.execute("solve.frequency", &json!({})).unwrap();
         assert_eq!(f["modes"].as_array().map(Vec::len), Some(6));
+    }
+
+    /// The I-beam opens swept all-hex and ready; solved, its tip deflection is the beam theory's
+    /// bending plus shear (P L³ / 3 E I + P L / G A_web: 0.149 + 0.035 mm) within 5 %.
+    #[test]
+    fn the_ibeam_bends_as_beam_theory() {
+        let mut s = open("ibeam");
+        assert!(s.model.elements().values().all(|e| e.kind == fieldcraft_model::ElementKind::Hex8));
+        s.execute("solve.static", &json!({})).unwrap();
+        let p = s.execute("solve.probe", &json!({"step": "Load", "at": [[200.0, 0.0, 20.0]]})).unwrap();
+        let tip = -p["nodes"][0]["displacement"][2].as_f64().unwrap();
+        let (e, g) = (210000.0, 210000.0 / 2.6);
+        let i = (40.0 * 40.0f64.powi(3) - 38.0 * 34.0f64.powi(3)) / 12.0;
+        let theory = IBEAM_LOAD * 200.0f64.powi(3) / (3.0 * e * i) + IBEAM_LOAD * 200.0 / (g * 2.0 * 37.0);
+        assert!((tip - theory).abs() < 0.05 * theory, "{tip} against {theory}");
     }
 
     #[test]

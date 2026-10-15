@@ -188,3 +188,13 @@ panel.
 
 A hex8 block beside a tet4 cube: meshes to look at (element types, nodes, picking), nothing to
 solve.
+
+## I-beam cantilever (`ibeam`)
+
+![Von Mises stress on the swept hex8 I-beam, clamped at x = 0 with 1 kN on its free end](media/examples/ibeam.png)
+
+The 200 mm steel I-beam of the README video (`tests/corpus/cantilever-i-beam`), opened as
+SolidCraft geometry with persistent face names, swept all-hex (hex8 of 4 mm, incompatible modes),
+clamped at `F2:start` and loaded with 1000 N down through a kinematic coupling to `F2:top`.
+**Look at:** the bending stress in the flanges, highest at the clamp; the tip moves 0.18 mm down
+(beam theory with shear: 0.184 mm).

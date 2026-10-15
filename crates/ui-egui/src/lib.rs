@@ -333,6 +333,8 @@ type DatumPreview = (Option<(u64, &'static str, String)>, Option<fieldcraft_mode
 /// The nodes the open Merge Nodes form would merge (both of each pair), and the revision and form
 /// text they are for.
 type MergePreview = (Option<(u64, String)>, Arc<Vec<u32>>);
+/// The open Relax Nodes form's preview, by model revision and form text.
+type RelaxPreview = (Option<(u64, String)>, Option<Arc<fieldcraft_engine::cmd::RelaxPreview>>);
 
 /// A screenshot asked for over the control channel.
 struct Shot {
@@ -355,6 +357,7 @@ pub struct ModelApp {
     /// The datum the open form defines, and the revision, command and form text it is for.
     preview: std::cell::RefCell<DatumPreview>,
     merge_preview: std::cell::RefCell<MergePreview>,
+    relax_preview: std::cell::RefCell<RelaxPreview>,
     /// Forms opened so far (numbers each [`ParamsDialog::opening`]).
     forms_opened: u64,
     pub viewport: Viewport,
@@ -493,6 +496,7 @@ impl ModelApp {
             dialog: None,
             preview: Default::default(),
             merge_preview: Default::default(),
+            relax_preview: Default::default(),
             forms_opened: 0,
             viewport: Viewport::default(),
             icons: icons::IconCache::default(),
@@ -1157,6 +1161,81 @@ impl ModelApp {
         cache.1.clone()
     }
 
+    /// What the open Relax Nodes form would do (the nodes' new positions and the region's
+    /// quality), worked out once per form text and model revision.
+    pub fn relax_preview(&self) -> Option<Arc<fieldcraft_engine::cmd::RelaxPreview>> {
+        let d = self.dialog.as_ref().filter(|d| d.command == "mesh.node.relax")?;
+        let key = (self.revision, d.text.clone());
+        let mut cache = self.relax_preview.borrow_mut();
+        if cache.0.as_ref() != Some(&key) {
+            let preview = serde_json::from_str::<Value>(&d.text).ok().and_then(|p| fieldcraft_engine::cmd::relax_preview(&self.session, &p));
+            *cache = (Some(key), preview.map(Arc::new));
+        }
+        cache.1.clone()
+    }
+
+    /// The open Relax Nodes form's preview in a line: nodes moved and the region's quality.
+    pub fn relax_note(&self) -> Option<String> {
+        let p = self.relax_preview()?;
+        let r = &p.relaxed;
+        Some(format!(
+            "Preview: {} nodes move (largest {:.3}); scaled Jacobian min {:.3} → {:.3}, edge ratio max {:.2} → {:.2}, {} → {} invalid",
+            r.moved,
+            r.max_displacement,
+            r.before.min_quality,
+            r.after.min_quality,
+            r.before.max_edge_ratio,
+            r.after.max_edge_ratio,
+            r.before.invalid,
+            r.after.invalid
+        ))
+    }
+
+    /// Whether the Relax Nodes form is open.
+    pub fn relaxing(&self) -> bool {
+        self.dialog.as_ref().is_some_and(|d| d.command == "mesh.node.relax")
+    }
+
+    /// Put the open Relax Nodes form's sphere at `at` (a click on the mesh); a sphere without a
+    /// radius yet gets a twentieth of the mesh's size.
+    pub fn relax_place(&mut self, at: Vec3) -> bool {
+        let mut bounds = Aabb3::EMPTY;
+        for n in self.session.model.nodes().values() {
+            bounds.add(Vec3::from(n.xyz));
+        }
+        let size = bounds.diagonal();
+        let Some(d) = self.dialog.as_mut().filter(|d| d.command == "mesh.node.relax") else { return false };
+        let mut params = serde_json::from_str::<Value>(&d.text).ok().filter(Value::is_object).unwrap_or_else(|| json!({}));
+        params["center"] = json!([at.x, at.y, at.z]);
+        if let Some(o) = params.as_object_mut() {
+            o.remove("around_element");
+            o.remove("nodes");
+        }
+        if params.get("radius").and_then(Value::as_f64).is_none_or(|r| !(r > 0.0)) && size > 0.0 && size.is_finite() {
+            params["radius"] = json!(size / 20.0);
+        }
+        d.text = params.to_string();
+        d.touched.insert("center".into());
+        true
+    }
+
+    /// Scale the open Relax Nodes form's radius by `factor` (Alt + scroll over the view).
+    pub fn relax_scale_radius(&mut self, factor: f64) -> bool {
+        let Some(sphere) = self
+            .dialog
+            .as_ref()
+            .filter(|d| d.command == "mesh.node.relax")
+            .and_then(|d| serde_json::from_str::<Value>(&d.text).ok().and_then(|p| fieldcraft_engine::cmd::relax_sphere(&self.session, &p)))
+        else {
+            return false;
+        };
+        let Some(d) = self.dialog.as_mut() else { return false };
+        let mut params = serde_json::from_str::<Value>(&d.text).ok().filter(Value::is_object).unwrap_or_else(|| json!({}));
+        params["radius"] = json!(sphere.1 * factor);
+        d.text = params.to_string();
+        true
+    }
+
     /// The datum the open datum form defines so far, drawn before OK.
     /// Worked out once per form text and model revision (a face centre costs a design query).
     fn datum_preview(&self) -> Option<fieldcraft_model::Datum> {
@@ -1403,7 +1482,8 @@ impl ModelApp {
         let set = self.selected_set();
         let cut = self.partition_preview();
         let merge = self.merge_preview();
-        let selected = hash(&|h| (scene, self.pick.generation, &set, &cut, &*merge).hash(h));
+        let relax_key = self.dialog.as_ref().filter(|d| d.command == "mesh.node.relax").map(|d| d.text.clone());
+        let selected = hash(&|h| (scene, self.pick.generation, &set, &cut, &*merge, &relax_key).hash(h));
         let key = hash(&|h| (selected, self.pick.hover_generation).hash(h));
         if self.pick.overlay.0 == Some(key) {
             return (key, self.pick.overlay.1.clone());
@@ -1439,6 +1519,10 @@ impl ModelApp {
                 let m = self.with_picker(|p| p.items_overlay(&items, theme::rgb(t.pick_hover)));
                 s.points.extend(m.points);
             }
+            // The Relax Nodes sphere and its preview (#398).
+            if relax_key.is_some() {
+                self.relax_overlay(&mut s, &t);
+            }
             self.pick.selected_overlay = (Some(selected), Arc::new(s));
         }
         let mut s = (*self.pick.selected_overlay.1).clone();
@@ -1452,6 +1536,36 @@ impl ModelApp {
         }
         self.pick.overlay = (Some(key), Arc::new(s));
         (key, self.pick.overlay.1.clone())
+    }
+
+    /// The open Relax Nodes form drawn over the scene: its sphere of influence, translucent, and
+    /// the edges of the elements it changes at their relaxed positions.
+    fn relax_overlay(&self, s: &mut Scene, t: &theme::Tokens) {
+        let sphere = self
+            .dialog
+            .as_ref()
+            .and_then(|d| serde_json::from_str::<Value>(&d.text).ok())
+            .and_then(|p| fieldcraft_engine::cmd::relax_sphere(&self.session, &p));
+        if let Some((c, r)) = sphere {
+            scene::sphere(s, Vec3::from(c), r, theme::rgb(t.pick_hover));
+        }
+        let Some(p) = self.relax_preview() else { return };
+        let model = &self.session.model;
+        let at = |n: u32| p.relaxed.positions.get(&n).copied().or_else(|| model.node(n).map(|x| x.xyz)).map(Vec3::from);
+        let color = theme::rgb(t.pick_selected);
+        for e in model.elements().values().filter(|e| e.nodes.iter().any(|n| p.relaxed.positions.contains_key(n))) {
+            for edge in e.kind.edges() {
+                let ends = (edge.first().and_then(|&i| e.nodes.get(i)), edge.get(1).and_then(|&i| e.nodes.get(i)));
+                if let (Some(&a), Some(&b)) = ends
+                    && let (Some(a), Some(b)) = (at(a), at(b))
+                {
+                    s.lines.push(fieldcraft_render::SceneLine { a, b, color, width: 1.5 });
+                }
+            }
+        }
+        for x in p.relaxed.positions.values() {
+            s.points.push(fieldcraft_render::ScenePoint { p: Vec3::from(*x), color, size: 4.0 });
+        }
     }
 
     /// The seed on `edge`, if it has one.
@@ -2272,6 +2386,35 @@ mod tests {
         assert_eq!(app.session.model.nodes().len(), 12);
         app.run("mesh.check.duplicates", json!({})).unwrap();
         assert!(app.pick.selection.is_empty());
+    }
+
+    /// Relax Nodes: a click places the sphere, Alt + scroll sizes it, the form previews the moved
+    /// nodes and the region's quality, and the sphere is drawn translucent (#398).
+    #[test]
+    fn relax_nodes_places_its_sphere_and_previews() {
+        let mut app = ModelApp::new(Session::default());
+        let c = [[0., 0., 0.], [4., 0., 0.], [4., 4., 0.], [0., 4., 0.], [0., 0., 4.], [4., 0., 4.], [4., 4., 4.], [0., 4., 4.]];
+        app.run("mesh.block", json!({"body": "A", "kind": "hex8", "corners": c, "divisions": [4, 4, 4]})).unwrap();
+        // A spike inside.
+        let n = *app.session.model.nodes().iter().find(|(_, p)| p.xyz == [2.0, 2.0, 2.0]).unwrap().0;
+        app.session.model.set_node(n, [2.7, 2.6, 2.5]).unwrap();
+        app.model_changed();
+        assert!(!app.relaxing() && app.relax_preview().is_none());
+        app.start("mesh.node.relax").unwrap();
+        assert!(app.relaxing());
+        assert!(app.relax_place(Vec3 { x: 2.0, y: 2.0, z: 2.0 }));
+        assert!(app.relax_scale_radius(10.0));
+        let note = app.relax_note().unwrap();
+        assert!(note.starts_with("Preview:"), "{note}");
+        let p = app.relax_preview().unwrap();
+        assert!(p.relaxed.positions.contains_key(&n) && p.relaxed.after.min_quality > p.relaxed.before.min_quality);
+        let (_, overlay) = app.overlay();
+        assert!(!overlay.fills.is_empty() && !overlay.lines.is_empty(), "the sphere and the preview are drawn");
+        // OK runs it as the form says.
+        let text = app.dialog.as_ref().unwrap().text.clone();
+        app.dialog = None;
+        app.run("mesh.node.relax", serde_json::from_str(&text).unwrap()).unwrap();
+        assert_ne!(app.session.model.node(n).unwrap().xyz, [2.7, 2.6, 2.5]);
     }
 
     /// Mesh Quality reads as a sentence in the status bar, not as its JSON report.

@@ -47,8 +47,12 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     if response.clicked()
         && let Some(at) = response.interact_pointer_pos()
     {
-        let _ = app.select_at(at, mode(ui.input(|i| i.modifiers)));
-        probe_at(app, at, rect);
+        // With Relax Nodes open a click on the mesh places its sphere (#398).
+        let placed = app.relaxing() && app.surface_point(at).is_some_and(|p| app.relax_place(p));
+        if !placed {
+            let _ = app.select_at(at, mode(ui.input(|i| i.modifiers)));
+            probe_at(app, at, rect);
+        }
     }
     if !app.capturing {
         hover(app, &response);
@@ -383,7 +387,10 @@ fn navigate(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response, rect: 
         let options = ui.ctx().options(|o| o.input_options);
         let (scroll, pinch, at) = ui.input(|i| (wheel_points(i, &options), i.zoom_delta(), i.pointer.hover_pos()));
         let factor = (-f64::from(scroll) * ZOOM_PER_POINT * zoom_sign(app)).exp() / f64::from(pinch).max(1e-3);
-        if (factor - 1.0).abs() > 1e-9 {
+        // Alt + scroll sizes the Relax Nodes sphere instead of zooming.
+        let sized =
+            app.relaxing() && ui.input(|i| i.modifiers.alt) && scroll != 0.0 && app.relax_scale_radius((f64::from(scroll) * ZOOM_PER_POINT).exp());
+        if !sized && (factor - 1.0).abs() > 1e-9 {
             let anchor = at.and_then(|p| {
                 app.surface_point(p).or_else(|| app.cam.target_plane_point(f64::from(p.x - rect.left()), f64::from(p.y - rect.top()), w, h))
             });

@@ -126,6 +126,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     let selected = (!app.pick.selection.is_empty()).then(|| app.pick.selection.summary());
     // While a job runs (this form's mesher, a solve) OK waits for it.
     let running = app.busy().map(str::to_string);
+    let relax_note = app.relax_note();
     let units = app.session.model.units();
     let session = &app.session;
     // The set Use selection will make on OK is offered with the others.
@@ -251,6 +252,9 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.label(RichText::new(e).color(t.error));
     } else if d.attempted && !missing.is_empty() {
         ui.label(RichText::new(&missing).color(t.error));
+    }
+    if let Some(note) = &relax_note {
+        ui.label(RichText::new(note).small().color(t.text));
     }
     ui.collapsing(RichText::new("What it takes").size(12.0).color(t.text_dim), |ui| {
         ui.label(RichText::new(spec.params).small().color(t.text_dim));

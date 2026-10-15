@@ -952,6 +952,25 @@ input points), Steiner points kept half the local spacing from the boundary.
   is exact: a planar bilinear quad's Jacobian is affine in each reference coordinate, so four exact `orient2d` corner
   tests decide it.
 
+### B7a. Node relaxation of a finished mesh (implemented in `fieldcraft-mesh::relax`, `mesh.node.relax`)
+
+- **Method.** Smart Laplacian (S. Canann, J. Tristano, M. Staten, *An approach to combined Laplacian and
+  optimization-based smoothing for triangular, quadrilateral, and quad-dominant meshes*, IMR 1998; L. Freitag 1997
+  above): a node's weighted step toward the centroid of its edge neighbours is kept only when the worst element
+  around it does not get worse and no element inverts, halved otherwise. Then one step up the gradient of the worst
+  element's quality (the active max–min element of Freitag and Ollivier-Gooch, IJNME 40, 1997; P. Knupp, IJNME 48,
+  2000), kept only when it raises the worst. Quality is the scaled Jacobian of `crate::quality`; validity its
+  certified check.
+- **Surface nodes in UV.** A node on a B-rep face moves in the face's own parameters (the displacement resolved on
+  the surface's coordinate directions, then the surface evaluated there), so it stays exactly on an analytic face;
+  free-form faces fall back to projection onto the face's tessellation (SolidCraft's kernel exposes the analytic
+  surfaces only). Nodes on a B-rep edge slide along it; vertex nodes are held; partition cut faces are not
+  geometry, so their nodes move freely.
+- **Relaxation fields.** What a relaxation did is kept as the relaxed region's cells before and after; a later
+  mesh takes the displacement at each node's parametric coordinates in the old cell holding it (barycentric or
+  trilinear shape functions), slides it onto its face or edge, undoes any move that would invert an element, and
+  smooths once (`mesh.node.relax.apply`, or `reapply` after every remesh).
+
 ---
 
 ### B8. Mapped and swept hexahedral meshing (implemented in `fieldcraft-mesh::hex`)

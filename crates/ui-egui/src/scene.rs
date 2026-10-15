@@ -8,7 +8,7 @@
 //! their own over the model, a constant size on screen, muted over a results plot.
 
 use fieldcraft_render::glyphs::{Definition, Drawn, GlyphShow, GlyphView, Glyphs};
-use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Scene, SceneLabel, SceneLine, ScenePoint, SceneTri, Vec3};
+use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Rgb, Scene, SceneFill, SceneLabel, SceneLine, ScenePoint, SceneTri, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{Tokens, rgb};
@@ -97,6 +97,40 @@ pub fn datum_preview(s: &mut Scene, datum: fieldcraft_model::Datum, bounds: &Aab
         return Aabb3::EMPTY;
     }
     fieldcraft_render::glyphs::datums(&model, bounds, &|_| true, Some(NAME), &t.glyph_colors(), s)
+}
+
+/// A sphere drawn translucent (a tool's region of influence, such as Relax Nodes'), with its
+/// three great circles as lines.
+pub fn sphere(s: &mut Scene, c: Vec3, r: f64, color: Rgb) {
+    if !(r > 0.0 && r.is_finite()) {
+        return;
+    }
+    const RINGS: usize = 12;
+    const SEGMENTS: usize = 24;
+    let at = |i: usize, j: usize| {
+        let theta = std::f64::consts::PI * i as f64 / RINGS as f64;
+        let phi = std::f64::consts::TAU * j as f64 / SEGMENTS as f64;
+        Vec3 { x: theta.sin() * phi.cos(), y: theta.sin() * phi.sin(), z: theta.cos() }
+    };
+    for i in 0..RINGS {
+        for j in 0..SEGMENTS {
+            let (a, b, d, e) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
+            for tri in [[a, b, d], [a, d, e]] {
+                let n = (tri[0] + tri[1] + tri[2]).normalized().unwrap_or(tri[0]);
+                s.fills.push(SceneFill { tri: SceneTri { p: tri.map(|v| c + v * r), normal: n, color }, alpha: 0.18 });
+            }
+        }
+    }
+    for k in 0..SEGMENTS {
+        let (p, q) = (std::f64::consts::TAU * k as f64 / SEGMENTS as f64, std::f64::consts::TAU * (k + 1) as f64 / SEGMENTS as f64);
+        for (u, v) in [
+            (Vec3 { x: p.cos(), y: p.sin(), z: 0.0 }, Vec3 { x: q.cos(), y: q.sin(), z: 0.0 }),
+            (Vec3 { x: p.cos(), y: 0.0, z: p.sin() }, Vec3 { x: q.cos(), y: 0.0, z: q.sin() }),
+            (Vec3 { x: 0.0, y: p.cos(), z: p.sin() }, Vec3 { x: 0.0, y: q.cos(), z: q.sin() }),
+        ] {
+            s.lines.push(SceneLine { a: c + u * r, b: c + v * r, color, width: 1.0 });
+        }
+    }
 }
 
 /// The scene for `display` drawn in `style`.
@@ -253,7 +287,7 @@ mod tests {
                 .collect();
             // An element edge across the seeded edge is not along it.
             d.edges.push(fieldcraft_render::DisplayEdge {
-                p: [Vec3::ZERO, Vec3::new(0.0, 10.0, 0.0)],
+                p: [Vec3::ZERO, Vec3 { x: 0.0, y: 10.0, z: 0.0 }],
                 nodes: [0, 99],
                 corners: [0, 99],
                 feature: true,
@@ -290,7 +324,7 @@ mod tests {
         let t = Tokens::dark();
         let geometry = |s: &Scene| s.lines.iter().filter(|l| l.color == rgb(t.geometry_edge)).map(|l| [l.a, l.b]).collect::<Vec<_>>();
         let s = build(&d, Style::ShadedEdges, Show::DEFAULT, &t);
-        assert_eq!(geometry(&s), vec![[Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)]]);
+        assert_eq!(geometry(&s), vec![[Vec3 { x: 0.0, y: 0.0, z: 0.0 }, Vec3 { x: 1.0, y: 0.0, z: 0.0 }]]);
         // Without the mesh the design's edges are drawn.
         let s = build(&d, Style::ShadedEdges, Show { mesh: false, ..Show::DEFAULT }, &t);
         assert_eq!(geometry(&s).len(), 3);

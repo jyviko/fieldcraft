@@ -214,6 +214,8 @@ enum Act {
     Pick(fieldcraft_model::GeometryRef),
     /// Select elements in the viewport and frame them (Mesh Quality's worst and invalid ones).
     Elements(Vec<u32>),
+    /// Open Relax Nodes round an element (Mesh Quality's worst).
+    Relax(u32),
 }
 
 /// The reply's section of the context panel.
@@ -256,6 +258,10 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             }
             Act::Pick(g) => app.select([crate::selection::Item::Geometry(g)], crate::selection::Mode::Replace),
             Act::Elements(labels) => app.show_elements(&labels),
+            Act::Relax(element) => {
+                app.show_elements(&[element]);
+                app.open_form("mesh.node.relax", serde_json::json!({"around_element": element}));
+            }
         }
     }
 }
@@ -411,6 +417,16 @@ fn quality(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>) {
             if ui.link(text).on_hover_text("Select and frame it in the viewport").clicked() {
                 acts.push(Act::Elements(vec![worst]));
             }
+        }
+    }
+    if let Some(worst) = v.pointer("/metrics/scaled_jacobian/worst").and_then(Value::as_u64).and_then(|w| u32::try_from(w).ok()) {
+        ui.add_space(6.0);
+        if ui
+            .button("Relax around worst element")
+            .on_hover_text("Open Relax Nodes with its sphere round the element of smallest scaled Jacobian; preview, then OK")
+            .clicked()
+        {
+            acts.push(Act::Relax(worst));
         }
     }
     if let Some(skipped) = v.get("skipped").and_then(Value::as_object).filter(|s| !s.is_empty()) {

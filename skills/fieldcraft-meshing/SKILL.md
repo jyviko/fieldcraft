@@ -62,6 +62,11 @@ Before the first mesh command:
 
 1. `mesh.quality`: all valid; scaled Jacobian min ≥ 0.3 (≥ 0.5 in the region of interest);
    edge ratio max ≤ 10; no element below these is acceptable without a stated reason.
+   **Isolated spikes** (a few bad elements in an otherwise good mesh) are fixed last, with
+   `mesh.node.relax {"around_element": <worst>}` (or `center` + `radius`): nodes there relax, surface
+   nodes sliding on their faces, nothing inverting. It is a final touch, never a substitute for a
+   better block plan: many bad elements mean the cuts are wrong (§2). Pass `"reapply": true` (or
+   run `mesh.node.relax.apply {field}`) so the relaxation follows a later remesh.
 2. Look at it: screenshots of each body and a section. Fans, pinches, wedges, slivers → back to §2.
 3. Volume: `mesh.quality` volume equals the geometry volume (a mismatch means orphan or missing
    cells, #385).

@@ -1264,6 +1264,29 @@ pub const NODE_MERGE: &[Field] = &[
 
 pub const CHECK_DUPLICATES: &[Field] = &[MERGE_TOLERANCE];
 
+pub const NODE_RELAX: &[Field] = &[
+    xyz("center", "Centre", D::Length).help("The centre of the sphere of influence; click the mesh to place it.").hint("click the mesh"),
+    positive("radius", "Radius", D::Length).help("Nodes closer to the centre than this move; Alt + scroll over the view changes it."),
+    int("around_element", "Around element", 1, 99_999_999)
+        .help("Instead of a centre: a sphere round this element (radius default twice its longest edge).")
+        .hint("none"),
+    labels("nodes", "Nodes", LabelOf::Node).help("Instead of a sphere: these nodes.").hint("none"),
+    references("bodies", "Bodies", C::Body).help("Only the nodes of these bodies.").hint("every body"),
+    int("iterations", "Iterations", 1, 100).help("Sweeps over the nodes.").def("5"),
+    range("strength", "Strength", D::None, 0.0, 1.0).help("How far each node moves toward its relaxed position, 0 to 1.").def("1"),
+    choice("falloff", "Falloff", &[("smooth", "Smooth"), ("linear", "Linear"), ("none", "None")])
+        .help("How the strength falls from the centre to the radius, so the edit blends into the mesh.")
+        .def("\"smooth\""),
+    text("field", "Keep as").help("The relaxation field to keep, to apply again after a remesh.").hint("Relax1, Relax2, …"),
+    flag("reapply", "Reapply after remesh").help("Apply the field again by itself after each remesh.").def("false"),
+];
+
+pub const NODE_RELAX_APPLY: &[Field] = &[
+    text("field", "Field").req().help("The relaxation field kept by Relax Nodes."),
+    references("bodies", "Bodies", C::Body).help("Only the nodes of these bodies.").hint("the field's bodies"),
+    range("polish", "Polish", D::None, 0.0, 1.0).help("Strength of one guarded smoothing sweep after the field is applied; 0 for none.").def("0.3"),
+];
+
 pub const RENUMBER: &[Field] = &[
     choice("what", "Renumber", &[("both", "Nodes and elements"), ("nodes", "Nodes"), ("elements", "Elements")])
         .help("Which labels change.")

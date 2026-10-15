@@ -18,10 +18,12 @@ pub use datum::edit_params as datum_edit_params;
 pub use datum::preview as datum_preview;
 pub use mesh::analytic_surfaces;
 pub use nodes::merge_preview as node_merge_preview;
+pub use relax::{Preview as RelaxPreview, preview as relax_preview, sphere as relax_sphere};
 mod mirror;
 mod model;
 pub(crate) mod nodes;
 pub(crate) mod octree;
+pub(crate) mod relax;
 pub mod replace;
 mod results;
 pub(crate) mod seeds;
@@ -86,6 +88,8 @@ pub static ALL: &[CommandSpec] = &[
     nodes::MERGE,
     nodes::DUPLICATES,
     nodes::RENUMBER,
+    relax::RELAX,
+    relax::APPLY,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

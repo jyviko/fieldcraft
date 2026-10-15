@@ -167,6 +167,24 @@ edges of partition cells matching counts.
 4. `mesh.seed.list` lists the seeds and the edges they reach (`stale` when the design has no such
    edge); `mesh.seed.clear {edges?}` removes them. Seeds are saved with the model.
 
+## Relaxing a few bad elements
+
+When `mesh.quality` shows a handful of spikes in an otherwise good mesh:
+
+1. `execute` `mesh.node.relax {"around_element": <the scaled Jacobian's worst>}` (or `{"center":
+   [x, y, z], "radius": r}`, or `nodes` / `elements` / `set`; `iterations`, `strength`, `falloff`).
+   Nodes there relax (smart Laplacian, then optimization of the worst element), each move kept
+   only when the worst element around the node does not get worse and nothing inverts. Nodes on a
+   B-rep face slide in its UV parameters and stay on it, nodes on a B-rep edge slide along it,
+   vertex nodes stay; nodes on a partition cut face move freely (both cells share them). The
+   reply gives the nodes moved, the largest displacement, and the region's smallest scaled
+   Jacobian, largest edge ratio and worst elements before and after. One undo step.
+2. The relaxation is kept as a field of the model (`field`, default `Relax1`, …; saved with it).
+   After a remesh, `mesh.node.relax.apply {"field": "Relax1"}` puts the relaxed shape on the new
+   mesh (each node takes the displacement interpolated in the old cell it lies in, on its face,
+   then one guarded smoothing sweep); with `"reapply": true` on the relaxation every remesh does
+   it by itself (the mesher's reply lists `relaxations_applied`).
+
 ## Limits
 
 The server treats its input as hostile. A message line may be at most 16 MiB (the control

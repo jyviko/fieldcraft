@@ -328,7 +328,8 @@ impl Session {
         let scope = crash::Scope::enter();
         let journaled = crash::command_begin(&scope, self, id, params);
         let (revision, opened) = (self.revision, self.opened);
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params).and_then(|v| cmd::relax::after_remesh(self, id, v))));
         let result = match outcome {
             Ok(Err(EngineError::Param(p))) => Err(EngineError::Param(match spec.form {
                 Some(form) => schema::refine(form, params, p),

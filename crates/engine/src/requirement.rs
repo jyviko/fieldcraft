@@ -167,6 +167,34 @@ impl Requirement {
     }
 }
 
+impl crate::schema::Collection {
+    /// What an item of the collection is as a requirement: its [`Requirement::provider`] is the
+    /// command that makes one, which a form offers when a reference field has nothing to pick.
+    pub fn requirement(self) -> Requirement {
+        use crate::schema::Collection as C;
+        match self {
+            C::Set => Requirement::Set,
+            C::Material => Requirement::Material,
+            C::Section => Requirement::Section,
+            C::ReferencePoint => Requirement::ReferencePoint,
+            C::Coupling => Requirement::Coupling,
+            C::Contact => Requirement::Contact,
+            C::Tie => Requirement::Tie,
+            C::Mass => Requirement::Mass,
+            C::Spring => Requirement::Spring,
+            C::BoundaryCondition => Requirement::BoundaryCondition,
+            C::Load => Requirement::Load,
+            C::FluidDomain => Requirement::FluidDomain,
+            C::Step => Requirement::Step,
+            C::SolvedStep => Requirement::Result,
+            C::Body => Requirement::Design,
+            C::Datum => Requirement::Datum,
+            C::DatumPlane => Requirement::DatumPlane,
+            C::Partition => Requirement::Partition,
+        }
+    }
+}
+
 /// A requirement the session does not meet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Missing(pub Requirement);
@@ -275,6 +303,42 @@ mod tests {
                 assert!(!provider.requires.contains(r), "{} provides {r:?} but requires it", provider.id);
             }
         }
+    }
+
+    /// A collection's requirement is met exactly when it has a name to pick, and its provider is
+    /// a command on the toolbar.
+    #[test]
+    fn collections_require_what_they_list() {
+        use crate::schema::Collection as C;
+        let all = [
+            C::Set,
+            C::Material,
+            C::Section,
+            C::ReferencePoint,
+            C::Coupling,
+            C::Contact,
+            C::Tie,
+            C::Mass,
+            C::Spring,
+            C::BoundaryCondition,
+            C::Load,
+            C::FluidDomain,
+            C::Step,
+            C::SolvedStep,
+            C::Body,
+            C::Datum,
+            C::DatumPlane,
+            C::Partition,
+        ];
+        let empty = Session::default();
+        for c in all {
+            let r = c.requirement();
+            assert!(empty.names(c).is_empty() && !r.met(&empty), "{c:?}");
+            assert!(catalogue::entry_of(r.provider()).is_some(), "{c:?}");
+        }
+        let mut s = Session::default();
+        s.execute("model.material.create", &json!({"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}})).unwrap();
+        assert!(C::Material.requirement().met(&s) && s.names(C::Material) == ["Steel"]);
     }
 
     #[test]

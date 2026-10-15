@@ -374,7 +374,7 @@ pub(crate) fn weights(model: &Model, p: &Value) -> Result<(BTreeMap<u32, f64>, O
         nodes.extend(el.nodes.iter().copied());
     }
     if listed == 0 {
-        return Err(EngineError::Params("say which nodes to relax: `center` and `radius`, `around_element`, `nodes`, `elements` or `set`".into()));
+        return Err(EngineError::Params("say which nodes to relax: give one of `center` and `radius`, `around_element`, `nodes`, `elements` or `set`".into()));
     }
     if let Some(only) = &only {
         nodes.retain(|n| only.contains(n));

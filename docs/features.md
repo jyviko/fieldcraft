@@ -46,11 +46,11 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Improve | Smooth — Smooth node positions, keeping every element valid | coming soon (M6) |  |
 | Improve | Untangle — Repair inverted elements | coming soon (M6) |  |
 | Improve | Layers — Boundary padding and layers through thin walls | coming soon (M6) |  |
+| Improve | Relax Nodes — Relax the nodes inside a sphere to fix spikes and slivers; surface nodes slide on the geometry; kept as a field to apply again after a remesh | ready | `mesh.node.relax`, `mesh.node.relax.apply` |
 | Edit | Node — Add a node | ready | `mesh.node.add`, `mesh.node.remove` |
 | Edit | Element — Add an element on existing nodes | ready | `mesh.element.add`, `mesh.element.remove`, `mesh.clear` |
 | Edit | Mirror Mesh — Mirror a body's mesh across a plane, joined on the plane (mesh half a symmetric part) | ready | `mesh.mirror` |
 | Edit | Merge Nodes — Merge coincident nodes, keeping sets, loads and boundary conditions on the survivors; check for duplicates and cracks, renumber | ready | `mesh.node.merge`, `mesh.check.duplicates`, `mesh.renumber` |
-| Improve | Relax Nodes — Relax the nodes inside a sphere to fix spikes and slivers; surface nodes slide on the geometry; kept as a field to apply again after a remesh | ready | `mesh.node.relax`, `mesh.node.relax.apply` |
 | Edit | Remesh Region — Remesh a region in place; split and collapse elements | coming soon (M6) |  |
 | Edit | Orphan Mesh — Import a mesh without geometry | coming soon (M6) |  |
 | Verify | Quality — Quality metrics and the certified validity check, failing elements listed | ready | `mesh.quality` |

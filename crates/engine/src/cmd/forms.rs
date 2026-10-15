@@ -1891,6 +1891,7 @@ mod tests {
         "has a result",
         "no crash report",
         "FIELDCRAFT_CRASH_TEST",
+        "no relaxation field",
     ];
 
     /// Fill top-level required names (a fresh one) and references (the first existing item).

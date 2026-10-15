@@ -5,7 +5,8 @@
 //! (which resizes them) never uploads the mesh again. The selection highlight is a third, small
 //! scene (the overlay) drawn over the first: its faces pass the depth test over the faces they
 //! repeat, so a hover change uploads only the overlay. Every layer's `on_top` lines are drawn
-//! last, with no depth test.
+//! last, with no depth test. Translucent faces (a datum plane's fill) are drawn after every
+//! opaque face, blended, depth-tested without writing depth, as the CPU renderer draws them.
 //!
 //! A large mesh does not fit one vertex buffer (wgpu's default `max_buffer_size`, which eframe
 //! requests, is 256 MiB): geometry is split into batches of at most [`MAX_BATCH_BYTES`] and the
@@ -39,6 +40,8 @@ pub type GpuErrors = Arc<Mutex<Option<String>>>;
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct GpuScene {
     pub tris: Vec<u8>,
+    /// Translucent triangles ([`Scene::fills`]), in the triangle format with their alpha.
+    pub fills: Vec<u8>,
     pub lines: Vec<u8>,
     /// Lines drawn over everything ([`Scene::on_top`]).
     pub top_lines: Vec<u8>,
@@ -48,10 +51,16 @@ impl GpuScene {
     /// The scene's triangles, lines and points; widths and sizes scaled by `pixels_per_point`
     /// (the scene gives them in points).
     pub fn from_scene(scene: &Scene, pixels_per_point: f32) -> GpuScene {
-        let mut g = GpuScene { tris: Vec::with_capacity(scene.tris.len() * 3 * TRI_SIZE), lines: Vec::new(), top_lines: Vec::new() };
+        let mut g = GpuScene { tris: Vec::with_capacity(scene.tris.len() * 3 * TRI_SIZE), ..GpuScene::default() };
         for t in &scene.tris {
             for p in t.p {
-                g.vertex(p.to_f32(), t.normal.to_f32(), t.color);
+                push_vertex(&mut g.tris, p.to_f32(), t.normal.to_f32(), t.color, 255);
+            }
+        }
+        for f in &scene.fills {
+            let alpha = if f.alpha.is_finite() { (f.alpha.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 0 };
+            for p in f.tri.p {
+                push_vertex(&mut g.fills, p.to_f32(), f.tri.normal.to_f32(), f.tri.color, alpha);
             }
         }
         for l in &scene.lines {
@@ -65,15 +74,17 @@ impl GpuScene {
         }
         g
     }
-    fn vertex(&mut self, p: [f32; 3], n: [f32; 3], c: Rgb) {
-        for v in p.iter().chain(&n) {
-            self.tris.extend_from_slice(&v.to_le_bytes());
-        }
-        self.tris.extend_from_slice(&[c.0, c.1, c.2, 255]);
-    }
     fn line(&mut self, a: [f32; 3], b: [f32; 3], c: Rgb, width: f32) {
         push_line(&mut self.lines, a, b, c, width);
     }
+}
+
+/// A triangle vertex into `buf`.
+fn push_vertex(buf: &mut Vec<u8>, p: [f32; 3], n: [f32; 3], c: Rgb, alpha: u8) {
+    for v in p.iter().chain(&n) {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    buf.extend_from_slice(&[c.0, c.1, c.2, alpha]);
 }
 
 /// A line instance into `buf`.
@@ -119,6 +130,7 @@ struct Batch {
 struct Layer {
     key: Option<u64>,
     tris: Vec<Batch>,
+    fills: Vec<Batch>,
     lines: Vec<Batch>,
     top_lines: Vec<Batch>,
 }
@@ -131,10 +143,12 @@ impl Layer {
         if let Some(sc) = slot.lock().ok().and_then(|mut s| s.take()) {
             // The old buffers go first, so the new ones don't have to fit beside them.
             self.tris.clear();
+            self.fills.clear();
             self.lines.clear();
             self.top_lines.clear();
             let max = device.limits().max_buffer_size;
             self.tris = upload(device, queue, "fc_tris", &sc.tris, TRI_SIZE, 3, max);
+            self.fills = upload(device, queue, "fc_fills", &sc.fills, TRI_SIZE, 3, max);
             self.lines = upload(device, queue, "fc_lines", &sc.lines, LINE_SIZE, 1, max);
             self.top_lines = upload(device, queue, "fc_top_lines", &sc.top_lines, LINE_SIZE, 1, max);
             self.key = Some(key);
@@ -142,12 +156,16 @@ impl Layer {
     }
 
     fn paint_tris(&self, pass: &mut wgpu::RenderPass<'static>, tri: &wgpu::RenderPipeline) {
-        if !self.tris.is_empty() {
-            pass.set_pipeline(tri);
-            for b in &self.tris {
-                pass.set_vertex_buffer(0, b.buffer.slice(..));
-                pass.draw(0..b.count, 0..1);
-            }
+        paint_tri_batches(&self.tris, pass, tri);
+    }
+}
+
+fn paint_tri_batches(batches: &[Batch], pass: &mut wgpu::RenderPass<'static>, tri: &wgpu::RenderPipeline) {
+    if !batches.is_empty() {
+        pass.set_pipeline(tri);
+        for b in batches {
+            pass.set_vertex_buffer(0, b.buffer.slice(..));
+            pass.draw(0..b.count, 0..1);
         }
     }
 }
@@ -166,6 +184,8 @@ struct Resources {
     tri: wgpu::RenderPipeline,
     /// The overlay's faces: pulled toward the eye and depth-tested without writing depth.
     overlay_tri: wgpu::RenderPipeline,
+    /// Translucent faces: blended, depth-tested without writing depth.
+    fill: wgpu::RenderPipeline,
     line: wgpu::RenderPipeline,
     /// Lines over everything: no depth test.
     top_line: wgpu::RenderPipeline,
@@ -380,6 +400,14 @@ impl Resources {
         Resources {
             tri: pipeline("fc_tris", "vs_tri", "fs_tri", tri_layout(), depth(wgpu::CompareFunction::Less, true), None),
             overlay_tri: pipeline("fc_overlay_tris", "vs_overlay_tri", "fs_tri", tri_layout(), depth(wgpu::CompareFunction::LessEqual, false), None),
+            fill: pipeline(
+                "fc_fills",
+                "vs_tri",
+                "fs_tri",
+                tri_layout(),
+                depth(wgpu::CompareFunction::Less, false),
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+            ),
             line: pipeline(
                 "fc_lines",
                 "vs_line",
@@ -489,6 +517,9 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         res.scene.paint_tris(pass, &res.tri);
         res.symbols.paint_tris(pass, &res.tri);
         res.overlay.paint_tris(pass, &res.overlay_tri);
+        for layer in [&res.scene, &res.symbols, &res.overlay] {
+            paint_tri_batches(&layer.fills, pass, &res.fill);
+        }
         for layer in [&res.scene, &res.symbols, &res.overlay] {
             paint_line_batches(&layer.lines, pass, &res.line);
         }

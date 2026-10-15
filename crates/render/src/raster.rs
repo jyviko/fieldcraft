@@ -26,6 +26,14 @@ pub struct SceneTri {
     pub color: Rgb,
 }
 
+/// A translucent triangle (a datum plane's fill): drawn after the opaque faces, depth-tested
+/// against them without hiding what is behind, blended at `alpha` (0–1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneFill {
+    pub tri: SceneTri,
+    pub alpha: f64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SceneLine {
     pub a: Vec3,
@@ -55,6 +63,8 @@ pub struct SceneLabel {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
     pub tris: Vec<SceneTri>,
+    /// Translucent triangles ([`SceneFill`]).
+    pub fills: Vec<SceneFill>,
     pub lines: Vec<SceneLine>,
     pub points: Vec<ScenePoint>,
     pub labels: Vec<SceneLabel>,
@@ -71,6 +81,7 @@ impl Scene {
     /// Add `other`'s primitives (not its background or radius) to this scene.
     pub fn append(&mut self, other: Scene) {
         self.tris.extend(other.tris);
+        self.fills.extend(other.fills);
         self.lines.extend(other.lines);
         self.points.extend(other.points);
         self.labels.extend(other.labels);
@@ -221,7 +232,7 @@ const DEPTH_BIAS: f64 = 2e-4;
 
 /// [`render`] with overlays drawn over the scene (the setup's symbols, a selection highlight):
 /// their faces over the scene's faces they coincide with (a highlight repeats the faces it
-/// marks), then every layer's lines and points depth-tested, then every layer's
+/// marks), then every layer's translucent faces blended over them, then every layer's lines and points depth-tested, then every layer's
 /// [`Scene::on_top`] lines and labels over everything. The overlays' background and radius are
 /// not used.
 pub fn render_layers(scene: &Scene, overlays: &[&Scene], cam: &Camera, w: usize, h: usize) -> Result<Canvas, RenderError> {
@@ -229,7 +240,13 @@ pub fn render_layers(scene: &Scene, overlays: &[&Scene], cam: &Camera, w: usize,
         return Err(RenderError::Size { w, h });
     }
     let count = |s: &Scene| {
-        s.tris.len().saturating_add(s.lines.len()).saturating_add(s.points.len()).saturating_add(s.labels.len()).saturating_add(s.on_top.len())
+        s.tris
+            .len()
+            .saturating_add(s.fills.len())
+            .saturating_add(s.lines.len())
+            .saturating_add(s.points.len())
+            .saturating_add(s.labels.len())
+            .saturating_add(s.on_top.len())
     };
     let primitives = overlays.iter().fold(count(scene), |n, o| n.saturating_add(count(o)));
     if primitives > MAX_PRIMITIVES {
@@ -277,6 +294,18 @@ pub fn render_layers(scene: &Scene, overlays: &[&Scene], cam: &Camera, w: usize,
         });
     }
     let layers = || std::iter::once(scene).chain(overlays.iter().copied());
+    // Translucent faces over the opaque ones, without writing depth: what is behind shows.
+    for f in layers().flat_map(|s| &s.fills) {
+        let t = &f.tri;
+        let (Some(a), Some(b), Some(cc)) = (project(t.p[0]), project(t.p[1]), project(t.p[2])) else { continue };
+        let alpha = if f.alpha.is_finite() { f.alpha.clamp(0.0, 1.0) } else { 0.0 };
+        let col = shade(t.normal, view_dir, t.color.f());
+        raster_tri(a, b, cc, sw, sh, |x, y, z| {
+            if c.depth.get(y * sw + x).is_some_and(|d| z < *d) {
+                c.put(x, y, col, alpha);
+            }
+        });
+    }
     let line = |c: &mut Canvas, l: &SceneLine, depth_test: bool| {
         let (Some(a), Some(b)) = (biased(l.a, 1.0), biased(l.b, 1.0)) else { return };
         let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
@@ -484,6 +513,28 @@ mod tests {
         let (x, y, _) = cam.to_screen(Vec3::new(0.0, 0.0, 5.0), 64.0, 64.0, 20.0).unwrap();
         let p = px(&c, x as usize, y as usize);
         assert!(p[2] > 200 && p[0] < 60, "{p:?}");
+    }
+
+    /// A translucent face tints what is behind it and hides nothing; one behind an opaque face
+    /// does not show (#302).
+    #[test]
+    fn translucent_faces_blend_over_what_is_in_front_only() {
+        let mut cam = Camera { distance: 50.0, ..Default::default() };
+        cam.set_view(StandardView::Front);
+        let px = |c: &Canvas| c.rgba[(32 * c.w + 32) * 4..(32 * c.w + 32) * 4 + 3].to_vec();
+        let red = red_triangle();
+        let plain = px(&render(&red, &cam, 64, 64).unwrap());
+        let fill = |y: f64| SceneFill {
+            tri: SceneTri { p: red.tris[0].p.map(|p| Vec3::new(p.x, y, p.z)), color: Rgb(0, 0, 255), ..red.tris[0] },
+            alpha: 0.25,
+        };
+        let mut front = red.clone();
+        front.fills.push(fill(-1.0));
+        let tinted = px(&render(&front, &cam, 64, 64).unwrap());
+        assert!(tinted[2] > plain[2] + 20 && tinted[0] > 120, "red still shows, tinted blue: {tinted:?} over {plain:?}");
+        let mut back = red.clone();
+        back.fills.push(fill(1.0));
+        assert_eq!(px(&render(&back, &cam, 64, 64).unwrap()), plain);
     }
 
     /// In perspective, close to the part (the near plane at its smallest), a line a little

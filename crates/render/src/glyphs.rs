@@ -51,7 +51,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use fieldcraft_model::{BoundaryCondition, ContactSurfaces, ElementFace, Load, Model, Procedure, ResolvedSet, Target};
 
 use crate::display::{centre, polygon_normal};
-use crate::{Aabb3, Rgb, Scene, SceneLabel, SceneLine, ScenePoint, Vec3};
+use crate::{Aabb3, Rgb, Scene, SceneFill, SceneLabel, SceneLine, ScenePoint, SceneTri, Vec3};
 
 /// The symbol unit drawn when the caller gives none: a fraction of the model's bounding box
 /// diagonal.
@@ -894,8 +894,8 @@ impl Glyphs {
 const DATUM_MARGIN: f64 = 0.05;
 /// A datum point's cross: each arm's length, as a fraction of the bounding box diagonal.
 const DATUM_POINT: f64 = 0.02;
-/// Hatch lines across a datum plane's rectangle (its light fill).
-const DATUM_HATCH: usize = 4;
+/// A datum plane's fill: how opaque its translucent rectangle is.
+pub const DATUM_FILL_ALPHA: f64 = 0.12;
 
 /// Corner `k` (0..8, one bit per axis) of box `b`.
 fn box_corner(b: &Aabb3, k: usize) -> Vec3 {
@@ -958,7 +958,7 @@ fn axis_ends(bounds: &Aabb3, p: Vec3, a: Vec3) -> (Vec3, Vec3) {
     (p + a * (t0 - margin), p + a * (t1 + margin))
 }
 
-/// Draw the model's datum planes (an outlined, lightly hatched rectangle: the model's extent
+/// Draw the model's datum planes (an outlined rectangle with a light translucent fill: the model's extent
 /// within the plane, `bounds`, plus a margin), axes (a line along the model's extent) and points
 /// (a small cross), each with its name; returns the box around them. Only the datums `shown`
 /// takes are drawn, and `highlight` (the one selected in the browser) whether shown or not, in
@@ -976,7 +976,7 @@ pub fn datums(
     for (name, datum) in model.datums().iter().filter(|(n, _)| shown(n) || highlight == Some(n.as_str())) {
         let picked = highlight == Some(name.as_str());
         let color = if picked { colors.highlight } else { colors.datum };
-        let (outline, thin) = if picked { (HIGHLIGHT_WIDTH, OUTLINE_WIDTH) } else { (OUTLINE_WIDTH, COUPLING_WIDTH) };
+        let outline = if picked { HIGHLIGHT_WIDTH } else { OUTLINE_WIDTH };
         // The one selected in the browser shows through the part.
         (d.color, d.on_top) = (color, picked);
         match *datum {
@@ -991,11 +991,9 @@ pub fn datums(
                     let b = ring.get((k + 1) % 4).copied().unwrap_or(*a);
                     d.line(*a, b);
                 }
-                d.width = thin;
-                for k in 1..DATUM_HATCH {
-                    let t = -1.0 + 2.0 * k as f64 / DATUM_HATCH as f64;
-                    d.line(corner(t, -1.0), corner(t, 1.0));
-                    d.line(corner(-1.0, t), corner(1.0, t));
+                let [a, b, c2, e] = ring;
+                for p in [[a, b, c2], [a, c2, e]] {
+                    d.scene.fills.push(SceneFill { tri: SceneTri { p, normal: n, color }, alpha: DATUM_FILL_ALPHA });
                 }
                 d.scene.labels.push(SceneLabel { p: corner(1.0, 1.0), text: name.clone(), color });
             }
@@ -1712,9 +1710,11 @@ mod tests {
         let bounds = cube(0.0, 10.0);
         let mut scene = Scene::default();
         let drawn = datums(&m, &bounds, &|_| true, None, &COLORS, &mut scene);
-        // A rectangle with its hatch (4 + 2 × 3 lines), the axis line and the point's three arms,
-        // each crossing at the point.
-        assert_eq!(scene.lines.len(), 14);
+        // A rectangle (4 lines, filled by two translucent triangles), the axis line and the
+        // point's three arms, each crossing at the point.
+        assert_eq!(scene.lines.len(), 8);
+        assert_eq!(scene.fills.len(), 2);
+        assert!(scene.fills.iter().all(|f| f.alpha == DATUM_FILL_ALPHA && f.tri.normal == Vec3::X));
         let p = Vec3::new(1.0, 2.0, 3.0);
         assert!(scene.lines.iter().rev().take(3).all(|l| ((l.a + l.b) * 0.5).dist(p) < 1e-12));
         let mut names: Vec<&str> = scene.labels.iter().map(|l| l.text.as_str()).collect();
@@ -1734,7 +1734,7 @@ mod tests {
         assert_eq!((only.lines.len(), only.labels.len()), (1, 1));
         let mut picked = Scene::default();
         datums(&m, &bounds, &|_| false, Some("Mid"), &COLORS, &mut picked);
-        assert_eq!((picked.lines.len(), picked.on_top.len()), (0, 10));
+        assert_eq!((picked.lines.len(), picked.on_top.len(), picked.fills.len()), (0, 4, 2));
         assert!(picked.on_top.iter().all(|l| l.color == COLORS.highlight));
     }
 

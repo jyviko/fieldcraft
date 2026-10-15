@@ -42,6 +42,7 @@ pub mod geometry;
 pub mod loads;
 pub mod materials;
 mod mesh;
+pub mod mesh_plans;
 pub mod nodal;
 pub mod progress;
 pub mod relaxations;
@@ -71,6 +72,7 @@ pub use mesh::{
     Element, ElementEdge, ElementFace, ElementKind, MIN_NORMALIZED_JACOBIAN, Node, admissible_jacobian, check_coordinates, normalized_jacobian,
     tet4_jacobian,
 };
+pub use mesh_plans::{CutRole, MeshPlan, PlanCut, PlanFeature, PlanMesher, PlanRing, PlanUnmapped, RingKind};
 pub use relaxations::{Relaxation, RelaxationCell};
 pub use sections::{BeamProfile, Extent, Formulation, Integration, Section, SectionKind};
 pub use seeds::{Bias, BiasToward, Divisions, Seed, SeedConstraint};
@@ -167,6 +169,9 @@ pub struct Model {
     /// Relaxation fields (`mesh.node.relax`), by name.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     relaxations: BTreeMap<String, Relaxation>,
+    /// Mesh plans (`mesh.plan`), by name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    mesh_plans: BTreeMap<String, MeshPlan>,
 }
 
 /// A [`Model`] as stored, before it is checked.
@@ -217,6 +222,8 @@ struct ModelData {
     seeds: Vec<Seed>,
     #[serde(default)]
     relaxations: BTreeMap<String, Relaxation>,
+    #[serde(default)]
+    mesh_plans: BTreeMap<String, MeshPlan>,
 }
 
 impl TryFrom<ModelData> for Model {
@@ -302,6 +309,9 @@ impl TryFrom<ModelData> for Model {
         }
         for (n, v) in d.relaxations {
             m.set_relaxation(&n, v)?;
+        }
+        for (n, v) in d.mesh_plans {
+            m.set_mesh_plan(&n, v)?;
         }
         Ok(m)
     }
@@ -434,6 +444,7 @@ impl Model {
             suppressed_datums: self.suppressed_datums.clone(),
             seeds: self.seeds.clone(),
             relaxations: self.relaxations.clone(),
+            mesh_plans: self.mesh_plans.clone(),
         }
     }
 
@@ -458,6 +469,29 @@ impl Model {
 
     pub fn remove_relaxation(&mut self, name: &str) -> Result<Relaxation> {
         remove_existing(&mut self.relaxations, "relaxation", name)
+    }
+
+    /// The mesh plans, by name.
+    pub fn mesh_plans(&self) -> &BTreeMap<String, MeshPlan> {
+        &self.mesh_plans
+    }
+
+    pub fn mesh_plan(&self, name: &str) -> Option<&MeshPlan> {
+        self.mesh_plans.get(name)
+    }
+
+    /// Add a mesh plan, or replace the one of that name.
+    pub fn set_mesh_plan(&mut self, name: &str, plan: MeshPlan) -> Result<()> {
+        plan.check().map_err(|e| context("mesh plan", name, e))?;
+        if self.mesh_plans.contains_key(name) {
+            replace_existing(&mut self.mesh_plans, "mesh plan", name, plan)
+        } else {
+            insert_new(&mut self.mesh_plans, "mesh plan", name, plan)
+        }
+    }
+
+    pub fn remove_mesh_plan(&mut self, name: &str) -> Result<MeshPlan> {
+        remove_existing(&mut self.mesh_plans, "mesh plan", name)
     }
 
     /// Counts of each kind of definition, for summaries.

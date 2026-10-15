@@ -12,10 +12,12 @@ use serde_json::{Map, Value, json};
 use crate::fields::{self, NumberEdit, Style};
 use crate::theme::Tokens;
 
-/// The label column.
-const LABEL_W: f32 = 112.0;
-/// A field without its unit.
-const FIELD_W: f32 = 120.0;
+/// The label column: as wide as the form's longest label, at least this…
+const LABEL_MIN: f32 = 72.0;
+/// …and at most this share of the form's width; longer labels wrap.
+const LABEL_SHARE: f32 = 0.45;
+/// The narrowest field.
+const FIELD_MIN: f32 = 48.0;
 /// Indentation of a group's fields.
 const INDENT: f32 = 10.0;
 
@@ -58,14 +60,80 @@ struct Form<'a> {
     out: Outcome,
 }
 
-pub fn style(t: &Tokens) -> Style {
-    Style { label_width: LABEL_W, field_width: FIELD_W, dim: t.text_dim, error: t.error, required: t.accent }
+/// The form's look; `label_width` is the label column ([`label_column`]).
+pub fn style(t: &Tokens, label_width: f32) -> Style {
+    Style { label_width, dim: t.text_dim, error: t.error, required: t.accent }
+}
+
+/// The label column of `fields` in a form `width` wide: its longest label on one line with its
+/// marks, within [`LABEL_MIN`] and [`LABEL_SHARE`] of the width. Labels longer than that wrap; the
+/// column widens when one would need more than [`fields::LABEL_LINES`] lines, as long as a field
+/// keeps [`FIELD_MIN`].
+pub fn label_column(ui: &Ui, fields: &[Field], units: UnitSystem, width: f32) -> f32 {
+    let share = (width * LABEL_SHARE).max(LABEL_MIN);
+    let most = (width - FIELD_MIN - ui.spacing().item_spacing.x).max(share);
+    let mut column = LABEL_MIN;
+    each_label(fields, units, 0, &mut |label, required, help| {
+        let one_line = fields::label_width(ui, label, required, help);
+        let need = if one_line <= share { one_line } else { wrapped_width(ui, label, required, help, share, one_line.min(most)) };
+        column = column.max(need);
+    });
+    column.min(most)
+}
+
+/// The narrowest column in `lo..=hi` that shows `label` whole on [`fields::LABEL_LINES`] lines.
+fn wrapped_width(ui: &Ui, label: &str, required: bool, help: bool, mut lo: f32, mut hi: f32) -> f32 {
+    let marks = fields::marks_width(required, help);
+    let fits = |column: f32| !fields::label_galley(ui, label, egui::Color32::PLACEHOLDER, column - marks).elided;
+    if fits(lo) {
+        return lo;
+    }
+    // Bisection to a point.
+    for _ in 0..12 {
+        if hi - lo < 1.0 {
+            break;
+        }
+        let mid = (lo + hi) / 2.0;
+        if fits(mid) { hi = mid } else { lo = mid }
+    }
+    hi.ceil()
+}
+
+/// A field's width: the rest of its row.
+fn fill(ui: &Ui) -> f32 {
+    ui.available_width().max(FIELD_MIN)
+}
+
+/// Each row label of `fields` (nested too): its text, whether it is required and has help.
+fn each_label(fields: &[Field], units: UnitSystem, depth: usize, out: &mut dyn FnMut(&str, bool, bool)) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for f in fields {
+        let help = !f.help_text(units).is_empty();
+        match f.kind {
+            Kind::Variants { variants, .. } => {
+                // A flattened variant's row is the field's own; a keyed one's is "Type".
+                if f.key.is_empty() {
+                    out(f.label, f.required, help);
+                } else {
+                    out("Type", true, help);
+                }
+                for v in variants {
+                    each_label(v.fields, units, depth + 1, out);
+                }
+            }
+            Kind::Group(inner) | Kind::Rows { fields: inner, .. } => each_label(inner, units, depth + 1, out),
+            _ => out(f.label, f.required, help),
+        }
+    }
 }
 
 /// Draw `fields` editing `params` (an object).
 pub fn show(ui: &mut Ui, t: &Tokens, cx: &Context, fields: &'static [Field], params: &mut Map<String, Value>) -> Outcome {
     let problems = cx.problems.iter().cloned().collect();
-    let mut f = Form { cx, style: style(t), problems, names: BTreeMap::new(), out: Outcome::default() };
+    let label_width = label_column(ui, fields, cx.units, ui.available_width());
+    let mut f = Form { cx, style: style(t, label_width), problems, names: BTreeMap::new(), out: Outcome::default() };
     ui.spacing_mut().item_spacing.y = 3.0;
     if cx.units == UnitSystem::Unspecified && has_system_units(fields, 0) {
         let note = format!("No unit system: numbers are in the model's own consistent units. {}", schema::UNITS_HINT);
@@ -138,7 +206,7 @@ impl Form<'_> {
         let labels: Vec<&str> = variants.iter().map(|v| v.label).collect();
         let id = self.id(path);
         let help = f.help_text(self.cx.units);
-        let picked = fields::row(ui, &self.style, f.label, f.required, &help, |ui| fields::combo(ui, id, selected, &labels, FIELD_W + 40.0));
+        let picked = fields::row(ui, &self.style, f.label, f.required, &help, |ui| fields::combo(ui, id, selected, &labels, fill(ui)));
         picked.and_then(|i| variants.get(i)).map(|v| v.tag.to_string()).filter(|t| Some(t.as_str()) != current)
     }
 
@@ -173,15 +241,15 @@ impl Form<'_> {
         match f.kind {
             Kind::Number { .. } => {
                 let unit = f.unit_label(self.cx.units);
-                let out = self.number(ui, id, value, f.hint, false, FIELD_W);
+                let width = (fill(ui) - fields::unit_width(ui, unit.as_deref())).max(FIELD_MIN);
+                let out = self.number(ui, id, value, f.hint, false, width);
                 fields::unit(ui, &s, unit.as_deref());
                 out
             }
-            Kind::Integer { .. } => self.number(ui, id, value, f.hint, true, FIELD_W),
+            Kind::Integer { .. } => self.number(ui, id, value, f.hint, true, fill(ui)),
             Kind::Text | Kind::Path { .. } => {
                 let mut text = value.and_then(Value::as_str).unwrap_or_default().to_string();
-                fields::text(ui, &s, id, &mut text, f.hint, FIELD_W + 40.0)
-                    .then(|| if text.is_empty() && !f.required { Value::Null } else { json!(text) })
+                fields::text(ui, &s, id, &mut text, f.hint, fill(ui)).then(|| if text.is_empty() && !f.required { Value::Null } else { json!(text) })
             }
             Kind::Bool => {
                 let mut on = value.and_then(Value::as_bool).unwrap_or(false);
@@ -202,7 +270,7 @@ impl Form<'_> {
                 if optional {
                     labels.push("(default)");
                 }
-                fields::combo(ui, id, selected, &labels, FIELD_W + 40.0).map(|i| options.get(i).map_or(Value::Null, |(v, _)| json!(v)))
+                fields::combo(ui, id, selected, &labels, fill(ui)).map(|i| options.get(i).map_or(Value::Null, |(v, _)| json!(v)))
             }
             Kind::Vector { labels, nullable, .. } => self.vector(ui, id, value, f, labels, nullable),
             Kind::Ref(c) => self.reference(ui, id, path, value, c, f.hint, f.required),
@@ -218,7 +286,7 @@ impl Form<'_> {
                 if !f.required {
                     labels.push("(none)");
                 }
-                fields::combo(ui, id, selected, &labels, FIELD_W + 40.0).and_then(|i| match options.get(i) {
+                fields::combo(ui, id, selected, &labels, fill(ui)).and_then(|i| match options.get(i) {
                     Some(o) if Some(o.key) == key => None,
                     Some(o) if matches!(o.kind, Kind::Unit) => Some(json!(o.key)),
                     Some(o) => Some(json!({o.key: schema::prefill(&[*o], &json!({})).get(o.key).cloned().unwrap_or(Value::Null)})),
@@ -314,7 +382,7 @@ impl Form<'_> {
         if names.is_empty() {
             ui.vertical(|ui| {
                 let none = format!("No {} yet", plural(c.label()));
-                ui.add_enabled_ui(false, |ui| fields::combo(ui, id, current.as_deref().unwrap_or(&none), &[], FIELD_W + 40.0));
+                ui.add_enabled_ui(false, |ui| fields::combo(ui, id, current.as_deref().unwrap_or(&none), &[], fill(ui)));
                 self.create_button(ui, c, path);
             });
             return None;
@@ -325,7 +393,7 @@ impl Form<'_> {
         if !required {
             labels.push("(default)");
         }
-        fields::combo(ui, id, &selected, &labels, FIELD_W + 40.0).map(|i| names.get(i).map_or(Value::Null, |n| json!(n)))
+        fields::combo(ui, id, &selected, &labels, fill(ui)).map(|i| names.get(i).map_or(Value::Null, |n| json!(n)))
     }
 
     fn reference_list(&mut self, ui: &mut Ui, path: &str, value: Option<&Value>, c: Collection) -> Option<Value> {
@@ -367,7 +435,7 @@ impl Form<'_> {
         let shown = value.map(Value::to_string).unwrap_or_default();
         let mut text = ui.data(|d| d.get_temp::<(String, String)>(id)).filter(|(_, over)| *over == shown).map_or_else(|| shown.clone(), |(t, _)| t);
         let bad = !text.trim().is_empty() && serde_json::from_str::<Value>(&text).is_err();
-        let mut edit = egui::TextEdit::singleline(&mut text).id(id).code_editor().desired_width(FIELD_W + 40.0);
+        let mut edit = egui::TextEdit::singleline(&mut text).id(id).code_editor().desired_width(fill(ui));
         if bad {
             edit = edit.text_color(self.style.error);
             self.out.invalid += 1;
@@ -561,6 +629,8 @@ fn preselect_in(fields: &[Field], obj: &mut Map<String, Value>, pick: &dyn Fn(Co
 
 #[cfg(test)]
 mod tests {
+    use egui::Color32;
+
     use super::*;
 
     /// Every command's form draws, with its defaults and with hostile parameters, with and without
@@ -604,6 +674,80 @@ mod tests {
                 assert_eq!(params, before, "{}", c.id);
             }
         }
+    }
+
+    /// Every form's labels show whole, wrapped at most onto two lines, with their marks inside
+    /// the label column, at the context panel's width and at a narrow one, in a 1280×800 window.
+    #[test]
+    fn no_label_or_mark_is_clipped() {
+        let ctx = egui::Context::default();
+        let input =
+            || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))), ..Default::default() };
+        let one = |c: Collection| vec![format!("{} with a long name", c.label())];
+        let mut checked = 0;
+        for width in [crate::context::WIDTH - 16.0, 200.0] {
+            for c in fieldcraft_engine::commands() {
+                let Some(form) = c.form else { continue };
+                let mut params = schema::prefill(form, &json!({})).as_object().cloned().unwrap_or_default();
+                let mut labels = BTreeSet::new();
+                each_label(form, UnitSystem::MmTonneS, 0, &mut |l, _, _| {
+                    labels.insert(l.to_string());
+                });
+                let (mut left, mut column, mut cut) = (0.0, 0.0, Vec::new());
+                let mut out = ctx.run_ui(input(), |ui| {
+                    let touched = BTreeSet::new();
+                    let cx = Context {
+                        units: UnitSystem::MmTonneS,
+                        names: &one,
+                        salt: Id::new(c.id),
+                        touched: &touched,
+                        attempted: false,
+                        refused: None,
+                        problems: &[],
+                    };
+                    ui.vertical(|ui| {
+                        ui.set_max_width(width);
+                        left = ui.min_rect().left();
+                        column = label_column(ui, form, cx.units, width);
+                        // Every label (also of sections not open), laid out as its row lays it out.
+                        each_label(form, cx.units, 0, &mut |label, required, help| {
+                            let wrap = column - fields::marks_width(required, help);
+                            if fields::label_galley(ui, label, Color32::WHITE, wrap).elided {
+                                cut.push(label.to_string());
+                            }
+                        });
+                        show(ui, &Tokens::get(false), &cx, form, &mut params);
+                    });
+                });
+                out.textures_delta.clear();
+                assert!(cut.is_empty(), "{} at {width}: {cut:?} do not fit {column}", c.id);
+                assert!(column <= width - FIELD_MIN, "{}: {column}", c.id);
+                // A row's column starts at its label (nested rows are indented); its marks follow.
+                let mut row_left = left;
+                for shape in &out.shapes {
+                    let egui::Shape::Text(t) = &shape.shape else { continue };
+                    let text = t.galley.text();
+                    let rect = t.galley.rect.translate(t.pos.to_vec2());
+                    let end = row_left + column + 0.5;
+                    if labels.contains(text) && rect.left() < left + width / 2.0 {
+                        row_left = rect.left();
+                        assert!(!t.galley.elided, "{} at {width}: `{text}` elided", c.id);
+                        assert!(rect.right() <= rect.left() + column + 0.5, "{} at {width}: `{text}` past the column", c.id);
+                        checked += 1;
+                    } else if (text == "*" || text == "i") && rect.left() < end {
+                        assert!(rect.right() <= end, "{} at {width}: a mark past the column: {rect:?}", c.id);
+                    }
+                }
+            }
+        }
+        assert!(checked > 100, "{checked}");
+    }
+
+    /// Long labels share the column: the Plasticity form's "Hardening modulus" shows whole.
+    #[test]
+    fn hardening_modulus_shows_whole() {
+        let text = drawn("model.material.plasticity", UnitSystem::MmTonneS, json!({"plastic": {"type": "bilinear"}}));
+        assert!(text.lines().any(|l| l == "Hardening modulus"), "{text}");
     }
 
     /// In every form, each required field left empty is a problem, so OK waits, and the message

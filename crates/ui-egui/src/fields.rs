@@ -2,7 +2,7 @@
 //! is a number, a drop-down, a text field. They know nothing of FieldCraft (colours and widths
 //! come in a [`Style`]), so they can move to the shared Craft UI crate.
 //!
-//! The row layout (a label column of fixed width, clamped for long labels, then the field) is
+//! The row layout (a label column, a long label wrapping inside it, then the field) is
 //! adapted from SolidCraft's dialog rows (`crates/ui-egui/src/dialogs.rs`, MIT OR Apache-2.0).
 
 use egui::{Color32, Id, RichText, Ui, vec2};
@@ -12,8 +12,6 @@ use egui::{Color32, Id, RichText, Ui, vec2};
 pub struct Style {
     /// The label column.
     pub label_width: f32,
-    /// A field (number, text, drop-down) without its unit.
-    pub field_width: f32,
     pub dim: Color32,
     pub error: Color32,
     /// The mark of a required field.
@@ -23,39 +21,79 @@ pub struct Style {
 /// Row height.
 pub const ROW_H: f32 = 22.0;
 
+/// The room the marks after a label take: the required `*` and the help [`help_mark`].
+pub fn marks_width(required: bool, help: bool) -> f32 {
+    MARK_GAP + if required { STAR_W } else { 0.0 } + if help { HELP_W } else { 0.0 }
+}
+
+/// Between a label and its marks.
+const MARK_GAP: f32 = 2.0;
+/// The required mark.
+const STAR_W: f32 = 9.0;
+/// The help mark and the space before it.
+const HELP_W: f32 = 13.0;
+/// A label longer than its column wraps onto this many lines (labels are short phrases).
+pub const LABEL_LINES: usize = 2;
+
+/// The font of a row's label.
+pub fn label_font(ui: &Ui) -> egui::FontId {
+    egui::TextStyle::Body.resolve(ui.style())
+}
+
+/// The width of `label` on one line, with its marks: what a label column needs to show it whole.
+pub fn label_width(ui: &Ui, label: &str, required: bool, help: bool) -> f32 {
+    crate::elide::width(ui, label, &label_font(ui)).ceil() + marks_width(required, help)
+}
+
+/// `label` laid out in a column `wrap` wide, on at most [`LABEL_LINES`] lines (elided past them).
+pub fn label_galley(ui: &Ui, label: &str, color: Color32, wrap: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple(label.to_string(), label_font(ui), color, wrap.max(0.0));
+    job.wrap.max_rows = LABEL_LINES;
+    ui.painter().layout_job(job)
+}
+
 /// A row: `label` (with a mark when `required`, and [`help_mark`] when there is `help`) in the
-/// label column, then `add`. Hovering the label or the mark shows the label and `help`.
+/// label column, then `add`. A label wider than the column wraps onto [`LABEL_LINES`] lines; the
+/// marks always follow it inside the column. Hovering the label or the mark shows the label and
+/// `help`.
 pub fn row<R>(ui: &mut Ui, s: &Style, label: &str, required: bool, help: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
-        ui.allocate_ui_with_layout(vec2(s.label_width, ROW_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.set_width(s.label_width);
-            ui.spacing_mut().item_spacing.x = 2.0;
-            let tip = if help.is_empty() { label.to_string() } else { format!("{label}\n{help}") };
-            // The marks keep their room: a long label truncates before them.
-            let marks = if required { 10.0 } else { 0.0 } + if help.is_empty() { 0.0 } else { 13.0 };
-            ui.scope(|ui| {
-                ui.set_max_width((s.label_width - marks).max(0.0));
-                ui.add(egui::Label::new(RichText::new(label).color(s.dim)).truncate()).on_hover_text(&tip);
-            });
-            if required {
-                ui.label(RichText::new("*").color(s.required)).on_hover_text("Required");
-            }
-            if !help.is_empty() {
-                help_mark(ui, s.dim).on_hover_text(&tip);
-            }
-        });
+        let galley = label_galley(ui, label, s.dim, s.label_width - marks_width(required, !help.is_empty()));
+        let (rect, response) = ui.allocate_exact_size(vec2(s.label_width, galley.size().y.max(ROW_H)), egui::Sense::hover());
+        let text_rect = egui::Align2::LEFT_CENTER.anchor_size(rect.left_center(), galley.size());
+        let tip = if help.is_empty() { label.to_string() } else { format!("{label}\n{help}") };
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, label));
+        response.on_hover_text(&tip);
+        // The marks sit after the label's last line.
+        let last = galley.rows.last().map_or(egui::Rect::ZERO, |r| r.rect());
+        let mark_y = text_rect.top() + last.center().y;
+        let mut x = text_rect.left() + last.right() + MARK_GAP;
+        ui.painter().galley(text_rect.min, galley, s.dim);
+        if required {
+            let star = egui::Rect::from_min_size(egui::pos2(x, mark_y - 7.0), vec2(STAR_W, 14.0));
+            ui.painter().text(egui::pos2(x, mark_y), egui::Align2::LEFT_CENTER, "*", label_font(ui), s.required);
+            ui.interact(star, ui.id().with("required"), egui::Sense::hover()).on_hover_text("Required");
+            x += STAR_W;
+        }
+        if !help.is_empty() {
+            let mark = egui::Rect::from_center_size(egui::pos2(x + HELP_W / 2.0, mark_y), vec2(11.0, 11.0));
+            paint_help_mark(ui.painter(), mark, s.dim);
+            ui.interact(mark, ui.id().with("help"), egui::Sense::hover()).on_hover_text(&tip);
+        }
         add(ui)
     })
     .inner
 }
 
 /// A small circled "i" after a label that has help, drawn (the UI font has no such glyph).
-pub fn help_mark(ui: &mut Ui, color: Color32) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(11.0, 11.0), egui::Sense::hover());
-    let painter = ui.painter();
+pub fn paint_help_mark(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
     painter.circle_stroke(rect.center(), 5.0, egui::Stroke::new(1.0, color));
     painter.text(rect.center(), egui::Align2::CENTER_CENTER, "i", egui::FontId::proportional(8.5), color);
-    response
+}
+
+/// The width of `unit` after a field ([`unit`]), with the space before it; 0 without one.
+pub fn unit_width(ui: &Ui, unit: Option<&str>) -> f32 {
+    unit.map_or(0.0, |u| crate::elide::width(ui, u, &egui::TextStyle::Small.resolve(ui.style())).ceil() + ui.spacing().item_spacing.x)
 }
 
 /// A message under a field, aligned with the fields.

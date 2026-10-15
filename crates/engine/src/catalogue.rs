@@ -238,7 +238,14 @@ pub static CATALOGUE: &[Capability] = &[
     // ---- Geometry ----
     ready("geometry.open", "Open Design", Geometry, "Import", "Open a SolidCraft design: its bodies with persistent face names"),
     ready("geometry.import.mesh", "Tagged Mesh", Geometry, "Import", "Read a face-tagged surface mesh (3MF)"),
-    ready("geometry.bodies", "Bodies", Geometry, "Inspect", "List the open design's bodies, volumes and named faces"),
+    ready_more(
+        "geometry.bodies",
+        "Bodies",
+        Geometry,
+        "Inspect",
+        "List the open design's bodies, volumes and named faces, edges and vertices",
+        &["geometry.centre"],
+    ),
     ready("geometry.tessellate", "Tessellate", Geometry, "Inspect", "Tessellate a body into a face-tagged boundary surface"),
     ready(
         "mesh.surface.check",
@@ -493,7 +500,14 @@ pub static CATALOGUE: &[Capability] = &[
         "Contact",
         "Find the parts of the mesh that touch, and make contact pairs of them",
     ),
-    soon("interaction.rigid_wall", "Rigid Wall", Interactions, "Contact", "M10", "Rigid walls for explicit dynamics"),
+    ready_more(
+        "interaction.rigid_wall",
+        "Rigid Wall",
+        Interactions,
+        "Contact",
+        "A fixed rigid plane a set's nodes cannot pass, with friction, in an explicit dynamics step",
+        &["interaction.rigid_wall.delete"],
+    ),
     soon("interaction.bolt", "Bolt Load", Interactions, "Connectors", "M7", "Bolt pretension"),
     ready_more(
         "model.spring.create",

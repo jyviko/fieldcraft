@@ -148,6 +148,19 @@ fn scalar(f: &Field, v: &Value, units: UnitSystem) -> String {
         Kind::Vector { labels, .. } => vector(labels, v, unit.as_deref()),
         Kind::Ref(_) | Kind::Text | Kind::Path { .. } => v.as_str().map_or_else(|| crate::context::value_text(v), str::to_string),
         Kind::RefList(_) => list(v, |x| x.as_str().map(str::to_string)),
+        // `Bracket.3: Tet, Bracket.7: Swept`.
+        Kind::RefChoices(_, options) => v.as_object().map_or_else(
+            || crate::context::value_text(v),
+            |o| {
+                o.iter()
+                    .map(|(k, x)| {
+                        let s = x.as_str().unwrap_or_default();
+                        format!("{k}: {}", options.iter().find(|(o, _)| *o == s).map_or(s, |(_, l)| *l))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        ),
         Kind::Either(options) => match v {
             Value::String(s) => options.iter().find(|o| o.key == s).map_or_else(|| s.clone(), |o| o.label.to_string()),
             Value::Object(o) => o

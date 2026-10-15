@@ -1,5 +1,7 @@
 //! `interaction.contact.*`: contact definitions (pairs of surfaces, general contact) and the
-//! search for surfaces that touch; `interaction.tie*`: ties between non-matching meshes.
+//! search for surfaces that touch; `interaction.tie*`: ties between non-matching meshes;
+//! `interaction.rigid_wall*`: rigid walls, which belong to an explicit dynamics step (its
+//! `rigid_walls`, also edited in the step's form).
 //!
 //! A contact's surfaces are sets of element faces, or of element edges in a 2D model
 //! ([`fieldcraft_model::contact`]). The commands
@@ -16,7 +18,7 @@ use crate::schema::ProblemKind;
 use std::collections::BTreeMap;
 
 use fieldcraft_fem::contact::{Grid, bounds, closest_point};
-use fieldcraft_model::{Contact, ContactSurfaces, ElementFace, Friction, InitialPenetration, Model, Set, Tie};
+use fieldcraft_model::{Contact, ContactSurfaces, ElementFace, Friction, InitialPenetration, Model, Procedure, RigidWall, Set, Step, Tie};
 use serde_json::{Value, json};
 
 use super::{name, opt};
@@ -36,6 +38,88 @@ fn contact(p: &Value, surfaces: ContactSurfaces) -> Result<Contact> {
 /// A required name-valued parameter.
 fn text<'a>(p: &'a Value, key: &str) -> Result<&'a str> {
     p.get(key).and_then(Value::as_str).ok_or_else(|| EngineError::param(key, ProblemKind::NotAName))
+}
+
+pub const RIGID_WALL: CommandSpec = CommandSpec {
+    id: "interaction.rigid_wall",
+    label: "Rigid Wall",
+    params: r#"{"step": "Impact" (an explicit dynamics step; default: the model's only one), "set": "front" (the nodes the wall stops), "point": [x, y, z] (on the wall), "normal": [nx, ny, nz] (toward the side the nodes stay on), "friction": {"static": 0.3, "kinetic": 0.2, "decay": 10} (Coulomb; default frictionless)} — a fixed rigid plane the set's nodes cannot pass, added to the step's rigid walls (the same list as model.step.create's `rigid_walls`). Replies the step and the wall's index in it"#,
+    form: Some(super::forms::RIGID_WALL),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Step, Requirement::Set],
+    run: rigid_wall,
+};
+
+pub const RIGID_WALL_DELETE: CommandSpec = CommandSpec {
+    id: "interaction.rigid_wall.delete",
+    label: "Delete Rigid Wall",
+    params: r#"{"step": "Impact", "index": 0} — removes a rigid wall from an explicit dynamics step (its index in the step's `rigid_walls`, from 0)"#,
+    form: Some(super::forms::RIGID_WALL_DELETE),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Step],
+    run: rigid_wall_delete,
+};
+
+/// The explicit dynamics step `step` names, or the model's only one when it names none.
+fn explicit_step(m: &Model, p: &Value) -> Result<Step> {
+    let explicit = |s: &&Step| matches!(s.procedure, Procedure::ExplicitDynamic(_));
+    let step = match p.get("step") {
+        None | Some(Value::Null) => {
+            let mut all = m.steps().iter().filter(explicit);
+            match (all.next(), all.next()) {
+                (Some(s), None) => s,
+                (None, _) => {
+                    return Err(EngineError::Params(
+                        "the model has no explicit dynamics step, where rigid walls act: create one (Steps › Step, Dynamic, explicit)".into(),
+                    ));
+                }
+                (Some(_), Some(_)) => {
+                    return Err(EngineError::param("step", ProblemKind::Invalid("name the explicit dynamics step: the model has several".into())));
+                }
+            }
+        }
+        Some(_) => {
+            let n = text(p, "step")?;
+            let s = m.steps().iter().find(|s| s.name == n).ok_or_else(|| EngineError::Params(format!("no step `{n}`")))?;
+            if !explicit(&s) {
+                return Err(EngineError::Params(format!("step `{n}` is not an explicit dynamics step: rigid walls act only there")));
+            }
+            s
+        }
+    };
+    Ok(step.clone())
+}
+
+fn rigid_wall(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut step = explicit_step(&s.model, p)?;
+    let set = text(p, "set")?.to_string();
+    if s.model.set(&set).is_none() {
+        return Err(EngineError::Params(format!("no set `{set}`")));
+    }
+    let wall = RigidWall {
+        set,
+        point: super::req(p, "point")?,
+        normal: super::req(p, "normal")?,
+        friction: opt::<Friction>(p, "friction")?.unwrap_or(Friction::NONE),
+    };
+    let Procedure::ExplicitDynamic(e) = &mut step.procedure else { return Err(EngineError::Params("not an explicit dynamics step".into())) };
+    e.rigid_walls.push(wall);
+    let index = e.rigid_walls.len() - 1;
+    let name = step.name.clone();
+    s.model.replace_step(step)?;
+    Ok(json!({"step": name, "index": index}))
+}
+
+fn rigid_wall_delete(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut step = explicit_step(&s.model, p)?;
+    let index: usize = super::req(p, "index")?;
+    let Procedure::ExplicitDynamic(e) = &mut step.procedure else { return Err(EngineError::Params("not an explicit dynamics step".into())) };
+    if index >= e.rigid_walls.len() {
+        return Err(EngineError::param("index", ProblemKind::Invalid(format!("step `{}` has {} rigid walls", step.name, e.rigid_walls.len()))));
+    }
+    e.rigid_walls.remove(index);
+    s.model.replace_step(step)?;
+    Ok(Value::Null)
 }
 
 pub const PAIR: CommandSpec = CommandSpec {
@@ -321,6 +405,36 @@ fn find(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rigid walls go into the explicit step (the model's only one, or the one named) and come
+    /// out by index; a model without an explicit step, or a step of another kind, is refused.
+    #[test]
+    fn rigid_walls_belong_to_the_explicit_step() {
+        let mut s = Session::default();
+        super::super::define::tests::defined_bar(&mut s);
+        let wall = json!({"set": "end", "point": [3, 0, 0], "normal": [-1, 0, 0], "friction": {"static": 0.2}});
+        assert!(s.execute("interaction.rigid_wall", &wall).is_err(), "no explicit step yet");
+        let mut on_bend = wall.clone();
+        on_bend["step"] = json!("Bend");
+        assert!(s.execute("interaction.rigid_wall", &on_bend).is_err(), "a static step");
+        s.execute("model.step.create", &json!({"name": "Hit", "procedure": {"type": "explicit_dynamic", "end_time": 1e-4}})).unwrap();
+        let r = s.execute("interaction.rigid_wall", &wall).unwrap();
+        assert_eq!(r, json!({"step": "Hit", "index": 0}));
+        let walls = |s: &Session| match &s.model.step("Hit").unwrap().procedure {
+            Procedure::ExplicitDynamic(e) => e.rigid_walls.clone(),
+            _ => panic!(),
+        };
+        assert_eq!(walls(&s).len(), 1);
+        assert_eq!(walls(&s)[0].set, "end");
+        for bad in [json!({"set": "nope", "point": [0, 0, 0], "normal": [1, 0, 0]}), json!({"set": "end", "point": [0, 0, 0], "normal": [0, 0, 0]})] {
+            assert!(s.execute("interaction.rigid_wall", &bad).is_err(), "{bad}");
+        }
+        assert!(s.execute("interaction.rigid_wall.delete", &json!({"step": "Hit", "index": 1})).is_err());
+        s.execute("interaction.rigid_wall.delete", &json!({"step": "Hit", "index": 0})).unwrap();
+        assert!(walls(&s).is_empty());
+        s.execute("model.step.create", &json!({"name": "Hit2", "procedure": {"type": "explicit_dynamic", "end_time": 1e-4}})).unwrap();
+        assert!(s.execute("interaction.rigid_wall", &wall).is_err(), "two explicit steps: name one");
+    }
 
     /// Two unit cubes of 2×2×2 hex8 each, the second resting on the first (separate nodes), and
     /// a third cube far away.

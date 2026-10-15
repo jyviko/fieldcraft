@@ -50,6 +50,8 @@ pub struct Outcome {
     pub create: Option<(Collection, String)>,
     /// The paths of the fields edited this frame.
     pub touched: Vec<String>,
+    /// The body whose row in a list of bodies is under the pointer (the viewport highlights it).
+    pub hover_body: Option<String>,
 }
 
 struct Form<'a> {
@@ -298,6 +300,7 @@ impl Form<'_> {
             Kind::Vector { labels, nullable, .. } => self.vector(ui, id, value, f, labels, nullable),
             Kind::Ref(c) => self.reference(ui, id, path, value, c, f.hint, f.required),
             Kind::RefList(c) => self.reference_list(ui, path, value, c),
+            Kind::RefChoices(c, options) => self.reference_choices(ui, id, value, c, options),
             Kind::Either(options) => {
                 let key = match value {
                     Some(Value::String(s)) => Some(s.as_str()),
@@ -431,18 +434,74 @@ impl Form<'_> {
         let chosen: Vec<String> =
             value.and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
         let names = self.names(c).to_vec();
+        let shown = names.get(..names.len().min(MAX_ROWS)).unwrap_or_default();
         let mut changed = None;
+        let list = |picked: Vec<String>| if picked.is_empty() { Value::Null } else { json!(picked) };
         ui.vertical(|ui| {
             if names.is_empty() {
                 ui.label(RichText::new(format!("No {} yet", plural(c.label()))).color(self.style.dim));
                 self.create_button(ui, c, path);
             }
-            for n in names.iter().take(MAX_ROWS) {
+            // All, none and the others, for long lists.
+            if shown.len() > 3 {
+                ui.horizontal(|ui| {
+                    if ui.small_button("All").clicked() {
+                        changed = Some(list(shown.to_vec()));
+                    }
+                    if ui.small_button("None").clicked() {
+                        changed = Some(Value::Null);
+                    }
+                    if ui.small_button("Invert").on_hover_text("Tick the unticked ones and untick the others").clicked() {
+                        changed = Some(list(shown.iter().filter(|n| !chosen.contains(n)).cloned().collect()));
+                    }
+                });
+            }
+            for n in shown {
                 let mut on = chosen.contains(n);
-                if ui.checkbox(&mut on, n).changed() {
+                let r = ui.checkbox(&mut on, n);
+                if r.hovered() && c == Collection::Body {
+                    self.out.hover_body = Some(n.clone());
+                }
+                if r.changed() {
                     let mut next: Vec<String> = names.iter().filter(|m| if *m == n { on } else { chosen.contains(m) }).cloned().collect();
                     next.dedup();
-                    changed = Some(if next.is_empty() { Value::Null } else { json!(next) });
+                    changed = Some(list(next));
+                }
+            }
+        });
+        changed
+    }
+
+    /// A drop-down per item of `c` (its row hovered highlights a body), "(default)" leaving it
+    /// out of the object.
+    fn reference_choices(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, c: Collection, options: &[(&str, &str)]) -> Option<Value> {
+        let current = value.and_then(Value::as_object).cloned().unwrap_or_default();
+        let names = self.names(c).to_vec();
+        let mut labels: Vec<&str> = options.iter().map(|(_, l)| *l).collect();
+        labels.push("(default)");
+        let mut changed = None;
+        ui.vertical(|ui| {
+            if names.is_empty() {
+                ui.label(RichText::new(format!("No {} yet", plural(c.label()))).color(self.style.dim));
+            }
+            for (i, n) in names.iter().take(MAX_ROWS).enumerate() {
+                let chosen = current.get(n).and_then(Value::as_str);
+                let selected = options.iter().find(|(v, _)| Some(*v) == chosen).map_or("(default)", |(_, l)| *l);
+                let row = ui.horizontal(|ui| {
+                    let width = (ui.available_width() * 0.5).max(FIELD_MIN);
+                    ui.add_sized([width, ui.spacing().interact_size.y], egui::Label::new(n.as_str()).truncate());
+                    fields::combo(ui, id.with(i), selected, &labels, fill(ui))
+                });
+                if row.response.contains_pointer() && c == Collection::Body {
+                    self.out.hover_body = Some(n.clone());
+                }
+                if let Some(k) = row.inner {
+                    let mut next = current.clone();
+                    match options.get(k) {
+                        Some((v, _)) => next.insert(n.clone(), json!(v)),
+                        None => next.remove(n),
+                    };
+                    changed = Some(if next.is_empty() { Value::Null } else { Value::Object(next) });
                 }
             }
         });

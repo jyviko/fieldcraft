@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-68 ready, 41 coming soon.
+69 ready, 40 coming soon.
 
 ## Geometry
 
@@ -14,7 +14,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 |---|---|---|---|
 | Import | Open Design — Open a SolidCraft design: its bodies with persistent face names | ready | `geometry.open` |
 | Import | Tagged Mesh — Read a face-tagged surface mesh (3MF) | ready | `geometry.import.mesh` |
-| Inspect | Bodies — List the open design's bodies, volumes and named faces | ready | `geometry.bodies` |
+| Inspect | Bodies — List the open design's bodies, volumes and named faces, edges and vertices | ready | `geometry.bodies`, `geometry.centre` |
 | Inspect | Tessellate — Tessellate a body into a face-tagged boundary surface | ready | `geometry.tessellate` |
 | Inspect | Check Surface — Weld, closed, manifold, orientation and self-intersection checks; feature edges | ready | `mesh.surface.check` |
 | Prepare | Datum Plane — A datum plane: principal plane and offset, three points or datum points, point and normal, normal to an axis | ready | `geometry.datum`, (`geometry.datum.edit`), (`geometry.datum.delete`) |
@@ -109,7 +109,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Contact | General Contact — Contact between everything that may touch, or self contact of a surface, with friction (explicit dynamics and nonlinear static steps) | ready | `interaction.contact.general`, `interaction.contact.edit`, `interaction.contact.delete` |
 | Contact | Contact Pair — Contact between two surfaces: with friction in explicit dynamics, mortar contact with friction in nonlinear static steps | ready | `interaction.contact.pair` |
 | Contact | Find Contacts — Find the parts of the mesh that touch, and make contact pairs of them | ready | `interaction.contact.find` |
-| Contact | Rigid Wall — Rigid walls for explicit dynamics | coming soon (M10) |  |
+| Contact | Rigid Wall — A fixed rigid plane a set's nodes cannot pass, with friction, in an explicit dynamics step | ready | `interaction.rigid_wall`, `interaction.rigid_wall.delete` |
 | Connectors | Bolt Load — Bolt pretension | coming soon (M7) |  |
 | Connectors | Spring — Spring or dashpot to the ground or between two points, along a direction or their line | ready | `model.spring.create`, `model.spring.edit`, `model.spring.delete` |
 | Connectors | Point Mass — Point mass and rotary inertia at nodes or a reference point | ready | `model.mass.create`, `model.mass.edit`, `model.mass.delete` |

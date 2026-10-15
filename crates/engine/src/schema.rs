@@ -74,6 +74,9 @@ pub enum Kind {
     Ref(Collection),
     /// A list of such names.
     RefList(Collection),
+    /// A choice per item: an object from the names of a collection's items to one of these
+    /// strings (value, label); an item left out takes the command's default.
+    RefChoices(Collection, &'static [(&'static str, &'static str)]),
     /// A nested object.
     Group(&'static [Field]),
     /// A nested object (or, with an empty key, the parent object) tagged by `tag`: the tag's value
@@ -429,6 +432,10 @@ pub const fn reference(key: &'static str, label: &'static str, c: Collection) ->
 pub const fn references(key: &'static str, label: &'static str, c: Collection) -> Field {
     field(key, label, Kind::RefList(c))
 }
+
+pub const fn ref_choices(key: &'static str, label: &'static str, c: Collection, options: &'static [(&'static str, &'static str)]) -> Field {
+    field(key, label, Kind::RefChoices(c, options))
+}
 pub const fn group(key: &'static str, label: &'static str, fields: &'static [Field]) -> Field {
     field(key, label, Kind::Group(fields))
 }
@@ -659,7 +666,9 @@ impl Problem {
             ProblemKind::NotText => "text".into(),
             ProblemKind::NotABool => "true or false".into(),
             ProblemKind::NotAChoice => match f.map(|f| f.kind) {
-                Some(Kind::Choice(options)) => format!("one of {}", options.iter().map(|(o, _)| *o).collect::<Vec<_>>().join(", ")),
+                Some(Kind::Choice(options) | Kind::RefChoices(_, options)) => {
+                    format!("one of {}", options.iter().map(|(o, _)| *o).collect::<Vec<_>>().join(", "))
+                }
                 Some(Kind::Either(options)) => format!("one of {}", options.iter().map(|o| o.key).collect::<Vec<_>>().join(", ")),
                 _ => "one of the choices".into(),
             },
@@ -914,6 +923,11 @@ fn value_problem(f: &'static Field, v: &Value, path: &str, out: &mut Vec<Problem
             _ => Some(ProblemKind::NotAVector { len: labels.len() }),
         },
         Kind::RefList(_) => (!v.as_array().is_some_and(|a| a.iter().all(Value::is_string))).then_some(ProblemKind::NotNames),
+        Kind::RefChoices(_, options) => match v.as_object() {
+            Some(o) if o.values().all(|x| x.as_str().is_some_and(|s| options.iter().any(|(opt, _)| *opt == s))) => None,
+            Some(_) => Some(ProblemKind::NotAChoice),
+            None => Some(ProblemKind::NotAnObject),
+        },
         Kind::Group(fields) => match v.as_object() {
             Some(o) => {
                 check(fields, o, path, out, depth + 1);
@@ -1035,6 +1049,11 @@ fn field_schema(f: &Field, depth: usize) -> Value {
         }
         Kind::Ref(c) => json!({"type": "string", "x-references": c.label()}),
         Kind::RefList(c) => json!({"type": "array", "items": {"type": "string", "x-references": c.label()}}),
+        Kind::RefChoices(c, options) => json!({
+            "type": "object",
+            "x-references": c.label(),
+            "additionalProperties": {"enum": options.iter().map(|(o, _)| *o).collect::<Vec<_>>()},
+        }),
         Kind::Group(fields) if depth <= MAX_DEPTH => object_schema(fields, depth + 1),
         Kind::Variants { tag, variants } if depth <= MAX_DEPTH => json!({"oneOf": variant_schemas(tag, variants, depth + 1)}),
         Kind::Either(options) if depth <= MAX_DEPTH => json!({"oneOf": options.iter().map(|o| match o.kind {

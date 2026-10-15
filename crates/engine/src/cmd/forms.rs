@@ -1050,10 +1050,22 @@ pub const HEX_BLOCKS: &[Field] = &[
     FEATURE_ANGLE,
 ];
 
+const CELL_METHODS: &[(&str, &str)] = &[
+    ("auto", "Auto (hex, else tet)"),
+    ("hex", "Hex"),
+    ("swept", "Swept"),
+    ("extrude", "Extrude"),
+    ("sweep", "Sweep"),
+    ("revolve", "Revolve"),
+    ("mapped", "Mapped"),
+    ("tet", "Tet"),
+];
+
 pub const CELLS: &[Field] = &[
-    json("methods", "Methods")
-        .help("The meshing method per cell, as JSON.")
-        .hint(r#"{"cell": "auto | hex | swept | extrude | sweep | revolve | mapped | tet"}"#),
+    references("bodies", "Cells", C::Body)
+        .help("The cells (bodies) to mesh: tick them, or pick them in the viewport (Select: Bodies) and Use selection. Every body of the design when none is ticked.")
+        .hint("every body of the design"),
+    ref_choices("methods", "Methods", C::Body, CELL_METHODS).help("A meshing method for single cells; the others take Other cells' method."),
     choice(
         "default",
         "Other cells",
@@ -1062,7 +1074,6 @@ pub const CELLS: &[Field] = &[
     .help("The method for cells not listed in Methods. All hex meshes every cell as a mapped block, with the division counts of all cells assigned together so shared faces match (mesh.hex.blocks).")
     .notes(&[("blocks", "All hex: every cell must have six sides, each with four edges; leave Methods empty.")])
         .def("\"auto\""),
-    references("bodies", "Cells", C::Body).help("The cells (bodies) to mesh; every body of the design when empty.").hint("every body of the design"),
     HEX_SIZE,
     HEX_ORDER,
     TOLERANCE,
@@ -1346,6 +1357,33 @@ pub const DATUM_AXIS: &[Field] = &[
     .req()
     .def(r#"{"type": "principal"}"#),
 ];
+pub const RIGID_WALL: &[Field] = &[
+    reference("step", "Step", C::Step)
+        .help("The explicit dynamics step the wall acts in; the model's only one when empty.")
+        .hint("the explicit step"),
+    reference("set", "Set", C::Set).help("The nodes the wall stops: pick them and Use selection.").req(),
+    xyz("point", "Point", D::Length).help("A point on the wall.").req().def("[0, 0, 0]"),
+    xyz("normal", "Normal", D::None).help("The wall's normal, pointing to the side the nodes stay on.").req().def("[0, 0, 1]"),
+    FRICTION,
+];
+pub const RIGID_WALL_DELETE: &[Field] = &[
+    reference("step", "Step", C::Step).help("The explicit dynamics step.").req(),
+    int("index", "Wall", 0, MAX_ROWS as i64).help("The wall's place in the step's rigid walls, from 0.").req(),
+];
+pub const CENTRE: &[Field] = &[
+    rows(
+        "geometry",
+        "Geometry",
+        &[
+            reference("body", "Body", C::Body).help("A body of the open design.").req(),
+            text("face", "Face").help("A persistent face name of the body."),
+            text("edge", "Edge").help("A persistent edge name of the body."),
+            text("vertex", "Vertex").help("A persistent vertex name of the body."),
+        ],
+    )
+    .help("Faces or edges (a hole's faces or rim give its centre), or one vertex."),
+    json("nodes", "Nodes").help("Mesh node labels, as a JSON list: their mean.").hint("[labels]"),
+];
 pub const DATUM_POINT: &[Field] = &[
     NAME,
     variants(
@@ -1355,10 +1393,12 @@ pub const DATUM_POINT: &[Field] = &[
             variant("coordinates", "Coordinates", &[xyz("point", "Point", POINT).help("The point's coordinates.").req()]),
             variant(
                 "vertex",
-                "Mesh vertex",
+                "Vertex",
                 &[
                     reference("body", "Body", C::Body).help("The body the vertex belongs to.").req(),
-                    text("vertex", "Vertex").help("The vertex's name, as the mesh tags it.").req(),
+                    text("vertex", "Vertex")
+                        .help("The vertex's persistent name: pick it with Select: Vertices and Use selection (geometry.bodies lists every body's vertices).")
+                        .req(),
                 ],
             ),
             variant(
@@ -1720,6 +1760,7 @@ mod tests {
         "`boundary_conditions` or `loads`",
         "give one of",
         "is not an explicit",
+        "has no explicit dynamics step",
         "has a result",
         "no crash report",
         "FIELDCRAFT_CRASH_TEST",

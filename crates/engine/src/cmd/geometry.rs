@@ -26,11 +26,21 @@ pub const OPEN: CommandSpec = CommandSpec {
 pub const BODIES: CommandSpec = CommandSpec {
     id: "geometry.bodies",
     label: "Bodies",
-    params: "{} — the open design's bodies: measures, persistent face names (by face index) and edges (persistent name `<face>|<face>`, `~k` when several separate the same faces, and length)",
+    params: "{} — the open design's bodies: measures, persistent face names (by face index) and edges (persistent name `<face>|<face>`, `~k` when several separate the same faces, and length) and vertices (persistent name `<face>|<face>|<face>` after the faces that meet there, `~k` when several touch the same faces, and point)",
     form: Some(&[]),
     kind: CommandKind::Model,
     requires: &[], // No design is an answer too: no bodies.
     run: bodies,
+};
+
+pub const CENTRE: CommandSpec = CommandSpec {
+    id: "geometry.centre",
+    label: "Centre of Selection",
+    params: r#"{"geometry": [{"body": "Body1", "face": "F3:hole"} | {"body", "edge"} | {"body", "vertex"}], "nodes": [labels]} — the point a reference point or datum point goes at for what is picked: a vertex's point; the mean of nodes; the centre of a hole (cylindrical faces on one axis, or circular edges on one circle: the axis point at their mid-depth, the circle's centre); otherwise the area centroid of the faces and the length centroid of the edges. Replies `point` and `from` (`vertex`, `nodes`, `circle`, `centroid`)"#,
+    form: Some(super::forms::CENTRE),
+    kind: CommandKind::Model,
+    requires: &[],
+    run: centre,
 };
 
 pub const TESSELLATE: CommandSpec = CommandSpec {
@@ -145,6 +155,7 @@ fn bodies(s: &mut Session, _: &Value) -> Result<Value> {
     for b in &design.bodies {
         let m = b.measure()?;
         let edges: Vec<Value> = b.edges()?.iter().map(|e| json!({"name": e.name, "length": e.length()})).collect();
+        let vertices: Vec<Value> = b.vertices()?.iter().map(|v| json!({"name": v.name, "point": v.point})).collect();
         out.push(json!({
             "name": b.name,
             "volume": m.volume,
@@ -153,9 +164,191 @@ fn bodies(s: &mut Session, _: &Value) -> Result<Value> {
             "bbox": [m.bbox_min, m.bbox_max],
             "faces": b.faces().iter().map(|f| json!({"name": f.name, "exact": f.exact})).collect::<Vec<_>>(),
             "edges": edges,
+            "vertices": vertices,
         }));
     }
     Ok(Value::Array(out))
+}
+
+/// Most geometry items and nodes `geometry.centre` takes.
+const MAX_CENTRE_ITEMS: usize = 10_000;
+
+fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale3(a: [f64; 3], k: f64) -> [f64; 3] {
+    a.map(|v| v * k)
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// The centre of the circle through three points, `None` when they lie on a line.
+fn circumcentre(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<[f64; 3]> {
+    let (u, v) = (sub3(b, a), sub3(c, a));
+    let n = cross3(u, v);
+    let nn = dot3(n, n);
+    if !(nn > 1e-24 * dot3(u, u) * dot3(v, v)) {
+        return None;
+    }
+    let k = add3(scale3(cross3(n, u), dot3(v, v)), scale3(cross3(v, n), dot3(u, u)));
+    Some(add3(a, scale3(k, 0.5 / nn)))
+}
+
+/// The centre of an edge's polyline when it is an arc or circle (every point at one distance
+/// from it, within a thousandth), else `None`.
+fn circle_centre(points: &[[f64; 3]]) -> Option<[f64; 3]> {
+    let n = points.len();
+    if n < 3 {
+        return None;
+    }
+    let closed = points.first().zip(points.last()).is_some_and(|(a, b)| dot3(sub3(*a, *b), sub3(*a, *b)) < 1e-18);
+    let pick = |f: f64| points.get(((n - 1) as f64 * f).round() as usize).copied();
+    let (a, b, c) = if closed { (pick(0.0)?, pick(1.0 / 3.0)?, pick(2.0 / 3.0)?) } else { (pick(0.0)?, pick(0.5)?, pick(1.0)?) };
+    let centre = circumcentre(a, b, c)?;
+    let r = dot3(sub3(a, centre), sub3(a, centre)).sqrt();
+    let on = points.iter().all(|p| (dot3(sub3(*p, centre), sub3(*p, centre)).sqrt() - r).abs() <= 1e-3 * r);
+    on.then_some(centre)
+}
+
+/// The length-weighted centre of a polyline and its length.
+fn polyline_centroid(points: &[[f64; 3]]) -> ([f64; 3], f64) {
+    let (mut sum, mut length) = ([0.0; 3], 0.0);
+    for w in points.windows(2) {
+        let l = dot3(sub3(w[1], w[0]), sub3(w[1], w[0])).sqrt();
+        sum = add3(sum, scale3(add3(w[0], w[1]), 0.5 * l));
+        length += l;
+    }
+    (if length > 0.0 { scale3(sum, 1.0 / length) } else { points.first().copied().unwrap_or_default() }, length)
+}
+
+fn centre(s: &mut Session, p: &Value) -> Result<Value> {
+    let geometry: Vec<GeometryRef> = super::opt(p, "geometry")?.unwrap_or_default();
+    let nodes: Vec<u32> = super::opt(p, "nodes")?.unwrap_or_default();
+    if geometry.len() + nodes.len() > MAX_CENTRE_ITEMS {
+        return Err(EngineError::Params(format!("geometry.centre takes at most {MAX_CENTRE_ITEMS} items")));
+    }
+    if geometry.is_empty() && nodes.is_empty() {
+        return Err(EngineError::Params("give one of `geometry` or `nodes`: what to find the centre of".into()));
+    }
+    if !geometry.is_empty() && !nodes.is_empty() {
+        return Err(EngineError::Params("give either `geometry` or `nodes`, not both".into()));
+    }
+    if !nodes.is_empty() {
+        let mut sum = [0.0; 3];
+        for n in &nodes {
+            let node = s.model.node(*n).ok_or_else(|| EngineError::Params(format!("no node {n}")))?;
+            sum = add3(sum, node.xyz);
+        }
+        return Ok(json!({"point": scale3(sum, 1.0 / nodes.len() as f64), "from": "nodes"}));
+    }
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let shape = |b: &str| design.body(b).ok_or_else(|| EngineError::Params(format!("the design has no body `{b}`")));
+    if let [g] = geometry.as_slice()
+        && let Entity::Vertex(v) = &g.entity
+    {
+        let vertex = shape(&g.body)?.vertices()?.into_iter().find(|x| &x.name == v);
+        let vertex = vertex.ok_or_else(|| EngineError::Params(format!("body `{}` has no vertex `{v}`", g.body)))?;
+        return Ok(json!({"point": vertex.point, "from": "vertex"}));
+    }
+    // Hole centres: every face a cylinder about one axis, or every edge an arc of one circle.
+    let mut circles: Vec<[f64; 3]> = Vec::new();
+    let mut axis: Option<([f64; 3], [f64; 3])> = None;
+    let mut round = true;
+    // Centroids, weighted by area (faces) or length (edges).
+    let (mut faces_sum, mut faces_area, mut edges_sum, mut edges_length) = ([0.0; 3], 0.0, [0.0; 3], 0.0);
+    for g in &geometry {
+        let body = shape(&g.body)?;
+        match &g.entity {
+            Entity::Face(f) => {
+                let i = body.face_index(f).ok_or_else(|| EngineError::Params(format!("body `{}` has no face `{f}`", g.body)))?;
+                let c = body.face_centre(f)?;
+                let mesh = body.tessellate((body.size()? * fieldcraft_geometry::EDGE_TOLERANCE).max(1e-4))?;
+                let area: f64 = mesh
+                    .triangles
+                    .iter()
+                    .zip(&mesh.tri_face)
+                    .filter(|(_, t)| **t == i)
+                    .filter_map(|(t, _)| {
+                        let q = |k: usize| mesh.positions.get(t[k] as usize).copied();
+                        let (a, b, c) = (q(0)?, q(1)?, q(2)?);
+                        let n = cross3(sub3(b, a), sub3(c, a));
+                        Some(0.5 * dot3(n, n).sqrt())
+                    })
+                    .sum();
+                faces_sum = add3(faces_sum, scale3(c, area));
+                faces_area += area;
+                match body.face_surfaces()?.get(i as usize).copied().flatten() {
+                    Some(fieldcraft_geometry::FaceSurface::Cylinder { origin, axis: d, .. }) => {
+                        let len = dot3(d, d).sqrt();
+                        let d = scale3(d, 1.0 / len.max(1e-300));
+                        // The face centre's foot on the axis.
+                        let foot = add3(origin, scale3(d, dot3(sub3(c, origin), d)));
+                        let same = axis.is_none_or(|(o, a)| {
+                            let off = sub3(foot, o);
+                            let across = sub3(off, scale3(a, dot3(off, a)));
+                            dot3(cross3(a, d), cross3(a, d)) < 1e-12 && dot3(across, across).sqrt() <= 1e-6 * body.size().unwrap_or(1.0).max(1e-9)
+                        });
+                        round &= same;
+                        axis.get_or_insert((foot, d));
+                        circles.push(foot);
+                    }
+                    _ => round = false,
+                }
+            }
+            Entity::Edge(e) => {
+                let edges = body.edges()?;
+                let edge = edges.iter().find(|x| &x.name == e).ok_or_else(|| EngineError::Params(format!("body `{}` has no edge `{e}`", g.body)))?;
+                let (c, l) = polyline_centroid(&edge.points);
+                edges_sum = add3(edges_sum, scale3(c, l));
+                edges_length += l;
+                match circle_centre(&edge.points) {
+                    Some(c) => circles.push(c),
+                    None => round = false,
+                }
+            }
+            Entity::Vertex(_) | Entity::Body => {
+                return Err(EngineError::Params("geometry.centre takes one vertex, or faces and edges".into()));
+            }
+        }
+    }
+    // Arcs of one circle share a centre; faces of one axis were checked as they came.
+    let spread = circles.iter().map(|c| circles.first().map_or(0.0, |f| dot3(sub3(*c, *f), sub3(*c, *f)).sqrt())).fold(0.0f64, f64::max);
+    let size = geometry.first().and_then(|g| design.body(&g.body)).and_then(|b| b.size().ok()).unwrap_or(1.0).max(1e-9);
+    let edges_only = geometry.iter().all(|g| matches!(g.entity, Entity::Edge(_)));
+    if round && !circles.is_empty() && (!edges_only || spread <= 1e-6 * size) {
+        let point = match axis {
+            // Cylinder faces: the axis point at the mean of their centres' feet.
+            Some((_, d)) => {
+                let mean = scale3(circles.iter().fold([0.0; 3], |a, c| add3(a, *c)), 1.0 / circles.len() as f64);
+                let o = circles.first().copied().unwrap_or(mean);
+                add3(o, scale3(d, dot3(sub3(mean, o), d)))
+            }
+            None => circles.first().copied().unwrap_or_default(),
+        };
+        return Ok(json!({"point": point, "from": "circle"}));
+    }
+    let point = if faces_area > 0.0 {
+        scale3(faces_sum, 1.0 / faces_area)
+    } else if edges_length > 0.0 {
+        scale3(edges_sum, 1.0 / edges_length)
+    } else {
+        return Err(EngineError::Params("what is picked has no area or length to find a centre of".into()));
+    };
+    if !point.iter().all(|v| v.is_finite()) {
+        return Err(EngineError::Params("the centre is not a finite point".into()));
+    }
+    Ok(json!({"point": point, "from": "centroid"}))
 }
 
 fn body<'a>(s: &'a Session, p: &Value) -> Result<&'a Shape> {
@@ -212,6 +405,73 @@ mod tests {
         zip.start_file("3D/3dmodel.model", zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(model.as_bytes()).unwrap();
         zip.finish().unwrap().into_inner()
+    }
+
+    /// The plate's hole (Ø10 at x = y = 15 through z 0..10): its faces give the axis point at
+    /// mid-depth, a rim arc its circle's centre, a corner vertex its point, a flat face its
+    /// centroid; datum points take the design's vertices by name.
+    #[test]
+    fn centres_of_holes_vertices_and_faces() {
+        use fieldcraft_geometry::FaceSurface;
+        use fieldcraft_geometry::sample::{Plate, plate_design};
+        let design = Arc::new(open_design(&plate_design(&Plate::default()).unwrap()).unwrap());
+        let mut s = Session { design: Some(design.clone()), ..Session::default() };
+        let body = &design.bodies[0];
+        let near = |v: &Value, p: [f64; 3]| {
+            let q: [f64; 3] = serde_json::from_value(v["point"].clone()).unwrap();
+            assert!((0..3).all(|k| (q[k] - p[k]).abs() < 1e-6), "{v} vs {p:?}");
+        };
+        let surfaces = body.face_surfaces().unwrap();
+        let hole: Vec<Value> = body
+            .faces()
+            .iter()
+            .zip(&surfaces)
+            .filter(|(_, s)| matches!(s, Some(FaceSurface::Cylinder { .. })))
+            .map(|(f, _)| json!({"body": body.name, "face": f.name}))
+            .collect();
+        assert_eq!(hole.len(), 2);
+        let r = s.execute("geometry.centre", &json!({"geometry": hole})).unwrap();
+        near(&r, [15.0, 15.0, 5.0]);
+        assert_eq!(r["from"], "circle");
+        let r = s.execute("geometry.centre", &json!({"geometry": [hole[0]]})).unwrap();
+        near(&r, [15.0, 15.0, 5.0]);
+        // A rim arc on top.
+        let edges = body.edges().unwrap();
+        let arc = edges.iter().find(|e| e.points.iter().all(|p| (p[2] - 10.0).abs() < 1e-9) && e.points.len() > 3).unwrap();
+        let r = s.execute("geometry.centre", &json!({"geometry": [{"body": body.name, "edge": arc.name}]})).unwrap();
+        near(&r, [15.0, 15.0, 10.0]);
+        assert_eq!(r["from"], "circle");
+        // The corner at the origin, and a datum point on it by name.
+        let corner = body.vertices().unwrap().into_iter().find(|v| v.point == [0.0; 3]).unwrap();
+        let r = s.execute("geometry.centre", &json!({"geometry": [{"body": body.name, "vertex": corner.name}]})).unwrap();
+        near(&r, [0.0; 3]);
+        s.execute("geometry.datum.point", &json!({"name": "P", "by": {"type": "vertex", "body": body.name, "vertex": corner.name}})).unwrap();
+        assert_eq!(s.model.datum("P").and_then(|d| d.point()), Some([0.0; 3]));
+        let listed = s.execute("geometry.bodies", &json!({})).unwrap();
+        assert!(listed[0]["vertices"].as_array().unwrap().iter().any(|v| v["name"] == corner.name.as_str()), "{listed}");
+        // The bottom face (z = 0): its centroid, off the hole.
+        let bottom = body
+            .faces()
+            .iter()
+            .zip(&surfaces)
+            .find(|(_, s)| matches!(s, Some(FaceSurface::Plane { normal, point }) if normal[2].abs() > 0.99 && point[2].abs() < 1e-9))
+            .unwrap()
+            .0;
+        let r = s.execute("geometry.centre", &json!({"geometry": [{"body": body.name, "face": bottom.name}]})).unwrap();
+        assert_eq!(r["from"], "centroid");
+        // Nodes, and what is refused.
+        s.model.set_node(1, [1.0, 2.0, 3.0]).unwrap();
+        s.model.set_node(2, [3.0, 2.0, 1.0]).unwrap();
+        near(&s.execute("geometry.centre", &json!({"nodes": [1, 2]})).unwrap(), [2.0, 2.0, 2.0]);
+        for bad in [
+            json!({}),
+            json!({"nodes": [99]}),
+            json!({"geometry": [{"body": "nope"}]}),
+            json!({"geometry": [{"body": body.name}]}),
+            json!({"nodes": "x"}),
+        ] {
+            assert!(s.execute("geometry.centre", &bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

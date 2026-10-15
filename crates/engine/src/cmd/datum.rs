@@ -44,7 +44,7 @@ pub const DATUM_AXIS: CommandSpec = CommandSpec {
 pub const DATUM_POINT: CommandSpec = CommandSpec {
     id: "geometry.datum.point",
     label: "Datum Point",
-    params: r#"{"name": "P1", "by": {"type": "coordinates", "point": [x, y, z]} | {"type": "vertex", "body": "Body1", "vertex": "v3"} | {"type": "edge", "body": "Body1", "edge": "F1:top|F2:side", "fraction"?: 0.5} | {"type": "face_centre", "body": "Body1", "face": "F2:top"} | {"type": "axis_plane", "axis": "Spindle", "plane": "Mid"}} — a named datum point, shown in the viewport as a small cross: at coordinates, at a vertex of the mesh (as its geometry tags name it), a fraction along an edge of the open design (0.5: its midpoint), at the area centre of a face of the open design, or where a datum axis crosses a datum plane. Datum planes and axes can be made through datum points"#,
+    params: r#"{"name": "P1", "by": {"type": "coordinates", "point": [x, y, z]} | {"type": "vertex", "body": "Body1", "vertex": "F1:top|F2:side:l1|F2:side:l2"} | {"type": "edge", "body": "Body1", "edge": "F1:top|F2:side", "fraction"?: 0.5} | {"type": "face_centre", "body": "Body1", "face": "F2:top"} | {"type": "axis_plane", "axis": "Spindle", "plane": "Mid"}} — a named datum point, shown in the viewport as a small cross: at coordinates, at a vertex of the open design (its persistent name, as geometry.bodies lists it and Select: Vertices picks it) or of the mesh (as its geometry tags name it), a fraction along an edge of the open design (0.5: its midpoint), at the area centre of a face of the open design, or where a datum axis crosses a datum plane. Datum planes and axes can be made through datum points"#,
     form: Some(super::forms::DATUM_POINT),
     kind: CommandKind::Model,
     requires: &[],
@@ -296,14 +296,28 @@ fn point_datum(s: &Session, by: PointBy) -> Result<Datum> {
     let point = match by {
         PointBy::Coordinates { point } => point,
         PointBy::Vertex { body, vertex } => {
-            let m = &s.model;
-            let at = fieldcraft_model::GeometryRef::new(body.clone(), fieldcraft_model::Entity::Vertex(vertex.clone()))?;
-            let tags = m.classification().tags_selected_by(&at);
-            let node =
-                m.classification().nodes().iter().take(MAX_VERTEX_NODES).find(|(_, t)| tags.contains(t)).and_then(|(n, _)| m.node(*n)).ok_or_else(
-                    || EngineError::Params(format!("vertex `{vertex}` of body `{body}` is on no mesh node (vertices are named on meshed bodies)")),
-                )?;
-            node.xyz
+            // A vertex of the open design by its persistent name, else one the mesh tags.
+            let design_vertex = match s.design.as_deref().and_then(|d| d.body(&body)) {
+                Some(shape) => shape.vertices()?.into_iter().find(|v| v.name == vertex).map(|v| v.point),
+                None => None,
+            };
+            match design_vertex {
+                Some(point) => point,
+                None => {
+                    let m = &s.model;
+                    let at = fieldcraft_model::GeometryRef::new(body.clone(), fieldcraft_model::Entity::Vertex(vertex.clone()))?;
+                    let tags = m.classification().tags_selected_by(&at);
+                    let node = m
+                        .classification()
+                        .nodes()
+                        .iter()
+                        .take(MAX_VERTEX_NODES)
+                        .find(|(_, t)| tags.contains(t))
+                        .and_then(|(n, _)| m.node(*n))
+                        .ok_or_else(|| EngineError::Params(format!("body `{body}` has no vertex `{vertex}` (geometry.bodies lists its vertices)")))?;
+                    node.xyz
+                }
+            }
         }
         PointBy::Edge { body, edge, fraction } => {
             if !(0.0..=1.0).contains(&fraction) {

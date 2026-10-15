@@ -172,7 +172,8 @@ fn cup_with_a_handle_refined() {
 
 /// Without the split, the ring block under the upper arm is squeezed between the petal's edge
 /// and the window-top plane and folds: the mesher refuses the mesh and names the twisted
-/// elements' block and the block junction they touch.
+/// elements' block and the block junction they touch. (Smoothing now unfolds this grid to a
+/// scaled Jacobian of 0.22, so the check runs without it.)
 #[test]
 fn twisted_junction_elements_are_reported_not_meshed() {
     let (_d, mut s) = cup_session();
@@ -188,9 +189,10 @@ fn twisted_junction_elements_are_reported_not_meshed() {
         {"op": "connect", "from": [45, "+z"], "to": [47, "-z"], "layers": 2},
         {"op": "remove", "blocks": [1, 2, 3, 4, 5]}
     ]);
+    p["smoothing"] = json!("none");
     let model = s.model.clone();
     let e = s.execute("mesh.hex.project", &p).unwrap_err().to_string();
-    assert!(e.contains("twisted") && e.contains("where blocks 17, 37, 38, 41 meet"), "{e}");
+    assert!(e.contains("twisted") && e.contains("where blocks 5, 8, 12, 29, 30, 33 meet"), "{e}");
     assert_eq!(s.model, model);
 }
 
@@ -207,4 +209,46 @@ fn cup_floor_double_o_grid() {
     assert!(sj(&r) >= 0.5, "{r}");
     let (v, body) = (r["volume"].as_f64().unwrap(), r["body_volume"].as_f64().unwrap());
     assert!((v - body).abs() < 0.02 * body, "{r}");
+}
+
+/// Every element valid and no edge ratio above 10: smoothing must not collapse edges (#418).
+fn assert_no_collapsed_edges(s: &mut Session) {
+    let q = s.execute("mesh.quality", &json!({})).unwrap();
+    assert_eq!(q["valid"].as_u64(), Some(s.model.elements().len() as u64), "{q}");
+    assert!(q["metrics"]["edge_ratio"]["max"].as_f64().unwrap() <= 10.0, "{q}");
+}
+
+/// The handle-less cup at size 1: smoothing collapsed edges at the cavity's rim to an edge ratio
+/// of 172 (#418).
+#[test]
+fn cup_floor_smoothing_keeps_edges() {
+    let (_d, mut s) = session(json!([
+        {"command": "solid.cylinder", "params": {"radius": 20, "height": 30, "body_name": "Cup"}},
+        {"command": "solid.cylinder", "params": {"base": [0, 0, 4], "radius": 16, "height": 27, "operation": "cut", "targets": ["Cup"]}}
+    ]));
+    let mut p = cup_params(1.0, json!(0.5));
+    p["operations"] = json!([{"op": "o_grid", "block": 0, "open": [1, 2], "inset": 0.6}, {"op": "remove", "blocks": [1, 2, 3, 4, 5]}]);
+    s.execute("mesh.hex.project", &p).unwrap();
+    assert_no_collapsed_edges(&mut s);
+}
+
+/// Thin layers like a sealed enclosure's: a 1.6 mm floor slab and 1 mm walls round a pocket.
+/// The grid is regular already; smoothing must not even out its graded layers (it took the
+/// scaled Jacobian from 1 to 0.5 at size 2.5, #418).
+#[test]
+fn thin_enclosure_layers() {
+    let (_d, mut s) = session(json!([
+        {"command": "solid.box", "params": {"length": 40, "width": 30, "height": 12, "body_name": "Case"}},
+        {"command": "solid.box", "params": {"length": 38, "width": 28, "height": 20, "corner": [1, 1, 1.6], "operation": "cut", "targets": ["Case"]}}
+    ]));
+    for size in [1.0, 2.5] {
+        let r = s
+            .execute(
+                "mesh.hex.project",
+                &json!({"body": "Case", "size": size, "grid": {"planes": {"x": [0, 1, 39, 40], "y": [0, 1, 29, 30], "z": [0, 1.6, 12]}, "carve": [{"i": [1, 1], "j": [1, 1], "k": [1, 1]}]}}),
+            )
+            .unwrap();
+        assert_no_collapsed_edges(&mut s);
+        assert!(sj(&r) > 0.99, "{r}");
+    }
 }

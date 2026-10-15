@@ -708,6 +708,38 @@ mod tests {
         assert!(r["energy_balance"].as_f64().unwrap() < 0.05, "{r}");
     }
 
+    /// Hex20 extrudes the crank with its root arcs tangent to the spindle boss (#197), at the
+    /// sizes where it once failed the validity gate with inverted elements and hex8 did not: the
+    /// sample moves the root arcs off tangent, so this builds the tangent variant (root arcs of
+    /// R10 whose centres lie 33 mm from the spindle axis, R23 + R10). The elements at the cusp,
+    /// whose two curved sides meet tangentially, stay valid.
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn hex20_extrudes_the_crank_with_tangent_root_arcs() {
+        let mut script = CRANK_ARM.to_string();
+        for (from, to) in [
+            ("15.883151316213851, 28.354461805265395", "16.9566899202338, 28.310257274511628"),
+            ("15.883151316213851, -28.354461805265395", "16.9566899202338, -28.310257274511628"),
+            ("15.471735240951828, 18.362928548901984", "16.545273844971774, 18.31872401814822"),
+            ("15.471735240951828, -18.362928548901984", "16.545273844971774, -18.31872401814822"),
+            ("13.455063072993756, 18.65372021077189", "11.818299035314467, 19.731391433750527"),
+            ("13.455063072993756, -18.65372021077189", "11.818299035314467, -19.731391433750527"),
+        ] {
+            assert!(script.contains(from), "{from}");
+            script = script.replace(from, to);
+        }
+        let bytes = fieldcraft_geometry::script_design(&script).unwrap();
+        let (_dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        for size in [2.5, 3.0, 5.0] {
+            let r = s.execute("mesh.hex.generate", &json!({"body": "CrankArm", "size": size, "order": 2, "method": "extrude"})).unwrap();
+            let body = &r["bodies"][0];
+            assert_eq!(body["kind"], "hex20", "{r}");
+            assert!(body["quality"]["min_scaled_jacobian"].as_f64().unwrap() > 0.0, "{size}: {r}");
+        }
+    }
+
     /// A partition the kernel fails to make is reported as the kernel's failure, never as a plane
     /// that does not divide the body (#283): x = 148 plainly crosses the crank's half y > 0, whose
     /// cut fails in the kernel's boolean, and the same plane cuts the half y < 0.

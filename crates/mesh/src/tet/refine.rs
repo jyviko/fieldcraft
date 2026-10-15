@@ -208,12 +208,40 @@ pub fn split_edge(cx: &mut TetComplex, ctx: &Context, u: u32, w: u32, tag: u32, 
         None if tag != NONE => VertexKind::Face(tag),
         None => return Ok(None),
     };
+    // A midpoint inside the diametral sphere of a nearby feature edge encroaches it: split that
+    // edge instead (Shewchuk 1998), or face vertices pile up against the curve, each split
+    // halving their distance to it.
+    if matches!(kind, VertexKind::Face(_)) {
+        let mut near = vec![u, w];
+        if let Some(ring) = cx.edge_ring(u, w)? {
+            near.extend(ring.verts.first().copied());
+            near.extend(ring.verts.last().copied());
+        }
+        if let Some((a, b)) = encroached_curve_edge(cx, &near, m)? {
+            return split_edge(cx, ctx, a, b, tag, min_face);
+        }
+    }
     let Some(p) = ctx.place(kind, m) else { return Ok(None) };
     // The projection may only move the midpoint a little (a quarter of the edge).
     if measure::dist(p.coords(), m) > 0.25 * len {
         return Ok(None);
     }
     ops::insert_delaunay_apart(cx, p, kind, Site::Edge(u, w), MAX_CAVITY, MIN_GAP * ctx.h(m, len))
+}
+
+/// A feature-curve edge at one of the vertices `near` whose diametral sphere holds `p`.
+fn encroached_curve_edge(cx: &mut TetComplex, near: &[u32], p: P) -> Result<Option<(u32, u32)>> {
+    for &c in near {
+        for n in cx.neighbours(c)? {
+            if cx.curve(c, n).is_some() {
+                let (a, b) = (cx.xyz(c)?, cx.xyz(n)?);
+                if measure::dist(p, measure::mid(a, b)) < 0.5 * measure::dist(a, b) {
+                    return Ok(Some((c, n)));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Whether a tetrahedron is bad, and its circumcentre.

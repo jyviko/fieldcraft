@@ -76,8 +76,9 @@ The corpus filleted bracket (`tests/corpus/filleted-bracket`: an 8 mm L-bracket,
 hole through each leg) in steel, both hole bores clamped. The end of the upright is held at
 120 °C by a heater; the rest of its outside loses heat to still air at 20 °C
 (h = 10 W/(m² K)); steel conducts with k = 50 W/(m K), expands with α = 12 × 10⁻⁶/K and is
-stress free at 20 °C. One coupled temperature–displacement step (steady) on 23 641 tet10
-elements: about 8 s to open (meshing) and 13 s to solve.
+stress free at 20 °C. One coupled temperature–displacement step (steady) on about 23 000 tet10
+elements (the count differs a little between platforms): about 5 s to open (meshing) and 13 s to
+solve.
 
 **Look at:** Contours ▸ Temperature: the upright stays within a few degrees of the heater and
 the foot falls to 95 °C, a steady balance between conduction and the air. Contours ▸ Von Mises

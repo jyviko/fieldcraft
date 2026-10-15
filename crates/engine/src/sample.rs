@@ -741,6 +741,21 @@ mod tests {
         assert!(r["mass"]["relative_change"].as_f64().unwrap().abs() < 0.01, "{r}");
     }
 
+    /// The heated bracket's 4 mm tet mesh stays near its 23 000 elements and opens within the
+    /// control channel's 60 s request timeout. #303: refinement piled face vertices against a
+    /// feature curve, and the improvement then grew the mesh to 29 257 elements in about two
+    /// minutes.
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn the_heated_bracket_opens_quickly_with_its_usual_mesh() {
+        let start = std::time::Instant::now();
+        let s = open("heated-bracket");
+        let elapsed = start.elapsed();
+        let elements = s.model.elements().len();
+        assert!((20_000..=26_000).contains(&elements), "{elements} elements");
+        assert!(elapsed < std::time::Duration::from_secs(60), "opened in {elapsed:?}");
+    }
+
     /// The heated bracket's temperatures lie between the air's and the heater's, falling along
     /// the bracket away from the heater. Its thermal expansion: with the air at the heater's
     /// temperature the bracket warms evenly by ΔT, and held at the foot's hole alone (at x = 40)

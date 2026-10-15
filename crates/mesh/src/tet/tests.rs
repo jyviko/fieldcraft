@@ -195,6 +195,53 @@ mod pipeline {
         assert_eq!(a, b);
     }
 
+    /// Refinement splitting a face edge whose midpoint lies inside a feature edge's diametral
+    /// sphere splits the feature edge instead (#303): otherwise each split halves the distance
+    /// of the face vertices to the curve and they pile up against it.
+    #[test]
+    fn a_face_edge_split_that_encroaches_a_curve_splits_the_curve() {
+        use super::super::complex::{NONE, VertexKind, face_toward};
+        use super::super::geometry::Tessellation;
+        use super::super::ops::{Site, insert_delaunay};
+        use super::super::refine::{Context, MAX_CAVITY, split_edge};
+        use super::super::{complex_from_cdt, measure};
+        use crate::predicates::Point3;
+        use crate::size::UniformSize;
+        // Whether `p` lies in triangle `f` of the z = 0 plane.
+        let contains = |f: [[f64; 3]; 3], p: [f64; 3]| {
+            let side = |a: [f64; 3], b: [f64; 3]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+            let s = [side(f[0], f[1]), side(f[1], f[2]), side(f[2], f[0])];
+            s.iter().all(|&x| x >= 0.0) || s.iter().all(|&x| x <= 0.0)
+        };
+        let s = box_surface();
+        let cdt = tetrahedralize(&s, &CdtOptions::default()).unwrap();
+        let (mut cx, curve_faces) = complex_from_cdt(&s, &cdt, &QualityOptions::default()).unwrap();
+        let (geometry, size) = (Tessellation::new(&s, Vec::new()), UniformSize(5.0));
+        let ctx = Context { size: &size, geometry: &geometry, curve_faces: &curve_faces };
+        // A curve edge on the z = 0 side, and a face vertex beside it on that side.
+        let ((a, b), _) = cx.curve_edges().into_iter().find(|&((a, b), _)| [a, b].iter().all(|&v| cx.xyz(v).unwrap()[2] == 0.0)).unwrap();
+        let (xa, xb) = (cx.xyz(a).unwrap(), cx.xyz(b).unwrap());
+        let len = measure::dist(xa, xb);
+        let centre = [5.0, 5.0, 0.0];
+        let mid = measure::mid(xa, xb);
+        let inward = measure::scale(measure::sub(centre, mid), 0.3 * len / measure::dist(centre, mid));
+        let q = Point3::try_from(measure::add(mid, inward)).unwrap();
+        let (t, k) = cx
+            .live_tets()
+            .flat_map(|(t, vs)| (0..4).map(move |k| (t, vs, k)))
+            .find(|&(t, vs, k)| {
+                cx.adj(t).unwrap()[k] == NONE && cx.tags(t).unwrap()[k] == 4 && contains(face_toward(vs, k).map(|v| cx.xyz(v).unwrap()), q.coords())
+            })
+            .map(|(t, _, k)| (t, k))
+            .unwrap();
+        let v = insert_delaunay(&mut cx, q, VertexKind::Face(4), Site::Face(t, k), MAX_CAVITY).unwrap().unwrap();
+        assert!(cx.edge_tet(v, a).unwrap().is_some());
+        let w = split_edge(&mut cx, &ctx, v, a, 4, 0.0).unwrap().unwrap();
+        assert!(matches!(cx.kind(w), VertexKind::Curve(_)), "{:?}", cx.kind(w));
+        assert!(measure::dist(cx.xyz(w).unwrap(), mid) < 1e-9);
+        cx.validate().unwrap();
+    }
+
     #[test]
     fn a_seeded_edge_gets_the_seeded_spacing_and_the_size_grows_from_it() {
         use crate::seeds::EdgeSeed;

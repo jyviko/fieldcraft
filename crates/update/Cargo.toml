@@ -1,0 +1,35 @@
+[package]
+name = "fieldcraft-update"
+description = "FieldCraft's updates: check GitHub Releases for a newer version, download and verify it (SHA-256 list signed with the release key), and swap it in"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# A local HTTP server that plays the GitHub Releases API, for tests (`mock`).
+mock = []
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+sha2 = { workspace = true }
+# Checks the release key's signature of SHA256SUMS.txt (Ed25519, minisign's format). MIT.
+minisign-verify = "0.3"
+
+# Downloading and unpacking: the desktop app and the CLI only, never the browser build.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# HTTPS with rustls on ring, checked against the operating system's certificates: the same
+# client the app's usage sending uses (apps/fieldcraft).
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+zip = { workspace = true }
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+
+[dev-dependencies]
+# Signs test checksum lists with throwaway keys (never the release key).
+minisign = "0.9"

@@ -39,6 +39,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("model", Class::Layer(0)),
     // L0, no workspace dependencies: deterministic thread pool helpers for the solvers.
     ("parallel", Class::Standalone),
+    // L0, no workspace dependencies: checking for, verifying and installing releases.
+    ("update", Class::Standalone),
     // L1: geometry and math kernels.
     ("geometry", Class::Layer(1)),
     ("mesh", Class::Layer(1)),

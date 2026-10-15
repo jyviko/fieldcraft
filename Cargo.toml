@@ -27,6 +27,7 @@ fieldcraft-testkit = { path = "crates/testkit" }
 fieldcraft-render = { path = "crates/render" }
 fieldcraft-ui-egui = { path = "crates/ui-egui" }
 fieldcraft-mcp = { path = "crates/mcp" }
+fieldcraft-update = { path = "crates/update" }
 
 # foundation
 thiserror = "2"

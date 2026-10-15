@@ -523,7 +523,7 @@ mod tests {
         let (_dir, mut s) = split_box(true);
         let before = s.model.clone();
         let e = s.execute("mesh.hex.blocks", &json!({"size": 2.5})).unwrap_err().to_string();
-        assert!(e.contains("do not conform") && e.contains("`Box`"), "{e}");
+        assert!(e.contains("do not conform") && e.contains("`Box.1`"), "{e}");
         assert_eq!(s.model, before);
         for p in [
             json!({"size": 0}),

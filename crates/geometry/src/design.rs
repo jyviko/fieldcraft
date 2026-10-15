@@ -104,7 +104,7 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
     }
     // A feature that failed leaves a different solid than SolidCraft's: each one names the bodies
     // it would have changed, so opening never hands back a silently different solid.
-    let errors = model
+    let errors: Vec<FeatureError> = model
         .results
         .iter()
         .filter(|r| !r.skipped)
@@ -114,12 +114,113 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
             Some(FeatureError { feature: r.name.clone(), message, bodies })
         })
         .collect();
+    // The errors name the bodies as SolidCraft does; they follow the pieces' new names.
+    let renamed = number_split_bodies(&mut bodies);
+    let errors = errors
+        .into_iter()
+        .map(|mut e| {
+            for b in &mut e.bodies {
+                if let Some((_, new)) = renamed.iter().find(|(old, _)| old == b) {
+                    *b = new.clone();
+                }
+            }
+            e
+        })
+        .collect();
     Ok(Design { name: doc.name.clone(), source: std::sync::Arc::new(bodies.clone()), bodies, errors, cuts: Vec::new() })
+}
+
+/// A body name without the suffixes SolidCraft gives the pieces of a split body: ` (1)` for the
+/// new piece and `'` for a piece kept under its old name, any number of times
+/// (`Bracket (1) (1)' (1)` → `Bracket`).
+fn split_base(name: &str) -> &str {
+    let mut s = name;
+    loop {
+        let t = s.trim_end_matches('\'');
+        let t = match t.strip_suffix(')').and_then(|r| r.rsplit_once(" (")) {
+            Some((head, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => head,
+            _ => t,
+        };
+        if t.len() == s.len() || t.is_empty() {
+            return s;
+        }
+        s = t;
+    }
+}
+
+/// Name the pieces of a body split in the design `<body>.1`, `<body>.2`, … by position, instead
+/// of the suffixes the splits stacked up (`Bracket (1) (1)' (1)`), which say nothing about where
+/// a piece is. Pieces are ordered by centroid, x first, then y, then z, on a grid of a millionth
+/// of their spread, so the names follow the geometry, not the order of the design's timeline. A
+/// group is left as it is when one of the new names is a body's name already. The pieces keep
+/// the group's places in the list of bodies, in the order of their numbers. Returns each
+/// renamed body's (old, new) name.
+fn number_split_bodies(bodies: &mut [Shape]) -> Vec<(String, String)> {
+    let mut renamed = Vec::new();
+    let mut groups: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
+    for (i, b) in bodies.iter().enumerate() {
+        groups.entry(split_base(&b.name).to_string()).or_default().push(i);
+    }
+    for (base, mut members) in groups {
+        if members.len() < 2 || members.iter().all(|&i| bodies.get(i).is_none_or(|b| b.name == base)) {
+            continue;
+        }
+        let names: Vec<String> = (1..=members.len()).map(|k| format!("{base}.{k}")).collect();
+        if bodies.iter().any(|b| names.contains(&b.name)) {
+            continue;
+        }
+        let centroid = |i: usize| bodies.get(i).and_then(|b| b.measure().ok()).map_or([0.0; 3], |m| m.centroid);
+        let centres: Vec<[f64; 3]> = members.iter().map(|&i| centroid(i)).collect();
+        let spread = (0..3)
+            .map(|k| {
+                let (lo, hi) = centres.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c[k]), hi.max(c[k])));
+                hi - lo
+            })
+            .fold(0.0f64, f64::max);
+        let grid = if spread.is_finite() && spread > 0.0 { spread * 1e-6 } else { 1.0 };
+        let key = |j: usize| centres.get(j).map_or([0; 3], |c| c.map(|v| (v / grid).round() as i64));
+        let mut order: Vec<usize> = (0..members.len()).collect();
+        order.sort_by_key(|&j| (key(j), j));
+        // The group keeps its places in the list, now in the order of the numbers.
+        let ordered: Vec<Shape> = order.into_iter().filter_map(|j| members.get(j).and_then(|&i| bodies.get(i)).cloned()).collect();
+        members.sort_unstable();
+        for ((slot, mut shape), name) in members.into_iter().zip(ordered).zip(names) {
+            renamed.push((std::mem::replace(&mut shape.name, name.clone()), name));
+            if let Some(b) = bodies.get_mut(slot) {
+                *b = shape;
+            }
+        }
+    }
+    renamed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_suffixes_are_stripped() {
+        assert_eq!(split_base("Bracket (1) (1)' (1)"), "Bracket");
+        assert_eq!(split_base("Bracket (1)'''"), "Bracket");
+        assert_eq!(split_base("Bracket"), "Bracket");
+        assert_eq!(split_base("Part (a)"), "Part (a)");
+        assert_eq!(split_base("(1)"), "(1)");
+        assert_eq!(split_base("'''"), "'''");
+    }
+
+    #[cfg(feature = "scripts")]
+    /// The corpus bracket, split 29 times in the design, opens as `Bracket.1` … `Bracket.30`,
+    /// numbered by position.
+    #[test]
+    fn pieces_of_a_split_body_are_numbered_by_position() {
+        let script = include_str!("../../../tests/corpus/filleted-bracket-blocks/recipe.json");
+        let d = open_design(&crate::script_design(script).unwrap()).unwrap();
+        let names: Vec<&str> = d.bodies.iter().map(|b| b.name.as_str()).collect();
+        let expected: Vec<String> = (1..=30).map(|k| format!("Bracket.{k}")).collect();
+        assert_eq!(names, expected.iter().map(String::as_str).collect::<Vec<_>>(), "listed in the order of their numbers");
+        let x = |n: &str| d.body(n).unwrap().measure().unwrap().centroid[0];
+        assert!(x("Bracket.1") <= x("Bracket.30"));
+    }
     use crate::sample::{self, Plate};
 
     fn face_areas(shape: &Shape) -> Vec<f64> {

@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(thousands(1_000_000), "1,000,000");
     }
 
-    /// A 20 × 10 × 10 box split at x = 10 into `Box` (x < 10) and `Box (1)`.
+    /// A 20 × 10 × 10 box split at x = 10, opened as `Box.1` (x < 10) and `Box.2`.
     fn two_boxes() -> (crate::tests::TempDir, Session) {
         let commands = json!({"commands": [
             {"command": "solid.box", "params": {"length": 20, "width": 10, "height": 10, "body_name": "Box"}},
@@ -228,10 +228,10 @@ mod tests {
     #[test]
     fn an_element_type_change_is_named() {
         let (_dir, mut s) = two_boxes();
-        s.execute("mesh.tet.generate", &json!({"body": "Box", "size": 5, "order": "quadratic"})).unwrap();
-        let r = replacement(&s, "mesh.tet.generate", &json!({"body": "Box", "size": 4})).unwrap();
+        s.execute("mesh.tet.generate", &json!({"body": "Box.1", "size": 5, "order": "quadratic"})).unwrap();
+        let r = replacement(&s, "mesh.tet.generate", &json!({"body": "Box.1", "size": 4})).unwrap();
         assert!(r.warnings.iter().any(|w| w == "The element type changes: tet10 → tet4."), "{r:?}");
-        let same = replacement(&s, "mesh.tet.generate", &json!({"body": "Box", "order": "quadratic"})).unwrap();
+        let same = replacement(&s, "mesh.tet.generate", &json!({"body": "Box.1", "order": "quadratic"})).unwrap();
         assert!(same.warnings.iter().all(|w| !w.contains("element type")), "{same:?}");
     }
 
@@ -245,25 +245,25 @@ mod tests {
     /// was, names the set that listed the old labels, and one undo brings the first mesh back.
     #[test]
     fn every_mesher_replaces_the_mesh_of_its_body_only() {
-        let tet_other = json!({"command": "mesh.tet.generate", "params": {"body": "Box (1)", "size": 5}});
-        let hex_box = json!({"command": "mesh.hex.generate", "params": {"body": "Box", "size": 2.5}});
+        let tet_other = json!({"command": "mesh.tet.generate", "params": {"body": "Box.2", "size": 5}});
+        let hex_box = json!({"command": "mesh.hex.generate", "params": {"body": "Box.1", "size": 2.5}});
         let square = json!([[0, 0], [10, 0], [10, 10], [0, 10]]);
         let cases: Vec<(&str, Vec<Value>, Value, &str, &str)> = vec![
-            ("mesh.tet.generate", vec![tet_other.clone()], json!({"body": "Box", "size": 4}), "Box", "Box (1)"),
-            ("mesh.hex.generate", vec![tet_other.clone()], json!({"body": "Box", "size": 2.5}), "Box", "Box (1)"),
-            ("mesh.hex.sweep", vec![tet_other.clone()], json!({"body": "Box", "size": 2.5}), "Box", "Box (1)"),
-            ("mesh.hex.mapped", vec![tet_other.clone()], json!({"body": "Box", "size": 2.5}), "Box", "Box (1)"),
-            ("mesh.hex.octree", vec![tet_other.clone()], json!({"body": "Box", "size": 2.5}), "Box", "Box (1)"),
-            ("mesh.hex.blocks", vec![tet_other.clone()], json!({"bodies": ["Box"], "size": 2.5}), "Box", "Box (1)"),
-            ("mesh.cells", vec![tet_other.clone()], json!({"bodies": ["Box"], "size": 2.5, "default": "hex"}), "Box", "Box (1)"),
-            ("mesh.planar", vec![tet_other.clone()], json!({"polygon": square, "size": 2.5, "name": "Box"}), "Box", "Box (1)"),
+            ("mesh.tet.generate", vec![tet_other.clone()], json!({"body": "Box.1", "size": 4}), "Box.1", "Box.2"),
+            ("mesh.hex.generate", vec![tet_other.clone()], json!({"body": "Box.1", "size": 2.5}), "Box.1", "Box.2"),
+            ("mesh.hex.sweep", vec![tet_other.clone()], json!({"body": "Box.1", "size": 2.5}), "Box.1", "Box.2"),
+            ("mesh.hex.mapped", vec![tet_other.clone()], json!({"body": "Box.1", "size": 2.5}), "Box.1", "Box.2"),
+            ("mesh.hex.octree", vec![tet_other.clone()], json!({"body": "Box.1", "size": 2.5}), "Box.1", "Box.2"),
+            ("mesh.hex.blocks", vec![tet_other.clone()], json!({"bodies": ["Box.1"], "size": 2.5}), "Box.1", "Box.2"),
+            ("mesh.cells", vec![tet_other.clone()], json!({"bodies": ["Box.1"], "size": 2.5, "default": "hex"}), "Box.1", "Box.2"),
+            ("mesh.planar", vec![tet_other.clone()], json!({"polygon": square, "size": 2.5, "name": "Box.1"}), "Box.1", "Box.2"),
             // The image's tets (meshed before) are replaced by the mirrored hexahedra.
             (
                 "mesh.mirror",
                 vec![hex_box, tet_other],
-                json!({"plane": {"point": [10, 0, 0], "normal": [1, 0, 0]}, "bodies": ["Box"]}),
-                "Box (1)",
-                "Box",
+                json!({"plane": {"point": [10, 0, 0], "normal": [1, 0, 0]}, "bodies": ["Box.1"]}),
+                "Box.2",
+                "Box.1",
             ),
         ];
         let covered: BTreeSet<&str> = cases.iter().map(|c| c.0).collect();
@@ -313,16 +313,16 @@ mod tests {
     fn tets_over_hexahedra_leave_only_tets() {
         let (_dir, mut s) = two_boxes();
         s.execute("mesh.hex.generate", &json!({"size": 2.5})).unwrap();
-        let hexes = elements_of(&s, "Box").len();
-        let other = elements_of(&s, "Box (1)");
-        let r = s.execute("mesh.tet.generate", &json!({"body": "Box", "size": 4})).unwrap();
+        let hexes = elements_of(&s, "Box.1").len();
+        let other = elements_of(&s, "Box.2");
+        let r = s.execute("mesh.tet.generate", &json!({"body": "Box.1", "size": 4})).unwrap();
         assert_eq!(r["replaced"][0]["elements"], hexes, "{r}");
-        assert!(elements_of(&s, "Box").values().all(|e| e.kind == ElementKind::Tet4));
-        assert_eq!(elements_of(&s, "Box (1)"), other);
+        assert!(elements_of(&s, "Box.1").values().all(|e| e.kind == ElementKind::Tet4));
+        assert_eq!(elements_of(&s, "Box.2"), other);
         let tets = s.model.clone();
         s.execute("edit.undo", &json!({})).unwrap();
-        assert_eq!(elements_of(&s, "Box").len(), hexes, "one undo brings the hexahedra back");
-        assert!(elements_of(&s, "Box").values().all(|e| e.kind == ElementKind::Hex8));
+        assert_eq!(elements_of(&s, "Box.1").len(), hexes, "one undo brings the hexahedra back");
+        assert!(elements_of(&s, "Box.1").values().all(|e| e.kind == ElementKind::Hex8));
         s.execute("edit.redo", &json!({})).unwrap();
         assert_eq!(s.model, tets);
         // Meshing every body replaces both.
@@ -331,8 +331,8 @@ mod tests {
         assert!(s.model.elements().values().all(|e| e.kind == ElementKind::Tet4));
         // A body without a mesh asks nothing.
         let (_dir2, s2) = two_boxes();
-        assert_eq!(replacement(&s2, "mesh.tet.generate", &json!({"body": "Box"})), None);
-        assert_eq!(replacement(&s, "mesh.block", &json!({"body": "Box"})), None, "not a mesher");
+        assert_eq!(replacement(&s2, "mesh.tet.generate", &json!({"body": "Box.1"})), None);
+        assert_eq!(replacement(&s, "mesh.block", &json!({"body": "Box.1"})), None, "not a mesher");
     }
 
     #[test]

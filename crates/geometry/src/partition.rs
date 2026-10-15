@@ -104,7 +104,7 @@ impl Design {
             let feature = format!("partition {}", cut.name);
             for b in &cut.bodies {
                 if !bodies.iter().any(|x| &x.name == b) {
-                    errors.push(FeatureError { feature: feature.clone(), message: format!("no body `{b}` to cut") });
+                    errors.push(FeatureError { feature: feature.clone(), message: format!("no body `{b}` to cut"), bodies: vec![b.clone()] });
                 }
             }
             let mut report = CutReport { name: cut.name.clone(), split: Vec::new(), faces: 0 };
@@ -123,7 +123,11 @@ impl Design {
                     }
                     None => {
                         if listed {
-                            errors.push(FeatureError { feature: feature.clone(), message: format!("the plane does not divide `{}`", body.name) });
+                            errors.push(FeatureError {
+                                feature: feature.clone(),
+                                message: format!("the plane does not divide `{}`", body.name),
+                                bodies: vec![body.name.clone()],
+                            });
                         }
                         next.push(body);
                     }

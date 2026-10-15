@@ -16,7 +16,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const OPEN: CommandSpec = CommandSpec {
     id: "geometry.open",
     label: "Open Design",
-    params: r#"{"path": "part.solidcraft", "model"?: "keep"} — rebuilds the SolidCraft design and makes its bodies the geometry. `model`: "keep" (default) keeps the mesh and every definition, so opening the same design again after an edit picks up the change and sets follow their persistent face names; "new" starts a new model with the design (no mesh, sets, materials, sections, BCs, loads or steps; the unit system stays; the model is untitled until saved, and undo restores the previous file). The reply's `related` is false when the model (before the open) refers to bodies (mesh tags, set geometry) and the design has none of them, and `stale` lists what no longer resolves: `mesh_bodies` (bodies the mesh is tagged with that the design lacks) `sets` (sets naming a body or face it lacks) and `seeds` (edge seeds on edges it lacks). One undo step"#,
+    params: r#"{"path": "part.solidcraft", "model"?: "keep"} — rebuilds the SolidCraft design and makes its bodies the geometry. `model`: "keep" (default) keeps the mesh and every definition, so opening the same design again after an edit picks up the change and sets follow their persistent face names; "new" starts a new model with the design (no mesh, sets, materials, sections, BCs, loads or steps; the unit system stays; the model is untitled until saved, and undo restores the previous file). The reply's `related` is false when the model (before the open) refers to bodies (mesh tags, set geometry) and the design has none of them, and `stale` lists what no longer resolves: `mesh_bodies` (bodies the mesh is tagged with that the design lacks) `sets` (sets naming a body or face it lacks) and `seeds` (edge seeds on edges it lacks). `errors` lists the features that failed to rebuild with the `bodies` each may change, and `warnings` says so in one line each. One undo step"#,
     form: Some(super::forms::OPEN_DESIGN),
     kind: CommandKind::Model,
     requires: &[],
@@ -86,7 +86,9 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let out = json!({
         "name": design.name,
         "bodies": design.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
-        "errors": design.errors.iter().map(|e| json!({"feature": e.feature, "message": e.message})).collect::<Vec<_>>(),
+        "errors": design.errors.iter().map(|e| json!({"feature": e.feature, "message": e.message, "bodies": e.bodies})).collect::<Vec<_>>(),
+        // Shown with the open: a body that differs from the design is never silent.
+        "warnings": design.errors.iter().map(|e| e.warning()).collect::<Vec<_>>(),
         "model": if new_model { "new" } else { "kept" },
         "related": fit.related,
         "stale": {"mesh_bodies": fit.mesh_bodies, "sets": fit.sets, "seeds": fit.seeds},

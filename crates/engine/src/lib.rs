@@ -734,6 +734,7 @@ mod tests {
         let opened = s.execute("geometry.open", &json!({"path": path})).unwrap();
         assert_eq!(opened["bodies"], json!(["Body1"]));
         assert_eq!(opened["errors"], json!([]));
+        assert_eq!(opened["warnings"], json!([]));
         assert_eq!(s.journal.len(), 1);
 
         let bodies = s.execute("geometry.bodies", &json!({})).unwrap();

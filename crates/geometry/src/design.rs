@@ -34,6 +34,42 @@ pub struct Design {
 pub struct FeatureError {
     pub feature: String,
     pub message: String,
+    /// The bodies that may differ from the design as SolidCraft builds it: those the feature
+    /// names, or every body when it names none of them.
+    pub bodies: Vec<String>,
+}
+
+impl FeatureError {
+    /// One line for the person opening the design, naming the bodies it may change.
+    pub fn warning(&self) -> String {
+        format!("{} failed to build, so {} may differ from the design: {}", self.feature, quoted(&self.bodies), self.message)
+    }
+}
+
+fn quoted(bodies: &[String]) -> String {
+    match bodies {
+        [] => "the design".into(),
+        [b] => format!("body \"{b}\""),
+        _ => format!("bodies {}", bodies.iter().map(|b| format!("\"{b}\"")).collect::<Vec<_>>().join(", ")),
+    }
+}
+
+/// The bodies of `bodies` that `feature` names anywhere in its saved form (targets, tools,
+/// selections); all of them when it names none.
+fn bodies_of(feature: Option<&solidcraft_doc::Feature>, bodies: &[Shape]) -> Vec<String> {
+    fn strings<'a>(v: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+        match v {
+            serde_json::Value::String(s) => out.push(s),
+            serde_json::Value::Array(a) => a.iter().for_each(|v| strings(v, out)),
+            serde_json::Value::Object(o) => o.values().for_each(|v| strings(v, out)),
+            _ => {}
+        }
+    }
+    let value = feature.and_then(|f| serde_json::to_value(f).ok()).unwrap_or_default();
+    let mut named = Vec::new();
+    strings(&value, &mut named);
+    let hit: Vec<String> = bodies.iter().filter(|b| named.contains(&b.name.as_str())).map(|b| b.name.clone()).collect();
+    if hit.is_empty() { bodies.iter().map(|b| b.name.clone()).collect() } else { hit }
 }
 
 impl Design {
@@ -55,12 +91,6 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
         m.evaluate(doc);
         Ok(m)
     })?;
-    let errors = model
-        .results
-        .iter()
-        .filter(|r| !r.skipped)
-        .filter_map(|r| r.error.as_ref().map(|e| FeatureError { feature: r.name.clone(), message: e.clone() }))
-        .collect();
     // Placed in the world: a component's bodies through every occurrence of it (an instance is a
     // body of its own, named after its occurrence path), as SolidCraft displays and exports them.
     let state = guard("place components", || Ok(solidcraft_doc::world_state(doc, &model.state())))?;
@@ -72,6 +102,18 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
         })?;
         bodies.push(Shape { name: b.name.clone(), body: b.body.clone(), faces });
     }
+    // A feature that failed leaves a different solid than SolidCraft's: each one names the bodies
+    // it would have changed, so opening never hands back a silently different solid.
+    let errors = model
+        .results
+        .iter()
+        .filter(|r| !r.skipped)
+        .filter_map(|r| {
+            let message = r.error.clone()?;
+            let bodies = bodies_of(doc.features.iter().find(|f| f.id == r.id), &bodies);
+            Some(FeatureError { feature: r.name.clone(), message, bodies })
+        })
+        .collect();
     Ok(Design { name: doc.name.clone(), source: std::sync::Arc::new(bodies.clone()), bodies, errors, cuts: Vec::new() })
 }
 

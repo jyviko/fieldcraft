@@ -42,7 +42,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const CELLS: CommandSpec = CommandSpec {
     id: "mesh.cells",
     label: "Partitioned Mesh",
-    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, they are tied: each cell's tied cut faces make one tie, `tie_<cell>` (`/` as `_`; sets `<tie>_main`, the facing cells' cut faces, and `<tie>_secondary`, the cell's own), hex cells main to tet cells and otherwise by name, so a node is a secondary node of one such tie only; the ties an earlier run made on these cells are replaced. The cells of one design body that may sweep (auto, hex, swept, extrude, revolve) are swept together first: one cross-section and one set of layers for all of them, so they share their nodes across every cut, T-junctions included, with no edge seeds (`swept_together` names the body; `not_swept_together` says why not, and those cells are meshed one by one). Reports each cell's method (and why auto fell back to tet), its `quality` (volume, smallest and mean scaled Jacobian, largest edge ratio), and each interface: `merged` with the nodes merged or shared, or `tied`"#,
+    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, they are tied: each cell's tied cut faces make one tie, `tie_<cell>` (`/` as `_`; sets `<tie>_main`, the facing cells' cut faces, and `<tie>_secondary`, the cell's own), hex cells main to tet cells and otherwise by name, so a node is a secondary node of one such tie only; the ties an earlier run made on these cells are replaced. The cells of one design body that may sweep (auto, hex, swept, extrude, revolve) are swept together first: one cross-section and one set of layers for all of them, so they share their nodes across every cut, T-junctions included, with no edge seeds (`swept_together` names the body; `not_swept_together` says why not, and those cells are meshed one by one). Reports each cell's method (and why auto fell back to tet), its `quality` (volume, smallest and mean scaled Jacobian, largest edge ratio), and each interface: `merged` with the nodes merged or shared, or `tied` (with `why` when both cells are of one design body: the tet cell and why auto fell back, or why the body's cells were not swept together)"#,
     form: Some(super::forms::CELLS),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -300,6 +300,7 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
         .filter_map(|r| r.get("body").and_then(Value::as_str).map(String::from))
         .collect();
     interfaces.extend(join(model, &names, &tet, COINCIDENT * diagonal)?);
+    explain_ties(&design, &report, &mut interfaces);
     let (nodes, elements) = (model.nodes().len(), model.elements().len());
     Ok(cleared.report(s, json!({"cells": report, "interfaces": interfaces, "nodes": nodes, "elements": elements, "size": size})))
 }
@@ -542,6 +543,52 @@ fn join(model: &mut Model, cells: &[String], tet: &BTreeSet<String>, tol: f64) -
     Ok(out)
 }
 
+/// Give every tied interface between cells of one design body its reason (`why`), from the
+/// cells' reports (#396): a cell meshed with tet (and why auto fell back), the reason the body's
+/// cells did not sweep together, or a cell whose method does not sweep with the others; so an
+/// agent knows which cut or method to change for a conforming mesh.
+fn explain_ties(design: &fieldcraft_geometry::Design, report: &[Value], interfaces: &mut [Value]) {
+    let info = |cell: &str| report.iter().find(|r| r.get("body").and_then(Value::as_str) == Some(cell));
+    let text = |r: Option<&Value>, key: &str| r.and_then(|r| r.get(key)).and_then(Value::as_str).map(String::from);
+    for interface in interfaces.iter_mut() {
+        if interface.get("joined").and_then(Value::as_str) != Some("tied") {
+            continue;
+        }
+        let cells: Vec<String> = interface
+            .get("cells")
+            .and_then(Value::as_array)
+            .map(|c| c.iter().filter_map(Value::as_str).map(String::from).collect())
+            .unwrap_or_default();
+        let [a, b] = cells.as_slice() else { continue };
+        let Some(source) = design.source_of(a).filter(|s| design.source_of(b) == Some(*s)) else { continue };
+        let mut why: Vec<String> = Vec::new();
+        for cell in [a, b] {
+            let r = info(cell);
+            if text(r, "kind").is_some_and(|k| k.starts_with("tet")) {
+                why.push(match text(r, "why") {
+                    Some(w) => format!("`{cell}` is meshed with tet: {w}"),
+                    None => format!("`{cell}` is meshed with tet"),
+                });
+            }
+        }
+        if why.is_empty() {
+            let not_together = [a, b].into_iter().find_map(|c| text(info(c), "not_swept_together"));
+            let alone = [a, b].into_iter().find(|c| text(info(c), "swept_together").is_none() && text(info(c), "not_swept_together").is_none());
+            if let Some(w) = not_together {
+                why.push(format!("the cells of `{source}` do not sweep together ({w}), so each was meshed alone with its own divisions"));
+            } else if let Some(c) = alone {
+                let method = text(info(c), "method").unwrap_or_default();
+                why.push(format!("`{c}` is meshed alone (method `{method}`), not swept with the other cells of `{source}`"));
+            } else {
+                why.push(format!("the element faces of `{a}` and `{b}` do not match node for node"));
+            }
+        }
+        if let Some(o) = interface.as_object_mut() {
+            o.insert("why".into(), json!(why.join("; ")));
+        }
+    }
+}
+
 /// The name of the tie that holds `cell`'s tied cut faces.
 fn tie_name(cell: &str) -> String {
     let name = format!("tie_{cell}");
@@ -618,6 +665,7 @@ mod tests {
         assert_eq!(r["cells"][1]["kind"], "hex8", "{r}");
         let i = &r["interfaces"][0];
         assert_eq!(i["joined"], "tied", "{r}");
+        assert!(i["why"].as_str().is_some_and(|w| w.contains("`Body1/a` is meshed with tet")), "{r}");
         assert_eq!(s.model.ties().len(), 1);
         assert_eq!((i["main"].as_str(), i["secondary"].as_str(), i["tie"].as_str()), (Some("Body1/b"), Some("Body1/a"), Some("tie_Body1_a")), "{r}");
         for set in ["tie_Body1_a_main", "tie_Body1_a_secondary"] {
@@ -633,6 +681,33 @@ mod tests {
         // Rerunning replaces the tie it made rather than adding another.
         s.execute("mesh.cells", &json!({"methods": {"Body1/a": "tet"}, "size": 2.5})).unwrap();
         assert_eq!(s.model.ties().len(), 1);
+    }
+
+    /// A tie between cells of one design body says why they were not conforming (#396): the
+    /// reason the body's cells did not sweep together, or the cell meshed alone by its method.
+    #[test]
+    fn ties_inside_one_body_say_why() {
+        let (_dir, s) = cut_plate();
+        let design = s.design.clone().unwrap();
+        let tied = || vec![json!({"cells": ["Body1/a", "Body1/b"], "joined": "tied"}), json!({"cells": ["Body1/a", "Body1/b"], "joined": "merged"})];
+        let mut interfaces = tied();
+        let report = [
+            json!({"body": "Body1/a", "kind": "hex8", "method": "extrude", "not_swept_together": "extrude: the levels differ"}),
+            json!({"body": "Body1/b", "kind": "hex8", "method": "extrude", "not_swept_together": "extrude: the levels differ"}),
+        ];
+        explain_ties(&design, &report, &mut interfaces);
+        assert_eq!(
+            interfaces[0]["why"],
+            "the cells of `Body1` do not sweep together (extrude: the levels differ), so each was meshed alone with its own divisions"
+        );
+        assert!(interfaces[1].get("why").is_none());
+        let mut interfaces = tied();
+        let report = [
+            json!({"body": "Body1/a", "kind": "hex8", "method": "mapped"}),
+            json!({"body": "Body1/b", "kind": "hex8", "method": "extrude", "swept_together": "Body1"}),
+        ];
+        explain_ties(&design, &report, &mut interfaces);
+        assert_eq!(interfaces[0]["why"], "`Body1/a` is meshed alone (method `mapped`), not swept with the other cells of `Body1`");
     }
 
     /// The half crank arm (cut on its symmetry plane only) has no cell that maps or sweeps as
@@ -811,6 +886,7 @@ mod tests {
         let tied: Vec<&Value> = interfaces.iter().filter(|i| i["joined"] == "tied").collect();
         assert_eq!(tied.len(), 3, "{r}");
         assert!(tied.iter().all(|i| i["secondary"] == "Box/b/a/a" && i["tie"] == "tie_Box_b_a_a"), "{r}");
+        assert!(tied.iter().all(|i| i["why"].as_str().is_some_and(|w| w.starts_with("`Box/b/a/a` is meshed with tet"))), "{r}");
         let merged: Vec<&Value> = interfaces.iter().filter(|i| i["joined"] == "merged").collect();
         assert_eq!(merged.len(), 4, "{r}");
         // Box/a/a and Box/a/b meet across y = 10, the third cut.

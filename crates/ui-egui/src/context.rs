@@ -17,7 +17,12 @@ pub const WIDTH: f32 = 310.0;
 
 /// Whether the panel has anything to show.
 pub fn has_context(app: &mut ModelApp) -> bool {
-    app.dialog.is_some() || app.selected.is_some() || app.selected_seed.is_some() || app.reply.is_some() || app.plot().is_some()
+    app.dialog.is_some()
+        || app.refused.is_some()
+        || app.selected.is_some()
+        || app.selected_seed.is_some()
+        || app.reply.is_some()
+        || app.plot().is_some()
 }
 
 pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
@@ -35,6 +40,10 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
                 ui.set_width(WIDTH - 16.0);
                 if app.dialog.is_some() {
                     form(app, ui, &t);
+                    ui.add_space(10.0);
+                }
+                if app.refused.is_some() {
+                    refused(app, ui, &t);
                     ui.add_space(10.0);
                 }
                 if let Some((kind, name)) = app.selected.clone() {
@@ -67,6 +76,35 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
         });
 }
 
+/// A command that cannot run yet: what it misses, each with a button that starts the command
+/// that provides it (as the browser's ghost rows do).
+fn refused(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
+    let Some(u) = app.refused.clone() else { return };
+    let mut close = false;
+    heading(ui, t, Level::Title, |ui| {
+        ui.label(RichText::new(format!("{} — NOT YET", crate::command_label(u.command).to_uppercase())).font(label_font(ui.ctx(), 12.0)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            close = ui.small_button("×").on_hover_text("Dismiss").clicked();
+        });
+    });
+    ui.add_space(4.0);
+    ui.label(RichText::new("It needs:").color(t.text_dim));
+    let mut start = None;
+    for fieldcraft_engine::requirement::Missing(r) in &u.missing {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(format!("• {}", r.what())).color(t.text));
+            if ui.button(format!("{}…", r.place())).on_hover_text(r.provider()).clicked() {
+                start = Some(r.provider());
+            }
+        });
+    }
+    if close {
+        app.refused = None;
+    } else if let Some(command) = start {
+        let _ = app.start(command);
+    }
+}
+
 /// JSON shorter than this is shown pretty-printed in the JSON view.
 const MAX_PRETTY: usize = 100_000;
 
@@ -76,6 +114,8 @@ const MAX_PRETTY: usize = 100_000;
 /// coupling) has a Target row that takes the viewport's selection.
 fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     let selected = (!app.pick.selection.is_empty()).then(|| app.pick.selection.summary());
+    // While a job runs (this form's mesher, a solve) OK waits for it.
+    let running = app.busy().map(str::to_string);
     let units = app.session.model.units();
     let session = &app.session;
     // The set Use selection will make on OK is offered with the others.
@@ -191,9 +231,12 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.label(RichText::new(spec.params).small().color(t.text_dim));
     });
     ui.add_space(4.0);
-    let ready = invalid == 0 && missing.is_empty();
-    let not_ready =
-        || if invalid > 0 { format!("{missing}\nA field holds something that is not a value").trim().to_string() } else { missing.clone() };
+    let ready = invalid == 0 && missing.is_empty() && running.is_none();
+    let not_ready = || match &running {
+        Some(job) => format!("{job} is running: wait for it or cancel it"),
+        None if invalid > 0 => format!("{missing}\nA field holds something that is not a value").trim().to_string(),
+        None => missing.clone(),
+    };
     let mut attempted = false;
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -201,7 +244,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             let ok =
                 ui.add_enabled(ready, egui::Button::new(RichText::new("OK").color(egui::Color32::WHITE)).fill(t.accent).min_size(vec2(64.0, 0.0)));
             // A click on the greyed OK shows every problem, beside its field.
-            attempted = !ready && ok.contains_pointer() && ui.input(|i| i.pointer.primary_clicked());
+            attempted = !ready && running.is_none() && ok.contains_pointer() && ui.input(|i| i.pointer.primary_clicked());
             run = ok
                 .on_disabled_hover_ui(|ui| {
                     ui.label(not_ready());

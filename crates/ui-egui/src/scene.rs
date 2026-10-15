@@ -89,6 +89,16 @@ pub fn datums(s: &mut Scene, session: &fieldcraft_engine::Session, bounds: &Aabb
     fieldcraft_render::glyphs::datums(&session.model, bounds, &shown, selected, &t.glyph_colors(), s)
 }
 
+/// A datum being defined in a form, drawn highlighted (through the part) where OK would put it.
+pub fn datum_preview(s: &mut Scene, datum: fieldcraft_model::Datum, bounds: &Aabb3, t: &Tokens) -> Aabb3 {
+    const NAME: &str = "preview";
+    let mut model = fieldcraft_model::Model::default();
+    if model.add_datum(NAME, datum).is_err() {
+        return Aabb3::EMPTY;
+    }
+    fieldcraft_render::glyphs::datums(&model, bounds, &|_| true, Some(NAME), &t.glyph_colors(), s)
+}
+
 /// The scene for `display` drawn in `style`.
 pub fn build(display: &DisplayMesh, style: Style, show: Show, t: &Tokens) -> Scene {
     let mut s = Scene { background: Some((rgb(t.viewport_top), rgb(t.viewport_bottom))), ..Default::default() };

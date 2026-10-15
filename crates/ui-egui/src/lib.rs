@@ -246,6 +246,9 @@ pub struct PickState {
     names: Vec<selection::BodyNames>,
     /// The selection's highlight and what it was built for (kept while only the hover changes).
     selected_overlay: (Option<u64>, Arc<Scene>),
+    /// The filter an open form switched to: the form's opening, the filter it set and the one
+    /// to restore when it closes.
+    form_filter: Option<(u64, selection::Filter, selection::Filter)>,
     /// The highlight overlay (the selection's and the hover's) and what it was built for.
     overlay: (Option<u64>, Arc<Scene>),
     /// What the hover was last worked out for: the pointer, the camera, the scene, the filter
@@ -313,6 +316,9 @@ struct PlotKey {
     frame: Option<u64>,
 }
 
+/// A datum form's datum and what it was worked out for (revision, command, form text).
+type DatumPreview = (Option<(u64, &'static str, String)>, Option<fieldcraft_model::Datum>);
+
 /// A screenshot asked for over the control channel.
 struct Shot {
     token: u64,
@@ -331,6 +337,8 @@ pub struct ModelApp {
     pub cam: Camera,
     pub status: Option<Status>,
     pub dialog: Option<ParamsDialog>,
+    /// The datum the open form defines, and the revision, command and form text it is for.
+    preview: std::cell::RefCell<DatumPreview>,
     /// Forms opened so far (numbers each [`ParamsDialog::opening`]).
     forms_opened: u64,
     pub viewport: Viewport,
@@ -401,6 +409,11 @@ pub struct ModelApp {
     setup: (Option<(u64, u64, bool, bool)>, std::sync::Arc<Vec<fieldcraft_engine::progress::StageState>>),
     /// The file opening in the background, and files waiting to open after it.
     pub loading: Option<files::Loading>,
+    /// The last command refused for what the model misses, listed in the context panel until
+    /// it can run or is dismissed.
+    pub refused: Option<fieldcraft_engine::requirement::Unavailable>,
+    /// Jobs started over the control channel (numbers each).
+    pub jobs: u64,
     pub queued: std::collections::VecDeque<String>,
     /// The question the window is asking (unsaved changes, recover).
     pub prompt: Option<files::Prompt>,
@@ -455,6 +468,7 @@ impl ModelApp {
             cam: Camera::default(),
             status: None,
             dialog: None,
+            preview: Default::default(),
             forms_opened: 0,
             viewport: Viewport::default(),
             icons: icons::IconCache::default(),
@@ -493,6 +507,8 @@ impl ModelApp {
             reload: None,
             setup: (None, std::sync::Arc::default()),
             loading: None,
+            refused: None,
+            jobs: 0,
             queued: std::collections::VecDeque::new(),
             prompt: None,
             report: None,
@@ -652,7 +668,7 @@ impl ModelApp {
                 missing: u.missing.iter().map(|m| m.0).collect(),
             });
             let e = u.to_string();
-            self.set_status(e.clone(), true);
+            self.refuse(u);
             return Err(e);
         }
         if self.file_action(spec.id, &preset, interactive) {
@@ -672,6 +688,12 @@ impl ModelApp {
     /// Open a command's parameter form with `params` filled in.
     pub fn open_form(&mut self, command: &str, params: Value) {
         if let Some(spec) = fieldcraft_engine::find_command(command) {
+            // A mesher starts from how the mesh it would replace was made (size, order…), so a
+            // remesh changes only what is typed (#343).
+            let params = match params.as_object() {
+                Some(o) if o.is_empty() => self.last_mesher_params(spec.id).unwrap_or(params),
+                _ => params,
+            };
             // The schema's defaults are filled in, so the form starts as the command would run.
             let mut params = spec.form.map_or(params.clone(), |form| fieldcraft_engine::schema::prefill(form, &params));
             // A required reference with one obvious candidate starts picked.
@@ -683,6 +705,12 @@ impl ModelApp {
                     _ => Some(session.names(c)).filter(|n| n.len() == 1).and_then(|n| n.into_iter().next()),
                 };
                 form::preselect(form, obj, &pick);
+                // A new datum or partition starts with the next free name (Datum-1, …), editable.
+                if let Some(name) = self.default_name(spec.id)
+                    && obj.get("name").and_then(Value::as_str).is_none_or(str::is_empty)
+                {
+                    obj.insert("name".into(), json!(name));
+                }
             }
             self.forms_opened = self.forms_opened.wrapping_add(1);
             self.dialog = Some(ParamsDialog {
@@ -698,6 +726,40 @@ impl ModelApp {
                 pending_set: None,
             });
         }
+    }
+
+    /// The parameters mesher `id` last ran with in this model (its journal), while the mesh it
+    /// made is there; `None` for other commands.
+    fn last_mesher_params(&self, id: &str) -> Option<Value> {
+        fieldcraft_engine::MESHERS.iter().find(|(m, _)| *m == id)?;
+        let (_, params) = self.session.journal.iter().rev().find(|(c, _)| c == id)?;
+        let targets = fieldcraft_engine::MESHERS.iter().find(|(m, _)| *m == id)?.1;
+        let meshed = targets(&self.session, params).ok()?.iter().any(|b| !self.session.model.body_mesh(b).elements.is_empty());
+        meshed.then(|| params.clone())
+    }
+
+    /// A command that cannot run yet: the status bar says so in short, and the context panel
+    /// lists each missing piece with the command that provides it ([`ModelApp::refused`]).
+    pub fn refuse(&mut self, u: fieldcraft_engine::requirement::Unavailable) {
+        let label = command_label(u.command);
+        let text = match u.missing.as_slice() {
+            [one] => format!("{label} cannot run yet. {one}"),
+            many => format!("{label} cannot run yet: {} things missing (listed in the panel)", many.len()),
+        };
+        self.set_status(text, true);
+        self.refused = Some(u);
+    }
+
+    /// The name a new item of command `id` starts with: `<Kind>-<n>`, the first not taken.
+    fn default_name(&self, id: &str) -> Option<String> {
+        use fieldcraft_engine::schema::Collection;
+        let (base, collection) = match id {
+            "geometry.datum" | "geometry.datum.axis" | "geometry.datum.point" => ("Datum", Collection::Datum),
+            "geometry.partition" => ("Partition", Collection::Partition),
+            _ => return None,
+        };
+        let taken = self.session.names(collection);
+        (1..=fieldcraft_engine::schema::MAX_NAMES).map(|n| format!("{base}-{n}")).find(|n| !taken.contains(n))
     }
 
     /// A reference field's "Create …": open the command that makes an item of `collection` over
@@ -941,6 +1003,7 @@ impl ModelApp {
         let mut h = std::hash::DefaultHasher::new();
         let plot = self.plot.1.as_ref().map(|p| Arc::as_ptr(p) as usize);
         (self.revision, self.ui.style, self.ui.show(), self.ui.dark, plot, self.selected_datum()).hash(&mut h);
+        format!("{:?}", self.datum_preview()).hash(&mut h);
         h.finish()
     }
 
@@ -986,7 +1049,10 @@ impl ModelApp {
             };
             let mut datums = Aabb3::EMPTY;
             if show.geometry && self.plot.1.is_none() {
-                datums = scene::datums(&mut s, &self.session, &self.display.1.bounds, self.selected_datum(), &t);
+                datums = scene::datums(&mut s, &self.session, &self.display.1.bounds, self.selected_datum().as_deref(), &t);
+                if let Some(d) = self.datum_preview() {
+                    datums.union(scene::datum_preview(&mut s, d, &self.display.1.bounds, &t));
+                }
                 scene::seeds(&mut s, &self.session.model, &self.pick.names, &self.display.1, &t);
             }
             self.scene = (Some(key), s, datums);
@@ -1000,12 +1066,30 @@ impl ModelApp {
         (key, &self.scene.1)
     }
 
-    /// The datum selected in the browser: drawn highlighted, shown or hidden.
-    fn selected_datum(&self) -> Option<&str> {
+    /// The datum drawn highlighted, shown or hidden: the one the open Partition form cuts by,
+    /// else the one selected in the browser.
+    fn selected_datum(&self) -> Option<String> {
+        if let Some(d) = self.dialog.as_ref().filter(|d| d.command == "geometry.partition") {
+            return serde_json::from_str::<Value>(&d.text).ok()?.get("datum").and_then(Value::as_str).map(str::to_string);
+        }
         match &self.selected {
-            Some((browser::Def::Datum, name)) => Some(name.as_str()),
+            Some((browser::Def::Datum, name)) => Some(name.clone()),
             _ => None,
         }
+    }
+
+    /// The datum the open datum form defines so far, drawn before OK.
+    /// Worked out once per form text and model revision (a face centre costs a design query).
+    fn datum_preview(&self) -> Option<fieldcraft_model::Datum> {
+        let d = self.dialog.as_ref()?;
+        let key = (self.revision, d.command, d.text.clone());
+        let mut cache = self.preview.borrow_mut();
+        if cache.0.as_ref() != Some(&key) {
+            let params = serde_json::from_str::<Value>(&d.text).ok();
+            let datum = params.and_then(|p| fieldcraft_engine::cmd::datum_preview(&self.session, d.command, &p));
+            *cache = (Some(key), datum);
+        }
+        cache.1
     }
 
     /// The definition selected in the browser, when it has symbols.
@@ -1472,6 +1556,11 @@ impl ModelApp {
         self.frame_new_document();
         self.results_shown = shown;
         self.check_selection();
+        self.follow_form_filter();
+        // A refusal goes once the command can run.
+        if self.refused.as_ref().is_some_and(|u| self.unavailable(u.command).is_none()) {
+            self.refused = None;
+        }
         // A selected definition that is gone (undo, delete) is no longer selected.
         if self.selected.as_ref().is_some_and(|(kind, name)| !kind.exists(&self.session.model, name)) {
             self.selected = None;
@@ -1483,6 +1572,29 @@ impl ModelApp {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(results::PERIOD / results::FRAMES as f64));
         }
         self.screenshots(ctx);
+    }
+
+    /// A form that picks one kind of entity (Seed Edges: edges) switches the selection filter to
+    /// it while open, and the filter goes back when the form closes. A filter the user changes
+    /// while the form is open stays until the form wants another kind.
+    fn follow_form_filter(&mut self) {
+        let want = self
+            .dialog
+            .as_ref()
+            .and_then(|d| serde_json::from_str::<Value>(&d.text).ok().and_then(|p| selection::form_filter(d.command, &p)).map(|f| (d.opening, f)));
+        match (want, self.pick.form_filter) {
+            (Some((opening, f)), Some((o, set, _))) if opening == o && f == set => {}
+            (Some((opening, f)), previous) => {
+                let restore = previous.map_or(self.pick.filter, |(_, _, r)| r);
+                self.pick.form_filter = Some((opening, f, restore));
+                self.pick.filter = f;
+            }
+            (None, Some((_, _, restore))) => {
+                self.pick.form_filter = None;
+                self.pick.filter = restore;
+            }
+            (None, None) => {}
+        }
     }
 
     /// Undo (Ctrl/Cmd+Z), redo (Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y), open (Ctrl/Cmd+O), save
@@ -1640,6 +1752,9 @@ impl ModelApp {
             match self.with_origin(origin, |app| control::handle(app, ctx, &req)) {
                 control::Outcome::Done(v) => {
                     let _ = req.reply.send(v);
+                }
+                control::Outcome::Pending => {
+                    let _ = req.reply.send(json!({control::PENDING: true}));
                 }
                 control::Outcome::Screenshot { path } => {
                     self.shot_token = self.shot_token.wrapping_add(1);
@@ -1960,10 +2075,15 @@ mod tests {
         let err = app.start("deck.write.abaqus").unwrap_err();
         assert_eq!(err, "deck.write cannot run yet. Needs a mesh — Mesh › Tet Mesh");
         assert!(app.dialog.is_none());
-        assert_eq!(app.status.as_ref().map(|s| (s.error, s.text.as_str())), Some((true, err.as_str())));
+        let status = "Write Solver Deck cannot run yet. Needs a mesh — Mesh › Tet Mesh";
+        assert_eq!(app.status.as_ref().map(|s| (s.error, s.text.as_str())), Some((true, status)));
+        // The panel lists what is missing (#323), until the command can run.
+        assert_eq!(app.refused.as_ref().map(|u| u.command), Some("deck.write"));
         // With a model, a deck entry opens deck.write's form with its format filled in.
         app.run("file.sample", json!({"name": "cantilever"})).unwrap();
         app.start("deck.write.abaqus").unwrap();
+        app.logic(&egui::Context::default());
+        assert!(app.refused.is_none());
         let d = app.dialog.as_ref().unwrap();
         assert_eq!((d.command, d.text.as_str()), ("deck.write", r#"{"format":"abaqus"}"#));
     }

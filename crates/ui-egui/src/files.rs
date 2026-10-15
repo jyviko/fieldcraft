@@ -14,7 +14,10 @@
 //! ATTRIBUTION.md.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+
+use fieldcraft_model::progress::Progress;
 
 use fieldcraft_engine::Session;
 use serde_json::{Value, json};
@@ -115,6 +118,15 @@ fn kind_of_command(command: &str) -> Option<Kind> {
 }
 
 /// Commands a form runs in the background: they can take a while on a large part.
+/// Whether `command` may run long: a solve or a mesher, run as a job off the window thread.
+pub fn is_long(command: &str) -> bool {
+    BACKGROUND.contains(&command)
+        || matches!(
+            command,
+            "solve.run" | "solve.static" | "solve.nonlinear" | "solve.heat" | "solve.frequency" | "solve.buckle" | "solve.explicit" | "solve.fluid"
+        )
+}
+
 pub const BACKGROUND: &[&str] =
     &["mesh.tet.generate", "mesh.hex.generate", "mesh.hex.sweep", "mesh.hex.mapped", "mesh.hex.blocks", "mesh.hex.octree"];
 
@@ -270,6 +282,63 @@ pub struct Loading {
     /// Whether the window has drawn the job's progress: on the web the work runs (and the page
     /// stops drawing) only once the user has seen that it runs.
     shown: bool,
+    /// The command it runs.
+    pub command: &'static str,
+    /// Where the command is, reported from the worker ([`fieldcraft_model::progress`]).
+    pub progress: Arc<Progress>,
+    /// When it started (app time, seconds).
+    pub started: f64,
+    /// Control-channel requests waiting for its reply (`engine.execute` of a long command,
+    /// `job.wait`): each gets the command's result, or why it has none.
+    pub waiters: Vec<Sender<Value>>,
+}
+
+impl Loading {
+    /// The job for `ui.inspect` and `job.status`: what runs, where it is and for how long.
+    pub fn to_json(&self, now: f64) -> Value {
+        let p = self.progress.snapshot();
+        json!({
+            "title": self.title,
+            "command": self.command,
+            "elapsed": (now - self.started).max(0.0),
+            "progress": p,
+            "fraction": p.fraction(),
+            "line": p.line(),
+        })
+    }
+
+    /// The overlay's line: `Solving · Step 1/2 Load · Load factor 0.3 of 1 · 12 s`.
+    pub fn line(&self, now: f64) -> String {
+        let p = self.progress.snapshot().line();
+        let elapsed = elapsed((now - self.started).max(0.0));
+        if p.is_empty() { format!("{}… · {elapsed}", self.title) } else { format!("{}… · {p} · {elapsed}", self.title) }
+    }
+}
+
+/// What the status bar says when job `command` finished: its `done` text with the time it took,
+/// and for a mesher the elements made and their worst quality.
+fn finished(command: &str, done: &str, took: &str, reply: &Value) -> String {
+    let r = &reply["result"];
+    match (r["elements"].as_u64(), r["kind"].as_str()) {
+        (Some(n), Some(kind)) if BACKGROUND.contains(&command) => {
+            let bodies = r["bodies"].as_array().into_iter().flatten();
+            let dihedral = bodies.filter_map(|b| b["quality"]["mesh"]["min_dihedral"].as_f64()).reduce(f64::min);
+            let q = dihedral.map(|d| format!(", smallest dihedral angle {d:.1}°")).unwrap_or_default();
+            let n = fieldcraft_engine::thousands(usize::try_from(n).unwrap_or(usize::MAX));
+            format!("{done}: {n} {kind}{q} in {took} — Mesh › Quality checks them")
+        }
+        _ if is_long(command) => format!("{done} in {took}"),
+        _ => done.to_string(),
+    }
+}
+
+/// A duration as `0.4 s`, `12 s` or `3 min 05 s`.
+pub fn elapsed(seconds: f64) -> String {
+    match seconds {
+        s if s < 10.0 => format!("{s:.1} s"),
+        s if s < 60.0 => format!("{s:.0} s"),
+        s => format!("{} min {:02} s", (s / 60.0) as u64, (s % 60.0) as u64),
+    }
 }
 
 /// A finished background job whose session has not replaced the window's yet.
@@ -396,13 +465,18 @@ fn start(name: String, work: Work) -> Option<Work> {
 
 /// Run `command` on `session` off the window thread: the reply's receiver, and the work when it
 /// waits to run on the window thread (the web).
-fn spawn(session: Session, command: &'static str, params: Value) -> (Receiver<(Box<Session>, Result<Value, String>)>, Option<Work>) {
+fn spawn(
+    session: Session,
+    command: &'static str,
+    params: Value,
+    progress: Arc<Progress>,
+) -> (Receiver<(Box<Session>, Result<Value, String>)>, Option<Work>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let work = start(
         format!("fieldcraft {command}"),
         Box::new(move || {
             let mut s = session;
-            let r = s.execute(command, &params).map_err(|e| e.to_string());
+            let r = fieldcraft_model::progress::scoped(Some(progress), || s.execute(command, &params)).map_err(|e| e.to_string());
             let _ = tx.send((Box::new(s), r));
         }),
     );
@@ -444,9 +518,11 @@ impl ModelApp {
         } else {
             self.session.clone()
         };
-        let (rx, pending) = spawn(base, command, params);
+        let progress = Progress::new();
+        let (rx, pending) = spawn(base, command, params, progress.clone());
         self.set_status(format!("{title}…"), false);
-        self.loading = Some(Loading { title, done, recent, form: None, rx, pending, shown: false });
+        let started = self.now;
+        self.loading = Some(Loading { title, done, recent, form: None, rx, pending, shown: false, command, progress, started, waiters: Vec::new() });
         true
     }
 
@@ -558,12 +634,33 @@ impl ModelApp {
     /// Solve every step (`solve.run`) in the background; the results come up when it is done.
     pub fn solve_all(&mut self) {
         if let Some(u) = self.unavailable("solve.run") {
-            self.set_status(u.to_string(), true);
+            self.refuse(u);
             return;
         }
         let n = self.session.model.steps().len();
         let done = format!("Solved {n} step{}", if n == 1 { "" } else { "s" });
         self.begin_job("solve.run", json!({}), false, "Solving".into(), done, None);
+    }
+
+    /// Run `command` as a background job for the control channel: the job's number (its
+    /// opening), or why it cannot start (another job runs, the command cannot run yet).
+    pub fn start_job(&mut self, command: &str, params: Value) -> Result<u64, String> {
+        let spec = fieldcraft_engine::find_command(command).ok_or_else(|| format!("unknown command `{command}`"))?;
+        if let Err(u) = self.session.availability(spec) {
+            return Err(u.to_string());
+        }
+        let label = crate::command_label(spec.id).to_string();
+        let title = if spec.id.starts_with("solve.") { "Solving".to_string() } else { label.clone() };
+        let steps = self.session.model.steps().len();
+        let done = match spec.id {
+            "solve.run" => format!("Solved {steps} step{}", if steps == 1 { "" } else { "s" }),
+            _ => format!("{label} done"),
+        };
+        if !self.begin_job(spec.id, params, false, title, done, None) {
+            return Err(self.busy().map_or_else(|| "busy".to_string(), |b| format!("{b}: wait for it or cancel it")));
+        }
+        self.jobs = self.jobs.wrapping_add(1);
+        Ok(self.jobs)
     }
 
     /// Recover an autosaved model (`file.recover`) in the background.
@@ -583,6 +680,9 @@ impl ModelApp {
     pub fn cancel_loading(&mut self) {
         if let Some(l) = self.loading.take() {
             self.queued.clear();
+            for w in &l.waiters {
+                let _ = w.send(json!({"ok": false, "error": format!("cancelled: {}", l.title), "cancelled": true}));
+            }
             let line = if l.title == "Solving" { "Solve cancelled".to_string() } else { format!("{} cancelled", l.title) };
             self.set_status(line, false);
         }
@@ -603,6 +703,16 @@ impl ModelApp {
             Err(TryRecvError::Disconnected) => None,
         };
         let Some(l) = self.loading.take() else { return false };
+        let reply = match &outcome {
+            Some((_, Ok(v))) => json!({"ok": true, "result": v}),
+            Some((_, Err(e))) => json!({"ok": false, "error": e}),
+            None => json!({"ok": false, "error": format!("{}: stopped unexpectedly", l.title)}),
+        };
+        for w in &l.waiters {
+            let _ = w.send(reply.clone());
+        }
+        let took = elapsed((self.now - l.started).max(0.0));
+        let l = Loading { done: finished(l.command, &l.done, &took, &reply), ..l };
         match outcome {
             Some((session, Ok(reply))) => {
                 let opened = Opened { session, reply, done: l.done, recent: l.recent, form: l.form };
@@ -864,8 +974,9 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
     let t = crate::theme::Tokens::get(app.ui.dark);
     let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
     if hovering || app.loading.is_some() {
+        let fraction = app.loading.as_ref().and_then(|l| l.progress.snapshot().fraction());
         let text = match app.loading.as_ref() {
-            Some(l) => format!("{}…", l.title),
+            Some(l) => l.line(app.now),
             None => "Drop to open: .fieldcraft models, .solidcraft designs, .3mf tagged meshes".into(),
         };
         let mut cancel = false;
@@ -882,6 +993,9 @@ pub fn show(app: &mut ModelApp, ctx: &egui::Context) {
                             cancel = ui.button("Cancel").clicked();
                         }
                     });
+                    if let Some(f) = fraction {
+                        ui.add(egui::ProgressBar::new(f as f32).desired_height(4.0).fill(t.accent));
+                    }
                 });
             },
         );
@@ -1401,7 +1515,7 @@ mod tests {
         assert_eq!(app.busy(), Some("Solving"));
         assert!(app.run("model.info", serde_json::json!({})).is_err(), "commands wait for the solve");
         app.wait_loaded();
-        assert_eq!(app.status.as_ref().map(|s| s.text.as_str()), Some("Solved 2 steps"));
+        assert!(app.status.as_ref().is_some_and(|s| s.text.starts_with("Solved 2 steps in ")), "{:?}", app.status);
         app.logic(&egui::Context::default());
         assert_eq!(app.ui.tab, fieldcraft_engine::catalogue::Tab::Results);
         assert!(app.plot().is_some());
@@ -1415,6 +1529,31 @@ mod tests {
         let mut empty = ModelApp::new(Session::default());
         empty.solve_all();
         assert!(empty.busy().is_none() && empty.status.as_ref().is_some_and(|s| s.error));
+    }
+
+    /// A cancelled or refused solve leaves the window in the workspace it was in, and a job
+    /// waiting over the control channel hears that it was cancelled (#324, #367).
+    #[test]
+    fn a_cancelled_or_refused_solve_stays_in_its_workspace() {
+        use fieldcraft_engine::catalogue::Workspace;
+        let mut app = ModelApp::new(Session::default());
+        app.open_sample("cantilever");
+        app.ui.select_workspace(Workspace::Model);
+        let job = app.start_job("solve.run", serde_json::json!({})).unwrap();
+        assert_eq!(job, 1);
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.loading.as_mut().unwrap().waiters.push(tx);
+        assert_eq!(app.loading.as_ref().unwrap().to_json(app.now)["command"], "solve.run");
+        app.cancel_loading();
+        app.logic(&egui::Context::default());
+        assert_eq!(app.ui.workspace, Workspace::Model);
+        assert_eq!(rx.recv().unwrap()["cancelled"], true);
+        let mut empty = ModelApp::new(Session::default());
+        empty.ui.select_workspace(Workspace::Model);
+        assert!(empty.start_job("solve.run", serde_json::json!({})).is_err());
+        empty.solve_all();
+        empty.logic(&egui::Context::default());
+        assert_eq!(empty.ui.workspace, Workspace::Model);
     }
 
     /// A first-time user's path: Open picks a SolidCraft design, the Tet Mesh button opens its
@@ -1439,7 +1578,13 @@ mod tests {
         assert_eq!(app.busy(), Some("Generate Tet Mesh"), "meshing runs off the window thread");
         app.wait_loaded();
         assert!(app.dialog.is_none(), "the form closes when it succeeded: {:?}", app.status);
-        assert_eq!(app.status.as_ref().map(|s| (s.text.as_str(), s.error)), Some(("Generate Tet Mesh done", false)));
+        // The status sums up the mesh made: elements, worst angle, time, where to check it.
+        let status = app.status.clone().unwrap();
+        assert!(
+            !status.error && status.text.starts_with("Generate Tet Mesh done: ") && status.text.contains(" tet4, smallest dihedral angle "),
+            "{}",
+            status.text
+        );
         let counts = app.session.model.element_counts();
         assert!(matches!(counts.as_slice(), [(fieldcraft_model::ElementKind::Tet4, n)] if *n > 0), "{counts:?}");
         assert_eq!(app.session.journal.len(), 2, "open and mesh, each an undo step");

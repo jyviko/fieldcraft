@@ -115,6 +115,11 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context) {
                 }
                 ctx.request_repaint();
                 let mut r = rrx.recv_timeout(REPLY_TIMEOUT).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"}));
+                // A request waiting for a job (a solve, a mesher): its reply comes when the job
+                // ends, however long it runs; the job always answers, even when cancelled.
+                if r.get(fieldcraft_ui_egui::control::PENDING).is_some() {
+                    r = rrx.recv().unwrap_or_else(|_| json!({"ok": false, "error": "the job ended without a reply"}));
+                }
                 if let Some(o) = r.as_object_mut() {
                     o.insert("id".into(), id);
                 }

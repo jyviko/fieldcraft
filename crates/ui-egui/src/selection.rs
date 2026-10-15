@@ -820,6 +820,23 @@ pub fn target(id: &str, params: &Value) -> Option<Target> {
     }
 }
 
+/// The filter command `id`'s form picks with, when its target is one kind of entity: edges for
+/// edge seeds, and the vertex, edge or face a datum point is defined on.
+pub fn form_filter(id: &str, params: &Value) -> Option<Filter> {
+    if target(id, params) == Some(Target::Edges) {
+        return Some(Filter::Edges);
+    }
+    match id {
+        "geometry.datum.point" | "geometry.datum.point.edit" => match params.pointer("/by/type").and_then(Value::as_str) {
+            Some("vertex") => Some(Filter::Vertices),
+            Some("edge") => Some(Filter::Edges),
+            Some("face_centre") => Some(Filter::Faces),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// `params` with the selection's members put in (replacing any members it had).
 pub fn with_members(params: &Value, selection: &Selection) -> Value {
     let mut out = params.as_object().cloned().unwrap_or_default();
@@ -1160,6 +1177,9 @@ mod tests {
         assert_eq!(target("model.section.edit", &json!({})), Some(Target::Set));
         assert_eq!(target("model.coupling.create", &json!({})), Some(Target::Set));
         assert_eq!(target("mesh.node.add", &json!({})), None);
+        assert_eq!(form_filter("mesh.seed.edge", &json!({})), Some(Filter::Edges));
+        assert_eq!(form_filter("geometry.datum.point", &json!({"by": {"type": "vertex"}})), Some(Filter::Vertices));
+        assert_eq!(form_filter("model.load.create", &json!({})), None);
         assert_eq!(with_set(&json!({"name": "fix"}), Target::TargetSet, "fix-set"), json!({"name": "fix", "target": {"set": "fix-set"}}));
         assert_eq!(with_set(&json!({"name": "web"}), Target::Set, "web-set"), json!({"name": "web", "set": "web-set"}));
         let mut m = Model::default();

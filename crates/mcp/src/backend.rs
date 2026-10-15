@@ -164,9 +164,10 @@ impl Remote {
             match TcpStream::connect_timeout(&sa, Duration::from_millis(800)) {
                 Ok(s) => {
                     s.set_nodelay(true).ok();
-                    // Meshing and solving big models take a while; the app answers a request it
-                    // has not finished within 60 s with a timeout of its own.
-                    s.set_read_timeout(Some(Duration::from_secs(600))).ok();
+                    // Meshing and solving big models take as long as they take: the app answers
+                    // a solve or a mesher when its job ends (docs/control-protocol.md, Jobs), and
+                    // a closed app closes the connection.
+                    s.set_read_timeout(None).ok();
                     let read = s.try_clone()?;
                     self.conn = Some((BufReader::new(read), s));
                     return Ok(());

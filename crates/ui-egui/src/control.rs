@@ -33,8 +33,16 @@ impl ControlRequest {
     }
 }
 
+/// The key of the interim reply to a request that waits for a background job
+/// ([`Outcome::Pending`]): the server then waits for the final reply however long the job takes,
+/// since the job always answers (its result, its error, or that it was cancelled).
+pub const PENDING: &str = "pending";
+
 pub enum Outcome {
     Done(Value),
+    /// The reply comes when the background job finishes: the request's sender waits in
+    /// [`crate::files::Loading::waiters`].
+    Pending,
     /// A window screenshot, answered once a frame is presented.
     Screenshot {
         path: Option<String>,
@@ -170,6 +178,17 @@ fn privacy_json(app: &ModelApp) -> Value {
     })
 }
 
+/// Answer `req` when the running job finishes; with none running, at once.
+fn wait_job(app: &mut ModelApp, req: &ControlRequest) -> Outcome {
+    match app.loading.as_mut() {
+        Some(l) => {
+            l.waiters.push(req.reply.clone());
+            Outcome::Pending
+        }
+        None => ok(json!({"job": null})),
+    }
+}
+
 pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -182,7 +201,24 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
         "engine.execute" => {
             let Some(id) = s("command") else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            // A solve or a mesher runs as a job: the window keeps drawing its progress, and the
+            // reply comes when it is done however long that takes (or at once with `"wait":
+            // false`, then `job.status` / `job.wait` / `job.cancel`).
+            if crate::files::is_long(id) {
+                return match app.start_job(id, params) {
+                    Err(e) => err(e),
+                    Ok(job) if p.get("wait").and_then(Value::as_bool) == Some(false) => ok(json!({"job": job})),
+                    Ok(_) => wait_job(app, req),
+                };
+            }
             wrap(app.run(id, params))
+        }
+        "job.status" => ok(json!({"job": app.loading.as_ref().map(|l| l.to_json(app.now))})),
+        "job.wait" => wait_job(app, req),
+        "job.cancel" => {
+            let job = app.loading.as_ref().map(|l| l.to_json(app.now));
+            app.cancel_loading();
+            ok(json!({"cancelled": job}))
         }
         "engine.script" => {
             let Some(steps) = p.get("commands") else { return err("missing `commands` (a list of {command, params})") };
@@ -201,6 +237,7 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             "results": app.session.results_report(),
             "probe": app.probe,
             "busy": app.busy(),
+            "job": app.loading.as_ref().map(|l| l.to_json(app.now)),
             "solve": solve_json(app),
             "selected": app.selected.as_ref().map(|(k, n)| json!({"kind": k, "name": n})).or_else(|| app.selected_seed.as_ref().map(|e| json!({"kind": "seed", "edge": e}))),
             "browser": crate::browser::describe(app),
@@ -634,10 +671,15 @@ mod tests {
     use super::*;
 
     fn call(app: &mut ModelApp, method: &str, params: Value) -> Value {
-        let (req, _rx) = ControlRequest::new(method, params);
+        let (req, rx) = ControlRequest::new(method, params);
         match handle(app, &egui::Context::default(), &req) {
             Outcome::Done(v) => v,
             Outcome::Screenshot { .. } => json!({"screenshot": true}),
+            // A job's reply comes when it ends.
+            Outcome::Pending => {
+                app.wait_loaded();
+                rx.try_recv().unwrap_or(Value::Null)
+            }
         }
     }
 
@@ -692,10 +734,15 @@ mod tests {
     }
 
     fn call_in(app: &mut ModelApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
-        let (req, _rx) = ControlRequest::new(method, params);
+        let (req, rx) = ControlRequest::new(method, params);
         match handle(app, ctx, &req) {
             Outcome::Done(v) => v,
             Outcome::Screenshot { .. } => json!({"screenshot": true}),
+            // A job's reply comes when it ends.
+            Outcome::Pending => {
+                app.wait_loaded();
+                rx.try_recv().unwrap_or(Value::Null)
+            }
         }
     }
 

@@ -15,6 +15,7 @@ mod hex;
 pub(crate) mod mesh;
 
 pub use datum::edit_params as datum_edit_params;
+pub use datum::preview as datum_preview;
 pub use mesh::analytic_surfaces;
 mod mirror;
 mod model;

@@ -342,6 +342,18 @@ fn datum_of(s: &Session, kind: &str, p: &Value) -> Result<Datum> {
     }
 }
 
+/// The datum a datum form's `params` define so far, for drawing it before OK; `None` when
+/// `command` makes no datum or the parameters do not define one yet. The model is not changed.
+pub fn preview(s: &Session, command: &str, params: &Value) -> Option<Datum> {
+    let kind = match command {
+        "geometry.datum" | "geometry.datum.edit" => "plane",
+        "geometry.datum.axis" | "geometry.datum.axis.edit" => "axis",
+        "geometry.datum.point" | "geometry.datum.point.edit" => "point",
+        _ => return None,
+    };
+    datum_of(s, kind, params).ok()
+}
+
 /// The parameters of the command that edits datum `name`, describing it as it is (a plane by
 /// its point and normal, an axis by its point and direction, a point by its coordinates); and
 /// that command.

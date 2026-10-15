@@ -55,7 +55,10 @@ fn units(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn check(s: &mut Session, _: &Value) -> Result<Value> {
-    let diagnostics = s.model.check();
+    let mut diagnostics = s.model.check();
+    if let Some(why) = s.mesh_outdated() {
+        diagnostics.push(fieldcraft_model::Diagnostic { severity: Severity::Warning, subject: "mesh".into(), message: why });
+    }
     let errors = diagnostics.iter().filter(|d| d.severity == Severity::Error).count();
     let first_error = diagnostics.iter().find(|d| d.severity == Severity::Error).map(ToString::to_string);
     let progress = crate::progress::to_json(&s.progress_given(first_error));

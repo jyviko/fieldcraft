@@ -102,6 +102,28 @@ fn design_bodies(s: &Session) -> Result<Vec<String>> {
     Ok(design.bodies.iter().map(|b| b.name.clone()).collect())
 }
 
+/// Tetrahedra and hexahedra of either order: the kinds an order change swaps.
+fn family(k: ElementKind) -> Option<u8> {
+    match k {
+        ElementKind::Tet4 | ElementKind::Tet10 => Some(0),
+        ElementKind::Hex8 | ElementKind::Hex20 => Some(1),
+        _ => None,
+    }
+}
+
+/// The solid element type `command` makes with `params`, when it makes one type.
+fn made_kind(command: &str, params: &Value) -> Option<ElementKind> {
+    match command {
+        "mesh.tet.generate" => {
+            Some(if params.get("order").and_then(Value::as_str) == Some("quadratic") { ElementKind::Tet10 } else { ElementKind::Tet4 })
+        }
+        "mesh.hex.generate" | "mesh.hex.sweep" | "mesh.hex.mapped" | "mesh.hex.blocks" => {
+            Some(if params.get("order").and_then(Value::as_i64) == Some(2) { ElementKind::Hex20 } else { ElementKind::Hex8 })
+        }
+        _ => None,
+    }
+}
+
 /// What running a meshing command would replace, for a confirmation before it runs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Replacement {
@@ -141,6 +163,14 @@ pub fn replacement(s: &Session, command: &str, params: &Value) -> Option<Replace
         }
     };
     let mut warnings = Vec::new();
+    // The element type changing (tet10 → tet4 when the order is left out) is easy to miss.
+    if let Some(new) = made_kind(command, params) {
+        let old: BTreeSet<ElementKind> = removed.elements.iter().filter_map(|l| s.model.element(*l)).map(|e| e.kind).collect();
+        let changed: Vec<&str> = old.iter().filter(|k| **k != new && family(**k) == family(new)).map(|k| k.name()).collect();
+        if !changed.is_empty() {
+            warnings.push(format!("The element type changes: {} → {}.", changed.join(", "), new.name()));
+        }
+    }
     let stale = s.model.sets_using(&removed);
     if !stale.is_empty() {
         warnings.push(format!("Sets that list its nodes or elements by label ({}) will name labels of the old mesh.", stale.join(", ")));
@@ -192,6 +222,17 @@ mod tests {
         let mut s = Session::default();
         s.execute("geometry.open", &json!({"path": path})).unwrap();
         (dir, s)
+    }
+
+    /// Remeshing without the order would turn tet10 into tet4: the question says so (#343).
+    #[test]
+    fn an_element_type_change_is_named() {
+        let (_dir, mut s) = two_boxes();
+        s.execute("mesh.tet.generate", &json!({"body": "Box", "size": 5, "order": "quadratic"})).unwrap();
+        let r = replacement(&s, "mesh.tet.generate", &json!({"body": "Box", "size": 4})).unwrap();
+        assert!(r.warnings.iter().any(|w| w == "The element type changes: tet10 → tet4."), "{r:?}");
+        let same = replacement(&s, "mesh.tet.generate", &json!({"body": "Box", "order": "quadratic"})).unwrap();
+        assert!(same.warnings.iter().all(|w| !w.contains("element type")), "{same:?}");
     }
 
     /// A body's elements, by label.

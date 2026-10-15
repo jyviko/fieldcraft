@@ -65,7 +65,7 @@ fn node_stages(node: &str) -> &'static [Stage] {
 fn stage_tip(s: &StageState) -> Option<String> {
     match s.status {
         Status::Next => Some(format!("Next: {} — {}", s.label, s.place)),
-        Status::Blocked => Some(s.detail.clone().unwrap_or_else(|| s.place.clone())),
+        Status::Blocked | Status::Outdated => Some(s.detail.clone().unwrap_or_else(|| s.place.clone())),
         Status::Todo => Some(format!("{} still to do — {}", s.label, s.place)),
         Status::Done | Status::Optional => None,
     }
@@ -75,8 +75,9 @@ fn stage_tip(s: &StageState) -> Option<String> {
 /// else done; `None` for nodes that are no setup stage.
 fn node_state(stages: &[StageState], node: &str) -> Option<(Status, String)> {
     let own: Vec<&StageState> = stages.iter().filter(|s| node_stages(node).contains(&s.stage)).collect();
-    let status =
-        [Status::Next, Status::Blocked, Status::Todo, Status::Done, Status::Optional].into_iter().find(|st| own.iter().any(|s| s.status == *st))?;
+    let status = [Status::Outdated, Status::Next, Status::Blocked, Status::Todo, Status::Done, Status::Optional]
+        .into_iter()
+        .find(|st| own.iter().any(|s| s.status == *st))?;
     let tip: Vec<String> = own.iter().filter_map(|s| stage_tip(s)).collect();
     let tip = if tip.is_empty() { "Done".to_string() } else { tip.join("\n") };
     Some((status, tip))
@@ -606,7 +607,7 @@ fn item_row(app: &mut ModelApp, ui: &mut egui::Ui, id: egui::Id, mut row: Row, t
     }
 }
 
-/// ✓ done (success), → next (accent), ⚠ blocked (muted); nothing for the rest.
+/// ✓ done (success), → next (accent), ⚠ blocked (muted), ⚠ out of date (warm); nothing for the rest.
 fn paint_mark(p: &egui::Painter, r: Rect, status: Status, t: &Tokens) {
     let at = |x: f32, y: f32| Pos2::new(r.left() + x * r.width(), r.top() + y * r.height());
     match status {
@@ -626,6 +627,12 @@ fn paint_mark(p: &egui::Painter, r: Rect, status: Status, t: &Tokens) {
             p.add(egui::Shape::closed_line(vec![at(0.5, 0.0), at(1.05, 1.0), at(-0.05, 1.0)], s));
             p.line_segment([at(0.5, 0.35), at(0.5, 0.65)], s);
             p.circle_filled(at(0.5, 0.84), 0.7, t.text_dim);
+        }
+        Status::Outdated => {
+            let s = Stroke::new(1.3, t.warm);
+            p.add(egui::Shape::closed_line(vec![at(0.5, 0.0), at(1.05, 1.0), at(-0.05, 1.0)], s));
+            p.line_segment([at(0.5, 0.35), at(0.5, 0.65)], s);
+            p.circle_filled(at(0.5, 0.84), 0.8, t.warm);
         }
         Status::Todo | Status::Optional => {}
     }

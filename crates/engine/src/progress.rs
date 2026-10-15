@@ -97,6 +97,9 @@ pub enum Status {
     Blocked,
     /// Not done, and not needed for this model.
     Optional,
+    /// Done, but what it was made from changed since (`detail` says what): a mesh made before
+    /// its seeds or partitions changed.
+    Outdated,
 }
 
 /// One row of the checklist.
@@ -148,7 +151,10 @@ impl Session {
                     _ if stage == Stage::Solve => first_error.clone(),
                     _ => None,
                 };
-                let (status, detail) = if done {
+                let outdated = if done && stage == Stage::Mesh { self.mesh_outdated() } else { None };
+                let (status, detail) = if let Some(why) = outdated {
+                    (Status::Outdated, Some(why))
+                } else if done {
                     (Status::Done, None)
                 } else if optional {
                     (Status::Optional, None)
@@ -164,6 +170,35 @@ impl Session {
                 StageState { stage, label: stage.label(), status, command, place: r.place(), detail }
             })
             .collect()
+    }
+}
+
+impl Session {
+    /// Why the mesh no longer matches what steers it: seeds, partitions or the datums they cut
+    /// by changed after the last mesher ran (the journal says what ran when). `None` when it
+    /// matches, or no mesher made it.
+    pub fn mesh_outdated(&self) -> Option<String> {
+        let mesher = self.journal.iter().rposition(|(c, _)| crate::MESHERS.iter().any(|(m, _)| m == c))?;
+        let (command, _) = self.journal.get(mesher)?;
+        let mut changed = Vec::new();
+        for (c, _) in self.journal.get(mesher + 1..).unwrap_or_default() {
+            let what = match c.as_str() {
+                "mesh.seed.edge" | "mesh.seed.clear" => "Seeds",
+                "geometry.partition" | "geometry.partition.delete" => "Partitions",
+                "geometry.datum.edit" => "Datum planes",
+                _ => continue,
+            };
+            if !changed.contains(&what) {
+                changed.push(what);
+            }
+        }
+        let place = crate::catalogue::entry_of(command).map_or_else(|| command.clone(), |e| format!("{} › {}", e.tab.label(), e.label));
+        let what = match changed.as_slice() {
+            [] => return None,
+            [one] => one.to_string(),
+            [first @ .., last] => format!("{} and {}", first.join(", "), last.to_lowercase()),
+        };
+        Some(format!("{what} changed since this mesh was made — {place} to remesh"))
     }
 }
 
@@ -245,6 +280,21 @@ mod tests {
         assert!(s.model.loads().is_empty());
         assert_eq!(status(&s, Stage::Loads), Optional);
         assert_eq!(status(&s, Stage::Solve), Next, "{:?}", s.progress());
+    }
+
+    /// A seed added after meshing marks the mesh out of date, until a remesh (#342).
+    #[test]
+    fn a_seed_after_the_mesh_marks_it_outdated() {
+        let mut s = Session::default();
+        s.execute("file.sample", &json!({"name": "bracket-hex"})).unwrap();
+        assert_eq!(status(&s, Stage::Mesh), Done);
+        let edge = json!({"body": "Bracket (1) (1)' (1)", "edge": "F17:face:5|F2:side:l1"});
+        s.execute("mesh.seed.edge", &json!({"edges": [edge], "count": 6})).unwrap();
+        assert_eq!(status(&s, Stage::Mesh), Outdated);
+        let why = s.mesh_outdated().unwrap();
+        assert!(why.starts_with("Seeds changed since this mesh was made — Mesh › "), "{why}");
+        let v = s.execute("model.check", &json!({})).unwrap();
+        assert!(v.to_string().contains("Seeds changed since this mesh was made"), "{v}");
     }
 
     #[test]

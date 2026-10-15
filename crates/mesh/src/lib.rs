@@ -16,6 +16,7 @@ pub mod mirror;
 pub mod nodes;
 pub mod octree;
 pub mod planar;
+pub mod project;
 pub mod quad;
 pub mod quality;
 pub mod relax;

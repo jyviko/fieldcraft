@@ -496,6 +496,53 @@ impl Tessellation {
     }
 }
 
+impl Tessellation {
+    /// The closest point to `p` on the trimmed face `face`: the exact surface's closest point
+    /// when it lies on the face (within a fifth of the local triangle size of the face's
+    /// triangles), else the closest point of the face's triangles. Unlike
+    /// [`BoundaryGeometry::project_face`] it never returns a point of the surface's extension
+    /// beyond the face's boundary, whatever the distance from `p`.
+    pub fn project_trimmed(&self, face: u32, p: P) -> Option<P> {
+        let accept = |t: u32| self.tri_face.get(t as usize) == Some(&face);
+        let nearest = |x: P| {
+            let dist = |t: u32| {
+                let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
+                let (a, b, c) = (self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]));
+                let q = closest_on_triangle(x, a, b, c);
+                let d = sub(q, x);
+                let mut e = [measure::dist(a, b), measure::dist(b, c), measure::dist(c, a)];
+                e.sort_by(f64::total_cmp);
+                (dot(d, d), [q[0], q[1], q[2], e[1]])
+            };
+            self.tri_tree.nearest4(x, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
+        };
+        let (near, _) = nearest(p)?;
+        let Some(q) = self.analytic(face).and_then(|s| s.project(p)) else { return Some(near) };
+        let (back, size) = nearest(q)?;
+        Some(if measure::dist(back, q) <= 0.2 * size { q } else { near })
+    }
+
+    /// The outward unit normal of B-rep face `face` near `p`: the exact surface's (oriented like
+    /// the nearest triangle) when known, else the nearest triangle's.
+    pub fn face_normal(&self, face: u32, p: P) -> Option<P> {
+        let accept = |t: u32| self.tri_face.get(t as usize) == Some(&face);
+        let dist = |t: u32| {
+            let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
+            let (a, b, c) = (self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]));
+            let d = sub(closest_on_triangle(p, a, b, c), p);
+            let n = unit(cross(sub(b, a), sub(c, a))).unwrap_or([0.0; 3]);
+            (dot(d, d), [n[0], n[1], n[2], 0.0])
+        };
+        let r = self.tri_tree.nearest4(p, &accept, &dist)?;
+        let flat = unit([r[0], r[1], r[2]])?;
+        match self.analytic(face).and_then(|s| s.normal_at(p)) {
+            Some(n) if dot(n, flat) < 0.0 => Some(scale(n, -1.0)),
+            Some(n) => Some(n),
+            None => Some(flat),
+        }
+    }
+}
+
 impl BoundaryGeometry for Tessellation {
     fn project_face(&self, face: u32, p: P) -> Option<P> {
         let (near, scale_len) = self.on_tessellation(face, p)?;

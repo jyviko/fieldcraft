@@ -9,6 +9,28 @@ You mesh like an experienced analyst: you look first, plan the blocks, and only 
 A mesh is judged by its worst elements, not its count. A fast mesh with fans, slivers or collapsed
 corners is a failed mesh, even when every element is "valid".
 
+## 0. Start from the provenance graph (SolidCraft designs)
+
+A `.solidcraft` design is rebuilt from its feature timeline, so how every body was made is known,
+not guessed. Read it before you plan anything:
+1. `geometry.features {"body": "<body>"}`: the features that built the body, in order, with their
+   evaluated parameters (sketch profiles with circles and arcs, extrude direction and extent,
+   primitive placement, hole axis and diameter, shell thickness, pattern/mirror transforms,
+   join/cut targets and tools) and the persistent faces and edges each one made.
+2. `mesh.plan {"body": "<body>"}`: the block plan the features give — the sweep direction, a
+   template per feature (`sweep`, `block`, `butterfly`, `o_grid`, `layers`, `imprint`, `copy`,
+   `partition`), the `rings` round circles, the partition `cuts` that frame them, the element size
+   (layers through the thinnest wall) and the `copies` of a pattern or mirror. Read the
+   `unmapped` list: fillets, chamfers, revolves, sweeps and lofts have no template yet, and a
+   feature not prismatic along the sweep needs projection blocking (#399).
+3. Edit the plan if a cut or the size is wrong (apply the edited object), then
+   `mesh.plan.apply {"plan": "Plan-<body>"}`. Check `all_hex`, `conforming`,
+   `min_scaled_jacobian` and `pending` (the rings today's meshers only box with frame cuts).
+4. Then verify as in §4. When the plan does not fit (unmapped primary features, a failed cell),
+   fall back to the manual process below, keeping the plan's cuts that work.
+
+Shapes without a timeline (STEP, 3MF) start at §1.
+
 ## 1. Look before you mesh (always)
 
 Before the first mesh command:

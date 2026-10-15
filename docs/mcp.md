@@ -184,6 +184,19 @@ edges of partition cells matching counts.
 4. `mesh.seed.list` lists the seeds and the edges they reach (`stale` when the design has no such
    edge); `mesh.seed.clear {edges?}` removes them. Seeds are saved with the model.
 
+## Meshing from the feature graph
+
+A design opened from `.solidcraft` is rebuilt from its timeline, so how each body was made is
+known. `execute` `geometry.features {"body"?}` lists, per body, the features that built it in
+order: type, operation, evaluated values, placement and direction, the sketch profiles (lines,
+arcs, circles), pattern and mirror transforms, targets and tools, and the persistent faces and
+edges each one made. `mesh.plan {"body"}` turns that into a saved, editable hex-meshing plan
+(templates per feature, O-grid and butterfly rings round circles, the partition cuts their frames
+and imprints need, the copies a pattern or mirror made, and the features not mapped yet with why);
+`mesh.plan.apply {"plan"}` cuts and meshes the body (and its copies) with the structured meshers
+and reports `all_hex`, `conforming`, the smallest scaled Jacobian and what still needs the
+projection mesher (`pending`).
+
 ## Relaxing a few bad elements
 
 When `mesh.quality` shows a handful of spikes in an otherwise good mesh:

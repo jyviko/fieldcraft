@@ -645,6 +645,10 @@ mod tests {
         assert!((volume - expect).abs() < 1e-3 * expect, "{volume}");
         let faces = bodies[0]["faces"].as_array().unwrap();
         assert_eq!(faces.len(), 8);
+        let edges = bodies[0]["edges"].as_array().unwrap();
+        assert_eq!(edges.len(), 18);
+        // Through the thickness: four box corners, the two hole seams.
+        assert_eq!(edges.iter().filter(|e| (e["length"].as_f64().unwrap() - 10.0).abs() < 1e-6).count(), 6);
 
         let t = s.execute("geometry.tessellate", &json!({"body": "Body1", "tolerance": 0.05})).unwrap();
         let per_face: Vec<u64> = t["faces"].as_array().unwrap().iter().map(|f| f["triangles"].as_u64().unwrap()).collect();
@@ -662,6 +666,8 @@ mod tests {
         let wider = s.execute("geometry.bodies", &json!({})).unwrap();
         assert!(wider[0]["volume"].as_f64().unwrap() > volume);
         assert_eq!(wider[0]["faces"], bodies[0]["faces"]);
+        let names = |b: &Value| b[0]["edges"].as_array().unwrap().iter().map(|e| e["name"].clone()).collect::<Vec<_>>();
+        assert_eq!(names(&wider), names(&bodies));
         assert_eq!(s.journal.len(), 2);
     }
 

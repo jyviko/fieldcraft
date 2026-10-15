@@ -140,17 +140,20 @@ impl GeometryRef {
     /// Whether this reference (from a set) selects the tagged entity `tag`: the same body and
     /// kind, and the same name or the name of one of its pieces. A B-rep face the kernel splits
     /// into pieces (a full cylinder is two half-cylinders) carries the face's name with `#0`,
-    /// `#1`, … appended; a reference to the plain name selects all of them.
+    /// `#1`, … appended; a reference to the plain name selects all of them. Edges separating the
+    /// same faces are numbered `~0`, `~1`, … the same way.
     pub fn selects(&self, tag: &GeometryRef) -> bool {
         if self.body != tag.body || self.entity.kind() != tag.entity.kind() {
             return false;
         }
         match (self.entity.name(), tag.entity.name()) {
             (Some(want), Some(have)) => {
+                // A face's pieces are numbered `#k`, an edge's `~k` (edges separating the same faces).
+                let mark = if matches!(self.entity, Entity::Edge(_)) { '~' } else { '#' };
                 have == want
                     || have
                         .strip_prefix(want)
-                        .and_then(|r| r.strip_prefix('#'))
+                        .and_then(|r| r.strip_prefix(mark))
                         .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
             }
             _ => true,
@@ -354,6 +357,10 @@ mod tests {
         assert!(!r.selects(&GeometryRef::face("Body2", "F2:side").unwrap()));
         assert!(!r.selects(&GeometryRef::new("Body1", Entity::Edge("F2:side".into())).unwrap()));
         assert!(GeometryRef::body("Body1").unwrap().selects(&GeometryRef::body("Body1").unwrap()));
+        let edge = |n: &str| GeometryRef::new("Body1", Entity::Edge(n.into())).unwrap();
+        assert!(edge("A|B").selects(&edge("A|B~1")));
+        assert!(!edge("A|B").selects(&edge("A|B#1")));
+        assert!(!edge("A|B~0").selects(&edge("A|B~1")));
 
         for bad in [
             serde_json::json!({"body": ""}),

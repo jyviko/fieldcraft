@@ -126,7 +126,8 @@ pub fn tool_definitions() -> Vec<Value> {
             "Inspect the model",
             "The model: node and element counts, the unit system and the definitions by kind (model.info); the step \
              table (which boundary conditions and loads each step has, model.activity); the open design's bodies with \
-             their measures and persistent face names (geometry.bodies), which sets name as {body, face}.",
+             their measures, persistent face names (geometry.bodies), which sets name as {body, face}, and persistent \
+             edge names `<face>|<face>` with lengths, which sets name as {body, edge}.",
             obj(json!({}), &[]),
             true,
             false,

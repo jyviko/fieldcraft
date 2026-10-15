@@ -25,7 +25,7 @@ pub const OPEN: CommandSpec = CommandSpec {
 pub const BODIES: CommandSpec = CommandSpec {
     id: "geometry.bodies",
     label: "Bodies",
-    params: "{} — the open design's bodies: measures and persistent face names (by face index)",
+    params: "{} — the open design's bodies: measures, persistent face names (by face index) and edges (persistent name `<face>|<face>`, `~k` when several separate the same faces, and length)",
     form: Some(&[]),
     kind: CommandKind::Model,
     requires: &[], // No design is an answer too: no bodies.
@@ -126,6 +126,7 @@ fn bodies(s: &mut Session, _: &Value) -> Result<Value> {
     let mut out = Vec::with_capacity(design.bodies.len());
     for b in &design.bodies {
         let m = b.measure()?;
+        let edges: Vec<Value> = b.edges()?.iter().map(|e| json!({"name": e.name, "length": e.length()})).collect();
         out.push(json!({
             "name": b.name,
             "volume": m.volume,
@@ -133,6 +134,7 @@ fn bodies(s: &mut Session, _: &Value) -> Result<Value> {
             "centroid": m.centroid,
             "bbox": [m.bbox_min, m.bbox_max],
             "faces": b.faces().iter().map(|f| json!({"name": f.name, "exact": f.exact})).collect::<Vec<_>>(),
+            "edges": edges,
         }));
     }
     Ok(Value::Array(out))

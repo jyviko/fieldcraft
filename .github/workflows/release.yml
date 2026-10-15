@@ -17,9 +17,12 @@
 # macOS: signed with a Developer ID and notarized when the APPLE_* secrets exist, ad-hoc
 # otherwise (the release notes say which). Linux and Windows builds are not signed.
 #
-# Before anything is packaged, the verify jobs run everything CI can: the full `cargo xtask ci`,
-# `cargo xtask test --heavy` and `cargo xtask oracle` on Linux, and the oracle on macOS. Develop's
-# CI tests only what each change affects (ci.yml), so this is where a release proves all of it.
+# The verify jobs run everything CI can: the full `cargo xtask ci`, `cargo xtask test --heavy` and
+# `cargo xtask oracle` on Linux, and the oracle on macOS. Develop's CI tests only what each change
+# affects (ci.yml), so this is where a release proves all of it. The packaging jobs build in
+# parallel with them and only upload workflow artifacts; the `release` job, the only one that
+# signs SHA256SUMS.txt or touches a GitHub Release, needs every verify and packaging job, so a
+# failing verify means no draft and no signature.
 #
 # Dry run: `gh workflow run release.yml --ref <branch>` verifies and builds everything and uploads the
 # `release-assets` artifact without creating a release. `-f draft=true` on `main` retries
@@ -45,8 +48,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # The same CARGO_* environment as ci.yml: rust-cache hashes it into the cache key, so a
+  # difference would stop the verify jobs restoring develop's caches. (rust-cache already sets
+  # CARGO_INCREMENTAL=0 for every job.)
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
 
 jobs:
   version:
@@ -75,8 +80,9 @@ jobs:
           { echo "version=$VERSION"; echo "prerelease=$pre"; echo "draft=$REQUEST_DRAFT"; } >>"$GITHUB_OUTPUT"
           echo "### FieldCraft v$VERSION (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
 
-  # The full gate, the heavy tests and the oracle on Linux and macOS: every packaging job needs
-  # them, so a release (or a dry run) never builds from a commit that fails any of them.
+  # The full gate, the heavy tests and the oracle on Linux and macOS: the `release` job needs them,
+  # so a release never drafts or signs a commit that fails any of them. Each restores the cache of
+  # its ci.yml counterpart on develop (same shared-key), so it starts warm.
   verify-ci:
     name: Verify (cargo xtask ci)
     runs-on: ubuntu-24.04
@@ -89,6 +95,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          shared-key: ci
           # Release runs are rare: only release-branch runs keep a cache, so dry runs don't evict CI's.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo xtask ci
@@ -102,6 +109,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          shared-key: heavy
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo xtask test --heavy
 
@@ -112,9 +120,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            cache: release-oracle-linux
+            cache: oracle
           - os: macos-14
-            cache: release-oracle-macos
+            cache: oracle-macos
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -122,7 +130,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: ${{ matrix.cache }}
+          shared-key: ${{ matrix.cache }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo xtask oracle
       - name: docs/oracle.md is current
@@ -130,7 +138,7 @@ jobs:
 
   macos:
     name: macOS universal
-    needs: [version, verify-ci, verify-heavy, verify-oracle]
+    needs: version
     # Signing, notarization and analytics secrets live in the `release` environment, which only
     # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
     environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}
@@ -179,7 +187,7 @@ jobs:
 
   linux:
     name: Linux x86_64
-    needs: [version, verify-ci, verify-heavy, verify-oracle]
+    needs: version
     # The oldest GitHub-hosted image, so the binaries need only glibc >= 2.35.
     # Signing, notarization and analytics secrets live in the `release` environment, which only
     # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
@@ -268,7 +276,7 @@ jobs:
 
   windows:
     name: Windows x64
-    needs: [version, verify-ci, verify-heavy, verify-oracle]
+    needs: version
     # Signing, notarization and analytics secrets live in the `release` environment, which only
     # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
     environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}
@@ -302,7 +310,8 @@ jobs:
 
   release:
     name: Draft release (or dry-run artifacts)
-    needs: [version, macos, linux, windows]
+    # The only job that publishes anything: it waits for every verify and packaging job.
+    needs: [version, verify-ci, verify-heavy, verify-oracle, macos, linux, windows]
     # Signing, notarization and analytics secrets live in the `release` environment, which only
     # `main` may use; a dry run on another branch asks for no environment and builds unsigned.
     environment: ${{ github.ref == 'refs/heads/main' && 'release' || '' }}

@@ -221,8 +221,8 @@ fn role(brep: &Brep, face: &Face, frame: &Frame, tol: f64) -> std::result::Resul
 }
 
 /// Candidate extrusion directions: the normals of planar faces and the axes of cylinders, most
-/// common first.
-pub(crate) fn translations(brep: &Brep) -> Vec<Frame> {
+/// common first, over the faces of every body given.
+pub(crate) fn translations(breps: &[&Brep]) -> Vec<Frame> {
     let mut dirs: Vec<(P, f64)> = Vec::new();
     let mut push = |d: P, weight: f64| {
         let Some(mut d) = unit(d) else { return };
@@ -236,7 +236,7 @@ pub(crate) fn translations(brep: &Brep) -> Vec<Frame> {
             None => dirs.push((d, weight)),
         }
     };
-    for f in &brep.faces {
+    for f in breps.iter().flat_map(|b| &b.faces) {
         if let Some((_, n)) = f.plane {
             push(n, f.area);
         } else if let Some(Surface::Cylinder { axis, .. }) = f.surface {
@@ -244,76 +244,56 @@ pub(crate) fn translations(brep: &Brep) -> Vec<Frame> {
         }
     }
     dirs.sort_by(|a, b| b.1.total_cmp(&a.1));
-    let o = brep.point(0);
+    let Some(o) = breps.first().map(|b| b.point(0)) else { return Vec::new() };
     dirs.into_iter().filter_map(|(d, _)| Frame::translate(o, d)).collect()
 }
 
-/// Candidate axes of revolution: the axes of the analytic surfaces of revolution.
-pub(crate) fn rotations(brep: &Brep) -> Vec<Frame> {
+/// Candidate axes of revolution: the axes of the analytic surfaces of revolution of every body
+/// given.
+pub(crate) fn rotations(breps: &[&Brep]) -> Vec<Frame> {
     let mut axes: Vec<(P, P)> = Vec::new();
-    for f in &brep.faces {
+    let diagonal = breps.iter().map(|b| b.diagonal).fold(0.0, f64::max);
+    for f in breps.iter().flat_map(|b| &b.faces) {
         let (o, a) = match f.surface {
             Some(Surface::Cylinder { origin, axis, .. })
             | Some(Surface::Cone { apex: origin, axis, .. })
             | Some(Surface::Torus { center: origin, axis, .. }) => (origin, axis),
             _ => continue,
         };
-        if !axes.iter().any(|(p, b)| parallel(*b, a) && line_distance(o, *p, *b) <= RELATIVE_AXIS * brep.diagonal) {
+        if !axes.iter().any(|(p, b)| parallel(*b, a) && line_distance(o, *p, *b) <= RELATIVE_AXIS * diagonal) {
             axes.push((o, a));
         }
     }
     axes.into_iter().filter_map(|(o, a)| Frame::rotate(o, a)).collect()
 }
 
-/// The frame's classification of the body: face roles and levels.
+/// The frame's classification of the bodies swept together: face roles (per body) and levels.
 pub(crate) struct Setup {
     frame: Frame,
-    roles: Vec<Role>,
+    roles: Vec<Vec<Role>>,
     /// Sorted levels (heights or angles in `[0, 2π)`).
     levels: Vec<f64>,
     /// Sweep coordinates closer than this are one level.
     h_tol: f64,
 }
 
-/// Classify faces and edges and find the levels; an `Unsupported` error says why the body does
-/// not sweep in this frame.
-pub(crate) fn setup(ctx: &Ctx, frame: &Frame) -> Result<Setup> {
-    let brep = ctx.brep;
-    let tol = ctx.tol;
-    let mut roles = Vec::with_capacity(brep.faces.len());
-    for f in &brep.faces {
-        roles.push(role(brep, f, frame, tol).map_err(Error::Unsupported)?);
-    }
-    if frame.periodic() {
-        // A revolved region touching the axis would collapse its elements there.
-        if let Some(p) = brep.surface.points().iter().find(|&&p| frame.coords(p).0[1] <= tol) {
-            return Err(Error::Unsupported(format!("the body reaches the axis of revolution (at {p:?}); revolved hexahedra would collapse there")));
-        }
-    }
-    let r_max = brep.surface.points().iter().map(|&p| frame.coords(p).0[1].abs()).fold(0.0, f64::max);
+/// Classify faces and edges and find the levels of the bodies (one context each, sharing one
+/// tolerance) swept together; an `Unsupported` error says why a body does not sweep in this
+/// frame, naming it when there are several.
+pub(crate) fn setup(ctxs: &[Ctx], frame: &Frame) -> Result<Setup> {
+    let tol = ctxs.first().map_or(0.0, |c| c.tol);
+    let r_max = ctxs.iter().flat_map(|c| c.brep.surface.points()).map(|&p| frame.coords(p).0[1].abs()).fold(0.0, f64::max);
     let h_tol = match frame {
         Frame::Translate { .. } => tol,
         Frame::Rotate { .. } => tol / r_max.max(tol),
     };
-    let mut heights = Vec::new();
-    for (e, edge) in brep.edges.iter().enumerate() {
-        let pts: Vec<(Q, f64)> = edge.points.iter().map(|&v| frame.coords(brep.point(v))).collect();
-        let Some(&(q0, h0)) = pts.first() else { continue };
-        let across = pts.iter().all(|&(q, h)| frame.span(q, frame.dh(h, h0)) <= tol);
-        let along = pts.iter().all(|&(q, _)| dist([q[0], q[1], 0.0], [q0[0], q0[1], 0.0]) <= tol);
-        if across {
-            heights.push(h0);
-        } else if !along {
-            let [f0, f1] = edge.faces.map(|f| brep.face_tag(f));
-            return Err(Error::Unsupported(format!("edge {e} between faces {f0} and {f1} runs neither along nor across the sweep")));
-        }
-    }
-    for (f, r) in brep.faces.iter().zip(&roles) {
-        if *r == Role::Cap
-            && let Some(&v) = f.vertices.first()
-        {
-            heights.push(frame.coords(brep.point(v)).1);
-        }
+    let (mut roles, mut heights) = (Vec::with_capacity(ctxs.len()), Vec::new());
+    for (c, ctx) in ctxs.iter().enumerate() {
+        let named = |e: Error| match e {
+            Error::Unsupported(m) if ctxs.len() > 1 => Error::Unsupported(format!("cell {c}: {m}")),
+            e => e,
+        };
+        roles.push(classify(ctx, frame, tol, &mut heights).map_err(named)?);
     }
     heights.sort_by(f64::total_cmp);
     let mut levels: Vec<f64> = Vec::new();
@@ -336,6 +316,42 @@ pub(crate) fn setup(ctx: &Ctx, frame: &Frame) -> Result<Setup> {
     Ok(Setup { frame: *frame, roles, levels, h_tol })
 }
 
+/// One body's face roles in the frame; the heights of its edges across the sweep and of its caps
+/// are added to `heights`.
+fn classify(ctx: &Ctx, frame: &Frame, tol: f64, heights: &mut Vec<f64>) -> Result<Vec<Role>> {
+    let brep = ctx.brep;
+    let mut roles = Vec::with_capacity(brep.faces.len());
+    for f in &brep.faces {
+        roles.push(role(brep, f, frame, tol).map_err(Error::Unsupported)?);
+    }
+    if frame.periodic() {
+        // A revolved region touching the axis would collapse its elements there.
+        if let Some(p) = brep.surface.points().iter().find(|&&p| frame.coords(p).0[1] <= tol) {
+            return Err(Error::Unsupported(format!("the body reaches the axis of revolution (at {p:?}); revolved hexahedra would collapse there")));
+        }
+    }
+    for (e, edge) in brep.edges.iter().enumerate() {
+        let pts: Vec<(Q, f64)> = edge.points.iter().map(|&v| frame.coords(brep.point(v))).collect();
+        let Some(&(q0, h0)) = pts.first() else { continue };
+        let across = pts.iter().all(|&(q, h)| frame.span(q, frame.dh(h, h0)) <= tol);
+        let along = pts.iter().all(|&(q, _)| dist([q[0], q[1], 0.0], [q0[0], q0[1], 0.0]) <= tol);
+        if across {
+            heights.push(h0);
+        } else if !along {
+            let [f0, f1] = edge.faces.map(|f| brep.face_tag(f));
+            return Err(Error::Unsupported(format!("edge {e} between faces {f0} and {f1} runs neither along nor across the sweep")));
+        }
+    }
+    for (f, r) in brep.faces.iter().zip(&roles) {
+        if *r == Role::Cap
+            && let Some(&v) = f.vertices.first()
+        {
+            heights.push(frame.coords(brep.point(v)).1);
+        }
+    }
+    Ok(roles)
+}
+
 impl Setup {
     /// The number of levels the frame sweeps through (for ordering candidates).
     pub(crate) fn level_count(&self) -> usize {
@@ -356,50 +372,74 @@ impl SizeField for PlaneField<'_> {
     }
 }
 
-/// The cross-section of a frame the body sweeps in: the arrangement (cut into blocks),
-/// the level intervals and which of them each region fills. It does not depend on the element
-/// size, so refinement retries reuse it.
+/// The cross-section of a frame the bodies sweep in: the arrangement (cut into blocks),
+/// the level intervals and which body fills each region in each of them. It does not depend on
+/// the element size, so refinement retries reuse it.
 pub(crate) struct Prepared {
     setup: Setup,
     arr: Arrangement,
     intervals: Vec<(f64, f64)>,
-    filled: Vec<Vec<bool>>,
+    filled: Vec<Vec<Option<u32>>>,
     used: Vec<bool>,
+    /// The first arrangement tag of each body's faces (curve tags number the faces of all bodies
+    /// one after the other).
+    offsets: Vec<usize>,
 }
 
-/// Lay out the cross-section of `setup`'s frame.
-pub(crate) fn prepare(ctx: &Ctx, setup: Setup) -> Result<Prepared> {
-    let brep = ctx.brep;
+impl Prepared {
+    /// The body and face of an arrangement tag.
+    fn face(&self, ctxs: &[Ctx], tag: usize) -> Option<(usize, usize)> {
+        let c = self.offsets.iter().rposition(|&o| o <= tag)?;
+        let f = tag - self.offsets.get(c)?;
+        ctxs.get(c).filter(|ctx| f < ctx.brep.faces.len()).map(|_| (c, f))
+    }
+}
+
+/// Lay out the cross-section of `setup`'s frame, for the bodies of `ctxs` (those `setup` was
+/// made for) swept together: the walls of every body are imprinted on each other, so where two
+/// bodies meet on a wall they get the same curves, and each region of each level interval is
+/// filled by the body it lies in.
+pub(crate) fn prepare(ctxs: &[Ctx], setup: Setup) -> Result<Prepared> {
+    let ctx = ctxs.first().ok_or_else(|| Error::Failed("no body to sweep".into()))?;
     let tol = ctx.tol;
     let frame = &setup.frame;
-    let (roles, levels) = (&setup.roles, &setup.levels);
-    // Lower outlines of the walls, and every vertex.
+    let levels = &setup.levels;
+    // Lower outlines of the walls, and every vertex, of every body.
     let mut polylines: Vec<(Vec<Q>, usize)> = Vec::new();
-    for (e, edge) in brep.edges.iter().enumerate() {
-        let pts: Vec<(Q, f64)> = edge.points.iter().map(|&v| frame.coords(brep.point(v))).collect();
-        let Some(&(_, h0)) = pts.first() else { continue };
-        if !pts.iter().all(|&(q, h)| frame.span(q, frame.dh(h, h0)) <= tol) {
-            continue;
-        }
-        for &f in &edge.faces {
-            if roles.get(f) != Some(&Role::Wall) {
+    let mut vertices: Vec<Q> = Vec::new();
+    let mut offsets = Vec::with_capacity(ctxs.len());
+    let mut offset = 0;
+    for (c, body) in ctxs.iter().enumerate() {
+        let brep = body.brep;
+        let roles = setup.roles.get(c).map(Vec::as_slice).unwrap_or(&[]);
+        offsets.push(offset);
+        for (e, edge) in brep.edges.iter().enumerate() {
+            let pts: Vec<(Q, f64)> = edge.points.iter().map(|&v| frame.coords(brep.point(v))).collect();
+            let Some(&(_, h0)) = pts.first() else { continue };
+            if !pts.iter().all(|&(q, h)| frame.span(q, frame.dh(h, h0)) <= tol) {
                 continue;
             }
-            // The wall's triangle on the edge's first segment: is its third vertex above?
-            let Some(c) = brep.third_vertex(e, f) else { continue };
-            let (qc, hc) = frame.coords(brep.point(c));
-            if frame.dh(hc, h0) > 0.0 && frame.span(qc, frame.dh(hc, h0)) > tol {
-                polylines.push((pts.iter().map(|x| x.0).collect(), f));
+            for &f in &edge.faces {
+                if roles.get(f) != Some(&Role::Wall) {
+                    continue;
+                }
+                // The wall's triangle on the edge's first segment: is its third vertex above?
+                let Some(v) = brep.third_vertex(e, f) else { continue };
+                let (qc, hc) = frame.coords(brep.point(v));
+                if frame.dh(hc, h0) > 0.0 && frame.span(qc, frame.dh(hc, h0)) > tol {
+                    polylines.push((pts.iter().map(|x| x.0).collect(), offset + f));
+                }
             }
         }
+        vertices.extend(
+            brep.edges
+                .iter()
+                .flat_map(|e| [e.first(), e.last()])
+                .chain(brep.is_vertex.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u32))
+                .map(|v| frame.coords(brep.point(v)).0),
+        );
+        offset += brep.faces.len();
     }
-    let vertices: Vec<Q> = brep
-        .edges
-        .iter()
-        .flat_map(|e| [e.first(), e.last()])
-        .chain(brep.is_vertex.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u32))
-        .map(|v| frame.coords(brep.point(v)).0)
-        .collect();
     let coincide = 2.0 * ctx.opts.chordal_tolerance.max(0.0) + 4.0 * tol;
     // Level intervals; a revolution's last one wraps round to the first level.
     let (Some(&first_level), Some(rest)) = (levels.first(), levels.get(1..)) else {
@@ -407,7 +447,7 @@ pub(crate) fn prepare(ctx: &Ctx, setup: Setup) -> Result<Prepared> {
     };
     let ends: Vec<f64> = if frame.periodic() { rest.iter().copied().chain(std::iter::once(first_level + TAU)).collect() } else { rest.to_vec() };
     let intervals: Vec<(f64, f64)> = levels.iter().copied().zip(ends).collect();
-    let mut inside = Inside::new(brep.surface);
+    let mut inside = Occupants::new(ctxs, tol);
     let mut arr = arrangement::build(&vertices, &polylines, tol, coincide)?;
     let (mut filled, mut used) = occupancy(&arr, frame, &intervals, &mut inside)?;
     // Cut the filled regions into blocks the structured schemes fit, and lay the arrangement out
@@ -415,20 +455,21 @@ pub(crate) fn prepare(ctx: &Ctx, setup: Setup) -> Result<Prepared> {
     let h_ref = levels.first().copied().unwrap_or(0.0);
     let plane = PlaneField { field: ctx.field, frame: *frame, h: h_ref };
     let settings = decompose::Settings { field: &plane, tol, opts: &ctx.opts.quad };
-    let locked = seeded_curves(ctx, frame, h_ref, &intervals, setup.h_tol, &arr);
+    let locked = seeded_curves(ctxs, frame, h_ref, &intervals, setup.h_tol, &arr);
     let cut_lines = decompose::cuts(&arr, &used, &locked, &settings)?;
     if !cut_lines.is_empty() {
         polylines.extend(cut_lines.into_iter().map(|c| (c, decompose::CUT)));
         arr = arrangement::build(&vertices, &polylines, tol, coincide)?;
         (filled, used) = occupancy(&arr, frame, &intervals, &mut inside)?;
     }
-    Ok(Prepared { setup, arr, intervals, filled, used })
+    Ok(Prepared { setup, arr, intervals, filled, used, offsets })
 }
 
-/// Mesh the prepared cross-section, with its curves `2^refine` times finer than the size asks.
-pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
-    let brep = ctx.brep;
-    let Prepared { setup, arr, intervals, filled, used } = prepared;
+/// Mesh the prepared cross-section, with its curves `2^refine` times finer than the size asks;
+/// with the body (index into `ctxs`) of each hexahedron.
+pub(crate) fn mesh(ctxs: &[Ctx], prepared: &Prepared, refine: u32) -> Result<(Raw, Vec<u32>)> {
+    let ctx = ctxs.first().ok_or_else(|| Error::Failed("no body to sweep".into()))?;
+    let Prepared { setup, arr, intervals, filled, used, .. } = prepared;
     let (frame, levels) = (&setup.frame, &setup.levels);
     let h_ref = levels.first().copied().unwrap_or(0.0);
     // Interval assignment over the curves of filled regions, and the layer counts.
@@ -446,7 +487,7 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
         ia.var(goal * fine, 1);
     }
     let schemes = section::schemes(arr, used, &mut ia);
-    let seeds = Seeds::of(ctx, frame, h_ref, intervals, setup.h_tol, &(0..arr.curves.len()).map(curve3d).collect::<Vec<_>>())?;
+    let seeds = Seeds::of(ctxs, frame, h_ref, intervals, setup.h_tol, &(0..arr.curves.len()).map(curve3d).collect::<Vec<_>>())?;
     for (c, seed) in seeds.curves.iter().enumerate() {
         if let Some((seed, _)) = seed {
             ia.seed(c, seed);
@@ -493,7 +534,12 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
         let wall = arr
             .curves
             .get(c)
-            .and_then(|curve| curve.tags.iter().find_map(|&f| brep.faces.get(f).and_then(|x| x.surface)))
+            .and_then(|curve| {
+                curve.tags.iter().find_map(|&t| {
+                    let (c, f) = prepared.face(ctxs, t)?;
+                    ctxs.get(c)?.brep.faces.get(f)?.surface
+                })
+            })
             .filter(|s| !matches!(s, Surface::Plane { .. }));
         Ok(pts3.iter().map(|p| frame.coords(wall.and_then(|s| s.project(*p)).unwrap_or(*p)).0).collect())
     };
@@ -523,7 +569,7 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
     let mut count = 0usize;
     for (r, quads) in region_quads.iter().enumerate() {
         for (k, f) in filled.get(r).map(Vec::as_slice).unwrap_or(&[]).iter().enumerate() {
-            if *f {
+            if f.is_some() {
                 count = count.saturating_add(quads.len().saturating_mul(layers.get(k).copied().unwrap_or(0)));
             }
         }
@@ -543,25 +589,26 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
         })
     };
     let mut hexes: Vec<[u32; 8]> = Vec::with_capacity(count);
+    let mut cells: Vec<u32> = Vec::with_capacity(count);
     for (r, quads) in region_quads.iter().enumerate() {
         for (k, f) in filled.get(r).map(Vec::as_slice).unwrap_or(&[]).iter().enumerate() {
-            if !*f {
-                continue;
-            }
+            let Some(cell) = *f else { continue };
             let (s, n) = (first_layer.get(k).copied().unwrap_or(0), layers.get(k).copied().unwrap_or(0));
             for q in quads {
                 for j in s..s + n {
                     let b = q.map(|v| node(v, j, &mut nodes));
                     let t = q.map(|v| node(v, j + 1, &mut nodes));
                     hexes.push([b[0], b[1], b[2], b[3], t[0], t[1], t[2], t[3]]);
+                    cells.push(cell);
                 }
             }
         }
     }
     let filled_regions = used.iter().filter(|&&u| u).count();
     let structured = schemes.iter().zip(used.iter()).filter(|(s, u)| **u && **s != Scheme::Free).count();
+    let bodies = if ctxs.len() > 1 { format!(" ({} cells together)", ctxs.len()) } else { String::new() };
     let description = format!(
-        "{}: {} level{}, {} region{} ({} structured, {} free), {} layer{}",
+        "{}{bodies}: {} level{}, {} region{} ({} structured, {} free), {} layer{}",
         frame.describe(),
         levels.len(),
         if levels.len() == 1 { "" } else { "s" },
@@ -572,7 +619,7 @@ pub(crate) fn mesh(ctx: &Ctx, prepared: &Prepared, refine: u32) -> Result<Raw> {
         total_layers.saturating_sub(usize::from(!frame.periodic())),
         if total_layers == 2 { "" } else { "s" },
     );
-    Ok(Raw { nodes, hexes, description })
+    Ok((Raw { nodes, hexes, description }, cells))
 }
 
 /// The edge seeds as a layered mesh takes them: on the cross-section's curves (seeds of edges
@@ -633,10 +680,19 @@ fn split_over(nodes: &[f64], bounds: &[f64]) -> Option<Vec<Vec<f64>>> {
 }
 
 impl<'s> Seeds<'s> {
-    fn of(ctx: &'s Ctx, frame: &Frame, h_ref: f64, intervals: &[(f64, f64)], h_tol: f64, curves: &[Vec<P>]) -> Result<Seeds<'s>> {
+    fn of(ctxs: &'s [Ctx], frame: &Frame, h_ref: f64, intervals: &[(f64, f64)], h_tol: f64, curves: &[Vec<P>]) -> Result<Seeds<'s>> {
+        let mut out = Seeds { curves: vec![None; curves.len()], layers: vec![None; intervals.len()] };
+        for ctx in ctxs {
+            out.add(ctx, frame, h_ref, intervals, h_tol, curves)?;
+        }
+        Ok(out)
+    }
+
+    /// Add the seeds on the edges of one body.
+    fn add(&mut self, ctx: &'s Ctx, frame: &Frame, h_ref: f64, intervals: &[(f64, f64)], h_tol: f64, curves: &[Vec<P>]) -> Result<()> {
         let brep = ctx.brep;
         let tol = ctx.tol;
-        let mut out = Seeds { curves: vec![None; curves.len()], layers: vec![None; intervals.len()] };
+        let out = self;
         let stol = super::seed_tolerance(ctx.opts, tol);
         let conflict = |a: &EdgeSeed, b: &EdgeSeed, why: &str| {
             Error::Invalid(format!(
@@ -710,26 +766,60 @@ impl<'s> Seeds<'s> {
                 *slot = Some(LayerSeed { seed, fractions });
             }
         }
-        Ok(out)
+        Ok(())
     }
 }
 
-/// Which level intervals each region of the arrangement fills (inside test at the region's
-/// centre, mid-interval), and which regions fill any.
-fn occupancy(arr: &Arrangement, frame: &Frame, intervals: &[(f64, f64)], inside: &mut Inside) -> Result<(Vec<Vec<bool>>, Vec<bool>)> {
+/// The bodies swept together, for inside tests: each body's test and bounding box.
+struct Occupants<'a> {
+    bodies: Vec<(Inside<'a>, P, P)>,
+}
+
+impl<'a> Occupants<'a> {
+    fn new(ctxs: &[Ctx<'a>], tol: f64) -> Self {
+        let bodies = ctxs
+            .iter()
+            .map(|c| {
+                let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+                for p in c.brep.surface.points() {
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(p[k] - tol);
+                        hi[k] = hi[k].max(p[k] + tol);
+                    }
+                }
+                (Inside::new(c.brep.surface), lo, hi)
+            })
+            .collect();
+        Occupants { bodies }
+    }
+
+    /// The first body `x` lies in.
+    fn body_at(&mut self, x: P) -> Result<Option<u32>> {
+        for (i, (inside, lo, hi)) in self.bodies.iter_mut().enumerate() {
+            if (0..3).all(|k| x[k] >= lo[k] && x[k] <= hi[k]) && inside.contains(x)? {
+                return Ok(u32::try_from(i).ok());
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Which body fills each region of the arrangement in each level interval (inside tests at the
+/// region's centre, mid-interval), and which regions any body fills.
+fn occupancy(arr: &Arrangement, frame: &Frame, intervals: &[(f64, f64)], inside: &mut Occupants) -> Result<(Vec<Vec<Option<u32>>>, Vec<bool>)> {
     if arr.regions.is_empty() {
         return Err(Error::Unsupported("the projected outline encloses no region".into()));
     }
-    let mut filled: Vec<Vec<bool>> = Vec::with_capacity(arr.regions.len());
+    let mut filled: Vec<Vec<Option<u32>>> = Vec::with_capacity(arr.regions.len());
     for region in &arr.regions {
         let c = interior_point(arr, region)?;
         let mut row = Vec::with_capacity(intervals.len());
         for &(lo, hi) in intervals {
-            row.push(inside.contains(frame.point(c, 0.5 * (lo + hi)))?);
+            row.push(inside.body_at(frame.point(c, 0.5 * (lo + hi)))?);
         }
         filled.push(row);
     }
-    let used: Vec<bool> = filled.iter().map(|r| r.iter().any(|&x| x)).collect();
+    let used: Vec<bool> = filled.iter().map(|r| r.iter().any(Option::is_some)).collect();
     if !used.iter().any(|&u| u) {
         return Err(Error::Unsupported("no region of the cross-section lies inside the body".into()));
     }
@@ -737,10 +827,10 @@ fn occupancy(arr: &Arrangement, frame: &Frame, intervals: &[(f64, f64)], inside:
 }
 
 /// Which curves of `arr` carry an edge seed (a cut may not end inside them).
-fn seeded_curves(ctx: &Ctx, frame: &Frame, h_ref: f64, intervals: &[(f64, f64)], h_tol: f64, arr: &Arrangement) -> Vec<bool> {
+fn seeded_curves(ctxs: &[Ctx], frame: &Frame, h_ref: f64, intervals: &[(f64, f64)], h_tol: f64, arr: &Arrangement) -> Vec<bool> {
     let curves: Vec<Vec<P>> =
         arr.curves.iter().map(|cv| cv.points.iter().map(|&p| frame.point(arr.points.get(p).copied().unwrap_or([0.0; 2]), h_ref)).collect()).collect();
-    match Seeds::of(ctx, frame, h_ref, intervals, h_tol, &curves) {
+    match Seeds::of(ctxs, frame, h_ref, intervals, h_tol, &curves) {
         Ok(seeds) => seeds.curves.iter().map(Option::is_some).collect(),
         Err(_) => vec![false; arr.curves.len()],
     }

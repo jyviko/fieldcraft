@@ -22,7 +22,9 @@
 //! **Partitioned parts.** [`hex_mesh_cells`] ([`cells`]) meshes a part split into cells that
 //! meet face to face (SolidCraft split bodies) as one conforming mesh: every cell a mapped block,
 //! interval assignment over all cells together, each shared face meshed once and its nodes
-//! merged by identity.
+//! merged by identity. [`hex_mesh_swept_cells`] sweeps such cells together instead: one
+//! cross-section imprinted with every cell's walls, one interval assignment and one set of
+//! layers, so cells that share a sweep conform across their cut faces.
 //!
 //! **Common steps.** Interval assignment ([`interval`]) picks the division counts of shared curves
 //! together. Boundary nodes on analytic faces are placed on the exact surface; quadratic hexahedra
@@ -51,7 +53,7 @@ mod tests;
 
 use std::collections::HashMap;
 
-pub use cells::{Cell, CellsMesh, GROWTH, MAX_CELLS, hex_mesh_cells};
+pub use cells::{Cell, CellsMesh, GROWTH, MAX_CELLS, hex_mesh_cells, hex_mesh_swept_cells};
 pub use geom::Surface;
 
 use crate::seeds::EdgeSeed;
@@ -197,7 +199,17 @@ pub(crate) struct Ctx<'a> {
 
 impl<'a> Ctx<'a> {
     pub(crate) fn new(brep: &'a Brep<'a>, tree: &'a TriangleTree<'a>, field: &'a dyn SizeField, opts: &'a HexOptions) -> Result<Ctx<'a>> {
-        let tol = RELATIVE_TOLERANCE * brep.diagonal;
+        Ctx::with_tolerance(brep, tree, field, opts, RELATIVE_TOLERANCE * brep.diagonal)
+    }
+
+    /// A context with the classification tolerance `tol` (bodies meshed together share one).
+    pub(crate) fn with_tolerance(
+        brep: &'a Brep<'a>,
+        tree: &'a TriangleTree<'a>,
+        field: &'a dyn SizeField,
+        opts: &'a HexOptions,
+        tol: f64,
+    ) -> Result<Ctx<'a>> {
         let curves: Vec<Vec<P>> = (0..brep.edges.len()).map(|e| brep.edge_points(e, true)).collect();
         let edge_seeds = crate::seeds::match_curves(&opts.seeds, &curves, seed_tolerance(opts, tol))?;
         Ok(Ctx { brep, tree, field, opts, tol, edge_seeds })
@@ -256,7 +268,7 @@ pub(crate) struct Raw {
 const MAX_REFINE: u32 = 2;
 
 /// Classification tolerance relative to the bounding-box diagonal.
-const RELATIVE_TOLERANCE: f64 = 1e-6;
+pub(crate) const RELATIVE_TOLERANCE: f64 = 1e-6;
 
 /// Mesh the solid bounded by `surface` with hexahedra. `faces[tag]` is the analytic surface of
 /// B-rep face `tag` when known (exact node placement; free-form faces use the triangles);
@@ -290,7 +302,7 @@ pub fn hex_mesh(surface: &BoundarySurface, faces: &[Option<Surface>], field: &dy
         let mut last = None;
         match method {
             HexMethod::Extrude | HexMethod::Revolve => {
-                let setups = match candidate_setups(&ctx, method) {
+                let setups = match candidate_setups(std::slice::from_ref(&ctx), method) {
                     Ok(s) => s,
                     Err(why) => {
                         reasons.push(format!("{}: {why}", method.name()));
@@ -300,7 +312,7 @@ pub fn hex_mesh(surface: &BoundarySurface, faces: &[Option<Surface>], field: &dy
                 for setup in setups {
                     fieldcraft_model::progress::check()?;
                     // The cross-section is laid out once per frame; refinement retries reuse it.
-                    let prepared = match layered::prepare(&ctx, setup) {
+                    let prepared = match layered::prepare(std::slice::from_ref(&ctx), setup) {
                         Ok(p) => p,
                         Err(e @ Error::Limit(_)) => return Err(e),
                         Err(e) => {
@@ -308,7 +320,7 @@ pub fn hex_mesh(surface: &BoundarySurface, faces: &[Option<Surface>], field: &dy
                             continue;
                         }
                     };
-                    match with_refinement(&ctx, method, |refine| layered::mesh(&ctx, &prepared, refine)) {
+                    match with_refinement(&ctx, method, |refine| layered::mesh(std::slice::from_ref(&ctx), &prepared, refine).map(|m| m.0)) {
                         Ok(mesh) => return Ok(mesh),
                         Err(e @ Error::Limit(_)) => return Err(e),
                         Err(e) => last = Some(e),
@@ -351,12 +363,13 @@ fn check_estimate(surfaces: &[&BoundarySurface], field: &dyn SizeField, opts: &H
 }
 
 /// The frames a layered method can try, fewest levels first, or the first reason none fits.
-fn candidate_setups(ctx: &Ctx, method: HexMethod) -> std::result::Result<Vec<layered::Setup>, String> {
-    let frames = if method == HexMethod::Extrude { layered::translations(ctx.brep) } else { layered::rotations(ctx.brep) };
+pub(crate) fn candidate_setups(ctxs: &[Ctx], method: HexMethod) -> std::result::Result<Vec<layered::Setup>, String> {
+    let breps: Vec<&Brep> = ctxs.iter().map(|c| c.brep).collect();
+    let frames = if method == HexMethod::Extrude { layered::translations(&breps) } else { layered::rotations(&breps) };
     let mut fitting: Vec<(usize, usize, layered::Setup)> = Vec::new();
     let mut first_reason = None;
     for (k, f) in frames.into_iter().enumerate() {
-        match layered::setup(ctx, &f) {
+        match layered::setup(ctxs, &f) {
             Ok(s) => fitting.push((s.level_count(), k, s)),
             Err(e) => {
                 first_reason.get_or_insert_with(|| plain(&e));

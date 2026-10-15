@@ -130,6 +130,119 @@ pub fn hex_mesh_cells(cells: &[Cell], field: &dyn SizeField, opts: &HexOptions) 
     Ok(CellsMesh { mesh, element_cell, blocks, interfaces: shared })
 }
 
+/// Mesh `cells` (bodies that together make a part, meeting face to face) into one conforming
+/// all-hex mesh by sweeping them together, along one direction or about one axis (`opts.method`:
+/// [`HexMethod::Extrude`], [`HexMethod::Revolve`], or [`HexMethod::Auto`] / [`HexMethod::Swept`]
+/// for the first that fits).
+///
+/// This is many-to-many sweeping ([`super::layered`]) over the cells at once: the walls of every
+/// cell (its cut faces included) are imprinted into one cross-section and the levels of every cell
+/// are levels of all, so one interval assignment gives every curve and every level interval one
+/// count, and each region of each interval is filled by the cell it lies in. Where two cells meet
+/// they share the curves and layers there, so their elements meet node for node with no seeds;
+/// a cut that ends on another cut (a T-junction) is a curve ending on a curve like any other.
+/// Each element belongs to one cell and boundary faces are tagged with that cell's faces. Cells
+/// that do not all sweep in one frame are [`Error::Unsupported`] with the first reason.
+pub fn hex_mesh_swept_cells(cells: &[Cell], field: &dyn SizeField, opts: &HexOptions) -> Result<CellsMesh> {
+    let methods: &[HexMethod] = match opts.method {
+        HexMethod::Auto | HexMethod::Swept => &[HexMethod::Extrude, HexMethod::Revolve],
+        HexMethod::Extrude => &[HexMethod::Extrude],
+        HexMethod::Revolve => &[HexMethod::Revolve],
+        m => return Err(Error::Invalid(format!("cells are swept together by extrusion or revolution; method `{}` does not apply", m.name()))),
+    };
+    if !(opts.chordal_tolerance >= 0.0 && opts.chordal_tolerance.is_finite()) {
+        return Err(Error::Invalid(format!("the chordal tolerance must be a non-negative number, got {}", opts.chordal_tolerance)));
+    }
+    if cells.is_empty() || cells.len() > MAX_CELLS {
+        return Err(Error::Invalid(format!("{} cells; 1 to {MAX_CELLS} are meshed together", cells.len())));
+    }
+    if let Some(c) = cells.iter().find(|c| c.surface.shells().len() != 1) {
+        return Err(Error::Unsupported(format!("cell `{}` has {} shells; a cell is one solid without voids", c.name, c.surface.shells().len())));
+    }
+    let surfaces: Vec<&BoundarySurface> = cells.iter().map(|c| c.surface).collect();
+    super::check_estimate(&surfaces, field, opts)?;
+    let breps: Vec<Brep> = cells.iter().map(|c| Brep::new(c.surface, c.faces)).collect::<Result<_>>()?;
+    let trees: Vec<TriangleTree> = cells.iter().map(|c| TriangleTree::new(c.surface)).collect::<Result<_>>()?;
+    // One classification tolerance for all, from their joint extent.
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for p in cells.iter().flat_map(|c| c.surface.points()) {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    let tol = super::RELATIVE_TOLERANCE * dist(lo, hi);
+    if !(tol > 0.0 && tol.is_finite()) {
+        return Err(Error::Invalid("the cells have no extent".into()));
+    }
+    let ctxs: Vec<Ctx> = breps.iter().zip(&trees).map(|(brep, tree)| Ctx::with_tolerance(brep, tree, field, opts, tol)).collect::<Result<_>>()?;
+    let names: Vec<&str> = cells.iter().map(|c| c.name).collect();
+    let mut reasons: Vec<String> = Vec::new();
+    for &method in methods {
+        let setups = match super::candidate_setups(&ctxs, method) {
+            Ok(s) => s,
+            Err(why) => {
+                reasons.push(format!("{}: {why}", method.name()));
+                continue;
+            }
+        };
+        let mut last = None;
+        for setup in setups {
+            fieldcraft_model::progress::check()?;
+            let prepared = match super::layered::prepare(&ctxs, setup) {
+                Ok(p) => p,
+                Err(e @ Error::Limit(_)) => return Err(e),
+                Err(e) => {
+                    last = Some(e);
+                    continue;
+                }
+            };
+            // As a single body's sweep: on a face mesher's failure, again with finer curves.
+            for refine in 0..=super::MAX_REFINE {
+                fieldcraft_model::progress::check()?;
+                let made = super::layered::mesh(&ctxs, &prepared, refine)
+                    .and_then(|(raw, of)| Ok((finish(&Cells { ctxs: &ctxs, of: &of, names: &names }, raw, method)?, of)));
+                match made {
+                    Ok((mesh, element_cell)) => {
+                        let interfaces = shared_faces(&mesh, &element_cell);
+                        return Ok(CellsMesh { mesh, element_cell, blocks: Vec::new(), interfaces });
+                    }
+                    Err(e @ Error::Limit(_)) => return Err(e),
+                    Err(e @ Error::Failed(_)) => last = Some(e),
+                    Err(e) => {
+                        last = Some(e);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(e) = last {
+            reasons.push(format!("{}: {}", method.name(), super::plain(&e)));
+        }
+    }
+    Err(Error::Unsupported(format!("the cells do not sweep together ({})", reasons.join("; "))))
+}
+
+/// The pairs of cells that share element faces in `mesh`, counted once each.
+fn shared_faces(mesh: &HexMesh, element_cell: &[u32]) -> usize {
+    let mut owner: std::collections::HashMap<[u32; 4], u32> = std::collections::HashMap::new();
+    let mut pairs = std::collections::BTreeSet::new();
+    for e in 0..mesh.element_count() {
+        let (Some(h), Some(&c)) = (mesh.element(e), element_cell.get(e)) else { continue };
+        for k in 0..6 {
+            let mut key = super::hex_face(k).map(|i| h.get(i).copied().unwrap_or(0));
+            key.sort_unstable();
+            match owner.insert(key, c) {
+                Some(o) if o != c => {
+                    pairs.insert((o.min(c), o.max(c)));
+                }
+                _ => {}
+            }
+        }
+    }
+    pairs.len()
+}
+
 /// Vertices, edges and faces shared by the cells.
 struct Topology {
     /// Shared vertices: where they are.

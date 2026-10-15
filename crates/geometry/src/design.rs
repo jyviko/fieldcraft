@@ -76,6 +76,16 @@ impl Design {
     pub fn body(&self, name: &str) -> Option<&Shape> {
         self.bodies.iter().find(|b| b.name == name)
     }
+
+    /// The body of the design as opened that `name` is, or that partitions cut it from
+    /// (`Base` for `Base/a/b1`).
+    pub fn source_of(&self, name: &str) -> Option<&str> {
+        self.source
+            .iter()
+            .map(|b| b.name.as_str())
+            .filter(|s| name == *s || name.strip_prefix(s).is_some_and(|rest| rest.starts_with('/')))
+            .max_by_key(|s| s.len())
+    }
 }
 
 /// Open a design from its file bytes (a `.solidcraft` container or a JSON design) and rebuild it.

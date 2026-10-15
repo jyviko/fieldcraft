@@ -2,6 +2,14 @@
 //! typically made by `geometry.partition`) with its own method, all into one mesh, and the cells
 //! joined across the partitions that divide them.
 //!
+//! **Sweeping together (#288).** The cells of one body of the design whose method may sweep
+//! (`auto`, `hex`, `swept`, `extrude`, `revolve`) are first meshed together
+//! ([`hex_mesh_swept_cells`]): one cross-section with every cell's cut faces imprinted, one
+//! interval assignment and one set of layers, so cells meet node for node across every cut — a
+//! cut that ends on another included — with no edge seeds, and their nodes are shared. When they
+//! do not sweep together in one frame (the reply says why, per cell, as `not_swept_together`),
+//! each cell is meshed alone as below.
+//!
 //! **Joining.** Two cells on either side of a partition `P` meet on faces named
 //! `partition:P:a` and `partition:P:b`. Where the element faces of the two sides match node for
 //! node (the same divisions and kind on both sides, e.g. a mesh and its mirror image) the
@@ -17,12 +25,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fieldcraft_mesh::cdt::CdtOptions;
-use fieldcraft_mesh::hex::{HexMesh, HexMethod};
+use fieldcraft_mesh::hex::{Cell, CellsMesh, HexMesh, HexMethod, HexOptions, hex_mesh_swept_cells};
+use fieldcraft_mesh::size::UniformSize;
+use fieldcraft_mesh::surface::BoundarySurface;
 use fieldcraft_model::geometry::Entity;
 use fieldcraft_model::{ElementFace, GeometryRef, Model, Set, Tie};
 use serde_json::{Value, json};
 
-use super::hex::{Input, add_hex, hex_body};
+use super::hex::{Input, add_cells, add_hex, hex_body};
 use super::mesh::{BodyTets, add_tets, mesh_body, quality_options};
 use crate::requirement::Requirement;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
@@ -30,7 +40,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const CELLS: CommandSpec = CommandSpec {
     id: "mesh.cells",
     label: "Partitioned Mesh",
-    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, a set on each side and a tie between them are made (`tie_<partition>_<k>`, sets `<tie>_main` and `<tie>_secondary`: the side with fewer nodes is the main surface), replacing ties of those names from an earlier run. Reports each cell's method (and why auto fell back to tet), and each interface: `merged` with the nodes merged, or `tied`"#,
+    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, a set on each side and a tie between them are made (`tie_<partition>_<k>`, sets `<tie>_main` and `<tie>_secondary`: the side with fewer nodes is the main surface), replacing ties of those names from an earlier run. The cells of one design body that may sweep (auto, hex, swept, extrude, revolve) are swept together first: one cross-section and one set of layers for all of them, so they share their nodes across every cut, T-junctions included, with no edge seeds (`swept_together` names the body; `not_swept_together` says why not, and those cells are meshed one by one). Reports each cell's method (and why auto fell back to tet), its `quality` (volume, smallest and mean scaled Jacobian, largest edge ratio), and each interface: `merged` with the nodes merged or shared, or `tied`"#,
     form: Some(super::forms::CELLS),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -148,9 +158,55 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
     let cdt = CdtOptions { max_steiner: s.limits.max_steiner, max_tets: tet_options.max_tets };
 
     let seeds = super::seeds::edge_seeds(s)?;
+    let method_of = |n: &str| methods.get(n).copied().unwrap_or(default);
+    // The cells of one body that may sweep are swept together first (#288): one cross-section
+    // and one set of layers for all of them, so they meet node for node across their cuts. Cells
+    // that do not sweep together are meshed one by one, as below.
+    let mut groups: BTreeMap<(String, HexMethod), Vec<usize>> = BTreeMap::new();
+    for (i, shape) in shapes.iter().enumerate() {
+        let sweep = match method_of(&shape.name) {
+            Method::Auto | Method::Hex(HexMethod::Auto | HexMethod::Swept) => Some(HexMethod::Swept),
+            Method::Hex(m @ (HexMethod::Extrude | HexMethod::Revolve)) => Some(m),
+            Method::Hex(_) | Method::Tet => None,
+        };
+        if let (Some(m), Some(source)) = (sweep, design.source_of(&shape.name)) {
+            groups.entry((source.to_string(), m)).or_default().push(i);
+        }
+    }
+    let mut joint: Vec<Option<usize>> = vec![None; shapes.len()];
+    let mut not_together: BTreeMap<usize, String> = BTreeMap::new();
+    let mut swept: Vec<(String, Vec<usize>, Vec<Input>, CellsMesh)> = Vec::new();
+    for ((source, m), members) in groups {
+        if members.len() < 2 {
+            continue;
+        }
+        let inputs: Vec<Input> = members
+            .iter()
+            .filter_map(|&i| shapes.get(i))
+            .map(|shape| Ok(Input { seeds: seeds.clone(), ..super::hex::shape_input(shape, Some(tolerance))? }))
+            .collect::<Result<_>>()?;
+        match swept_together(p, &inputs, m, quadratic, size, tolerance, &seeds)? {
+            Ok(cm) => {
+                for &i in &members {
+                    if let Some(slot) = joint.get_mut(i) {
+                        *slot = Some(swept.len());
+                    }
+                }
+                swept.push((source, members, inputs, cm));
+            }
+            Err(why) => {
+                for &i in &members {
+                    not_together.insert(i, why.clone());
+                }
+            }
+        }
+    }
     let mut meshed: Vec<(Meshed, Value)> = Vec::with_capacity(shapes.len());
-    for shape in shapes {
-        let method = methods.get(&shape.name).copied().unwrap_or(default);
+    for (i, shape) in shapes.iter().enumerate() {
+        if joint.get(i).copied().flatten().is_some() {
+            continue;
+        }
+        let method = method_of(&shape.name);
         let input = || Ok::<_, EngineError>(Input { seeds: seeds.clone(), ..super::hex::shape_input(shape, Some(tolerance))? });
         let hex = |m: HexMethod| -> Result<(Input<'static>, HexMesh)> {
             let b = input()?;
@@ -175,6 +231,9 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
         };
         if let Some(o) = info.as_object_mut() {
             o.insert("body".into(), json!(shape.name));
+            if let Some(why) = not_together.get(&i) {
+                o.insert("not_swept_together".into(), json!(why));
+            }
         }
         meshed.push((cell, info));
     }
@@ -183,9 +242,29 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
     // and the definitions stay.
     let model = &mut s.model;
     let cleared = super::replace::clear(model, names.iter().map(String::as_str));
-    let mut report = Vec::with_capacity(meshed.len());
-    for (cell, mut info) in meshed {
-        let (kind, elements, nodes) = match &cell {
+    let mut report: Vec<(usize, Value)> = Vec::with_capacity(shapes.len());
+    let mut interfaces = Vec::new();
+    for (source, members, inputs, cm) in &swept {
+        add_cells(model, inputs, cm)?;
+        let m = &cm.mesh;
+        for (c, (&i, b)) in members.iter().zip(inputs).enumerate() {
+            let elements: Vec<usize> = (0..m.element_count()).filter(|&e| cm.element_cell.get(e).is_some_and(|&x| x as usize == c)).collect();
+            let nodes: BTreeSet<u32> = elements.iter().filter_map(|&e| m.element(e)).flatten().copied().collect();
+            report.push((
+                i,
+                json!({"body": b.name, "method": m.report.method.name(), "swept_together": source, "description": m.report.description, "kind": m.kind.name(), "elements": elements.len(), "nodes": nodes.len()}),
+            ));
+        }
+        interfaces.extend(swept_interfaces(&design, inputs, cm));
+    }
+    let mut k = 0;
+    for (i, _) in shapes.iter().enumerate() {
+        if joint.get(i).copied().flatten().is_some() {
+            continue;
+        }
+        let Some((cell, mut info)) = meshed.get_mut(k).map(|(c, v)| (c, std::mem::take(v))) else { break };
+        k += 1;
+        let (kind, elements, nodes) = match &*cell {
             Meshed::Hex(b, m) => {
                 add_hex(model, b, m)?;
                 (m.kind, m.element_count(), m.nodes.len())
@@ -200,11 +279,116 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
             o.insert("elements".into(), json!(elements));
             o.insert("nodes".into(), json!(nodes));
         }
-        report.push(info);
+        report.push((i, info));
     }
-    let interfaces = join(model, &names, COINCIDENT * diagonal)?;
+    report.sort_by_key(|r| r.0);
+    let report: Vec<Value> = report
+        .into_iter()
+        .map(|(_, mut info)| {
+            let quality = info.get("body").and_then(Value::as_str).map(|b| cell_quality(model, b));
+            if let (Some(o), Some(q)) = (info.as_object_mut(), quality) {
+                o.insert("quality".into(), q);
+            }
+            info
+        })
+        .collect();
+    interfaces.extend(join(model, &names, COINCIDENT * diagonal)?);
     let (nodes, elements) = (model.nodes().len(), model.elements().len());
     Ok(cleared.report(s, json!({"cells": report, "interfaces": interfaces, "nodes": nodes, "elements": elements, "size": size})))
+}
+
+/// Sweep the cells `inputs` together ([`hex_mesh_swept_cells`]) with `method` (extrude,
+/// revolve, or swept: either). `Ok(Err(why))` when they do not sweep together; limits and a
+/// cancel are errors.
+fn swept_together(
+    p: &Value,
+    inputs: &[Input],
+    method: HexMethod,
+    quadratic: bool,
+    size: Option<f64>,
+    tolerance: f64,
+    seeds: &[fieldcraft_mesh::seeds::EdgeSeed],
+) -> Result<std::result::Result<CellsMesh, String>> {
+    let h = size.ok_or_else(|| EngineError::Params("no element size".into()))?;
+    let mut surfaces = Vec::with_capacity(inputs.len());
+    for b in inputs {
+        let options = super::mesh::surface_options(p, &b.mesh)?;
+        match BoundarySurface::new(&b.mesh.positions, &b.mesh.triangles, &b.mesh.tri_face, &options) {
+            Ok(surface) => surfaces.push(surface),
+            Err(e) => return Ok(Err(format!("body `{}`: {e}", b.name))),
+        }
+    }
+    let cells: Vec<Cell> = surfaces.iter().zip(inputs).map(|(surface, b)| Cell { name: &b.name, surface, faces: &b.surfaces }).collect();
+    let options = HexOptions {
+        method,
+        quadratic,
+        chordal_tolerance: tolerance,
+        max_elements: fieldcraft_model::MAX_ELEMENTS / 8,
+        seeds: seeds.to_vec(),
+        ..HexOptions::default()
+    };
+    match hex_mesh_swept_cells(&cells, &UniformSize(h), &options) {
+        Ok(cm) => Ok(Ok(cm)),
+        Err(fieldcraft_mesh::Error::Model(fieldcraft_model::Error::Cancelled)) => Err(EngineError::Model(fieldcraft_model::Error::Cancelled)),
+        Err(e @ fieldcraft_mesh::Error::Limit(_)) => Err(EngineError::Params(e.to_string())),
+        Err(e) => Ok(Err(e.to_string())),
+    }
+}
+
+/// The interfaces of cells swept together: each pair of cells whose elements share faces, with
+/// the partition between them and the nodes they share (one mesh: merged by construction).
+fn swept_interfaces(design: &fieldcraft_geometry::Design, inputs: &[Input], cm: &CellsMesh) -> Vec<Value> {
+    let m = &cm.mesh;
+    let mut owner: BTreeMap<[u32; 4], u32> = BTreeMap::new();
+    let mut pairs: BTreeMap<(u32, u32), BTreeSet<u32>> = BTreeMap::new();
+    for e in 0..m.element_count() {
+        let (Some(h), Some(&c)) = (m.element(e), cm.element_cell.get(e)) else { continue };
+        for local in fieldcraft_model::ElementKind::Hex8.faces() {
+            let mut key = [0u32; 4];
+            for (slot, &i) in key.iter_mut().zip(local.iter()) {
+                *slot = h.get(i).copied().unwrap_or(0);
+            }
+            key.sort_unstable();
+            match owner.insert(key, c) {
+                Some(o) if o != c => pairs.entry((o.min(c), o.max(c))).or_default().extend(key),
+                _ => {}
+            }
+        }
+    }
+    // The partitions whose cut faces a cell has.
+    let cuts = |c: u32| -> BTreeSet<String> {
+        let name = inputs.get(c as usize).map_or("", |b| b.name.as_str());
+        let faces = design.body(name).map(|b| b.faces().iter().map(|f| f.name.clone()).collect::<Vec<_>>()).unwrap_or_default();
+        faces.iter().filter_map(|f| f.strip_prefix("partition:")?.rsplit_once(':').map(|(p, _)| p.to_string())).collect()
+    };
+    pairs
+        .into_iter()
+        .map(|((a, b), nodes)| {
+            let (na, nb) = (inputs.get(a as usize).map_or("", |x| x.name.as_str()), inputs.get(b as usize).map_or("", |x| x.name.as_str()));
+            let partition = cuts(a).intersection(&cuts(b)).next().cloned().unwrap_or_default();
+            json!({"partition": partition, "cells": [na, nb], "joined": "merged", "nodes": nodes.len(), "swept_together": true})
+        })
+        .collect()
+}
+
+/// A cell's mesh in numbers: its volume, smallest and mean scaled Jacobian and largest edge
+/// ratio.
+fn cell_quality(model: &Model, body: &str) -> Value {
+    let (mut volume, mut min, mut sum, mut n, mut ratio) = (0.0, f64::INFINITY, 0.0, 0usize, 0.0f64);
+    for label in model.body_elements(body) {
+        let Some(e) = model.element(label) else { continue };
+        let xyz: Vec<[f64; 3]> = e.nodes.iter().filter_map(|&l| model.node(l).map(|x| x.xyz)).collect();
+        let Ok(q) = fieldcraft_mesh::quality::element_quality(e.kind, &xyz) else { continue };
+        volume += q.size;
+        ratio = ratio.max(q.get(fieldcraft_mesh::quality::Metric::EdgeRatio).unwrap_or(0.0));
+        if let Some(sj) = q.get(fieldcraft_mesh::quality::Metric::ScaledJacobian) {
+            min = min.min(sj);
+            sum += sj;
+            n += 1;
+        }
+    }
+    let min = if n > 0 { Some(min) } else { None };
+    json!({"volume": volume, "min_scaled_jacobian": min, "mean_scaled_jacobian": if n > 0 { Some(sum / n as f64) } else { None }, "max_edge_ratio": ratio})
 }
 
 /// One side of an interface: a cell's element faces on one side of a partition.
@@ -490,5 +674,31 @@ mod tests {
             let u = n["displacement"][axis].as_f64().unwrap();
             assert!((u - expected).abs() < 1e-6 * expected, "{u} vs {expected}: {n}");
         }
+    }
+
+    /// Cells cut from one box by planes, one of them (`y = 10`) cutting only the cell left of
+    /// `x = 10`, so a cut ends on another (a T-junction): with no seeds the cells sweep together
+    /// and every interface merges node for node (#288), and the mesh fills the box.
+    #[test]
+    fn cells_of_a_body_sweep_together_and_merge_without_seeds() {
+        let (_dir, mut s) = super::super::datum::tests::scripted(json!([
+            {"command": "solid.box", "params": {"length": 30, "width": 20, "height": 10, "corner": [0, 0, 0], "body_name": "Box"}},
+        ]));
+        super::super::datum::tests::cut_at(&mut s, &[(0, 10.0), (0, 21.0)]);
+        s.execute("geometry.datum", &json!({"name": "Y", "by": {"type": "offset", "plane": "zx", "offset": 7.5}})).unwrap();
+        s.execute("geometry.partition", &json!({"name": "PY", "datum": "Y", "bodies": ["Box/a"]})).unwrap();
+        let r = s.execute("mesh.cells", &json!({"default": "auto", "size": 2.0})).unwrap();
+        let cells = r["cells"].as_array().unwrap();
+        assert_eq!(cells.len(), 4, "{r}");
+        assert!(cells.iter().all(|c| c["swept_together"] == "Box" && c["kind"] == "hex8"), "{r}");
+        let interfaces = r["interfaces"].as_array().unwrap();
+        assert_eq!(interfaces.len(), 4, "{r}");
+        assert!(interfaces.iter().all(|i| i["joined"] == "merged"), "{r}");
+        assert!(s.model.ties().is_empty());
+        let q = s.execute("mesh.quality", &json!({})).unwrap();
+        let volume = q["volume"].as_f64().unwrap();
+        assert!((volume - 6000.0).abs() < 1e-6, "{q}");
+        let d = s.execute("mesh.check.duplicates", &json!({})).unwrap();
+        assert_eq!((d["counts"]["coincident"].as_u64(), d["counts"]["cracks"].as_u64()), (Some(0), Some(0)), "{d}");
     }
 }

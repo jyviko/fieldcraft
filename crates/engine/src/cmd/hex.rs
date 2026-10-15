@@ -228,22 +228,7 @@ pub(super) fn hex_blocks(s: &mut Session, p: &Value) -> Result<Value> {
     // Replace the cells' meshes (replace.rs); other bodies and the definitions stay.
     let model = &mut s.model;
     let cleared = super::replace::clear(model, inputs.iter().map(|b| b.name.as_str()));
-    let (first_node, first_element) = super::fresh_labels(model, m.nodes.len(), m.element_count())?;
-    for (i, xyz) in m.nodes.iter().enumerate() {
-        model.set_node(first_node + i as u32, *xyz)?;
-    }
-    let mut body_tags = Vec::with_capacity(inputs.len());
-    for b in &inputs {
-        body_tags.push(model.geometry_tag(&GeometryRef::body(b.name.as_str())?)?);
-    }
-    for e in 0..m.element_count() {
-        let cell = cm.element_cell.get(e).map_or(0, |&c| c as usize);
-        let nodes: Vec<u32> = m.element(e).unwrap_or(&[]).iter().map(|&i| first_node + i).collect();
-        let l = first_element + e as u32;
-        model.set_element(l, m.kind, nodes)?;
-        model.tag_element(l, body_tags.get(cell).copied().ok_or_else(|| EngineError::Params("element without a cell".into()))?)?;
-    }
-    tag_faces(model, &inputs, |e| cm.element_cell.get(e as usize).map_or(0, |&c| c as usize), &m.boundary, first_element)?;
+    add_cells(model, &inputs, &cm)?;
     let blocks: Vec<Value> =
         inputs.iter().zip(&cm.blocks).map(|(b, d)| json!({"body": b.name, "divisions": d, "elements": d.iter().product::<usize>()})).collect();
     let reply = json!({
@@ -353,6 +338,29 @@ pub(super) fn hex_body(p: &Value, b: &Input, method: HexMethod, quadratic: bool,
         ..HexOptions::default()
     };
     hex_mesh(&surface, &b.surfaces, &UniformSize(h), &options).map_err(|e| EngineError::of_body(&b.name, e))
+}
+
+/// Add a mesh of several cells (`inputs[c]` is cell `c`) after the model's largest labels, its
+/// nodes shared between the cells, tagging each element with its cell's body and the boundary
+/// element faces with the cell's B-rep faces.
+pub(super) fn add_cells(model: &mut Model, inputs: &[Input], cm: &fieldcraft_mesh::hex::CellsMesh) -> Result<()> {
+    let m = &cm.mesh;
+    let (first_node, first_element) = super::fresh_labels(model, m.nodes.len(), m.element_count())?;
+    for (i, xyz) in m.nodes.iter().enumerate() {
+        model.set_node(first_node + i as u32, *xyz)?;
+    }
+    let mut body_tags = Vec::with_capacity(inputs.len());
+    for b in inputs {
+        body_tags.push(model.geometry_tag(&GeometryRef::body(b.name.as_str())?)?);
+    }
+    for e in 0..m.element_count() {
+        let cell = cm.element_cell.get(e).map_or(0, |&c| c as usize);
+        let nodes: Vec<u32> = m.element(e).unwrap_or(&[]).iter().map(|&i| first_node + i).collect();
+        let l = first_element + e as u32;
+        model.set_element(l, m.kind, nodes)?;
+        model.tag_element(l, body_tags.get(cell).copied().ok_or_else(|| EngineError::Params("element without a cell".into()))?)?;
+    }
+    tag_faces(model, inputs, |e| cm.element_cell.get(e as usize).map_or(0, |&c| c as usize), &m.boundary, first_element)
 }
 
 /// Add one body's hex mesh after the model's largest labels, tagging the elements with the body

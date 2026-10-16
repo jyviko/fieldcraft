@@ -265,10 +265,14 @@ const LEAF: usize = 6;
 
 impl Tree {
     fn build(boxes: &[(P, P)]) -> Tree {
-        let mut items: Vec<u32> = (0..boxes.len() as u32).collect();
+        Tree::build_over(boxes, (0..boxes.len() as u32).collect())
+    }
+
+    /// A tree over the items `items` (indices into `boxes`) only.
+    fn build_over(boxes: &[(P, P)], mut items: Vec<u32>) -> Tree {
         let empty = Node { lo: [0.0; 3], hi: [0.0; 3], left: None, start: 0, end: 0 };
         let mut nodes = vec![empty];
-        let mut work = vec![(0usize, 0usize, boxes.len())];
+        let mut work = vec![(0usize, 0usize, items.len())];
         while let Some((ni, start, end)) = work.pop() {
             let Some(slice) = items.get_mut(start..end) else { continue };
             let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -318,7 +322,8 @@ impl Tree {
                 })
                 .sum()
         };
-        let mut best: Option<(f64, [f64; 4])> = None;
+        // Ties go to the lowest item, so the result does not depend on how the tree is built.
+        let mut best: Option<(f64, u32, [f64; 4])> = None;
         let mut stack = vec![0usize];
         let mut steps = 0usize;
         while let Some(ni) = stack.pop() {
@@ -327,7 +332,7 @@ impl Tree {
                 break;
             }
             let Some(n) = self.nodes.get(ni) else { continue };
-            if best.is_some_and(|(d, _)| box_d2(n) > d) {
+            if best.is_some_and(|(d, _, _)| box_d2(n) > d) {
                 continue;
             }
             match n.left {
@@ -348,14 +353,14 @@ impl Tree {
                             continue;
                         }
                         let (d, q) = distance(i);
-                        if best.is_none_or(|(b, _)| d < b) {
-                            best = Some((d, q));
+                        if best.is_none_or(|(b, bi, _)| d < b || (d == b && i < bi)) {
+                            best = Some((d, i, q));
                         }
                     }
                 }
             }
         }
-        best.map(|(_, q)| q)
+        best.map(|(_, _, q)| q)
     }
 }
 
@@ -415,9 +420,14 @@ pub struct Tessellation {
     triangles: Vec<[u32; 3]>,
     tri_face: Vec<u32>,
     tri_tree: Tree,
+    /// A tree over each face's own triangles: a query for one face searches only its triangles,
+    /// not every triangle nearer the point (the same nearest triangle, far fewer boxes).
+    face_trees: Vec<Tree>,
     /// Feature segments: vertices and the (sorted) face pair.
     segments: Vec<([u32; 2], [u32; 2])>,
     seg_tree: Tree,
+    /// A tree over each face pair's segments.
+    pair_trees: std::collections::BTreeMap<[u32; 2], Tree>,
     analytic: Vec<Option<AnalyticSurface>>,
 }
 
@@ -437,6 +447,17 @@ impl Tessellation {
             })
             .collect();
         let tri_tree = Tree::build(&boxes);
+        let mut by_face: Vec<Vec<u32>> = Vec::new();
+        for (t, &f) in tri_face.iter().enumerate() {
+            let f = f as usize;
+            if f >= by_face.len() {
+                by_face.resize_with(f + 1, Vec::new);
+            }
+            if let Some(list) = by_face.get_mut(f) {
+                list.push(t as u32);
+            }
+        }
+        let face_trees = by_face.into_iter().map(|items| Tree::build_over(&boxes, items)).collect();
         let face_of = |t: u32| tri_face.get(t as usize).copied().unwrap_or(u32::MAX);
         let segments: Vec<([u32; 2], [u32; 2])> = surface
             .feature_edges()
@@ -454,7 +475,12 @@ impl Tessellation {
             })
             .collect();
         let seg_tree = Tree::build(&seg_boxes);
-        Tessellation { points, triangles, tri_face, tri_tree, segments, seg_tree, analytic }
+        let mut by_pair: std::collections::BTreeMap<[u32; 2], Vec<u32>> = std::collections::BTreeMap::new();
+        for (i, (_, pair)) in segments.iter().enumerate() {
+            by_pair.entry(*pair).or_default().push(i as u32);
+        }
+        let pair_trees = by_pair.into_iter().map(|(pair, items)| (pair, Tree::build_over(&seg_boxes, items))).collect();
+        Tessellation { points, triangles, tri_face, tri_tree, face_trees, segments, seg_tree, pair_trees, analytic }
     }
 
     fn pt(&self, v: u32) -> P {
@@ -478,7 +504,13 @@ impl Tessellation {
             let longest = measure::dist(a, b).max(measure::dist(b, c)).max(measure::dist(c, a));
             (dot(d, d), [q[0], q[1], q[2], longest])
         };
-        self.tri_tree.nearest4(p, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
+        self.face_tree(face).nearest4(p, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
+    }
+
+    /// The tree over `face`'s triangles (the whole boundary's for a face out of range, which
+    /// the queries' filter then finds nothing in).
+    fn face_tree(&self, face: u32) -> &Tree {
+        self.face_trees.get(face as usize).unwrap_or(&self.tri_tree)
     }
 
     /// The closest point on the curve's polyline, and the length of the segment it is on.
@@ -492,7 +524,7 @@ impl Tessellation {
             let d = sub(q, p);
             (dot(d, d), [q[0], q[1], q[2], measure::dist(a, b)])
         };
-        self.seg_tree.nearest4(p, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
+        self.pair_trees.get(&key).unwrap_or(&self.seg_tree).nearest4(p, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
     }
 }
 
@@ -518,7 +550,7 @@ impl Tessellation {
                 e.sort_by(f64::total_cmp);
                 (dot(d, d), [q[0], q[1], q[2], e[1]])
             };
-            self.tri_tree.nearest4(x, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
+            self.face_tree(face).nearest4(x, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
         };
         let (near, _) = nearest(p)?;
         let Some(surface) = self.analytic(face) else { return Some(near) };
@@ -541,7 +573,7 @@ impl Tessellation {
             let n = unit(cross(sub(b, a), sub(c, a))).unwrap_or([0.0; 3]);
             (dot(d, d), [n[0], n[1], n[2], 0.0])
         };
-        let r = self.tri_tree.nearest4(p, &accept, &dist)?;
+        let r = self.face_tree(face).nearest4(p, &accept, &dist)?;
         let flat = unit([r[0], r[1], r[2]])?;
         match self.analytic(face).and_then(|s| s.normal_at(p)) {
             Some(n) if dot(n, flat) < 0.0 => Some(scale(n, -1.0)),

@@ -399,6 +399,7 @@ pub static CATALOGUE: &[Capability] = &[
     soon("mesh.import.orphan", "Orphan Mesh", Mesh, "Edit", "M6", "Import a mesh without geometry"),
     ready("mesh.quality", "Quality", Mesh, "Verify", "Quality metrics and the certified validity check, failing elements listed"),
     soon("mesh.verify", "Verify Set", Mesh, "Verify", "M2", "Quality and validity per set"),
+    ready("mesh.export.stl", "Export STL", Mesh, "Verify", "Write the mesh's outer surface (or a set's faces) as binary STL"),
     ready_more("mesh.tag", "Tag Geometry", Mesh, "Verify", "Tag elements, faces, edges and nodes with the geometry they mesh", &["mesh.tag.clear"]),
     // ---- Properties ----
     ready_more(

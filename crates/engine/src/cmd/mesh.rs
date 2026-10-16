@@ -67,6 +67,16 @@ pub const QUALITY: CommandSpec = CommandSpec {
     run: quality_report,
 };
 
+pub const EXPORT_STL: CommandSpec = CommandSpec {
+    id: "mesh.export.stl",
+    label: "Export STL",
+    params: r#"{"path": "skin.stl", "set": "top", "format": "binary|ascii"} — writes the mesh's outer surface as STL: every solid element face no other solid shares, and the top side (face 1) of every shell; `set` (optional) writes only that set's element faces instead; `format` defaults to binary. Quadrilaterals are split in two, normals point out of the elements, and coordinates are rounded to single precision (STL stores f32). Replies {path, triangles, bytes}"#,
+    form: Some(super::forms::EXPORT_STL),
+    kind: CommandKind::Session,
+    requires: &[Requirement::Mesh],
+    run: export_stl,
+};
+
 pub const DELAUNAY_POINTS: CommandSpec = CommandSpec {
     id: "mesh.delaunay.points",
     label: "Delaunay of Points",
@@ -553,6 +563,53 @@ fn number(v: f64) -> Value {
     if v.is_finite() { json!(v) } else { json!(if v > 0.0 { "inf" } else { "-inf" }) }
 }
 
+fn export_stl(s: &mut Session, p: &Value) -> Result<Value> {
+    let set: Option<String> = super::opt(p, "set")?;
+    let format: Option<String> = super::opt(p, "format")?;
+    let ascii = match format.as_deref() {
+        None | Some("binary") => false,
+        Some("ascii") => true,
+        Some(other) => {
+            let shown: String = other.chars().take(32).collect();
+            return Err(EngineError::Params(format!("unknown STL format `{shown}`; known: binary, ascii")));
+        }
+    };
+    let path = super::file_param(s, p, "path", fieldcraft_io::roots::Access::Write)?;
+    let m = &s.model;
+    if m.elements().is_empty() {
+        return Err(EngineError::Params("the mesh has no elements".into()));
+    }
+    let faces = match &set {
+        Some(name) => {
+            let shown: String = name.chars().take(64).collect();
+            if !m.sets().contains_key(name) {
+                return Err(EngineError::Params(format!("no set `{shown}`")));
+            }
+            let faces = m.resolve_set(name)?.faces;
+            if faces.is_empty() {
+                return Err(EngineError::Params(format!("set `{shown}` has no element faces")));
+            }
+            faces
+        }
+        None => {
+            let faces = m.skin_faces();
+            if faces.is_empty() {
+                return Err(EngineError::Params("the mesh has only line elements: no surface to write".into()));
+            }
+            faces
+        }
+    };
+    let bytes = if ascii {
+        let name = std::path::Path::new(&path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        fieldcraft_io::stl::write_ascii(m, &faces, &name)?.into_bytes()
+    } else {
+        fieldcraft_io::stl::write_binary(m, &faces)?
+    };
+    let triangles = fieldcraft_io::stl::triangles(m, &faces)?.len();
+    fieldcraft_io::fs::write_atomic(std::path::Path::new(&path), &bytes, false)?;
+    Ok(json!({"path": path, "triangles": triangles, "bytes": bytes.len()}))
+}
+
 fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
     let bins = match p.get("bins") {
         None => 10,
@@ -671,6 +728,63 @@ fn surface_check(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn export_stl_writes_the_skin_or_a_set() {
+        let dir = std::env::temp_dir().join(format!("fieldcraft-stl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("skin.stl");
+        let path_str = path.to_string_lossy().into_owned();
+        let mut s = Session::default();
+        assert!(s.execute("mesh.export.stl", &json!({"path": path_str})).is_err(), "no mesh");
+        s.execute("file.sample", &json!({"name": "cantilever"})).unwrap();
+        let journal = s.journal.len();
+        let out = s.execute("mesh.export.stl", &json!({"path": path_str})).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!bytes.starts_with(b"solid"));
+        let skin = fieldcraft_io::stl::triangles(&s.model, &s.model.skin_faces()).unwrap().len();
+        assert!(skin >= s.model.skin_faces().len() && skin > 0);
+        assert_eq!(out["triangles"], skin);
+        assert_eq!(bytes.len(), 84 + 50 * skin);
+        assert_eq!(out["bytes"], bytes.len());
+        assert_eq!(s.journal.len(), journal, "exporting does not change the model");
+
+        // A set with faces writes only those; one without faces, or an unknown one, is refused.
+        let faces = s.model.skin_faces();
+        let two: Vec<serde_json::Value> = faces.iter().take(2).map(|f| json!({"element": f.element, "face": f.face})).collect();
+        let first = *s.model.elements().keys().next().unwrap();
+        s.execute("model.set.create", &json!({"name": "stl_faces", "faces": two})).unwrap();
+        s.execute("model.set.create", &json!({"name": "stl_elements", "elements": [first]})).unwrap();
+        let out = s.execute("mesh.export.stl", &json!({"path": path_str, "set": "stl_faces"})).unwrap();
+        assert_eq!(out["triangles"], fieldcraft_io::stl::triangles(&s.model, &faces[..2]).unwrap().len());
+        let other = dir.join("other.stl").to_string_lossy().into_owned();
+        let e = s.execute("mesh.export.stl", &json!({"path": other, "set": "nope"})).unwrap_err().to_string();
+        assert!(e.contains("no set `nope`"), "{e}");
+        let e = s.execute("mesh.export.stl", &json!({"path": other, "set": "stl_elements"})).unwrap_err().to_string();
+        assert!(e.contains("has no element faces"), "{e}");
+        let e = s.execute("mesh.export.stl", &json!({"path": other, "format": "obj"})).unwrap_err().to_string();
+        assert!(e.contains("known: binary, ascii"), "{e}");
+        assert!(!dir.join("other.stl").exists());
+
+        let out = s.execute("mesh.export.stl", &json!({"path": path_str, "format": "ascii"})).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("solid skin\n"));
+        assert_eq!(text.matches("facet normal").count(), skin);
+        assert_eq!(out["triangles"], skin);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_stl_refuses_a_mesh_of_lines() {
+        let mut s = Session::default();
+        s.execute("mesh.node.add", &json!({"label": 1, "xyz": [0, 0, 0]})).unwrap();
+        s.execute("mesh.node.add", &json!({"label": 2, "xyz": [1, 0, 0]})).unwrap();
+        s.execute("mesh.element.add", &json!({"label": 1, "kind": "rod2", "nodes": [1, 2]})).unwrap();
+        let path = std::env::temp_dir().join(format!("fieldcraft-stl-lines-{}.stl", std::process::id()));
+        let e = s.execute("mesh.export.stl", &json!({"path": path.to_string_lossy()})).unwrap_err().to_string();
+        assert!(e.contains("only line elements"), "{e}");
+        assert!(!path.exists());
+    }
+
     use serde_json::json;
 
     use crate::Session;

@@ -545,6 +545,10 @@ mod tests {
             json!({"format": "nastran", "path": "/no/such/dir/part.bdf", "steps": vec!["x".repeat(1000); 2000]}),
             json!({"format": "nastran", "path": "/no/such/dir/part.bdf", "steps": {}}),
             json!({"path": 7}),
+            json!({"path": "x\u{0}.stl"}),
+            json!({"path": "/no/such/dir/skin.stl", "set": 7}),
+            json!({"path": "/no/such/dir/skin.stl", "set": "x".repeat(100_000)}),
+            json!({"path": "/no/such/dir/skin.stl", "format": ["ascii"]}),
             // (`max_points` and `max_passes` keep mesh.tet.generate's quality stage small.)
             json!({"body": "Body1", "tolerance": 0.05, "max_points": 3000, "max_passes": 1}),
             json!({"body": null, "tolerance": "fine"}),

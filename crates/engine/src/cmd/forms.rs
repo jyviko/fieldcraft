@@ -1704,6 +1704,12 @@ pub const DECK: &[Field] = &[
     references("steps", "Steps", C::Step).help("The steps to write; all when empty.").hint("all"),
 ];
 
+pub const EXPORT_STL: &[Field] = &[
+    path("path", "File", true).help("Where to write the STL file.").req(),
+    reference("set", "Set", C::Set).help("Write only this set's element faces; the whole outer surface when empty.").hint("the outer surface"),
+    choice("format", "Format", &[("binary", "Binary"), ("ascii", "ASCII")]).help("Binary is compact; ASCII is readable text.").def("\"binary\""),
+];
+
 // ---- Solving ----
 
 const STEP: Field = reference("step", "Step", C::Step).help("The step to solve; the only one when empty.").hint("the only one");

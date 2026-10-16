@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-73 ready, 39 coming soon.
+74 ready, 39 coming soon.
 
 ## Geometry
 
@@ -57,6 +57,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Edit | Orphan Mesh — Import a mesh without geometry | coming soon (M6) |  |
 | Verify | Quality — Quality metrics and the certified validity check, failing elements listed | ready | `mesh.quality` |
 | Verify | Verify Set — Quality and validity per set | coming soon (M2) |  |
+| Verify | Export STL — Write the mesh's outer surface (or a set's faces) as binary STL | ready | `mesh.export.stl` |
 | Verify | Tag Geometry — Tag elements, faces, edges and nodes with the geometry they mesh | ready | `mesh.tag`, `mesh.tag.clear` |
 
 ## Properties

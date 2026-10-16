@@ -631,12 +631,12 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
                 Ok(s) => s,
                 Err(e) => return err(e),
             };
-            let png = match app.render_png(w, h, f64::from(scale)) {
-                Ok(png) => png,
+            let (png, renderer) = match app.render_png(w, h, f64::from(scale)) {
+                Ok(drawn) => drawn,
                 Err(e) => return err(e),
             };
             match std::fs::write(path, &png) {
-                Ok(()) => ok(json!({"path": path, "width": w, "height": h, "scale": scale, "bytes": png.len()})),
+                Ok(()) => ok(json!({"path": path, "width": w, "height": h, "scale": scale, "bytes": png.len(), "renderer": renderer.report()})),
                 Err(e) => err(format!("{path}: {e}")),
             }
         }
@@ -996,6 +996,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("fieldcraft-render-{}.png", std::process::id()));
         let r = call(&mut app, "ui.render", json!({"path": path.to_string_lossy(), "width": 120, "height": 80}));
         assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["result"]["renderer"]["kind"], "cpu", "{r}");
         let bytes = std::fs::read(&path).unwrap();
         assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
         let _ = std::fs::remove_file(&path);

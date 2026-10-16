@@ -377,6 +377,11 @@ pub struct ModelApp {
     pub toolbar_rects: Vec<(&'static str, egui::Rect, toolbar::Fit)>,
     /// The GPU adapter, for the status bar and diagnostics.
     pub gpu_info: Option<String>,
+    /// Draws `ui.render`'s pictures on the window's device with the viewport's pipelines; the
+    /// CPU rasterizer draws them without it (no GPU, the browser, or a failed set-up, kept in
+    /// [`App::render_png`]'s report).
+    #[cfg(not(target_arch = "wasm32"))]
+    capturer: Result<Option<fieldcraft_gpu::capture::Capturer>, String>,
     /// Bumped whenever the model may have changed.
     revision: u64,
     display: (Option<u64>, DisplayMesh),
@@ -515,6 +520,8 @@ impl ModelApp {
             icons: icons::IconCache::default(),
             toolbar_rects: Vec::new(),
             gpu_info: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            capturer: Ok(None),
             revision: 0,
             display: (None, DisplayMesh::default()),
             glyphs: Glyphs::default(),
@@ -601,6 +608,15 @@ impl ModelApp {
         self.viewport.gpu = Some(gpu::install(rs, depth_bits, samples, self.viewport.gpu_errors.clone(), ctx.clone()));
         let info = rs.adapter.get_info();
         self.gpu_info = Some(format!("{} ({:?})", info.name.trim(), info.backend));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let tier = fieldcraft_gpu::select::rank(info.device_type).0;
+            self.capturer =
+                fieldcraft_gpu::capture::Capturer::on_device(&rs.adapter, rs.device.clone(), rs.queue.clone(), tier).map(Some).map_err(|e| {
+                    log::warn!("ui.render draws on the CPU: {e}");
+                    e.to_string()
+                });
+        }
     }
 
     /// Run a command with JSON parameters: what every panel, the control channel and scripts
@@ -1360,22 +1376,47 @@ impl ModelApp {
         bounds
     }
 
-    /// A CPU render of the viewport's scene with the current camera and the selection, as PNG
+    /// A render of the viewport's scene with the current camera and the selection, as PNG
     /// bytes, `w` × `h` pixels at `pixels_per_point`: symbols, lines and nodes are as large as
-    /// in a window of that scale (#285).
-    pub fn render_png(&mut self, w: usize, h: usize, pixels_per_point: f64) -> Result<Vec<u8>, fieldcraft_render::RenderError> {
+    /// in a window of that scale (#285). Drawn with the viewport's pipelines on the window's
+    /// device when there is one, else (or when the GPU fails) by the CPU rasterizer, with why;
+    /// the second value says which.
+    pub fn render_png(&mut self, w: usize, h: usize, pixels_per_point: f64) -> Result<(Vec<u8>, fieldcraft_gpu::Renderer), String> {
         let cam = self.cam;
         let (_, overlay) = self.overlay();
         self.symbols_for(h as f64, pixels_per_point);
         self.scene();
-        if pixels_per_point == 1.0 {
-            return fieldcraft_render::render_layers_png(&self.scene.1, &[&self.symbols.1, &overlay], &cam, w, h);
-        }
-        let (mut scene, mut symbols, mut overlay) = (self.scene.1.clone(), self.symbols.1.clone(), (*overlay).clone());
-        for s in [&mut scene, &mut symbols, &mut overlay] {
-            s.scale_marks(pixels_per_point);
-        }
-        fieldcraft_render::render_layers_png(&scene, &[&symbols, &overlay], &cam, w, h)
+        let scaled;
+        let (scene, symbols, overlay) = if pixels_per_point == 1.0 {
+            (&self.scene.1, &self.symbols.1, &*overlay)
+        } else {
+            let (mut scene, mut symbols, mut overlay) = (self.scene.1.clone(), self.symbols.1.clone(), (*overlay).clone());
+            for s in [&mut scene, &mut symbols, &mut overlay] {
+                s.scale_marks(pixels_per_point);
+            }
+            scaled = (scene, symbols, overlay);
+            (&scaled.0, &scaled.1, &scaled.2)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let why = match &self.capturer {
+            Ok(Some(c)) => {
+                let (pw, ph) = (u32::try_from(w).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX));
+                match c.rgba(scene, &[symbols, overlay], &cam, pw, ph) {
+                    Ok(px) => {
+                        let png = fieldcraft_render::png(w, h, &px).ok_or("the picture could not be encoded")?;
+                        return Ok((png, fieldcraft_gpu::Renderer::Gpu { adapter: c.adapter.clone(), tier: c.tier, samples: c.samples() }));
+                    }
+                    Err(e @ fieldcraft_gpu::GpuError::Size(_)) => return Err(e.to_string()),
+                    Err(e) => Some(e.to_string()),
+                }
+            }
+            Ok(None) => None,
+            Err(e) => Some(e.clone()),
+        };
+        #[cfg(target_arch = "wasm32")]
+        let why = None;
+        let png = fieldcraft_render::render_layers_png(scene, &[symbols, overlay], &cam, w, h).map_err(|e| e.to_string())?;
+        Ok((png, fieldcraft_gpu::Renderer::Cpu { why }))
     }
 
     /// The geometry tags behind the drawn mesh, read again when the model changed.
@@ -2670,8 +2711,38 @@ mod tests {
         // Framed when the viewport first draws.
         draw(&mut app, &egui::Context::default(), 1280.0, 800.0);
         assert!(app.framed(), "{:?}", app.cam);
-        let png = app.render_png(64, 48, 1.0).unwrap();
+        let png = app.render_png(64, 48, 1.0).unwrap().0;
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
+    }
+
+    /// `ui.render` draws with the viewport's pipelines on the window's device when there is one
+    /// (here a device the `FIELDCRAFT_GPU` policy opens, as the app's), says so, and draws on
+    /// the CPU with the reason when the GPU could not be set up.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn renders_on_the_windows_gpu() {
+        use fieldcraft_gpu::{Renderer, capture::Capturer, select};
+        let mut app = ModelApp::new(Session::default());
+        app.run_script(&fieldcraft_engine::sample::script()).unwrap();
+        draw(&mut app, &egui::Context::default(), 1280.0, 800.0);
+        let size = |png: &[u8]| (u32::from_be_bytes(png[16..20].try_into().unwrap()), u32::from_be_bytes(png[20..24].try_into().unwrap()));
+        match Capturer::open(select::Policy::from_env().unwrap()) {
+            Ok(Some(c)) => {
+                app.capturer = Ok(Some(c));
+                let (png, drawn) = app.render_png(160, 100, 2.0).unwrap();
+                assert!(matches!(drawn, Renderer::Gpu { .. }), "{drawn:?}");
+                assert_eq!(size(&png), (160, 100));
+                let (gpu, _) = app.render_png(160, 100, 1.0).unwrap();
+                assert_ne!(png, gpu, "the scale changes the marks");
+                assert!(app.render_png(0, 100, 1.0).is_err());
+            }
+            Ok(None) | Err(_) if select::gpu_required() => panic!("FIELDCRAFT_REQUIRE_GPU=1 but no GPU"),
+            Ok(None) | Err(_) => eprintln!("no GPU adapter: the GPU half skipped"),
+        }
+        app.capturer = Err("no device".into());
+        let (png, drawn) = app.render_png(160, 100, 1.0).unwrap();
+        assert_eq!(drawn, Renderer::Cpu { why: Some("no device".into()) });
+        assert_eq!(size(&png), (160, 100));
     }
 
     #[test]

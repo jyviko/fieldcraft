@@ -557,9 +557,16 @@ pub(crate) fn project_only(b: &Body, name: &str, t: &Topology, opts: &ProjectOpt
 
 /// Replace body `name`'s mesh (opened as `b`) with `nodes` and `hexes` made for it elsewhere
 /// (a part of another body's mesh): its outer faces (those no other of the hexes shares) tagged
-/// with the B-rep face of `b` nearest their middle. Nodes within `merge` of other meshes' join
-/// them.
-pub(crate) fn add_hexes(s: &mut Session, b: &Body, name: &str, nodes: &[[f64; 3]], hexes: &[[u32; 8]], merge: f64) -> Result<Value> {
+/// with the face `tags` names for them (element, face number) when `b` has it, else with the
+/// B-rep face of `b` nearest their middle. Nodes within `merge` of other meshes' join them.
+pub(crate) fn add_hexes(
+    s: &mut Session,
+    b: &Body,
+    nodes: &[[f64; 3]],
+    hexes: &[[u32; 8]],
+    tags: &BTreeMap<(u32, u8), String>,
+    merge: f64,
+) -> Result<Value> {
     use fieldcraft_mesh::project::Geometry;
     let faces = ElementKind::Hex8.faces();
     let mut count: BTreeMap<[u32; 4], usize> = BTreeMap::new();
@@ -585,6 +592,10 @@ pub(crate) fn add_hexes(s: &mut Session, b: &Body, name: &str, nodes: &[[f64; 3]
                 let p = nodes.get(v as usize).copied().unwrap_or_default();
                 [a[0] + 0.25 * p[0], a[1] + 0.25 * p[1], a[2] + 0.25 * p[2]]
             });
+            if let Some(f) = tags.get(&(e as u32, fi as u8 + 1)).and_then(|n| b.input.face_names.iter().position(|x| x == n)) {
+                boundary.push(BoundaryFace { element: e as u32, face: fi as u8 + 1, brep_face: f as u32 });
+                continue;
+            }
             let nearest = (0..face_count)
                 .filter_map(|f| b.target.project(f, mid).map(|p| ((0..3).map(|i| (p[i] - mid[i]).powi(2)).sum::<f64>(), f)))
                 .min_by(|x, y| x.0.total_cmp(&y.0));
@@ -593,7 +604,6 @@ pub(crate) fn add_hexes(s: &mut Session, b: &Body, name: &str, nodes: &[[f64; 3]
             }
         }
     }
-    let _ = name;
     let (reply, _, _) = add_mesh(s, &b.input, nodes, hexes, &boundary, merge)?;
     Ok(reply)
 }

@@ -1402,15 +1402,20 @@ struct CornerCopy {
     summary: Value,
 }
 
+/// Where across the sheet past a corner the candidate cuts lie. Holding the cut's sheet planar
+/// costs the corner some freedom to smooth, and how much depends on where it runs, so each
+/// candidate is meshed and the best kept.
+const CORNER_FRACTIONS: [f64; 4] = [0.5, 0.625, 0.75, 0.875];
+
 /// A block's corners in parameter space (hex8 order).
 const BLOCK_CORNERS: [[usize; 3]; 8] = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
 
 /// The corner planes of layout `t` along axis `a`, over a body from `lo` to `hi` along it: the
 /// planes of the layout's vertices from the low end inward whose mirror images across the
-/// middle `c` are planes too, up to the first that is not; the cut `x1` midway between the last
-/// of them and that one, and its image `x2`. `None` when there is none (or only the end), or the
+/// middle `c` are planes too, up to the first that is not; the candidate cuts between the last
+/// of them and that one ([`CORNER_FRACTIONS`] of the way), and `c`. `None` when there is none (or only the end), or the
 /// planes mirror past the middle (the body's own symmetry meshes it then).
-fn corner_planes(t: &Topology, a: V3, lo: f64, hi: f64, eps: f64) -> Option<(f64, f64, f64)> {
+fn corner_planes(t: &Topology, a: V3, lo: f64, hi: f64, eps: f64) -> Option<(Vec<f64>, f64)> {
     let c = 0.5 * (lo + hi);
     let mut xs: Vec<f64> = t.vertices.iter().map(|v| dot(*v, a)).collect();
     xs.sort_by(f64::total_cmp);
@@ -1424,13 +1429,17 @@ fn corner_planes(t: &Topology, a: V3, lo: f64, hi: f64, eps: f64) -> Option<(f64
     if q >= c - eps {
         return None;
     }
-    let x1 = 0.5 * (p + q);
-    let x2 = 2.0 * c - x1;
-    // The high end holds as many planes beyond the image as the low end before the cut, and the
-    // image cuts none.
-    let low = xs.iter().filter(|&&x| x < x1).count();
-    let high = xs.iter().filter(|&&x| x > x2).count();
-    (low == high && !has(x2)).then_some((x1, x2, c))
+    // Cuts across the sheet from midway to near its far plane; the image must cut no plane, and
+    // the high end hold as many planes beyond it as the low end before the cut.
+    let cuts: Vec<f64> = CORNER_FRACTIONS
+        .iter()
+        .map(|f| p + f * (q - p))
+        .filter(|&x1| {
+            let x2 = 2.0 * c - x1;
+            xs.iter().filter(|&&x| x < x1).count() == xs.iter().filter(|&&x| x > x2).count() && !has(x2)
+        })
+        .collect();
+    (!cuts.is_empty()).then_some((cuts, c))
 }
 
 /// The blocks of `t` that `keep` takes, over their own vertices.
@@ -1507,17 +1516,30 @@ fn copy_corner(
         if sym.iter().any(|c| parallel(c.normal, a)) {
             continue;
         }
-        let Some((x1, x2, c)) = corner_planes(&layout.topology, a, dot(lo, a), dot(hi, a), eps) else { continue };
+        let Some((cuts, c)) = corner_planes(&layout.topology, a, dot(lo, a), dot(hi, a), eps) else { continue };
         let clear = |x: f64| cell_plan.rings.iter().all(|r| (dot(r.center, a) - x).abs() >= 1.01 * r.radius);
-        if clear(x1) && clear(x2) && mirror.symmetric(a, c, |p| dot(p, a) < x1 || dot(p, a) > x2) {
-            found = Some((a, [x1, x2], c));
+        let cuts: Vec<f64> = cuts.into_iter().filter(|&x| clear(x) && clear(2.0 * c - x)).collect();
+        // The surface beyond the deepest cut mirrors, so beyond every cut it does.
+        let Some(deepest) = cuts.iter().copied().reduce(f64::max) else { continue };
+        if mirror.symmetric(a, c, |p| dot(p, a) < deepest || dot(p, a) > 2.0 * c - deepest) {
+            found = Some((a, cuts, c));
             break;
         }
     }
     let Some((a, at, c)) = found else { return Ok(Err(None)) };
     let before = s.snapshot();
-    match corner_meshes(s, name, plan, sym, cell, &layout.topology, a, at, c, tolerance) {
-        Ok(copy) => Ok(Ok(copy)),
+    match corner_meshes(s, name, plan, sym, cell, &layout.topology, a, &at, c, tolerance) {
+        Ok(mut copy) => {
+            // The layout is the cell's, split at the cuts.
+            if let Some(o) = copy.reply.as_object_mut() {
+                o.insert("layout".into(), json!(layout.summary()));
+                o.insert(
+                    "blend_layers".into(),
+                    json!(layout.layers.iter().map(|(side, depth, what)| json!({"side": side, "depth": depth, "for": what})).collect::<Vec<_>>()),
+                );
+            }
+            Ok(Ok(copy))
+        }
         // A corner copy that does not mesh leaves the cell to be meshed whole.
         Err(e) => {
             s.restore(before);
@@ -1534,63 +1556,45 @@ fn corner_meshes(
     plan: &MeshPlan,
     sym: &[PlanCut],
     cell: &str,
-    t: &Topology,
+    t0: &Topology,
     a: V3,
-    at: [f64; 2],
+    candidates: &[f64],
     c: f64,
     tolerance: f64,
 ) -> Result<CornerCopy> {
-    let [x1, x2] = at;
-    // The whole cell meshed first, its layout split at both cuts: the low corner is taken from
-    // this mesh, so it is as good as the whole cell's.
-    let mut t = t.clone();
-    split_at(&mut t, a, x1)?;
-    split_at(&mut t, a, x2)?;
     let opts = fieldcraft_mesh::project::ProjectOptions { size: plan.size, ..Default::default() };
     let whole_body = super::project::open_body(s, cell, Some(tolerance), &json!({}))?;
     let merge = super::project::merge_distance(None, whole_body.diagonal())?;
-    // The sheets at the cuts held planar, so the corner's cut face is the plane.
-    let sheets = ProjectOptions { planes: at.iter().map(|&x| (a.map(|k| k * x), a)).collect(), ..opts.clone() };
-    let whole = super::project::project_only(&whole_body, cell, &t, &sheets)?;
-    let whole_min = whole.report.min_scaled_jacobian;
-    let along = |p: &[f64; 3]| dot(*p, a);
-    let hex_centre = |h: &[u32; 8]| h.iter().map(|&v| whole.nodes.get(v as usize).map_or(0.0, along)).sum::<f64>() / 8.0;
-    // The low corner's hexes, over their own nodes; the nodes on the cut sheet put on the plane.
-    let mut index: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
-    let mut corner_nodes: Vec<[f64; 3]> = Vec::new();
-    let mut corner_hexes: Vec<[u32; 8]> = Vec::new();
-    let mut beyond: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-    for h in &whole.hexes {
-        if hex_centre(h) >= x1 {
-            beyond.extend(h.iter().copied());
+    // What the cell meshed whole gets (no corner may be worse), and per candidate cut the whole
+    // cell meshed with its layout split there and the sheets at the cut and its image held
+    // planar, the corner taken from that mesh: independent meshes, made side by side. The best
+    // corner wins.
+    let whole = &whole_body;
+    let runs = fieldcraft_parallel::map(candidates.len() + 1, |k| match k.checked_sub(1).and_then(|i| candidates.get(i)) {
+        None => super::project::project_only(whole, cell, t0, &opts).map(|m| (m.report.min_scaled_jacobian, None)),
+        Some(&x1) => corner_of_whole(whole, cell, t0, a, [x1, 2.0 * c - x1], &opts).map(|r| (r.sj, Some(([x1, 2.0 * c - x1], r)))),
+    });
+    let mut reference: Option<f64> = None;
+    let mut best: Option<(f64, [f64; 2], CornerOfWhole)> = None;
+    for run in runs {
+        match run {
+            Ok((sj, None)) => reference = Some(sj),
+            Ok((sj, Some((at, corner)))) => {
+                if best.as_ref().is_none_or(|b| sj > b.0) {
+                    best = Some((sj, at, corner));
+                }
+            }
+            Err(_) => {}
         }
     }
-    for h in whole.hexes.iter().filter(|h| hex_centre(h) < x1) {
-        corner_hexes.push(h.map(|v| {
-            *index.entry(v).or_insert_with(|| {
-                let mut p = whole.nodes.get(v as usize).copied().unwrap_or_default();
-                if beyond.contains(&v) {
-                    let off = x1 - along(&p);
-                    p = std::array::from_fn(|k| p[k] + off * a[k]);
-                }
-                corner_nodes.push(p);
-                corner_nodes.len() as u32 - 1
-            })
-        }));
-    }
-    let corner_sj = corner_hexes
-        .iter()
-        .map(|h| {
-            let x = h.map(|v| corner_nodes.get(v as usize).copied().unwrap_or_default());
-            fieldcraft_mesh::quality::element_quality(fieldcraft_model::ElementKind::Hex8, &x)
-                .ok()
-                .and_then(|q| q.get(fieldcraft_mesh::quality::Metric::ScaledJacobian))
-                .unwrap_or(-1.0)
-        })
-        .fold(f64::INFINITY, f64::min);
-    if corner_hexes.is_empty() || corner_sj < whole_min - 1e-9 {
+    let reference = reference.ok_or_else(|| EngineError::Params("the cell does not mesh whole".into()))?;
+    let Some((corner_sj, at, corner)) = best else {
+        return Err(EngineError::Params("no corner cut meshes".into()));
+    };
+    let [x1, x2] = at;
+    if corner_sj < reference - 1e-9 {
         return Err(EngineError::Params(format!(
-            "the corner taken from the whole cell's mesh has a smallest scaled Jacobian of {corner_sj}, below the whole cell's {whole_min}"
+            "the best corner has a smallest scaled Jacobian of {corner_sj:.3}, below the {reference:.3} of the cell meshed whole"
         )));
     }
     let mut cuts: Vec<PlanCut> = sym.to_vec();
@@ -1627,10 +1631,10 @@ fn corner_meshes(
         }
     };
     let (low, middle, high) = (pick(&|x| x < x1)?, pick(&|x| x > x1 && x < x2)?, pick(&|x| x > x2)?);
-    let centre = |b: &[u32; 8]| b.iter().map(|&v| t.vertices.get(v as usize).map_or(0.0, |p| dot(*p, a))).sum::<f64>() / 8.0;
-    let middle_blocks = sub_topology(&t, |b| (x1..x2).contains(&centre(b)));
+    let centre = |b: &[u32; 8]| b.iter().map(|&v| corner.t.vertices.get(v as usize).map_or(0.0, |p| dot(*p, a))).sum::<f64>() / 8.0;
+    let middle_blocks = sub_topology(&corner.t, |b| (x1..x2).contains(&centre(b)));
     let body = super::project::open_body(s, &low, Some(tolerance), &json!({}))?;
-    super::project::add_hexes(s, &body, &low, &corner_nodes, &corner_hexes, merge)?;
+    super::project::add_hexes(s, &body, &corner.nodes, &corner.hexes, &corner.tags, merge)?;
     (super::mirror::MIRROR.run)(s, &json!({"plane": {"point": a.map(|k| k * c), "normal": a}, "bodies": [low]}))?;
     let body = super::project::open_body(s, &middle, Some(tolerance), &json!({}))?;
     let (fixed, fixed_faces) = cut_face_patches(s, &body, &middle, plan.size)?;
@@ -1640,9 +1644,9 @@ fn corner_meshes(
     let opts = fieldcraft_mesh::project::ProjectOptions { fixed, ..opts };
     let mut mesh = super::project::project_body(s, &middle, body, &middle_blocks, &opts, merge)?;
     let middle_sj = mesh["min_scaled_jacobian"].as_f64().unwrap_or(-1.0);
-    if middle_sj < whole_min - 1e-3 {
+    if middle_sj < reference - 1e-3 {
         return Err(EngineError::Params(format!(
-            "the middle meshed round the corners has a smallest scaled Jacobian of {middle_sj}, below the whole cell's {whole_min}"
+            "the middle meshed round the corners has a smallest scaled Jacobian of {middle_sj:.3}, below the {reference:.3} of the cell meshed whole"
         )));
     }
     let corner_sj = Some(corner_sj);
@@ -1653,7 +1657,7 @@ fn corner_meshes(
         "image": high,
         "middle": middle,
         "fixed": fixed_faces,
-        "min_scaled_jacobian": {"whole_cell": whole_min, "corner": corner_sj, "middle": mesh["min_scaled_jacobian"]},
+        "min_scaled_jacobian": {"whole_cell": reference, "corner": corner_sj, "middle": mesh["min_scaled_jacobian"]},
     });
     let min = [corner_sj, mesh["min_scaled_jacobian"].as_f64()].into_iter().flatten().reduce(f64::min);
     if let Some(o) = mesh.as_object_mut() {
@@ -1661,6 +1665,69 @@ fn corner_meshes(
     }
     let reply = json!({"min_scaled_jacobian": min, "mesh": mesh});
     Ok(CornerCopy { reply, cells: vec![low, middle, high], summary })
+}
+
+/// The low corner (below `at[0]`) of the cell meshed whole with layout `t0` split at both cuts
+/// `at`, the sheets there held planar: its smallest scaled Jacobian, the split layout, and its
+/// hexes over their own nodes (those on the cut sheet put exactly on the plane).
+#[allow(clippy::type_complexity)]
+fn corner_of_whole(body: &super::project::Body, cell: &str, t0: &Topology, a: V3, at: [f64; 2], opts: &ProjectOptions) -> Result<CornerOfWhole> {
+    let x1 = at[0];
+    let mut t = t0.clone();
+    for x in at {
+        split_at(&mut t, a, x)?;
+    }
+    let sheets = ProjectOptions { planes: at.iter().map(|&x| (a.map(|k| k * x), a)).collect(), ..opts.clone() };
+    let whole = super::project::project_only(body, cell, &t, &sheets)?;
+    let along = |p: &[f64; 3]| dot(*p, a);
+    let hex_centre = |h: &[u32; 8]| h.iter().map(|&v| whole.nodes.get(v as usize).map_or(0.0, along)).sum::<f64>() / 8.0;
+    let beyond: std::collections::BTreeSet<u32> = whole.hexes.iter().filter(|h| hex_centre(h) >= x1).flat_map(|h| h.iter().copied()).collect();
+    let mut index: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    let mut nodes: Vec<[f64; 3]> = Vec::new();
+    let mut hexes: Vec<[u32; 8]> = Vec::new();
+    let mut element_of: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    for (e, h) in whole.hexes.iter().enumerate().filter(|(_, h)| hex_centre(h) < x1) {
+        element_of.insert(e as u32, hexes.len() as u32);
+        hexes.push(h.map(|v| {
+            *index.entry(v).or_insert_with(|| {
+                let mut p = whole.nodes.get(v as usize).copied().unwrap_or_default();
+                if beyond.contains(&v) {
+                    let off = x1 - along(&p);
+                    p = std::array::from_fn(|k| p[k] + off * a[k]);
+                }
+                nodes.push(p);
+                nodes.len() as u32 - 1
+            })
+        }));
+    }
+    if hexes.is_empty() {
+        return Err(EngineError::Params("the corner holds no elements".into()));
+    }
+    let sj = hexes
+        .iter()
+        .map(|h| {
+            let x = h.map(|v| nodes.get(v as usize).copied().unwrap_or_default());
+            fieldcraft_mesh::quality::element_quality(fieldcraft_model::ElementKind::Hex8, &x)
+                .ok()
+                .and_then(|q| q.get(fieldcraft_mesh::quality::Metric::ScaledJacobian))
+                .unwrap_or(-1.0)
+        })
+        .fold(f64::INFINITY, f64::min);
+    let names = body.face_names();
+    let tags =
+        whole.boundary.iter().filter_map(|f| Some(((*element_of.get(&f.element)?, f.face), names.get(f.brep_face as usize)?.clone()))).collect();
+    Ok(CornerOfWhole { sj, t, nodes, hexes, tags })
+}
+
+/// The low corner [`corner_of_whole`] takes from the whole cell's mesh.
+struct CornerOfWhole {
+    sj: f64,
+    /// The layout split at the cuts.
+    t: Topology,
+    nodes: Vec<[f64; 3]>,
+    hexes: Vec<[u32; 8]>,
+    /// The B-rep face (by name) the whole cell's mesh tagged each outer element face with.
+    tags: std::collections::BTreeMap<(u32, u8), String>,
 }
 
 /// The fixed patches of body `name` (opened as `b`): each of its cut faces another cell's mesh

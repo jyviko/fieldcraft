@@ -1086,6 +1086,11 @@ impl ModelApp {
                 Some(p) => results::scene(p, style, show, &t),
                 None => scene::build(&self.display.1, style, show, &t),
             };
+            // The elements Mark Bad Elements marked, in the error colour over the element faces.
+            if self.plot.1.is_none() && show.mesh && style != scene::Style::Wireframe {
+                let marked = fieldcraft_engine::view::marked(&self.session);
+                fieldcraft_engine::view::mark(&mut s, &self.display.1, &marked, theme::rgb(t.error));
+            }
             let mut datums = Aabb3::EMPTY;
             if show.geometry && self.plot.1.is_none() {
                 datums = scene::datums(&mut s, &self.session, &self.display.1.bounds, self.selected_datum().as_deref(), &t);
@@ -2430,6 +2435,23 @@ mod tests {
         let status = app.status.clone().unwrap();
         assert!(status.text.starts_with("Mesh Quality: 226 elements, all valid; scaled Jacobian min "), "{}", status.text);
         assert!(!status.error && !status.text.contains('{'));
+    }
+
+    /// Mark Bad Elements draws the marked elements' faces in the error colour, and only while
+    /// they are marked.
+    #[test]
+    fn marked_elements_draw_in_the_error_colour() {
+        let mut app = ModelApp::new(Session::default());
+        app.run_script(&fieldcraft_engine::sample::script()).unwrap();
+        let error = theme::rgb(theme::Tokens::get(app.ui.dark).error);
+        let red = |app: &mut ModelApp| app.scene().1.tris.iter().filter(|t| t.color == error).count();
+        assert_eq!(red(&mut app), 0);
+        let some = app.session.model.elements().keys().take(3).copied().collect::<Vec<_>>();
+        app.run("mesh.quality.mark", json!({"elements": some, "limits": {"scaled_jacobian": 1.5}})).unwrap();
+        let marked = red(&mut app);
+        assert!(marked > 0 && marked < app.scene().1.tris.len(), "{marked}");
+        app.run("mesh.quality.mark", json!({})).unwrap();
+        assert_eq!(red(&mut app), 0);
     }
 
     #[test]

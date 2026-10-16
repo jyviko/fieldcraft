@@ -560,7 +560,9 @@ pub(crate) fn fixed_patch(s: &Session, b: &Body, body: &str, names: &[String], s
             for l in quad {
                 let hit = *on.entry(l).or_insert_with(|| {
                     let x = s.model.node(l)?.xyz;
-                    faces.iter().position(|&f| b.target.project(f, x).is_some_and(|q| (0..3).map(|k| (q[k] - x[k]).powi(2)).sum::<f64>().sqrt() <= tol))
+                    faces
+                        .iter()
+                        .position(|&f| b.target.project(f, x).is_some_and(|q| (0..3).map(|k| (q[k] - x[k]).powi(2)).sum::<f64>().sqrt() <= tol))
                 });
                 lies &= hit.is_some();
             }
@@ -579,7 +581,9 @@ pub(crate) fn fixed_patch(s: &Session, b: &Body, body: &str, names: &[String], s
         }
     }
     if patch.quads.is_empty() {
-        return Err(EngineError::Params(format!("`fixed`: no other body's mesh has element faces on faces {names:?} of `{body}`; mesh the neighbour first")));
+        return Err(EngineError::Params(format!(
+            "`fixed`: no other body's mesh has element faces on faces {names:?} of `{body}`; mesh the neighbour first"
+        )));
     }
     Ok(patch)
 }

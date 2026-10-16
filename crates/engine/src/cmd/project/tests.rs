@@ -275,7 +275,9 @@ fn a_fixed_face_takes_the_neighbours_mesh_as_given() {
             .into_iter()
             .flat_map(|e| c.elements().get(&e).map(|t| t.faces.keys().map(|&f| (e, f)).collect::<Vec<_>>()).unwrap_or_default())
             .filter(|&(element, face)| {
-                s.model.face_nodes(fieldcraft_model::ElementFace { element, face }).is_some_and(|ns| ns.iter().all(|n| (s.model.node(*n).unwrap().xyz[2] - z).abs() < 1e-9))
+                s.model
+                    .face_nodes(fieldcraft_model::ElementFace { element, face })
+                    .is_some_and(|ns| ns.iter().all(|n| (s.model.node(*n).unwrap().xyz[2] - z).abs() < 1e-9))
             })
             .count()
     };

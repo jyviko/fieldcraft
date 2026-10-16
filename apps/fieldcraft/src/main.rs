@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod control_server;
+mod terminate;
 mod update;
 mod usage;
 
@@ -266,6 +267,14 @@ fn main() -> eframe::Result {
                 let info = rs.adapter.get_info();
                 log::info!("graphics {:?} {} ({}), MSAA {}x (requested {MSAA}x)", info.backend, info.name, info.driver, rs.msaa_samples);
                 app.set_wgpu(rs, DEPTH_BITS, rs.msaa_samples, &cc.egui_ctx);
+            }
+            // `kill`, Ctrl-C or a logout closes the window as Close does: autosaved, no crash (#248).
+            let ctx = cc.egui_ctx.clone();
+            if let Err(e) = terminate::watch(move || {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                ctx.request_repaint();
+            }) {
+                log::warn!("termination signals: {e}");
             }
             if let Some(port) = args.control {
                 app = app.with_control(control_server::start(port, cc.egui_ctx.clone()));

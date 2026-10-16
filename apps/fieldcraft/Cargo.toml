@@ -25,6 +25,10 @@ ureq = { version = "3.4", default-features = false, features = ["rustls-no-provi
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 getrandom = "0.3"
 
+# A termination signal (SIGTERM, SIGINT, SIGHUP) closes the window the normal way (terminate.rs).
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
 [build-dependencies]
 # The Windows executable's icon resource (build.rs).
 embed-resource = "3.0.12"

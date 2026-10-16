@@ -50,8 +50,8 @@ error stream.
 - `report.json` (`"format": "fieldcraft-crash/1"`): `kind` (`command_panic`: a command hit an
   internal error, caught, the model left unchanged; `recovered_panic`: one caught inside a command;
   `panic`: an internal error outside commands; `unclean_exit`: the app ended without a clean exit
-  — an abort, a stack overflow, a crash in a graphics driver, the process being killed — found at
-  the next start), `message`, `location`, `thread`, `backtrace`, `app`, `system`, `command`,
+  — an abort, a stack overflow, a crash in a graphics driver, the process being killed outright
+  (SIGKILL) — found at the next start), `message`, `location`, `thread`, `backtrace`, `app`, `system`, `command`,
   `recent_commands` (up to 32), `last_activity` (the last control request, such as
   `control ui.capture`), `base`, `count`, `first_seen`, `last_seen`, `notes`
 - `model.fieldcraft`: the model the replay starts from
@@ -77,6 +77,10 @@ diagnostics.bug_report` opens the form, `ui.prompt {"answer": "set", …}` sets 
 
 **Check that reporting works:** with `FIELDCRAFT_CRASH_TEST=1`, `diagnostics.crash_test {mode}`
 crashes on purpose: `panic`, `recovered` or `abort` (reported at the next start).
+
+A request to terminate is no crash: on Linux and macOS, SIGTERM (`kill PID`), SIGINT (Ctrl-C)
+and SIGHUP close the window as **Close** does (unsaved work is autosaved for recovery, the
+journal ends, no report). A second signal ends the app at once.
 
 ### How it stays cheap and small
 

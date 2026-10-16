@@ -295,6 +295,9 @@ pub struct Session {
     /// sets it on its own model (and the control channel and the command search while they
     /// run); `None` (scratch sessions, the CLI, tests) counts nothing.
     pub origin: Option<usage::Origin>,
+    /// What the last `geometry.check` found, drawn as markers while the design it checked is
+    /// open ([`view::geometry_marks`]). Not an edit: neither journalled, saved nor undone.
+    pub geometry_marks: Option<Arc<view::GeometryMarks>>,
 }
 
 impl Session {

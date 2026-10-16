@@ -1718,6 +1718,7 @@ pub const GEOMETRY_CHECK: &[Field] = &[
     range("sliver", "Sliver width", D::None, 0.0, 10.0).help("Faces narrower than this fraction of the size are reported.").def("0.3"),
     range("gap", "Gap", D::None, 0.0, 10.0).help("Parallel faces closer than this fraction of the size, but not touching, are reported.").def("0.3"),
     range("parallel_angle", "Parallel within", D::Degree, 0.0, 60.0).help("Faces this close to parallel count for the gap.").def("10"),
+    flag("mark", "Mark findings").help("Mark what is found in the viewport until the design changes.").def("true"),
 ];
 pub const TESSELLATE: &[Field] = &[reference("body", "Body", C::Body).help("The body to tessellate.").req(), TOLERANCE];
 pub const IMPORT_MESH: &[Field] = &[path("path", "3MF file", false).help("A 3MF surface mesh with named faces.").req()];

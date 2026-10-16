@@ -110,6 +110,65 @@ fn display_tolerance(b: &Aabb3) -> f64 {
     if d.is_finite() { (d * 1e-3).clamp(1e-3, 1.0) } else { 0.1 }
 }
 
+/// The findings of a `geometry.check`, to draw over the design it checked.
+#[derive(Clone, Debug, Default)]
+pub struct GeometryMarks {
+    /// The design checked: the marks are stale once another is open.
+    pub design: std::sync::Weak<fieldcraft_geometry::Design>,
+    pub marks: Vec<GeometryMark>,
+}
+
+/// One finding to draw: its faces, its edge and the point to look at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeometryMark {
+    /// The faces by body name and face index.
+    pub faces: Vec<(String, u32)>,
+    /// A short edge's polyline (empty for the other kinds).
+    pub path: Vec<[f64; 3]>,
+    pub at: [f64; 3],
+}
+
+/// The findings of the last `geometry.check`, while the design it checked is still open.
+pub fn geometry_marks(s: &Session) -> Option<&GeometryMarks> {
+    let marks = s.geometry_marks.as_deref()?;
+    let design = s.design.as_ref()?;
+    std::sync::Weak::ptr_eq(&marks.design, &std::sync::Arc::downgrade(design)).then_some(marks)
+}
+
+/// Marker line width, and the marker dot's diameter, in output pixels.
+const MARK_WIDTH: f64 = 4.0;
+const MARK_DOT: f64 = 12.0;
+
+/// Draw `marks` over `scene` in `color`: the faces they name recoloured when `faces` (the
+/// scene's triangles start with `display`'s surface triangles in order, as they do while no
+/// element faces are drawn; `bodies` names the drawn surfaces in order), short edges as thick
+/// lines and a dot at each finding's point, both over everything so a feature too small to see
+/// at the zoom, or inside the mesh, still shows where it is.
+pub fn draw_geometry_marks(scene: &mut Scene, display: &DisplayMesh, bodies: &[&str], marks: &GeometryMarks, faces: bool, color: Rgb) {
+    if faces {
+        let marked: std::collections::BTreeSet<(u32, u32)> = marks
+            .marks
+            .iter()
+            .flat_map(|m| &m.faces)
+            .filter_map(|(body, f)| bodies.iter().position(|b| b == body).and_then(|b| u32::try_from(b).ok()).map(|b| (b, *f)))
+            .collect();
+        for (t, d) in scene.tris.iter_mut().zip(&display.surface_tris) {
+            if marked.contains(&(d.body, d.face)) {
+                t.color = color;
+            }
+        }
+    }
+    for m in &marks.marks {
+        for w in m.path.windows(2) {
+            if let [a, b] = w {
+                scene.on_top.push(SceneLine { a: Vec3::from(*a), b: Vec3::from(*b), color, width: MARK_WIDTH });
+            }
+        }
+        let at = Vec3::from(m.at);
+        scene.on_top.push(SceneLine { a: at, b: at, color, width: MARK_DOT });
+    }
+}
+
 /// What a picture shows besides the image.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shown {
@@ -273,6 +332,16 @@ fn picture(s: &Session, p: &Palette, section: Option<Section>, toward: Vec3) -> 
     let Some((view, result)) = plot else {
         let mut scene = model_scene(&base, p);
         mark(&mut scene, &base, &marked(s), p.marked);
+        if let Some(marks) = geometry_marks(s) {
+            let bodies: Vec<&str> = s
+                .design
+                .iter()
+                .flat_map(|d| &d.bodies)
+                .filter(|b| s.shows(fieldcraft_io::ItemKind::Body, &b.name))
+                .map(|b| b.name.as_str())
+                .collect();
+            draw_geometry_marks(&mut scene, &base, &bodies, marks, base.tris.is_empty(), p.marked);
+        }
         let bounds = base.bounds;
         let shows = |n: &str| s.shows(fieldcraft_io::ItemKind::Datum, n);
         let datums = fieldcraft_render::glyphs::datums(&s.model, &base.bounds, &shows, None, &p.glyphs, &mut scene);

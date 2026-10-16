@@ -1041,7 +1041,8 @@ impl ModelApp {
     pub fn scene_key(&self) -> u64 {
         let mut h = std::hash::DefaultHasher::new();
         let plot = self.plot.1.as_ref().map(|p| Arc::as_ptr(p) as usize);
-        (self.revision, self.ui.style, self.ui.show(), self.ui.dark, plot, self.selected_datum()).hash(&mut h);
+        let marks = fieldcraft_engine::view::geometry_marks(&self.session).map(|m| m as *const _ as usize);
+        (self.revision, self.ui.style, self.ui.show(), self.ui.dark, plot, self.selected_datum(), marks).hash(&mut h);
         format!("{:?}", self.datum_preview()).hash(&mut h);
         h.finish()
     }
@@ -1090,6 +1091,13 @@ impl ModelApp {
             if self.plot.1.is_none() && show.mesh && style != scene::Style::Wireframe {
                 let marked = fieldcraft_engine::view::marked(&self.session);
                 fieldcraft_engine::view::mark(&mut s, &self.display.1, &marked, theme::rgb(t.error));
+            }
+            // What Check Geometry found, in the error colour: its faces where geometry faces are
+            // drawn, short edges and a dot at each finding over everything.
+            if let Some(marks) = fieldcraft_engine::view::geometry_marks(&self.session).filter(|_| show.geometry && self.plot.1.is_none()) {
+                let faces = style != scene::Style::Wireframe && !(show.mesh && !self.display.1.tris.is_empty());
+                let bodies: Vec<&str> = self.pick.names.iter().map(|n| n.name.as_str()).collect();
+                fieldcraft_engine::view::draw_geometry_marks(&mut s, &self.display.1, &bodies, marks, faces, theme::rgb(t.error));
             }
             let mut datums = Aabb3::EMPTY;
             if show.geometry && self.plot.1.is_none() {
@@ -2452,6 +2460,33 @@ mod tests {
         assert!(marked > 0 && marked < app.scene().1.tris.len(), "{marked}");
         app.run("mesh.quality.mark", json!({})).unwrap();
         assert_eq!(red(&mut app), 0);
+    }
+
+    /// Check Geometry's findings draw in the error colour (faces, and a dot at each over
+    /// everything) until a check with `mark: false`.
+    #[test]
+    fn geometry_check_findings_draw_in_the_error_colour() {
+        let dir = std::env::temp_dir().join(format!("fieldcraft-ui-check-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let design = dir.join("plate.solidcraft");
+        let bytes = fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap();
+        std::fs::write(&design, bytes).unwrap();
+        let mut app = ModelApp::new(Session::default());
+        app.run("geometry.open", json!({"path": design.to_string_lossy()})).unwrap();
+        let error = theme::rgb(theme::Tokens::get(app.ui.dark).error);
+        let red = |app: &mut ModelApp| {
+            let s = app.scene().1;
+            (s.tris.iter().filter(|t| t.color == error).count(), s.on_top.iter().filter(|l| l.color == error && l.a == l.b).count())
+        };
+        assert_eq!(red(&mut app), (0, 0));
+        // Against a 1 m element every face of the plate is small.
+        let r = app.run("geometry.check", json!({"size": 1000})).unwrap();
+        let (faces, dots) = red(&mut app);
+        assert!(faces > 0, "{r}");
+        assert_eq!(dots, r["findings"].as_array().unwrap().len());
+        app.run("geometry.check", json!({"size": 1000, "mark": false})).unwrap();
+        assert_eq!(red(&mut app), (0, 0));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

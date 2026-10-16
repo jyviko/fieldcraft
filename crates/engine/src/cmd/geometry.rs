@@ -56,7 +56,7 @@ pub const CENTRE: CommandSpec = CommandSpec {
 pub const CHECK: CommandSpec = CommandSpec {
     id: "geometry.check",
     label: "Check Geometry",
-    params: r#"{"body"?: "Body1" (default: every body of the open design), "size"?: mm (the target element size; default a twentieth of the smallest checked body's bounding-box diagonal), "short_edge": 0.3, "small_face": 0.1, "sliver": 0.3, "gap": 0.3 (fractions of the size, 0..=10), "parallel_angle": 10 (degrees, 0..=60)} — before meshing, finds what is small against the size (read-only): `short_edge` edges shorter than short_edge × size, `small_face` faces with area below small_face × size², `sliver_face` faces narrower (2 × area / perimeter) than sliver × size, and `near_faces` pairs of faces within parallel_angle of parallel that are closer than gap × size without touching (a gap between bodies or cells, an overlap, or a wall thinner than the gap; faces within twice the tessellation tolerance touch). Replies `size`, `counts` per kind, `summary`, and `findings` (by kind, worst first, at most 1000; `truncated` says when more were found), each with `kind`, `body`, `edge`, `faces` (persistent names; near faces: the second on `other_body`), `value` (mm, mm²), `limit` and `at` (a point on it)"#,
+    params: r#"{"body"?: "Body1" (default: every body of the open design), "size"?: mm (the target element size; default a twentieth of the smallest checked body's bounding-box diagonal), "short_edge": 0.3, "small_face": 0.1, "sliver": 0.3, "gap": 0.3 (fractions of the size, 0..=10), "parallel_angle": 10 (degrees, 0..=60)} — before meshing, finds what is small against the size (read-only): `short_edge` edges shorter than short_edge × size, `small_face` faces with area below small_face × size², `sliver_face` faces narrower (2 × area / perimeter) than sliver × size, and `near_faces` pairs of faces within parallel_angle of parallel that are closer than gap × size without touching (a gap between bodies or cells, an overlap, or a wall thinner than the gap; faces within twice the tessellation tolerance touch). Replies `size`, `counts` per kind, `summary`, and `findings` (by kind, worst first, at most 1000; `truncated` says when more were found), each with `kind`, `body`, `edge`, `faces` (persistent names; near faces: the second on `other_body`), `value` (mm, mm²), `limit` and `at` (a point on it). `mark` (default true): the viewport and pictures mark the findings in the marker colour (their faces, short edges as lines, and a dot at each `at`) until the design changes or a check with `mark: false` or nothing found"#,
     form: Some(super::forms::GEOMETRY_CHECK),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -425,7 +425,30 @@ fn check(s: &mut Session, p: &Value) -> Result<Value> {
         gap: fraction("gap", defaults.gap)?,
         parallel_angle: super::mesh::number_in(p, "parallel_angle", defaults.parallel_angle.to_degrees(), 0.0..=60.0)?.to_radians(),
     };
+    let mark = match p.get("mark") {
+        None => true,
+        Some(v) => v.as_bool().ok_or_else(|| EngineError::Params("`mark` must be true or false".into()))?,
+    };
     let findings = check::check(&shapes, &options)?;
+    s.geometry_marks = s.design.as_ref().filter(|_| mark && !findings.is_empty()).map(|design| {
+        let marks = findings
+            .iter()
+            .map(|f| {
+                // A near pair's second face lies on the other body.
+                let on = |k: usize| if k == 1 { f.other_body.clone().unwrap_or_else(|| f.body.clone()) } else { f.body.clone() };
+                // A short edge is drawn itself: its faces can be large.
+                let faces = if f.kind == Kind::ShortEdge {
+                    Vec::new()
+                } else if f.kind == Kind::NearFaces {
+                    f.face_indices.iter().enumerate().map(|(k, &i)| (on(k), i)).collect()
+                } else {
+                    f.face_indices.iter().map(|&i| (f.body.clone(), i)).collect()
+                };
+                crate::view::GeometryMark { faces, path: f.path.clone(), at: f.at }
+            })
+            .collect();
+        Arc::new(crate::view::GeometryMarks { design: Arc::downgrade(design), marks })
+    });
     let counts: serde_json::Map<String, Value> =
         Kind::ALL.iter().map(|k| (k.name().to_string(), json!(findings.iter().filter(|f| f.kind == *k).count()))).collect();
     // The size to three decimals, without trailing zeros.
@@ -554,6 +577,46 @@ mod tests {
         // The size is what makes the step small: at 1 mm it is a feature like any other.
         let fine = s.execute("geometry.check", &json!({"size": 1})).unwrap();
         assert!(kinds(&fine).is_empty(), "{fine}");
+    }
+
+    /// The findings are drawn in the picture: the sliver riser's faces in the marker colour, the
+    /// short edges as lines and a dot at each finding over everything; a clean check, `mark:
+    /// false` or another design takes them away.
+    #[test]
+    fn check_marks_its_findings_in_the_picture() {
+        let (_dir, mut s) = design(json!([
+            {"command": "solid.box", "params": {"length": 40, "width": 20, "height": 10, "body_name": "Base"}},
+            {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 10.4, "operation": "join", "targets": ["Base"]}},
+        ]));
+        let p = crate::view::Palette::LIGHT;
+        let marked = |s: &Session| {
+            let (scene, _, _) = crate::view::scene(s, &p);
+            let faces = scene.tris.iter().filter(|t| t.color == p.marked).count();
+            let lines: Vec<_> = scene.on_top.iter().filter(|l| l.color == p.marked).collect();
+            let dots = lines.iter().filter(|l| l.a == l.b).count();
+            (faces, lines.len() - dots, dots)
+        };
+        assert_eq!(marked(&s), (0, 0, 0), "nothing checked yet");
+        let r = s.execute("geometry.check", &json!({"size": 5})).unwrap();
+        let (faces, edges, dots) = marked(&s);
+        assert!(faces > 0, "the riser's faces are marked");
+        assert!(edges >= 2, "the short edges are drawn: {edges}");
+        assert_eq!(dots, r["findings"].as_array().unwrap().len(), "a dot at each finding");
+        // Every marked triangle lies on the riser, x = 20, between z = 10 and 10.4.
+        let (scene, _, _) = crate::view::scene(&s, &p);
+        for t in scene.tris.iter().filter(|t| t.color == p.marked) {
+            assert!(t.p.iter().all(|v| (v.x - 20.0).abs() < 1e-6 && v.z > 10.0 - 1e-6 && v.z < 10.4 + 1e-6), "{t:?}");
+        }
+        s.execute("geometry.check", &json!({"size": 5, "mark": false})).unwrap();
+        assert_eq!(marked(&s), (0, 0, 0), "mark: false clears");
+        s.execute("geometry.check", &json!({"size": 5})).unwrap();
+        s.execute("geometry.check", &json!({"size": 1})).unwrap();
+        assert_eq!(marked(&s), (0, 0, 0), "a clean check clears");
+        s.execute("geometry.check", &json!({"size": 5})).unwrap();
+        assert!(s.execute("geometry.check", &json!({"size": 5, "mark": "yes"})).is_err());
+        assert!(marked(&s).2 > 0, "a failed check keeps the marks");
+        s.design = s.design.as_deref().map(|d| Arc::new(d.clone()));
+        assert_eq!(marked(&s), (0, 0, 0), "stale once another design is open");
     }
 
     /// Two bodies 0.5 mm apart: their facing faces are near faces; once they touch they are not.

@@ -78,6 +78,10 @@ pub struct Finding {
     /// The face (small and sliver faces), the faces of the edge (short edges), or the two faces
     /// (near faces: the first on `body`, the second on `other_body`).
     pub faces: Vec<String>,
+    /// The faces of `faces` by face index (each on its own body), for drawing them.
+    pub face_indices: Vec<u32>,
+    /// The edge's polyline, for a short edge (empty otherwise), for drawing it.
+    pub path: Vec<[f64; 3]>,
     /// The body of the second face, for near faces.
     pub other_body: Option<String>,
     /// The measure: length (mm), area (mm²), width (mm) or distance (mm).
@@ -130,6 +134,8 @@ pub fn check(bodies: &[&Shape], options: &CheckOptions) -> Result<Vec<Finding>> 
                     body: shape.name.clone(),
                     edge: Some(e.name.clone()),
                     faces: distinct.iter().map(|&f| shape.face_label(f)).collect(),
+                    face_indices: distinct.iter().copied().collect(),
+                    path: e.points.clone(),
                     other_body: None,
                     value: length,
                     limit,
@@ -174,7 +180,18 @@ pub fn check(bodies: &[&Shape], options: &CheckOptions) -> Result<Vec<Finding>> 
 }
 
 fn face_finding(kind: Kind, shape: &Shape, f: u32, value: f64, limit: f64, at: [f64; 3]) -> Finding {
-    Finding { kind, body: shape.name.clone(), edge: None, faces: vec![shape.face_label(f)], other_body: None, value, limit, at }
+    Finding {
+        kind,
+        body: shape.name.clone(),
+        edge: None,
+        faces: vec![shape.face_label(f)],
+        face_indices: vec![f],
+        path: Vec::new(),
+        other_body: None,
+        value,
+        limit,
+        at,
+    }
 }
 
 #[derive(Default)]
@@ -279,6 +296,8 @@ fn near_faces(bodies: &[&Shape], tris: &[Tri], adjacent: &BTreeSet<(usize, u32, 
             body: sa.name.clone(),
             edge: None,
             faces: vec![sa.face_label(fa), sb.face_label(fb)],
+            face_indices: vec![fa, fb],
+            path: Vec::new(),
             other_body: Some(sb.name.clone()),
             value: d,
             limit: gap,

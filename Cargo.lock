@@ -1368,6 +1368,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fieldcraft-gpu"
+version = "0.6.0"
+dependencies = [
+ "fieldcraft-render",
+ "log",
+ "pollster 0.4.0",
+ "thiserror 2.0.21",
+ "wgpu",
+]
+
+[[package]]
 name = "fieldcraft-io"
 version = "0.6.0"
 dependencies = [
@@ -1473,6 +1484,7 @@ dependencies = [
  "fieldcraft-engine",
  "fieldcraft-explicit",
  "fieldcraft-geometry",
+ "fieldcraft-gpu",
  "fieldcraft-model",
  "fieldcraft-render",
  "fieldcraft-update",

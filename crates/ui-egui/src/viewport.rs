@@ -20,7 +20,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use fieldcraft_render::{StandardView, Vec3};
 
 use crate::browser::Def;
-use crate::gpu::{GpuScene, ViewportCallback};
+use crate::gpu::{Frame, GpuScene, ViewportCallback};
 use crate::icons::{self, Look};
 use crate::menu::{self, Target};
 use crate::navigation::{self, NavButton};
@@ -463,8 +463,6 @@ fn paint_gpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
         }
     }
     let cam = app.cam;
-    let aspect = f64::from(rect.width()) / f64::from(rect.height()).max(1.0);
-    let eye = cam.eye();
     let (overlay_key, overlay) = app.overlay();
     if app.viewport.overlay_uploaded != Some(overlay_key)
         && let Ok(mut slot) = app.viewport.overlay_slot.lock()
@@ -479,10 +477,7 @@ fn paint_gpu(app: &mut ModelApp, ui: &egui::Ui, painter: &egui::Painter, rect: R
         symbols_slot: app.viewport.symbols_slot.clone(),
         overlay_key,
         overlay_slot: app.viewport.overlay_slot.clone(),
-        view_proj: cam.view_proj(aspect, radius).to_f32(),
-        back: cam.back().to_f32(),
-        eye: [eye.x as f32, eye.y as f32, eye.z as f32, if cam.fov > 0.0 { 1.0 } else { 0.0 }],
-        size_px: [rect.width() * ppp, rect.height() * ppp],
+        frame: Frame::of(&cam, rect.width() * ppp, rect.height() * ppp, radius),
     };
     painter.add(egui_wgpu::Callback::new_paint_callback(rect, cb));
 }

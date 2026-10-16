@@ -56,6 +56,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("doc", Class::Layer(4)),
     ("io", Class::Layer(5)),
     ("engine", Class::Layer(6)),
+    ("gpu", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("mcp", Class::Layer(7)),
     ("testkit", Class::Testkit),
@@ -67,7 +68,10 @@ pub const TABLE: &[(&str, Class)] = &[
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).
-pub const INTRA_LAYER_ORDER: &[&[&str]] = &[];
+pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
+    // The window draws through the GPU crate's pipelines.
+    &["gpu", "ui-egui"],
+];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));

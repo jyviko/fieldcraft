@@ -1,0 +1,20 @@
+[package]
+name = "fieldcraft-gpu"
+description = "FieldCraft's GPU viewport pipelines (lit faces, wide lines) and offscreen captures: the window's picture, drawn without a window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fieldcraft-render = { workspace = true }
+wgpu = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = { workspace = true }
+# Native backends, so the CLI and the tests open a device without a window.
+wgpu = { workspace = true, features = ["metal", "vulkan", "dx12", "gles"] }

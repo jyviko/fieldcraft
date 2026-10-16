@@ -9,7 +9,8 @@ use fieldcraft_fem::plasticity::J2;
 use fieldcraft_fem::uniform::{Hex8, Tet4, modulus_bound};
 use fieldcraft_fem::{DofKind, DofLayout, DofSet, face};
 use fieldcraft_model::{
-    Elastic, ElementKind, ExplicitDynamic, Friction, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step, StressRate, Target,
+    BoundaryCondition, Elastic, ElementKind, ExplicitDynamic, Friction, HourglassKind, Integration, Load, Model, Resolved, SectionKind, Step,
+    StressRate, Target,
 };
 
 use crate::contact::Interface;
@@ -100,6 +101,36 @@ pub struct Wall {
     pub friction: Friction,
 }
 
+/// One velocity constraint of the symmetry planes not normal to an axis at a node: c · v = 0
+/// over the node's translations, `q` its part on the components no prescribed velocity holds,
+/// of unit length and perpendicular to the node's other rows' (Gram–Schmidt over the planes that
+/// meet at the node). [`SymmetryRow::project`] removes q (c · v) from the velocity: with the same
+/// lumped mass on a node's three translations this is the mass-weighted closest velocity that
+/// satisfies the planes and the prescribed values (the constrained update of a lumped-mass
+/// central difference scheme), exactly, in one pass over the rows.
+#[derive(Debug, Clone)]
+pub struct SymmetryRow {
+    pub node: usize,
+    pub q: [f64; 3],
+    pub c: [f64; 3],
+}
+
+impl SymmetryRow {
+    pub fn project(&self, v: &mut [f64]) {
+        let at = |k: usize| NODE_DOFS * self.node + k;
+        let along: f64 = (0..3).map(|k| self.c[k] * v.get(at(k)).copied().unwrap_or(0.0)).sum();
+        for k in 0..3 {
+            if let Some(x) = v.get_mut(at(k)) {
+                *x -= along * self.q[k];
+            }
+        }
+    }
+}
+
+/// A free part below this fraction of its row's size is round-off: the row repeats the node's
+/// earlier ones, or the prescribed velocities hold it.
+const REPEATED: f64 = 1e-10;
+
 /// The discrete system of an explicit dynamic step.
 ///
 /// Its elements are solids, so every node carries the three translations and the layout is
@@ -130,6 +161,8 @@ pub struct System {
     /// Prescribed velocity per degree of freedom (`None` = free).
     pub prescribed: Vec<Option<f64>>,
     pub walls: Vec<Wall>,
+    /// The symmetry planes not normal to an axis, per node.
+    pub planes: Vec<SymmetryRow>,
     /// The model's contacts ([`crate::contact`]).
     pub contacts: Vec<Interface>,
     /// Velocity per degree of freedom at the start (prescribed velocities included).
@@ -293,6 +326,7 @@ impl System {
             discrete_increment: None,
             prescribed: vec![None; dofs],
             walls: Vec::new(),
+            planes: Vec::new(),
             contacts: Vec::new(),
             initial_velocity: vec![0.0; dofs],
             external: vec![0.0; dofs],
@@ -541,6 +575,7 @@ impl System {
     /// Prescribed velocities from the step's boundary conditions: zero for held degrees of
     /// freedom, value / end time for a displacement reached over the step.
     fn prescribe(&mut self, model: &Model, resolved: &Resolved, step: &Step, end_time: f64) -> Result<()> {
+        let mut normals: std::collections::BTreeMap<usize, Vec<[f64; 3]>> = std::collections::BTreeMap::new();
         for name in &step.boundary_conditions {
             let bc = model.boundary_condition(name).ok_or_else(|| invalid(format!("boundary condition `{name}` is missing")))?;
             if let Target::ReferencePoint(rp) = bc.target() {
@@ -548,6 +583,14 @@ impl System {
             }
             if bc.is_thermal() {
                 return Err(Error::NotSupported(format!("temperature boundary conditions (`{name}`) in explicit dynamics")));
+            }
+            if let BoundaryCondition::Symmetry { plane, .. } = bc
+                && let Some(normal) = plane.inclined()
+            {
+                for node in resolved.target_nodes(bc.target()).iter().filter_map(|l| self.node(*l)) {
+                    normals.entry(node).or_default().push(normal);
+                }
+                continue;
             }
             for &label in resolved.target_nodes(bc.target()) {
                 let Some(node) = self.node(label) else { continue };
@@ -570,6 +613,34 @@ impl System {
                     }
                 }
             }
+        }
+        // Each node's planes: orthonormal free parts, or rows the prescribed velocities satisfy.
+        for (node, rows) in normals {
+            let p = [0, 1, 2].map(|k| self.prescribed.get(NODE_DOFS * node + k).copied().flatten());
+            let mut done: Vec<SymmetryRow> = Vec::new();
+            for n in rows {
+                let mut c = n;
+                for r in &done {
+                    let f: f64 = (0..3).map(|k| r.q[k] * if p[k].is_none() { c[k] } else { 0.0 }).sum();
+                    for k in 0..3 {
+                        c[k] -= f * r.c[k];
+                    }
+                }
+                let q = [0, 1, 2].map(|k| if p[k].is_none() { c[k] } else { 0.0 });
+                let length = q.iter().map(|x| x * x).sum::<f64>().sqrt();
+                if length > REPEATED {
+                    done.push(SymmetryRow { node, q: q.map(|x| x / length), c: c.map(|x| x / length) });
+                    continue;
+                }
+                // Nothing free is left: the prescribed velocities must satisfy the row.
+                let along: f64 = (0..3).map(|k| c[k] * p[k].unwrap_or(0.0)).sum();
+                let size: f64 = (0..3).map(|k| (n[k] * p[k].unwrap_or(0.0)).abs()).sum();
+                if along.abs() > 1e-9 * size {
+                    let label = self.labels.get(node).copied().unwrap_or_default();
+                    return Err(invalid(format!("node {label} moves off a symmetry plane (normal {n:?}) by its prescribed velocities")));
+                }
+            }
+            self.planes.extend(done);
         }
         Ok(())
     }
@@ -729,11 +800,14 @@ impl System {
                 }
             }
         }
-        // A prescribed velocity holds from the start.
+        // A prescribed velocity holds from the start, and so do the symmetry planes.
         for (v, p) in self.initial_velocity.iter_mut().zip(&self.prescribed) {
             if let Some(p) = p {
                 *v = *p;
             }
+        }
+        for row in &self.planes {
+            row.project(&mut self.initial_velocity);
         }
         let size = self.xyz.iter().flatten().fold(0.0f64, |m, c| m.max(c.abs())).max(1.0);
         for w in &settings.rigid_walls {

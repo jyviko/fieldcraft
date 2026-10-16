@@ -12,8 +12,10 @@
 //!    condition: T. J. R. Hughes, R. L. Taylor, J. L. Sackman, A. Curnier, W. Kanoknukulchai,
 //!    *A finite element method for a class of contact-impact problems*, CMAME 8(3):249–276,
 //!    1976), with Coulomb friction as a tangential impulse at most μ times the normal one (the
-//!    tangential velocity stops, or loses μ Δv_n when it slides), and prescribed degrees of
-//!    freedom take their velocity. The change a constraint makes is the impulse of its reaction,
+//!    tangential velocity stops, or loses μ Δv_n when it slides), prescribed degrees of
+//!    freedom take their velocity, and a symmetry plane not normal to an axis removes its nodes'
+//!    velocity along its normal (from their free components: the lumped mass is the same on a
+//!    node's three translations, so this is the mass-weighted projection onto the constraint). The change a constraint makes is the impulse of its reaction,
 //!    r^n = M Δv / Δt^n;
 //! 4. energies: the works of the internal, contact and external forces by the trapezoidal rule,
 //!    W += ½ Δu · (f^{n−1} + f^n) (exactly the strain energy for a linear elastic material),
@@ -77,7 +79,7 @@ struct Output {
 }
 
 /// Velocity constraints over an increment of length `dt` (rigid walls when dt > 0, then
-/// prescribed degrees of freedom); returns the kinetic energy the walls' friction took (`mass`
+/// prescribed degrees of freedom, then inclined symmetry planes); returns the kinetic energy the walls' friction took (`mass`
 /// per degree of freedom).
 fn constrain(sys: &System, u: &[f64], v: &mut [f64], dt: f64, mass: &[f64]) -> f64 {
     let mut dissipated = 0.0;
@@ -106,6 +108,9 @@ fn constrain(sys: &System, u: &[f64], v: &mut [f64], dt: f64, mass: &[f64]) -> f
         if let Some(p) = p {
             *c = *p;
         }
+    }
+    for row in &sys.planes {
+        row.project(v);
     }
     dissipated
 }

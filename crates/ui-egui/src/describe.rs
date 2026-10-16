@@ -189,6 +189,14 @@ fn scalar(f: &Field, v: &Value, units: UnitSystem) -> String {
         Kind::Multi(options) => {
             list(v, |x| options.iter().find(|(o, _)| fieldcraft_engine::schema::multi_value(o) == *x).map(|(_, l)| (*l).to_string()))
         }
+        Kind::PerAxis { .. } => match v {
+            Value::Array(a) => a
+                .iter()
+                .map(|x| x.as_f64().map_or_else(|| crate::context::value_text(x), |x| with_unit(x, unit.as_deref())))
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => v.as_f64().map_or_else(|| crate::context::value_text(v), |x| with_unit(x, unit.as_deref())),
+        },
         Kind::NumberOrAuto { .. } => match v {
             Value::String(s) => s.clone(),
             _ => v.as_f64().map_or_else(|| crate::context::value_text(v), |x| with_unit(x, unit.as_deref())),

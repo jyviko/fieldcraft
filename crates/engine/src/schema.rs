@@ -112,6 +112,13 @@ pub enum Kind {
         dim: Dim,
         min: Option<f64>,
     },
+    /// One number for every direction, or one per axis (`labels`, e.g. the material axes
+    /// 1, 2, 3), each at least `min`.
+    PerAxis {
+        dim: Dim,
+        min: Option<f64>,
+        labels: &'static [&'static str],
+    },
     /// Any JSON: what the schema does not describe.
     Json,
 }
@@ -390,7 +397,11 @@ impl Field {
     /// Its physical dimension, for a number or a vector of numbers.
     pub fn dim(&self) -> Option<Dim> {
         match self.kind {
-            Kind::Number { dim, .. } | Kind::Vector { dim, .. } | Kind::Points { dim, .. } | Kind::NumberOrAuto { dim, .. } => Some(dim),
+            Kind::Number { dim, .. }
+            | Kind::Vector { dim, .. }
+            | Kind::Points { dim, .. }
+            | Kind::NumberOrAuto { dim, .. }
+            | Kind::PerAxis { dim, .. } => Some(dim),
             _ => None,
         }
     }
@@ -508,6 +519,10 @@ pub const fn multi(key: &'static str, label: &'static str, options: &'static [(&
 /// A number at least `min`, or "auto".
 pub const fn number_or_auto(key: &'static str, label: &'static str, dim: Dim, min: Option<f64>) -> Field {
     field(key, label, Kind::NumberOrAuto { dim, min })
+}
+/// One number at least `min`, or one per axis of `labels`.
+pub const fn per_axis(key: &'static str, label: &'static str, dim: Dim, min: Option<f64>, labels: &'static [&'static str]) -> Field {
+    field(key, label, Kind::PerAxis { dim, min, labels })
 }
 pub const fn json(key: &'static str, label: &'static str) -> Field {
     field(key, label, Kind::Json)
@@ -1045,6 +1060,18 @@ fn value_problem(f: &'static Field, v: &Value, path: &str, out: &mut Vec<Problem
             (_, Some(_)) => Some(ProblemKind::Below(min.unwrap_or(0.0))),
             _ => Some(ProblemKind::Invalid("a number or \"auto\"".into())),
         },
+        Kind::PerAxis { min, labels, .. } => {
+            let values = match v {
+                Value::Array(a) if a.len() == labels.len() => a.iter().map(|x| x.as_f64().filter(|x| x.is_finite())).collect::<Option<Vec<_>>>(),
+                Value::Array(_) => None,
+                _ => v.as_f64().filter(|x| x.is_finite()).map(|x| vec![x]),
+            };
+            match values {
+                Some(xs) if xs.iter().all(|&x| min.is_none_or(|lo| x >= lo)) => None,
+                Some(_) => Some(ProblemKind::Below(min.unwrap_or(0.0))),
+                None => Some(ProblemKind::Invalid(format!("a number, or {} numbers (one per axis)", labels.len()))),
+            }
+        }
         Kind::Rows { fields, max } => match v.as_array() {
             Some(a) if a.len() <= max => {
                 for (i, row) in a.iter().enumerate() {
@@ -1172,6 +1199,18 @@ fn field_schema(f: &Field, depth: usize) -> Value {
             }
             json!({"oneOf": [n, {"const": "auto"}]})
         }
+        Kind::PerAxis { dim, min, labels } => {
+            let mut n = json!({"type": "number"});
+            if let Some(lo) = min {
+                n["minimum"] = json!(lo);
+            }
+            let mut s =
+                json!({"oneOf": [n.clone(), {"type": "array", "items": n, "minItems": labels.len(), "maxItems": labels.len(), "x-labels": labels}]});
+            if dim != Dim::None {
+                s["x-dimension"] = json!(format!("{dim:?}").to_lowercase());
+            }
+            s
+        }
         _ => json!({}),
     };
     s["title"] = json!(f.label);
@@ -1268,6 +1307,19 @@ mod tests {
         let s = json_schema(F);
         assert_eq!(s["properties"]["path"]["items"]["minItems"], 2);
         assert_eq!(s["properties"]["path"]["items"]["x-columns"], json!(["fraction", "factor"]));
+    }
+
+    /// A per-axis field takes one number or one per axis, each at least its minimum.
+    #[test]
+    fn per_axis_takes_one_number_or_one_per_axis() {
+        const F: &[Field] = &[per_axis("k", "K", Dim::Conductivity, Some(0.0), &["1", "2", "3"])];
+        assert!(problems(F, &json!({"k": 50})).is_empty());
+        assert!(problems(F, &json!({"k": [50, 20, 20.5]})).is_empty());
+        for bad in [json!({"k": -1}), json!({"k": [1, 2]}), json!({"k": [1, 2, -3]}), json!({"k": "x"}), json!({"k": [1, 2, "3"]})] {
+            assert_eq!(problems(F, &bad).len(), 1, "{bad}");
+        }
+        let s = json_schema(F);
+        assert_eq!(s["properties"]["k"]["oneOf"][1]["maxItems"], 3);
     }
 
     #[test]

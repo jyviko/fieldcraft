@@ -333,6 +333,7 @@ impl Form<'_> {
             Kind::Points { columns, max, .. } => self.points(ui, id, value, f, columns, max),
             Kind::Multi(options) => self.multi(ui, value, options),
             Kind::NumberOrAuto { .. } => self.number_or_auto(ui, id, value, f),
+            Kind::PerAxis { labels, .. } => self.per_axis(ui, id, value, f, labels),
             Kind::Unit | Kind::Group(_) | Kind::Variants { .. } | Kind::Rows { .. } => None,
         }
     }
@@ -715,6 +716,39 @@ impl Form<'_> {
         out
     }
 
+    /// One number, or with Per axis ticked one per axis: ticking it copies the number to every
+    /// axis, unticking keeps the first axis's value.
+    fn per_axis(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, f: &Field, labels: &[&str]) -> Option<Value> {
+        let split = matches!(value, Some(Value::Array(_)));
+        let mut on = split;
+        let mut out = None;
+        ui.vertical(|ui| {
+            if ui.checkbox(&mut on, "Per axis").on_hover_text("A different value along each axis").changed() {
+                out = Some(match (on, value) {
+                    (true, Some(v)) if v.is_number() => Value::Array(vec![v.clone(); labels.len()]),
+                    (true, _) => Value::Null,
+                    (false, Some(Value::Array(a))) => a.first().cloned().unwrap_or(Value::Null),
+                    (false, _) => Value::Null,
+                });
+            }
+            if split {
+                if let Some(v) = self.vector(ui, id.with("axes"), value, f, labels, false, None) {
+                    out = Some(v);
+                }
+            } else {
+                ui.horizontal(|ui| {
+                    let unit = f.unit_label(self.cx.units);
+                    let width = (fill(ui) - fields::unit_width(ui, unit.as_deref())).max(FIELD_MIN);
+                    if let Some(v) = self.number(ui, id, value, f.hint, false, width) {
+                        out = Some(v);
+                    }
+                    fields::unit(ui, &self.style, unit.as_deref());
+                });
+            }
+        });
+        out
+    }
+
     /// A JSON value typed as text: kept while it does not parse.
     /// Empty, it shows `hint` (the expected format) greyed.
     fn json(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, hint: &str) -> Option<Value> {
@@ -844,7 +878,7 @@ fn caption(component: &str) -> String {
 pub fn has_system_units(fields: &[Field], depth: usize) -> bool {
     depth <= MAX_DEPTH
         && fields.iter().any(|f| match f.kind {
-            Kind::Number { dim, .. } | Kind::Vector { dim, .. } => dim.follows_system(),
+            Kind::Number { dim, .. } | Kind::Vector { dim, .. } | Kind::PerAxis { dim, .. } => dim.follows_system(),
             Kind::Group(inner) | Kind::Rows { fields: inner, .. } | Kind::Either(inner) => has_system_units(inner, depth + 1),
             Kind::Variants { variants, .. } => variants.iter().any(|v| has_system_units(v.fields, depth + 1)),
             _ => false,

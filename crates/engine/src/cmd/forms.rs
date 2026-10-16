@@ -186,18 +186,19 @@ const HYPERELASTIC: Field = variants(
 .help("A large-strain rubber model (nonlinear steps), built on the isotropic constants.")
 .hint("large strain in nonlinear steps, from the isotropic constants");
 
+/// The material axes 1, 2, 3 (the global X, Y, Z until material orientations land).
+const AXES_123: &[&str] = &["1", "2", "3"];
+
 const THERMAL: Field = group(
     "thermal",
     "Thermal",
     &[
-        json("conductivity", "Conductivity")
-            .help("Thermal conductivity, one value or one per axis. Steel ≈ 50 W/(m·K), i.e. 50 in mm-t-s-N.")
-            .hint("k or [k1, k2, k3]"),
+        per_axis("conductivity", "Conductivity", D::Conductivity, Some(0.0), AXES_123)
+            .help("Thermal conductivity, one value or one per material axis. Steel ≈ 50 W/(m·K), i.e. 50 in mm-t-s-N."),
         positive("specific_heat", "Specific heat", D::SpecificHeat)
             .help("Heat that raises a unit mass by one degree. Steel ≈ 460 J/(kg·K), 4.6e8 in mm-t-s."),
-        json("expansion", "Expansion")
-            .help("Thermal expansion coefficient, one value or one per axis, in 1/K. Steel ≈ 1.2e-5, aluminium ≈ 2.3e-5.")
-            .hint("α or [α1, α2, α3], 1/K"),
+        per_axis("expansion", "Expansion", D::Expansion, None, AXES_123)
+            .help("Thermal expansion coefficient, one value or one per material axis. Steel ≈ 1.2e-5, aluminium ≈ 2.3e-5."),
         num("reference_temperature", "Reference temperature", D::Temperature).help("The temperature at which there is no thermal strain.").def("0"),
     ],
 )
@@ -371,7 +372,9 @@ pub const COUPLING: &[Field] = &[
 pub const MASS: &[Field] = &[
     NAME,
     TARGET,
-    positive("mass", "Mass", D::Mass).help("A lumped mass at each node of the target.").hint("per node; [mx, my, mz] in JSON"),
+    per_axis("mass", "Mass", D::Mass, Some(0.0), XYZ)
+        .help("A lumped mass at each node of the target: one value, or one per direction X, Y, Z.")
+        .hint("per node"),
     vector("inertia", "Inertia", D::Inertia, &["I11", "I22", "I33", "I12", "I13", "I23"])
         .help("Rotary inertia about the reference point: three moments and three products.")
         .hint("about the node; needs a reference point"),

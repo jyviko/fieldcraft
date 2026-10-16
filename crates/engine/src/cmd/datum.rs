@@ -470,15 +470,24 @@ fn cuts(model: &Model) -> Vec<Cut> {
         .collect()
 }
 
-/// `design` cut by `model`'s partitions, then with its face merges (the design as opened when
-/// the model has neither).
+/// `design` cut by `model`'s partitions, then with its face merges and its face splits (those
+/// along a suppressed datum left out; the design as opened when the model has none).
 pub(crate) fn partitioned(design: &Design, model: &Model) -> Result<Design> {
     let merges: Vec<Merge> = model
         .face_merges()
         .iter()
         .map(|m| Merge { name: m.name.clone(), body: m.body.clone(), faces: m.faces.clone(), into: m.into.clone() })
         .collect();
-    Ok(design.partitioned(&cuts(model))?.merged(&merges)?)
+    let splits: Vec<fieldcraft_geometry::face_split::FaceSplit> = model
+        .face_splits()
+        .iter()
+        .filter(|s| !model.datum_suppressed(&s.datum))
+        .filter_map(|s| {
+            let (point, normal) = model.datum(&s.datum)?.plane()?;
+            Some(fieldcraft_geometry::face_split::FaceSplit { name: s.name.clone(), body: s.body.clone(), face: s.face.clone(), point, normal })
+        })
+        .collect();
+    Ok(design.partitioned(&cuts(model))?.merged(&merges)?.split(&splits)?)
 }
 
 /// Cut the session's design by its model's partitions again (and merge its faces again). The bodies that are gone (cells

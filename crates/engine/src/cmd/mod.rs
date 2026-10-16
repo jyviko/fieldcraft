@@ -76,6 +76,8 @@ pub static ALL: &[CommandSpec] = &[
     virtual_faces::FACES_MERGE,
     virtual_faces::FACES_MERGE_DELETE,
     virtual_faces::FACE_ABSORB,
+    virtual_faces::FACE_SPLIT,
+    virtual_faces::FACE_SPLIT_DELETE,
     stitch::STITCH,
     stitch::STITCH_DELETE,
     mesh::NODE_ADD,

@@ -1740,6 +1740,12 @@ pub const STITCH: &[Field] = &[
         .req(),
 ];
 pub const STITCH_DELETE: &[Field] = existing!("Stitch", C::Stitch);
+pub const FACE_SPLIT: &[Field] = &[
+    NAME,
+    group("face", "Face", FACE_ROW).help("The face to split.").req(),
+    reference("datum", "Datum plane", C::DatumPlane).help("The plane the face is split along.").req(),
+];
+pub const FACE_SPLIT_DELETE: &[Field] = existing!("Face split", C::FaceSplit);
 pub const FACES_MERGE_DELETE: &[Field] = existing!("Face merge", C::FaceMerge);
 pub const MESH_PLAN: &[Field] = &[
     reference("body", "Body", C::Body).help("The body of the design to plan (as opened, not a partition cell).").req(),

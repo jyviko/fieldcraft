@@ -221,6 +221,8 @@ pub enum Collection {
     FaceMerge,
     /// A stitch (`geometry.stitch`).
     Stitch,
+    /// A face split (`geometry.face.split`).
+    FaceSplit,
 }
 
 impl Collection {
@@ -248,6 +250,7 @@ impl Collection {
             Collection::Partition => "partition",
             Collection::FaceMerge => "face merge",
             Collection::Stitch => "stitch",
+            Collection::FaceSplit => "face split",
         }
     }
 }
@@ -279,6 +282,7 @@ impl Session {
             Collection::Partition => Box::new(m.partitions().iter().map(|p| p.name.as_str())),
             Collection::FaceMerge => Box::new(m.face_merges().iter().map(|f| f.name.as_str())),
             Collection::Stitch => Box::new(m.stitches().iter().map(|f| f.name.as_str())),
+            Collection::FaceSplit => Box::new(m.face_splits().iter().map(|f| f.name.as_str())),
         };
         names.take(MAX_NAMES).map(str::to_string).collect()
     }

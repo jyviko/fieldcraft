@@ -45,6 +45,26 @@ pub const FACE_ABSORB: CommandSpec = CommandSpec {
     run: absorb,
 };
 
+pub const FACE_SPLIT: CommandSpec = CommandSpec {
+    id: "geometry.face.split",
+    label: "Split Face",
+    params: r#"{"name": "Band", "face": {"body": "Base", "face": "F1:+z"}, "datum": "Mid" (a datum plane)} — splits a face along the curve where a datum plane crosses it, for meshing only (virtual topology; partitions cut whole bodies): the meshers, the checks and the viewport take it as two faces on its surface, `split:<name>:a` on the plane's negative side and `split:<name>:b` on the other, with the cut as an edge between them (a row of nodes along it; seed it like any edge), and the face's edges cut where the plane crosses them. The B-rep is not changed. Applied after the face merges, by persistent names, whenever the design is opened (a merge cannot name a split face); moving the datum moves the cut, and the datum cannot be deleted while a split uses it. The body loses its mesh (`replaced`); sets naming the face no longer resolve (`stale_sets`). A plane that does not cross the face is an error. Delete with geometry.face.split.delete. One undo step"#,
+    form: Some(super::forms::FACE_SPLIT),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Design, Requirement::DatumPlane],
+    run: split,
+};
+
+pub const FACE_SPLIT_DELETE: CommandSpec = CommandSpec {
+    id: "geometry.face.split.delete",
+    label: "Delete Face Split",
+    params: r#"{"name": "Band"} — removes a face split: the face is one face again; the body loses its mesh (`replaced`)"#,
+    form: Some(super::forms::FACE_SPLIT_DELETE),
+    kind: CommandKind::Model,
+    requires: &[Requirement::FaceSplit],
+    run: split_delete,
+};
+
 /// Most faces one merge lists.
 const MAX_FACES: usize = fieldcraft_model::virtual_faces::MAX_FACE_MERGE_FACES;
 
@@ -75,12 +95,12 @@ fn stale_sets(s: &Session, body: &str) -> Vec<String> {
     s.model.sets().iter().filter(|(_, set)| set.geometry.iter().any(gone)).map(|(n, _)| n.clone()).collect()
 }
 
-/// Apply the model's partitions and merges to the design again, failing with the error of a merge
-/// named in `merges` when it has one; the meshes of `bodies` go (their faces changed).
-fn reapply(s: &mut Session, merges: &[String], bodies: &[String], reply: Value) -> Result<Value> {
+/// Apply the model's partitions, merges and splits to the design again, failing with the error of
+/// one of `features` (`merge <name>`, `split <name>`) when it has one; the meshes of `bodies` go
+/// (their faces changed).
+fn reapply(s: &mut Session, features: &[String], bodies: &[String], reply: Value) -> Result<Value> {
     let mut cleared = super::datum::recut(s)?;
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
-    let features: Vec<String> = merges.iter().map(|m| format!("merge {m}")).collect();
     let errors: Vec<String> =
         design.errors.iter().filter(|e| features.contains(&e.feature)).map(|e| format!("{}: {}", e.feature, e.message)).collect();
     if !errors.is_empty() {
@@ -110,7 +130,7 @@ fn merge(s: &mut Session, p: &Value) -> Result<Value> {
     s.model.add_face_merge(FaceMerge { name: name.clone(), body: body.clone(), faces: faces.clone(), into: None })?;
     let face = merged_face_name(&name);
     let reply = json!({"name": name, "body": body, "face": face});
-    let mut reply = reapply(s, std::slice::from_ref(&name), std::slice::from_ref(&body), reply)?;
+    let mut reply = reapply(s, &[format!("merge {name}")], std::slice::from_ref(&body), reply)?;
     let shape = s.design.as_deref().and_then(|d| d.body(&body));
     let brep = shape.and_then(|b| b.face_index(&face)).and_then(|f| shape?.merged_faces().into_iter().find(|(g, _)| *g == f)).map_or(0, |(_, n)| n);
     if let Some(o) = reply.as_object_mut() {
@@ -200,7 +220,29 @@ fn absorb(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Params(format!("no face could be absorbed: {}", json!(skipped))));
     }
     let bodies: Vec<String> = shapes.into_iter().map(|b| b.name).collect();
-    reapply(s, &merges, &bodies, json!({"absorbed": absorbed, "skipped": skipped}))
+    let features: Vec<String> = merges.iter().map(|m| format!("merge {m}")).collect();
+    reapply(s, &features, &bodies, json!({"absorbed": absorbed, "skipped": skipped}))
+}
+
+fn split(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = super::name(p)?.to_string();
+    let r: GeometryRef = super::req(p, "face")?;
+    let Entity::Face(face) = r.entity else { return Err(EngineError::invalid("face", "give {\"body\", \"face\"}")) };
+    let datum: String = super::req(p, "datum")?;
+    super::datum::datum_plane_of(&s.model, &datum)?;
+    s.model.add_face_split(fieldcraft_model::FaceSplit { name: name.clone(), body: r.body.clone(), face: face.clone(), datum })?;
+    let feature = format!("split:{name}");
+    let faces = [format!("{feature}:a"), format!("{feature}:b")];
+    let reply = json!({"name": name, "body": r.body, "faces": faces});
+    reapply(s, &[format!("split {name}")], std::slice::from_ref(&r.body), reply)
+}
+
+fn split_delete(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = super::name(p)?;
+    let removed = s.model.remove_face_split(name)?;
+    let mut cleared = super::datum::recut(s)?;
+    cleared.extend(super::replace::clear(&mut s.model, [removed.body.as_str()]));
+    Ok(cleared.report_if_any(s, json!({"deleted": name, "body": removed.body})))
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -506,5 +548,76 @@ mod tests {
         let r = s.execute("geometry.face.absorb", &json!({"name": "Riser", "face": face})).unwrap();
         assert_eq!(r["absorbed"][0]["name"], "Riser", "{r}");
         assert!(s.model.face_merges()[0].into.is_some());
+    }
+
+    /// The plate's top face (z = 10), by name.
+    fn top(s: &Session) -> String {
+        let b = &s.design.as_ref().unwrap().bodies[0];
+        b.faces()
+            .iter()
+            .zip(b.face_surfaces().unwrap())
+            .find(|(_, x)| matches!(x, Some(FaceSurface::Plane { normal, point }) if normal[2] > 0.5 && point[2] > 9.0))
+            .unwrap()
+            .0
+            .name
+            .clone()
+    }
+
+    /// Mesh nodes on the top along x = `x`.
+    fn nodes_along(s: &Session, x: f64) -> usize {
+        s.model.nodes().values().filter(|n| (n.xyz[0] - x).abs() < 1e-6 && (n.xyz[2] - 10.0).abs() < 1e-6).count()
+    }
+
+    /// Splitting the top along a datum plane gives two faces the tet mesher tags, with a row of
+    /// nodes along the cut; the split follows the datum, holds it, is saved and replayed, and
+    /// undoes.
+    #[test]
+    fn a_split_face_meshes_with_a_node_row_along_the_cut() {
+        let (mut s, dir) = super::super::datum::tests::plate();
+        let body = s.design.as_ref().unwrap().bodies[0].name.clone();
+        let face = json!({"body": body, "face": top(&s)});
+        s.execute("geometry.datum", &json!({"name": "Cut", "by": {"type": "offset", "plane": "yz", "offset": 30.3}})).unwrap();
+        let mesh = json!({"size": 3});
+        s.execute("mesh.tet.generate", &mesh).unwrap();
+        let before = nodes_along(&s, 30.3);
+        let r = s.execute("geometry.face.split", &json!({"name": "Band", "face": face, "datum": "Cut"})).unwrap();
+        assert_eq!(r["faces"], json!(["split:Band:a", "split:Band:b"]), "{r}");
+        assert!(r["replaced"].is_array(), "{r}");
+        assert_eq!(faces(&s).len(), 9);
+        s.execute("mesh.tet.generate", &mesh).unwrap();
+        let after = nodes_along(&s, 30.3);
+        assert!(after >= 10 && after > before, "a node row along the 30 mm cut: {before} -> {after}");
+        let c = s.model.classification();
+        let used: BTreeSet<String> =
+            c.elements().values().flat_map(|t| t.faces.values()).filter_map(|&t| c.entity(t)?.entity.name().map(str::to_string)).collect();
+        assert!(used.contains("split:Band:a") && used.contains("split:Band:b"), "{used:?}");
+        // The datum holds; moving it moves the cut.
+        assert!(s.execute("geometry.datum.delete", &json!({"name": "Cut"})).is_err());
+        s.execute("geometry.datum.edit", &json!({"name": "Cut", "by": {"type": "offset", "plane": "yz", "offset": 35.5}})).unwrap();
+        s.execute("mesh.tet.generate", &mesh).unwrap();
+        assert!(nodes_along(&s, 35.5) >= 10);
+        // Saved and replayed.
+        let file = dir.join("split.fieldcraft");
+        s.execute("file.save", &json!({"path": file.to_str().unwrap()})).unwrap();
+        let mut t = Session::default();
+        t.execute("file.open", &json!({"path": file.to_str().unwrap()})).unwrap();
+        assert_eq!(faces(&t), faces(&s));
+        // Bad splits change nothing; delete brings the face back.
+        let journal = s.journal.len();
+        for p in [
+            json!({"name": "X", "face": face, "datum": "nope"}),
+            json!({"name": "X", "face": {"body": body, "face": "nope"}, "datum": "Cut"}),
+            json!({"name": "X", "face": {"body": body}, "datum": "Cut"}),
+            json!({"name": "Band", "face": face, "datum": "Cut"}),
+            json!({"name": "X", "face": {"body": body, "face": "split:Band:b"}, "datum": "Cut"}),
+        ] {
+            assert!(s.execute("geometry.face.split", &p).is_err(), "{p}");
+        }
+        assert_eq!(s.journal.len(), journal);
+        s.execute("geometry.face.split.delete", &json!({"name": "Band"})).unwrap();
+        assert_eq!(faces(&s).len(), 8);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(faces(&s).len(), 9);
+        std::fs::remove_dir_all(dir).ok();
     }
 }

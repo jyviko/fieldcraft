@@ -36,6 +36,8 @@ pub enum Requirement {
     FaceMerge,
     /// A stitch.
     Stitch,
+    /// A face split.
+    FaceSplit,
     /// An edge seed.
     Seed,
     /// At least one mesh node.
@@ -85,6 +87,7 @@ impl Requirement {
             Requirement::Partition => !m.partitions().is_empty(),
             Requirement::FaceMerge => !m.face_merges().is_empty(),
             Requirement::Stitch => !m.stitches().is_empty(),
+            Requirement::FaceSplit => !m.face_splits().is_empty(),
             Requirement::Seed => !m.seeds().is_empty(),
             Requirement::Nodes => !m.nodes().is_empty(),
             Requirement::Mesh => has_elements,
@@ -127,6 +130,7 @@ impl Requirement {
             Requirement::Partition => "a partition",
             Requirement::FaceMerge => "a face merge",
             Requirement::Stitch => "a stitch",
+            Requirement::FaceSplit => "a face split",
             Requirement::Seed => "an edge seed",
             Requirement::Nodes => "mesh nodes",
             Requirement::Mesh | Requirement::Analysable => "a mesh",
@@ -159,6 +163,7 @@ impl Requirement {
             Requirement::Partition => "geometry.partition",
             Requirement::FaceMerge => "geometry.faces.merge",
             Requirement::Stitch => "geometry.stitch",
+            Requirement::FaceSplit => "geometry.face.split",
             Requirement::Seed => "mesh.seed.edge",
             Requirement::Nodes => "mesh.node.add",
             Requirement::Mesh | Requirement::Analysable => "mesh.tet.generate",
@@ -218,6 +223,7 @@ impl crate::schema::Collection {
             C::Partition => Requirement::Partition,
             C::FaceMerge => Requirement::FaceMerge,
             C::Stitch => Requirement::Stitch,
+            C::FaceSplit => Requirement::FaceSplit,
         }
     }
 }
@@ -360,6 +366,7 @@ mod tests {
             C::Partition,
             C::FaceMerge,
             C::Stitch,
+            C::FaceSplit,
         ];
         let empty = Session::default();
         for c in all {

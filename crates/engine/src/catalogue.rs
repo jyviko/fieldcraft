@@ -310,6 +310,14 @@ pub static CATALOGUE: &[Capability] = &[
         "Absorb tiny and sliver faces into a neighbour for meshing, one picked or every one Check Geometry found",
     ),
     covering(
+        "geometry.face.split",
+        "Split Face",
+        Geometry,
+        "Prepare",
+        "Split a face along a datum plane for meshing only: two faces on its surface, the cut an edge between them",
+        &["geometry.face.split.delete"],
+    ),
+    covering(
         "geometry.stitch",
         "Stitch",
         Geometry,

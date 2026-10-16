@@ -35,8 +35,9 @@ not guessed. Read it before you plan anything:
    body did not fit (a plane at an angle, a curved face that is not a ring or a blend, two
    circles in one frame), and then the frame cuts and swept cells are used instead (`pending`
    lists the rings left boxed). Check `all_hex`, `conforming`, `min_scaled_jacobian`.
-   Known gap: a shelled box whose fillet radius exceeds the wall (the enclosure-base pattern)
-   can still leave a twisted element at the outer fillet's bottom corner.
+   A boss the walls run into (an enclosure's corner screw boss) is ringed over the square round
+   its whole circle, the ring split where the walls join it; the inner fillet where the walls
+   meet is taken in by the ring's corner, even where the boss just touches it.
 4. Then verify as in §4. When the plan does not fit (unmapped primary features, a failed cell),
    fall back to the manual process below, keeping the plan's cuts that work.
 

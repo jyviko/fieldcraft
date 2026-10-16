@@ -1559,6 +1559,35 @@ mod acceptance {
         accept(&mut s, &r, 0.6, 6.0);
     }
 
+    /// An enclosure base: a box with rounded vertical edges, shelled open at the top, a screw
+    /// boss joined at each corner (centred outside it, nearly touching the inner fillet) with a
+    /// blind hole, and standoffs on the floor. Each boss's ring frames the whole circle,
+    /// subdivided where the walls join it; the inner fillet is taken in by the ring's corner and
+    /// the boss's near touch with it leaves no sliver.
+    #[test]
+    fn an_enclosure_base_rings_each_corner_boss_where_the_walls_join_it() {
+        let mut commands = vec![
+            json!({"command": "solid.box", "params": {"length": 56, "width": 42, "height": 16, "body_name": "Base"}}),
+            json!({"command": "solid.fillet", "params": {"edges": [[0, 0, 8], [56, 0, 8], [56, 42, 8], [0, 42, 8]], "radius": 5}}),
+            json!({"command": "solid.shell", "params": {"faces": [[28, 21, 16]], "thickness": 3, "body": "Base"}}),
+        ];
+        for (x, y) in [(-1.0, -1.0), (57.0, -1.0), (-1.0, 43.0), (57.0, 43.0)] {
+            commands.push(json!({"command": "solid.cylinder", "params": {"diameter": 13, "height": 16, "base": [x, y, 0], "operation": "join", "targets": ["Base"]}}));
+        }
+        for (x, y) in [(-1.0, -1.0), (57.0, -1.0), (-1.0, 43.0), (57.0, 43.0)] {
+            commands.push(json!({"command": "solid.hole", "params": {"position": [x, y, 16], "diameter": 3.3, "depth": 8}}));
+        }
+        for (x, y) in [(16.5, 16.5), (39.5, 16.5)] {
+            commands.push(json!({"command": "solid.cylinder", "params": {"diameter": 6, "height": 4, "base": [x, y, 3], "operation": "join", "targets": ["Base"]}}));
+        }
+        let (_d, mut s) = open(json!(commands));
+        let plan = s.execute("mesh.plan", &json!({"body": "Base", "size": 1.5, "layers": 2})).unwrap();
+        assert_eq!(plan["mesher"], "project", "{plan}");
+        let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
+        assert!(r["layout"].as_str().unwrap().contains("10 circle(s) ringed"), "{r}");
+        accept(&mut s, &r, 0.5, 10.0);
+    }
+
     #[test]
     fn a_filleted_box_meshes_structured_round_its_corners() {
         let (_d, mut s) = open(json!([

@@ -14,7 +14,12 @@
 //!   side of the body near the hole is the frame there and the far side is as far; a fillet
 //!   round a corner of the outline that holds a hole (a screw hole in a rounded corner) is taken
 //!   in by the hole's ring, its frame reaching the two sides and its outer corner projected onto
-//!   the fillet's middle, so the corner needs no blend layer.
+//!   the fillet's middle, so the corner needs no blend layer. A boss the body's walls run into
+//!   (planes of the body crossing its circle outside it) is framed by the square round its
+//!   whole circle, subdivided by those planes, every square inside it divided alike so the
+//!   ring's blocks meet the walls node to node; on the walls' side the frame stops at their
+//!   inner plane and its corner projects onto the inner fillet's middle (a boss just touching
+//!   the fillet included).
 //! - **Blend layer.** A side of the body a fillet or chamfer runs along, or that a shell's wall
 //!   stands on, gets a layer of blocks between the grid (on the body shrunk by the blend's
 //!   depth or the wall's thickness) and the side, one block per boundary face of the grid, the
@@ -161,6 +166,14 @@ struct Group {
     /// The frame's half-side per local axis when a corner blend it takes in sets it: the
     /// distance from the centre to the body's side the blend runs along.
     forced: [Option<f64>; 2],
+    /// A boss the body's walls run into: planes of the body cross its circle (outside it, where
+    /// the walls join), so its frame is the square round the whole circle, subdivided by those
+    /// planes, and the ring's blocks follow the subdivision.
+    patch: bool,
+    /// The extent per local axis of the concave blends a patch takes in (the inner fillet where
+    /// the walls meet, in pieces where the boss touches it): the frame's side on the blends'
+    /// side of the centre goes to their middle.
+    blends: Option<[[f64; 2]; 2]>,
 }
 
 /// Plan the block topology of the body.
@@ -219,6 +232,8 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
     // The faces: planes square to an axis (with their outward sign), the circles' cylinders, and
     // the blends; anything else is not this layout's.
     let mut planes_on: [Vec<(f64, f64)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    // The planar faces square to an in-plane axis: (axis, offset, face).
+    let mut side_faces: Vec<(usize, f64, usize)> = Vec::new();
     let mut blend_faces: Vec<usize> = Vec::new();
     for (f, s) in inp.surfaces.iter().enumerate() {
         let blend = inp.blends.contains(&(f as u32));
@@ -226,15 +241,21 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
             Some(FaceSurface::Plane { normal, point }) => {
                 let n = local(*normal);
                 match (0..3).find(|&a| (n[a].abs() - 1.0).abs() < 1e-6) {
-                    Some(a) => planes_on[a].push((local(*point)[a], n[a].signum())),
+                    Some(a) => {
+                        planes_on[a].push((local(*point)[a], n[a].signum()));
+                        if a < 2 {
+                            side_faces.push((a, local(*point)[a], f));
+                        }
+                    }
                     None if blend => blend_faces.push(f),
                     None => return Err(format!("face `{}` is a plane at an angle to the axes", name(f))),
                 }
             }
-            Some(FaceSurface::Cylinder { origin, axis, radius }) if !blend => {
-                if !((dot(*axis, d).abs() - 1.0).abs() < 1e-6 && on_circle(*origin, *radius)) {
-                    return Err(format!("face `{}` is a cylinder that is not one of the plan's rings", name(f)));
-                }
+            // A ring's cylinder, even where a fillet's history names it (a boss over a filleted
+            // corner).
+            Some(FaceSurface::Cylinder { origin, axis, radius }) if (dot(*axis, d).abs() - 1.0).abs() < 1e-6 && on_circle(*origin, *radius) => {}
+            Some(FaceSurface::Cylinder { .. }) if !blend => {
+                return Err(format!("face `{}` is a cylinder that is not one of the plan's rings", name(f)));
             }
             _ if blend => blend_faces.push(f),
             _ => return Err(format!("face `{}` is curved and neither a ring's cylinder nor a fillet's", name(f))),
@@ -250,11 +271,25 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
                     g.circles.push(*c);
                 }
             }
-            None => groups.push(Group { c: c.c, circles: vec![*c], frame: [[0.0; 2]; 2], forced: [None; 2] }),
+            None => groups.push(Group { c: c.c, circles: vec![*c], frame: [[0.0; 2]; 2], forced: [None; 2], patch: false, blends: None }),
         }
     }
     for g in &mut groups {
         g.circles.sort_by(|a, b| b.r.total_cmp(&a.r));
+        let Some(outer) = g.circles.first().copied() else { continue };
+        let r0 = outer.r;
+        let crossing: Vec<usize> = side_faces.iter().filter(|(a, v, _)| (v - g.c[*a]).abs() < r0 - eps).map(|(_, _, f)| *f).collect();
+        if outer.kind != RingKind::Butterfly || crossing.is_empty() {
+            continue;
+        }
+        // The walls join the boss outside its circle: no face of theirs inside it.
+        for f in crossing {
+            let pts = face_points.get(f).map_or(&[][..], Vec::as_slice);
+            if pts.iter().any(|p| (p[0] - g.c[0]).hypot(p[1] - g.c[1]) < r0 * (1.0 - 1e-3)) {
+                return Err(format!("face `{}` runs through the circle of radius {r0:.4}", name(f)));
+            }
+        }
+        g.patch = true;
     }
 
     // The blend layer: per side, the depth of the blends along it, or the shell's wall. A blend
@@ -271,6 +306,13 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
             && let Some(g) = groups.get_mut(g)
         {
             g.forced = half.map(Some);
+            continue;
+        }
+        if let Some((g, extent)) = patch_blend(&groups, pts)
+            && let Some(g) = groups.get_mut(g)
+        {
+            let union = g.blends.map_or(extent, |b| std::array::from_fn(|a| [b[a][0].min(extent[a][0]), b[a][1].max(extent[a][1])]));
+            g.blends = Some(union);
             continue;
         }
         let mut touched = false;
@@ -341,11 +383,26 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
         let r0 = outer.r;
         for a in 0..2 {
             let c = g.c[a];
-            if fixed[a].iter().any(|v| (v - c).abs() < r0 - eps) {
+            if !g.patch && fixed[a].iter().any(|v| (v - c).abs() < r0 - eps) {
                 return Err(format!("a face of the body runs through the circle of radius {r0:.4}"));
             }
         }
         let half = match outer.kind {
+            // The square round the whole circle (its corners projected onto it at 45°), or
+            // where a blend it takes in sets a side, at the walls' inner plane.
+            RingKind::Butterfly if g.patch => std::array::from_fn(|a| {
+                let mut h = [r0; 2];
+                // The blends' near edge: the walls' inner plane, whose corner projects onto
+                // the blend's middle.
+                if let Some(b) = g.blends {
+                    if 0.5 * (b[a][0] + b[a][1]) > g.c[a] {
+                        h[1] = b[a][0] - g.c[a];
+                    } else {
+                        h[0] = g.c[a] - b[a][1];
+                    }
+                }
+                h
+            }),
             RingKind::Butterfly => [[r0 / 2f64.sqrt(); 2]; 2],
             RingKind::OGrid => o_grid_frame(g, &fixed, eps)?,
         };
@@ -353,7 +410,7 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
             let c = g.c[a];
             for s in 0..2 {
                 let h = half[a][s];
-                if outer.kind == RingKind::Butterfly && fixed[a].iter().any(|v| (v - c).abs() < h - eps) {
+                if outer.kind == RingKind::Butterfly && !g.patch && fixed[a].iter().any(|v| (v - c).abs() < h - eps) {
                     return Err(format!("a face of the body runs through the square inside the circle of radius {r0:.4}"));
                 }
                 g.frame[a][s] = if s == 0 { c - h } else { c + h };
@@ -417,11 +474,14 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
     }
     for g in &groups {
         for a in 0..2 {
+            // A patch's frame may stop short of its circle where the walls join (the ring's
+            // faces there are projected out onto it), but holds the circles inside.
             let r0 = g.circles.first().map_or(0.0, |c| c.r);
-            if !(g.frame[a][0] < g.c[a] - 0.7 * r0 && g.frame[a][1] > g.c[a] + 0.7 * r0) {
+            let hold = if g.patch { 1.2 * g.circles.get(1).map_or(0.0, |c| c.r) } else { 0.7 * r0 };
+            if !(g.frame[a][0] < g.c[a] - hold && g.frame[a][1] > g.c[a] + hold) {
                 return Err(format!("the frame round the circle of radius {r0:.4} does not hold it"));
             }
-            if planes[a].iter().any(|p| *p > g.frame[a][0] + eps && *p < g.frame[a][1] - eps) {
+            if !g.patch && planes[a].iter().any(|p| *p > g.frame[a][0] + eps && *p < g.frame[a][1] - eps) {
                 return Err(format!("a plane of the body runs through the frame round the circle of radius {r0:.4}"));
             }
         }
@@ -444,19 +504,25 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
         .map(|(b, _)| [mid(&planes[0], b % n[0]), mid(&planes[1], (b / n[0]) % n[1]), mid(&planes[2], b / (n[0] * n[1]))])
         .collect();
     let index = |p: &[f64], v: f64| p.iter().position(|x| (x - v).abs() < eps);
+    // The grid cells the rings replace.
+    let mut replaced: Vec<usize> = Vec::new();
     let mut rings = 0;
     for g in &groups {
-        let (Some(i0), Some(j0)) = (index(&planes[0], g.frame[0][0]), index(&planes[1], g.frame[1][0])) else {
+        let (Some(i0), Some(i1), Some(j0), Some(j1)) =
+            (index(&planes[0], g.frame[0][0]), index(&planes[0], g.frame[0][1]), index(&planes[1], g.frame[1][0]), index(&planes[1], g.frame[1][1]))
+        else {
             return Err("a frame lost its planes".into());
         };
+        let r0 = g.circles.first().map_or(0.0, |c| c.r);
         // The squares inside the frame: one per circle (corners at 45° on it), then the core.
-        // Each: half-sides [-u, +u, -v, +v] and the radius it stands for per side.
+        // Each: half-sides [-u, +u, -v, +v] and the radius it stands for per side (a patch's
+        // frame stands for its circle, which the frame's corners are projected onto).
         let mut squares: Vec<([f64; 4], [f64; 4])> = Vec::new();
         let fr = [g.c[0] - g.frame[0][0], g.frame[0][1] - g.c[0], g.c[1] - g.frame[1][0], g.frame[1][1] - g.c[1]];
-        squares.push((fr, fr));
+        squares.push((fr, if g.patch { [r0; 4] } else { fr }));
         for c in &g.circles {
             let h = c.r / 2f64.sqrt();
-            if squares.last().is_some_and(|(s, _)| s.iter().all(|x| (x - h).abs() < eps)) {
+            if squares.last().is_some_and(|(s, _)| s.iter().all(|x| (x - h).abs() < eps)) || (g.patch && c.r == r0) {
                 continue;
             }
             squares.push(([h; 4], [c.r; 4]));
@@ -465,31 +531,71 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
         let inner = g.circles.last().map_or(0.0, |c| c.r);
         squares.push(([inner / (2.0 * 2f64.sqrt()); 4], [0.0; 4]));
         if squares.windows(2).any(|w| (0..4).any(|i| !(w[1].0[i] < w[0].0[i] - eps))) {
-            return Err(format!("the frame round the circle of radius {:.4} is too tight for its ring", g.circles.first().map_or(0.0, |c| c.r)));
+            return Err(format!("the frame round the circle of radius {r0:.4} is too tight for its ring"));
         }
+        // The frame's subdivision by the grid's planes, as fractions along each side: every
+        // square inside is divided alike, so the ring's blocks meet node to node.
+        let frac = |a: usize, lo: usize, hi: usize| -> Vec<f64> {
+            let (p0, p1) = (planes[a][lo], planes[a][hi]);
+            planes[a][lo..=hi].iter().map(|p| (p - p0) / (p1 - p0)).collect()
+        };
+        let (fu, fv) = (frac(0, i0, i1), frac(1, j0, j1));
+        // Point (u, v) (fractions along the axes) of square `k`.
+        let at = |k: usize, u: f64, v: f64| -> [f64; 2] {
+            let h = squares.get(k).map_or([0.0; 4], |s| s.0);
+            [g.c[0] - h[0] + u * (h[0] + h[1]), g.c[1] - h[2] + v * (h[2] + h[3])]
+        };
+        // The frame's boundary, counter-clockwise, as (u, v) fractions with the side each
+        // segment that starts there lies on (0: -u, 1: +u, 2: -v, 3: +v).
+        let mut around: Vec<([f64; 2], usize)> = Vec::new();
+        around.extend(fu[..fu.len() - 1].iter().map(|&u| ([u, 0.0], 2)));
+        around.extend(fv[..fv.len() - 1].iter().map(|&v| ([1.0, v], 1)));
+        around.extend(fu[1..].iter().rev().map(|&u| ([u, 1.0], 3)));
+        around.extend(fv[1..].iter().rev().map(|&v| ([0.0, v], 0)));
         for w in 0..n[2] {
-            let cell = (w * n[1] + j0) * n[0] + i0;
-            let zmid = mid(&planes[2], w);
-            for pair in squares.windows(2) {
-                let ((_, outer_rho), (half, inner_rho)) = (pair[0], pair[1]);
-                let first = t.blocks.len();
-                t.o_grid(cell, &[1, 2], [0.5; 3]).map_err(|e| e.to_string())?;
-                let corners = t.blocks.get(cell).copied().ok_or("an O-grid lost its block")?;
-                for (bits, v) in [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0], [1, 0], [1, 1], [0, 1]].iter().zip(corners) {
-                    if let Some(p) = t.vertices.get_mut(v as usize) {
-                        p[0] = if bits[0] == 0 { g.c[0] - half[0] } else { g.c[0] + half[1] };
-                        p[1] = if bits[1] == 0 { g.c[1] - half[2] } else { g.c[1] + half[3] };
+            let (z0, z1) = (planes[2][w], planes[2][w + 1]);
+            let zmid = 0.5 * (z0 + z1);
+            for i in i0..i1 {
+                for j in j0..j1 {
+                    replaced.push((w * n[1] + j) * n[0] + i);
+                }
+            }
+            let add = |q: [[f64; 2]; 4], pr: V3, t: &mut Topology, probe: &mut Vec<V3>| {
+                let base = t.vertices.len() as u32;
+                for z in [z0, z1] {
+                    for p in q {
+                        t.vertices.push([p[0], p[1], z]);
                     }
                 }
-                // The four blocks round it, in the O-grid's order: -v, +u, +v, -u.
-                for (q, (dir, side)) in [([0.0, -1.0], 2), ([1.0, 0.0], 1), ([0.0, 1.0], 3), ([-1.0, 0.0], 0)].into_iter().enumerate() {
+                let mut b = [base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7];
+                let pos = b.map(|v| t.vertices.get(v as usize).copied().unwrap_or_default());
+                if corner_det(&pos) < 0.0 {
+                    b = [b[0], b[3], b[2], b[1], b[4], b[7], b[6], b[5]];
+                }
+                t.blocks.push(b);
+                probe.push(pr);
+            };
+            for (k, pair) in squares.windows(2).enumerate() {
+                let (outer_rho, inner_rho) = (pair[0].1, pair[1].1);
+                for (s, &(p, side)) in around.iter().enumerate() {
+                    let Some(&(q, _)) = around.get((s + 1) % around.len()) else { continue };
+                    let quad = [at(k, p[0], p[1]), at(k, q[0], q[1]), at(k + 1, q[0], q[1]), at(k + 1, p[0], p[1])];
+                    // The probe: between the two radii the squares stand for, toward the
+                    // segment's middle.
+                    let m = [0.5 * (quad[0][0] + quad[1][0]) - g.c[0], 0.5 * (quad[0][1] + quad[1][1]) - g.c[1]];
+                    let len = m[0].hypot(m[1]).max(eps);
                     let rho = 0.5 * (outer_rho[side] + inner_rho[side]);
-                    if first + q < t.blocks.len() {
-                        probe.push([g.c[0] + dir[0] * rho, g.c[1] + dir[1] * rho, zmid]);
-                    }
+                    add(quad, [g.c[0] + m[0] / len * rho, g.c[1] + m[1] / len * rho, zmid], &mut t, &mut probe);
                 }
-                if let Some(p) = probe.get_mut(cell) {
-                    *p = [g.c[0], g.c[1], zmid];
+            }
+            // The core, divided as the frame.
+            let last = squares.len() - 1;
+            for u in fu.windows(2) {
+                for v in fv.windows(2) {
+                    let quad = [at(last, u[0], v[0]), at(last, u[1], v[0]), at(last, u[1], v[1]), at(last, u[0], v[1])];
+                    let cx = 0.25 * quad.iter().map(|p| p[0]).sum::<f64>();
+                    let cy = 0.25 * quad.iter().map(|p| p[1]).sum::<f64>();
+                    add(quad, [cx, cy, zmid], &mut t, &mut probe);
                 }
             }
         }
@@ -497,6 +603,14 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
     if probe.len() != t.blocks.len() {
         return Err("the layout lost track of its blocks".into());
     }
+    replaced.sort_unstable();
+    replaced.dedup();
+    t.remove(&replaced).map_err(|e| e.to_string())?;
+    let mut k = 0;
+    probe.retain(|_| {
+        k += 1;
+        replaced.binary_search(&(k - 1)).is_err()
+    });
     t.merge(eps);
 
     // The blend layer: a block on every boundary face of the grid on a side with a layer.
@@ -623,6 +737,31 @@ fn corner_ring(groups: &[Group], pts: &[V3], lo: V3, hi: V3, eps: f64) -> Option
             half[a] = h;
         }
         Some((i, half))
+    })
+}
+
+/// The patch ring that takes in the concave blend with points `pts` (local frame): a blend
+/// inside the square round a boss's whole circle and not inside the circle (the inner fillet
+/// where the walls meet the boss, the boss touching it at most). Returns the group and, per
+/// axis, the blend's extent.
+fn patch_blend(groups: &[Group], pts: &[V3]) -> Option<(usize, [[f64; 2]; 2])> {
+    let (mut bl, mut bh) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for p in pts {
+        for a in 0..2 {
+            bl[a] = bl[a].min(p[a]);
+            bh[a] = bh[a].max(p[a]);
+        }
+    }
+    groups.iter().enumerate().find_map(|(i, g)| {
+        let r0 = g.circles.first()?.r;
+        let tol = 1e-3 * r0;
+        if !g.patch || pts.iter().any(|p| (p[0] - g.c[0]).hypot(p[1] - g.c[1]) < 0.9 * r0) {
+            return None;
+        }
+        if (0..2).any(|a| bl[a] < g.c[a] - r0 - tol || bh[a] > g.c[a] + r0 + tol) {
+            return None;
+        }
+        Some((i, [[bl[0], bh[0]], [bl[1], bh[1]]]))
     })
 }
 

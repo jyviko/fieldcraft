@@ -264,11 +264,21 @@ pub fn orientation(p: &Value) -> Result<Orientation> {
     Orientation::checked(yaw, pitch, distance).ok_or_else(|| bad("`yaw` and `pitch` must be finite and `distance` finite and above 0"))
 }
 
-/// A PNG of the session seen from `at`, `w` × `h` pixels: framing everything drawn but the
+/// A picture ready to draw: the scene (with its background and clipping radius), the setup's
+/// symbols as a layer over it, and the camera.
+pub struct Framed {
+    pub scene: Scene,
+    pub symbols: Scene,
+    pub cam: Camera,
+    pub shown: Shown,
+}
+
+/// The session seen from `at` in a `w` × `h` pixel picture: framing everything drawn but the
 /// datums (they are drawn at the model's extent, and framing them would only add margin), or from
-/// `at`'s distance when it has one. The symbols are drawn at their default size on screen
-/// ([`glyphs::DEFAULT_SIZE`] pixels) for that camera.
-pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette) -> Result<(Vec<u8>, Shown)> {
+/// `at`'s distance when it has one. The symbols are sized for their default size on screen
+/// ([`glyphs::DEFAULT_SIZE`] pixels) for that camera. The CPU rasterizer ([`render_png`]) and
+/// the GPU (`fieldcraft-cli snapshot`) draw the same [`Framed`].
+pub fn frame(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette) -> Framed {
     let mut pic = picture(s, p);
     let mut cam = Camera::default();
     let aspect = w as f64 / h.max(1) as f64;
@@ -287,8 +297,14 @@ pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette
     bounds.union(pic.symbols(unit(&cam), &mut symbols));
     bounds.union(pic.datums);
     pic.scene.radius = if bounds.is_empty() { 1.0 } else { (cam.target.dist(bounds.center()) + bounds.diagonal() * 0.5).max(1e-3) };
-    let png = fieldcraft_render::render_layers_png(&pic.scene, &[&symbols], &cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;
-    Ok((png, pic.shown))
+    Framed { scene: pic.scene, symbols, cam, shown: pic.shown }
+}
+
+/// A PNG of the session seen from `at`, `w` × `h` pixels ([`frame`]), drawn on the CPU.
+pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette) -> Result<(Vec<u8>, Shown)> {
+    let f = frame(s, at, w, h, p);
+    let png = fieldcraft_render::render_layers_png(&f.scene, &[&f.symbols], &f.cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;
+    Ok((png, f.shown))
 }
 
 #[cfg(test)]

@@ -206,14 +206,14 @@ fn over_background(px: &[u8], w: usize, h: usize, bg: (Rgb, Rgb)) -> Vec<u8> {
     let f = |c: Rgb| [c.0, c.1, c.2].map(f64::from);
     let (top, bottom) = (f(bg.0), f(bg.1));
     let mut out = px.to_vec();
-    for (i, p) in out.chunks_exact_mut(4).enumerate() {
+    for (i, [r, g, b, a]) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let t = (i / w.max(1)) as f64 / h.max(1) as f64;
-        let k = 1.0 - f64::from(p[3]) / 255.0;
-        for (c, (a, b)) in p.iter_mut().zip(top.iter().zip(&bottom)) {
-            let back = a + (b - a) * t;
+        let k = 1.0 - f64::from(*a) / 255.0;
+        for (c, (top, bottom)) in [r, g, b].into_iter().zip(top.iter().zip(&bottom)) {
+            let back = top + (bottom - top) * t;
             *c = (f64::from(*c) + back * k).round().clamp(0.0, 255.0) as u8;
         }
-        p[3] = 255;
+        *a = 255;
     }
     out
 }

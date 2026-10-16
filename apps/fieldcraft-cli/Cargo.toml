@@ -1,6 +1,6 @@
 [package]
 name = "fieldcraft-cli"
-description = "FieldCraft from the command line: list commands, run scripts, serve MCP"
+description = "FieldCraft from the command line: list commands, run scripts, draw snapshots, serve MCP"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,10 +10,13 @@ workspace = true
 
 [dependencies]
 fieldcraft-engine = { workspace = true }
+fieldcraft-gpu = { workspace = true }
+fieldcraft-render = { workspace = true }
 fieldcraft-io = { workspace = true }
 fieldcraft-mcp = { workspace = true }
 fieldcraft-update = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+png = { workspace = true }
 fieldcraft-update = { workspace = true, features = ["mock"] }

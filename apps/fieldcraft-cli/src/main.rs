@@ -1,5 +1,6 @@
 //! fieldcraft-cli commands
 //! fieldcraft-cli run <script.json>
+//! fieldcraft-cli snapshot <script.json> --out shot.png [--view iso|x|y|z|front|…] [--size WxH]
 //! fieldcraft-cli features
 //! fieldcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
 //! fieldcraft-cli crashes [list [--json] | show <id> | replay <id> | dir | clear [<id>]]
@@ -9,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod crashes;
+mod snapshot;
 mod update;
 
 use std::path::Path;
@@ -23,6 +25,12 @@ usage:
   fieldcraft-cli commands --json       the same as JSON, each command's parameters as JSON Schema
   fieldcraft-cli run <script.json>     run a script (a JSON array of {\"command\", \"params\"})
                                        and print the model summary
+  fieldcraft-cli snapshot <script.json> --out FILE.png [--view V] [--size WxH]
+                                       run a script and draw the model to a PNG with no
+                                       window: the viewport's GPU pipeline on a hardware or
+                                       software GPU, else the CPU rasterizer (FIELDCRAFT_GPU=
+                                       auto|hardware|software|cpu); V: iso (default), x, y, z,
+                                       front, back, left, right, top, bottom; size 1280x800
   fieldcraft-cli features              print docs/features.md (every capability, ready or
                                        coming soon) from the capability catalogue
   fieldcraft-cli mcp [options]         serve the Model Context Protocol on stdin/stdout
@@ -67,6 +75,7 @@ fn main() -> ExitCode {
         Some("mcp") => mcp(args.get(1..).unwrap_or(&[])),
         Some("crashes") => crashes::run(args.get(1..).unwrap_or(&[])),
         Some("update") => update::run(args.get(1..).unwrap_or(&[])),
+        Some("snapshot") => snapshot::run(args.get(1..).unwrap_or(&[])),
         Some("run") => args.get(1).ok_or_else(|| format!("run needs a script\n\n{USAGE}")).and_then(|p| run(p)),
         Some("-V" | "--version") => {
             println!("fieldcraft-cli {}", env!("CARGO_PKG_VERSION"));
@@ -135,7 +144,8 @@ fn mcp(args: &[String]) -> Result<(), String> {
     server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| format!("mcp: {e}"))
 }
 
-fn run(path: &str) -> Result<(), String> {
+/// The session after running the script at `path`.
+fn session_of(path: &str) -> Result<Session, String> {
     let size = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.len();
     if size > MAX_SCRIPT_BYTES {
         return Err(format!("{path}: larger than {} MB", MAX_SCRIPT_BYTES / (1024 * 1024)));
@@ -144,6 +154,11 @@ fn run(path: &str) -> Result<(), String> {
     let script: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
     let mut session = Session::default();
     session.run_script(&script).map_err(|e| e.to_string())?;
+    Ok(session)
+}
+
+fn run(path: &str) -> Result<(), String> {
+    let mut session = session_of(path)?;
     let info = session.execute("model.info", &json!({})).map_err(|e| e.to_string())?;
     println!("{}", serde_json::to_string_pretty(&info).map_err(|e| e.to_string())?);
     Ok(())

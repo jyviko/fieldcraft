@@ -1292,9 +1292,12 @@ name = "fieldcraft-cli"
 version = "0.6.0"
 dependencies = [
  "fieldcraft-engine",
+ "fieldcraft-gpu",
  "fieldcraft-io",
  "fieldcraft-mcp",
+ "fieldcraft-render",
  "fieldcraft-update",
+ "png",
  "serde_json",
 ]
 

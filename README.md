@@ -118,6 +118,7 @@ cargo xtask ci                                  # fmt, assets, layers, clippy, t
 cargo xtask test --heavy                        # the heavy (ignored) tests and the doc tests
 cargo run -p fieldcraft-cli -- commands         # every command and its parameters
 cargo run -p fieldcraft-cli -- run script.json  # run a command script
+cargo run -p fieldcraft-cli -- snapshot script.json --out shot.png  # draw it to a PNG, no window
 cargo run -p fieldcraft-cli -- mcp              # MCP server on stdio for AI agents (docs/mcp.md)
 ```
 

@@ -132,6 +132,8 @@ jobs:
           # Shared keys: release.yml's verify jobs restore these caches (they save only on main).
           shared-key: ci
           save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - name: Software GPU (lavapipe), so headless snapshots run the GPU pipeline
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends mesa-vulkan-drivers
       - name: cargo xtask ci (the affected crates, or everything)
         env:
           BASE: ${{ needs.plan.outputs.base }}

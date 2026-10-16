@@ -394,6 +394,36 @@ impl Camera {
         }
     }
 
+    /// The distance (zoom, in orthographic views) at which all eight corners of `b` project
+    /// inside the view shrunk by [`FIT_MARGIN`] on each side, keeping the target where it is (at
+    /// the view's centre): [`Camera::fit_in`] for a camera aimed at a chosen point, which the box
+    /// need not be centred on. With `s(z) = α·d − β·z` as there, a corner at `(x, y, z)` relative
+    /// to the target stays in when `|x| ≤ a·aspect·s(z)` and `|y| ≤ a·s(z)` for the margin's
+    /// edge `a`, so `d ≥ (|x|/(a·aspect) + β·z)/α`, and likewise for `y`.
+    pub fn fit_about(&mut self, b: &Aabb3, aspect: f64) {
+        if b.is_empty() || !(b.min.is_finite() && b.max.is_finite() && self.target.is_finite()) {
+            return;
+        }
+        let aspect = if aspect.is_finite() && aspect > 1e-6 { aspect.min(1e6) } else { 1.0 };
+        let a = 1.0 - 2.0 * FIT_MARGIN;
+        let (r, u, back) = self.basis();
+        let alpha = Camera { distance: 1.0, ..*self }.half_height();
+        let beta = if self.fov > 0.0 { alpha } else { 0.0 };
+        let size = (b.diagonal() * 0.5).max(1e-3);
+        let mut d = size * 1e-3 / alpha;
+        for p in b.corners() {
+            let p = p - self.target;
+            let (x, y, z) = (p.dot(r), p.dot(u), p.dot(back));
+            d = d.max((x.abs() / (a * aspect) + beta * z) / alpha).max((y.abs() / a + beta * z) / alpha);
+            if beta > 0.0 {
+                d = d.max(z + size * 1e-3);
+            }
+        }
+        if d.is_finite() {
+            self.distance = d.clamp(Orientation::DISTANCE.0, Orientation::DISTANCE.1);
+        }
+    }
+
     pub fn is_valid(&self) -> bool {
         self.target.is_finite() && self.yaw.is_finite() && self.pitch.is_finite() && self.distance.is_finite() && self.distance > 0.0
     }
@@ -402,6 +432,27 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A box off to one side of the target fits with the target still at the centre and the
+    /// box's farthest corner at the margin.
+    #[test]
+    fn fit_about_keeps_the_target_centred() {
+        let b = Aabb3 { min: Vec3::new(10.0, -5.0, 0.0), max: Vec3::new(30.0, 5.0, 8.0) };
+        for fov in [0.0, 0.6] {
+            let mut c = Camera { target: Vec3::new(12.0, 0.0, 2.0), fov, ..Default::default() };
+            c.fit_about(&b, 1.5);
+            let (w, h) = (300.0, 200.0);
+            let (x, y, _) = c.to_screen(c.target, w, h, 50.0).unwrap();
+            assert!((x - 150.0).abs() < 1e-6 && (y - 100.0).abs() < 1e-6);
+            let worst = b
+                .corners()
+                .iter()
+                .map(|p| c.to_screen(*p, w, h, 50.0).unwrap())
+                .map(|(x, y, _)| ((x - 150.0).abs() / 150.0).max((y - 100.0).abs() / 100.0))
+                .fold(0.0, f64::max);
+            assert!((worst - (1.0 - 2.0 * FIT_MARGIN)).abs() < 1e-6, "fov {fov}: {worst}");
+        }
+    }
 
     #[test]
     fn front_view_projects_target_to_centre() {

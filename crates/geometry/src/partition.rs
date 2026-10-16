@@ -187,6 +187,10 @@ impl Design {
 /// several times the body's size, and its boolean then puts the cut up to a few micrometres off
 /// the plane (1.8 µm on a 140 mm body), off the faces it should meet (#384); boxes of the body's own
 /// size keep the cut on the plane.
+///
+/// A boolean the kernel could only make by moving one body against the other (its last-resort
+/// tool nudge, micrometres and microradians) is refused: the cut would lie off the plane, next to
+/// the face it was meant to run along, and leave a cell bounded by slivers no mesher takes (#427).
 fn halves(body: &Shape, plane: &Plane) -> solidcraft_kernel::Result<Vec<solidcraft_kernel::Body>> {
     let bbox = solidcraft_kernel::measure(&body.body)?.bbox;
     let reach = bbox.diagonal().max(LINEAR_REACH);
@@ -203,7 +207,14 @@ fn halves(body: &Shape, plane: &Plane) -> solidcraft_kernel::Result<Vec<solidcra
     let mut out = Vec::with_capacity(2);
     for (lo, hi) in [(0.0, reach), (-reach, 0.0)] {
         let Some(side) = solidcraft_kernel::extrude(plane, std::slice::from_ref(&square), lo, hi)?.pop() else { continue };
-        out.extend(solidcraft_kernel::boolean(&body.body, &side, solidcraft_kernel::BoolOp::Intersect)?);
+        let (cut, report) =
+            solidcraft_kernel::capture_boolean_diagnostics(|| solidcraft_kernel::boolean(&body.body, &side, solidcraft_kernel::BoolOp::Intersect));
+        if let Some(moved) = report.warning() {
+            return Err(solidcraft_kernel::KernelError::Failed(format!(
+                "the cut is only made off the plane ({moved}); the plane runs along a face or edge of the body: move it off (by a fraction of the element size)"
+            )));
+        }
+        out.extend(cut?);
     }
     Ok(out)
 }

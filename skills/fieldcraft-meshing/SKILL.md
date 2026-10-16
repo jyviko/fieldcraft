@@ -77,7 +77,8 @@ Before the first mesh command:
 - **Curved splits are allowed.** A cut does not have to be a plane: use a cylindrical or offset
   surface (a ring around a boss, an offset of a fillet) when a plane would create slivers.
 - **Never cut along an existing face** (a plane coincident with a face within tolerance leaves
-  micrometre slivers, #384) and never through the axis of a small hole (degenerate tessellation at the
+  micrometre slivers, #384; where the kernel can only make it by nudging its cut off the plane,
+  `geometry.partition` refuses it, #427) and never through the axis of a small hole (degenerate tessellation at the
   hole edge). Offset the cut to just outside the feature instead.
 - **Keep cuts consistent across touching bodies** so their meshes can match, or tie them
   deliberately (`interaction.tie`; linear faces only today).

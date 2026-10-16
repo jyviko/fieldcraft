@@ -769,6 +769,41 @@ mod tests {
         }
     }
 
+    /// A cut at x = 130 runs along the pocket's end wall (#427), and the kernel only makes it
+    /// with its cutting box nudged 1.3 µm and 2 µrad off the plane: on the half y > 0 that left a
+    /// cell bounded by slivers next to the wall, which `mesh.cells` refused with an open boundary
+    /// at x = 130. The partition refuses such a cut, saying why, on the whole crank and on the
+    /// half, and leaves the body whole; the plane moved past the pocket (x = 136) cuts the half
+    /// into cells that mesh.
+    #[test]
+    fn a_cut_the_kernel_can_only_nudge_off_its_plane_is_refused() {
+        let datum = |name: &str, x: f64| json!({"name": name, "by": {"type": "offset", "plane": "yz", "offset": x}});
+        let refused = |s: &mut Session, body: &str| {
+            let e = s.execute("geometry.partition", &json!({"name": "X130", "datum": "X130", "bodies": [body]})).unwrap_err().to_string();
+            assert!(e.contains(&format!("could not cut `{body}`")) && e.contains("only made off the plane"), "{e}");
+        };
+        let names = |s: &mut Session| -> Vec<String> {
+            let r = s.execute("geometry.bodies", &json!({})).unwrap();
+            r.as_array().unwrap().iter().filter_map(|b| b["name"].as_str().map(String::from)).collect()
+        };
+        let bytes = fieldcraft_geometry::script_design(CRANK_ARM).unwrap();
+        let (_dir, path) = crate::tests::design_file(&bytes);
+        let mut whole = Session::default();
+        whole.execute("geometry.open", &json!({"path": path})).unwrap();
+        whole.execute("geometry.datum", &datum("X130", 130.0)).unwrap();
+        refused(&mut whole, "CrankArm");
+        assert_eq!(names(&mut whole), ["CrankArm"]);
+
+        let mut s = open("crank-mirror");
+        s.execute("geometry.datum", &datum("X130", 130.0)).unwrap();
+        refused(&mut s, "CrankArm/b");
+        assert_eq!(names(&mut s), ["CrankArm/a", "CrankArm/b"]);
+        s.execute("geometry.datum", &datum("X136", 136.0)).unwrap();
+        let r = s.execute("geometry.partition", &json!({"name": "X136", "datum": "X136", "bodies": ["CrankArm/b"]})).unwrap();
+        assert_eq!(r["cells"], json!(["CrankArm/b/a", "CrankArm/b/b"]), "{r}");
+        s.execute("mesh.cells", &json!({"bodies": ["CrankArm/b/a", "CrankArm/b/b"], "default": "extrude", "size": 3})).unwrap();
+    }
+
     /// The whole crank extruded all-hex (#198): its back pocket's floor is a rounded rectangle,
     /// straight sides running tangent into corner arcs, so the region is a disk whose O-grid's
     /// middle block follows its 6:1 elongation; a square middle block squashed its elements to a

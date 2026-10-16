@@ -945,7 +945,8 @@ pub(crate) mod tests {
 
     /// #384: cuts stay on their plane (the kernel's own split put them 1.8 µm off it on the air
     /// of the enclosure, so the cut faces were not even recognized), and a plane along an
-    /// existing face or through a hole's axis is a warning naming the plane, the body and where.
+    /// existing face or through a hole's axis is a warning naming the plane, the body and where,
+    /// or refused where the kernel could only cut it off the plane.
     #[test]
     fn cuts_stay_on_the_plane_and_risky_ones_are_named() {
         let (_dir, mut s) = pi5();
@@ -972,11 +973,11 @@ pub(crate) mod tests {
             assert!(!cut.is_empty() && cut.iter().all(|x| (x - 16.5).abs() < 1e-9), "{cell}: {cut:?}");
         }
         s.execute("edit.undo", &json!({})).unwrap();
-        // Along the side of the heat sink's pedestal: named.
-        let r = plane(&mut s, "Side", 34.0);
-        let warnings = r["warnings"].to_string();
-        assert!(warnings.contains("partition `PSide`: the plane lies on face `F45:-x` of `Air`"), "{r}");
-        s.execute("edit.undo", &json!({})).unwrap();
+        // Along the side of the heat sink's pedestal: the kernel only cuts with its box nudged
+        // off the plane, so the cut is refused, saying why (#427).
+        s.execute("geometry.datum", &json!({"name": "Side", "by": {"type": "offset", "plane": "yz", "offset": 34.0}})).unwrap();
+        let e = s.execute("geometry.partition", &json!({"name": "PSide", "datum": "Side", "bodies": ["Air"]})).unwrap_err().to_string();
+        assert!(e.contains("could not cut `Air`") && e.contains("only made off the plane"), "{e}");
         // Through a standoff's hole: the cell whose boundary breaks at the hole's edge is named.
         let r = plane(&mut s, "Axis", 74.5);
         let warnings = r["warnings"].to_string();

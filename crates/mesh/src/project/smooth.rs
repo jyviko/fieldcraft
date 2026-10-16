@@ -47,6 +47,9 @@ const SAME_QUALITY: f64 = 1e-6;
 /// move without lowering another below the lower of its own value and [`QUALITY_FLOOR`].
 const LIFT_BELOW: f64 = 0.7;
 
+/// Sweeps that straighten the grid lines on the faces after the compass search.
+const STRAIGHTEN_SWEEPS: usize = 30;
+
 /// Rounds of the compass search on the worst elements.
 const OPTIMIZE_ROUNDS: usize = 20;
 
@@ -508,6 +511,52 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
             improved |= best.1 != p;
         }
         if !improved {
+            break;
+        }
+    }
+    // The search moves boundary nodes one at a time, each to its own best place, which leaves the
+    // grid lines on a face zigzagging from node to node. Straighten them: each surface node back
+    // toward the mean of its neighbours on the surface, as far as no element round it falls below
+    // the lower of its own value and the mesh's smallest after the search (so the mesh's worst
+    // element is no worse for it).
+    let floor = hexes.iter().map(|h| hex_scaled_jacobian(&h.map(|q| at(m.nodes, q)))).fold(f64::INFINITY, f64::min);
+    for _ in 0..STRAIGHTEN_SWEEPS {
+        let mut moved = false;
+        for v in 0..n as u32 {
+            let c = cons(v);
+            if !matches!(c, Constraint::Surface(_)) {
+                continue;
+            }
+            let p = at(m.nodes, v);
+            let Some(q) = along_boundary.get(&v).and_then(|e| {
+                let (mut s, mut k) = ([0.0; 3], 0usize);
+                for &w in e {
+                    s = add(s, at(m.nodes, w));
+                    k += 1;
+                }
+                (k > 0).then(|| place(g, targets, c, scale(s, 1.0 / k as f64), ptol))
+            }) else {
+                continue;
+            };
+            if dist(q, p) <= ptol {
+                continue;
+            }
+            let before = quality(m.nodes, v);
+            for step in [1.0, 0.5, 0.25] {
+                let x = if step == 1.0 { q } else { place(g, targets, c, add(p, scale(sub(q, p), step)), ptol) };
+                if let Some(slot) = m.nodes.get_mut(v as usize) {
+                    *slot = x;
+                }
+                if quality(m.nodes, v).keeps_above(before, floor) {
+                    moved = true;
+                    break;
+                }
+                if let Some(slot) = m.nodes.get_mut(v as usize) {
+                    *slot = p;
+                }
+            }
+        }
+        if !moved {
             break;
         }
     }

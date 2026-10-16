@@ -12,7 +12,10 @@ fn cli(host: &str, args: &[&str]) -> std::process::Output {
 #[test]
 fn update_check_reports_the_latest_release() {
     let server = Server::start().unwrap();
-    server.release("latest", &json!({"tag_name": "v99.0.0", "html_url": "https://github.com/tangency-labs/fieldcraft/releases/tag/v99.0.0", "assets": []}));
+    server.release(
+        "latest",
+        &json!({"tag_name": "v99.0.0", "html_url": "https://github.com/tangency-labs/fieldcraft/releases/tag/v99.0.0", "assets": []}),
+    );
     let out = cli(&server.url(), &["update", "--check"]);
     assert!(out.status.success(), "{out:?}");
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();

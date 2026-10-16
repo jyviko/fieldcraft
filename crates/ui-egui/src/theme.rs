@@ -6,6 +6,7 @@
 //! ATTRIBUTION.md. Widget states are coloured with craft-ui's `WidgetPalette`.
 
 use egui::{Color32, Stroke};
+use fieldcraft_engine::view::Palette;
 use fieldcraft_model::ElementKind;
 use fieldcraft_render::Rgb;
 use fieldcraft_render::glyphs::GlyphColors;
@@ -254,6 +255,28 @@ impl Tokens {
             thermal: rgb(self.glyph_thermal),
             label: rgb(self.overlay_text),
             datum: rgb(self.glyph_datum),
+        }
+    }
+
+    /// The viewport's colours for the scene builder ([`fieldcraft_engine::view::build`]).
+    pub fn palette(&self) -> Palette {
+        Palette {
+            background: (rgb(self.viewport_top), rgb(self.viewport_bottom)),
+            hex: rgb(self.hex),
+            tet: rgb(self.tet),
+            wedge: rgb(self.wedge),
+            shell: rgb(self.shell),
+            line_element: rgb(self.line_element),
+            mesh_edge: rgb(self.mesh_edge),
+            node: rgb(self.node),
+            geometry: rgb(self.geometry),
+            geometry_edge: rgb(self.geometry_edge),
+            bodies: self.bodies.map(rgb),
+            no_result: rgb(self.no_result),
+            contour: self.contour_stops(),
+            contour_over: rgb(self.contour_over),
+            marked: rgb(self.error),
+            glyphs: self.glyph_colors(),
         }
     }
 

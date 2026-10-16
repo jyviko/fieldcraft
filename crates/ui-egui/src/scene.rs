@@ -9,58 +9,10 @@
 
 use fieldcraft_render::glyphs::{Definition, Drawn, GlyphShow, GlyphView, Glyphs};
 use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Rgb, Scene, SceneFill, SceneLabel, SceneLine, ScenePoint, SceneTri, Vec3};
-use serde::{Deserialize, Serialize};
 
 use crate::theme::{Tokens, rgb};
 
-/// How the model is drawn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Style {
-    /// Lit faces with the element edges on them.
-    #[default]
-    ShadedEdges,
-    /// Lit faces only.
-    Shaded,
-    /// Element edges only.
-    Wireframe,
-}
-
-impl Style {
-    pub const ALL: [Style; 3] = [Style::ShadedEdges, Style::Shaded, Style::Wireframe];
-    pub fn label(self) -> &'static str {
-        match self {
-            Style::ShadedEdges => "Shaded with edges",
-            Style::Shaded => "Shaded",
-            Style::Wireframe => "Wireframe",
-        }
-    }
-}
-
-/// Mesh edge width, geometry edge width, line element width and node size, in points.
-const EDGE_WIDTH: f64 = 1.0;
-const GEOMETRY_EDGE_WIDTH: f64 = 1.5;
-const LINE_ELEMENT_WIDTH: f64 = 3.0;
-const NODE_SIZE: f64 = 5.0;
-
-/// What is shown (the browser's eye toggles).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Show {
-    /// The open design and imported surfaces.
-    pub geometry: bool,
-    /// Elements.
-    pub mesh: bool,
-    pub nodes: bool,
-    /// Boundary conditions and loads.
-    pub loads: bool,
-    /// Reference points, couplings and rigid walls.
-    pub interactions: bool,
-}
-
-impl Show {
-    /// Geometry, mesh and the analysis setup, without nodes.
-    pub const DEFAULT: Show = Show { geometry: true, mesh: true, nodes: false, loads: true, interactions: true };
-}
+pub use fieldcraft_engine::view::{Show, Style};
 
 /// Draw the analysis setup's symbols into `s` at the nodes' positions `pos` and symbol unit
 /// `unit` (model length, [`fieldcraft_render::glyphs::symbol_unit`]), muted over a results plot,
@@ -133,47 +85,10 @@ pub fn sphere(s: &mut Scene, c: Vec3, r: f64, color: Rgb) {
     }
 }
 
-/// The scene for `display` drawn in `style`.
+/// The scene for `display` drawn in `style` in the theme's colours: the engine's builder, which
+/// the headless pictures use too.
 pub fn build(display: &DisplayMesh, style: Style, show: Show, t: &Tokens) -> Scene {
-    let mut s = Scene { background: Some((rgb(t.viewport_top), rgb(t.viewport_bottom))), ..Default::default() };
-    // Geometry faces draw where no element faces cover them.
-    let mesh_faces = show.mesh && !display.tris.is_empty();
-    if style != Style::Wireframe {
-        if show.mesh {
-            s.tris = display.tris.iter().map(|d| SceneTri { p: d.p, normal: d.normal, color: rgb(t.element(d.kind)) }).collect();
-        }
-        if !mesh_faces && show.geometry {
-            s.tris.extend(display.surface_tris.iter().map(|d| SceneTri {
-                p: d.p,
-                normal: d.normal,
-                color: rgb(display.body_color(d, t.geometry, &t.bodies)),
-            }));
-        }
-    }
-    if style != Style::Shaded && show.mesh {
-        // Without faces behind them the edges take the element colour, so they read on the
-        // background.
-        let color = rgb(if style == Style::Wireframe { t.hex } else { t.mesh_edge });
-        s.lines = display.edges.iter().map(|e| SceneLine { a: e.p[0], b: e.p[1], color, width: EDGE_WIDTH }).collect();
-    }
-    // Face boundaries in every style: they are the geometry's outline. Over the mesh they are
-    // the element edges on geometry edges, so they lie exactly on the element faces; the
-    // geometry's own tessellation lies off them by its chord error.
-    if show.geometry {
-        let color = rgb(t.geometry_edge);
-        if mesh_faces {
-            s.lines.extend(display.edges.iter().filter(|e| e.feature).map(|e| SceneLine { a: e.p[0], b: e.p[1], color, width: GEOMETRY_EDGE_WIDTH }));
-        } else {
-            s.lines.extend(display.surface_edges.iter().map(|[a, b]| SceneLine { a: *a, b: *b, color, width: GEOMETRY_EDGE_WIDTH }));
-        }
-    }
-    if show.mesh {
-        s.lines.extend(display.lines.iter().map(|l| SceneLine { a: l.a, b: l.b, color: rgb(t.element(l.kind)), width: LINE_ELEMENT_WIDTH }));
-    }
-    if show.nodes {
-        s.points = display.nodes.iter().map(|n| ScenePoint { p: n.p, color: rgb(t.node), size: NODE_SIZE }).collect();
-    }
-    s
+    fieldcraft_engine::view::build(display, style, show, &t.palette())
 }
 
 /// Size of a seed's tick (points).

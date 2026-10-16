@@ -14,7 +14,7 @@
 use fieldcraft_model::ElementKind;
 use fieldcraft_render::contour::{bands_color, split_triangle};
 use fieldcraft_render::glyphs::{self, GlyphColors, GlyphShow, GlyphView, Glyphs};
-use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Orientation, Rgb, Scene, SceneLine, SceneTri, Vec3};
+use fieldcraft_render::{Aabb3, Camera, DisplayMesh, Orientation, Rgb, Scene, SceneLine, ScenePoint, SceneTri, Vec3};
 use serde_json::Value;
 
 use crate::results::{auto_scale, displacements, field_values, range};
@@ -31,6 +31,8 @@ pub struct Palette {
     pub shell: Rgb,
     pub line_element: Rgb,
     pub mesh_edge: Rgb,
+    /// Nodes, when they are shown.
+    pub node: Rgb,
     pub geometry: Rgb,
     pub geometry_edge: Rgb,
     /// The bodies of a design with several, in turn.
@@ -51,17 +53,18 @@ pub struct Palette {
 pub const CONTOUR_OVER: Rgb = Rgb(0x6e, 0x2c, 0x80);
 
 impl Palette {
-    /// The desktop app's light theme.
+    /// The desktop app's light theme (its `Tokens::light().palette()`, a test there checks).
     pub const LIGHT: Palette = Palette {
-        background: (Rgb(0xf0, 0xf3, 0xf7), Rgb(0xc8, 0xd0, 0xdc)),
+        background: (Rgb(240, 243, 247), Rgb(203, 210, 221)),
         hex: Rgb(0x78, 0x9c, 0xc0),
         tet: Rgb(0x80, 0xb4, 0x8a),
         wedge: Rgb(0xc0, 0xaa, 0x78),
         shell: Rgb(0xc0, 0x8c, 0x78),
         line_element: Rgb(0xc8, 0x8c, 0x1e),
         mesh_edge: Rgb(0x1e, 0x23, 0x2a),
-        geometry: Rgb(0xb4, 0xba, 0xc4),
-        geometry_edge: Rgb(0x2a, 0x30, 0x3a),
+        node: Rgb(0xb4, 0x3c, 0x8c),
+        geometry: Rgb(176, 186, 198),
+        geometry_edge: Rgb(40, 44, 52),
         bodies: [
             Rgb(0x8f, 0xb4, 0xd9),
             Rgb(0xe0, 0xa4, 0x6c),
@@ -75,7 +78,7 @@ impl Palette {
         no_result: Rgb(0x9a, 0xa0, 0xaa),
         contour: [Rgb(0x2b, 0x4f, 0xd8), Rgb(0x2f, 0xb8, 0xe0), Rgb(0x3c, 0xc8, 0x64), Rgb(0xf0, 0xd2, 0x3c), Rgb(0xe0, 0x40, 0x2e)],
         contour_over: CONTOUR_OVER,
-        marked: Rgb(0xe0, 0x2e, 0x2e),
+        marked: Rgb(214, 54, 54),
         glyphs: GlyphColors {
             constraint: Rgb(0x00, 0x8a, 0xa8),
             load: Rgb(0xd0, 0x24, 0x24),
@@ -88,7 +91,8 @@ impl Palette {
         },
     };
 
-    fn element(&self, kind: ElementKind) -> Rgb {
+    /// The colour elements of this kind are drawn in.
+    pub fn element(&self, kind: ElementKind) -> Rgb {
         match kind {
             ElementKind::Hex8 | ElementKind::Hex20 => self.hex,
             ElementKind::Tet4 | ElementKind::Tet10 => self.tet,
@@ -99,10 +103,103 @@ impl Palette {
     }
 }
 
-/// Mesh edge, geometry edge and line element widths, in output pixels.
+/// How the model is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Style {
+    /// Lit faces with the element edges on them.
+    #[default]
+    ShadedEdges,
+    /// Lit faces only.
+    Shaded,
+    /// Element edges only.
+    Wireframe,
+}
+
+impl Style {
+    pub const ALL: [Style; 3] = [Style::ShadedEdges, Style::Shaded, Style::Wireframe];
+    pub fn label(self) -> &'static str {
+        match self {
+            Style::ShadedEdges => "Shaded with edges",
+            Style::Shaded => "Shaded",
+            Style::Wireframe => "Wireframe",
+        }
+    }
+}
+
+/// What is shown (the browser's eye toggles).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Show {
+    /// The open design and imported surfaces.
+    pub geometry: bool,
+    /// Elements.
+    pub mesh: bool,
+    pub nodes: bool,
+    /// Boundary conditions and loads.
+    pub loads: bool,
+    /// Reference points, couplings and rigid walls.
+    pub interactions: bool,
+}
+
+impl Show {
+    /// Geometry, mesh and the analysis setup, without nodes.
+    pub const DEFAULT: Show = Show { geometry: true, mesh: true, nodes: false, loads: true, interactions: true };
+}
+
+/// Mesh edge width, geometry edge width, line element width and node size, in points.
 const EDGE_WIDTH: f64 = 1.0;
 const GEOMETRY_EDGE_WIDTH: f64 = 1.5;
 const LINE_ELEMENT_WIDTH: f64 = 3.0;
+const NODE_SIZE: f64 = 5.0;
+
+/// The scene for `display` drawn in `style` with `p`'s colours: the one builder of the window's
+/// viewport and the headless pictures, so both draw the same model.
+///
+/// Geometry (the open design, imported surfaces) draws as faces with their boundaries while
+/// the model has no element faces; once it is meshed, as its boundaries drawn along the mesh
+/// (the element edges on geometry edges), so the mesh is not hidden behind coincident faces and
+/// every line lies on the element faces.
+pub fn build(display: &DisplayMesh, style: Style, show: Show, p: &Palette) -> Scene {
+    let mut s = Scene { background: Some(p.background), ..Default::default() };
+    // Geometry faces draw where no element faces cover them.
+    let mesh_faces = show.mesh && !display.tris.is_empty();
+    if style != Style::Wireframe {
+        if show.mesh {
+            s.tris = display.tris.iter().map(|d| SceneTri { p: d.p, normal: d.normal, color: p.element(d.kind) }).collect();
+        }
+        if !mesh_faces && show.geometry {
+            s.tris.extend(display.surface_tris.iter().map(|d| SceneTri {
+                p: d.p,
+                normal: d.normal,
+                color: display.body_color(d, p.geometry, &p.bodies),
+            }));
+        }
+    }
+    if style != Style::Shaded && show.mesh {
+        // Without faces behind them the edges take the element colour, so they read on the
+        // background.
+        let color = if style == Style::Wireframe { p.hex } else { p.mesh_edge };
+        s.lines = display.edges.iter().map(|e| SceneLine { a: e.p[0], b: e.p[1], color, width: EDGE_WIDTH }).collect();
+    }
+    // Face boundaries in every style: they are the geometry's outline. Over the mesh they are
+    // the element edges on geometry edges, so they lie exactly on the element faces; the
+    // geometry's own tessellation lies off them by its chord error.
+    if show.geometry {
+        let color = p.geometry_edge;
+        if mesh_faces {
+            s.lines.extend(display.edges.iter().filter(|e| e.feature).map(|e| SceneLine { a: e.p[0], b: e.p[1], color, width: GEOMETRY_EDGE_WIDTH }));
+        } else {
+            s.lines.extend(display.surface_edges.iter().map(|[a, b]| SceneLine { a: *a, b: *b, color, width: GEOMETRY_EDGE_WIDTH }));
+        }
+    }
+    if show.mesh {
+        s.lines.extend(display.lines.iter().map(|l| SceneLine { a: l.a, b: l.b, color: p.element(l.kind), width: LINE_ELEMENT_WIDTH }));
+    }
+    if show.nodes {
+        s.points = display.nodes.iter().map(|n| ScenePoint { p: n.p, color: p.node, size: NODE_SIZE }).collect();
+    }
+    s
+}
 
 /// The chordal tolerance geometry is tessellated with for display: a thousandth of its size.
 fn display_tolerance(b: &Aabb3) -> f64 {
@@ -270,25 +367,9 @@ fn display_parts(s: &Session, section: Option<Section>, toward: Vec3) -> (Displa
     (d, failed, bodies)
 }
 
-/// The model drawn as the viewport draws it (shaded with element edges).
+/// The model drawn as the viewport draws it by default (shaded with element edges).
 fn model_scene(d: &DisplayMesh, p: &Palette) -> Scene {
-    let mut s = Scene { background: Some(p.background), ..Default::default() };
-    s.tris = d.tris.iter().map(|t| SceneTri { p: t.p, normal: t.normal, color: p.element(t.kind) }).collect();
-    let faces_drawn = d.tris.is_empty();
-    if faces_drawn {
-        s.tris.extend(d.surface_tris.iter().map(|t| SceneTri { p: t.p, normal: t.normal, color: d.body_color(t, p.geometry, &p.bodies) }));
-    }
-    s.lines = d.edges.iter().map(|e| SceneLine { a: e.p[0], b: e.p[1], color: p.mesh_edge, width: EDGE_WIDTH }).collect();
-    if faces_drawn {
-        s.lines.extend(d.surface_edges.iter().map(|[a, b]| SceneLine { a: *a, b: *b, color: p.mesh_edge, width: GEOMETRY_EDGE_WIDTH }));
-    } else {
-        // Over the mesh the geometry's edges are drawn along it (the element edges on them), so
-        // they lie on the element faces.
-        let edge = p.geometry_edge;
-        s.lines.extend(d.edges.iter().filter(|e| e.feature).map(|e| SceneLine { a: e.p[0], b: e.p[1], color: edge, width: GEOMETRY_EDGE_WIDTH }));
-    }
-    s.lines.extend(d.lines.iter().map(|l| SceneLine { a: l.a, b: l.b, color: p.element(l.kind), width: LINE_ELEMENT_WIDTH }));
-    s
+    build(d, Style::ShadedEdges, Show::DEFAULT, p)
 }
 
 /// The elements `mesh.quality.mark` marked (its set), drawn in the marker colour.

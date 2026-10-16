@@ -2715,6 +2715,28 @@ mod tests {
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
     }
 
+    /// The window and the headless pictures build one scene: the same session gives the same
+    /// faces, lines and points from the app's viewport and from `engine::view` (the light theme
+    /// is `Palette::LIGHT`), meshed or not.
+    #[test]
+    fn the_window_and_headless_pictures_build_one_scene() {
+        use fieldcraft_engine::view::{self, Palette};
+        assert_eq!(theme::Tokens::light().palette(), Palette::LIGHT);
+        let mut app = ModelApp::new(Session::default());
+        app.ui.dark = false;
+        app.run_script(&fieldcraft_engine::sample::script()).unwrap();
+        draw(&mut app, &egui::Context::default(), 1280.0, 800.0);
+        let headless =
+            view::frame(&app.session, &fieldcraft_render::Orientation::of(fieldcraft_render::StandardView::Iso), 320, 200, &Palette::LIGHT, None);
+        let window = app.scene().1.clone();
+        assert!(!window.tris.is_empty() && !window.lines.is_empty());
+        assert_eq!(window.tris, headless.scene.tris);
+        assert_eq!(window.lines, headless.scene.lines);
+        assert_eq!(window.points, headless.scene.points);
+        assert_eq!(window.fills, headless.scene.fills);
+        assert_eq!(window.background, headless.scene.background);
+    }
+
     /// `ui.render` draws with the viewport's pipelines on the window's device when there is one
     /// (here a device the `FIELDCRAFT_GPU` policy opens, as the app's), says so, and draws on
     /// the CPU with the reason when the GPU could not be set up.

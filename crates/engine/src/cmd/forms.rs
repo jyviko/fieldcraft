@@ -1409,8 +1409,8 @@ pub const NODE_RELAX: &[Field] = &[
         .help("Instead of a centre: a sphere round this element (radius default twice its longest edge).")
         .hint("none"),
     face_rows("faces", "Faces")
-        .help("Instead of a sphere: every node on these CAD faces and the elements touching them, nodes sliding on the faces. Pick faces in the view, then Use selection.")
-        .hint("pick faces"),
+        .help("Instead of a sphere: every node on these CAD faces and the elements touching them, nodes sliding on the faces. Shift-click faces in the view, then Use selection.")
+        .hint("Shift-click faces"),
     labels("nodes", "Nodes", LabelOf::Node).help("Instead of a sphere: these nodes.").hint("none"),
     labels("elements", "Elements", LabelOf::Element).help("Instead of a sphere: the nodes of these elements.").hint("none"),
     references("bodies", "Bodies", C::Body).help("Only the nodes of these bodies.").hint("every body"),

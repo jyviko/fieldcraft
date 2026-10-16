@@ -47,8 +47,10 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     if response.clicked()
         && let Some(at) = response.interact_pointer_pos()
     {
-        // With Relax Nodes open a click on the mesh places its sphere (#398).
-        let placed = app.relaxing() && app.surface_point(at).is_some_and(|p| app.relax_place(p));
+        // With Relax Nodes open a plain click on the mesh places its sphere (#398); Shift or
+        // Ctrl picks faces to relax (#471), and so does every click once the form lists faces.
+        let plain = mode(ui.input(|i| i.modifiers)) == Mode::Replace;
+        let placed = app.relaxing() && plain && !app.relax_by_faces() && app.surface_point(at).is_some_and(|p| app.relax_place(p));
         if !placed {
             let _ = app.select_at(at, mode(ui.input(|i| i.modifiers)));
             probe_at(app, at, rect);

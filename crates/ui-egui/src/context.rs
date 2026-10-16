@@ -165,6 +165,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
                 selection::Target::DatumPoint => "Puts the point on what is selected: a vertex, an edge's midpoint, a face's centre, or the centre of a hole or of several items",
                 selection::Target::Bodies => "The selected bodies (Select: Bodies), or the bodies of the selected faces, become the cells",
                 selection::Target::ExtrudeFaces => "Pick the source face and use it, then pick the target surface and use it",
+                selection::Target::Faces => "The selected design faces (Shift-click to pick, Select: Faces) are relaxed instead of a sphere",
             };
             let button = match target {
                 selection::Target::ExtrudeFaces if selection::extrude_key(&params) == "source" => "Use as source",

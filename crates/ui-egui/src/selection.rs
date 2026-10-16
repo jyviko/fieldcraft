@@ -855,6 +855,9 @@ pub enum Target {
     /// The selected faces as an extrusion's `source` while it has none, then as its
     /// `to_surface`: pick the source face, then the target surface.
     ExtrudeFaces,
+    /// The selected geometry faces as `faces: [{body, face}]`, in place of a sphere or labels
+    /// (the faces Relax Nodes relaxes).
+    Faces,
 }
 
 /// Where command `id`'s form takes the selection, if it does. `params` (the form's current
@@ -867,6 +870,7 @@ pub fn target(id: &str, params: &Value) -> Option<Target> {
         "geometry.datum.point" | "geometry.datum.point.edit" => Some(Target::DatumPoint),
         "mesh.cells" => Some(Target::Bodies),
         "mesh.hex.extrude" => Some(Target::ExtrudeFaces),
+        "mesh.node.relax" => Some(Target::Faces),
         "model.boundary_condition.create" | "model.boundary_condition.edit" => Some(Target::TargetSet),
         "model.section.create" | "model.section.edit" | "model.coupling.create" | "model.coupling.edit" | "interaction.rigid_wall" => {
             Some(Target::Set)
@@ -929,6 +933,28 @@ pub fn with_edges(params: &Value, selection: &Selection) -> Option<Value> {
     Some(Value::Object(out))
 }
 
+/// `params` with the selection's geometry faces as `faces`, and no sphere, nodes or elements
+/// (what Relax Nodes relaxes); `None` when no face is selected.
+pub fn with_faces(params: &Value, selection: &Selection) -> Option<Value> {
+    let faces: Vec<Value> = selection
+        .items()
+        .iter()
+        .filter_map(|i| match i {
+            Item::Geometry(g) if matches!(g.entity, Entity::Face(_)) => Some(json!(g)),
+            _ => None,
+        })
+        .collect();
+    if faces.is_empty() {
+        return None;
+    }
+    let mut out = params.as_object().cloned().unwrap_or_default();
+    for key in ["center", "radius", "around_element", "nodes", "elements"] {
+        out.remove(key);
+    }
+    out.insert("faces".into(), Value::Array(faces));
+    Some(Value::Object(out))
+}
+
 /// The key of an extrusion's form the selected faces go into: `source` while it names no face
 /// (and no `source_set`), then `to_surface`.
 pub fn extrude_key(params: &Value) -> &'static str {
@@ -969,7 +995,7 @@ pub fn with_set(params: &Value, target: Target, set: &str) -> Value {
         Target::Set => {
             out.insert("set".into(), json!(set));
         }
-        Target::Members | Target::Edges | Target::Position | Target::DatumPoint | Target::Bodies | Target::ExtrudeFaces => {}
+        Target::Members | Target::Edges | Target::Position | Target::DatumPoint | Target::Bodies | Target::ExtrudeFaces | Target::Faces => {}
     }
     Value::Object(out)
 }

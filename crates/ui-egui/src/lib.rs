@@ -1252,6 +1252,16 @@ impl ModelApp {
         self.dialog.as_ref().is_some_and(|d| d.command == "mesh.node.relax")
     }
 
+    /// Whether the open Relax Nodes form relaxes listed faces: clicks in the view then pick faces
+    /// instead of placing a sphere.
+    pub fn relax_by_faces(&self) -> bool {
+        self.dialog
+            .as_ref()
+            .filter(|d| d.command == "mesh.node.relax")
+            .and_then(|d| serde_json::from_str::<Value>(&d.text).ok())
+            .is_some_and(|p| p.get("faces").and_then(Value::as_array).is_some_and(|f| !f.is_empty()))
+    }
+
     /// Put the open Relax Nodes form's sphere at `at` (a click on the mesh); a sphere without a
     /// radius yet gets a twentieth of the mesh's size.
     pub fn relax_place(&mut self, at: Vec3) -> bool {
@@ -1264,8 +1274,9 @@ impl ModelApp {
         let mut params = serde_json::from_str::<Value>(&d.text).ok().filter(Value::is_object).unwrap_or_else(|| json!({}));
         params["center"] = json!([at.x, at.y, at.z]);
         if let Some(o) = params.as_object_mut() {
-            o.remove("around_element");
-            o.remove("nodes");
+            for key in ["around_element", "nodes", "elements", "faces"] {
+                o.remove(key);
+            }
         }
         if params.get("radius").and_then(Value::as_f64).is_none_or(|r| !(r > 0.0)) && size > 0.0 && size.is_finite() {
             params["radius"] = json!(size / 20.0);
@@ -1806,6 +1817,9 @@ impl ModelApp {
             }
             selection::Target::ExtrudeFaces => selection::with_extrude_faces(&params, &self.pick.selection)
                 .ok_or("no face is selected: pick the source face, then the target surface (Select: Faces)")?,
+            selection::Target::Faces => {
+                selection::with_faces(&params, &self.pick.selection).ok_or("no face is selected: pick the faces to relax (Select: Faces)")?
+            }
             selection::Target::Bodies => {
                 let bodies = selection::bodies(&self.pick.selection).ok_or("no geometry is selected: pick cells with Select: Bodies")?;
                 let mut out = params.as_object().cloned().unwrap_or_default();
@@ -2509,6 +2523,33 @@ mod tests {
         app.dialog = None;
         app.run("mesh.node.relax", serde_json::from_str(&text).unwrap()).unwrap();
         assert_ne!(app.session.model.node(n).unwrap().xyz, [2.7, 2.6, 2.5]);
+    }
+
+    /// Relax Nodes by face (#471): Use selection puts the picked design faces in the form in
+    /// place of a sphere, clicks then pick faces, and OK relaxes them.
+    #[test]
+    fn relax_nodes_takes_picked_faces() {
+        let mut app = ModelApp::new(Session::default());
+        let dir = std::env::temp_dir().join(format!("fieldcraft-relax-faces-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let design = dir.join("plate.solidcraft");
+        std::fs::write(&design, fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap()).unwrap();
+        app.run("geometry.open", json!({"path": design.to_string_lossy()})).unwrap();
+        app.run("mesh.tet.generate", json!({"size": 4.0})).unwrap();
+        let body = app.session.design.as_ref().unwrap().bodies[0].clone();
+        let face = body.faces()[0].name.clone();
+        app.start("mesh.node.relax").unwrap();
+        assert!(app.relax_place(Vec3 { x: 1.0, y: 1.0, z: 1.0 }) && !app.relax_by_faces());
+        let picked = fieldcraft_model::geometry::GeometryRef::face(body.name.clone(), face.clone()).unwrap();
+        app.select([selection::Item::Geometry(picked)], selection::Mode::Replace);
+        app.use_selection_in_dialog().unwrap();
+        let params: Value = serde_json::from_str(&app.dialog.as_ref().unwrap().text).unwrap();
+        assert_eq!(params["faces"], json!([{"body": body.name, "face": face}]), "{params}");
+        assert!(params.get("center").is_none() && params.get("radius").is_none(), "{params}");
+        assert!(app.relax_by_faces() && app.relax_preview().is_some());
+        app.dialog = None;
+        app.run("mesh.node.relax", params).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Mesh Quality reads as a sentence in the status bar, not as its JSON report.

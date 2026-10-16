@@ -5,6 +5,9 @@
 //! model keeps the merges in the order they were made, because a merge may name the face an
 //! earlier one made (`merge:<name>`); they are applied after the partitions, so a body named may
 //! be a partition cell.
+//!
+//! A **stitch** closes an imported surface's gaps under a tolerance for meshing (the geometry
+//! layer welds its open points and splits T-junctions).
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +31,52 @@ pub struct FaceMerge {
     /// Absorb (`geometry.face.absorb`): the merged face keeps this one's name (one of `faces`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub into: Option<String>,
+}
+
+/// Most stitches a model holds.
+pub const MAX_STITCHES: usize = 1024;
+
+/// An imported surface's gaps under `tolerance` (mm) closed for meshing (`geometry.stitch`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Stitch {
+    pub name: String,
+    /// The imported surface, by name.
+    pub surface: String,
+    pub tolerance: f64,
+}
+
+impl Model {
+    /// The stitches, in the order they apply.
+    pub fn stitches(&self) -> &[Stitch] {
+        &self.stitches
+    }
+
+    /// Add a stitch after the others.
+    pub fn add_stitch(&mut self, stitch: Stitch) -> Result<()> {
+        let name = stitch.name.clone();
+        check_name("stitch", &name)?;
+        if self.stitches.iter().any(|s| s.name == name) {
+            return Err(Error::Invalid(format!("stitch `{name}` already exists")));
+        }
+        if self.stitches.len() >= MAX_STITCHES {
+            return Err(Error::Limit(format!("a model holds at most {MAX_STITCHES} stitches")));
+        }
+        let invalid = |m: String| context("stitch", &name, Error::Invalid(m));
+        if stitch.surface.trim().is_empty() || stitch.surface.len() > MAX_GEOMETRY_NAME_LEN {
+            return Err(invalid(format!("the surface name is 1 to {MAX_GEOMETRY_NAME_LEN} bytes")));
+        }
+        if !(stitch.tolerance > 0.0 && stitch.tolerance <= crate::MAX_COORD) {
+            return Err(invalid("the tolerance must be a positive length".into()));
+        }
+        self.stitches.push(stitch);
+        Ok(())
+    }
+
+    pub fn remove_stitch(&mut self, name: &str) -> Result<Stitch> {
+        let i = self.stitches.iter().position(|s| s.name == name).ok_or_else(|| Error::NotFound(format!("stitch `{name}`")))?;
+        Ok(self.stitches.remove(i))
+    }
 }
 
 impl Model {
@@ -81,6 +130,20 @@ mod tests {
 
     fn merge(name: &str, faces: &[&str]) -> FaceMerge {
         FaceMerge { name: name.into(), body: "Base".into(), faces: faces.iter().map(|f| f.to_string()).collect(), into: None }
+    }
+
+    #[test]
+    fn stitches_are_kept_in_order_and_checked() {
+        let mut m = Model::default();
+        let st = |n: &str, t: f64| Stitch { name: n.into(), surface: "Mesh1".into(), tolerance: t };
+        m.add_stitch(st("Gaps", 0.1)).unwrap();
+        for bad in [st("Gaps", 0.1), st("A", 0.0), st("B", f64::NAN), st("C", -1.0), Stitch { surface: " ".into(), ..st("D", 0.1) }] {
+            assert!(m.add_stitch(bad).is_err());
+        }
+        let back: Model = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.stitches(), m.stitches());
+        m.remove_stitch("Gaps").unwrap();
+        assert!(m.stitches().is_empty());
     }
 
     /// Merges keep their order, are saved and read back, and bad ones are refused.

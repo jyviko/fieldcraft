@@ -85,7 +85,7 @@ pub use steps::{
 };
 pub use tie::Tie;
 pub use units::UnitSystem;
-pub use virtual_faces::FaceMerge;
+pub use virtual_faces::{FaceMerge, Stitch};
 
 /// The largest node or element label. Nastran's GRID and element ids stop at 99 999 999 (eight
 /// digits in a small field), the tightest of the three formats.
@@ -177,6 +177,9 @@ pub struct Model {
     /// Face merges (virtual topology), in the order they apply.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     face_merges: Vec<FaceMerge>,
+    /// Stitches of imported surfaces, in the order they apply.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    stitches: Vec<Stitch>,
 }
 
 /// A [`Model`] as stored, before it is checked.
@@ -231,6 +234,8 @@ struct ModelData {
     mesh_plans: BTreeMap<String, MeshPlan>,
     #[serde(default)]
     face_merges: Vec<FaceMerge>,
+    #[serde(default)]
+    stitches: Vec<Stitch>,
 }
 
 impl TryFrom<ModelData> for Model {
@@ -322,6 +327,9 @@ impl TryFrom<ModelData> for Model {
         }
         for v in d.face_merges {
             m.add_face_merge(v)?;
+        }
+        for v in d.stitches {
+            m.add_stitch(v)?;
         }
         Ok(m)
     }
@@ -456,6 +464,7 @@ impl Model {
             relaxations: self.relaxations.clone(),
             mesh_plans: self.mesh_plans.clone(),
             face_merges: self.face_merges.clone(),
+            stitches: self.stitches.clone(),
         }
     }
 
@@ -506,7 +515,7 @@ impl Model {
     }
 
     /// Counts of each kind of definition, for summaries.
-    pub fn definition_counts(&self) -> [(&'static str, usize); 17] {
+    pub fn definition_counts(&self) -> [(&'static str, usize); 18] {
         [
             ("sets", self.sets.len()),
             ("materials", self.materials.len()),
@@ -525,6 +534,7 @@ impl Model {
             ("partitions", self.partitions.len()),
             ("seeds", self.seeds.len()),
             ("face_merges", self.face_merges.len()),
+            ("stitches", self.stitches.len()),
         ]
     }
 }

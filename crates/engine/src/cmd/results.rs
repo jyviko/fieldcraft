@@ -70,6 +70,16 @@ pub const REACTIONS: CommandSpec = CommandSpec {
     run: reactions,
 };
 
+pub const EXPORT_VTU: CommandSpec = CommandSpec {
+    id: "results.export.vtu",
+    label: "Export VTU",
+    params: r#"{"step": "Load", "path": "out.vtu" | "out.pvd", "mode": 1, "frames": "all|last", "encoding": "ascii|binary"} — writes a solved step as VTK XML unstructured grids for ParaView: the mesh (points in node label order, cells in element label order, arrays `node_label` and `element_label`), the step's nodal fields as point data and per-element fields as cell data. Static: displacement, rotation (with shells or beams), reaction, stress (6 components in VTK order XX, YY, ZZ, XY, YZ, XZ), von_mises, temperature (coupled steps); nonlinear static: displacement per frame, the final fields on the last; frequency: mode_shape, with mode, frequency and eigenvalue as field data; explicit: displacement and velocity per frame, cell stress, plastic_strain, damage, eroded; heat: temperature per frame, heat_flux on the last. Point array `has_result` is 0 at nodes the step has no values for (written as 0, as are values that are not finite). A `.vtu` path writes one state (the last frame, or `mode`, default 1); a `.pvd` path writes every frame or mode (`frames: "last"` only the last) as `out_0000.vtu`, … beside it and the collection listing each with its time (load factor, mode number). `encoding` ascii (default) or binary (inline base64). Fluid steps are not supported yet. Replies {files, bytes, points, cells}"#,
+    form: Some(super::forms::EXPORT_VTU),
+    kind: CommandKind::Session,
+    requires: &[Requirement::Result],
+    run: export_vtu,
+};
+
 pub const EXPORT_CSV: CommandSpec = CommandSpec {
     id: "results.export.csv",
     label: "Export Results (CSV)",
@@ -379,6 +389,251 @@ fn reactions(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"step": step, "stale": !current, "about": about, "sets": per_set, "total": total, "applied": r.applied_total}))
 }
 
+/// Most files one `results.export.vtu` writes.
+pub const MAX_VTU_FILES: usize = 10_000;
+/// Most bytes one `results.export.vtu` writes, over all its files.
+pub const MAX_VTU_BYTES: u64 = 8 << 30;
+
+/// One state of a result written as a `.vtu`: the end of a linear step, a mode (from 1) or a
+/// frame (from 0).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum State {
+    Final,
+    Mode(usize),
+    Frame(usize),
+}
+
+fn export_vtu(s: &mut Session, p: &Value) -> Result<Value> {
+    use fieldcraft_io::vtk::{self, Encoding};
+    let step = step_for(s, p, Want::Any)?;
+    let mode: Option<usize> = opt(p, "mode")?;
+    let last_only = match opt::<String>(p, "frames")?.as_deref() {
+        None | Some("all") => false,
+        Some("last") => true,
+        Some(_) => return Err(EngineError::invalid("frames", "must be \"all\" or \"last\"")),
+    };
+    let encoding = match opt::<String>(p, "encoding")?.as_deref() {
+        None | Some("ascii") => Encoding::Ascii,
+        Some("binary") => Encoding::Base64,
+        Some(_) => return Err(EngineError::invalid("encoding", "must be \"ascii\" or \"binary\"")),
+    };
+    let path = super::file_param(s, p, "path", fieldcraft_io::roots::Access::Write)?;
+    let target = std::path::Path::new(&path);
+    let series = match target.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).as_deref() {
+        Some("vtu") => false,
+        Some("pvd") => true,
+        _ => return Err(EngineError::Params("`path` must end in .vtu (one file) or .pvd (a series of .vtu files)".into())),
+    };
+    let r = match s.latest_result(&step) {
+        Some((_, false)) => return Err(EngineError::Params(format!("the model changed since step `{step}` was solved; solve it again"))),
+        Some((r, true)) => std::sync::Arc::clone(r),
+        None => return Err(EngineError::Params(format!("step `{step}` has no result; solve it first"))),
+    };
+    let frames = |n: usize, what: &str| -> Result<Vec<State>> {
+        let last = n.checked_sub(1).ok_or_else(|| EngineError::Params(format!("step `{step}` has no {what}")))?;
+        Ok(if series && !last_only { (0..n).map(State::Frame).collect() } else { vec![State::Frame(last)] })
+    };
+    if mode.is_some() && !matches!(r.kind(), Kind::Frequency(_)) {
+        return Err(EngineError::invalid("mode", "is for frequency and buckling steps"));
+    }
+    let states: Vec<State> = match r.kind() {
+        Kind::Fluid(_) => return Err(EngineError::Params("fluid results are per cell; not supported yet".into())),
+        Kind::Static(st) => match &st.nonlinear {
+            Some(h) if !h.frames.is_empty() => frames(h.frames.len(), "frames")?,
+            _ => vec![State::Final],
+        },
+        Kind::Frequency(f) => match mode {
+            Some(m) if m == 0 || m > f.modes.len() => {
+                return Err(EngineError::invalid("mode", format!("step `{step}` has modes 1 to {}", f.modes.len())));
+            }
+            Some(m) => vec![State::Mode(m)],
+            None if series && !last_only => (1..=f.modes.len()).map(State::Mode).collect(),
+            None if f.modes.is_empty() => return Err(EngineError::Params(format!("step `{step}` has no modes"))),
+            None => vec![State::Mode(1)],
+        },
+        Kind::Explicit(e) => frames(e.frames.len(), "field frames")?,
+        Kind::Heat(h) => frames(h.frames.len(), "temperatures")?,
+    };
+    if states.len() > MAX_VTU_FILES {
+        return Err(EngineError::Params(format!("step `{step}` has {} frames; at most {MAX_VTU_FILES} files are written", states.len())));
+    }
+
+    let model = &s.model;
+    let (nodes, elements) = vtk::points_and_cells(model);
+    let build = |state: State| -> Result<(f64, String)> {
+        let (time, fields, data) = vtu_fields(&r, state, &nodes, &elements);
+        let data: Vec<(&str, f64)> = data.iter().map(|(n, v)| (*n, *v)).collect();
+        Ok((time, vtk::write_vtu(model, &fields, &data, encoding)?))
+    };
+    // The last state has the most fields: its size times the count bounds the output before
+    // anything is written.
+    let Some(&last) = states.last() else { return Err(EngineError::Params(format!("step `{step}` has nothing to write"))) };
+    let sample = build(last)?;
+    let estimate = (sample.1.len() as u64).saturating_mul(states.len() as u64);
+    if estimate > MAX_VTU_BYTES {
+        return Err(EngineError::Params(format!(
+            "the export would write about {estimate} bytes; at most {MAX_VTU_BYTES} (8 GiB) are written: choose `frames: \"last\"` or a single .vtu"
+        )));
+    }
+
+    let mut written: Vec<std::path::PathBuf> = Vec::new();
+    let mut bytes = 0usize;
+    let result = (|| -> Result<Vec<String>> {
+        if !series {
+            fieldcraft_io::fs::write_atomic(target, sample.1.as_bytes(), false)?;
+            written.push(target.to_path_buf());
+            bytes += sample.1.len();
+            return Ok(vec![path.clone()]);
+        }
+        let stem = target.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let dir = target.parent().unwrap_or(std::path::Path::new(""));
+        let mut entries: Vec<(f64, String)> = Vec::with_capacity(states.len());
+        let mut files = Vec::with_capacity(states.len() + 1);
+        for (k, &state) in states.iter().enumerate() {
+            let name = format!("{stem}_{k:04}.vtu");
+            let file = dir.join(&name);
+            let built = if state == last { None } else { Some(build(state)?) };
+            let (time, text) = built.as_ref().map_or((sample.0, sample.1.as_str()), |(t, x)| (*t, x.as_str()));
+            fieldcraft_io::fs::write_atomic(&file, text.as_bytes(), false)?;
+            written.push(file.clone());
+            bytes += text.len();
+            entries.push((time, name));
+            files.push(file.to_string_lossy().into_owned());
+        }
+        let list: Vec<(f64, &str)> = entries.iter().map(|(t, n)| (*t, n.as_str())).collect();
+        let collection = vtk::pvd(&list);
+        fieldcraft_io::fs::write_atomic(target, collection.as_bytes(), false)?;
+        bytes += collection.len();
+        files.push(path.clone());
+        Ok(files)
+    })();
+    match result {
+        Ok(files) => Ok(json!({"files": files, "bytes": bytes, "points": nodes.len(), "cells": elements.len()})),
+        Err(e) => {
+            // Leave nothing half written behind.
+            for f in &written {
+                let _ = std::fs::remove_file(f);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// A stress (xx, yy, zz, xy, xz, yz) in VTK's symmetric tensor order (XX, YY, ZZ, XY, YZ, XZ).
+fn vtk_tensor(t: &[f64; 6]) -> [f64; 6] {
+    [t[0], t[1], t[2], t[3], t[5], t[4]]
+}
+
+/// Values given per label (`labels` sorted, as a result's nodes and elements are) spread over
+/// `order` (the points' or cells' labels): `N` components each, 0 where a label has none.
+fn spread<const N: usize>(order: &[u32], labels: &[u32], values: &[[f64; N]]) -> Vec<f64> {
+    let mut out = vec![0.0; order.len() * N];
+    for (label, v) in labels.iter().zip(values) {
+        if let Ok(i) = order.binary_search(label)
+            && let Some(slot) = out.get_mut(i * N..(i + 1) * N)
+        {
+            slot.copy_from_slice(v);
+        }
+    }
+    out
+}
+
+fn scalars(values: &[f64]) -> Vec<[f64; 1]> {
+    values.iter().map(|v| [*v]).collect()
+}
+
+/// The fields of one state of a result, its time (load factor, mode number) and its field data.
+fn vtu_fields(
+    r: &crate::StepResult,
+    state: State,
+    nodes: &[u32],
+    elements: &[u32],
+) -> (f64, Vec<fieldcraft_io::vtk::Field>, Vec<(&'static str, f64)>) {
+    use fieldcraft_io::vtk::{Field, Location};
+    let mut fields = Vec::new();
+    let mut data = Vec::new();
+    let mut add = |name: &str, location: Location, components: usize, values: Vec<f64>, integer: bool| {
+        fields.push(Field { name: name.into(), location, components, values, integer });
+    };
+    let on = |labels: &[u32]| -> Vec<f64> { nodes.iter().map(|n| if labels.binary_search(n).is_ok() { 1.0 } else { 0.0 }).collect() };
+    add("has_result", Location::Point, 1, on(r.nodes()), true);
+    let point = Location::Point;
+    let cell = Location::Cell;
+    let time = match (r.kind(), state) {
+        (Kind::Static(st), _) => {
+            let frame = match (state, &st.nonlinear) {
+                (State::Frame(k), Some(h)) => h.frames.get(k).map(|f| (f.load_factor, f.displacement.as_slice(), k + 1 == h.frames.len())),
+                _ => None,
+            };
+            let (time, displacement, last) = frame.unwrap_or((0.0, st.displacement.as_slice(), true));
+            add("displacement", point, 3, spread(nodes, &st.nodes, displacement), false);
+            if last {
+                if !st.shells.is_empty() || !st.beams.is_empty() {
+                    add("rotation", point, 3, spread(nodes, &st.nodes, &st.rotation), false);
+                }
+                add("reaction", point, 3, spread(nodes, &st.nodes, &st.reaction), false);
+                if !st.stress.is_empty() {
+                    let stress: Vec<[f64; 6]> = st.stress.iter().map(vtk_tensor).collect();
+                    add("stress", point, 6, spread(nodes, &st.nodes, &stress), false);
+                    add("von_mises", point, 1, spread(nodes, &st.nodes, &scalars(&st.von_mises)), false);
+                }
+                if let Some(t) = &st.temperature {
+                    add("temperature", point, 1, spread(nodes, &st.nodes, &scalars(t)), false);
+                }
+            }
+            if st.nonlinear.is_some() {
+                data.push(("load_factor", time));
+            }
+            time
+        }
+        (Kind::Frequency(f), State::Mode(m)) => {
+            if let Some(mode) = m.checked_sub(1).and_then(|k| f.modes.get(k)) {
+                add("mode_shape", point, 3, spread(nodes, &f.nodes, &mode.shape), false);
+                data.extend([("mode", m as f64), ("frequency", mode.frequency), ("eigenvalue", mode.eigenvalue)]);
+            }
+            m as f64
+        }
+        (Kind::Explicit(e), State::Frame(k)) => {
+            let Some(f) = e.frames.get(k) else { return (0.0, fields, data) };
+            if !f.displacement.is_empty() {
+                add("displacement", point, 3, spread(nodes, &e.nodes, &f.displacement), false);
+            }
+            if !f.velocity.is_empty() {
+                add("velocity", point, 3, spread(nodes, &e.nodes, &f.velocity), false);
+            }
+            if !f.stress.is_empty() {
+                let stress: Vec<[f64; 6]> = f.stress.iter().map(vtk_tensor).collect();
+                add("stress", cell, 6, spread(elements, &e.elements, &stress), false);
+            }
+            if !f.plastic_strain.is_empty() {
+                add("plastic_strain", cell, 1, spread(elements, &e.elements, &scalars(&f.plastic_strain)), false);
+            }
+            if !f.damage.is_empty() {
+                add("damage", cell, 1, spread(elements, &e.elements, &scalars(&f.damage)), false);
+            }
+            if !f.failed.is_empty() {
+                let eroded: Vec<[f64; 1]> = f.failed.iter().map(|&b| [if b { 1.0 } else { 0.0 }]).collect();
+                add("eroded", cell, 1, spread(elements, &e.elements, &eroded), true);
+            }
+            data.push(("time", f.time));
+            f.time
+        }
+        (Kind::Heat(h), State::Frame(k)) => {
+            let time = h.times.get(k).copied().unwrap_or(0.0);
+            if let Some(t) = h.frames.get(k) {
+                add("temperature", point, 1, spread(nodes, &h.nodes, &scalars(t)), false);
+            }
+            if k + 1 == h.frames.len() && !h.flux.is_empty() {
+                add("heat_flux", point, 3, spread(nodes, &h.nodes, &h.flux), false);
+            }
+            data.push(("time", time));
+            time
+        }
+        _ => 0.0,
+    };
+    (time, fields, data)
+}
+
 fn export_csv(s: &mut Session, p: &Value) -> Result<Value> {
     let what: String = super::req(p, "what")?;
     let path = super::file_param(s, p, "path", fieldcraft_io::roots::Access::Write)?;
@@ -548,6 +803,164 @@ fn reactions_table(r: &Value) -> Table {
 mod tests {
     use super::*;
     use crate::cmd::solve::tests::cantilever;
+
+    /// The numbers of the first `DataArray` called `name` in a written `.vtu`.
+    fn vtu_array(xml: &str, name: &str) -> Vec<f64> {
+        let at = xml.find(&format!("Name=\"{name}\"")).unwrap_or_else(|| panic!("no array {name}"));
+        let start = at + xml[at..].find('>').unwrap() + 1;
+        let end = start + xml[start..].find("</DataArray>").unwrap();
+        xml[start..end].split_whitespace().map(|t| t.parse().unwrap()).collect()
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("fieldcraft-vtu-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn export_vtu_writes_a_static_step_and_its_modes() {
+        let dir = scratch("static");
+        let out = dir.join("out.vtu").to_string_lossy().into_owned();
+        let mut s = Session::default();
+        s.execute("file.sample", &json!({"name": "cantilever"})).unwrap();
+        let e = s.execute("results.export.vtu", &json!({"step": "Load", "path": out})).unwrap_err().to_string();
+        assert!(e.contains("Needs a solved step"), "{e}");
+        s.execute("solve.static", &json!({"step": "Load"})).unwrap();
+        let reply = s.execute("results.export.vtu", &json!({"step": "Load", "path": out})).unwrap();
+        let xml = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(reply["points"], s.model.nodes().len());
+        assert_eq!(reply["cells"], s.model.elements().len());
+        assert_eq!(reply["bytes"], xml.len());
+        assert!(xml.contains(&format!("NumberOfPoints=\"{}\"", s.model.nodes().len())));
+
+        // The tip node's displacement is the probe's, at the node's point.
+        let labels = vtu_array(&xml, "node_label");
+        let u = vtu_array(&xml, "displacement");
+        let r = s.result("Load").unwrap().clone();
+        let Kind::Static(st) = r.kind() else { panic!() };
+        let (k, tip) = st.displacement.iter().enumerate().max_by(|a, b| a.1[2].abs().total_cmp(&b.1[2].abs())).unwrap();
+        let tip_label = st.nodes[k];
+        let probe = s.execute("solve.probe", &json!({"step": "Load", "nodes": [tip_label]})).unwrap();
+        let i = labels.iter().position(|&l| l == f64::from(tip_label)).unwrap();
+        assert_eq!(&u[3 * i..3 * i + 3], tip.as_slice());
+        assert_eq!(
+            probe["nodes"][0]["displacement"].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>()),
+            Some(tip.to_vec()),
+            "{probe}"
+        );
+        // Stress components in VTK order: XY at 3, YZ at 4, XZ at 5.
+        let stress = vtu_array(&xml, "stress");
+        let t = st.stress[k];
+        assert_eq!(&stress[6 * i..6 * i + 6], [t[0], t[1], t[2], t[3], t[5], t[4]].as_slice());
+        assert_eq!(vtu_array(&xml, "has_result").iter().filter(|&&h| h == 1.0).count(), st.nodes.len());
+        // Deterministic.
+        s.execute("results.export.vtu", &json!({"step": "Load", "path": out})).unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), xml);
+
+        // Modes: one file per mode with its frequency, and a collection.
+        s.execute("solve.frequency", &json!({"step": "Modes"})).unwrap();
+        let pvd = dir.join("modes.pvd").to_string_lossy().into_owned();
+        let reply = s.execute("results.export.vtu", &json!({"step": "Modes", "path": pvd})).unwrap();
+        let files = reply["files"].as_array().unwrap();
+        assert_eq!(files.len(), 7, "six modes and the collection: {reply}");
+        let mode2 = std::fs::read_to_string(dir.join("modes_0001.vtu")).unwrap();
+        assert_eq!(vtu_array(&mode2, "mode"), [2.0]);
+        let collection = std::fs::read_to_string(&pvd).unwrap();
+        assert!(collection.contains("timestep=\"2.0\" part=\"0\" file=\"modes_0001.vtu\""), "{collection}");
+        let one = dir.join("mode3.vtu").to_string_lossy().into_owned();
+        s.execute("results.export.vtu", &json!({"step": "Modes", "path": one, "mode": 3, "encoding": "binary"})).unwrap();
+        assert!(std::fs::read_to_string(&one).unwrap().contains("format=\"binary\""));
+
+        // Refusals write nothing.
+        let none = dir.join("none.vtu").to_string_lossy().into_owned();
+        for (p, why) in [
+            (json!({"step": "Modes", "path": none, "mode": 0}), "modes 1 to 6"),
+            (json!({"step": "Modes", "path": none, "mode": 1_000_000_000}), "modes 1 to 6"),
+            (json!({"step": "Load", "path": none, "mode": 1}), "frequency"),
+            (json!({"step": "Load", "path": dir.join("x.vtk").to_string_lossy()}), ".vtu"),
+            (json!({"step": "Load", "path": none, "frames": 3}), "frames"),
+            (json!({"step": "Load", "path": none, "encoding": "hex"}), "encoding"),
+            (json!({"step": "Nope", "path": none}), "has no result"),
+        ] {
+            let e = s.execute("results.export.vtu", &p).unwrap_err().to_string();
+            assert!(e.contains(why), "{p}: {e}");
+        }
+        s.execute("mesh.node.add", &json!({"label": 9999, "xyz": [50, 50, 50]})).unwrap();
+        let e = s.execute("results.export.vtu", &json!({"step": "Load", "path": none})).unwrap_err().to_string();
+        assert!(e.contains("the model changed since step `Load` was solved"), "{e}");
+        assert!(!dir.join("none.vtu").exists() && !dir.join("x.vtk").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_vtu_writes_nonlinear_frames_and_heat() {
+        let dir = scratch("nl-heat");
+        let mut s = Session::default();
+        cantilever(&mut s);
+        s.run_script(&json!([
+            {"command": "model.section.edit", "params": {"name": "bar", "set": "all", "material": "Mat", "kind": {"type": "solid"}, "formulation": {}}},
+            {"command": "model.step.create", "params": {"name": "Large", "procedure": {"type": "nonlinear_static", "initial_increment": 0.25},
+                "boundary_conditions": ["clamp"], "loads": ["push"]}},
+            {"command": "model.material.edit", "params": {"name": "Mat", "elastic": {"type": "isotropic", "young": 1000, "poisson": 0}, "density": 1, "thermal": {"conductivity": 2}}},
+            {"command": "model.boundary_condition.create", "params": {"name": "Heater", "type": "temperature", "target": {"set": "root"}, "value": 100}},
+            {"command": "model.set.create", "params": {"name": "skin", "faces": (1..=6).map(|f| json!({"element": 10, "face": f})).collect::<Vec<_>>()}},
+            {"command": "model.load.create", "params": {"name": "Air", "type": "convection", "set": "skin", "film": 0.5, "sink": 20}},
+            {"command": "model.step.create", "params": {"name": "Therm", "procedure": {"type": "heat_transfer"}, "boundary_conditions": ["Heater"], "loads": ["Air"]}},
+        ]))
+        .unwrap();
+        s.execute("solve.nonlinear", &json!({"step": "Large"})).unwrap();
+        s.execute("solve.heat", &json!({"step": "Therm"})).unwrap();
+
+        let pvd = dir.join("large.pvd").to_string_lossy().into_owned();
+        let reply = s.execute("results.export.vtu", &json!({"step": "Large", "path": pvd})).unwrap();
+        let Kind::Static(st) = s.result("Large").unwrap().kind() else { panic!() };
+        let h = st.nonlinear.as_ref().unwrap();
+        assert_eq!(reply["files"].as_array().unwrap().len(), h.frames.len() + 1);
+        let first = std::fs::read_to_string(dir.join("large_0000.vtu")).unwrap();
+        let last = std::fs::read_to_string(dir.join(format!("large_{:04}.vtu", h.frames.len() - 1))).unwrap();
+        assert!(first.contains("Name=\"displacement\"") && !first.contains("Name=\"stress\""), "final stresses on the last frame only");
+        assert!(last.contains("Name=\"stress\"") && last.contains("Name=\"von_mises\""));
+        assert_eq!(vtu_array(&last, "load_factor"), [h.frames.last().unwrap().load_factor]);
+
+        let heat = dir.join("heat.vtu").to_string_lossy().into_owned();
+        s.execute("results.export.vtu", &json!({"step": "Therm", "path": heat})).unwrap();
+        let xml = std::fs::read_to_string(&heat).unwrap();
+        let t = vtu_array(&xml, "temperature");
+        assert!(t.contains(&100.0), "the heater's temperature");
+        assert_eq!(vtu_array(&xml, "heat_flux").len(), 3 * s.model.nodes().len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_vtu_writes_explicit_frames_as_a_series() {
+        let dir = scratch("impact");
+        let mut s = Session::default();
+        s.execute("file.sample", &json!({"name": "impact"})).unwrap();
+        s.execute("solve.explicit", &json!({})).unwrap();
+        let pvd = dir.join("impact.pvd").to_string_lossy().into_owned();
+        let reply = s.execute("results.export.vtu", &json!({"path": pvd})).unwrap();
+        let Kind::Explicit(e) = s.result("Impact").unwrap().kind() else { panic!() };
+        let frames = e.frames.len();
+        assert!(frames > 2);
+        assert_eq!(reply["files"].as_array().unwrap().len(), frames + 1);
+        let collection = std::fs::read_to_string(&pvd).unwrap();
+        let times: Vec<f64> =
+            collection.match_indices("timestep=\"").map(|(i, m)| collection[i + m.len()..].split('"').next().unwrap().parse().unwrap()).collect();
+        assert_eq!(times.len(), frames);
+        assert!(times.windows(2).all(|w| w[0] < w[1]), "{times:?}");
+        let last = std::fs::read_to_string(dir.join(format!("impact_{:04}.vtu", frames - 1))).unwrap();
+        let cell = &last[last.find("<CellData>").unwrap()..last.find("</CellData>").unwrap()];
+        assert!(cell.contains("Name=\"stress\" NumberOfComponents=\"6\""), "{cell}");
+        // A .vtu takes the last frame; `frames: "last"` makes a one-entry series.
+        let one = dir.join("last.vtu").to_string_lossy().into_owned();
+        s.execute("results.export.vtu", &json!({"path": one})).unwrap();
+        assert_eq!(std::fs::read_to_string(&one).unwrap(), last);
+        let lastp = dir.join("last.pvd").to_string_lossy().into_owned();
+        assert_eq!(s.execute("results.export.vtu", &json!({"path": lastp, "frames": "last"})).unwrap()["files"].as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn solved() -> Session {
         let mut s = Session::default();

@@ -9,9 +9,11 @@
 //!
 //! Points are the model's nodes in label order and cells its elements in label order; the point
 //! array `node_label` and the cell array `element_label` keep the labels. Element node order is
-//! the model's ([`ElementKind`]), which is VTK's for every kind but the wedge: a FieldCraft
-//! wedge's triangle 1-2-3 has its right-hand normal towards 4-5-6, a VTK wedge's base 0-1-2
-//! points away from 3-4-5, so wedges are written as 0, 2, 1, 3, 5, 4.
+//! the model's ([`ElementKind`]), which is VTK's for every kind. That holds for the wedge too:
+//! VTK's wedge has the parametric coordinates (0,0,0), (1,0,0), (0,1,0) for points 0-2 and the
+//! same at ζ = 1 for 3-5, so the base 0-1-2's right-hand normal points to 3-4-5, as a FieldCraft
+//! wedge's 1-2-3 points to 4-5-6 (VTK 9 computes a positive volume for it and lists its outward
+//! base face as 0-2-1).
 //!
 //! Data arrays are written as text (`ascii`, numbers in the shortest form that reads back to the
 //! same `f64`) or inline base64 (`binary`, each array prefixed with its byte count as a `UInt64`,
@@ -38,15 +40,6 @@ pub fn cell_type(kind: ElementKind) -> u8 {
         ElementKind::Wedge6 => 13,                   // VTK_WEDGE
         ElementKind::Hex8 => 12,                     // VTK_HEXAHEDRON
         ElementKind::Hex20 => 25,                    // VTK_QUADRATIC_HEXAHEDRON
-    }
-}
-
-/// The positions in an element's node list in the order VTK lists the cell's points.
-pub fn vtk_order(kind: ElementKind) -> &'static [usize] {
-    const IDENTITY: [usize; 20] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
-    match kind {
-        ElementKind::Wedge6 => &[0, 2, 1, 3, 5, 4],
-        k => IDENTITY.get(..k.node_count()).unwrap_or(&[]),
     }
 }
 
@@ -106,8 +99,7 @@ pub fn write_vtu(model: &Model, fields: &[Field], field_data: &[(&str, f64)], en
     let mut offsets: Vec<i64> = Vec::with_capacity(elements.len());
     let mut types: Vec<u8> = Vec::with_capacity(elements.len());
     for e in model.elements().values() {
-        for &i in vtk_order(e.kind) {
-            let label = e.nodes.get(i).copied().ok_or_else(|| Error::Invalid(format!("a {} lists too few nodes", e.kind.name())))?;
+        for &label in &e.nodes {
             connectivity.push(index(label)? as i64);
         }
         offsets.push(connectivity.len() as i64);
@@ -438,8 +430,7 @@ mod tests {
             let labels = numbers(array(&xml, "node_label").1);
             let written: Vec<u32> = numbers(array(&xml, "connectivity").1).iter().map(|&i| labels[i as usize] as u32).collect();
             let e = m.element(7).unwrap();
-            let expected: Vec<u32> = vtk_order(kind).iter().map(|&i| e.nodes[i]).collect();
-            assert_eq!(written, expected, "{kind:?}");
+            assert_eq!(written, e.nodes, "{kind:?}");
         }
         let ids: Vec<u8> = ElementKind::ALL.iter().map(|&k| cell_type(k)).collect();
         // rod2, rod3, beam2, tri3, tri6, quad4, quad8, tet4, tet10, wedge6, hex8, hex20
@@ -466,27 +457,25 @@ mod tests {
         [0, 1, 2].map(|k| p.iter().map(|q| q[k]).sum::<f64>() / n)
     }
 
-    /// The VTK document's convention for each 3D cell: the base face's right-hand normal points
-    /// towards the rest of the cell for the tetrahedron and the hexahedron, and away from it
-    /// (out of the cell) for the wedge. The signed measure is positive when the written cell
-    /// follows it.
+    /// VTK's convention for each 3D cell, from its parametric coordinates: the base face's
+    /// right-hand normal points to the rest of the cell (tetrahedron 0-1-2 to 3, hexahedron
+    /// 0-1-2-3 to 4-7, wedge 0-1-2 to 3-5). The signed measure is positive when the written cell
+    /// follows it; VTK 9.7's vtkCellSizeFilter and vtkMeshQuality agree (a unit wedge written
+    /// this way measures +0.5, reordered 0-2-1-3-5-4 it measures -0.5).
     #[test]
     fn solid_cells_have_positive_volume_in_vtk_convention() {
-        for (kind, base, rest, towards) in [
-            (ElementKind::Tet4, 3, 3..4, true),
-            (ElementKind::Tet10, 3, 3..4, true),
-            (ElementKind::Hex8, 4, 4..8, true),
-            (ElementKind::Hex20, 4, 4..8, true),
-            (ElementKind::Wedge6, 3, 3..6, false),
+        for (kind, base, rest) in [
+            (ElementKind::Tet4, 3, 3..4),
+            (ElementKind::Tet10, 3, 3..4),
+            (ElementKind::Hex8, 4, 4..8),
+            (ElementKind::Hex20, 4, 4..8),
+            (ElementKind::Wedge6, 3, 3..6),
         ] {
             let p = cell_points(&write_vtu(&one(kind), &[], &[], Encoding::Ascii).unwrap());
             let b = &p[..base];
             let n = cross(sub(b[1], b[0]), sub(b[2], b[0]));
-            let d = dot(n, sub(centre(&p[rest]), centre(b)));
-            assert!(if towards { d > 0.0 } else { d < 0.0 }, "{kind:?}: {d}");
+            assert!(dot(n, sub(centre(&p[rest]), centre(b))) > 0.0, "{kind:?}");
         }
-        // Without the wedge's reorder the base would point the wrong way.
-        assert_eq!(vtk_order(ElementKind::Wedge6), [0, 2, 1, 3, 5, 4]);
     }
 
     #[test]
@@ -496,10 +485,7 @@ mod tests {
             (ElementKind::Tri6, &[(0, 1), (1, 2), (2, 0)]),
             (ElementKind::Quad8, &[(0, 1), (1, 2), (2, 3), (3, 0)]),
             (ElementKind::Tet10, &[(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)]),
-            (
-                ElementKind::Hex20,
-                &[(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)],
-            ),
+            (ElementKind::Hex20, &[(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)]),
         ];
         for (kind, list) in edges {
             let p = cell_points(&write_vtu(&one(kind), &[], &[], Encoding::Ascii).unwrap());

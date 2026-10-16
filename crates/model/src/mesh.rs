@@ -20,9 +20,8 @@ pub struct Node {
 /// - hex8/hex20: face 1-2-3-4, then 5-6-7-8 above it; hex20's mid-side nodes 9–12 lie on the
 ///   edges of 1-2-3-4, 13–16 on those of 5-6-7-8, and 17–20 on edges 1-5, 2-6, 3-7, 4-8.
 ///
-/// This is the Abaqus order, and VTK's for every kind but wedge6: a VTK wedge's base 0-1-2 has its
-/// right-hand normal pointing away from 3-4-5, so the VTK writer lists a wedge as 1-3-2-4-6-5.
-/// Formats that order nodes differently, such as Nastran's
+/// This is the Abaqus (and VTK) order; a VTK wedge too has its base 0-1-2 normal pointing to
+/// 3-4-5 (its parametric coordinates put 0-1-2 at ζ = 0 counter-clockwise seen from ζ = 1). Formats that order nodes differently, such as Nastran's
 /// CHEXA with 20 nodes (vertical edges before the top face's edges), are reordered by their deck
 /// readers and writers; the model never stores another order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

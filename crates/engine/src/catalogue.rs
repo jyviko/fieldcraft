@@ -618,6 +618,7 @@ pub static CATALOGUE: &[Capability] = &[
     soon("results.cut", "Cut", Results, "Plots", "M9", "Section cuts through the model"),
     soon("results.display_group", "Display Group", Results, "Plots", "M9", "Show and hide parts of the model"),
     soon("results.streamlines", "Streamlines", Results, "Plots", "M12", "Streamlines and flow fields"),
+    ready("results.export.vtu", "Export VTU", Results, "Files", "Write a solved step as VTK unstructured grids for ParaView"),
     soon("results.read", "Read Results", Results, "Files", "M9", "Read results in public formats"),
     soon("results.convergence", "Convergence", Results, "Files", "M9", "Mesh convergence studies"),
     // ---- Tools ----

@@ -1838,6 +1838,17 @@ pub const EXPORT_CSV: &[Field] = &[
     int("mode", "Mode", 1, 1_000_000).help("Probe: the mode to read, for frequency and buckling steps."),
     int("frame", "Frame", 0, 1_000_000_000).help("Probe: the frame to read, for explicit and transient steps."),
 ];
+pub const EXPORT_VTU: &[Field] = &[
+    path("path", "File", true).help("A .vtu file for one state, or a .pvd collection for every frame or mode.").req(),
+    SOLVED,
+    int("mode", "Mode", 1, 1_000_000).help("Frequency steps: the mode to write; every mode in a .pvd when empty.").hint("all (.pvd) or 1"),
+    choice("frames", "Frames", &[("all", "Every frame"), ("last", "The last frame")])
+        .help("A .pvd series: every frame or only the last.")
+        .def("\"all\""),
+    choice("encoding", "Encoding", &[("ascii", "Text"), ("binary", "Binary (base64)")])
+        .help("Text is readable; binary is smaller and exact.")
+        .def("\"ascii\""),
+];
 pub const REACTIONS: &[Field] = &[
     SOLVED,
     references("sets", "Sets", C::Set)

@@ -53,6 +53,7 @@ pub mod sets;
 pub mod steps;
 pub mod tie;
 pub mod units;
+pub mod virtual_faces;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -84,6 +85,7 @@ pub use steps::{
 };
 pub use tie::Tie;
 pub use units::UnitSystem;
+pub use virtual_faces::FaceMerge;
 
 /// The largest node or element label. Nastran's GRID and element ids stop at 99 999 999 (eight
 /// digits in a small field), the tightest of the three formats.
@@ -172,6 +174,9 @@ pub struct Model {
     /// Mesh plans (`mesh.plan`), by name.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     mesh_plans: BTreeMap<String, MeshPlan>,
+    /// Face merges (virtual topology), in the order they apply.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    face_merges: Vec<FaceMerge>,
 }
 
 /// A [`Model`] as stored, before it is checked.
@@ -224,6 +229,8 @@ struct ModelData {
     relaxations: BTreeMap<String, Relaxation>,
     #[serde(default)]
     mesh_plans: BTreeMap<String, MeshPlan>,
+    #[serde(default)]
+    face_merges: Vec<FaceMerge>,
 }
 
 impl TryFrom<ModelData> for Model {
@@ -312,6 +319,9 @@ impl TryFrom<ModelData> for Model {
         }
         for (n, v) in d.mesh_plans {
             m.set_mesh_plan(&n, v)?;
+        }
+        for v in d.face_merges {
+            m.add_face_merge(v)?;
         }
         Ok(m)
     }
@@ -445,6 +455,7 @@ impl Model {
             seeds: self.seeds.clone(),
             relaxations: self.relaxations.clone(),
             mesh_plans: self.mesh_plans.clone(),
+            face_merges: self.face_merges.clone(),
         }
     }
 
@@ -495,7 +506,7 @@ impl Model {
     }
 
     /// Counts of each kind of definition, for summaries.
-    pub fn definition_counts(&self) -> [(&'static str, usize); 16] {
+    pub fn definition_counts(&self) -> [(&'static str, usize); 17] {
         [
             ("sets", self.sets.len()),
             ("materials", self.materials.len()),
@@ -513,6 +524,7 @@ impl Model {
             ("datums", self.datums.len()),
             ("partitions", self.partitions.len()),
             ("seeds", self.seeds.len()),
+            ("face_merges", self.face_merges.len()),
         ]
     }
 }

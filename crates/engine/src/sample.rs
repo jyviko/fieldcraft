@@ -740,29 +740,32 @@ mod tests {
         }
     }
 
-    /// A partition the kernel fails to make is reported as the kernel's failure, never as a plane
-    /// that does not divide the body (#283): x = 148 plainly crosses the crank's half y > 0, whose
-    /// cut fails in the kernel's boolean, and the same plane cuts the half y < 0.
+    /// The crank's half y > 0 divides at x = 110 … 148 and by the diagonal plane through
+    /// (125, 2) as its mirror half does (#283): the oversized cutting boxes once made the kernel's
+    /// boolean fail there, reported as a plane that does not divide. Each cut leaves two cells
+    /// whose volumes add up to the half's (within the measure's tessellation).
     #[test]
-    fn a_kernel_failure_to_partition_is_reported_as_such() {
-        use fieldcraft_geometry::Cut;
-        let design = fieldcraft_geometry::open_design(&fieldcraft_geometry::script_design(CRANK_ARM).unwrap()).unwrap();
-        let cut = |name: &str, point: [f64; 3], normal: [f64; 3], bodies: &[&str]| Cut {
-            name: name.into(),
-            point,
-            normal,
-            bodies: bodies.iter().map(|b| b.to_string()).collect(),
+    fn the_crank_half_divides_where_its_mirror_does() {
+        let mut s = open("crank-mirror");
+        let volume = |s: &mut Session, body: &str| -> f64 {
+            let r = s.execute("geometry.bodies", &json!({})).unwrap();
+            let b = r.as_array().unwrap().iter().find(|b| b["name"] == body).unwrap_or_else(|| panic!("{body}: {r}"));
+            b["volume"].as_f64().unwrap_or_else(|| panic!("{b}"))
         };
-        let half = cut("Half", [0.0; 3], [0.0, 1.0, 0.0], &[]);
-        let p = design.partitioned(&[half.clone(), cut("X148", [148.0, 0.0, 0.0], [1.0, 0.0, 0.0], &[CRANK_HALF])]).unwrap();
-        assert!(p.errors.is_empty(), "{:?}", p.errors);
-        let p = design.partitioned(&[half, cut("X148", [148.0, 0.0, 0.0], [1.0, 0.0, 0.0], &["CrankArm/b"])]).unwrap();
-        // Should the kernel learn to make this cut, the cut is all there is to check.
-        if p.cuts[1].split.is_empty() {
-            let errors: Vec<&str> = p.errors.iter().filter(|e| e.feature == "partition X148").map(|e| e.message.as_str()).collect();
-            assert!(matches!(errors.as_slice(), [m] if m.starts_with("the kernel could not cut `CrankArm/b`")), "{errors:?}");
-        } else {
-            assert_eq!(p.cuts[1].split, ["CrankArm/b"]);
+        let half = volume(&mut s, "CrankArm/b");
+        let (sin, cos) = (32f64.to_radians().sin(), 32f64.to_radians().cos());
+        for (name, by) in [
+            ("X110", json!({"type": "offset", "plane": "yz", "offset": 110})),
+            ("X148", json!({"type": "offset", "plane": "yz", "offset": 148})),
+            ("X148R", json!({"type": "point_normal", "point": [148, 0, 0], "normal": [-1, 0, 0]})),
+            ("Diag", json!({"type": "point_normal", "point": [125, 2, 0], "normal": [sin, -cos, 0]})),
+        ] {
+            s.execute("geometry.datum", &json!({"name": name, "by": by})).unwrap();
+            let r = s.execute("geometry.partition", &json!({"name": name, "datum": name, "bodies": ["CrankArm/b"]})).unwrap();
+            assert_eq!(r["cells"], json!(["CrankArm/b/a", "CrankArm/b/b"]), "{name}: {r}");
+            let cells = volume(&mut s, "CrankArm/b/a") + volume(&mut s, "CrankArm/b/b");
+            assert!((cells - half).abs() < 1e-5 * half, "{name}: {cells} against {half}");
+            s.execute("geometry.partition.delete", &json!({"name": name})).unwrap();
         }
     }
 

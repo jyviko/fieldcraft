@@ -236,6 +236,14 @@ pub fn display(s: &Session) -> (DisplayMesh, Vec<String>) {
 
 /// [`display`] with a section through the mesh, cut away on the side `toward` points to.
 pub fn display_cut(s: &Session, section: Option<Section>, toward: Vec3) -> (DisplayMesh, Vec<String>) {
+    let (d, failed, _) = display_parts(s, section, toward);
+    (d, failed)
+}
+
+/// [`display_cut`], and the names of the bodies drawn in the order of their surfaces
+/// ([`fieldcraft_render::SurfaceTri::body`]).
+fn display_parts(s: &Session, section: Option<Section>, toward: Vec3) -> (DisplayMesh, Vec<String>, Vec<String>) {
+    let mut bodies = Vec::new();
     let mut hidden = s.hidden_elements();
     let cut = section.filter(|_| !s.model.elements().is_empty());
     if let Some(c) = cut {
@@ -244,19 +252,22 @@ pub fn display_cut(s: &Session, section: Option<Section>, toward: Vec3) -> (Disp
     let mut d = DisplayMesh::from_model_hiding(&s.model, &hidden);
     let mut failed = Vec::new();
     if cut.is_some() {
-        return (d, failed);
+        return (d, failed, bodies);
     }
     for body in s.design.iter().flat_map(|d| &d.bodies).filter(|b| s.shows(fieldcraft_io::ItemKind::Body, &b.name)) {
         let mesh = body.measure().and_then(|m| body.tessellate(display_tolerance(&Aabb3 { min: m.bbox_min.into(), max: m.bbox_max.into() })));
         match mesh {
-            Ok(m) => d.add_surface(&m.positions, &m.triangles, &m.tri_face),
+            Ok(m) => {
+                d.add_surface(&m.positions, &m.triangles, &m.tri_face);
+                bodies.push(body.name.clone());
+            }
             Err(e) => failed.push(format!("{}: {e}", body.name)),
         }
     }
     for surface in s.surfaces.iter().filter(|x| s.shows(fieldcraft_io::ItemKind::Surface, &x.name)) {
         d.add_surface(&surface.mesh.positions, &surface.mesh.triangles, &surface.mesh.tri_face);
     }
-    (d, failed)
+    (d, failed, bodies)
 }
 
 /// The model drawn as the viewport draws it (shaded with element edges).
@@ -309,6 +320,8 @@ struct Picture {
     colors: GlyphColors,
     /// The box around the datums drawn: inside the clipping radius, never framed (#295).
     datums: Aabb3,
+    /// The bodies drawn, in the order of their surfaces.
+    bodies: Vec<String>,
 }
 
 impl Picture {
@@ -324,7 +337,7 @@ impl Picture {
 }
 
 fn picture(s: &Session, p: &Palette, section: Option<Section>, toward: Vec3) -> Picture {
-    let (base, failed) = display_cut(s, section, toward);
+    let (base, failed, bodies) = display_parts(s, section, toward);
     let mut shown = Shown { failed, ..Shown::default() };
     let plot = s.results_view.as_ref().and_then(|v| s.latest_result(&v.step).map(|(r, _)| (v, r)));
     // Over a results plot, the symbols of what its step used.
@@ -345,7 +358,7 @@ fn picture(s: &Session, p: &Palette, section: Option<Section>, toward: Vec3) -> 
         let bounds = base.bounds;
         let shows = |n: &str| s.shows(fieldcraft_io::ItemKind::Datum, n);
         let datums = fieldcraft_render::glyphs::datums(&s.model, &base.bounds, &shows, None, &p.glyphs, &mut scene);
-        return Picture { scene, drawn: base, bounds, shown, glyphs, colors: p.glyphs, datums };
+        return Picture { scene, drawn: base, bounds, shown, glyphs, colors: p.glyphs, datums, bodies };
     };
     shown.step = Some(view.step.clone());
     let pick = view.pick();
@@ -381,7 +394,7 @@ fn picture(s: &Session, p: &Palette, section: Option<Section>, toward: Vec3) -> 
     }
     let mut bounds = base.bounds;
     bounds.union(drawn.bounds);
-    Picture { scene, drawn, bounds, shown, glyphs, colors: p.glyphs.over_results(p.background.1), datums: Aabb3::EMPTY }
+    Picture { scene, drawn, bounds, shown, glyphs, colors: p.glyphs.over_results(p.background.1), datums: Aabb3::EMPTY, bodies }
 }
 
 /// The scene of the session (the model, or the results view's plot) with the setup's symbols
@@ -411,6 +424,261 @@ pub fn orientation(p: &Value) -> Result<Orientation> {
     let pitch = number("pitch").ok_or_else(|| bad("`pitch` (degrees) is required"))??;
     let distance = number("distance").transpose()?;
     Orientation::checked(yaw, pitch, distance).ok_or_else(|| bad("`yaw` and `pitch` must be finite and `distance` finite and above 0"))
+}
+
+/// What a camera looks at: a point, or the centre of mass or of the bounding box of the bodies
+/// named (every body drawn when `None`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    Point(Vec3),
+    Mass(Option<Vec<String>>),
+    Bbox(Option<Vec<String>>),
+}
+
+impl Target {
+    /// The default: the centre of mass of the model drawn, so a sweep of yaws orbits it.
+    pub const MODEL: Target = Target::Mass(None);
+
+    fn bodies(&self) -> Option<&[String]> {
+        match self {
+            Target::Point(_) => None,
+            Target::Mass(b) | Target::Bbox(b) => b.as_deref(),
+        }
+    }
+
+    /// The JSON form [`camera`] reads.
+    pub fn json(&self) -> Value {
+        let center = |what: &str, bodies: &Option<Vec<String>>| match bodies {
+            Some(b) => serde_json::json!({"center_of": what, "bodies": b}),
+            None => serde_json::json!({"center_of": what}),
+        };
+        match self {
+            Target::Point(p) => serde_json::json!([p.x, p.y, p.z]),
+            Target::Mass(b) => center("mass", b),
+            Target::Bbox(b) => center("bbox", b),
+        }
+    }
+}
+
+/// A camera aimed as agents give it ([`camera`]): an orientation, what it looks at, whether its
+/// distance fits the target's bodies to the frame, and a perspective field of view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Aim {
+    pub at: Orientation,
+    /// `None` keeps the camera's target (the app's `ui.camera`); a picture of its own aims at
+    /// [`Target::MODEL`].
+    pub target: Option<Target>,
+    /// Without a distance: the target's bodies fill the frame from this direction. Otherwise the
+    /// distance keeps the whole model in the frame from every direction, so a sweep keeps its
+    /// size.
+    pub fit: bool,
+    /// Vertical field of view in degrees; 0 is orthographic.
+    pub fov: Option<f64>,
+}
+
+impl Aim {
+    /// Largest field of view, in degrees.
+    pub const MAX_FOV: f64 = 150.0;
+    /// Most bodies a target names.
+    pub const MAX_BODIES: usize = 1000;
+
+    /// Looking from `at`, with the target left as it is.
+    pub fn new(at: Orientation) -> Self {
+        Aim { at, target: None, fit: false, fov: None }
+    }
+
+    /// The JSON form [`camera`] reads.
+    pub fn json(&self) -> Value {
+        let mut v = serde_json::json!({"yaw": self.at.yaw, "pitch": self.at.pitch});
+        if let Some(d) = self.at.distance {
+            v["distance"] = d.into();
+        }
+        if let Some(t) = &self.target {
+            v["target"] = t.json();
+        }
+        if self.fit {
+            v["fit"] = true.into();
+        }
+        if let Some(f) = self.fov {
+            v["fov"] = f.into();
+        }
+        v
+    }
+}
+
+/// A camera from JSON: [`orientation`]'s `{yaw, pitch, distance?}` and `target`: `[x, y, z]` or
+/// `{"center_of": "mass" | "bbox", "bodies"?: [names]}`; `fit` (the target's bodies fill the
+/// frame; not with a distance) and `fov` (vertical, degrees, 0 orthographic). Hostile input is
+/// refused or clamped.
+pub fn camera(p: &Value) -> Result<Aim> {
+    let bad = |m: &str| EngineError::Params(format!("camera: {m}"));
+    let o = p.as_object().ok_or_else(|| bad("an object {yaw, pitch, distance?, target?, fit?, fov?}"))?;
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "yaw" | "pitch" | "distance" | "target" | "fit" | "fov")) {
+        return Err(bad(&format!("unknown field `{}` (yaw, pitch, distance, target, fit, fov)", k.chars().take(40).collect::<String>())));
+    }
+    let given = |k: &str| o.get(k).filter(|v| !v.is_null());
+    let mut core = serde_json::Map::new();
+    for k in ["yaw", "pitch", "distance"] {
+        if let Some(v) = given(k) {
+            core.insert(k.into(), v.clone());
+        }
+    }
+    let at = orientation(&Value::Object(core))?;
+    let target = given("target").map(target).transpose()?;
+    let fit = match given("fit") {
+        None => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad("`fit` must be true or false"))?,
+    };
+    if fit && at.distance.is_some() {
+        return Err(bad("give `distance` or `fit`, not both"));
+    }
+    let fov = match given("fov") {
+        None => None,
+        Some(v) => Some(
+            v.as_f64()
+                .filter(|f| f.is_finite() && (0.0..=Aim::MAX_FOV).contains(f))
+                .ok_or_else(|| bad(&format!("`fov` must be a number of degrees from 0 (orthographic) to {}", Aim::MAX_FOV)))?,
+        ),
+    };
+    Ok(Aim { at, target, fit, fov })
+}
+
+fn target(v: &Value) -> Result<Target> {
+    let bad = |m: &str| EngineError::Params(format!("camera: target {m}"));
+    if let Some(a) = v.as_array() {
+        let c: Vec<f64> = a.iter().filter_map(Value::as_f64).filter(|x| x.is_finite() && x.abs() <= 1e12).collect();
+        return match c[..] {
+            [x, y, z] if a.len() == 3 => Ok(Target::Point(Vec3::new(x, y, z))),
+            _ => Err(bad("must be [x, y, z] (finite numbers)")),
+        };
+    }
+    let o = v.as_object().ok_or_else(|| bad("must be [x, y, z] or {center_of: mass | bbox, bodies?}"))?;
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "center_of" | "bodies")) {
+        return Err(bad(&format!("has an unknown field `{}` (center_of, bodies)", k.chars().take(40).collect::<String>())));
+    }
+    let bodies = match o.get("bodies").filter(|v| !v.is_null()) {
+        None => None,
+        Some(b) => {
+            let a = b
+                .as_array()
+                .filter(|a| !a.is_empty() && a.len() <= Aim::MAX_BODIES)
+                .ok_or_else(|| bad(&format!("bodies must be a list of 1 to {} names", Aim::MAX_BODIES)))?;
+            Some(a.iter().map(|n| n.as_str().map(str::to_string).ok_or_else(|| bad("bodies must be names"))).collect::<Result<Vec<_>>>()?)
+        }
+    };
+    match o.get("center_of").and_then(Value::as_str).unwrap_or("mass") {
+        "mass" => Ok(Target::Mass(bodies)),
+        "bbox" => Ok(Target::Bbox(bodies)),
+        other => Err(bad(&format!("center_of `{}`: mass or bbox", other.chars().take(40).collect::<String>()))),
+    }
+}
+
+/// The centre of mass of the solid a closed triangle surface bounds (the divergence theorem), or
+/// the centre of area of an open one; `None` without triangles.
+fn centre_of_mass<'a>(tris: impl Iterator<Item = &'a [Vec3; 3]>) -> Option<Vec3> {
+    let (mut volume, mut moment, mut area, mut areal) = (0.0, Vec3::ZERO, 0.0, Vec3::ZERO);
+    for [a, b, c] in tris {
+        let v = a.dot(b.cross(*c)) / 6.0;
+        volume += v;
+        moment = moment + (*a + *b + *c) * (v / 4.0);
+        let s = (*b - *a).cross(*c - *a).len() * 0.5;
+        area += s;
+        areal = areal + (*a + *b + *c) * (s / 3.0);
+    }
+    if !(area > 0.0) {
+        return None;
+    }
+    // A closed surface's volume is well away from 0 compared with its area times its size;
+    // an open one (a shell) has none worth the name.
+    let size = area.sqrt();
+    let c = if volume.abs() > 1e-6 * area * size { moment * (1.0 / volume) } else { areal * (1.0 / area) };
+    c.is_finite().then_some(c)
+}
+
+impl Picture {
+    /// The point `target` names, and the box around what it frames: the bodies it names, or
+    /// everything drawn.
+    fn aim_point(&self, target: &Target) -> Result<(Vec3, Aabb3)> {
+        let surfaces: Vec<&[Vec3; 3]> = match target.bodies() {
+            Some(names) => {
+                let mut picked = Vec::new();
+                for n in names {
+                    let i = self.bodies.iter().position(|b| b == n).ok_or_else(|| {
+                        EngineError::Params(format!(
+                            "camera: no body `{}` is drawn (drawn: {})",
+                            n.chars().take(80).collect::<String>(),
+                            if self.bodies.is_empty() { "none".into() } else { self.bodies.join(", ") }
+                        ))
+                    })?;
+                    picked.push(u32::try_from(i).unwrap_or(u32::MAX));
+                }
+                self.drawn.surface_tris.iter().filter(|t| picked.contains(&t.body)).map(|t| &t.p).collect()
+            }
+            // What is drawn: the elements' faces over the geometry's.
+            None if !self.drawn.tris.is_empty() => self.drawn.tris.iter().map(|t| &t.p).collect(),
+            None => self.drawn.surface_tris.iter().map(|t| &t.p).collect(),
+        };
+        let mut b = Aabb3::EMPTY;
+        for p in surfaces.iter().flat_map(|t| t.iter()) {
+            b.add(*p);
+        }
+        let framed = if target.bodies().is_some() { b } else { self.bounds };
+        let whole = if b.is_empty() { self.bounds } else { b };
+        let point = match target {
+            Target::Point(p) => *p,
+            Target::Bbox(_) => whole.center(),
+            Target::Mass(_) => centre_of_mass(surfaces.into_iter()).unwrap_or_else(|| whole.center()),
+        };
+        Ok((point, framed))
+    }
+}
+
+/// `cam` aimed as `aim` says with the picture `pic` and a view `aspect` wide per unit of height:
+/// turned, its field of view set, then (with a target) moved to look at it from `aim`'s distance,
+/// from the distance that fits the target's bodies (`fit`), or from the distance at which the
+/// sphere about the target through the farthest corner of everything drawn fits the view.
+fn aimed(pic: &Picture, aim: &Aim, mut cam: Camera, aspect: f64) -> Result<Camera> {
+    cam.orient(&Orientation { distance: None, ..aim.at });
+    if let Some(f) = aim.fov {
+        cam.fov = f.to_radians();
+    }
+    let Some(target) = &aim.target else {
+        cam.orient(&aim.at);
+        return Ok(cam);
+    };
+    let (point, framed) = pic.aim_point(target)?;
+    if !point.is_finite() {
+        return Ok(cam);
+    }
+    cam.target = point;
+    if aim.at.distance.is_some() {
+        cam.orient(&aim.at);
+    } else if aim.fit {
+        cam.fit_about(&framed, aspect);
+    } else if !pic.bounds.is_empty() {
+        let aspect = if aspect.is_finite() && aspect > 1e-6 { aspect } else { 1.0 };
+        let radius = pic.bounds.corners().iter().map(|c| c.dist(point)).fold(1e-3, f64::max) / (1.0 - 2.0 * fieldcraft_render::FIT_MARGIN);
+        // The half height the sphere needs, then the distance that shows it.
+        let half = radius / aspect.min(1.0);
+        let d = if cam.fov > 0.0 {
+            let half_angle = ((cam.fov * 0.5).tan() * aspect.min(1.0)).atan();
+            radius / half_angle.sin().max(1e-6)
+        } else {
+            half / Camera { distance: 1.0, ..cam }.half_height()
+        };
+        if d.is_finite() {
+            cam.distance = d.clamp(Orientation::DISTANCE.0, Orientation::DISTANCE.1);
+        }
+    }
+    Ok(cam)
+}
+
+/// The app's camera `cam` aimed as `aim` says at the session `s` drawn in a view `aspect` wide
+/// per unit of height (the control channel's `ui.camera`); `cam` as it is but turned when `aim`
+/// has no target.
+pub fn aim(s: &Session, aim: &Aim, cam: Camera, aspect: f64) -> Result<Camera> {
+    let pic = picture(s, &Palette::LIGHT, None, cam.back());
+    aimed(&pic, aim, cam, aspect)
 }
 
 /// A picture ready to draw: the scene (with its background and clipping radius), the setup's
@@ -449,6 +717,24 @@ pub fn frame(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette, sec
     bounds.union(pic.datums);
     pic.scene.radius = if bounds.is_empty() { 1.0 } else { (cam.target.dist(bounds.center()) + bounds.diagonal() * 0.5).max(1e-3) };
     Framed { scene: pic.scene, symbols, cam, shown: pic.shown }
+}
+
+/// The session seen through `aim` ([`camera`]) in a `w` × `h` pixel picture, aimed at
+/// [`Target::MODEL`] unless it names a target; the symbols at their default size on screen and
+/// a `section` as [`frame`] draws them. An error names a body the target asks for that is not
+/// drawn.
+pub fn frame_at(s: &Session, aim: &Aim, w: usize, h: usize, p: &Palette, section: Option<Section>) -> Result<Framed> {
+    let aim = Aim { target: Some(aim.target.clone().unwrap_or(Target::MODEL)), ..aim.clone() };
+    let mut cam = Camera::default();
+    cam.orient(&aim.at);
+    let mut pic = picture(s, p, section, cam.back());
+    let cam = aimed(&pic, &aim, Camera { fov: 0.0, ..cam }, w as f64 / h.max(1) as f64)?;
+    let mut symbols = Scene::default();
+    let mut bounds = pic.bounds;
+    bounds.union(pic.symbols(glyphs::unit_for(&cam, h as f64, glyphs::DEFAULT_SIZE, 1.0).unwrap_or(f64::NAN), &mut symbols));
+    bounds.union(pic.datums);
+    pic.scene.radius = if bounds.is_empty() { 1.0 } else { (cam.target.dist(bounds.center()) + bounds.diagonal() * 0.5).max(1e-3) };
+    Ok(Framed { scene: pic.scene, symbols, cam, shown: pic.shown })
 }
 
 /// A PNG of the session seen from `at`, `w` × `h` pixels ([`frame`]), drawn on the CPU.
@@ -496,6 +782,153 @@ mod tests {
         let muted = Palette::LIGHT.glyphs.over_results(Palette::LIGHT.background.1);
         assert!(scene.lines.iter().any(|l| l.color == muted.constraint));
         assert!(!scene.lines.iter().any(|l| l.color == Palette::LIGHT.glyphs.constraint));
+    }
+
+    /// A session of hex8 boxes `[min, max]`, one element each.
+    fn boxes(b: &[([f64; 3], [f64; 3])]) -> Session {
+        let mut s = Session::default();
+        for (e, (lo, hi)) in b.iter().enumerate() {
+            let e = e as u32;
+            let corner = |i: usize| {
+                let pick = |k: usize, bit: bool| if bit { hi[k] } else { lo[k] };
+                let (x, y, z) = ([false, true, true, false][i % 4], [false, false, true, true][i % 4], i >= 4);
+                [pick(0, x), pick(1, y), pick(2, z)]
+            };
+            for i in 0..8 {
+                s.execute("mesh.node.add", &json!({"label": e * 8 + i as u32 + 1, "xyz": corner(i)})).unwrap();
+            }
+            s.execute("mesh.element.add", &json!({"label": e + 1, "kind": "hex8", "nodes": (1..=8).map(|i| e * 8 + i).collect::<Vec<_>>()})).unwrap();
+        }
+        s
+    }
+
+    /// RGBA pixels of a PNG.
+    fn pixels(png: &[u8]) -> Vec<u8> {
+        let mut r = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+        let mut buf = vec![0; r.output_buffer_size().unwrap()];
+        let info = r.next_frame(&mut buf).unwrap();
+        buf.truncate(info.buffer_size());
+        buf
+    }
+
+    /// The centroid of the pixels of `png` that differ from the empty picture `empty`, and how
+    /// many there are.
+    fn drawn_centroid(png: &[u8], empty: &[u8], w: usize) -> (f64, f64, usize) {
+        let (a, b) = (pixels(png), pixels(empty));
+        let (mut sx, mut sy, mut n) = (0.0, 0.0, 0usize);
+        for (i, (p, q)) in a.chunks(4).zip(b.chunks(4)).enumerate() {
+            if p.iter().zip(q).take(3).any(|(x, y)| x.abs_diff(*y) > 8) {
+                sx += (i % w) as f64 + 0.5;
+                sy += (i / w) as f64 + 0.5;
+                n += 1;
+            }
+        }
+        (sx / n.max(1) as f64, sy / n.max(1) as f64, n)
+    }
+
+    fn shot(s: &Session, aim: &Aim, w: usize, h: usize) -> Vec<u8> {
+        let f = frame_at(s, aim, w, h, &Palette::LIGHT, None).unwrap();
+        fieldcraft_render::render_layers_png(&f.scene, &[&f.symbols], &f.cam, w, h).unwrap()
+    }
+
+    /// A yaw sweep of a box far from the origin orbits it: the box stays at the picture's
+    /// centre and keeps its size, from below and above, orthographic and in perspective (#467).
+    #[test]
+    fn a_yaw_sweep_orbits_the_model() {
+        let s = boxes(&[([200.0, 40.0, 30.0], [260.0, 70.0, 50.0])]);
+        let (w, h) = (240, 160);
+        let empty = shot(&Session::default(), &camera(&json!({"yaw": 0, "pitch": 0})).unwrap(), w, h);
+        for extra in [json!({}), json!({"fov": 40}), json!({"fit": true})] {
+            for pitch in [25.0, -30.0] {
+                let mut sizes = Vec::new();
+                for yaw in (0..360).step_by(30) {
+                    let mut p = json!({"yaw": yaw, "pitch": pitch});
+                    p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+                    let (x, y, n) = drawn_centroid(&shot(&s, &camera(&p).unwrap(), w, h), &empty, w);
+                    assert!(n > 500, "{p}: {n} pixels");
+                    // In perspective the near end of the box is drawn larger than the far end, which
+                    // moves its silhouette's centroid off the centre of mass by a few percent of
+                    // the width; the centre of mass itself projects to the centre (checked below).
+                    let tolerance = if extra.get("fov").is_some() { 0.05 * w as f64 } else { 2.0 };
+                    let off = (x - w as f64 / 2.0).abs().max((y - h as f64 / 2.0).abs());
+                    assert!(off < tolerance, "{p}: centroid ({x:.1}, {y:.1})");
+                    sizes.push(n);
+                    let cam = frame_at(&s, &camera(&p).unwrap(), w, h, &Palette::LIGHT, None).unwrap().cam;
+                    let (cx, cy, _) = cam.to_screen(Vec3::new(230.0, 55.0, 40.0), w as f64, h as f64, 100.0).unwrap();
+                    assert!((cx - w as f64 / 2.0).abs() < 1e-6 && (cy - h as f64 / 2.0).abs() < 1e-6, "{p}");
+                }
+                // Without `fit` the distance is the same from every side; with it the box fills
+                // the frame, so it is larger.
+                if extra.get("fit").is_none() {
+                    let (lo, hi) = (sizes.iter().min().unwrap(), sizes.iter().max().unwrap());
+                    assert!(*hi < lo * 3, "{extra} {pitch}: {sizes:?}");
+                }
+            }
+        }
+    }
+
+    /// The target is the centre of mass by default, the bounding box's centre or a point when
+    /// asked; bodies name what it frames, and a body not drawn is an error.
+    #[test]
+    fn camera_targets() {
+        // An L: a long box and a short one on top of its end.
+        let s = boxes(&[([0.0, 0.0, 0.0], [90.0, 10.0, 10.0]), ([0.0, 0.0, 10.0], [10.0, 10.0, 40.0])]);
+        let pic = picture(&s, &Palette::LIGHT, None, Vec3::Z);
+        let (mass, _) = pic.aim_point(&Target::MODEL).unwrap();
+        // Volumes 9000 and 3000: x = (45·9000 + 5·3000)/12000 = 35, z = (5·9000 + 25·3000)/12000 = 10.
+        assert!(mass.dist(Vec3::new(35.0, 5.0, 10.0)) < 1e-9, "{mass:?}");
+        let (bbox, _) = pic.aim_point(&Target::Bbox(None)).unwrap();
+        assert!(bbox.dist(Vec3::new(45.0, 5.0, 20.0)) < 1e-9, "{bbox:?}");
+        let (point, _) = pic.aim_point(&Target::Point(Vec3::new(1.0, 2.0, 3.0))).unwrap();
+        assert_eq!(point, Vec3::new(1.0, 2.0, 3.0));
+        // An open surface (one face of a box) has its centre of area.
+        let face = [[Vec3::ZERO, Vec3::X, Vec3::new(1.0, 1.0, 0.0)], [Vec3::ZERO, Vec3::new(1.0, 1.0, 0.0), Vec3::Y]];
+        assert!(centre_of_mass(face.iter()).unwrap().dist(Vec3::new(0.5, 0.5, 0.0)) < 1e-12);
+        assert_eq!(centre_of_mass([].iter()), None);
+        let err = frame_at(
+            &s,
+            &camera(&json!({"yaw": 0, "pitch": 0, "target": {"center_of": "mass", "bodies": ["Gear"]}})).unwrap(),
+            64,
+            48,
+            &Palette::LIGHT,
+            None,
+        );
+        assert!(err.is_err_and(|e| e.to_string().contains("no body `Gear`")));
+        // The app's camera without a target keeps its own and only turns.
+        let cam = Camera { target: Vec3::new(7.0, 8.0, 9.0), distance: 321.0, ..Camera::default() };
+        let turned = aim(&s, &camera(&json!({"yaw": 90, "pitch": 10})).unwrap(), cam, 1.5).unwrap();
+        assert_eq!((turned.target, turned.distance), (cam.target, cam.distance));
+        let aimed = aim(&s, &camera(&json!({"yaw": 90, "pitch": 10, "target": {"center_of": "mass"}, "fit": true})).unwrap(), cam, 1.5).unwrap();
+        assert!(aimed.target.dist(mass) < 1e-9 && aimed.distance != cam.distance);
+    }
+
+    #[test]
+    fn camera_json_is_checked() {
+        let a = camera(&json!({"yaw": 10, "pitch": 20, "target": [1, 2, 3], "fov": 35})).unwrap();
+        assert_eq!((a.target, a.fov, a.fit), (Some(Target::Point(Vec3::new(1.0, 2.0, 3.0))), Some(35.0), false));
+        let a = camera(&json!({"yaw": 0, "pitch": 0, "target": {"center_of": "bbox", "bodies": ["A"]}, "fit": true})).unwrap();
+        assert_eq!(camera(&a.json()).unwrap(), a);
+        assert_eq!(a.target, Some(Target::Bbox(Some(vec!["A".into()]))));
+        assert_eq!(camera(&json!({"yaw": 0, "pitch": 0, "target": {}})).unwrap().target, Some(Target::MODEL));
+        for bad in [
+            json!({"yaw": 0, "pitch": 0, "target": [1, 2]}),
+            json!({"yaw": 0, "pitch": 0, "target": [1, 2, "x"]}),
+            json!({"yaw": 0, "pitch": 0, "target": [1, 2, 1e300]}),
+            json!({"yaw": 0, "pitch": 0, "target": {"center_of": "gravity"}}),
+            json!({"yaw": 0, "pitch": 0, "target": {"center_of": "mass", "bodies": []}}),
+            json!({"yaw": 0, "pitch": 0, "target": {"center_of": "mass", "bodies": [3]}}),
+            json!({"yaw": 0, "pitch": 0, "target": {"middle": 1}}),
+            json!({"yaw": 0, "pitch": 0, "target": "mass"}),
+            json!({"yaw": 0, "pitch": 0, "fit": true, "distance": 10}),
+            json!({"yaw": 0, "pitch": 0, "fit": 1}),
+            json!({"yaw": 0, "pitch": 0, "fov": -1}),
+            json!({"yaw": 0, "pitch": 0, "fov": 179}),
+            json!({"yaw": 0, "pitch": 0, "fov": "wide"}),
+            json!({"yaw": 0, "pitch": 0, "zoom": 2}),
+            json!({"pitch": 0}),
+        ] {
+            assert!(camera(&bad).is_err(), "{bad}");
+        }
     }
 
     /// Pixels of colour `c` (within a few levels) in a PNG.

@@ -1378,7 +1378,7 @@ version = "0.6.0"
 dependencies = [
  "fieldcraft-render",
  "log",
- "pollster 0.4.0",
+ "pollster 1.0.1",
  "serde_json",
  "thiserror 2.0.21",
  "wgpu",

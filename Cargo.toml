@@ -54,7 +54,7 @@ eframe = { version = "0.36", default-features = false }
 egui-wgpu = "0.36"
 # the wgpu egui-wgpu uses, for the offscreen viewport (crates/gpu); backends come per target there
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
-pollster = "0.4"
+pollster = "1.0"
 # Shared Craft-family egui components (icon buttons, tabs, widget palette); the same rev as
 # VectorCraft. MIT OR Apache-2.0.
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675" }

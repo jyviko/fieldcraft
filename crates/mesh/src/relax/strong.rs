@@ -12,9 +12,10 @@
 //! B (2 − q)                        for an invalid element (B large),
 //! ```
 //!
-//! growing without bound as an element degenerates (a barrier: no step that lowers `F` inverts an
-//! element), while the invalid branch falls as an inverted element untangles and lies far above
-//! any valid configuration. The size term is there because the scaled Jacobian does not see an
+//! φ continuing as its tangent line below q = 0.3, so it rises steeply but stays finite as an
+//! element degenerates, while the invalid branch falls as an inverted element untangles and lies
+//! above every valid element's term (a barrier: no step that lowers `F` inverts an element unless
+//! it untangles worse ones; and passing through q → 0⁺ never costs more than staying inverted). The size term is there because the scaled Jacobian does not see an
 //! element flattening along one direction: without it the optimiser squeezed elements against
 //! the boundary to square up their neighbours (the Pi 5 base's largest edge ratio went from 5 to
 //! 34). For the same reason an element longer than the region's largest edge ratio before costs
@@ -43,8 +44,14 @@ use fieldcraft_model::Model;
 use super::{Constraints, Elem, Freedom, P, RegionQuality, State, add, dist, dot, measure, region_quality, scale, sub};
 use crate::{Error, Result};
 
-/// Weight of an invalid element in the objective.
-const INVALID: f64 = 1e8;
+/// Weight of an invalid element in the objective: above every valid element's term (the shape
+/// term is at most [`shape`] at 0, a few 1e9, plus the size term), so no step that untangles an
+/// element ever looks worse than staying inverted.
+const INVALID: f64 = 1e11;
+
+/// Below this quality the shape term continues as its tangent line, so it stays finite (and
+/// below [`INVALID`]) as an element degenerates instead of growing without bound.
+const KNEE: f64 = 0.3;
 
 /// Weight of the size term.
 const SIZE_WEIGHT: f64 = 0.5;
@@ -66,13 +73,27 @@ enum Phase {
 fn phi(phase: Phase, q: f64, valid: bool, v: f64, v0: f64) -> f64 {
     if valid && q > 0.0 {
         let g = if v > 0.0 && v0 > 0.0 { libm::log(v / v0) } else { 0.0 };
-        let shape = match phase {
-            Phase::Smooth => (1.0 / q - 1.0).powi(2),
-            Phase::MinMax => q.powi(-MIN_MAX_POWER) - 1.0,
-        };
-        shape + SIZE_WEIGHT * g * g
+        shape(phase, q) + SIZE_WEIGHT * g * g
     } else {
         INVALID * (2.0 - q.min(1.0))
+    }
+}
+
+/// The shape term of a valid element of quality `q > 0`: `φ(q)` from [`KNEE`] up, its tangent
+/// line below. Unbounded, `q⁻¹⁶` reached 1e96 as an element neared flat, so far above an
+/// invalid element's term that the descent kept elements inverted rather than pass through
+/// q → 0⁺ (#438: the distorted plate stayed tangled).
+fn shape(phase: Phase, q: f64) -> f64 {
+    // φ and its derivative at `x`.
+    let at = |x: f64| match phase {
+        Phase::Smooth => ((1.0 / x - 1.0).powi(2), -2.0 * (1.0 / x - 1.0) / (x * x)),
+        Phase::MinMax => (x.powi(-MIN_MAX_POWER) - 1.0, -f64::from(MIN_MAX_POWER) * x.powi(-MIN_MAX_POWER - 1)),
+    };
+    if q >= KNEE {
+        at(q).0
+    } else {
+        let (v, d) = at(KNEE);
+        v + d * (q - KNEE)
     }
 }
 

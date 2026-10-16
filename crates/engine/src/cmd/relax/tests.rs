@@ -357,3 +357,37 @@ fn strong_mode_parameters_are_checked() {
     let r = s.execute("mesh.node.relax", &json!({"mode": "strong", "below": 0.01})).unwrap();
     assert_eq!(r["moved"], 0, "{r}");
 }
+
+/// The mesh and the strong relaxation are the same bits on every platform and thread count:
+/// the plate's hex mesh differed between macOS and Linux (the system maths library's `atan2`,
+/// `sin` … are not correctly rounded), so the distorted-plate test passed on one and failed on
+/// the other (#438). The fingerprint is of the nodes after mesh.hex.generate, after the
+/// perturbation and after the strong relaxation; CI checks it on Linux, it was taken on macOS.
+#[test]
+fn mesh_and_strong_relaxation_are_the_same_bits_everywhere() {
+    let fingerprint = |s: &Session, h: &mut u64| {
+        // FNV-1a over every node's label and coordinate bits.
+        for (n, p) in s.model.nodes() {
+            for word in [u64::from(*n), p.xyz[0].to_bits(), p.xyz[1].to_bits(), p.xyz[2].to_bits()] {
+                for b in word.to_le_bytes() {
+                    *h = (*h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        }
+    };
+    let run = || {
+        let mut h = 0xcbf2_9ce4_8422_2325;
+        let mut s = plate();
+        s.execute("mesh.hex.generate", &json!({"size": 2.0})).unwrap();
+        fingerprint(&s, &mut h);
+        perturb(&mut s, ON_HOLE, 6.0, 0.35);
+        fingerprint(&s, &mut h);
+        s.execute("mesh.node.relax", &json!({"mode": "strong", "below": 0.5, "reach": 4.0})).unwrap();
+        fingerprint(&s, &mut h);
+        h
+    };
+    let one = fieldcraft_parallel::with_threads(1, run);
+    let many = fieldcraft_parallel::with_threads(4, run);
+    assert_eq!(one, many, "1 and 4 threads differ");
+    assert_eq!(one, 0x7445_e04c_0d65_c1d0, "fingerprint {one:#018x}");
+}

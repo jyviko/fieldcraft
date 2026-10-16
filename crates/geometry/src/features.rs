@@ -374,19 +374,20 @@ impl Design {
         let shapes: Vec<&Shape> = match body {
             Some(name) => {
                 let source = self.source_of(name).ok_or_else(|| crate::Error::Invalid(format!("no body `{name}`")))?;
-                self.source.iter().filter(|b| b.name == source).collect()
+                self.opened.iter().filter(|b| b.name == source).collect()
             }
-            None => self.source.iter().collect(),
+            None => self.opened.iter().collect(),
         };
         shapes.into_iter().map(|shape| guard("feature graph", || Ok(body_features(history, shape))).map_err(crate::Error::from)?).collect()
     }
 }
 
 fn body_features(history: &History, shape: &Shape) -> Result<BodyFeatures> {
-    // Faces by the features their names mention.
+    // Faces by the features their names mention (a merged face: the names of its B-rep faces).
     let mut faces: BTreeMap<u64, Vec<String>> = BTreeMap::new();
     for f in shape.faces() {
-        let ids: BTreeSet<u64> = feature_ids(&f.name).collect();
+        let ids: BTreeSet<u64> =
+            if f.members.is_empty() { feature_ids(&f.name).collect() } else { f.members.iter().flat_map(|m| feature_ids(m)).collect() };
         for id in ids {
             faces.entry(id).or_default().push(f.name.clone());
         }

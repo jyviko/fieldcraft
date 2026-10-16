@@ -101,7 +101,7 @@ impl Design {
         }
         let planes: Vec<(Plane, [f64; 3])> = cuts.iter().map(plane_of).collect::<Result<_>>()?;
         let mut bodies: Vec<Shape> = self.source.as_ref().clone();
-        let mut errors: Vec<FeatureError> = self.errors.iter().filter(|e| !e.feature.starts_with("partition ")).cloned().collect();
+        let mut errors: Vec<FeatureError> = self.errors.iter().filter(|e| !crate::virtual_faces::derived(&e.feature)).cloned().collect();
         let mut reports = Vec::with_capacity(cuts.len());
         for (cut, (plane, n)) in cuts.iter().zip(&planes) {
             let feature = format!("partition {}", cut.name);
@@ -176,6 +176,7 @@ impl Design {
             errors,
             cuts: reports,
             source: std::sync::Arc::clone(&self.source),
+            opened: std::sync::Arc::clone(&self.source),
             history: self.history.clone(),
         })
     }
@@ -276,10 +277,10 @@ fn split(body: &Shape, plane: &Plane, n: [f64; 3], cut: &Cut) -> Result<Split> {
     let parent = Faces::of(body, tol)?;
     let mut cells: Vec<(bool, [f64; 3], Shape)> = Vec::with_capacity(parts.len());
     for part in parts {
-        let mut shape = Shape { name: String::new(), body: part, faces: Vec::new() };
+        let mut shape = Shape { name: String::new(), body: part, faces: Vec::new(), face_map: Vec::new() };
         let m = shape.measure()?;
         let negative = dot(sub(m.centroid, cut.point), n) < 0.0;
-        shape.faces = (0..m.faces).map(|_| Face { name: String::new(), exact: false }).collect();
+        shape.faces = (0..m.faces).map(|_| Face { name: String::new(), exact: false, members: Vec::new() }).collect();
         cells.push((negative, m.centroid, shape));
     }
     cells.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| lexical(&a.1, &b.1)));
@@ -345,7 +346,7 @@ impl Shape {
 
 /// Whether two analytic surfaces are the same surface (within `tol`); free-form faces match any
 /// free-form face.
-fn same_surface(a: Option<FaceSurface>, b: Option<FaceSurface>, tol: f64) -> bool {
+pub(crate) fn same_surface(a: Option<FaceSurface>, b: Option<FaceSurface>, tol: f64) -> bool {
     let close = |x: [f64; 3], y: [f64; 3]| dot(sub(x, y), sub(x, y)).sqrt() <= tol;
     let parallel = |x: [f64; 3], y: [f64; 3]| dot(cross(x, y), cross(x, y)).sqrt() <= 1e-6;
     let on_line = |p: [f64; 3], o: [f64; 3], axis: [f64; 3]| {
@@ -414,7 +415,7 @@ fn point_triangle(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
 }
 
 /// The name without a trailing piece number (`F2:top#1` → `F2:top`).
-fn base_name(name: &str) -> &str {
+pub(crate) fn base_name(name: &str) -> &str {
     match name.rsplit_once('#') {
         Some((b, k)) if !k.is_empty() && k.bytes().all(|c| c.is_ascii_digit()) => b,
         _ => name,

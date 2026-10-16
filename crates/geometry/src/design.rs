@@ -27,6 +27,9 @@ pub struct Design {
     pub cuts: Vec<crate::partition::CutReport>,
     /// The bodies as opened, before any partition: what [`Design::partitioned`] starts from.
     pub(crate) source: std::sync::Arc<Vec<Shape>>,
+    /// The bodies as opened with the face merges on them ([`Design::merged`]): what
+    /// [`Design::source_body`] and [`Design::features`] describe.
+    pub(crate) opened: std::sync::Arc<Vec<Shape>>,
     /// The timeline the design was rebuilt from ([`Design::features`]).
     pub(crate) history: Option<std::sync::Arc<crate::features::History>>,
 }
@@ -79,9 +82,9 @@ impl Design {
         self.bodies.iter().find(|b| b.name == name)
     }
 
-    /// The body `name` of the design as opened (before any partition).
+    /// The body `name` of the design as opened (before any partition), with its merged faces.
     pub fn source_body(&self, name: &str) -> Option<&Shape> {
-        self.source.iter().find(|b| b.name == name)
+        self.opened.iter().find(|b| b.name == name)
     }
 
     /// The body of the design as opened that `name` is, or that partitions cut it from
@@ -120,9 +123,13 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
     for b in &state.bodies {
         let faces = guard("name faces", || {
             let names = naming::face_names(b);
-            Ok(names.iter().enumerate().map(|(i, name)| Face { name: name.clone(), exact: naming::face_name_exact(b, i) }).collect())
+            Ok(names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| Face { name: name.clone(), exact: naming::face_name_exact(b, i), members: Vec::new() })
+                .collect())
         })?;
-        bodies.push(Shape { name: b.name.clone(), body: b.body.clone(), faces });
+        bodies.push(Shape { name: b.name.clone(), body: b.body.clone(), faces, face_map: Vec::new() });
     }
     // A feature that failed leaves a different solid than SolidCraft's: each one names the bodies
     // it would have changed, so opening never hands back a silently different solid.
@@ -152,6 +159,7 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
     Ok(Design {
         name: doc.name.clone(),
         source: std::sync::Arc::new(bodies.clone()),
+        opened: std::sync::Arc::new(bodies.clone()),
         bodies,
         errors,
         cuts: Vec::new(),

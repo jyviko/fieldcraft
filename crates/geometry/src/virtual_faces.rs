@@ -1,0 +1,417 @@
+//! Virtual topology: faces merged for meshing only.
+//!
+//! SolidCraft's kernel cannot heal a B-rep (no face merge or split), and a mesher should not have
+//! to: a fillet the kernel left in pieces, or a face an imprint split, only needs to *mesh* as one
+//! face. A [`Merge`] makes adjacent faces of a body one virtual face in what the meshers take from
+//! the body ([`Shape::tessellate`], [`Shape::faces`], [`Shape::face_surfaces`], edge and vertex
+//! names): the triangles of its B-rep faces carry one tag, the edges between them are gone (an
+//! edge they leave split in pieces along a neighbour is joined into one), and its surface is the
+//! one its B-rep faces share (none when they lie on different surfaces: meshers then keep to the
+//! tessellation). The B-rep itself is unchanged.
+//!
+//! Merges live in the FieldCraft model, by persistent face names, and are applied again after the
+//! partitions whenever the design is opened, so an edit of the design followed by a re-open
+//! replays them. A merge whose faces are gone or no longer touch is listed in [`Design::errors`]
+//! (feature `merge <name>`), as a feature that failed to rebuild; the others still apply.
+//!
+//! The merged face is named `merge:<name>`. A face name in a merge selects the face of that name,
+//! or the pieces a partition cut it into (`<name>#0`, `<name>#1`, …), as sets do.
+
+use std::collections::BTreeSet;
+
+use crate::edges::EDGE_TOLERANCE;
+use crate::{Design, Error, Face, FaceSurface, FeatureError, Result, Shape, SurfaceMesh};
+
+/// Most merges a design takes.
+pub const MAX_MERGES: usize = 1024;
+/// Most faces one merge names.
+pub const MAX_MERGE_FACES: usize = 1024;
+/// Most edges of one pair of faces joined end to end (more are left as they are).
+const MAX_JOINED: usize = 256;
+
+/// Faces of one body made one face for meshing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Merge {
+    /// Names the merged face (`merge:<name>`).
+    pub name: String,
+    pub body: String,
+    /// The faces, by persistent name (a name also selects the pieces a partition cut it into).
+    pub faces: Vec<String>,
+}
+
+/// The name of the face merge `name` makes.
+pub fn merged_face_name(name: &str) -> String {
+    format!("merge:{name}")
+}
+
+/// Whether a feature error comes from the model's partitions or merges (applied again from the
+/// design as opened) rather than from the design's own timeline.
+pub(crate) fn derived(feature: &str) -> bool {
+    feature.starts_with("partition ") || feature.starts_with("merge ")
+}
+
+impl Design {
+    /// The design with `merges` applied in order, on top of its partitions. A merge that fails on
+    /// this design (a body or face that is not there, faces that do not touch) is listed in
+    /// [`Design::errors`] (feature `merge <name>`) and changes nothing; the rest still apply. A
+    /// body no partition cut is also merged as opened ([`Design::source_body`], the feature graph).
+    pub fn merged(mut self, merges: &[Merge]) -> Result<Design> {
+        if merges.len() > MAX_MERGES {
+            return Err(Error::Invalid(format!("a design takes at most {MAX_MERGES} face merges")));
+        }
+        for m in merges {
+            let feature = format!("merge {}", m.name);
+            let Some(body) = self.bodies.iter_mut().find(|b| b.name == m.body) else {
+                self.errors.push(FeatureError { feature, message: format!("no body `{}`", m.body), bodies: vec![m.body.clone()] });
+                continue;
+            };
+            match body.merge_faces(&merged_face_name(&m.name), &m.faces) {
+                Ok(merged) => *body = merged,
+                Err(e) => self.errors.push(FeatureError { feature, message: e.to_string(), bodies: vec![m.body.clone()] }),
+            }
+        }
+        if self.bodies.iter().any(|b| !b.face_map.is_empty()) {
+            let opened = self.source.iter().map(|s| self.bodies.iter().find(|b| b.name == s.name).unwrap_or(s).clone()).collect();
+            self.opened = std::sync::Arc::new(opened);
+        }
+        Ok(self)
+    }
+}
+
+impl Shape {
+    /// The faces with this name: the face itself, else the pieces a partition cut it into
+    /// (`<name>#k`).
+    pub fn faces_named(&self, name: &str) -> Vec<u32> {
+        let exact: Vec<u32> =
+            (0..self.faces.len()).filter(|&i| self.faces.get(i).is_some_and(|f| f.name == name)).filter_map(|i| u32::try_from(i).ok()).collect();
+        if !exact.is_empty() {
+            return exact;
+        }
+        (0..self.faces.len())
+            .filter(|&i| self.faces.get(i).is_some_and(|f| crate::partition::base_name(&f.name) == name && f.name != name))
+            .filter_map(|i| u32::try_from(i).ok())
+            .collect()
+    }
+
+    /// The faces made of several B-rep faces (by face index), each with how many.
+    pub fn merged_faces(&self) -> Vec<(u32, usize)> {
+        let mut count = vec![0usize; self.faces.len()];
+        for &f in &self.face_map {
+            if let Some(c) = count.get_mut(f as usize) {
+                *c += 1;
+            }
+        }
+        count.into_iter().enumerate().filter(|(_, c)| *c > 1).filter_map(|(i, c)| Some((u32::try_from(i).ok()?, c))).collect()
+    }
+
+    /// This shape with the faces named `faces` (two or more, touching along edges) made one face
+    /// named `name`, in place of the first of them.
+    pub fn merge_faces(&self, name: &str, faces: &[String]) -> Result<Shape> {
+        if faces.len() > MAX_MERGE_FACES {
+            return Err(Error::Invalid(format!("a merge takes at most {MAX_MERGE_FACES} faces")));
+        }
+        if self.faces.iter().any(|f| f.name == name) {
+            return Err(Error::Invalid(format!("body `{}` already has a face `{name}`", self.name)));
+        }
+        let mut members = BTreeSet::new();
+        for f in faces {
+            let found = self.faces_named(f);
+            if found.is_empty() {
+                return Err(Error::Invalid(format!("body `{}` has no face `{f}`", self.name)));
+            }
+            members.extend(found);
+        }
+        if members.len() < 2 {
+            return Err(Error::Invalid("a merge needs two or more faces".into()));
+        }
+        self.connected(&members)?;
+        // The faces left, the merged one where its first face was; the old index → the new one.
+        let mut kept: Vec<Face> = Vec::with_capacity(self.faces.len());
+        let mut renumber = Vec::with_capacity(self.faces.len());
+        let mut merged: Option<u32> = None;
+        for (i, f) in self.faces.iter().enumerate() {
+            let index = u32::try_from(kept.len()).map_err(|_| Error::Invalid("too many faces".into()))?;
+            if !u32::try_from(i).is_ok_and(|i| members.contains(&i)) {
+                renumber.push(index);
+                kept.push(f.clone());
+                continue;
+            }
+            match merged {
+                Some(m) => {
+                    renumber.push(m);
+                    if let Some(face) = kept.get_mut(m as usize) {
+                        face.exact &= f.exact;
+                        face.members.extend(members_of(f));
+                    }
+                }
+                None => {
+                    merged = Some(index);
+                    renumber.push(index);
+                    kept.push(Face { name: name.to_string(), exact: f.exact, members: members_of(f) });
+                }
+            }
+        }
+        let brep = if self.face_map.is_empty() { (0..u32::try_from(self.faces.len()).unwrap_or(0)).collect() } else { self.face_map.clone() };
+        let face_map = brep.iter().map(|&v| renumber.get(v as usize).copied().unwrap_or(v)).collect();
+        Ok(Shape { name: self.name.clone(), body: self.body.clone(), faces: kept, face_map })
+    }
+
+    /// An error unless `members` touch one another along edges, all in one piece.
+    fn connected(&self, members: &BTreeSet<u32>) -> Result<()> {
+        let mesh = self.tessellate((self.size()? * EDGE_TOLERANCE).max(1e-4))?;
+        let mut reached = BTreeSet::new();
+        let mut todo: Vec<u32> = members.first().copied().into_iter().collect();
+        while let Some(f) = todo.pop() {
+            if !reached.insert(f) {
+                continue;
+            }
+            for faces in mesh.edge_faces.iter().filter(|fs| fs.contains(&f)) {
+                todo.extend(faces.iter().filter(|g| members.contains(g) && !reached.contains(g)));
+            }
+        }
+        match members.iter().find(|f| !reached.contains(f)) {
+            None => Ok(()),
+            Some(&f) => Err(Error::Invalid(format!(
+                "face `{}` of body `{}` does not touch the others along an edge: a merge makes adjacent faces one",
+                self.face_label(f),
+                self.name
+            ))),
+        }
+    }
+
+    /// The surfaces of the B-rep faces face `face` is made of (one for a face not merged); `None`
+    /// for a free-form one.
+    pub fn member_surfaces(&self, face: u32) -> Result<Vec<Option<FaceSurface>>> {
+        let brep = self.brep_face_surfaces()?;
+        if self.face_map.is_empty() {
+            return Ok(brep.get(face as usize).copied().into_iter().collect());
+        }
+        Ok(self.face_map.iter().zip(brep).filter(|(v, _)| **v == face).map(|(_, s)| s).collect())
+    }
+
+    /// `brep` (surfaces by B-rep face) by face: a merged face has its B-rep faces' surface when
+    /// they share one, else none.
+    pub(crate) fn virtual_surfaces(&self, brep: Vec<Option<FaceSurface>>) -> Result<Vec<Option<FaceSurface>>> {
+        if self.face_map.is_empty() {
+            return Ok(brep);
+        }
+        let tol = (self.size()? * 1e-6).max(1e-9);
+        let mut out: Vec<Option<Option<FaceSurface>>> = vec![None; self.faces.len()];
+        for (b, &v) in self.face_map.iter().enumerate() {
+            let surface = brep.get(b).copied().flatten();
+            if let Some(slot) = out.get_mut(v as usize) {
+                *slot = match *slot {
+                    None => Some(surface),
+                    Some(s) if crate::partition::same_surface(s, surface, tol) && s.is_some() => Some(s),
+                    Some(_) => Some(None),
+                };
+            }
+        }
+        Ok(out.into_iter().map(Option::flatten).collect())
+    }
+
+    /// `mesh` (a tessellation of the B-rep) with the merged faces: triangles tagged by face,
+    /// the edges inside a merged face dropped and the pieces of an edge it leaves joined.
+    pub(crate) fn virtual_mesh(&self, mut mesh: SurfaceMesh) -> SurfaceMesh {
+        if self.face_map.is_empty() {
+            return mesh;
+        }
+        let map = |f: u32| self.face_map.get(f as usize).copied().unwrap_or(f);
+        for f in &mut mesh.tri_face {
+            *f = map(*f);
+        }
+        let mut edges = Vec::with_capacity(mesh.edges.len());
+        let mut edge_faces = Vec::with_capacity(mesh.edges.len());
+        for (points, faces) in mesh.edges.into_iter().zip(mesh.edge_faces) {
+            let two = faces.windows(2).any(|w| w[0] != w[1]);
+            let mut mapped: Vec<u32> = faces.iter().map(|&f| map(f)).collect();
+            mapped.dedup();
+            // Between two B-rep faces of one merged face: inside it.
+            if two && mapped.windows(2).all(|w| w[0] == w[1]) {
+                continue;
+            }
+            edges.push(points);
+            edge_faces.push(mapped);
+        }
+        join_pieces(&mut edges, &mut edge_faces, (2.0 * mesh.weld_distance).max(1e-9));
+        mesh.edges = edges;
+        mesh.edge_faces = edge_faces;
+        mesh
+    }
+}
+
+/// The B-rep faces `f` is made of, by name: itself, or a merged face's.
+fn members_of(f: &Face) -> Vec<String> {
+    if f.members.is_empty() { vec![f.name.clone()] } else { f.members.clone() }
+}
+
+fn close(a: [f64; 3], b: [f64; 3], tol: f64) -> bool {
+    (0..3).map(|k| (a[k] - b[k]).powi(2)).sum::<f64>().sqrt() <= tol
+}
+
+/// Join edges between the same faces end to end where they meet and no other edge ends: the
+/// pieces of one edge a merge left (a fillet's pieces each had their own edge along the face
+/// beside them).
+fn join_pieces(edges: &mut Vec<Vec<[f64; 3]>>, faces: &mut Vec<Vec<u32>>, tol: f64) {
+    let key = |f: &Vec<u32>| {
+        let mut k = f.clone();
+        k.sort_unstable();
+        k.dedup();
+        k
+    };
+    // Every edge end, to count the edges meeting at a point.
+    let ends =
+        |edges: &[Vec<[f64; 3]>], p: [f64; 3]| edges.iter().flat_map(|e| [e.first(), e.last()]).flatten().filter(|q| close(**q, p, tol)).count();
+    let mut joined = 0;
+    'again: while joined < MAX_JOINED {
+        for i in 0..edges.len() {
+            for j in (i + 1)..edges.len() {
+                let (Some(a), Some(b)) = (edges.get(i), edges.get(j)) else { continue };
+                if faces.get(i).map(key) != faces.get(j).map(key) || a.len() < 2 || b.len() < 2 {
+                    continue;
+                }
+                let (a0, a1, b0, b1) = (a[0], a[a.len() - 1], b[0], b[b.len() - 1]);
+                // Closed already, or would close into a loop at both ends: leave it.
+                if close(a0, a1, tol) || close(b0, b1, tol) {
+                    continue;
+                }
+                let at = if close(a1, b0, tol) {
+                    Some((a1, false, false))
+                } else if close(a1, b1, tol) {
+                    Some((a1, false, true))
+                } else if close(a0, b1, tol) {
+                    Some((a0, true, true))
+                } else if close(a0, b0, tol) {
+                    Some((a0, true, false))
+                } else {
+                    None
+                };
+                let Some((p, flip_a, flip_b)) = at else { continue };
+                if ends(edges, p) != 2 {
+                    continue;
+                }
+                let mut b = edges.remove(j);
+                faces.remove(j);
+                let Some(a) = edges.get_mut(i) else { return };
+                if flip_a {
+                    a.reverse();
+                }
+                if flip_b {
+                    b.reverse();
+                }
+                a.extend(b.into_iter().skip(1));
+                joined += 1;
+                continue 'again;
+            }
+        }
+        break;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sample::{self, Plate};
+    use crate::{FaceSurface, open_design};
+
+    fn plate() -> Design {
+        open_design(&sample::plate_design(&Plate::default()).unwrap()).unwrap()
+    }
+
+    /// The plate's hole is two half-cylinders.
+    fn halves(d: &Design) -> Vec<String> {
+        let body = &d.bodies[0];
+        let s = body.face_surfaces().unwrap();
+        body.faces().iter().zip(s).filter(|(_, s)| matches!(s, Some(FaceSurface::Cylinder { .. }))).map(|(f, _)| f.name.clone()).collect()
+    }
+
+    /// Merging the hole's halves makes one cylindrical face: one tag on its triangles, its seams
+    /// gone from the edges, the rim arcs joined into one circle each, and the edge and face names
+    /// follow; the B-rep keeps its faces.
+    #[test]
+    fn merged_halves_are_one_face_without_seams() {
+        let d = plate();
+        let hole = halves(&d);
+        assert_eq!(hole.len(), 2, "{hole:?}");
+        let before = d.bodies[0].tessellate(0.01).unwrap();
+        let body = d.bodies[0].name.clone();
+        let d = d.merged(&[Merge { name: "Hole".into(), body, faces: hole.clone() }]).unwrap();
+        assert!(d.errors.is_empty(), "{:?}", d.errors);
+        let body = &d.bodies[0];
+        assert_eq!(body.faces().len(), 7);
+        let f = body.face_index("merge:Hole").unwrap();
+        assert!(body.face_index(&hole[0]).is_none());
+        assert!(matches!(body.face_surfaces().unwrap()[f as usize], Some(FaceSurface::Cylinder { .. })));
+        assert_eq!(body.merged_faces(), vec![(f, 2)]);
+        let mesh = body.tessellate(0.01).unwrap();
+        assert_eq!(mesh.triangles, before.triangles);
+        let tags: BTreeSet<u32> = mesh.tri_face.iter().copied().collect();
+        assert_eq!(tags.len(), 7);
+        // 12 box edges and the two rims, each now one circle.
+        let edges = body.edges().unwrap();
+        assert_eq!(edges.len(), 14, "{:?}", edges.iter().map(|e| &e.name).collect::<Vec<_>>());
+        assert!(edges.iter().all(|e| e.faces.iter().all(|&g| (g as usize) < 7)));
+        let rims: Vec<_> = edges.iter().filter(|e| e.faces.contains(&f)).collect();
+        assert_eq!(rims.len(), 2);
+        for r in rims {
+            assert!(r.name.contains("merge:Hole"), "{}", r.name);
+            assert!(close(r.points[0], *r.points.last().unwrap(), 1e-6), "a rim is a closed circle");
+        }
+        assert_eq!(body.measure().unwrap().faces, 7);
+    }
+
+    /// A merge of faces that do not touch, of one face, of a missing face or body is an error
+    /// listed with the design, which keeps its faces.
+    #[test]
+    fn bad_merges_are_listed_and_change_nothing() {
+        let d = plate();
+        let body = d.bodies[0].name.clone();
+        let names: Vec<String> = d.bodies[0].faces().iter().map(|f| f.name.clone()).collect();
+        let s = d.bodies[0].face_surfaces().unwrap();
+        let planes: Vec<&String> = names
+            .iter()
+            .zip(&s)
+            .filter(|(_, s)| matches!(s, Some(FaceSurface::Plane { normal, .. }) if normal[2].abs() > 0.5))
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(planes.len(), 2, "top and bottom");
+        let m = |name: &str, body: &str, faces: Vec<String>| Merge { name: name.into(), body: body.into(), faces };
+        let merged = d
+            .clone()
+            .merged(&[
+                m("Apart", &body, planes.iter().map(|s| s.to_string()).collect()),
+                m("One", &body, vec![names[0].clone()]),
+                m("Missing", &body, vec![names[0].clone(), "nope".into()]),
+                m("Nobody", "Nobody", vec![names[0].clone(), names[1].clone()]),
+            ])
+            .unwrap();
+        let failed: Vec<&str> = merged.errors.iter().map(|e| e.feature.as_str()).collect();
+        assert_eq!(failed, ["merge Apart", "merge One", "merge Missing", "merge Nobody"]);
+        assert!(merged.errors[0].message.contains("does not touch"), "{}", merged.errors[0].message);
+        assert_eq!(merged.bodies[0].faces().len(), 8);
+        // A second merge into a name already there is refused too.
+        let twice = d.merged(&[m("H", &body, halves(&plate())), m("H", &body, vec![names[0].clone(), names[1].clone()])]).unwrap();
+        assert_eq!(twice.errors.len(), 1);
+    }
+
+    /// Merges stack: a merged face merges again with its neighbour, and the surfaces differ then.
+    #[test]
+    fn a_merged_face_merges_again() {
+        let d = plate();
+        let body = d.bodies[0].name.clone();
+        let hole = halves(&d);
+        let d = d.merged(&[Merge { name: "Hole".into(), body: body.clone(), faces: hole }]).unwrap();
+        let b = &d.bodies[0];
+        let f = b.face_index("merge:Hole").unwrap();
+        let mesh = b.tessellate(0.01).unwrap();
+        let next = mesh.edge_faces.iter().find(|fs| fs.contains(&f)).and_then(|fs| fs.iter().find(|&&g| g != f)).copied().unwrap();
+        let next = b.faces()[next as usize].name.clone();
+        let d = d.merged(&[Merge { name: "More".into(), body, faces: vec!["merge:Hole".into(), next] }]).unwrap();
+        assert!(d.errors.is_empty(), "{:?}", d.errors);
+        let b = &d.bodies[0];
+        let f = b.face_index("merge:More").unwrap();
+        assert_eq!(b.faces().len(), 6);
+        assert_eq!(b.merged_faces(), vec![(f, 3)]);
+        assert_eq!(b.face_surfaces().unwrap()[f as usize], None);
+    }
+}

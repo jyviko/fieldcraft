@@ -25,11 +25,13 @@ pub mod partition;
 pub mod sample;
 #[cfg(feature = "scripts")]
 mod script;
+pub mod virtual_faces;
 
 pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design};
 pub use edges::{EDGE_TOLERANCE, Edge, Vertex};
 pub use features::{BodyFeatures, Curve, FeatureNode, ProfileGeometry, SketchGeometry};
 pub use partition::{Cut, CutReport};
+pub use virtual_faces::Merge;
 pub mod tagged_mesh;
 #[cfg(feature = "scripts")]
 pub use script::{MAX_SCRIPT_BYTES, script_design};
@@ -62,8 +64,11 @@ const LINEAR_TOLERANCE: f64 = solidcraft_geom::LINEAR_TOL;
 pub struct Shape {
     pub name: String,
     body: Body,
-    /// By B-rep face index (the [`SurfaceMesh::tri_face`] tags); empty for shapes built in code.
+    /// By face index (the [`SurfaceMesh::tri_face`] tags); empty for shapes built in code. With
+    /// merged faces ([`virtual_faces`]) these are the virtual faces, not the B-rep's.
     faces: Vec<Face>,
+    /// The virtual face (index into `faces`) of each B-rep face; empty: they are the same.
+    face_map: Vec<u32>,
 }
 
 /// A B-rep face's persistent identity.
@@ -75,6 +80,8 @@ pub struct Face {
     /// The name follows the history SolidCraft recorded; `false` when it was worked out from the
     /// geometry, which an upstream edit can fool.
     pub exact: bool,
+    /// A merged face's B-rep faces, by persistent name ([`virtual_faces`]); empty for a B-rep face.
+    pub members: Vec<String>,
 }
 
 /// The analytic surface a B-rep face lies on, when it is one of the elementary kinds. Directions
@@ -148,7 +155,7 @@ fn xyz(v: solidcraft_geom::Vec3) -> [f64; 3] {
 pub fn block(a: [f64; 3], b: [f64; 3]) -> Result<Shape> {
     let v = |p: [f64; 3]| solidcraft_geom::Vec3 { x: p[0], y: p[1], z: p[2] };
     let body = guard("block", || solidcraft_kernel::box_solid(v(a), v(b)))?;
-    Ok(Shape { name: "Block".into(), body, faces: Vec::new() })
+    Ok(Shape { name: "Block".into(), body, faces: Vec::new(), face_map: Vec::new() })
 }
 
 impl Shape {
@@ -188,8 +195,15 @@ impl Shape {
     }
 
     /// The analytic surface of each B-rep face, by face index (the [`SurfaceMesh::tri_face`]
-    /// tags): `None` for a free-form face. Meshers project nodes onto these surfaces.
+    /// tags): `None` for a free-form face. Meshers project nodes onto these surfaces. A merged
+    /// face has the surface its B-rep faces share, `None` when they lie on different ones.
     pub fn face_surfaces(&self) -> Result<Vec<Option<FaceSurface>>> {
+        let brep = self.brep_face_surfaces()?;
+        self.virtual_surfaces(brep)
+    }
+
+    /// [`Shape::face_surfaces`] by B-rep face index.
+    pub(crate) fn brep_face_surfaces(&self) -> Result<Vec<Option<FaceSurface>>> {
         guard("face surfaces", || {
             Ok((0..self.body.face_count())
                 .map(|f| {
@@ -231,24 +245,26 @@ impl Shape {
             centroid: xyz(m.centroid),
             bbox_min: xyz(m.bbox.min),
             bbox_max: xyz(m.bbox.max),
-            faces: m.faces,
+            faces: if self.face_map.is_empty() { m.faces } else { self.faces.len() },
         })
     }
 
-    /// Triangulate the boundary within `tolerance` (chordal deviation, mm).
+    /// Triangulate the boundary within `tolerance` (chordal deviation, mm). Triangles are tagged
+    /// by face index ([`Shape::faces`]): merged faces are one face, without the edges between
+    /// their B-rep faces.
     pub fn tessellate(&self, tolerance: f64) -> Result<SurfaceMesh> {
         if !(tolerance > 0.0 && tolerance.is_finite()) {
             return Err(Error::Invalid(format!("tessellation tolerance must be a positive number, got {tolerance}")));
         }
         let m = guard("tessellate", || self.body.tessellate(tolerance))?;
-        Ok(SurfaceMesh {
+        Ok(self.virtual_mesh(SurfaceMesh {
             positions: m.positions.into_iter().map(xyz).collect(),
             triangles: m.triangles,
             tri_face: m.tri_face,
             weld_distance: 2.0 * LINEAR_TOLERANCE,
             edges: m.edges.into_iter().map(|e| e.into_iter().map(xyz).collect()).collect(),
             edge_faces: m.edge_faces,
-        })
+        }))
     }
 }
 

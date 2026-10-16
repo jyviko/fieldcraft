@@ -19,7 +19,7 @@ with (a set on them finds nothing); `marked` the elements failing the limits bef
 relaxing, and what relaxing changed; ¹ a tet mesh has no edge ratio: its largest aspect ratio
 stands in; `duplicates` coincident nodes and cracks; `geometry.check` its findings at the size;
 `verdict` pass when the minimum scaled Jacobian and the largest edge ratio meet the limits and
-the volume is within 2 % (`pass (fallback)` when a fallback meshed it).
+the volume is within 1 % (`pass (fallback)` when a fallback meshed it).
 The section pictures cut each part through the middle of its longest side, marked elements red.
 Times are wall clock on the machine that ran it.
 
@@ -27,43 +27,41 @@ Times are wall clock on the machine that ran it.
 
 | part | method | symmetry | elements | min SJ | mean SJ | max edge ratio¹ | volume error | untagged faces | marked → after relax | duplicates | geometry.check | time s | verdict | section |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| bent-tube | plan (sweep) | – | 192 (192 hex8) | 0.861 | 0.865 | 5.0 | -1.7e-1 | 0 | 0 (not relaxed) | none | 8 near_faces, 2 sliver_face | 1.9 | fail (volume) | [y=37.500](skill/bent-tube.png) |
-| bolted-assembly | plan (sweep), mesh.hex.generate (auto) | – | 6272 (6272 hex8) | 0.583 | 0.939 | 3.6 | 2.0e-4 | 0 | 0 (not relaxed) | 8 coincident, 0 cracks | – | 3.9 | pass | [x=50.000](skill/bolted-assembly.png) |
-| cantilever-i-beam | plan (sweep) | – | 61600 (61600 hex8) | 1.000 | 1.000 | 1.0 | 0.0e0 | 0 | 0 (not relaxed) | none | – | 5.7 | pass | [x=100.000](skill/cantilever-i-beam.png) |
-| cross-cylinders | none | – | – | – | – | – | – | – | – | – | – | 18.3 | no mesh | – |
-| filleted-bracket | tet10 | – | 19557 (19557 tet10) | 0.042 | 0.519 | 9.1 | -6.7e-6 | 0 | 1709 (not relaxed) | none | – | 35.5 | fail (SJ) | [x=30.000](skill/filleted-bracket.png) |
-| filleted-bracket-blocks | plan (sweep) | – | 75410 (75410 hex8) | 0.704 | 0.954 | 3.5 | 3.7e-5 | 0 | 0 (not relaxed) | none (after merging 2348 nodes) | – | 16.7 | pass | [x=30.000](skill/filleted-bracket-blocks.png) |
-| i-beam | plan (sweep) | – | 61600 (61600 hex8) | 1.000 | 1.000 | 1.0 | 0.0e0 | 0 | 0 (not relaxed) | none | – | 9.3 | pass | [z=100.000](skill/i-beam.png) |
-| loft-transition | plan (sweep) | – | 2873 (2873 hex8) | 0.189 | 0.960 | 2.2 | -2.1e-3 | 0 | 4 → 4 (4 relaxed, 0 undone; min SJ 0.189 → 0.189, max ratio 1.7 → 2.2) | none | – | 2.3 | fail (SJ) | [z=25.000](skill/loft-transition.png) |
-| perforated-plate | plan (project) | 2 plane(s) | 8576 (8576 hex8) | 0.707 | 0.888 | 3.0 | 7.7e-4 | 0 | 0 (not relaxed) | none | – | 33.5 | pass | [x=60.000](skill/perforated-plate.png) |
-| pinhole-block | plan (project) | 2 plane(s) | 5068 (5068 hex8) | 0.707 | 0.942 | 18.4 | 8.1e-5 | 0 | 1680 (not relaxed) | none | 32 sliver_face | 24.0 | fail (ratio) | [y=25.000](skill/pinhole-block.png) |
-| rounded-box | plan (project) | 2 plane(s) | 9260 (9260 hex8) | 0.734 | 0.985 | 2.2 | -4.1e-3 | 0 | 0 (not relaxed) | none | – | 10.3 | pass | [x=20.000](skill/rounded-box.png) |
+| bent-tube | plan (sweep) | – | 22272 (22272 hex8) | 0.998 | 0.998 | 1.4 | -2.8e-3 | 0 | 0 (not relaxed) | none | – | 3.7 | pass | [y=37.500](skill/bent-tube.png) |
+| bolted-assembly | plan (sweep), mesh.hex.generate (auto) | – | 6272 (6272 hex8) | 0.583 | 0.939 | 3.6 | 2.0e-4 | 0 | 0 (not relaxed) | 8 coincident, 0 cracks | – | 3.7 | pass | [x=50.000](skill/bolted-assembly.png) |
+| cantilever-i-beam | plan (sweep) | – | 61600 (61600 hex8) | 1.000 | 1.000 | 1.0 | 0.0e0 | 0 | 0 (not relaxed) | none | – | 8.5 | pass | [x=100.000](skill/cantilever-i-beam.png) |
+| cross-cylinders | none | – | – | – | – | – | – | – | – | – | – | 27.2 | no mesh | – |
+| filleted-bracket | tet10 | – | 21525 (21525 tet10) | 0.021 | 0.535 | 13.5 | -7.0e-6 | 0 | 1492 (not relaxed) | none | – | 15.9 | fail (SJ, ratio) | [x=30.000](skill/filleted-bracket.png) |
+| filleted-bracket-blocks | plan (sweep) | – | 75410 (75410 hex8) | 0.704 | 0.954 | 3.5 | 3.7e-5 | 0 | 0 (not relaxed) | none (after merging 2348 nodes) | – | 6.9 | pass | [x=30.000](skill/filleted-bracket-blocks.png) |
+| i-beam | plan (sweep) | – | 61600 (61600 hex8) | 1.000 | 1.000 | 1.0 | 0.0e0 | 0 | 0 (not relaxed) | none | – | 4.5 | pass | [z=100.000](skill/i-beam.png) |
+| loft-transition | plan (sweep) | – | 2873 (2873 hex8) | 0.189 | 0.959 | 1.7 | -2.1e-3 | 0 | 4 → 4 (4 relaxed, 0 undone; min SJ 0.189 → 0.189, max ratio 1.7 → 1.7) | none | – | 0.9 | fail (SJ) | [z=25.000](skill/loft-transition.png) |
+| perforated-plate | plan (project) | 2 plane(s) | 8576 (8576 hex8) | 0.707 | 0.888 | 3.0 | 7.7e-4 | 0 | 0 (not relaxed) | none | – | 9.5 | pass | [x=60.000](skill/perforated-plate.png) |
+| pinhole-block | plan (project) | 2 plane(s) | 40768 (40768 hex8) | 0.707 | 0.984 | 8.0 | 8.1e-5 | 0 | 0 (not relaxed) | none | – | 25.5 | pass | [y=25.000](skill/pinhole-block.png) |
+| rounded-box | plan (project) | 2 plane(s) | 11520 (11520 hex8) | 0.717 | 0.973 | 4.0 | -4.1e-3 | 0 | 0 (not relaxed) | none | – | 8.7 | pass | [x=20.000](skill/rounded-box.png) |
 | shallow-groove | plan (sweep) | – | 1960 (1960 hex8) | 0.991 | 0.999 | 1.1 | 2.7e-4 | 0 | 0 (not relaxed) | none | – | 0.2 | pass | [x=30.000](skill/shallow-groove.png) |
 | sharp-wedge | plan (sweep) | – | 1674 (1674 hex8) | 0.014 | 0.301 | 149.6 | 2.7e-15 | 0 | 1524 (not relaxed) | none | – | 0.2 | fail (SJ, ratio) | [x=40.000](skill/sharp-wedge.png) |
-| sphere-on-plate | tet10 | – | 15073 (15073 tet10) | 0.121 | 0.558 | 6.2 | -1.1e-4 | 0 | 662 (not relaxed) | none | – | 5.0 | fail (SJ) | [y=0.000](skill/sphere-on-plate.png) |
-| spline-vase | plan (sweep) | – | 4536 (4536 hex8) | 0.665 | 0.945 | 9.9 | -6.6e-3 | 0 | 0 (not relaxed) | none | – | 0.8 | pass | [z=-35.000](skill/spline-vase.png) |
-| stepped-block | plan (cells) | – | 1416 (1416 hex8) | 1.000 | 1.000 | 1.3 | -4.8e-15 | 0 | 0 (not relaxed) | none | – | 0.5 | pass | [x=30.000](skill/stepped-block.png) |
-| thin-ribs | plan (sweep) | – | 301308 (301308 hex8) | 0.999 | 1.000 | 1.3 | -3.4e-12 | 0 | 0 (not relaxed) | none | – | 34.0 | pass | [x=50.000](skill/thin-ribs.png) |
-| thin-wall-enclosure | plan (sweep) | – | 124512 (124512 hex8) | 1.000 | 1.000 | 1.0 | 0.0e0 | 0 | 0 (not relaxed) | none | – | 21.8 | pass | [x=40.000](skill/thin-wall-enclosure.png) |
-| analytic-sphere | mesh.hex.project (sphere) | – | 864 (864 hex8) | 0.702 | 0.929 | 2.7 | -3.0e-2 | 0 | 0 (not relaxed) | none | – | 2.5 | fail (volume) | [z=0.000](skill/analytic-sphere.png) |
-| analytic-torus | plan (sweep) | – | 1080 (1080 hex8) | 0.834 | 0.909 | 2.4 | -4.7e-2 | 0 | 0 (not relaxed) | none | – | 1.0 | fail (volume) | [x=0.000](skill/analytic-torus.png) |
-| analytic-cylinder | plan (project) | – | 1700 (1700 hex8) | 0.845 | 0.970 | 1.9 | -1.6e-2 | 0 | 0 (not relaxed) | none | – | 1.4 | pass | [z=20.000](skill/analytic-cylinder.png) |
-| analytic-pipe | plan (project) | – | 1008 (1008 hex8) | 0.996 | 0.996 | 1.4 | -5.0e-3 | 0 | 0 (not relaxed) | none | – | 1.0 | pass | [z=30.000](skill/analytic-pipe.png) |
-| analytic-plate-hole | plan (project) | – | 5856 (5856 hex8) | 0.937 | 0.996 | 3.0 | 4.3e-5 | 0 | 0 (not relaxed) | none | – | 5.8 | pass | [x=100.000](skill/analytic-plate-hole.png) |
-| crank-arm | plan (project) | – | 1372 (1372 hex8) | 0.544 | 0.860 | 10.5 | -3.3e-3 | 0 | 9 (9 relaxations undone: worse) | none | 16 short_edge, 9 sliver_face | 48.2 | fail (ratio) | [x=81.000](skill/crank-arm.png) |
-| upright-bracket | plan (sweep) | – | 1364 (1364 hex8) | 0.707 | 0.968 | 3.1 | 2.1e-4 | 0 | 0 (not relaxed) | none | – | 0.2 | pass | [x=30.000](skill/upright-bracket.png) |
-| pi5-base | plan (project) | 1 plane(s) | 29852 (29852 hex8) | 0.683 | 0.969 | 4.9 | -3.0e-3 | 0 | 0 (not relaxed) | none | 8 short_edge, 4 sliver_face | 197.5 | pass | [x=56.000](skill/pi5-base.png) |
-| pi5-lid | plan (project) | – | 5130 (5130 hex8) | 0.724 | 0.868 | 3.9 | -2.9e-4 | 0 | 0 (not relaxed) | none | – | 10.7 | pass | [x=56.000](skill/pi5-lid.png) |
-| cup | plan (project) | – | 1114 (1114 hex8) | 0.701 | 0.921 | 5.0 | -4.5e-3 | 0 | 0 (not relaxed) | none | – | 3.0 | pass | [x=5.000](skill/cup.png) |
-| plain-cup | mesh.hex.generate (auto) | – | 2000 (2000 hex8) | 0.820 | 0.995 | 4.7 | -2.3e-3 | 0 | 0 (not relaxed) | none | – | 0.9 | pass (fallback) | [x=0.000](skill/plain-cup.png) |
+| sphere-on-plate | tet10 | – | 23799 (23799 tet10) | 0.092 | 0.587 | 5.9 | -8.7e-5 | 0 | 679 (not relaxed) | none | – | 13.7 | fail (SJ) | [y=0.000](skill/sphere-on-plate.png) |
+| spline-vase | plan (sweep) | – | 4536 (4536 hex8) | 0.665 | 0.945 | 9.9 | -6.6e-3 | 0 | 0 (not relaxed) | none | – | 2.3 | pass | [z=-35.000](skill/spline-vase.png) |
+| stepped-block | plan (cells) | – | 1416 (1416 hex8) | 1.000 | 1.000 | 1.3 | -4.8e-15 | 0 | 0 (not relaxed) | none | – | 1.6 | pass | [x=30.000](skill/stepped-block.png) |
+| thin-ribs | plan (sweep) | – | 301308 (301308 hex8) | 0.999 | 1.000 | 1.3 | -3.4e-12 | 0 | 0 (not relaxed) | none | – | 34.7 | pass | [x=50.000](skill/thin-ribs.png) |
+| thin-wall-enclosure | plan (sweep) | – | 124512 (124512 hex8) | 1.000 | 1.000 | 1.0 | 0.0e0 | 0 | 0 (not relaxed) | none | – | 13.5 | pass | [x=40.000](skill/thin-wall-enclosure.png) |
+| analytic-sphere | mesh.hex.project (sphere) | – | 3400 (3400 hex8) | 0.728 | 0.968 | 3.3 | -1.1e-2 | 0 | 0 (not relaxed) | none | – | 8.8 | fail (volume) | [z=0.000](skill/analytic-sphere.png) |
+| analytic-torus | plan (sweep) | – | 48360 (48360 hex8) | 0.837 | 0.986 | 2.9 | -4.2e-3 | 0 | 0 (not relaxed) | none | – | 9.8 | pass | [x=0.000](skill/analytic-torus.png) |
+| analytic-cylinder | plan (project) | – | 4347 (4347 hex8) | 0.859 | 0.985 | 2.4 | -4.9e-3 | 0 | 0 (not relaxed) | none | – | 7.3 | pass | [z=20.000](skill/analytic-cylinder.png) |
+| analytic-pipe | plan (project) | – | 2244 (2244 hex8) | 0.997 | 0.997 | 1.3 | -3.3e-3 | 0 | 0 (not relaxed) | none | – | 3.6 | pass | [z=30.000](skill/analytic-pipe.png) |
+| analytic-plate-hole | plan (project) | – | 5856 (5856 hex8) | 0.937 | 0.996 | 3.0 | 4.3e-5 | 0 | 0 (not relaxed) | none | – | 4.7 | pass | [x=100.000](skill/analytic-plate-hole.png) |
+| crank-arm | plan (project) | – | 4014 (4014 hex8) | 0.578 | 0.933 | 5.8 | -8.4e-4 | 0 | 0 (not relaxed) | none | 4 short_edge, 2 sliver_face | 21.7 | pass | [x=81.000](skill/crank-arm.png) |
+| upright-bracket | plan (sweep) | – | 1364 (1364 hex8) | 0.707 | 0.968 | 3.1 | 2.1e-4 | 0 | 0 (not relaxed) | none | – | 0.1 | pass | [x=30.000](skill/upright-bracket.png) |
+| pi5-base | plan (project) | 1 plane(s) | 29852 (29852 hex8) | 0.683 | 0.969 | 4.9 | -3.0e-3 | 0 | 0 (not relaxed) | none | 8 short_edge, 4 sliver_face | 131.2 | pass | [x=56.000](skill/pi5-base.png) |
+| pi5-lid | plan (project) | – | 5130 (5130 hex8) | 0.724 | 0.868 | 3.9 | -2.9e-4 | 0 | 0 (not relaxed) | none | – | 10.5 | pass | [x=56.000](skill/pi5-lid.png) |
+| cup | plan (project) | – | 1258 (1258 hex8) | 0.702 | 0.929 | 5.0 | -3.5e-3 | 0 | 0 (not relaxed) | none | – | 3.0 | pass | [x=5.000](skill/cup.png) |
+| plain-cup | mesh.hex.generate (auto) | – | 2000 (2000 hex8) | 0.820 | 0.995 | 4.7 | -2.3e-3 | 0 | 0 (not relaxed) | none | – | 1.3 | pass (fallback) | [x=0.000](skill/plain-cup.png) |
 
 ## Why a part fails
 
 Each earlier method's error, in the order the skill tries them, and for a part that fails the
 limits the cause read from its numbers and section picture.
 
-- `bent-tube` (corpus: A 10 mm tube with a 1 mm wall, bent through R30: a thin-walled sweep along a line-arc-line path.):
-  - **fail (volume)**: the plan's default size (1/25 of the diagonal) puts six elements round the Ø10 tube: the swept section is a hexagon and loses 17 % of the volume. Size from the tube's radius (§5), not the part's diagonal.
 - `bolted-assembly` (corpus: A base plate with a clamp block component placed twice, once turned 90 degrees: bodies placed by component transforms.):
   - Clamp body: mesh.plan.apply: mesh plan `Plan-Clamp_body`: the projected layout does not mesh: invalid input: node 3076 at [11.000000000000004, 10.0, 5.0] lies on the edge between nodes 2640 and 2715: new elements must meet the mesh face to face, with the same divisions…
   - Clamp body (Clamp:2): mesh.plan.apply: mesh plan `Plan-Clamp_body__Clamp_2_`: the projected layout does not mesh: invalid input: node 5884 at [66.42857142857143, 5.000000000000001, 5.0] lies on the edge between nodes 984 and 1059: new elements must meet the mesh face to face, wi…
@@ -71,34 +69,28 @@ limits the cause read from its numbers and section picture.
   - Cross: mesh.plan.apply: mesh plan `Plan-Cross`: the cells ["Cross"] (cuts []) do not mesh all-hex: body `Cross`: invalid boundary surface: 28 defects; triangles 142 and 254 are oriented inconsistently across edge 0–396 at (-15.488656021315903, 4.577998041166734, 7…
   - Cross: mesh.hex.generate: body `Cross`: invalid boundary surface: 28 defects; triangles 146 and 258 are oriented inconsistently across edge 0–402 at (-15.488656021315903, 4.577998041166734, 7.853092194999726); triangles 255 and 258 are oriented inconsistently across…
   - Cross: mesh.hex.project (sphere): body `Cross`: invalid boundary surface: 28 defects; triangles 146 and 258 are oriented inconsistently across edge 0–402 at (-15.488656021315903, 4.577998041166734, 7.853092194999726); triangles 255 and 258 are oriented inconsistently across…
-  - Cross: mesh.tet.generate: invalid boundary surface: 28 defects; triangles 146 and 258 are oriented inconsistently across edge 0–402 at (-15.488656021315903, 4.577998041166734, 7.853092194999726); triangles 255 and 258 are oriented inconsistently across edge 0–565 at…
+  - Cross: mesh.tet.generate: invalid boundary surface: 28 defects; triangles 76 and 78 are oriented inconsistently across edge 9–230 at (-18.75000000000002, 5.634596901641276, 7.632255089815496); triangles 77 and 78 are oriented inconsistently across edge 9–232 at (-15…
   - **no mesh**: the boundary tessellation of the joined cylinders is invalid (inconsistent orientation at the two singular points), so every mesher refuses the body.
 - `filleted-bracket` (corpus: An 8 mm L-bracket with an R6 inside fillet and a hole through each leg: a blend beside holes.):
   - Bracket: mesh.plan.apply: mesh plan `Plan-Bracket`: the cells ["Bracket"] (cuts []) do not mesh all-hex: body `Bracket`: not supported yet: no structured hex method fits this body (extrude: cylindrical face 8 is not parallel to the direction; sweep: from face 1: lin…
   - Bracket: mesh.hex.generate: body `Bracket`: not supported yet: no structured hex method fits this body (extrude: cylindrical face 8 is not parallel to the direction; sweep: from face 1: linking face 6 has 2 boundary loops (periodic or holed linking faces are not swept…
-  - Bracket: mesh.hex.project (sphere): body `Bracket`: meshing failed: 120 of 5104 elements are inverted, twisted or degenerate after projection (certified Jacobian; smallest corner scaled Jacobian -0.760): block 1 cell [4, 0, 0] near (20.373, 3.413, 3.606); block 1 cell [5, 0, …
-  - **fail (SJ)**: no structured method takes the whole body (the plan has no cuts for the fillet beside the holes), and tet10 at the plan's size leaves slivers (min SJ 0.04, 1709 marked). The same part partitioned into mapped cells (`filleted-bracket-blocks`) passes: partition (§3.4).
+  - Bracket: mesh.hex.project (sphere): body `Bracket`: meshing failed: 91 of 5104 elements are inverted, twisted or degenerate after projection (certified Jacobian; smallest corner scaled Jacobian -0.760): block 1 cell [3, 3, 0] near (12.519, 11.405, 1.604); block 1 cell [3, 4, …
+  - **fail (SJ, ratio)**: no structured method takes the whole body (the plan has no cuts for the fillet beside the holes), and tet10 at the plan's size leaves slivers (min SJ 0.04, 1709 marked). The same part partitioned into mapped cells (`filleted-bracket-blocks`) passes: partition (§3.4).
 - `loft-transition` (corpus: A 40 mm square lofted to an R15 circle 50 mm above: a ruled free-form surface between unlike sections.):
   - **fail (SJ)**: the lofted sides are swept one to one, and the elements where the section changes shape are skewed (min SJ 0.19). Relaxing the four marked elements did not raise it: the blocks are wrong, not the nodes (§6.3). A loft has no template yet (`unmapped`).
-- `pinhole-block` (corpus: A 50 mm block drilled through by sixteen 0.6 mm pinholes: features 80 times smaller than the part, genus 16.):
-  - **fail (ratio)**: the plan's cuts run beside the small holes' frames and leave strips of thin elements along the cut planes (red in the picture, edge ratio 18): 1680 marked, a clustered failure. §4: offset a cut one element out of the feature.
 - `sharp-wedge` (corpus: A wedge whose faces meet at under 3 degrees: a sharp edge with a needle-thin cross-section.):
-  - **fail (SJ, ratio)**: the wedge's sharp edge is swept as hex, so every element tapers to it (min SJ 0.01, edge ratio 150). §4: a column of wedge6 at the edge; the plan has no wedge template.
+  - **fail (SJ, ratio)**: the wedge's sharp edge is swept as hex, so every element tapers to it (min SJ 0.01, edge ratio 150). A column of wedge6 at the edge (§4) raises the SJ but not the ratio: any element with a corner on a 2.9° edge has sides at least 1/tan 2.9° ≈ 20 times its width there, twice the limit. The edge has to be blunted (defeatured) or the limit waived along it.
 - `sphere-on-plate` (corpus: A sphere sunk 0.1 mm into a plate: the faces meet at under 6 degrees around a 2 mm circle.):
   - Plate: mesh.plan.apply: mesh plan `Plan-Plate`: the cells ["Plate"] (cuts []) do not mesh all-hex: body `Plate`: not supported yet: no structured hex method fits this body (extrude: face 6 is curved across the direction; sweep: from face 0: 6 faces are not on the …
   - Plate: mesh.hex.generate: body `Plate`: not supported yet: no structured hex method fits this body (extrude: face 6 is curved across the direction; sweep: from face 0: 6 faces are not on the sweep path; from face 5: linking face 11 has 2 boundary loops (periodic or …
-  - Plate: mesh.hex.project (sphere): body `Plate`: meshing failed: the mesh volume 32014.728344815157 is far from the body's 69353.30815403847: the blocks do not cover the part (every outer block face must stand for part of its surface)
+  - Plate: mesh.hex.project (sphere): body `Plate`: meshing failed: the mesh volume 32917.42909007507 is far from the body's 69353.30815403847: the blocks do not cover the part (every outer block face must stand for part of its surface)
   - **fail (SJ)**: no structured method takes the plate with the sunk sphere, and tet10 leaves slivers (min SJ 0.12, 662 marked).
 - `analytic-sphere` (corpus: Sphere r 20: curvature everywhere, no edges.):
   - Sphere: mesh.plan.apply: mesh plan `Plan-Sphere`: the cells ["Sphere"] (cuts []) do not mesh all-hex: body `Sphere`: not supported yet: no structured hex method fits this body (extrude: no direction to try; sweep: no planar face to sweep from; revolve: no axis to t…
   - Sphere: mesh.hex.generate: body `Sphere`: not supported yet: no structured hex method fits this body (extrude: no direction to try; sweep: no planar face to sweep from; revolve: no axis to try; mapped: meshing failed: meshing failed: mesh validity gate: 8 inverted or…
-  - **fail (volume)**: the sphere template meshes it cleanly, but hex8 faces chord the sphere at the plan's size and the mesh is 3 % short of its volume: refine, or hex20 (`order: 2`).
-- `analytic-torus` (corpus: Torus 30/8: genus 1 with doubly curved faces and no edges.):
-  - **fail (volume)**: the revolve is clean, but hex8 faces chord the torus at the plan's size and the mesh is 4.7 % short of its volume: refine, or hex20.
-- `crank-arm` (sample `crank-arm`: the 170 mm bicycle crank, mirror symmetric across y = 0):
-  - **fail (ratio)**: the edge ratio is 10.5 in the nine elements at the square bore's R1.5 corners, just over the limit. Relaxing each raised its region's edge ratio, so each was undone (§6.3). `mesh.plan.apply` did not find the y = 0 symmetry plane; the sample meshes the partitioned half and mirrors it.
+  - **fail (volume)**: no structured method takes a sphere (it has no face to sweep from or axis to revolve about), so the plan does not apply and the fallback's sphere template meshes it at the plan's size (2.45 mm, which keeps a sphere's chords to 0.75 % on paper), 1.1 % short of the volume: the template's elements at the cube's eight corners span more of the sphere than the size. A sphere template in the plan (§3) would size its caps; hex20 (`order: 2`) closes it too.
 - `plain-cup` (the cup without its handle (#418)):
-  - Cup: mesh.plan.apply: mesh plan `Plan-Cup`: the projected layout does not mesh: body `Cup`: meshing failed: the mesh volume 4994.312243612882 is far from the body's 16760.91944296662: the blocks do not cover the part (every outer block face must stand for part o…
+  - Cup: mesh.plan.apply: mesh plan `Plan-Cup`: the projected layout does not mesh: body `Cup`: meshing failed: the mesh volume 5012.205781249979 is far from the body's 16760.91944296662: the blocks do not cover the part (every outer block face must stand for part o…
 
 ## Parts
 

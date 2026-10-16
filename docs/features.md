@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-81 ready, 38 coming soon.
+81 ready, 37 coming soon.
 
 ## Geometry
 
@@ -40,12 +40,11 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | 2D | 2D Mesh — Quad or triangle mesh of a planar face or polygon in the XY plane for plane stress, plane strain and axisymmetric models; edges tagged | ready | `mesh.planar` |
 | Structured Hex | Quad Faces — All-quad meshes of faces on shared edge nodes | coming soon (M5) |  |
 | Structured Hex | Hex Mesh — Structured hex mesh of a body: automatic, or extruded, swept, revolved or mapped (the Method drop-down) | ready | `mesh.hex.generate`, (`mesh.hex.sweep`), (`mesh.hex.mapped`) |
-| Structured Hex | Partitioned Mesh — One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions | ready | `mesh.cells`, (`mesh.hex.blocks`) |
+| Structured Hex | Partitioned Mesh — One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions, tet cells to hex cells through conforming pyramids | ready | `mesh.cells`, (`mesh.hex.blocks`) |
 | Structured Hex | Extrude to Surface — Hex layers from a meshed or planar section up to a curved target surface, following the side faces | ready | `mesh.hex.extrude` |
 | Structured Hex | Mesh Plan — A hex-meshing plan from the features that built a body (sweeps, blocks, O-grids, layers, imprints, copies); saved, editable, applied with the structured meshers | ready | `mesh.plan`, `mesh.plan.apply` |
 | Structured Hex | Mesh Block — A mapped block of hex, wedge or quad elements between corner points; projection blocking (a block topology projected onto the part) | ready | `mesh.block`, `mesh.hex.project` |
 | Structured Hex | Decompose — Find sweepable and mappable regions of 3D parts (extruded cross-sections are already cut into blocks by Hex Mesh) | coming soon (M5) |  |
-| Structured Hex | Transition — Conforming tet–hex interfaces with pyramids | coming soon (M5) |  |
 | Automatic Hex | Octree Hex — Unstructured all-hex mesh of any part: adaptive grid, boundary layers on every sharp edge, untangled and proven valid | ready | `mesh.hex.octree` |
 | Automatic Hex | Hex-Dominant — Hex-dominant mesh by recombining tets | coming soon (M6) |  |
 | Automatic Hex | Polycube — Polycube hex mesh of blocky parts | coming soon (M6) |  |

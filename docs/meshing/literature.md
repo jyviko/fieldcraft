@@ -1121,6 +1121,22 @@ faces, so a region need not be sweepable between two parallel faces.
   National Conference 1968.
 - **Layer grading**: geometric progression of thicknesses (last over first = bias).
 
+### B11. Hex–tet transitions and decomposition proposals (implemented in `fieldcraft-mesh::transition`, `mesh.cells`, `mesh.plan`)
+
+- **Pyramid transition layer**: a pyramid on each quadrilateral of a hex mesh's interface with a
+  tetrahedral region, its apex inside the region, so tetrahedra share its triangular sides:
+  S. J. Owen, S. A. Canann, S. Saigal, *Pyramid elements for maintaining tetrahedra to hexahedra
+  conformability*, AMD Vol. 220, Trends in Unstructured Mesh Generation, ASME 1997, 123–129. The
+  tet mesher keeps the pyramids' sides as frozen boundary faces (A3's refinement and improvement
+  refuse to change them).
+- **Pyramid element**: L. Bedrosian, *Shape functions and integration formulas for
+  three-dimensional finite element analysis*, IJNME 35(1):95–108, 1992 (rational functions, a
+  collapsed Gauss rule).
+- **Decomposition into sweepable cells**: cutting a part so most of it sweeps and a remainder goes
+  to a free mesher, as in T. D. Blacker, *The Cooper Tool*, Proc. 5th International Meshing
+  Roundtable, 13–29, 1996 (B4, B8); here the remainder is the box round the features the
+  provenance plan does not map.
+
 ## Part C: Datasets and benchmarks
 
 | Dataset | Content | Licence | Usable for FieldCraft? |

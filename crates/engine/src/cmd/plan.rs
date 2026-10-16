@@ -39,6 +39,7 @@ use fieldcraft_model::{CutRole, Datum, MeshPlan, Partition, PlanCut, PlanFeature
 use serde_json::{Value, json};
 
 mod blocks;
+mod decompose;
 mod pillow;
 
 use crate::requirement::Requirement;
@@ -57,7 +58,7 @@ const MIN_RELATIVE_TOLERANCE: f64 = 1e-5;
 pub const PLAN: CommandSpec = CommandSpec {
     id: "mesh.plan",
     label: "Mesh Plan",
-    params: r#"{"body": "Base", "name"?: "Plan-Base", "size"?: mm (largest element size; default 1/25 of the body's diagonal), "layers"?: 2 (elements through the thinnest wall: a shell's thickness, a plate's; 1..=10), "max_elements"?: 300000 (the size grows past the walls' when more would be needed)} — the body's hex-meshing plan derived from the features that built it (geometry.features), saved in the model under `name` (replacing a plan of that name); nothing is meshed (mesh.plan.apply). The plan: the sweep `direction` (and every direction the mapped features are prismatic along), the element `size`, `tolerance` and `layers`; per mapped feature its `template` (sweep of an extrude's profile along its stored direction, block for a box, butterfly for a cylinder or a circular boss, o_grid for a hole or a circular cut, layers through a shell's thickness, imprint of a join, cut or combine tool's cross-section, copy for a pattern or mirror, partition for a split body) and the `faces` it made (the projection targets); the `rings` round the body's circles (o_grid or butterfly: centre, axis, radius, half-side of the square `frame`, the cylindrical `faces` they project onto); the partition `cuts` the frames and imprints need (each with its feature and reason, never on a face of the body); the `mesher` (cells when there are cuts, else sweep); the `copies` (the other bodies a pattern or mirror made from it); the features it does not map with the reason (`unmapped`: fillets, chamfers, revolves, sweeps and lofts are step 3; a feature not prismatic along the sweep needs projection blocking, #399) and `notes`"#,
+    params: r#"{"body": "Base", "name"?: "Plan-Base", "size"?: mm (largest element size; default 1/25 of the body's diagonal), "layers"?: 2 (elements through the thinnest wall: a shell's thickness, a plate's; 1..=10), "max_elements"?: 300000 (the size grows past the walls' when more would be needed)} — the body's hex-meshing plan derived from the features that built it (geometry.features), saved in the model under `name` (replacing a plan of that name); nothing is meshed (mesh.plan.apply). The plan: the sweep `direction` (and every direction the mapped features are prismatic along), the element `size`, `tolerance` and `layers`; per mapped feature its `template` (sweep of an extrude's profile along its stored direction, block for a box, butterfly for a cylinder or a circular boss, o_grid for a hole or a circular cut, layers through a shell's thickness, imprint of a join, cut or combine tool's cross-section, copy for a pattern or mirror, partition for a split body) and the `faces` it made (the projection targets); the `rings` round the body's circles (o_grid or butterfly: centre, axis, radius, half-side of the square `frame`, the cylindrical `faces` they project onto); the partition `cuts` the frames and imprints need (each with its feature and reason, never on a face of the body); the `mesher` (cells when there are cuts, else sweep); the `copies` (the other bodies a pattern or mirror made from it); the features it does not map with the reason (`unmapped`: fillets, chamfers, revolves, sweeps and lofts are step 3; a feature not prismatic along the sweep needs projection blocking, #399) and `notes`; with unmapped features that the sweep cannot mesh, a `decomposition` proposal (not saved): the partition `cuts` (point, normal) that box those features' faces into one cell, one element size clear of them, inside the body and clear of its faces (`open_sides` where no such cut fits), the boxed `tet_region`, an upper bound of its share of the volume, and the `commands` that make the cuts and mesh the cells with mesh.cells (the boxed cell tet, joined to the hex cells by pyramids)"#,
     form: Some(super::forms::MESH_PLAN),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -1002,9 +1003,13 @@ fn plan(s: &mut Session, p: &Value) -> Result<Value> {
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
     let plan = build(design, &body, size, layers, max_elements)?;
     s.model.set_mesh_plan(&name, plan.clone())?;
+    let decomposition = decompose::proposal(design, &plan)?;
     let mut reply = serde_json::to_value(&plan).map_err(|e| EngineError::Params(e.to_string()))?;
     if let Some(o) = reply.as_object_mut() {
         o.insert("name".into(), json!(name));
+        if let Some(d) = decomposition {
+            o.insert("decomposition".into(), d);
+        }
     }
     Ok(reply)
 }

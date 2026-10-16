@@ -129,7 +129,7 @@ mod tests {
     pub(crate) fn github(tag: &str) -> Value {
         json!({
             "tag_name": tag,
-            "html_url": format!("https://github.com/jyviko/fieldcraft/releases/tag/{tag}"),
+            "html_url": format!("https://github.com/tangency-labs/fieldcraft/releases/tag/{tag}"),
             "body": "## What's new\n- updates",
             "draft": false,
             "prerelease": false,

@@ -101,7 +101,7 @@ assets = [
 [package.metadata.generate-rpm]
 name = "fieldcraft"
 license = "MIT OR Apache-2.0"
-url = "https://github.com/jyviko/fieldcraft"
+url = "https://github.com/tangency-labs/fieldcraft"
 assets = [
     { source = "target/release/fieldcraft", dest = "/usr/bin/fieldcraft", mode = "755" },
     { source = "target/release/fieldcraft-cli", dest = "/usr/bin/fieldcraft-cli", mode = "755" },

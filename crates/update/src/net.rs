@@ -164,9 +164,9 @@ mod tests {
         // Errors are messages, never panics.
         let missing = Client::new(&server.url()).release(&Which::Version(Version::parse("1.2.3").unwrap())).unwrap_err();
         assert!(missing.to_string().contains("no published release of FieldCraft 1.2.3"), "{missing}");
-        server.route("/repos/jyviko/fieldcraft/releases/latest", 200, b"not json".to_vec());
+        server.route("/repos/tangency-labs/fieldcraft/releases/latest", 200, b"not json".to_vec());
         assert!(matches!(Client::new(&server.url()).check(), Err(Error::Release(_))));
-        server.route("/repos/jyviko/fieldcraft/releases/latest", 403, b"{}".to_vec());
+        server.route("/repos/tangency-labs/fieldcraft/releases/latest", 403, b"{}".to_vec());
         assert!(matches!(Client::new(&server.url()).check(), Err(Error::Network(_))));
         assert!(matches!(Client::new("http://127.0.0.1:1").check(), Err(Error::Network(_))));
     }

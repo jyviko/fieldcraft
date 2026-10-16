@@ -1,9 +1,9 @@
 FieldCraft is open-source CAE pre-processing in Rust: it turns geometry into analysis-ready
 finite element models, writes Abaqus, Nastran and LS-DYNA decks, and solves linear static and
 modal problems with its own solver. AI agents can drive it over MCP (`fieldcraft-cli mcp`).
-[README](https://github.com/jyviko/fieldcraft#readme) ·
-[roadmap](https://github.com/jyviko/fieldcraft/blob/main/ROADMAP.md) ·
-[issues](https://github.com/jyviko/fieldcraft/issues)
+[README](https://github.com/tangency-labs/fieldcraft#readme) ·
+[roadmap](https://github.com/tangency-labs/fieldcraft/blob/main/ROADMAP.md) ·
+[issues](https://github.com/tangency-labs/fieldcraft/issues)
 
 **Which file?**
 - **macOS 11+** (Apple silicon and Intel): open `fieldcraft-{version}-macos-universal.dmg` and

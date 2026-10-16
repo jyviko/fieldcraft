@@ -15,7 +15,7 @@ needed most, and how to claim work. The rules every change follows, by a person 
 You need stable Rust 1.95 or newer.
 
 ```sh
-git clone https://github.com/jyviko/fieldcraft && cd fieldcraft
+git clone https://github.com/tangency-labs/fieldcraft && cd fieldcraft
 cargo run --release -p fieldcraft -- --sample cantilever   # the desktop app on a sample model
 cargo run -p fieldcraft-cli -- commands                    # every command and its parameters
 cargo test -p fieldcraft-solver                            # the tests of one crate
@@ -28,32 +28,32 @@ cargo xtask oracle --quick                                 # the verification ca
 
 ## Where help is wanted most
 
-See the [`help wanted`](https://github.com/jyviko/fieldcraft/labels/help%20wanted) and
-[`good first issue`](https://github.com/jyviko/fieldcraft/labels/good%20first%20issue) labels, and
+See the [`help wanted`](https://github.com/tangency-labs/fieldcraft/labels/help%20wanted) and
+[`good first issue`](https://github.com/tangency-labs/fieldcraft/labels/good%20first%20issue) labels, and
 the `area:` labels for your field. In order of how much they would help users:
 
-1. **Reproducible meshes** ([#115](https://github.com/jyviko/fieldcraft/issues/115)). The same part
+1. **Reproducible meshes** ([#115](https://github.com/tangency-labs/fieldcraft/issues/115)). The same part
    must give the same tet mesh on every platform and every run, as the solvers already do.
-2. **All-hex meshing of thin and curved parts** ([#85](https://github.com/jyviko/fieldcraft/issues/85)).
+2. **All-hex meshing of thin and curved parts** ([#85](https://github.com/tangency-labs/fieldcraft/issues/85)).
    The octree mesher over-refines thin walls; concave transition templates and an up-front depth
    are next. Hex meshing is the centre of gravity of the project.
-3. **Getting results in and out**: ParaView export ([#90](https://github.com/jyviko/fieldcraft/issues/90)),
-   Gmsh import ([#91](https://github.com/jyviko/fieldcraft/issues/91)), Abaqus deck reading
-   ([#98](https://github.com/jyviko/fieldcraft/issues/98)), CSV and STL
-   ([#92](https://github.com/jyviko/fieldcraft/issues/92), [#93](https://github.com/jyviko/fieldcraft/issues/93)).
-4. **Verification benchmarks** ([#97](https://github.com/jyviko/fieldcraft/issues/97),
-   [#106](https://github.com/jyviko/fieldcraft/issues/106)). An engineer with a published benchmark
+3. **Getting results in and out**: ParaView export ([#90](https://github.com/tangency-labs/fieldcraft/issues/90)),
+   Gmsh import ([#91](https://github.com/tangency-labs/fieldcraft/issues/91)), Abaqus deck reading
+   ([#98](https://github.com/tangency-labs/fieldcraft/issues/98)), CSV and STL
+   ([#92](https://github.com/tangency-labs/fieldcraft/issues/92), [#93](https://github.com/tangency-labs/fieldcraft/issues/93)).
+4. **Verification benchmarks** ([#97](https://github.com/tangency-labs/fieldcraft/issues/97),
+   [#106](https://github.com/tangency-labs/fieldcraft/issues/106)). An engineer with a published benchmark
    can add it as an oracle case without touching solver code.
 5. **Nonlinear elements and materials**: incompatible modes at finite strain
-   ([#82](https://github.com/jyviko/fieldcraft/issues/82)), kinematic hardening
-   ([#81](https://github.com/jyviko/fieldcraft/issues/81)), and the material library
-   ([#99](https://github.com/jyviko/fieldcraft/issues/99)).
-6. **The app**: typed command forms ([#112](https://github.com/jyviko/fieldcraft/issues/112)), XY and
-   path plots ([#94](https://github.com/jyviko/fieldcraft/issues/94), [#95](https://github.com/jyviko/fieldcraft/issues/95)).
+   ([#82](https://github.com/tangency-labs/fieldcraft/issues/82)), kinematic hardening
+   ([#81](https://github.com/tangency-labs/fieldcraft/issues/81)), and the material library
+   ([#99](https://github.com/tangency-labs/fieldcraft/issues/99)).
+6. **The app**: typed command forms ([#112](https://github.com/tangency-labs/fieldcraft/issues/112)), XY and
+   path plots ([#94](https://github.com/tangency-labs/fieldcraft/issues/94), [#95](https://github.com/tangency-labs/fieldcraft/issues/95)).
 
 Bigger areas on the [roadmap](ROADMAP.md) — contact, dynamics, composites, coupled fields, wave
 propagation, turbulence — are open to anyone who wants to own one: start a thread in
-[Discussions](https://github.com/jyviko/fieldcraft/discussions).
+[Discussions](https://github.com/tangency-labs/fieldcraft/discussions).
 
 ## Before you start: claim an issue
 

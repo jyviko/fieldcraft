@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use crate::crash::without_home;
 
 /// The issue form.
-pub const ISSUE_URL: &str = "https://github.com/jyviko/fieldcraft/issues/new";
+pub const ISSUE_URL: &str = "https://github.com/tangency-labs/fieldcraft/issues/new";
 /// The longest link a draft opens: GitHub refuses new-issue links much past 8 KB.
 pub const MAX_URL: usize = 7000;
 /// The session file a draft attaches.
@@ -329,7 +329,7 @@ mod tests {
             ..Default::default()
         };
         let d = draft(&input, "v1.2.3, testos x");
-        assert!(d.url.starts_with("https://github.com/jyviko/fieldcraft/issues/new?template=bug.yml&title="), "{}", d.url);
+        assert!(d.url.starts_with("https://github.com/tangency-labs/fieldcraft/issues/new?template=bug.yml&title="), "{}", d.url);
         assert!(d.attachments.is_empty() && d.clipboard.is_none(), "nothing attached without Share my session");
         let all = format!("{} {:?} {}", d.title, d.fields, decode(&d.url));
         assert!(!all.contains(&home()), "no home folder: {all}");

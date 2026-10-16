@@ -13,7 +13,7 @@ use crate::ModelApp;
 use crate::files::Prompt;
 
 /// What is sent, event by event.
-pub const PRIVACY_URL: &str = "https://github.com/jyviko/fieldcraft/blob/main/docs/privacy.md";
+pub const PRIVACY_URL: &str = "https://github.com/tangency-labs/fieldcraft/blob/main/docs/privacy.md";
 /// The question, as the first run asks it.
 pub const QUESTION: &str = "Help improve FieldCraft by sharing anonymous usage: which tools you use, nothing from your models.";
 const DETAIL: &str = "Counted: the commands you run (their names, how long they took, whether they failed), the steps from a design to results, \

@@ -7,7 +7,7 @@ each step. The code is `crates/update` (`fieldcraft-update`); the window's side 
 ## Checking
 
 The app asks the GitHub Releases API for the latest published release
-(`GET https://api.github.com/repos/jyviko/fieldcraft/releases/latest`; drafts and pre-releases
+(`GET https://api.github.com/repos/tangency-labs/fieldcraft/releases/latest`; drafts and pre-releases
 are never offered) and compares its version with the running one (Semantic Versioning order).
 
 - **At start-up**, at most once a day, when **Check for updates automatically** is on (the

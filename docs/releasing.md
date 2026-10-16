@@ -56,7 +56,7 @@ about it, and the release notes say which of the two the draft contains.
 | `APPLE_TEAM_ID` | The 10-character team id of the Developer ID |
 
 Add them to the `release` environment ([Where the secrets live](#where-the-secrets-live)) with
-`gh secret set <NAME> --env release -R jyviko/fieldcraft`. With the certificate but without the
+`gh secret set <NAME> --env release -R tangency-labs/fieldcraft`. With the certificate but without the
 three notarization secrets the app is signed and not notarized. A dmg made locally with
 `packaging/macos/package.sh` is ad-hoc signed unless `MACOS_SIGN_IDENTITY` names an identity
 in the keychain.
@@ -84,7 +84,7 @@ Setting it up, once:
 ```sh
 cargo install --locked rsign2 --version 0.6.7
 rsign generate -W -p fieldcraft-release.pub -s fieldcraft-release.key   # -W: no password
-gh secret set FIELDCRAFT_SIGNING_KEY --env release -R jyviko/fieldcraft < fieldcraft-release.key
+gh secret set FIELDCRAFT_SIGNING_KEY --env release -R tangency-labs/fieldcraft < fieldcraft-release.key
 ```
 
 Keep an offline copy of the secret key file (a password manager, an encrypted backup) and
@@ -130,19 +130,19 @@ never the shell history):
 ```sh
 for n in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_PASSWORD \
          APPLE_TEAM_ID FIELDCRAFT_SIGNING_KEY POSTHOG_KEY; do
-  gh secret set "$n" --env release -R jyviko/fieldcraft < "$n.txt"
+  gh secret set "$n" --env release -R tangency-labs/fieldcraft < "$n.txt"
 done
-gh secret list --env release -R jyviko/fieldcraft     # all eight listed
+gh secret list --env release -R tangency-labs/fieldcraft     # all eight listed
 # After a release run on main has signed with them:
 for n in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_PASSWORD \
          APPLE_TEAM_ID FIELDCRAFT_SIGNING_KEY POSTHOG_KEY; do
-  gh secret delete "$n" -R jyviko/fieldcraft
+  gh secret delete "$n" -R tangency-labs/fieldcraft
 done
 ```
 
 ## Choose and prepare the version
 
-1. Look at the previous published release (`gh release list -R jyviko/fieldcraft`) and the
+1. Look at the previous published release (`gh release list -R tangency-labs/fieldcraft`) and the
    changes since it, and choose one version for the batch: a patch for compatible fixes; a minor
    for new capabilities, and while on `0.x` also for breaking changes (say what breaks in the
    notes); `-rc.N` for a release candidate. `1.0` is the owner's decision.
@@ -189,8 +189,8 @@ commit needs: `cargo xtask affected --base <sha>^ --head <sha>`. A file outside 
 Publishing is a maintainer's call; an agent preparing a release stops at the draft.
 
 1. Check the run succeeded for the intended commit and the draft targets it
-   (`gh release view v<version> -R jyviko/fieldcraft`).
-2. Download the assets into an empty folder (`gh release download v<version> -R jyviko/fieldcraft`),
+   (`gh release view v<version> -R tangency-labs/fieldcraft`).
+2. Download the assets into an empty folder (`gh release download v<version> -R tangency-labs/fieldcraft`),
    run `shasum -a 256 -c SHA256SUMS.txt`, check the signature
    (`minisign -Vm SHA256SUMS.txt -P <the public key above>`, or `rsign verify -P …`), and check
    every platform's files are there.
@@ -201,13 +201,13 @@ Publishing is a maintainer's call; an agent preparing a release stops at the dra
    platforms you could not try (each job checks its own package).
 4. Edit the notes: what is new, fixes, breaking changes, known limitations. Keep the install and
    signing paragraphs; never claim signing the notes don't state.
-5. Publish: `gh release edit v<version> -R jyviko/fieldcraft --draft=false --latest`
+5. Publish: `gh release edit v<version> -R tangency-labs/fieldcraft --draft=false --latest`
    (a release candidate: `--draft=false --prerelease --latest=false`). Publishing creates the tag
    at the draft's commit; never push release tags by hand.
 
 ## Dry runs
 
-`gh workflow run release.yml -R jyviko/fieldcraft --ref <branch>` runs the verify jobs and builds every package in parallel, and
+`gh workflow run release.yml -R tangency-labs/fieldcraft --ref <branch>` runs the verify jobs and builds every package in parallel, and
 uploads them with the notes as the `release-assets` artifact of the run, without creating a
 release. `-f draft=true` creates or updates the draft, and is accepted on `main` only.
 Locally, `packaging/macos/package.sh --arch aarch64` (or `x86_64`, `universal`) and

@@ -139,7 +139,7 @@ People trust FieldCraft with their models; a crash loses their work. **This outr
   heavy tests, nightly, before every release and on demand (`gh workflow run CI --ref <branch>`). Hostile-input tests run commands on sessions with small
   work caps (`Session::limits`) so refusals are instant; never lower the production caps for a
   test.
-- **Publishing**: `origin` is github.com/jyviko/fieldcraft. Changes land through pull requests
+- **Publishing**: `origin` is github.com/tangency-labs/fieldcraft. Changes land through pull requests
   as the workflow above describes; the coordinator reads every merged diff and sends findings
   back as fix-forward work. Never force-push `develop` or `main`; `main` holds released code and moves only by
   fast-forward at a release (docs/releasing.md). Never commit `plan/`, `.agent-files/`,

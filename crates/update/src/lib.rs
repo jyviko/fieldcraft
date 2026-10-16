@@ -35,7 +35,7 @@ pub use release::{Asset, Check, Release};
 pub use version::Version;
 
 /// The repository releases come from.
-pub const REPO: &str = "jyviko/fieldcraft";
+pub const REPO: &str = "tangency-labs/fieldcraft";
 /// The GitHub API.
 pub const DEFAULT_HOST: &str = "https://api.github.com";
 /// Replaces [`DEFAULT_HOST`] (and allows plain `http`), for tests against a local server only.

@@ -10,8 +10,8 @@ see the results — with a nonlinear implicit solver (large deformation, plastic
 in place. Hex meshing is the centre of gravity. Next: buckling and arc-length, contact, then
 the wider material and multiphysics library. See [ROADMAP.md](ROADMAP.md).
 **Want to help?** Pick an issue labelled
-[good first issue](https://github.com/jyviko/fieldcraft/labels/good%20first%20issue) or
-[help wanted](https://github.com/jyviko/fieldcraft/labels/help%20wanted) and read
+[good first issue](https://github.com/tangency-labs/fieldcraft/labels/good%20first%20issue) or
+[help wanted](https://github.com/tangency-labs/fieldcraft/labels/help%20wanted) and read
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ![Claude analyses an I-beam cantilever in FieldCraft over MCP: it opens the part, hex meshes it, sets steel, the clamp and a 1 kN tip load, solves, shows von Mises stress and the deformed shape, and checks the tip deflection against beam theory](docs/media/claude-mcp.gif)
@@ -28,15 +28,15 @@ theory with shear 0.177 mm).
 
 ## Download
 
-[![Download for macOS](https://img.shields.io/badge/macOS-Download-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/jyviko/fieldcraft/releases/latest)
-[![Download for Windows](https://img.shields.io/badge/Windows-Download-0078D6?style=for-the-badge)](https://github.com/jyviko/fieldcraft/releases/latest)
-[![Download for Linux](https://img.shields.io/badge/Linux-Download-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/jyviko/fieldcraft/releases/latest)
-[![Try it in your browser](https://img.shields.io/badge/Browser-Try%20it-2ea44f?style=for-the-badge&logo=webassembly&logoColor=white)](https://jyviko.github.io/fieldcraft/)
+[![Download for macOS](https://img.shields.io/badge/macOS-Download-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/tangency-labs/fieldcraft/releases/latest)
+[![Download for Windows](https://img.shields.io/badge/Windows-Download-0078D6?style=for-the-badge)](https://github.com/tangency-labs/fieldcraft/releases/latest)
+[![Download for Linux](https://img.shields.io/badge/Linux-Download-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/tangency-labs/fieldcraft/releases/latest)
+[![Try it in your browser](https://img.shields.io/badge/Browser-Try%20it-2ea44f?style=for-the-badge&logo=webassembly&logoColor=white)](https://tangency-labs.github.io/fieldcraft/)
 
 - **macOS:** open the `.dmg` and drag FieldCraft into Applications (Apple silicon and Intel).
 - **Windows:** unzip and run `fieldcraft.exe`.
 - **Linux:** the `.AppImage` (allow it to run as a program), or the `.tar.gz`.
-- **Browser:** [try it at jyviko.github.io/fieldcraft](https://jyviko.github.io/fieldcraft/), no install.
+- **Browser:** [try it at tangency-labs.github.io/fieldcraft](https://tangency-labs.github.io/fieldcraft/), no install.
 - **Command line:** `fieldcraft-cli` ships in every package; AI agents connect to it over MCP
   ([docs/mcp.md](docs/mcp.md)).
 

@@ -8,7 +8,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 authors = ["FieldCraft contributors"]
-repository = "https://github.com/jyviko/fieldcraft"
+repository = "https://github.com/tangency-labs/fieldcraft"
 
 [workspace.dependencies]
 # internal

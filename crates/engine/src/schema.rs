@@ -217,6 +217,8 @@ pub enum Collection {
     /// A datum point.
     DatumPoint,
     Partition,
+    /// A face merge (`geometry.faces.merge`).
+    FaceMerge,
 }
 
 impl Collection {
@@ -242,6 +244,7 @@ impl Collection {
             Collection::DatumAxis => "datum axis",
             Collection::DatumPoint => "datum point",
             Collection::Partition => "partition",
+            Collection::FaceMerge => "face merge",
         }
     }
 }
@@ -271,6 +274,7 @@ impl Session {
             Collection::DatumAxis => Box::new(m.datums().iter().filter(|(_, d)| d.axis().is_some()).map(|(n, _)| n.as_str())),
             Collection::DatumPoint => Box::new(m.datums().iter().filter(|(_, d)| d.point().is_some()).map(|(n, _)| n.as_str())),
             Collection::Partition => Box::new(m.partitions().iter().map(|p| p.name.as_str())),
+            Collection::FaceMerge => Box::new(m.face_merges().iter().map(|f| f.name.as_str())),
         };
         names.take(MAX_NAMES).map(str::to_string).collect()
     }

@@ -276,6 +276,7 @@ impl Tokens {
             contour: self.contour_stops(),
             contour_over: rgb(self.contour_over),
             marked: rgb(self.error),
+            merged: rgb(self.warm),
             glyphs: self.glyph_colors(),
         }
     }

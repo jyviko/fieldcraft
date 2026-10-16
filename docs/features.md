@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-78 ready, 38 coming soon.
+79 ready, 38 coming soon.
 
 ## Geometry
 
@@ -22,6 +22,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Prepare | Datum Axis — A datum axis: principal axis, two points or datum points, point and direction | ready | `geometry.datum.axis`, (`geometry.datum.axis.edit`) |
 | Prepare | Datum Point — A datum point: coordinates, a mesh vertex, along an edge, a face's centre, an axis through a plane | ready | `geometry.datum.point`, (`geometry.datum.point.edit`) |
 | Prepare | Partition — Cut bodies into cells by a datum plane; the two faces of each cut are paired by name | ready | `geometry.partition`, (`geometry.partition.delete`), (`geometry.partition.suppress`) |
+| Prepare | Merge Faces — Mesh adjacent faces as one (virtual topology): a fillet in pieces, a face split by an imprint; the B-rep is unchanged | ready | `geometry.faces.merge`, (`geometry.faces.merge.delete`) |
 | Prepare | Midsurface — Extract midsurfaces of thin parts for shell meshes | coming soon (M8) |  |
 
 ## Mesh

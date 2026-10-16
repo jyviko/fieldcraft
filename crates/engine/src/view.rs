@@ -45,6 +45,8 @@ pub struct Palette {
     pub contour_over: Rgb,
     /// The elements `mesh.quality.mark` marked.
     pub marked: Rgb,
+    /// Faces merged for meshing (`geometry.faces.merge`).
+    pub merged: Rgb,
     /// The analysis setup's symbols.
     pub glyphs: GlyphColors,
 }
@@ -79,6 +81,7 @@ impl Palette {
         contour: [Rgb(0x2b, 0x4f, 0xd8), Rgb(0x2f, 0xb8, 0xe0), Rgb(0x3c, 0xc8, 0x64), Rgb(0xf0, 0xd2, 0x3c), Rgb(0xe0, 0x40, 0x2e)],
         contour_over: CONTOUR_OVER,
         marked: Rgb(214, 54, 54),
+        merged: Rgb(222, 150, 30),
         glyphs: GlyphColors {
             constraint: Rgb(0x00, 0x8a, 0xa8),
             load: Rgb(0xd0, 0x24, 0x24),
@@ -266,6 +269,27 @@ pub fn draw_geometry_marks(scene: &mut Scene, display: &DisplayMesh, bodies: &[&
     }
 }
 
+/// Draw the merged faces (`geometry.faces.merge`) of the drawn bodies (`bodies`, in the order of
+/// their surfaces) in `color`, so each shows as one face in one colour. The scene's triangles
+/// start with `display`'s surface triangles in order, as they do while no element faces are drawn.
+pub fn draw_merged_faces(scene: &mut Scene, display: &DisplayMesh, s: &Session, bodies: &[&str], color: Rgb) {
+    let Some(design) = s.design.as_deref() else { return };
+    let merged: std::collections::BTreeSet<(u32, u32)> = bodies
+        .iter()
+        .enumerate()
+        .filter_map(|(i, name)| Some((u32::try_from(i).ok()?, design.body(name)?)))
+        .flat_map(|(i, b)| b.merged_faces().into_iter().map(move |(f, _)| (i, f)))
+        .collect();
+    if merged.is_empty() {
+        return;
+    }
+    for (t, d) in scene.tris.iter_mut().zip(&display.surface_tris) {
+        if merged.contains(&(d.body, d.face)) {
+            t.color = color;
+        }
+    }
+}
+
 /// What a picture shows besides the image.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shown {
@@ -354,7 +378,12 @@ fn display_parts(s: &Session, section: Option<Section>, toward: Vec3) -> (Displa
     for body in s.design.iter().flat_map(|d| &d.bodies).filter(|b| s.shows(fieldcraft_io::ItemKind::Body, &b.name)) {
         let mesh = body.measure().and_then(|m| body.tessellate(display_tolerance(&Aabb3 { min: m.bbox_min.into(), max: m.bbox_max.into() })));
         match mesh {
-            Ok(m) => {
+            Ok(mut m) => {
+                // A merged face's B-rep faces were tessellated apart: their copies of the points
+                // they share differ by up to the weld distance, and would draw as edges.
+                if !body.merged_faces().is_empty() {
+                    weld_points(&mut m.positions, m.weld_distance);
+                }
                 d.add_surface(&m.positions, &m.triangles, &m.tri_face);
                 bodies.push(body.name.clone());
             }
@@ -365,6 +394,31 @@ fn display_parts(s: &Session, section: Option<Section>, toward: Vec3) -> (Displa
         d.add_surface(&surface.mesh.positions, &surface.mesh.triangles, &surface.mesh.tri_face);
     }
     (d, failed, bodies)
+}
+
+/// Move every point within `distance` of an earlier one (in x order) onto it, so copies of one
+/// point are identical.
+fn weld_points(positions: &mut [[f64; 3]], distance: f64) {
+    let mut order: Vec<usize> = (0..positions.len()).collect();
+    order.sort_by(|&a, &b| positions.get(a).map_or(0.0, |p| p[0]).total_cmp(&positions.get(b).map_or(0.0, |p| p[0])));
+    let close = |p: [f64; 3], q: [f64; 3]| (0..3).map(|k| (p[k] - q[k]).powi(2)).sum::<f64>() <= distance * distance;
+    for (k, &i) in order.iter().enumerate() {
+        let Some(p) = positions.get(i).copied() else { continue };
+        // The earliest point within reach, among those not far behind in x.
+        let mut to = p;
+        for &j in order.get(..k).unwrap_or_default().iter().rev() {
+            let Some(q) = positions.get(j).copied() else { continue };
+            if p[0] - q[0] > distance {
+                break;
+            }
+            if close(p, q) {
+                to = q;
+            }
+        }
+        if let Some(slot) = positions.get_mut(i) {
+            *slot = to;
+        }
+    }
 }
 
 /// The model drawn as the viewport draws it by default (shaded with element edges).
@@ -426,15 +480,13 @@ fn picture(s: &Session, p: &Palette, section: Option<Section>, toward: Vec3) -> 
     let Some((view, result)) = plot else {
         let mut scene = model_scene(&base, p);
         mark(&mut scene, &base, &marked(s), p.marked);
+        // `bodies` names the drawn surfaces in order.
+        let drawn: Vec<&str> = bodies.iter().map(String::as_str).collect();
+        if base.tris.is_empty() {
+            draw_merged_faces(&mut scene, &base, s, &drawn, p.merged);
+        }
         if let Some(marks) = geometry_marks(s) {
-            let bodies: Vec<&str> = s
-                .design
-                .iter()
-                .flat_map(|d| &d.bodies)
-                .filter(|b| s.shows(fieldcraft_io::ItemKind::Body, &b.name))
-                .map(|b| b.name.as_str())
-                .collect();
-            draw_geometry_marks(&mut scene, &base, &bodies, marks, base.tris.is_empty(), p.marked);
+            draw_geometry_marks(&mut scene, &base, &drawn, marks, base.tris.is_empty(), p.marked);
         }
         let bounds = base.bounds;
         let shows = |n: &str| s.shows(fieldcraft_io::ItemKind::Datum, n);

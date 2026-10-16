@@ -113,14 +113,19 @@ fn canonical(d: V3) -> Option<V3> {
 const AXES: [V3; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 /// Whether the faces `faces` (persistent names on `shape`) are all prismatic along `d`: planes
-/// along or across it, cylinders about an axis along it.
+/// along or across it, cylinders about an axis along it; a merged face on no one surface, when
+/// each of its B-rep faces is.
 fn faces_prismatic(shape: &Shape, surfaces: &[Option<FaceSurface>], faces: &[String], d: V3) -> bool {
+    let prismatic = |s: Option<FaceSurface>| match s {
+        Some(FaceSurface::Plane { normal, .. }) => parallel(normal, d) || perpendicular(normal, d),
+        Some(FaceSurface::Cylinder { axis, .. }) => parallel(axis, d),
+        _ => false,
+    };
     faces.iter().all(|name| {
         let Some(i) = shape.face_index(name) else { return true };
         match surfaces.get(i as usize).copied().flatten() {
-            Some(FaceSurface::Plane { normal, .. }) => parallel(normal, d) || perpendicular(normal, d),
-            Some(FaceSurface::Cylinder { axis, .. }) => parallel(axis, d),
-            _ => false,
+            Some(s) => prismatic(Some(s)),
+            None => shape.member_surfaces(i).is_ok_and(|m| m.len() > 1 && m.into_iter().all(prismatic)),
         }
     })
 }

@@ -1710,6 +1710,14 @@ pub const PARTITION: &[Field] = &[
     references("bodies", "Bodies", C::Body).help("The bodies to divide; every body the plane cuts when empty.").hint("every body the plane divides"),
 ];
 pub const PARTITION_DELETE: &[Field] = existing!("Partition", C::Partition);
+pub const FACES_MERGE: &[Field] = &[
+    NAME,
+    face_rows("faces", "Faces")
+        .help("Two or more adjacent faces of one body, meshed as one face. Shift-click faces in the view, then Use selection.")
+        .req()
+        .hint("Shift-click faces"),
+];
+pub const FACES_MERGE_DELETE: &[Field] = existing!("Face merge", C::FaceMerge);
 pub const MESH_PLAN: &[Field] = &[
     reference("body", "Body", C::Body).help("The body of the design to plan (as opened, not a partition cell).").req(),
     text("name", "Name").help("The name the plan is saved under.").hint("Plan-<body>"),

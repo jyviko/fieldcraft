@@ -294,6 +294,14 @@ pub static CATALOGUE: &[Capability] = &[
         "Cut bodies into cells by a datum plane; the two faces of each cut are paired by name",
         &["geometry.partition.delete", "geometry.partition.suppress"],
     ),
+    covering(
+        "geometry.faces.merge",
+        "Merge Faces",
+        Geometry,
+        "Prepare",
+        "Mesh adjacent faces as one (virtual topology): a fillet in pieces, a face split by an imprint; the B-rep is unchanged",
+        &["geometry.faces.merge.delete"],
+    ),
     soon("geometry.midsurface", "Midsurface", Geometry, "Prepare", "M8", "Extract midsurfaces of thin parts for shell meshes"),
     // ---- Mesh ----
     soon("mesh.size.global", "Global Size", Mesh, "Size", "M2", "One element size for the whole part"),

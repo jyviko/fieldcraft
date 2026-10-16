@@ -1135,11 +1135,15 @@ impl ModelApp {
                 let marked = fieldcraft_engine::view::marked(&self.session);
                 fieldcraft_engine::view::mark(&mut s, &self.display.1, &marked, theme::rgb(t.error));
             }
-            // What Check Geometry found, in the error colour: its faces where geometry faces are
-            // drawn, short edges and a dot at each finding over everything.
+            // Faces merged for meshing, each one face in the warm colour where geometry faces are
+            // drawn; then what Check Geometry found, in the error colour: its faces, short edges
+            // and a dot at each finding over everything.
+            let faces = style != scene::Style::Wireframe && !(show.mesh && !self.display.1.tris.is_empty());
+            let bodies: Vec<&str> = self.pick.names.iter().map(|n| n.name.as_str()).collect();
+            if show.geometry && self.plot.1.is_none() && faces {
+                fieldcraft_engine::view::draw_merged_faces(&mut s, &self.display.1, &self.session, &bodies, theme::rgb(t.warm));
+            }
             if let Some(marks) = fieldcraft_engine::view::geometry_marks(&self.session).filter(|_| show.geometry && self.plot.1.is_none()) {
-                let faces = style != scene::Style::Wireframe && !(show.mesh && !self.display.1.tris.is_empty());
-                let bodies: Vec<&str> = self.pick.names.iter().map(|n| n.name.as_str()).collect();
                 fieldcraft_engine::view::draw_geometry_marks(&mut s, &self.display.1, &bodies, marks, faces, theme::rgb(t.error));
             }
             let mut datums = Aabb3::EMPTY;

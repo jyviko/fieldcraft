@@ -35,6 +35,7 @@ mod symmetry;
 mod tags;
 pub mod update;
 pub(crate) mod view;
+mod virtual_faces;
 pub mod xy;
 
 use crate::schema::ProblemKind;
@@ -70,6 +71,8 @@ pub static ALL: &[CommandSpec] = &[
     datum::DATUM_SUPPRESS,
     datum::PARTITION_SUPPRESS,
     datum::PARTITION_DELETE,
+    virtual_faces::FACES_MERGE,
+    virtual_faces::FACES_MERGE_DELETE,
     mesh::NODE_ADD,
     mesh::NODE_REMOVE,
     mesh::ELEMENT_ADD,

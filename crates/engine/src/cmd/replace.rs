@@ -46,6 +46,17 @@ pub(super) fn clear<'a>(model: &mut Model, bodies: impl IntoIterator<Item = &'a 
 }
 
 impl Cleared {
+    /// Add what `other` removed (a body in both counts once, as `other` reports it).
+    pub(super) fn extend(&mut self, other: Cleared) {
+        self.bodies.retain(|(b, _, _)| !other.bodies.iter().any(|(o, _, _)| o == b));
+        self.bodies.extend(other.bodies);
+        self.removed.elements.extend(other.removed.elements);
+        self.removed.nodes.extend(other.removed.nodes);
+        self.stale_sets.extend(other.stale_sets);
+        self.stale_sets.sort();
+        self.stale_sets.dedup();
+    }
+
     /// [`Cleared::report`] when anything was removed; `reply` as it is otherwise.
     pub(super) fn report_if_any(self, s: &Session, reply: Value) -> Value {
         if self.bodies.is_empty() { reply } else { self.report(s, reply) }

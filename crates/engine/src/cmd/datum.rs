@@ -12,7 +12,7 @@
 use crate::schema::ProblemKind;
 use std::sync::Arc;
 
-use fieldcraft_geometry::{Cut, Design};
+use fieldcraft_geometry::{Cut, Design, Merge};
 use fieldcraft_io::{Item, ItemKind, MAX_HIDDEN};
 use fieldcraft_model::{Datum, Model, Partition};
 use serde::Deserialize;
@@ -470,12 +470,15 @@ fn cuts(model: &Model) -> Vec<Cut> {
         .collect()
 }
 
-/// `design` cut by `model`'s partitions (the design as opened when the model has none).
+/// `design` cut by `model`'s partitions, then with its face merges (the design as opened when
+/// the model has neither).
 pub(crate) fn partitioned(design: &Design, model: &Model) -> Result<Design> {
-    Ok(design.partitioned(&cuts(model))?)
+    let merges: Vec<Merge> =
+        model.face_merges().iter().map(|m| Merge { name: m.name.clone(), body: m.body.clone(), faces: m.faces.clone() }).collect();
+    Ok(design.partitioned(&cuts(model))?.merged(&merges)?)
 }
 
-/// Cut the session's design by its model's partitions again. The bodies that are gone (cells
+/// Cut the session's design by its model's partitions again (and merge its faces again). The bodies that are gone (cells
 /// whose partition went, a body a new partition cut) take their meshes with them (#385): what
 /// went is in the returned [`super::replace::Cleared`], which the command reports.
 pub(super) fn recut(s: &mut Session) -> Result<super::replace::Cleared> {

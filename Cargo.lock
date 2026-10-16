@@ -1279,7 +1279,7 @@ dependencies = [
  "fieldcraft-io",
  "fieldcraft-ui-egui",
  "fieldcraft-update",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "log",
  "rfd",
  "rustls",

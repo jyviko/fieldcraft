@@ -33,7 +33,7 @@ log = { workspace = true }
 # operating system's certificates (no bundled root list), and a random install id.
 ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-getrandom = "0.3"
+getrandom = "0.4"
 
 # A termination signal (SIGTERM, SIGINT) closes the window the normal way (terminate.rs).
 [target.'cfg(unix)'.dependencies]

@@ -290,11 +290,24 @@ mod tests {
         s.model.nodes().values().filter(|n| on(n.xyz)).count()
     }
 
+    /// The sample plate made square (30 × 30 × 10, the Ø10 hole in the middle): no layout of the
+    /// cross-section has a reason to cut along the seams.
+    fn square_plate() -> (Session, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("fieldcraft-merge-{}-{:?}", std::process::id(), std::thread::current().id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("square.solidcraft");
+        let plate = fieldcraft_geometry::sample::Plate { width: 30.0, ..Default::default() };
+        std::fs::write(&path, fieldcraft_geometry::sample::plate_design(&plate).unwrap()).unwrap();
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path.to_str().unwrap()})).unwrap();
+        (s, dir)
+    }
+
     /// A mesher takes the merged face as one: its boundary element faces are tagged with it, the
-    /// halves are gone from the tags, and the seams between the halves (no longer edges) carry at
-    /// most `left` nodes.
-    fn mesher_meshes_a_merged_face_as_one(command: &str, params: serde_json::Value, left: impl Fn(usize) -> usize) {
-        let (mut s, dir) = super::super::datum::tests::plate();
+    /// halves are gone from the tags, and the seams between the halves (no longer edges) carry
+    /// `expected(session, seams)` nodes.
+    fn mesher_meshes_a_merged_face_as_one(command: &str, params: serde_json::Value, expected: impl Fn(&Session, &[Vec<[f64; 3]>]) -> usize) {
+        let (mut s, dir) = square_plate();
         let hole = halves(&s);
         let b = &s.design.as_ref().unwrap().bodies[0];
         let seams: Vec<Vec<[f64; 3]>> = b
@@ -319,21 +332,30 @@ mod tests {
         assert!(tagged.contains("merge:Hole"), "{tagged:?}");
         assert!(!tagged.iter().any(|n| hole.iter().any(|h| n.split(['|', '~']).any(|p| p == h))), "{tagged:?}");
         let after = nodes_on_seams(&s, &seams);
-        assert!(after <= left(before), "{command}: nodes on the seams after the merge: {after} (before {before})");
+        let expected = expected(&s, &seams);
+        assert_eq!(after, expected, "{command}: nodes on the seams after the merge (before {before})");
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
     fn the_tet_mesher_meshes_a_merged_face_as_one() {
-        // Before: the surface mesh keeps the seams as feature lines (21 nodes); after: none.
-        mesher_meshes_a_merged_face_as_one("mesh.tet.generate", json!({"size": 4}), |_| 0);
+        // Before: the surface mesh keeps the seams as feature lines; after: none.
+        mesher_meshes_a_merged_face_as_one("mesh.tet.generate", json!({"size": 4}), |_, _| 0);
     }
 
     #[test]
     fn the_hex_mesher_meshes_a_merged_face_as_one() {
-        // The swept O-grid round the hole had a node column on each seam; after, the rim is one
-        // closed edge and only the column where its ring starts is left.
-        mesher_meshes_a_merged_face_as_one("mesh.hex.generate", json!({"size": 2.5}), |before| before / 2);
+        // Before, the swept O-grid round the hole had a node column on each seam, and after the
+        // merge one on the seam where the closed rim's chain started (#512). The rim's start is
+        // no curve end now: the seams are lines like any other round the hole. The square plate's
+        // layout (cuts from its corners) still puts nodes in the middle of the arcs between the
+        // cuts, which on this plate are where the seams lie and also a quarter turn round: the
+        // seams carry as many nodes as those turned lines, no more and no fewer.
+        let turned = |s: &Session, seams: &[Vec<[f64; 3]>]| {
+            let quarter: Vec<Vec<[f64; 3]>> = seams.iter().map(|l| l.iter().map(|p| [30.0 - p[1], p[0], p[2]]).collect()).collect();
+            nodes_on_seams(s, &quarter)
+        };
+        mesher_meshes_a_merged_face_as_one("mesh.hex.generate", json!({"size": 2.5}), turned);
     }
 
     /// The hex-meshing plan sees the merged hole as one face: the hole's feature and its ring

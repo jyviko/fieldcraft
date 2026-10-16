@@ -431,9 +431,13 @@ pub(crate) fn prepare(ctxs: &[Ctx], setup: Setup) -> Result<Prepared> {
                 }
             }
         }
+        // Curve ends: the B-rep vertices and the ends of open edges. A closed edge without a
+        // vertex on it (a hole's rim after its halves are merged, #512) starts wherever its chain
+        // was picked up: that point is no end, and the cross-section's mesher places its nodes.
         vertices.extend(
             brep.edges
                 .iter()
+                .filter(|e| !e.closed())
                 .flat_map(|e| [e.first(), e.last()])
                 .chain(brep.is_vertex.iter().enumerate().filter(|(_, v)| **v).map(|(i, _)| i as u32))
                 .map(|v| frame.coords(brep.point(v)).0),

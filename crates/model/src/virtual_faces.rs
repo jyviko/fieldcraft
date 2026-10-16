@@ -237,3 +237,56 @@ mod tests {
         assert_eq!(m.face_merges().len(), 2);
     }
 }
+
+/// Most defeatures a model holds.
+pub const MAX_DEFEATURES: usize = 1024;
+/// Most features one defeature names.
+pub const MAX_DEFEATURE_FEATURES: usize = 1024;
+
+/// Features of the design's timeline taken out for meshing (`geometry.defeature`): holes filled,
+/// fillets and chamfers back to their sharp edges, bosses removed, by feature id (`F<id>` in
+/// persistent names).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Defeature {
+    pub name: String,
+    pub features: Vec<u64>,
+}
+
+impl Model {
+    /// The defeatures, in the order they were made.
+    pub fn defeatures(&self) -> &[Defeature] {
+        &self.defeatures
+    }
+
+    /// Add a defeature, or replace the features of the one of that name (in its place).
+    pub fn set_defeature(&mut self, defeature: Defeature) -> Result<()> {
+        let name = defeature.name.clone();
+        check_name("defeature", &name)?;
+        let invalid = |m: String| context("defeature", &name, Error::Invalid(m));
+        if defeature.features.is_empty() || defeature.features.len() > MAX_DEFEATURE_FEATURES {
+            return Err(invalid(format!("1 to {MAX_DEFEATURE_FEATURES} features")));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        if let Some(id) = defeature.features.iter().find(|id| !seen.insert(**id)) {
+            return Err(invalid(format!("feature F{id} is listed twice")));
+        }
+        match self.defeatures.iter().position(|d| d.name == name) {
+            Some(i) => {
+                if let Some(d) = self.defeatures.get_mut(i) {
+                    *d = defeature;
+                }
+            }
+            None if self.defeatures.len() >= MAX_DEFEATURES => {
+                return Err(Error::Limit(format!("a model holds at most {MAX_DEFEATURES} defeatures")));
+            }
+            None => self.defeatures.push(defeature),
+        }
+        Ok(())
+    }
+
+    pub fn remove_defeature(&mut self, name: &str) -> Result<Defeature> {
+        let i = self.defeatures.iter().position(|d| d.name == name).ok_or_else(|| Error::NotFound(format!("defeature `{name}`")))?;
+        Ok(self.defeatures.remove(i))
+    }
+}

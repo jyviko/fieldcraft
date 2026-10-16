@@ -87,7 +87,7 @@ pub use steps::{
 };
 pub use tie::Tie;
 pub use units::UnitSystem;
-pub use virtual_faces::{FaceMerge, FaceSplit, Stitch};
+pub use virtual_faces::{Defeature, FaceMerge, FaceSplit, Stitch};
 
 /// The largest node or element label. Nastran's GRID and element ids stop at 99 999 999 (eight
 /// digits in a small field), the tightest of the three formats.
@@ -191,6 +191,9 @@ pub struct Model {
     /// Face splits along datum planes, in the order they apply (after the merges).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     face_splits: Vec<FaceSplit>,
+    /// Features of the design taken out for meshing, in the order they were made.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    defeatures: Vec<Defeature>,
 }
 
 /// A [`Model`] as stored, before it is checked.
@@ -253,6 +256,8 @@ struct ModelData {
     stitches: Vec<Stitch>,
     #[serde(default)]
     face_splits: Vec<FaceSplit>,
+    #[serde(default)]
+    defeatures: Vec<Defeature>,
 }
 
 impl TryFrom<ModelData> for Model {
@@ -354,6 +359,9 @@ impl TryFrom<ModelData> for Model {
         }
         for v in d.face_splits {
             m.add_face_split(v)?;
+        }
+        for v in d.defeatures {
+            m.set_defeature(v)?;
         }
         Ok(m)
     }
@@ -492,6 +500,7 @@ impl Model {
             face_merges: self.face_merges.clone(),
             stitches: self.stitches.clone(),
             face_splits: self.face_splits.clone(),
+            defeatures: self.defeatures.clone(),
         }
     }
 
@@ -542,7 +551,7 @@ impl Model {
     }
 
     /// Counts of each kind of definition, for summaries.
-    pub fn definition_counts(&self) -> [(&'static str, usize); 20] {
+    pub fn definition_counts(&self) -> [(&'static str, usize); 21] {
         [
             ("sets", self.sets.len()),
             ("materials", self.materials.len()),
@@ -564,6 +573,7 @@ impl Model {
             ("face_merges", self.face_merges.len()),
             ("stitches", self.stitches.len()),
             ("face_splits", self.face_splits.len()),
+            ("defeatures", self.defeatures.len()),
         ]
     }
 }

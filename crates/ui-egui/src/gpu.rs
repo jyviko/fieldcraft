@@ -74,9 +74,14 @@ pub fn install(rs: &egui_wgpu::RenderState, depth_bits: u8, samples: u32, errors
         ctx.request_repaint();
     }));
     let t = GpuTarget { format: rs.target_format, depth: egui_wgpu::depth_format_from_bits(depth_bits, 0), samples };
-    let res = Resources { pipelines: Pipelines::new(&rs.device, t), scene: Keyed::default(), symbols: Keyed::default(), overlay: Keyed::default() };
-    rs.renderer.write().callback_resources.insert(res);
+    rs.renderer.write().callback_resources.insert(Resources::new(&rs.device, t));
     t
+}
+
+impl Resources {
+    fn new(device: &wgpu::Device, t: GpuTarget) -> Self {
+        Resources { pipelines: Pipelines::new(device, t), scene: Keyed::default(), symbols: Keyed::default(), overlay: Keyed::default() }
+    }
 }
 
 impl egui_wgpu::CallbackTrait for ViewportCallback {
@@ -104,5 +109,67 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         }
         pass.set_viewport(vp.left_px as f32, vp.top_px as f32, vp.width_px as f32, vp.height_px as f32, 0.0, 1.0);
         res.pipelines.paint(pass, &res.scene.layer, &res.symbols.layer, &res.overlay.layer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_wgpu::CallbackTrait;
+    use fieldcraft_engine::view::{self, Palette};
+    use fieldcraft_gpu::capture::{self, Capturer};
+    use fieldcraft_gpu::select::{self, Policy};
+    use fieldcraft_render::{Orientation, StandardView};
+
+    use super::*;
+
+    /// The window draws what a headless capture draws, byte for byte: the sample model, its
+    /// symbols and an overlay go through the window's paint callback (slots, `prepare`,
+    /// `paint` with the viewport set) into the capture's offscreen pass, and the pixels equal
+    /// [`Capturer::rgba`]'s. This pins the pipelines the window and the captures share since
+    /// they moved into `fieldcraft-gpu`.
+    #[test]
+    fn the_window_draws_what_a_capture_draws() {
+        let cap = match Capturer::open(Policy::from_env().unwrap()) {
+            Ok(Some(c)) => c,
+            Ok(None) if select::gpu_required() => panic!("FIELDCRAFT_REQUIRE_GPU=1 but no GPU adapter"),
+            Err(e) if select::gpu_required() => panic!("FIELDCRAFT_REQUIRE_GPU=1 but no GPU device: {e}"),
+            Ok(None) => return eprintln!("no GPU adapter: skipped"),
+            Err(e) => return eprintln!("no GPU device ({e}): skipped"),
+        };
+        let mut session = fieldcraft_engine::Session::default();
+        session.execute("file.sample", &serde_json::json!({"name": "cantilever"})).unwrap();
+        let (w, h) = (240u32, 160u32);
+        let f = view::frame(&session, &Orientation::of(StandardView::Iso), w as usize, h as usize, &Palette::LIGHT, None);
+        // The overlay: the first few faces again, as a selection highlight repeats them.
+        let overlay = fieldcraft_render::Scene { tris: f.scene.tris.iter().take(40).cloned().collect(), ..Default::default() };
+        assert!(!f.scene.tris.is_empty() && !overlay.tris.is_empty());
+
+        let (device, queue, target) = cap.device();
+        let mut resources = egui_wgpu::CallbackResources::default();
+        resources.insert(Resources::new(device, target));
+        let slot = |s: &fieldcraft_render::Scene| -> SceneSlot { Arc::new(Mutex::new(Some(GpuScene::from_scene(s, 1.0)))) };
+        let cb = ViewportCallback {
+            key: 1,
+            slot: slot(&f.scene),
+            symbols_key: 1,
+            symbols_slot: slot(&f.symbols),
+            overlay_key: 1,
+            overlay_slot: slot(&overlay),
+            frame: Frame::of(&f.cam, w as f32, h as f32, f.scene.radius),
+        };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: 1.0 };
+        assert!(cb.prepare(device, queue, &screen, &mut encoder, &mut resources).is_empty());
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w as f32, h as f32));
+        let info = egui::PaintCallbackInfo { viewport: rect, clip_rect: rect, pixels_per_point: 1.0, screen_size_px: [w, h] };
+        let drawn = cap.offscreen(w, h, |pass| cb.paint(info, pass, &resources)).unwrap();
+        let window = capture::finish(&drawn, &f.scene, &[&f.symbols, &overlay], &f.cam, w, h).unwrap();
+
+        let headless = cap.rgba(&f.scene, &[&f.symbols, &overlay], &f.cam, w, h).unwrap();
+        assert_eq!(window.len(), (w * h * 4) as usize);
+        assert!(window == headless, "the window's pixels differ from the capture's");
+        // And the picture has the model in it, not only the background.
+        let distinct: std::collections::HashSet<&[u8]> = window.chunks(4).collect();
+        assert!(distinct.len() > 50, "{} colours", distinct.len());
     }
 }

@@ -42,6 +42,9 @@ pub(super) struct Input<'a> {
     /// The design's edge seeds ([`super::seeds::edge_seeds`]); the mesher applies those on its
     /// edges.
     pub(super) seeds: Vec<fieldcraft_mesh::seeds::EdgeSeed>,
+    /// Per triangle of `mesh`, the B-rep face it lies on: its piece of a merged face (empty for
+    /// a surface that is not a body's).
+    pub(super) pieces: Vec<u32>,
 }
 
 fn analytic(s: FaceSurface) -> Surface {
@@ -73,7 +76,8 @@ pub(super) fn shape_input(shape: &Shape, tolerance: Option<f64>) -> Result<Input
     }
     let surfaces = shape.face_surfaces()?.into_iter().map(|f| f.map(analytic)).collect();
     let face_names = shape.faces().iter().map(|f| f.name.clone()).collect();
-    Ok(Input { name: shape.name.clone(), mesh: Cow::Owned(shape.tessellate(tol)?), surfaces, face_names, diagonal: diag, seeds: Vec::new() })
+    let (mesh, pieces) = shape.tessellate_pieces(tol)?;
+    Ok(Input { name: shape.name.clone(), mesh: Cow::Owned(mesh), surfaces, face_names, diagonal: diag, seeds: Vec::new(), pieces })
 }
 
 /// The imported surface `surface` names, with the body name its mesh is tagged with.
@@ -109,7 +113,15 @@ pub(super) fn inputs<'a>(s: &'a Session, p: &Value) -> Result<Vec<Input<'a>>> {
             }
             // Faces named by index, as mesh.tet.generate names them.
             let face_names = (0..t.faces).map(|f| f.to_string()).collect();
-            Ok(vec![Input { name, mesh: Cow::Borrowed(&t.mesh), surfaces: Vec::new(), face_names, diagonal: diagonal(lo, hi), seeds: Vec::new() }])
+            Ok(vec![Input {
+                name,
+                mesh: Cow::Borrowed(&t.mesh),
+                surfaces: Vec::new(),
+                face_names,
+                diagonal: diagonal(lo, hi),
+                seeds: Vec::new(),
+                pieces: Vec::new(),
+            }])
         }
         (None, None) => {
             let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first, or give `surface`".into()))?;

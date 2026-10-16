@@ -2405,6 +2405,42 @@ mod acceptance {
         accept(&mut s, &r, 0.5, 10.0);
     }
 
+    /// The enclosure base's bosses cut a 0.42 mm strip out of the middle of the inner fillet
+    /// (#511, #513): geometry.check finds the slivers and geometry.face.absorb absorbs them.
+    /// The absorbed faces stay absorbed in the cells the plan's symmetry cuts the body into, and
+    /// the projection keeps to the exact surfaces of a merged face's pieces, so the mesh is no
+    /// worse for them, whole or by symmetry.
+    #[test]
+    fn absorbed_slivers_stay_absorbed_in_the_plan_s_cells() {
+        let mut commands = vec![
+            json!({"command": "solid.box", "params": {"length": 56, "width": 42, "height": 16, "body_name": "Base"}}),
+            json!({"command": "solid.fillet", "params": {"edges": [[0, 0, 8], [56, 0, 8], [56, 42, 8], [0, 42, 8]], "radius": 5}}),
+            json!({"command": "solid.shell", "params": {"faces": [[28, 21, 16]], "thickness": 3, "body": "Base"}}),
+        ];
+        for (x, y) in [(-1.0, -1.0), (57.0, -1.0), (-1.0, 43.0), (57.0, 43.0)] {
+            commands.push(json!({"command": "solid.cylinder", "params": {"diameter": 13, "height": 16, "base": [x, y, 0], "operation": "join", "targets": ["Base"]}}));
+        }
+        let (_d, mut s) = open(json!(commands));
+        let check = s.execute("geometry.check", &json!({"body": "Base", "size": 1.5, "mark": true})).unwrap();
+        assert_eq!(check["counts"]["sliver_face"], 4, "{check}");
+        let absorbed = s.execute("geometry.face.absorb", &json!({"from_check": true})).unwrap();
+        assert_eq!(absorbed["absorbed"].as_array().map(Vec::len), Some(4), "{absorbed}");
+        let plan = s.execute("mesh.plan", &json!({"body": "Base", "size": 1.5, "layers": 2})).unwrap();
+        assert_eq!(plan["mesher"], "project", "{plan}");
+        let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"], "symmetry": false})).unwrap();
+        accept(&mut s, &r, 0.6, 10.0);
+        let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
+        assert_eq!(r["symmetry"].as_array().map(Vec::len), Some(2), "{r}");
+        let design = s.design.as_deref().unwrap();
+        assert!(design.errors.is_empty(), "{:?}", design.errors);
+        // Each quarter holds one corner, its sliver absorbed.
+        let cells: Vec<_> = design.bodies.iter().filter(|b| b.name.starts_with("Base/")).collect();
+        assert_eq!(cells.len(), 4);
+        assert!(cells.iter().all(|c| c.merged_faces().len() == 1), "{:?}", cells.iter().map(|c| c.merged_faces()).collect::<Vec<_>>());
+        assert_eq!(design.source_body("Base").map(|b| b.merged_faces().len()), Some(4));
+        accept(&mut s, &r, 0.65, 10.0);
+    }
+
     /// The crank arm sample, whole (#455, #190): its sides are at an angle to the axes and its
     /// root arcs meet the bosses at a kink, so it takes the ring-and-pillow layout: each boss an
     /// annulus from its bore or pedal hole to its circle through every level, the arm a carved

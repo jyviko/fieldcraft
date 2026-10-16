@@ -203,8 +203,8 @@ impl Shape {
         self.virtual_surfaces(brep)
     }
 
-    /// [`Shape::face_surfaces`] by B-rep face index.
-    pub(crate) fn brep_face_surfaces(&self) -> Result<Vec<Option<FaceSurface>>> {
+    /// [`Shape::face_surfaces`] by B-rep face index (the pieces of [`Shape::tessellate_pieces`]).
+    pub fn brep_face_surfaces(&self) -> Result<Vec<Option<FaceSurface>>> {
         guard("face surfaces", || {
             Ok((0..self.body.face_count())
                 .map(|f| {
@@ -254,18 +254,37 @@ impl Shape {
     /// by face index ([`Shape::faces`]): merged faces are one face, without the edges between
     /// their B-rep faces.
     pub fn tessellate(&self, tolerance: f64) -> Result<SurfaceMesh> {
+        Ok(self.virtual_mesh(self.tessellate_brep(tolerance)?))
+    }
+
+    /// [`Shape::tessellate`], and per triangle the B-rep face it lies on: its piece of a merged
+    /// face, whose surface is in [`Shape::brep_face_surfaces`] (the same as its tag when no face
+    /// is merged).
+    pub fn tessellate_pieces(&self, tolerance: f64) -> Result<(SurfaceMesh, Vec<u32>)> {
+        let brep = self.tessellate_brep(tolerance)?;
+        let pieces = brep.tri_face.clone();
+        Ok((self.virtual_mesh(brep), pieces))
+    }
+
+    /// The B-rep's own tessellation, tagged by B-rep face.
+    fn tessellate_brep(&self, tolerance: f64) -> Result<SurfaceMesh> {
         if !(tolerance > 0.0 && tolerance.is_finite()) {
             return Err(Error::Invalid(format!("tessellation tolerance must be a positive number, got {tolerance}")));
         }
         let m = guard("tessellate", || self.body.tessellate(tolerance))?;
-        Ok(self.virtual_mesh(SurfaceMesh {
+        Ok(SurfaceMesh {
             positions: m.positions.into_iter().map(xyz).collect(),
             triangles: m.triangles,
             tri_face: m.tri_face,
             weld_distance: 2.0 * LINEAR_TOLERANCE,
             edges: m.edges.into_iter().map(|e| e.into_iter().map(xyz).collect()).collect(),
             edge_faces: m.edge_faces,
-        }))
+        })
+    }
+
+    /// Whether some face is made of several B-rep faces ([`virtual_faces`]).
+    pub fn has_merged_faces(&self) -> bool {
+        !self.face_map.is_empty()
     }
 }
 

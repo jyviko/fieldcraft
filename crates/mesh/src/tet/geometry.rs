@@ -429,6 +429,20 @@ pub struct Tessellation {
     /// A tree over each face pair's segments.
     pair_trees: std::collections::BTreeMap<[u32; 2], Tree>,
     analytic: Vec<Option<AnalyticSurface>>,
+    /// Faces made of several B-rep faces (virtual topology): each triangle's B-rep face (its
+    /// piece) and each piece's exact surface, for a face with no one surface of its own. Empty
+    /// when no face is merged.
+    tri_piece: Vec<u32>,
+    piece_analytic: Vec<Option<AnalyticSurface>>,
+}
+
+/// The B-rep faces of merged faces: per triangle of the surface a [`Tessellation`] is built on
+/// (as given to [`BoundarySurface::new`]) the B-rep face it lies on, and each B-rep face's exact
+/// surface when known.
+#[derive(Debug, Clone, Default)]
+pub struct Pieces {
+    pub tri_piece: Vec<u32>,
+    pub analytic: Vec<Option<AnalyticSurface>>,
 }
 
 impl Tessellation {
@@ -480,7 +494,31 @@ impl Tessellation {
             by_pair.entry(*pair).or_default().push(i as u32);
         }
         let pair_trees = by_pair.into_iter().map(|(pair, items)| (pair, Tree::build_over(&seg_boxes, items))).collect();
-        Tessellation { points, triangles, tri_face, tri_tree, face_trees, segments, seg_tree, pair_trees, analytic }
+        Tessellation {
+            points,
+            triangles,
+            tri_face,
+            tri_tree,
+            face_trees,
+            segments,
+            seg_tree,
+            pair_trees,
+            analytic,
+            tri_piece: Vec::new(),
+            piece_analytic: Vec::new(),
+        }
+    }
+
+    /// The same target with the B-rep pieces of its merged faces (`surface` the boundary
+    /// surface it was built on): a point on a merged face that lies on no one surface goes onto
+    /// the exact surface of the piece it is on, trimmed to that piece, instead of its triangles.
+    pub fn with_pieces(mut self, surface: &BoundarySurface, pieces: Pieces) -> Tessellation {
+        if pieces.tri_piece.is_empty() {
+            return self;
+        }
+        self.tri_piece = surface.source_triangle().iter().map(|&t| pieces.tri_piece.get(t as usize).copied().unwrap_or(u32::MAX)).collect();
+        self.piece_analytic = pieces.analytic;
+        self
     }
 
     fn pt(&self, v: u32) -> P {
@@ -492,19 +530,42 @@ impl Tessellation {
         self.analytic.get(face as usize).and_then(|a| a.as_ref())
     }
 
-    /// The closest point on the face's triangles, and the longest edge of the triangle it is
-    /// on (the local scale of the tessellation).
-    fn on_tessellation(&self, face: u32, p: P) -> Option<(P, f64)> {
+    /// The exact surface of a point of face `face` on its triangle `t`: the face's own, else
+    /// that of the B-rep piece of a merged face the triangle lies on.
+    fn exact(&self, face: u32, t: u32) -> Option<&AnalyticSurface> {
+        self.analytic(face).or_else(|| {
+            let piece = *self.tri_piece.get(t as usize)?;
+            self.piece_analytic.get(piece as usize).and_then(|a| a.as_ref())
+        })
+    }
+
+    /// Whether triangle `u` lies on the same piece of face `face` as triangle `t` (always, for
+    /// a face with a surface of its own or without pieces).
+    fn same_piece(&self, face: u32, t: u32, u: u32) -> bool {
+        self.analytic(face).is_some() || self.tri_piece.get(t as usize) == self.tri_piece.get(u as usize)
+    }
+
+    /// The nearest triangle of face `face` to `p` and the closest point on it.
+    fn nearest_triangle(&self, face: u32, p: P) -> Option<(P, u32)> {
         let accept = |t: u32| self.tri_face.get(t as usize) == Some(&face);
         let dist = |t: u32| {
             let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
-            let (a, b, c) = (self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]));
-            let q = closest_on_triangle(p, a, b, c);
+            let q = closest_on_triangle(p, self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]));
             let d = sub(q, p);
-            let longest = measure::dist(a, b).max(measure::dist(b, c)).max(measure::dist(c, a));
-            (dot(d, d), [q[0], q[1], q[2], longest])
+            // The triangle index travels through the f64 exactly (counts are capped far below
+            // 2^53).
+            (dot(d, d), [q[0], q[1], q[2], f64::from(t)])
         };
-        self.face_tree(face).nearest4(p, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
+        self.face_tree(face).nearest4(p, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3] as u32))
+    }
+
+    /// The closest point on the face's triangles, the longest edge of the triangle it is on
+    /// (the local scale of the tessellation) and that triangle.
+    fn on_tessellation(&self, face: u32, p: P) -> Option<(P, f64, u32)> {
+        let (q, t) = self.nearest_triangle(face, p)?;
+        let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
+        let (a, b, c) = (self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]));
+        Some((q, measure::dist(a, b).max(measure::dist(b, c)).max(measure::dist(c, a)), t))
     }
 
     /// The B-rep face whose triangles lie nearest to `p`.
@@ -552,24 +613,17 @@ impl Tessellation {
     /// closest point of the face's triangles. Unlike [`BoundaryGeometry::project_face`] it never
     /// returns a point of the surface's extension beyond the face's boundary, whatever the
     /// distance from `p` — nor of the same surface's other faces: the pieces of one fillet split
-    /// by a cut share their cylinder, and a point on one piece is off the others.
+    /// by a cut share their cylinder, and a point on one piece is off the others. On a merged
+    /// face lying on no one surface, the surface is that of the piece its nearest triangle is
+    /// on, trimmed to that piece.
     pub fn project_trimmed(&self, face: u32, p: P) -> Option<P> {
-        let accept = |t: u32| self.tri_face.get(t as usize) == Some(&face);
         let corners = |t: u32| {
             let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
             (self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]))
         };
-        let near = {
-            let dist = |t: u32| {
-                let (a, b, c) = corners(t);
-                let q = closest_on_triangle(p, a, b, c);
-                let d = sub(q, p);
-                (dot(d, d), [q[0], q[1], q[2], 0.0])
-            };
-            let r = self.face_tree(face).nearest4(p, &accept, &dist)?;
-            [r[0], r[1], r[2]]
-        };
-        let Some(surface) = self.analytic(face) else { return Some(near) };
+        let (near, nearest) = self.nearest_triangle(face, p)?;
+        let accept = |t: u32| self.tri_face.get(t as usize) == Some(&face) && self.same_piece(face, nearest, t);
+        let Some(surface) = self.exact(face, nearest) else { return Some(near) };
         let Some(q) = surface.project(p) else { return Some(near) };
         // The nearest triangle to the surface's point, with its slack: the largest gap between
         // the triangle and the surface (at its edges' midpoints and centre: a chord's deepest
@@ -589,19 +643,14 @@ impl Tessellation {
     }
 
     /// The outward unit normal of B-rep face `face` near `p`: the exact surface's (oriented like
-    /// the nearest triangle) when known, else the nearest triangle's.
+    /// the nearest triangle; on a merged face, its piece's) when known, else the nearest
+    /// triangle's.
     pub fn face_normal(&self, face: u32, p: P) -> Option<P> {
-        let accept = |t: u32| self.tri_face.get(t as usize) == Some(&face);
-        let dist = |t: u32| {
-            let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
-            let (a, b, c) = (self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]));
-            let d = sub(closest_on_triangle(p, a, b, c), p);
-            let n = unit(cross(sub(b, a), sub(c, a))).unwrap_or([0.0; 3]);
-            (dot(d, d), [n[0], n[1], n[2], 0.0])
-        };
-        let r = self.face_tree(face).nearest4(p, &accept, &dist)?;
-        let flat = unit([r[0], r[1], r[2]])?;
-        match self.analytic(face).and_then(|s| s.normal_at(p)) {
+        let (_, t) = self.nearest_triangle(face, p)?;
+        let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
+        let (a, b, c) = (self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]));
+        let flat = unit(cross(sub(b, a), sub(c, a)))?;
+        match self.exact(face, t).and_then(|s| s.normal_at(p)) {
             Some(n) if dot(n, flat) < 0.0 => Some(scale(n, -1.0)),
             Some(n) => Some(n),
             None => Some(flat),
@@ -611,8 +660,8 @@ impl Tessellation {
 
 impl BoundaryGeometry for Tessellation {
     fn project_face(&self, face: u32, p: P) -> Option<P> {
-        let (near, scale_len) = self.on_tessellation(face, p)?;
-        match self.analytic(face) {
+        let (near, scale_len, t) = self.on_tessellation(face, p)?;
+        match self.exact(face, t) {
             // The exact surface's closest point, kept when it is near the tessellation's: the
             // tessellation deviates from its surface by far less than half its triangles' size,
             // so a point further away is a projection onto another part of the surface (the far
@@ -664,8 +713,8 @@ impl Tessellation {
     /// tessellation's chordal tolerance, as [`BoundaryGeometry::project_face`]).
     pub fn slide_face(&self, face: u32, p: P, d: P) -> Option<P> {
         let target = add(p, d);
-        let (near, scale_len) = self.on_tessellation(face, target)?;
-        if let Some(q) = self.analytic(face).and_then(|s| s.slide(p, d)) {
+        let (near, scale_len, t) = self.on_tessellation(face, target)?;
+        if let Some(q) = self.exact(face, t).and_then(|s| s.slide(p, d)) {
             let tol = (0.5 * scale_len).max(2.0 * measure::dist(target, near));
             if measure::dist(q, near) <= tol {
                 return Some(q);

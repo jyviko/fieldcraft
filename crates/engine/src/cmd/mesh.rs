@@ -216,21 +216,30 @@ pub(super) fn quality_options(p: &Value, max_tets: u64) -> Result<(QualityOption
 /// The exact surfaces of a body's faces, for the quality stage's projections (none when the
 /// kernel cannot give them: the stage then keeps to the tessellation).
 pub fn analytic_surfaces(shape: &fieldcraft_geometry::Shape) -> Vec<Option<AnalyticSurface>> {
+    shape.face_surfaces().unwrap_or_default().into_iter().map(|f| f.map(analytic_surface)).collect()
+}
+
+fn analytic_surface(f: fieldcraft_geometry::FaceSurface) -> AnalyticSurface {
     use fieldcraft_geometry::FaceSurface as F;
-    shape
-        .face_surfaces()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|f| {
-            f.map(|f| match f {
-                F::Plane { normal, point } => AnalyticSurface::Plane { normal, point },
-                F::Cylinder { origin, axis, radius } => AnalyticSurface::Cylinder { origin, axis, radius },
-                F::Cone { apex, axis, half_angle } => AnalyticSurface::Cone { apex, axis, half_angle },
-                F::Sphere { center, radius } => AnalyticSurface::Sphere { center, radius },
-                F::Torus { center, axis, major, minor } => AnalyticSurface::Torus { center, axis, major, minor },
-            })
-        })
-        .collect()
+    match f {
+        F::Plane { normal, point } => AnalyticSurface::Plane { normal, point },
+        F::Cylinder { origin, axis, radius } => AnalyticSurface::Cylinder { origin, axis, radius },
+        F::Cone { apex, axis, half_angle } => AnalyticSurface::Cone { apex, axis, half_angle },
+        F::Sphere { center, radius } => AnalyticSurface::Sphere { center, radius },
+        F::Torus { center, axis, major, minor } => AnalyticSurface::Torus { center, axis, major, minor },
+    }
+}
+
+/// The B-rep pieces of `shape`'s merged faces (virtual topology) for a projection target built
+/// on its tessellation whose triangles lie on the B-rep faces `tri_piece`
+/// ([`fieldcraft_geometry::Shape::tessellate_pieces`]): a merged face on no one surface then
+/// projects onto each piece's own; none when no face is merged.
+pub(crate) fn pieces(shape: &fieldcraft_geometry::Shape, tri_piece: &[u32]) -> fieldcraft_mesh::tet::geometry::Pieces {
+    if !shape.has_merged_faces() {
+        return fieldcraft_mesh::tet::geometry::Pieces::default();
+    }
+    let analytic = shape.brep_face_surfaces().unwrap_or_default().into_iter().map(|f| f.map(analytic_surface)).collect();
+    fieldcraft_mesh::tet::geometry::Pieces { tri_piece: tri_piece.to_vec(), analytic }
 }
 
 pub(super) fn quality_json(q: &TetQuality) -> Value {

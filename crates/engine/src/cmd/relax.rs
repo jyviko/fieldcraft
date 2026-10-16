@@ -194,7 +194,7 @@ fn design_geometry(s: &Session, nodes: &BTreeSet<u32>) -> Result<DesignGeometry>
             None => None,
             Some(shape) => {
                 let tol = (shape.size()? * 1e-3).max(1e-6);
-                let mesh = shape.tessellate(tol)?;
+                let (mesh, pieces) = shape.tessellate_pieces(tol)?;
                 let surface = BoundarySurface::new(
                     &mesh.positions,
                     &mesh.triangles,
@@ -202,7 +202,7 @@ fn design_geometry(s: &Session, nodes: &BTreeSet<u32>) -> Result<DesignGeometry>
                     &SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() },
                 )?;
                 let analytic = super::mesh::analytic_surfaces(shape);
-                g.bodies.push(Tessellation::new(&surface, analytic.clone()));
+                g.bodies.push(Tessellation::new(&surface, analytic.clone()).with_pieces(&surface, super::mesh::pieces(shape, &pieces)));
                 Some((g.bodies.len() - 1, analytic))
             }
         };

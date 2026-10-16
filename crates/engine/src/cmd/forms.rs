@@ -1430,7 +1430,7 @@ pub const NODE_RELAX: &[Field] = &[
     positive("reach", "Reach", D::Length).help("Strong: nodes this close to a moved node follow it, blended to zero at the reach.").hint("five element lengths"),
     choice("guards", "Keep a morph", &[("valid", "Unless an element inverts"), ("strict", "Only when it improves the elements")])
         .help("Strong: valid keeps every morph that inverts no element; strict keeps one only when the worst element it touches improves and no element gets longer.")
-        .def("\"valid\""),
+        .hint("valid"),
     int("iterations", "Iterations", 1, 200).help("Guarded: sweeps over the nodes (1 to 100). Strong: morph rounds.").hint("5 (strong: 20)"),
     range("strength", "Strength", D::None, 0.0, 1.0).help("How far each node moves toward its relaxed position, 0 to 1.").def("1"),
     choice("falloff", "Falloff", &[("smooth", "Smooth"), ("linear", "Linear"), ("none", "None")])

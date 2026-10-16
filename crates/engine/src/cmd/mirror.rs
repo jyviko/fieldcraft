@@ -9,8 +9,10 @@
 use crate::schema::ProblemKind;
 use std::collections::{BTreeMap, BTreeSet};
 
-use fieldcraft_geometry::Shape;
+use fieldcraft_geometry::{Design, Shape};
 use fieldcraft_mesh::mirror::{mirror, reflected_edges, reflected_faces};
+use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
+use fieldcraft_mesh::tet::geometry::Tessellation;
 use fieldcraft_model::geometry::Entity;
 use fieldcraft_model::{ElementFace, GeometryRef, Model};
 use serde_json::{Value, json};
@@ -50,6 +52,11 @@ fn plane(s: &Session, p: &Value) -> Result<([f64; 3], [f64; 3])> {
         None | Some(Value::Null) => Err(EngineError::param("plane", ProblemKind::Required)),
         _ => Err(not_a_plane()),
     }
+}
+
+/// The distance between two points.
+fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
+    (0..3).map(|k| (a[k] - b[k]).powi(2)).sum::<f64>().sqrt()
 }
 
 fn reflect(x: [f64; 3], point: [f64; 3], n: [f64; 3]) -> [f64; 3] {
@@ -165,7 +172,7 @@ fn mirror_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let cleared = super::replace::clear(model, image.values().map(|(name, _)| name.as_str()));
     let before = model.clone();
     let r = mirror(model, &region, point, n, ON_PLANE * diagonal).map_err(|e| EngineError::Params(e.to_string()))?;
-    tag_image(model, &before, &r, &image, point, n, diagonal)?;
+    tag_image(model, &before, &r, &image, design.as_deref(), point, n, diagonal)?;
     let added_nodes = model.nodes().len() - before.nodes().len();
     let images: Vec<Value> = image.iter().map(|(b, (t, shape))| json!({"body": b, "image": t, "in_design": shape.is_some()})).collect();
     let reply = json!({
@@ -185,50 +192,66 @@ fn tag_image(
     before: &Model,
     r: &fieldcraft_mesh::mirror::Mirrored,
     image: &BTreeMap<String, (String, Option<&Shape>)>,
+    design: Option<&Design>,
     point: [f64; 3],
     n: [f64; 3],
     diagonal: f64,
 ) -> Result<()> {
     let c = before.classification();
     let entity = |t: u32| c.entity(t).cloned();
-    // A source face's image: by the image body's face under its reflected centroid, one lookup per
-    // face name (the first element face of it stands for all).
-    let mut face_points: BTreeMap<(String, String), [f64; 3]> = BTreeMap::new();
-    for (&e, tags) in c.elements() {
-        if !r.elements.contains_key(&e) {
-            continue;
-        }
-        for (&f, &t) in &tags.faces {
-            let Some(GeometryRef { body, entity: Entity::Face(name) }) = entity(t) else { continue };
-            if face_points.contains_key(&(body.clone(), name.clone())) {
-                continue;
+    // Each image body's faces, to find the one each reflected boundary face lies on. A source
+    // face's image is the set of image faces its own reflection covers (sampled at its
+    // triangles' centres: one face for an exact mirror, pieces where the image is split
+    // differently); each element face goes to the one of them nearest its reflected centre. So
+    // an element face the mesher gave a face narrower than the elements (its centre on a
+    // neighbour) keeps that face's image.
+    let tolerance = (1e-3 * diagonal).max(1e-4);
+    let mut targets: BTreeMap<&str, (Tessellation, Vec<String>)> = BTreeMap::new();
+    for (target, shape) in image.values() {
+        let Some(shape) = shape else { continue };
+        let mesh = shape.tessellate(tolerance)?;
+        let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
+        let surface = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options)
+            .map_err(|e| EngineError::Params(format!("body `{target}`: {e}")))?;
+        let names = shape.faces().iter().map(|f| f.name.clone()).collect();
+        targets.insert(target.as_str(), (Tessellation::new(&surface, Vec::new()), names));
+    }
+    // The image faces each source face's reflection covers, by (source body, face name).
+    let mut covers: BTreeMap<(String, String), Vec<u32>> = BTreeMap::new();
+    for (body, (target, _)) in image {
+        let (Some(shape), Some((tess, _))) = (design.and_then(|d| d.body(body)), targets.get(target.as_str())) else { continue };
+        let mesh = shape.tessellate(tolerance)?;
+        let at = |v: u32| mesh.positions.get(v as usize).copied().unwrap_or_default();
+        for (t, &f) in mesh.triangles.iter().zip(&mesh.tri_face) {
+            let Some(name) = shape.faces().get(f as usize).map(|x| x.name.clone()) else { continue };
+            let centre = [0, 1, 2].map(|k| (at(t[0])[k] + at(t[1])[k] + at(t[2])[k]) / 3.0);
+            let Some(hit) = tess.nearest_face(reflect(centre, point, n)) else { continue };
+            let list = covers.entry((body.clone(), name)).or_default();
+            if !list.contains(&hit) {
+                list.push(hit);
             }
-            let Some(nodes) = before.face_nodes(ElementFace { element: e, face: f }) else { continue };
+        }
+    }
+    let image_face = |e: u32, f: u8, body: &str, name: &str| -> Option<(String, String)> {
+        let (target, _) = image.get(body)?;
+        let mapped = targets.get(target.as_str()).and_then(|(tess, names)| {
+            let nodes = before.face_nodes(ElementFace { element: e, face: f })?;
             let pts: Vec<[f64; 3]> = nodes.iter().filter_map(|n| before.node(*n).map(|x| x.xyz)).collect();
             let k = pts.len().max(1) as f64;
-            let centre = [0, 1, 2].map(|i| pts.iter().map(|p| p[i]).sum::<f64>() / k);
-            face_points.insert((body, name), reflect(centre, point, n));
-        }
-    }
-    let mut face_names: BTreeMap<(String, String), (String, String)> = BTreeMap::new();
-    let mut by_body: BTreeMap<String, Vec<(String, [f64; 3])>> = BTreeMap::new();
-    for ((body, name), p) in &face_points {
-        by_body.entry(body.clone()).or_default().push((name.clone(), *p));
-    }
-    for (body, faces) in by_body {
-        let Some((target, shape)) = image.get(&body) else { continue };
-        let found = match shape {
-            Some(shape) => {
-                let pts: Vec<[f64; 3]> = faces.iter().map(|(_, p)| *p).collect();
-                shape.nearest_faces(&pts, (1e-3 * diagonal).max(1e-4))?
-            }
-            None => vec![None; faces.len()],
-        };
-        for ((name, _), f) in faces.iter().zip(found) {
-            let mapped = f.and_then(|f| shape.and_then(|s| s.faces().get(f as usize))).map_or_else(|| name.clone(), |x| x.name.clone());
-            face_names.insert((body.clone(), name.clone()), (target.clone(), mapped));
-        }
-    }
+            let p = reflect([0, 1, 2].map(|i| pts.iter().map(|p| p[i]).sum::<f64>() / k), point, n);
+            let face = match covers.get(&(body.to_string(), name.to_string())).map(Vec::as_slice) {
+                Some([only]) => Some(*only),
+                Some(several @ [_, _, ..]) => several
+                    .iter()
+                    .filter_map(|&g| tess.project_trimmed(g, p).map(|q| (dist(p, q), g)))
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, g)| g),
+                _ => tess.nearest_face(p),
+            };
+            face.and_then(|i| names.get(i as usize)).cloned()
+        });
+        Some((target.clone(), mapped.unwrap_or_else(|| name.to_string())))
+    };
     let mut tags: BTreeMap<GeometryRef, u32> = BTreeMap::new();
     let mut tag = |model: &mut Model, r: GeometryRef| -> Result<u32> {
         if let Some(&t) = tags.get(&r) {
@@ -251,7 +274,7 @@ fn tag_image(
         }
         for (&f, &ft) in &t.faces {
             let Some(GeometryRef { body, entity: Entity::Face(name) }) = entity(ft) else { continue };
-            let Some((tb, tn)) = face_names.get(&(body, name)) else { continue };
+            let Some((tb, tn)) = image_face(e, f, &body, &name) else { continue };
             let g = faces.get(usize::from(f).saturating_sub(1)).copied().unwrap_or(f);
             let tg = tag(model, GeometryRef::face(tb.as_str(), tn.as_str())?)?;
             model.tag_element_face(copy, g, tg)?;

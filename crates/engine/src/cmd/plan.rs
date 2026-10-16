@@ -1324,6 +1324,16 @@ fn apply_projection(s: &mut Session, name: &str, plan: &MeshPlan, tolerance: f64
         Some(Err(why)) => return Err(EngineError::Params(format!("mesh plan `{name}`: no projection layout for body `{}`: {why}", plan.body))),
         None => return Err(EngineError::Params(format!("mesh plan `{name}`: projection blocking needs rings or blends; set the mesher to sweep"))),
     };
+    // Partitions of the user's that cut the body leave cells, each meshed on its own.
+    if design.body(&plan.body).is_none() {
+        let cells: Vec<&str> =
+            design.bodies.iter().filter(|b| design.source_of(&b.name) == Some(plan.body.as_str())).map(|b| b.name.as_str()).collect();
+        return Err(EngineError::Params(format!(
+            "mesh plan `{name}`: body `{}` is cut into the cells {cells:?} by partitions; plan and apply a cell (mesh.plan {{\"body\": \"{}\"}}), or delete the partitions",
+            plan.body,
+            cells.first().copied().unwrap_or_default()
+        )));
+    }
     let body = super::project::open_body(s, &plan.body, Some(tolerance), &json!({}))?;
     let merge = super::project::merge_distance(None, body.diagonal())?;
     let opts = fieldcraft_mesh::project::ProjectOptions { size: plan.size, ..Default::default() };
@@ -1685,6 +1695,36 @@ mod tests {
         let r = s.execute("mesh.plan.apply", &json!({"plan": cell["name"]})).unwrap();
         assert_eq!(r["all_hex"], true, "{r}");
         assert!(r["min_scaled_jacobian"].as_f64().unwrap() >= 0.5, "{r}");
+        // The whole body's plan cannot mesh a body partitions have cut: it says to plan a cell.
+        let e = s.execute("mesh.plan.apply", &json!({"plan": whole["name"]})).unwrap_err().to_string();
+        assert!(e.contains("cut into the cells") && e.contains("Plate/a"), "{e}");
+    }
+
+    /// The same from a saved model opened again (the design it refers to rebuilt on opening).
+    #[test]
+    fn a_saved_model_partitioned_after_opening_plans_its_body_and_cells() {
+        let bytes = fieldcraft_geometry::script_design(
+            &json!({"commands": [
+                {"command": "solid.box", "params": {"length": 60, "width": 40, "height": 6, "body_name": "Plate"}},
+                {"command": "solid.hole", "params": {"position": [15, 20, 6], "diameter": 8, "depth": 6}},
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let (_d, path) = crate::tests::design_file(&bytes);
+        let model = std::path::Path::new(&path).with_file_name("model.fieldcraft").to_string_lossy().into_owned();
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        s.execute("file.save_as", &json!({"path": model})).unwrap();
+        let mut s = Session::default();
+        s.execute("file.open", &json!({"path": model})).unwrap();
+        s.execute("geometry.datum", &json!({"name": "SymX", "by": {"type": "offset", "plane": "yz", "offset": 30}})).unwrap();
+        s.execute("geometry.partition", &json!({"name": "HalfX", "datum": "SymX", "bodies": ["Plate"]})).unwrap();
+        let cell = s.execute("mesh.plan", &json!({"body": "Plate/a"})).unwrap();
+        assert_eq!(cell["rings"].as_array().map(Vec::len), Some(1), "{cell}");
+        let whole = s.execute("mesh.plan", &json!({"body": "Plate"})).unwrap();
+        assert_eq!(whole["body"], "Plate", "{whole}");
+        s.execute("mesh.plan.apply", &json!({"plan": cell["name"]})).unwrap();
     }
 
     /// The feature graph of every corpus design and the crank arm: every body lists the features

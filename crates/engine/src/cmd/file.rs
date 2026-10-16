@@ -231,7 +231,12 @@ impl Session {
                 }
             });
             if let Some(d) = &design {
-                warnings.extend(d.errors.iter().filter(|e| e.feature.starts_with("partition ")).map(|e| format!("{}: {}", e.feature, e.message)));
+                warnings.extend(
+                    d.errors
+                        .iter()
+                        .filter(|e| e.feature.starts_with("partition ") || e.feature.starts_with("merge "))
+                        .map(|e| format!("{}: {}", e.feature, e.message)),
+                );
             }
             sources.design = Some(source);
         }
@@ -241,7 +246,7 @@ impl Session {
             surfaces.extend(opened.into_iter().flatten().map(Arc::new));
             sources.meshes.push(source);
         }
-        let session = Session {
+        let mut session = Session {
             model: file.model,
             design,
             surfaces,
@@ -252,6 +257,8 @@ impl Session {
             view: file.view,
             ..Session::default()
         };
+        let (_, failed) = super::stitch::restitch(&mut session);
+        warnings.extend(failed.into_iter().map(|(n, why)| format!("stitch `{n}`: {why}")));
         (session, warnings)
     }
 

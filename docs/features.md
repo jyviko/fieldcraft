@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-80 ready, 38 coming soon.
+81 ready, 38 coming soon.
 
 ## Geometry
 
@@ -24,6 +24,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Prepare | Partition — Cut bodies into cells by a datum plane; the two faces of each cut are paired by name | ready | `geometry.partition`, (`geometry.partition.delete`), (`geometry.partition.suppress`) |
 | Prepare | Merge Faces — Mesh adjacent faces as one (virtual topology): a fillet in pieces, a face split by an imprint; the B-rep is unchanged | ready | `geometry.faces.merge`, (`geometry.faces.merge.delete`) |
 | Prepare | Absorb Faces — Absorb tiny and sliver faces into a neighbour for meshing, one picked or every one Check Geometry found | ready | `geometry.face.absorb` |
+| Prepare | Stitch — Close an imported surface's gaps under a tolerance: open points welded, T-junctions split | ready | `geometry.stitch`, (`geometry.stitch.delete`) |
 | Prepare | Midsurface — Extract midsurfaces of thin parts for shell meshes | coming soon (M8) |  |
 
 ## Mesh

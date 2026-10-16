@@ -31,6 +31,7 @@ pub mod replace;
 mod results;
 pub(crate) mod seeds;
 pub(crate) mod solve;
+pub(crate) mod stitch;
 mod symmetry;
 mod tags;
 pub mod update;
@@ -74,6 +75,8 @@ pub static ALL: &[CommandSpec] = &[
     virtual_faces::FACES_MERGE,
     virtual_faces::FACES_MERGE_DELETE,
     virtual_faces::FACE_ABSORB,
+    stitch::STITCH,
+    stitch::STITCH_DELETE,
     mesh::NODE_ADD,
     mesh::NODE_REMOVE,
     mesh::ELEMENT_ADD,

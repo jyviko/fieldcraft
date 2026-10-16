@@ -309,6 +309,14 @@ pub static CATALOGUE: &[Capability] = &[
         "Prepare",
         "Absorb tiny and sliver faces into a neighbour for meshing, one picked or every one Check Geometry found",
     ),
+    covering(
+        "geometry.stitch",
+        "Stitch",
+        Geometry,
+        "Prepare",
+        "Close an imported surface's gaps under a tolerance: open points welded, T-junctions split",
+        &["geometry.stitch.delete"],
+    ),
     soon("geometry.midsurface", "Midsurface", Geometry, "Prepare", "M8", "Extract midsurfaces of thin parts for shell meshes"),
     // ---- Mesh ----
     soon("mesh.size.global", "Global Size", Mesh, "Size", "M2", "One element size for the whole part"),

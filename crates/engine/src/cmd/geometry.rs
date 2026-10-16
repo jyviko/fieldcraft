@@ -520,7 +520,17 @@ fn import_mesh(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     s.surfaces.extend(surfaces.into_iter().map(Arc::new));
     s.sources.meshes.push(source);
-    Ok(json!({"path": path, "surfaces": added}))
+    // The model's stitches of surfaces by these names apply to them too.
+    let (_, failed) = super::stitch::restitch(s);
+    let mut reply = json!({"path": path, "surfaces": added});
+    let warnings: Vec<String> =
+        failed.into_iter().filter(|(_, why)| !why.starts_with("no surface")).map(|(n, why)| format!("stitch `{n}`: {why}")).collect();
+    if !warnings.is_empty()
+        && let Some(o) = reply.as_object_mut()
+    {
+        o.insert("warnings".into(), json!(warnings));
+    }
+    Ok(reply)
 }
 
 #[cfg(test)]
@@ -660,7 +670,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn package(model: &str) -> Vec<u8> {
+    pub(crate) fn package(model: &str) -> Vec<u8> {
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         zip.start_file("3D/3dmodel.model", zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(model.as_bytes()).unwrap();

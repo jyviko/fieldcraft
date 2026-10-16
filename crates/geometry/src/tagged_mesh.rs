@@ -46,6 +46,9 @@ pub struct TaggedSurface {
     pub mesh: SurfaceMesh,
     /// Number of faces: `ft:faces` when given, else the largest tag + 1 (1 when untagged).
     pub faces: u32,
+    /// The surface as read, when `mesh` is it stitched ([`crate::stitch`]): what stitching
+    /// starts from again.
+    pub original: Option<std::sync::Arc<SurfaceMesh>>,
 }
 
 fn invalid(msg: impl std::fmt::Display) -> Error {
@@ -345,6 +348,7 @@ fn surface(mut o: Object, k: usize, id: u32, xf: &Xf, unit: f64) -> Result<Tagge
         name,
         mesh: SurfaceMesh { positions: o.positions, triangles: o.triangles, tri_face: o.tags, weld_distance: 0.0, ..SurfaceMesh::default() },
         faces,
+        original: None,
     })
 }
 
@@ -481,7 +485,7 @@ mod tests {
         assert_eq!(got.len(), 2);
         // The file carries no weld distance and no B-rep edges.
         let mesh = SurfaceMesh { weld_distance: 0.0, edges: Vec::new(), edge_faces: Vec::new(), ..mesh };
-        assert_eq!(got[0], TaggedSurface { name: "Block".into(), mesh: mesh.clone(), faces: 6 });
+        assert_eq!(got[0], TaggedSurface { name: "Block".into(), mesh: mesh.clone(), faces: 6, original: None });
         assert_eq!(got[1].name, "Again");
         assert_eq!(got[1].mesh, mesh);
     }

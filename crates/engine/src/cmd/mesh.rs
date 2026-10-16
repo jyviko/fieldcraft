@@ -1075,7 +1075,7 @@ mod tests {
             SurfaceMesh { positions: p.clone(), triangles: t.clone(), tri_face: vec![0, 1, 1, 1], weld_distance: 0.0, ..SurfaceMesh::default() };
         let open = SurfaceMesh { positions: p, triangles: t[..3].to_vec(), tri_face: vec![0, 1, 1], weld_distance: 0.0, ..SurfaceMesh::default() };
         for mesh in [tet, open] {
-            s.surfaces.push(Arc::new(TaggedSurface { name: "Tet".into(), mesh, faces: 2 }));
+            s.surfaces.push(Arc::new(TaggedSurface { name: "Tet".into(), mesh, faces: 2, original: None }));
         }
         let r = s.execute("mesh.surface.check", &json!({"surface": 0, "feature_angle": 180})).unwrap();
         assert_eq!((r["valid"].clone(), r["feature_edges"].clone()), (json!(true), json!({"face_boundary": 3, "sharp": 0})));
@@ -1308,7 +1308,7 @@ mod tests {
         let open = SurfaceMesh { positions: p, triangles: t[..3].to_vec(), tri_face: vec![0, 1, 1], weld_distance: 0.0, ..SurfaceMesh::default() };
         let mut s = Session::default();
         for mesh in [tet, open] {
-            s.surfaces.push(Arc::new(TaggedSurface { name: "Tet".into(), mesh, faces: 2 }));
+            s.surfaces.push(Arc::new(TaggedSurface { name: "Tet".into(), mesh, faces: 2, original: None }));
         }
         let r = s.execute("mesh.tet.generate", &json!({"surface": 0, "quality": false})).unwrap();
         assert_eq!((r["elements"].clone(), r["nodes"].clone(), r["boundary_faces"].clone()), (json!(1), json!(4), json!(4)));

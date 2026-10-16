@@ -34,6 +34,8 @@ pub enum Requirement {
     Partition,
     /// A face merge.
     FaceMerge,
+    /// A stitch.
+    Stitch,
     /// An edge seed.
     Seed,
     /// At least one mesh node.
@@ -82,6 +84,7 @@ impl Requirement {
             Requirement::DatumPoint => m.datums().values().any(|d| d.point().is_some()),
             Requirement::Partition => !m.partitions().is_empty(),
             Requirement::FaceMerge => !m.face_merges().is_empty(),
+            Requirement::Stitch => !m.stitches().is_empty(),
             Requirement::Seed => !m.seeds().is_empty(),
             Requirement::Nodes => !m.nodes().is_empty(),
             Requirement::Mesh => has_elements,
@@ -123,6 +126,7 @@ impl Requirement {
             Requirement::DatumPoint => "a datum point",
             Requirement::Partition => "a partition",
             Requirement::FaceMerge => "a face merge",
+            Requirement::Stitch => "a stitch",
             Requirement::Seed => "an edge seed",
             Requirement::Nodes => "mesh nodes",
             Requirement::Mesh | Requirement::Analysable => "a mesh",
@@ -154,6 +158,7 @@ impl Requirement {
             Requirement::DatumPoint => "geometry.datum.point",
             Requirement::Partition => "geometry.partition",
             Requirement::FaceMerge => "geometry.faces.merge",
+            Requirement::Stitch => "geometry.stitch",
             Requirement::Seed => "mesh.seed.edge",
             Requirement::Nodes => "mesh.node.add",
             Requirement::Mesh | Requirement::Analysable => "mesh.tet.generate",
@@ -212,6 +217,7 @@ impl crate::schema::Collection {
             C::DatumPoint => Requirement::DatumPoint,
             C::Partition => Requirement::Partition,
             C::FaceMerge => Requirement::FaceMerge,
+            C::Stitch => Requirement::Stitch,
         }
     }
 }
@@ -353,6 +359,7 @@ mod tests {
             C::DatumPoint,
             C::Partition,
             C::FaceMerge,
+            C::Stitch,
         ];
         let empty = Session::default();
         for c in all {

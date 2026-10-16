@@ -1723,6 +1723,14 @@ pub const FACE_ABSORB: &[Field] = &[
     text("into", "Into").help("The neighbour face that absorbs it, by persistent name.").hint("the neighbour sharing the longest edges"),
     flag("from_check", "From check").help("Absorb every small and sliver face the last Check Geometry found, each into its best neighbour."),
 ];
+pub const STITCH: &[Field] = &[
+    NAME,
+    text("surface", "Surface").help("The imported surface to stitch, by name.").req(),
+    positive("tolerance", "Tolerance", D::Length)
+        .help("Gaps narrower than this close: open points this close become one, and a point this close to another open edge splits it.")
+        .req(),
+];
+pub const STITCH_DELETE: &[Field] = existing!("Stitch", C::Stitch);
 pub const FACES_MERGE_DELETE: &[Field] = existing!("Face merge", C::FaceMerge);
 pub const MESH_PLAN: &[Field] = &[
     reference("body", "Body", C::Body).help("The body of the design to plan (as opened, not a partition cell).").req(),

@@ -30,7 +30,10 @@
 //! (apply an edited plan object) and applied again after the design changes. The projection
 //! blocking mesher (#399) consumes the same plan: its direction, templates and cuts.
 
+use std::collections::BTreeSet;
+
 use fieldcraft_geometry::{Curve, Design, FaceSurface, FeatureNode, Shape};
+use fieldcraft_model::geometry::Entity;
 use fieldcraft_model::{CutRole, Datum, MeshPlan, Partition, PlanCut, PlanFeature, PlanMesher, PlanRing, PlanUnmapped, RingKind};
 use serde_json::{Value, json};
 
@@ -62,7 +65,7 @@ pub const PLAN: CommandSpec = CommandSpec {
 pub const APPLY: CommandSpec = CommandSpec {
     id: "mesh.plan.apply",
     label: "Apply Mesh Plan",
-    params: r#"{"plan": "Plan-Base" (a saved plan) | {plan object, as mesh.plan replies it; edited}, "name"?: "Plan-Base" (the name an object is saved under; default Plan-<body>), "symmetry"?: true (a projection plan on a body mirror symmetric across planes through its middle square to the sweep meshes one cell and mirrors it: false meshes the whole body)} — carries the plan out with today's meshers: replaces the plan's earlier partitions (`<plan>-cut<k>`) with its `cuts` (datum planes and partitions of the plan's body only; a cut the kernel cannot make, or that leaves a cell no mesher takes, is left out and reported in `skipped_cuts`), then meshes the body: its cells swept together with structured hex (mesh.cells, `default` hex) when there are cuts, else the body swept (mesh.hex.generate, swept), at the plan's size; each of its `copies` is meshed the same way by a plan of its own (`Plan-<copy>`, saved). No fallback: a cell that does not mesh all-hex is the error. Replies the cuts made and skipped, the cells, the element count, the smallest scaled Jacobian, `all_hex`, whether the cells joined node to node into one mesh (`conforming`), the mapped features, what today's meshers cannot build yet (`pending`: the O-grid and butterfly rings, which need the projection blocking mesher, #399), the `unmapped` features, the copies and the mesher's reply (`mesh`); `replaced` names the meshes it replaced. A plan object is checked and saved first"#,
+    params: r#"{"plan": "Plan-Base" (a saved plan) | {plan object, as mesh.plan replies it; edited}, "name"?: "Plan-Base" (the name an object is saved under; default Plan-<body>), "symmetry"?: true (a projection plan on a body mirror symmetric across planes through its middle square to the sweep meshes one cell and mirrors it: false meshes the whole body)} — carries the plan out with today's meshers: replaces the plan's earlier partitions (`<plan>-cut<k>`) with its `cuts` (datum planes and partitions of the plan's body only; a cut the kernel cannot make, or that leaves a cell no mesher takes, is left out and reported in `skipped_cuts`), then meshes the body: its cells swept together with structured hex (mesh.cells, `default` hex) when there are cuts, else the body swept (mesh.hex.generate, swept), at the plan's size; each of its `copies` is meshed the same way by a plan of its own (`Plan-<copy>`, saved). No fallback: a cell that does not mesh all-hex is the error. Replies the cuts made and skipped, the cells, the element count, the smallest scaled Jacobian, `all_hex`, whether the cells joined node to node into one mesh (`conforming`), the mapped features, what today's meshers cannot build yet (`pending`: the O-grid and butterfly rings, which need the projection blocking mesher, #399), the `unmapped` features, the copies and the mesher's reply (`mesh`); `untagged_faces` names each face of the meshed bodies no element face is tagged with (a set by it finds nothing: only a face narrower than the elements beside it); `replaced` names the meshes it replaced. A plan object is checked and saved first"#,
     form: Some(super::forms::MESH_PLAN_APPLY),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -1042,18 +1045,47 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         take_replaced(&mut reply, &r);
         copies.push(json!({"body": copy, "plan": copy_name, "cells": r["cells"], "elements": r["elements"], "min_scaled_jacobian": r["min_scaled_jacobian"], "conforming": r["conforming"]}));
     }
+    let untagged = untagged_faces(s, &plan_bodies(s, p)?);
     let mins: Vec<f64> = std::iter::once(&reply).chain(&copies).filter_map(|r| r["min_scaled_jacobian"].as_f64()).collect();
     if let Some(o) = reply.as_object_mut() {
         if !copies.is_empty() {
             o.insert("copies".into(), json!(copies));
             o.insert("min_scaled_jacobian".into(), json!(mins.iter().copied().reduce(f64::min)));
         }
+        o.insert("untagged_faces".into(), json!(untagged));
         let results: Vec<&str> = s.solved_steps().collect();
         if o.get("replaced").is_some_and(|r| r.as_array().is_some_and(|a| !a.is_empty())) && !results.is_empty() {
             o.insert("results_cleared".into(), json!(results));
         }
     }
     Ok(reply)
+}
+
+/// The faces of `bodies` (as the design has them) that no element face of the mesh is tagged
+/// with: a set, load or relaxation by such a face finds nothing. Only a face narrower than the
+/// elements beside it should be one.
+fn untagged_faces(s: &Session, bodies: &[String]) -> Vec<Value> {
+    let c = s.model.classification();
+    let mut tagged: BTreeSet<u32> = BTreeSet::new();
+    for t in c.elements().values() {
+        tagged.extend(t.faces.values().copied());
+    }
+    let tagged: BTreeSet<(&str, &str)> = tagged
+        .iter()
+        .filter_map(|&t| c.entity(t))
+        .filter_map(|g| match &g.entity {
+            Entity::Face(name) => Some((g.body.as_str(), name.as_str())),
+            _ => None,
+        })
+        .collect();
+    let Some(design) = s.design.as_deref() else { return Vec::new() };
+    bodies
+        .iter()
+        .filter_map(|b| design.body(b))
+        .flat_map(|b| b.faces().iter().map(move |f| (b.name.as_str(), f.name.as_str())))
+        .filter(|key| !tagged.contains(key))
+        .map(|(body, face)| json!({"body": body, "face": face}))
+        .collect()
 }
 
 /// The bodies `mesh.plan.apply` fills (replace.rs): the cells of the plan's body and of its
@@ -1861,6 +1893,41 @@ mod acceptance {
         assert!(lo > 0.65, "per corner min scaled Jacobian {worst:?}");
     }
 
+    /// The enclosure base meshed by its symmetry (one quarter, mirrored twice): each corner
+    /// boss cuts the inner fillet into two pieces and a sliver narrower than the elements, and
+    /// every face of every cell, the slivers and their mirror images among them, has element
+    /// faces tagged with it, so a set by any face finds the mesh (#494).
+    #[test]
+    fn a_symmetric_filleted_base_tags_every_face_of_every_cell() {
+        let mut commands = vec![
+            json!({"command": "solid.box", "params": {"length": 56, "width": 42, "height": 16, "body_name": "Base"}}),
+            json!({"command": "solid.fillet", "params": {"edges": [[0, 0, 8], [56, 0, 8], [56, 42, 8], [0, 42, 8]], "radius": 5}}),
+            json!({"command": "solid.shell", "params": {"faces": [[28, 21, 16]], "thickness": 3, "body": "Base"}}),
+        ];
+        for (x, y) in [(-1.0, -1.0), (57.0, -1.0), (-1.0, 43.0), (57.0, 43.0)] {
+            commands.push(json!({"command": "solid.cylinder", "params": {"diameter": 13, "height": 16, "base": [x, y, 0], "operation": "join", "targets": ["Base"]}}));
+        }
+        let (_d, mut s) = open(json!(commands));
+        let plan = s.execute("mesh.plan", &json!({"body": "Base", "size": 1.5, "layers": 2})).unwrap();
+        let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
+        assert_eq!(r["cells"].as_array().map(Vec::len), Some(4), "{r}");
+        assert_eq!(r["untagged_faces"], json!([]), "{r}");
+        let design = s.design.clone().unwrap();
+        let mut blends = 0;
+        for cell in r["cells"].as_array().unwrap() {
+            let body = design.body(cell.as_str().unwrap()).unwrap();
+            for (k, face) in body.faces().iter().enumerate() {
+                blends += usize::from(face.name.contains("blend"));
+                let set = format!("F{k}");
+                s.execute("model.set.create", &json!({"name": set, "geometry": [{"body": body.name, "face": face.name}]})).unwrap();
+                let faces = s.model.resolve_set(&set).map(|x| x.faces.len());
+                assert!(faces.as_ref().is_ok_and(|n| *n > 0), "face {} of {}: {faces:?}", face.name, body.name);
+                s.execute("model.set.delete", &json!({"name": set})).unwrap();
+            }
+        }
+        assert!(blends >= 4, "the inner fillet's pieces");
+    }
+
     /// An enclosure base: a box with rounded vertical edges, shelled open at the top, a screw
     /// boss joined at each corner (centred outside it, nearly touching the inner fillet) with a
     /// blind hole, and standoffs on the floor. Each boss's ring frames the whole circle,
@@ -1968,9 +2035,10 @@ mod tests_support {
     }
 
     /// All hex, one conforming mesh on the geometry, the volume the body's, no element below
-    /// `min_sj` or above `max_edge_ratio`, no free faces inside.
+    /// `min_sj` or above `max_edge_ratio`, no free faces inside, every face of the body tagged.
     pub(super) fn accept(s: &mut Session, r: &Value, min_sj: f64, max_edge_ratio: f64) {
         assert_eq!((r["all_hex"].as_bool(), r["conforming"].as_bool()), (Some(true), Some(true)), "{r}");
+        assert_eq!(r["untagged_faces"], json!([]), "faces no element face is tagged with");
         let q = s.execute("mesh.quality", &json!({})).unwrap();
         let sj = q["metrics"]["scaled_jacobian"]["min"].as_f64().unwrap();
         let er = q["metrics"]["edge_ratio"]["max"].as_f64().unwrap();

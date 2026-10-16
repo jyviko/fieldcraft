@@ -1246,7 +1246,9 @@ pub const HEX_OCTREE: &[Field] = &[
     SURFACE,
     HEX_SIZE,
     TOLERANCE,
-    int("max_depth", "Refinement levels", 0, 5).help("How many times the octree may refine near the surface.").hint("3"),
+    int("max_depth", "Refinement levels", 0, 5)
+        .help("The most times the octree may refine near thin walls, narrow faces and curves; the levels the part needs are found before meshing.")
+        .hint("4"),
     int("max_elements", "Max elements", 1, 10_000_000).help("Cap on the elements created."),
     int("attempts", "Attempts", 1, 8).help("How many times to retry with adjusted settings.").hint("4"),
     int("max_sweeps", "Optimiser sweeps", 0, 10_000).help("The most smoothing sweeps.").hint("300"),

@@ -15,7 +15,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const HEX_OCTREE: CommandSpec = CommandSpec {
     id: "mesh.hex.octree",
     label: "Octree Hex Mesh",
-    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size in the interior, mm; default 1/25 of the bounding-box diagonal), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal), "max_depth": 3 (refinement levels below the size, each a third, 0..=5), "max_elements": 2000000 (1..=10000000; default the session limit), "attempts": 4 (builds, refining where one failed, 1..=8), "max_sweeps": 300 (optimiser sweeps, 0..=10000), and the boundary options of mesh.tet.generate ("weld", "weld_distance", "feature_angle")} — replaces the meshes of the bodies it meshes (as mesh.tet.generate; other bodies keep theirs) with an unstructured all-hex8 mesh of any part: an adaptive 3-refinement grid with conforming transition templates, a core inside the part, two boundary layers that capture every B-rep face boundary and sharp edge, and untangling. Every element is proven valid; boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name), so sets by geometry resolve. Reports per body the elements, quality, volume and grid statistics"#,
+    params: r#"{"body": "Body1" (default: every body of the open design) or "surface": 0 (an imported surface), "size": 2.0 (element size in the interior, mm; default 1/25 of the bounding-box diagonal), "tolerance": 0.05 (chordal tolerance of the tessellation, mm; default 1e-3 of the diagonal), "max_depth": 4 (the most refinement levels below the size, each a third, 0..=5; the levels the part's thinnest wall and narrowest face need are found before meshing, and a part that needs more levels or more than max_elements cells fails at once, naming them), "max_elements": 2000000 (1..=10000000; default the session limit), "attempts": 4 (builds, refining where one failed, 1..=8), "max_sweeps": 300 (optimiser sweeps, 0..=10000), and the boundary options of mesh.tet.generate ("weld", "weld_distance", "feature_angle")} — replaces the meshes of the bodies it meshes (as mesh.tet.generate; other bodies keep theirs) with an unstructured all-hex8 mesh of any part: an adaptive 3-refinement grid with conforming transition templates, a core inside the part, two boundary layers that capture every B-rep face boundary and sharp edge, and untangling. Every element is proven valid; boundary element faces are tagged with their B-rep faces (named as in geometry.bodies; by index when a face has no name), so sets by geometry resolve. Reports per body the elements, quality, volume and grid statistics (root cell size, levels, the thinnest wall and narrowest face, cells per level after refinement and after closure)"#,
     form: Some(super::forms::HEX_OCTREE),
     kind: CommandKind::Model,
     requires: &[Requirement::Geometry],
@@ -90,7 +90,7 @@ fn hex_octree(s: &mut Session, p: &Value) -> Result<Value> {
             "quality": {"min_scaled_jacobian": r.min_scaled_jacobian, "mean_scaled_jacobian": r.mean_scaled_jacobian},
             "volume": r.volume,
             "surface_volume": r.surface_volume,
-            "grid": {"cells": r.grid_cells, "core_elements": r.core_elements, "layer_elements": r.layer_elements, "frame": r.frame},
+            "grid": {"cells": r.grid_cells, "root_size": r.root_size, "levels": r.levels, "thinnest_wall": finite(r.thinnest_wall), "narrowest_patch": finite(r.narrowest_patch), "refined_per_level": r.refined_cells, "closed_per_level": r.closed_cells, "core_elements": r.core_elements, "layer_elements": r.layer_elements, "frame": r.frame},
             "features": {"corners": r.corners, "curves": r.curves, "patches": r.patches},
             "attempts": r.attempts,
             "retries": r.retries,
@@ -100,6 +100,11 @@ fn hex_octree(s: &mut Session, p: &Value) -> Result<Value> {
     let (nodes, elements) = (model.nodes().len(), model.elements().len());
     s.model = model;
     Ok(cleared.report(s, json!({"bodies": report, "nodes": nodes, "elements": elements})))
+}
+
+/// A measure that may be infinite (no wall, no bounded face) as JSON: `null` when it is.
+fn finite(x: f64) -> Value {
+    if x.is_finite() { json!(x) } else { Value::Null }
 }
 
 #[cfg(test)]

@@ -8,12 +8,14 @@
 //!    patches when they are orthogonal and cover more area than the coordinate axes do, the
 //!    coordinate axes otherwise (octree methods are orientation dependent; N. Pietroni et al.,
 //!    *Hex-mesh generation and processing: a survey*, ACM TOG 42(2), 2022, §4.6).
-//! 2. **Grid** ([`grid`]). Root cubes of the target size over the part's box, refined as a
-//!    27-tree where a B-rep face curves (its normals turn by more than
-//!    [`OctreeOptions::curvature_angle`] inside a cell), where the part is thin (fewer than
-//!    [`OctreeOptions::thickness_cells`] cells across, measured along the inward normal of each
-//!    boundary triangle) and where a patch is narrow, then strongly balanced and closed under the
-//!    transition templates.
+//! 2. **Grid** ([`grid`]). Root cubes over the part's box, refined as a 27-tree where a B-rep
+//!    face curves (its normals turn by more than [`OctreeOptions::curvature_angle`] inside a
+//!    cell), where the part is thin (fewer than [`OctreeOptions::thickness_cells`] cells across a
+//!    wall, measured along the inward normal of each boundary triangle to a face that faces it)
+//!    and where a patch is narrow, then strongly balanced and closed under the transition
+//!    templates. The levels the thinnest wall and narrowest patch need are found before the grid
+//!    is built, and the root size is chosen with them (see [`octree_hex_mesh`]'s plan): a part
+//!    that needs more levels or cells than allowed fails at once, with the numbers.
 //! 3. **Conforming hexahedra** ([`templates`]): the 3-refinement node-marking templates
 //!    (R. Schneiders, 1996; Y. Ito, A. M. Shih, B. K. Soni, IJNME 77(13), 2009), so every grid
 //!    leaf becomes 1, 4, 11, 22 or 27 hexahedra and the grid is conforming by construction.
@@ -57,9 +59,16 @@
 //! of a finer region is split, and the split spreads to the region's orthogonal hull (H. Tong,
 //! Y. J. Zhang, *MCHex*, arXiv 2511.02064, 2025, meet the same limit with the same templates).
 //! Curvature therefore refines only [`OctreeOptions::curvature_levels`] levels; deeper levels
-//! follow thickness and narrow faces, whose refined regions are mostly convex. Schneiders'
-//! modified edge rule (every edge with a marked end split in three) or the dual schemes are the
-//! upgrade path.
+//! follow thickness and narrow faces, whose refined regions are mostly convex. On curved parts
+//! this closure is most of the grid: the corpus's rounded box goes from 8 266 refined cells to
+//! 85 460 after closure, the loft from 6 650 to 80 438, the vase from 4 206 to 53 346 (thin walls
+//! cost little: the I-beam's 469 304 cells are all refinement). Schneiders' modified edge rule
+//! (an edge with a marked end split in three; R. Schneiders, VKI lecture series 2000-4, §5.3)
+//! makes every concave face a full 3 × 3 face and the seven-marked cell the 27-split, but the
+//! cell with six marks (a concave edge) then needs a template whose two faces at the unmarked
+//! edge both fold their three columns into that edge, and no valid construction of it with
+//! usable element quality is published; the dual schemes need a 2-refinement grid. Both remain
+//! the upgrade path.
 //!
 //! # Determinism and bounds
 //! The same boundary and options give the same mesh: grid cells are processed in sorted order,
@@ -96,7 +105,9 @@ use smooth::{Constraint, Optimizer};
 /// Options and caps of [`octree_hex_mesh`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct OctreeOptions {
-    /// Refinement levels below the root cells (each one a third of the size), at most 8.
+    /// The most refinement levels below the root cells (each one a third of the size), at most
+    /// 8. The levels the part's walls and narrow faces need are found before the grid is built
+    /// (see [`octree_hex_mesh`]); a part that needs more fails at once.
     pub max_depth: u8,
     /// The most grid cells and the most output elements.
     pub max_elements: usize,
@@ -124,7 +135,7 @@ pub struct OctreeOptions {
 impl Default for OctreeOptions {
     fn default() -> Self {
         OctreeOptions {
-            max_depth: 2,
+            max_depth: 4,
             max_elements: 5_000_000,
             curvature_angle: 25.0,
             curvature_levels: 1,
@@ -145,6 +156,17 @@ pub struct OctreeReport {
     pub attempts: usize,
     /// Grid leaves of the last build.
     pub grid_cells: usize,
+    /// The root cells' edge and the deepest level of the grid (see [`octree_hex_mesh`]).
+    pub root_size: f64,
+    pub levels: u8,
+    /// The thinnest wall and the narrowest patch the grid was chosen for (`∞` when none).
+    pub thinnest_wall: f64,
+    pub narrowest_patch: f64,
+    /// Grid leaves per level (root level first) of the last build: after the refinement
+    /// criteria (size, curvature, thickness, narrow patches and retry hints), and after balance
+    /// and closure.
+    pub refined_cells: Vec<usize>,
+    pub closed_cells: Vec<usize>,
     /// Core elements (from the grid) and boundary-layer elements.
     pub core_elements: usize,
     pub layer_elements: usize,
@@ -192,6 +214,11 @@ const FIT_STAGES: &[f64] = &[1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0];
 const MIN_SNAP_QUALITY: f64 = 0.05;
 /// Elements below this corner scaled Jacobian are improved by compass search.
 const IMPROVE_BELOW: f64 = 0.3;
+/// The two faces of a wall open by at most this angle (degrees) from facing each other. Where a
+/// convex edge is sharper (a wedge), the part is thinner at a distance `d` from the edge than
+/// `2 d tan(30°) ≈ 1.15 d`, so the cells that resolve the edge do not resolve its thickness; at
+/// blunter edges they do, and the edge is a feature, not a wall.
+const WALL_OPENING: f64 = 60.0;
 /// Closure rounds of the grid (each splits at least one leaf; the cell cap bounds them too).
 const CLOSURE_ROUNDS: usize = 1000;
 /// Rounds of the core clean-up (each drops at least one element).
@@ -214,40 +241,8 @@ enum Attempt {
 pub fn octree_hex_mesh(surface: &BoundarySurface, field: &dyn SizeField, options: &OctreeOptions) -> Result<OctreeHexMesh> {
     check_options(options)?;
     let g = Geometry::new(surface, options.sharp_angle, options.blade_angle)?;
-    let frame = choose_frame(&g);
-    let mut lo = [f64::INFINITY; 3];
-    let mut hi = [f64::NEG_INFINITY; 3];
-    for &p in surface.points() {
-        let u = to_frame(&frame, p);
-        for k in 0..3 {
-            lo[k] = lo[k].min(u[k]);
-            hi[k] = hi[k].max(u[k]);
-        }
-    }
-    let centre_u = [0, 1, 2].map(|k| 0.5 * (lo[k] + hi[k]));
-    let h = checked_size(field, from_frame(&frame, centre_u))?;
-    let mut roots = [0i64; 3];
-    for k in 0..3 {
-        let n = ((hi[k] - lo[k]) / h + 1.0).ceil();
-        if !(n.is_finite() && n >= 1.0 && n <= options.max_elements as f64) {
-            return Err(Error::Limit(format!("a size of {h} needs {n} root cells along an axis")));
-        }
-        roots[k] = n as i64;
-    }
-    let origin = [0, 1, 2].map(|k| centre_u[k] - 0.5 * roots[k] as f64 * h);
-    let ctx = Context {
-        g: &g,
-        field,
-        options,
-        frame,
-        origin,
-        h,
-        roots,
-        thickness: triangle_thickness(&g),
-        outside_memo: RefCell::new(HashMap::new()),
-        last_leaves: Cell::new(0),
-        too_thin: Cell::new(f64::INFINITY),
-    };
+    let thickness = triangle_thickness(&g);
+    let ctx = plan(&g, field, options, &thickness)?;
     let mut hints: Vec<P> = Vec::new();
     let mut retries: Vec<String> = Vec::new();
     for attempt in 0..options.attempts {
@@ -277,6 +272,143 @@ pub fn octree_hex_mesh(surface: &BoundarySurface, field: &dyn SizeField, options
         }
     }
     Err(Error::Failed(format!("octree hex meshing failed after {} builds: {}", retries.len(), retries.join("; "))))
+}
+
+/// What the part's walls and narrow patches ask of the grid, measured before it is built.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Needs {
+    /// The thinnest wall (`∞` when no two faces face each other).
+    wall: f64,
+    /// The narrowest patch (`∞` when no patch is bounded by curves).
+    patch: f64,
+    /// The largest cell edge that puts [`OctreeOptions::thickness_cells`] cells across every wall
+    /// and two across every patch.
+    edge: f64,
+}
+
+impl Needs {
+    fn of(g: &Geometry, thickness: &[f64], options: &OctreeOptions) -> Needs {
+        let wall = thickness.iter().copied().filter(|t| t.is_finite() && *t > 0.0).fold(f64::INFINITY, f64::min);
+        let patch = g.patches.iter().map(|p| p.width).filter(|w| w.is_finite() && *w > 0.0).fold(f64::INFINITY, f64::min);
+        let by_wall = if options.thickness_cells > 0.0 { wall / options.thickness_cells } else { f64::INFINITY };
+        Needs { wall, patch, edge: by_wall.min(0.5 * patch) }
+    }
+
+    /// Why the cells must be as small as [`Needs::edge`].
+    fn reason(&self, options: &OctreeOptions) -> String {
+        if options.thickness_cells > 0.0 && self.wall / options.thickness_cells <= 0.5 * self.patch {
+            format!("the part has walls {:.4} thick, which {} cells across need cells of {:.4}", self.wall, options.thickness_cells, self.edge)
+        } else {
+            format!("the part has a face {:.4} wide, which two cells across need cells of {:.4}", self.patch, self.edge)
+        }
+    }
+}
+
+/// The levels below a root cell of edge `h` down to cells no larger than `edge` (`None` past
+/// [`grid::MAX_LEVEL`]).
+fn levels_below(h: f64, edge: f64) -> Option<u8> {
+    (0..=grid::MAX_LEVEL).find(|&d| h / 3f64.powi(i32::from(d)) <= edge * (1.0 + 1e-9))
+}
+
+/// Choose the grid before building it. An octree's cell sizes are the root size divided by
+/// powers of 3, so the cells across the thinnest wall come out up to 3 times smaller than the
+/// wall needs, and the cells along every wall are counted in cubes of that. The root cells at
+/// the requested size, with the walls refined as deep as they need, come first; when that does
+/// not fit the levels or cells allowed, the root cells are shrunk (by less than 3 times) so that
+/// one level fewer reaches exactly the size the walls need, which puts far fewer cells along
+/// them. When neither fits, meshing fails here, before anything is built, naming the wall, the
+/// levels and the cells each would take. Rebuilds after a failure refine within the levels the
+/// plan reached, and at least one level below [`OctreeOptions::curvature_levels`].
+fn plan<'a>(g: &'a Geometry<'a>, field: &'a dyn SizeField, options: &'a OctreeOptions, thickness: &'a [f64]) -> Result<Context<'a>> {
+    let frame = choose_frame(g);
+    let (lo, hi) = frame_box(g, &frame);
+    let centre = from_frame(&frame, [0, 1, 2].map(|k| 0.5 * (lo[k] + hi[k])));
+    let h = checked_size(field, centre)?;
+    let needs = Needs::of(g, thickness, options);
+    let deep = levels_below(h, needs.edge);
+    let mut anchors: Vec<(f64, Option<u8>)> = vec![(h, deep)];
+    if let Some(d) = deep.filter(|&d| d >= 1) {
+        anchors.push((needs.edge * 3f64.powi(i32::from(d) - 1), Some(d - 1)));
+    }
+    let mut best: Option<(usize, Context<'a>)> = None;
+    let mut refused: Vec<String> = Vec::new();
+    for (root, levels) in anchors {
+        let Some(levels) = levels.filter(|&l| l <= options.max_depth) else {
+            let n = levels.map_or_else(|| format!("more than {}", grid::MAX_LEVEL), |l| l.to_string());
+            refused.push(format!("{n} levels below a size of {root:.4}"));
+            continue;
+        };
+        let ctx = Context::new(g, field, options, thickness, frame, root, (lo, hi), needs)?;
+        match ctx.refine(options.max_elements)? {
+            Refined::Within(tree) => {
+                let mut closed = tree.clone();
+                match closed.close(CLOSURE_ROUNDS, &|k| ctx.outside(k)) {
+                    Ok(()) => {
+                        let n = closed.leaf_count();
+                        // Rebuilds refine within the levels the plan reached, and one level
+                        // below the curvature levels.
+                        let deepest = closed.level_counts().iter().rposition(|&c| c > 0).and_then(|l| u8::try_from(l).ok()).unwrap_or(0);
+                        let depth = deepest.max(options.curvature_levels.saturating_add(1)).min(options.max_depth);
+                        let mut tree = tree;
+                        tree.set_depth(depth)?;
+                        closed.set_depth(depth)?;
+                        *ctx.refined_cells.borrow_mut() = tree.level_counts();
+                        *ctx.refined.borrow_mut() = Some(tree);
+                        *ctx.closed.borrow_mut() = Some(closed);
+                        best = Some((n, ctx));
+                        break;
+                    }
+                    Err(Error::Limit(_)) => {
+                        refused.push(format!(
+                            "{levels} levels below a size of {root:.4}, {} grid cells refined and more than {} after balancing and closure",
+                            tree.leaf_count(),
+                            options.max_elements
+                        ));
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Refined::Over { level, at_least } => {
+                refused.push(format!("{levels} levels below a size of {root:.4}, more than {at_least} grid cells by level {level}"));
+            }
+        }
+    }
+    match best {
+        Some((_, ctx)) => Ok(ctx),
+        None if needs.edge.is_finite() => Err(Error::Limit(format!(
+            "{}: {}; the limits are {} levels (`max_depth`) and {} cells (`max_elements`); use a smaller size, more levels or cells, or a structured (swept) hex mesh",
+            needs.reason(options),
+            refused.join("; or "),
+            options.max_depth,
+            options.max_elements
+        ))),
+        None => Err(Error::Limit(format!(
+            "the grid at a size of {h:.4} needs {}; the limits are {} levels (`max_depth`) and {} cells (`max_elements`)",
+            refused.join("; or "),
+            options.max_depth,
+            options.max_elements
+        ))),
+    }
+}
+
+/// The part's box in the frame's coordinates.
+fn frame_box(g: &Geometry, frame: &[[f64; 3]; 3]) -> (P, P) {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for &p in g.surface.points() {
+        let u = to_frame(frame, p);
+        for k in 0..3 {
+            lo[k] = lo[k].min(u[k]);
+            hi[k] = hi[k].max(u[k]);
+        }
+    }
+    (lo, hi)
+}
+
+/// A grid refined by the criteria, or how far the refinement got before the cell limit.
+enum Refined {
+    Within(Tree),
+    Over { level: u8, at_least: usize },
 }
 
 fn check_options(o: &OctreeOptions) -> Result<()> {
@@ -343,13 +475,20 @@ fn choose_frame(g: &Geometry) -> [[f64; 3]; 3] {
 }
 
 /// The distance through the part from each boundary triangle: a ray from its centre along the
-/// inward normal to the next triangle (`∞` when none).
+/// inward normal to the far side of the wall, a triangle whose normal opens from the opposite of
+/// this one by at most [`WALL_OPENING`] (`∞` when the ray first leaves through another face). A
+/// ray that starts near a convex edge leaves through the face beyond the edge after a distance
+/// that only measures how near the edge it started; the faces of a wall face each other.
 fn triangle_thickness(g: &Geometry) -> Vec<f64> {
     let far = 2.0 * norm(sub(g.bounds.hi, g.bounds.lo)) + 1.0;
+    let opposed = -WALL_OPENING.to_radians().cos();
     (0..g.surface.triangles().len() as u32)
         .map(|t| {
             let n = g.normals.get(t as usize).copied().unwrap_or([0.0; 3]);
-            g.ray(g.triangle_centre(t), n.map(|x| -x), far, t).map_or(f64::INFINITY, |(_, s)| s)
+            match g.ray(g.triangle_centre(t), n.map(|x| -x), far, t) {
+                Some((hit, s)) if g.normals.get(hit as usize).is_some_and(|&m| dot(m, n) <= opposed) => s,
+                _ => f64::INFINITY,
+            }
         })
         .collect()
 }
@@ -374,12 +513,17 @@ struct Context<'a> {
     origin: P,
     h: f64,
     roots: [i64; 3],
-    thickness: Vec<f64>,
+    thickness: &'a [f64],
+    needs: Needs,
     outside_memo: RefCell<HashMap<grid::Key, bool>>,
+    /// The grid refined by the criteria (before hints and closure), and closed, kept from the
+    /// plan: the first build takes the closed grid, rebuilds refine the other near their hints.
+    refined: RefCell<Option<Tree>>,
+    closed: RefCell<Option<Tree>>,
     /// Grid leaves of the last build.
     last_leaves: Cell<usize>,
-    /// The thinnest wall the deepest cells cannot cross in `thickness_cells` (∞ when none).
-    too_thin: Cell<f64>,
+    /// Leaves per level of the last build after the refinement criteria.
+    refined_cells: RefCell<Vec<usize>>,
 }
 
 /// The mesh while its boundary layers are built: points, elements, their target sizes and how
@@ -390,6 +534,51 @@ struct Work {
     size: Vec<f64>,
     role: Vec<Constraint>,
     core_count: usize,
+}
+
+impl<'a> Context<'a> {
+    /// Root cells of edge `h` over the part's box `(lo, hi)` (in the frame's coordinates).
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        g: &'a Geometry<'a>,
+        field: &'a dyn SizeField,
+        options: &'a OctreeOptions,
+        thickness: &'a [f64],
+        frame: [[f64; 3]; 3],
+        h: f64,
+        (lo, hi): (P, P),
+        needs: Needs,
+    ) -> Result<Context<'a>> {
+        if !(h.is_finite() && h > 0.0) {
+            return Err(Error::Invalid(format!("a root cell size of {h}")));
+        }
+        let centre_u = [0, 1, 2].map(|k| 0.5 * (lo[k] + hi[k]));
+        let mut roots = [0i64; 3];
+        for k in 0..3 {
+            let n = ((hi[k] - lo[k]) / h + 1.0).ceil();
+            if !(n.is_finite() && n >= 1.0 && n <= options.max_elements as f64) {
+                return Err(Error::Limit(format!("a size of {h} needs {n} root cells along an axis")));
+            }
+            roots[k] = n as i64;
+        }
+        let origin = [0, 1, 2].map(|k| centre_u[k] - 0.5 * roots[k] as f64 * h);
+        Ok(Context {
+            g,
+            field,
+            options,
+            frame,
+            origin,
+            h,
+            roots,
+            thickness,
+            needs,
+            outside_memo: RefCell::new(HashMap::new()),
+            refined: RefCell::new(None),
+            closed: RefCell::new(None),
+            last_leaves: Cell::new(0),
+            refined_cells: RefCell::new(Vec::new()),
+        })
+    }
 }
 
 impl Context<'_> {
@@ -429,16 +618,12 @@ impl Context<'_> {
             if key.0 < self.options.curvature_levels && dot(f, n) < cos {
                 return Ok(true);
             }
-            if let Some(&th) = self.thickness.get(t as usize)
-                && th < self.options.thickness_cells * e
-            {
-                if key.0 + 1 >= self.options.max_depth && th < self.options.thickness_cells * e / 3.0 {
-                    self.too_thin.set(self.too_thin.get().min(th));
-                }
+            // (With a relative margin, so cells planned at exactly the size a wall needs stay.)
+            if self.thickness.get(t as usize).is_some_and(|&th| th * (1.0 + 1e-9) < self.options.thickness_cells * e) {
                 return Ok(true);
             }
             // Narrow patches (a hole's wall, a thin rim) need cells across them.
-            if self.g.tri_patch.get(t as usize).and_then(|&p| self.g.patches.get(p as usize)).is_some_and(|pt| pt.width < 2.0 * e) {
+            if self.g.tri_patch.get(t as usize).and_then(|&p| self.g.patches.get(p as usize)).is_some_and(|pt| pt.width * (1.0 + 1e-9) < 2.0 * e) {
                 return Ok(true);
             }
         }
@@ -477,25 +662,69 @@ impl Context<'_> {
         out
     }
 
-    /// The refined, balanced and closed grid; leaves near `hints` (where an earlier build
-    /// failed) are split once more.
-    fn tree(&self, hints: &[P], max_leaves: usize) -> Result<Tree> {
-        let mut tree = Tree::new(self.roots, self.options.max_depth, max_leaves)?;
+    /// The grid refined level by level where [`Context::needs_split`] asks, within `max_leaves`
+    /// cells; past them, how far it got and a lower bound on the cells it needs (the cells so far
+    /// and the splits the level still asks for).
+    fn refine(&self, max_leaves: usize) -> Result<Refined> {
+        let roots = self.roots.iter().try_fold(1usize, |a, &n| usize::try_from(n).ok().and_then(|n| a.checked_mul(n))).unwrap_or(usize::MAX);
+        let mut tree = match Tree::new(self.roots, self.options.max_depth, max_leaves) {
+            Err(Error::Limit(_)) => return Ok(Refined::Over { level: 0, at_least: roots }),
+            other => other?,
+        };
         for level in 0..self.options.max_depth {
-            for key in tree.sorted_leaves() {
-                if key.0 == level && self.needs_split(key)? {
-                    tree.split(key)?;
+            fieldcraft_model::progress::check()?;
+            let keys: Vec<grid::Key> = tree.sorted_leaves().into_iter().filter(|k| k.0 == level).collect();
+            for (i, &key) in keys.iter().enumerate() {
+                if !self.needs_split(key)? {
+                    continue;
+                }
+                match tree.split(key) {
+                    Ok(()) => {}
+                    Err(Error::Limit(_)) if tree.leaf_count() + 26 > max_leaves => {
+                        let mut more = 1usize;
+                        for &k in keys.get(i + 1..).unwrap_or(&[]) {
+                            if self.needs_split(k)? {
+                                more += 1;
+                            }
+                        }
+                        return Ok(Refined::Over { level: level + 1, at_least: tree.leaf_count().saturating_add(26usize.saturating_mul(more)) });
+                    }
+                    Err(e) => return Err(e),
                 }
             }
         }
+        Ok(Refined::Within(tree))
+    }
+
+    /// The refined, balanced and closed grid; leaves near `hints` (where an earlier build
+    /// failed) are split once more.
+    fn tree(&self, hints: &[P], max_leaves: usize) -> Result<Tree> {
+        if hints.is_empty()
+            && let Some(t) = self.closed.borrow_mut().take()
+            && t.leaf_count() <= max_leaves
+        {
+            return Ok(t);
+        }
+        let kept = self.refined.borrow().clone();
+        let mut tree = match kept {
+            Some(t) => t,
+            None => match self.refine(max_leaves)? {
+                Refined::Within(t) => t,
+                Refined::Over { level, at_least } => {
+                    return Err(Error::Limit(format!("the grid needs more than {at_least} cells by level {level}; the limit is {max_leaves}")));
+                }
+            },
+        };
+        tree.set_max_leaves(max_leaves)?;
         if !hints.is_empty() {
-            let near: Vec<HashSet<grid::Key>> = (0..self.options.max_depth).map(|l| self.hint_cells(hints, l)).collect();
+            let near: Vec<HashSet<grid::Key>> = (0..tree.depth).map(|l| self.hint_cells(hints, l)).collect();
             let split: Vec<grid::Key> =
                 tree.sorted_leaves().into_iter().filter(|k| near.get(usize::from(k.0)).is_some_and(|s| s.contains(k))).collect();
             for key in split {
                 tree.split(key)?;
             }
         }
+        *self.refined_cells.borrow_mut() = tree.level_counts();
         tree.close(CLOSURE_ROUNDS, &|k| self.outside(k))?;
         Ok(tree)
     }
@@ -508,8 +737,11 @@ impl Context<'_> {
         if lattice.hexes.len() > self.options.max_elements {
             return Err(Error::Limit(format!("the grid has {} elements; the limit is {}", lattice.hexes.len(), self.options.max_elements)));
         }
-        let unit = self.h / tree.span(0) as f64;
-        let points: Vec<P> = lattice.points.iter().map(|q| from_frame(&self.frame, [0, 1, 2].map(|k| self.origin[k] + q[k] as f64 * unit))).collect();
+        // A lattice coordinate over the root span is an exact ratio, rounded once, so a point's
+        // position does not depend on how deep the lattice is.
+        let span = tree.span(0) as f64;
+        let points: Vec<P> =
+            lattice.points.iter().map(|q| from_frame(&self.frame, [0, 1, 2].map(|k| self.origin[k] + q[k] as f64 / span * self.h))).collect();
 
         // Core.
         let dist: Vec<f64> = points.iter().map(|&p| g.nearest(p, |_| true).map_or(0.0, |x| x.2.sqrt())).collect();
@@ -529,15 +761,6 @@ impl Context<'_> {
         let qb = topo::boundary(&w.hexes);
         let q: Vec<[u32; 4]> = qb.iter().map(|x| x.1).collect();
         if let Some(r) = check_topology(g, &q) {
-            let thin = self.too_thin.get();
-            if thin.is_finite() {
-                return Err(Error::Failed(format!(
-                    "{}: the part has walls {thin:.3} thick, thinner than {} cells of the deepest level ({:.3}); use a smaller size, more levels, or a structured (swept) hex mesh",
-                    r.why,
-                    self.options.thickness_cells,
-                    self.edge(self.options.max_depth)
-                )));
-            }
             return Ok(Attempt::Retry(r));
         }
 
@@ -747,6 +970,12 @@ impl Context<'_> {
         let report = OctreeReport {
             attempts: 0,
             grid_cells: tree.leaf_count(),
+            root_size: self.h,
+            levels: tree.level_counts().iter().rposition(|&n| n > 0).and_then(|l| u8::try_from(l).ok()).unwrap_or(0),
+            thinnest_wall: self.needs.wall,
+            narrowest_patch: self.needs.patch,
+            refined_cells: self.refined_cells.borrow().clone(),
+            closed_cells: tree.level_counts(),
             core_elements: w.core_count,
             layer_elements: w.hexes.len() - w.core_count,
             frame: self.frame,

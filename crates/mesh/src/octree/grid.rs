@@ -88,6 +88,35 @@ impl Tree {
         self.leaves
     }
 
+    /// Allow at most `max_leaves` leaves from now on (an error when there are more already).
+    pub fn set_max_leaves(&mut self, max_leaves: usize) -> Result<()> {
+        if self.leaves > max_leaves {
+            return Err(Error::Limit(format!("the grid has {} cells; the limit is {max_leaves}", self.leaves)));
+        }
+        self.max_leaves = max_leaves;
+        Ok(())
+    }
+
+    /// Make `depth` the deepest level allowed (an error when a leaf is deeper already).
+    pub fn set_depth(&mut self, depth: u8) -> Result<()> {
+        if depth > MAX_LEVEL || self.nodes.keys().any(|k| k.0 > depth) {
+            return Err(Error::Invalid(format!("grid depth {depth} is shallower than its leaves")));
+        }
+        self.depth = depth;
+        Ok(())
+    }
+
+    /// Leaves per level, root level first.
+    pub fn level_counts(&self) -> Vec<usize> {
+        let mut out = vec![0; usize::from(self.depth) + 1];
+        for (k, _) in self.nodes.iter().filter(|(_, leaf)| **leaf) {
+            if let Some(n) = out.get_mut(usize::from(k.0)) {
+                *n += 1;
+            }
+        }
+        out
+    }
+
     /// Whether `key` is a leaf.
     pub fn is_leaf(&self, key: &Key) -> bool {
         self.nodes.get(key).copied().unwrap_or(false)

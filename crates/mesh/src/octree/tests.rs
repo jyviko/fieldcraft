@@ -96,3 +96,66 @@ fn a_sphere_meshes() {
     let r = &m.report;
     assert!(((r.volume - r.surface_volume) / r.surface_volume).abs() < 0.01, "{r:?}");
 }
+
+#[test]
+fn a_slab_gets_the_levels_its_thickness_needs_up_front() {
+    // 1 mm thick: three cells across need cells of 1/3, two levels below a size of 3.
+    let s = box_surface([0.0; 3], [12.0, 9.0, 1.0]);
+    let m = octree_hex_mesh(&s, &UniformSize(3.0), &OctreeOptions::default()).unwrap();
+    let r = &m.report;
+    assert_eq!(r.thinnest_wall, 1.0, "{r:?}");
+    assert_eq!(r.root_size, 3.0, "{r:?}");
+    assert_eq!(r.levels, 2, "{r:?}");
+    assert_eq!(r.attempts, 1, "{r:?}");
+    assert!((r.volume - 108.0).abs() < 1e-9 * 108.0, "{r:?}");
+}
+
+#[test]
+fn walls_beyond_the_limits_fail_before_anything_is_built() {
+    let s = box_surface([0.0; 3], [12.0, 9.0, 1.0]);
+    // Too few levels: the requested size needs 2, the shrunk root 1.
+    let shallow = OctreeOptions { max_depth: 0, curvature_levels: 0, ..OctreeOptions::default() };
+    let e = octree_hex_mesh(&s, &UniformSize(3.0), &shallow).unwrap_err().to_string();
+    assert!(e.contains("walls 1.0000 thick") && e.contains("levels"), "{e}");
+    // Too few cells: refused with the count, at once.
+    let small = OctreeOptions { max_elements: 50, ..OctreeOptions::default() };
+    let start = std::time::Instant::now();
+    let e = octree_hex_mesh(&s, &UniformSize(3.0), &small).unwrap_err().to_string();
+    assert!(e.contains("walls 1.0000 thick") && e.contains("more than"), "{e}");
+    assert!(start.elapsed().as_secs_f64() < 5.0);
+}
+
+#[test]
+fn the_root_shrinks_when_the_requested_size_would_need_too_many_cells() {
+    // A size of 8 needs 3 levels for a 1 mm wall (cells of 0.30); a root of 3 needs 2 levels
+    // with cells of exactly 1/3. With 2 levels allowed only the shrunk root fits.
+    let s = box_surface([0.0; 3], [12.0, 9.0, 1.0]);
+    let o = OctreeOptions { max_depth: 2, ..OctreeOptions::default() };
+    let m = octree_hex_mesh(&s, &UniformSize(8.0), &o).unwrap();
+    assert!((m.report.root_size - 3.0).abs() < 1e-12, "{:?}", m.report);
+    assert_eq!(m.report.levels, 2);
+}
+
+#[test]
+fn hostile_options_are_errors() {
+    let s = box_surface([0.0; 3], [12.0, 9.0, 1.0]);
+    for o in [
+        OctreeOptions { max_depth: 9, ..OctreeOptions::default() },
+        OctreeOptions { max_elements: 0, ..OctreeOptions::default() },
+        OctreeOptions { max_elements: 1, ..OctreeOptions::default() },
+        OctreeOptions { thickness_cells: f64::NAN, ..OctreeOptions::default() },
+    ] {
+        assert!(octree_hex_mesh(&s, &UniformSize(3.0), &o).is_err(), "{o:?}");
+    }
+    // The deepest grid allowed on a size far below the part: refused by the cell limit.
+    let deep = OctreeOptions { max_depth: 5, max_elements: 10_000, ..OctreeOptions::default() };
+    assert!(octree_hex_mesh(&s, &UniformSize(0.05), &deep).is_err());
+}
+
+#[test]
+fn meshing_is_deterministic() {
+    let s = cylinder_surface(5.0, 8.0, 64);
+    let a = octree_hex_mesh(&s, &UniformSize(2.0), &OctreeOptions::default()).unwrap();
+    let b = octree_hex_mesh(&s, &UniformSize(2.0), &OctreeOptions::default()).unwrap();
+    assert_eq!(a, b);
+}

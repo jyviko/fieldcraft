@@ -574,6 +574,15 @@ Delaunay methods with Voronoi/ODT improvement, then (2) all-hex and hex-dominant
   hexahedral mesh of it exists (Mitchell's parity condition). Concave refined regions therefore
   need their concave cells refined. The fix is a modified edge rule (an edge with a marked end
   splits in three) with buffer layers in the face templates.
+- **Finding (#85, 2026-10).** Read in full (§5.3, Fig. 57–61). Under the modified rule the 256 mark
+  patterns fall into 14 classes of split edges; the faces are plain, one-corner (5 quads),
+  three-edge (template 2a, 10 quads) or full 3 × 3, so parity never fails and seven marks are the
+  27-split. The six-mark cell (a concave edge) is given only as a sketch ("the two trapezoidal
+  faces become a dangling face"). Working it through: its two 2a faces both fold their three
+  columns into the one unsplit edge, the cell corner there has five surface quads, and in the
+  sheet structure the chord through the two trapezoids must cross a transverse sheet twice, so
+  every hexahedral filling folds a sheet back on itself near that edge. No construction with
+  usable quality was found, so the rule was not adopted.
 
 **B1.8 Ito, Shih, Soni 2009, Octree-based reasonable-quality hexahedral mesh generation using a
 new set of refinement templates.** **Verdict: reference.**
@@ -606,7 +615,10 @@ new set of refinement templates.** **Verdict: reference.**
 feature map of B1.4 (patches first); padding plus a pillow per patch (B1.4 §3.4); the B6.4 energy
 with a fitting term (B1.4 §3.5); the certified check of B6.6 with local repair. The dual schemes
 of B1.5 were not adopted (B1.6 finding); concave refined regions are closed by refinement (B1.7
-limit), so curvature refines one level only.
+limit), so curvature refines one level only. Since #85 the levels and root size are chosen before
+the grid is built, from the thinnest wall (measured to a facing wall only: a ray that leaves
+through the face beyond a convex edge measures how near the edge it started, not a wall) and the
+narrowest patch; a part beyond the levels or cells allowed fails at once with the numbers.
 
 ---
 

@@ -64,6 +64,8 @@ pub(crate) struct Layout {
     /// The frame round each circle group: its axis point (the sweep's coordinate 0) and the
     /// smallest half-side of the frame.
     pub(crate) frames: Vec<(V3, f64)>,
+    /// The ring-and-pillow layout ([`super::pillow`]): the pillow's least thickness along the walls.
+    pub(crate) pillow: Option<f64>,
 }
 
 impl Layout {
@@ -80,13 +82,14 @@ impl Layout {
     pub(crate) fn summary(&self) -> String {
         let layers: Vec<String> = self.layers.iter().map(|(s, d, w)| format!("{s} {d:.4} mm ({w})")).collect();
         format!(
-            "projection blocking: {} blocks over a {}×{}×{} grid, {} circle(s) ringed{}",
+            "projection blocking: {} blocks over a {}×{}×{} grid, {} circle(s) ringed{}{}",
             self.topology.blocks.len(),
             self.planes[0].saturating_sub(1),
             self.planes[1].saturating_sub(1),
             self.planes[2].saturating_sub(1),
             self.rings,
-            if layers.is_empty() { String::new() } else { format!(", a blend layer on {}", layers.join(", ")) }
+            if layers.is_empty() { String::new() } else { format!(", a blend layer on {}", layers.join(", ")) },
+            self.pillow.map_or_else(String::new, |t| format!(", a pillow layer from the carved grid to the walls ({t:.4} mm and more)"))
         )
     }
 }
@@ -107,7 +110,7 @@ pub(crate) struct Input<'a> {
 
 /// The local frame: local axis `a` is world axis `PERM[k][a]`, `k` the sweep's world axis (a
 /// cyclic permutation, so blocks keep their handedness).
-const PERM: [[usize; 3]; 3] = [[1, 2, 0], [2, 0, 1], [0, 1, 2]];
+pub(super) const PERM: [[usize; 3]; 3] = [[1, 2, 0], [2, 0, 1], [0, 1, 2]];
 
 const SIDE_NAMES: [[&str; 2]; 3] = [["-x", "+x"], ["-y", "+y"], ["-z", "+z"]];
 
@@ -700,7 +703,7 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
             (world([g.c[0], g.c[1], 0.0]), half)
         })
         .collect();
-    Ok(Layout { topology: t, rings, layers, planes: planes.each_ref().map(Vec::len), frames })
+    Ok(Layout { topology: t, rings, layers, planes: planes.each_ref().map(Vec::len), frames, pillow: None })
 }
 
 /// The ring that takes in the blend with points `pts` (local frame): a blend round a corner of
@@ -811,7 +814,7 @@ fn hex_faces(b: &[u32; 8]) -> [[u32; 4]; 6] {
 }
 
 /// The Jacobian determinant at corner 1 of a hex8 block (positive: right-handed).
-fn corner_det(c: &[V3; 8]) -> f64 {
+pub(super) fn corner_det(c: &[V3; 8]) -> f64 {
     dot(sub(c[1], c[0]), cross(sub(c[3], c[0]), sub(c[4], c[0])))
 }
 

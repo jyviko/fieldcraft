@@ -35,6 +35,7 @@ use fieldcraft_model::{CutRole, Datum, MeshPlan, Partition, PlanCut, PlanFeature
 use serde_json::{Value, json};
 
 mod blocks;
+mod pillow;
 
 use crate::requirement::Requirement;
 use crate::schema::ProblemKind;
@@ -969,7 +970,9 @@ fn layout_of(design: &Design, plan: &MeshPlan) -> Result<Option<std::result::Res
         None
     };
     let input = blocks::Input { shape, surfaces: &surfaces, mesh: &mesh, direction, rings: &plan.rings, blends: blend_faces, shell, size: plan.size };
-    Ok(Some(blocks::layout(&input)))
+    // The grid layout, else the ring-and-pillow layout (a section at an angle to the axes); the
+    // grid's reason when neither fits.
+    Ok(Some(blocks::layout(&input).or_else(|why| pillow::layout(&input).map_err(|other| format!("{why}; ring and pillow: {other}")))))
 }
 
 fn plan(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1653,6 +1656,39 @@ mod tests {
         }
     }
 
+    /// A cut's rectangular opening whose ends are faces of the body (a pocket's end walls): the
+    /// kernel cannot cut along a face (#427), so those frame sides move one element (twice the
+    /// gap) out of the opening; the sides off every face stay where they are (#455).
+    #[test]
+    fn a_frame_side_on_an_opening_s_end_face_moves_one_element_out_of_it() {
+        let x = [1.0, 0.0, 0.0];
+        let y = [0.0, 1.0, 0.0];
+        let z = [0.0, 0.0, 1.0];
+        let body = super::Clearance {
+            corners: vec![[-20.0, -20.0, 0.0], [190.0, 20.0, 16.0]],
+            // The pocket's end walls (x = 48 and x = 130), facing into it.
+            planes: vec![(x, 48.0, "F6:side:l4"), (x.map(|c| -c), -130.0, "F6:side:l2")],
+            curved: Vec::new(),
+            gap: 1.5,
+        };
+        let pocket = super::Imprint {
+            feature: 6,
+            cut: true,
+            extent: None,
+            sides: vec![(x, 48.0), (x, 130.0), (y, -7.0), (y, 7.0)],
+            center: Some([89.0, 0.0, 4.0]),
+        };
+        let mut cuts = Vec::new();
+        super::imprint_cuts(&[pocket], z, &body, &mut cuts);
+        let at = |n: [f64; 3]| -> Vec<f64> {
+            let mut v: Vec<f64> = cuts.iter().filter(|c| super::parallel(c.normal, n)).map(|c| super::dot(c.point, n)).collect();
+            v.sort_by(f64::total_cmp);
+            v
+        };
+        assert_eq!(at(x), vec![45.0, 133.0], "{cuts:?}");
+        assert_eq!(at(y), vec![-7.0, 7.0], "{cuts:?}");
+    }
+
     #[test]
     fn a_fillet_is_a_blend_layer_and_hostile_plans_are_refused() {
         let (_d, mut s) = open(json!([
@@ -1893,30 +1929,26 @@ mod acceptance {
         accept(&mut s, &r, 0.5, 10.0);
     }
 
-    /// The crank arm sample, whole: the back pocket's frame cuts lie on its end faces (x = 48 and
-    /// x = 130), which the kernel cannot cut along; the plan moves them one element out of the
-    /// pocket, so both are made and the cells between the bosses mesh structured (#455).
+    /// The crank arm sample, whole (#455, #190): its sides are at an angle to the axes and its
+    /// root arcs meet the bosses at a kink, so it takes the ring-and-pillow layout: each boss an
+    /// annulus from its bore or pedal hole to its circle through every level, the arm a carved
+    /// grid with a pillow layer to the outline and the bosses' circles, a corner block at each
+    /// root. One conforming all-hex mesh from the plan alone, at three sizes.
     #[test]
-    fn the_crank_arm_meshes_from_its_plan_with_its_pocket_framed() {
-        for size in [3.0, 4.0] {
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn the_crank_arm_meshes_from_its_plan_with_rings_and_a_pillow() {
+        for size in [2.5, 3.0, 4.0] {
             let mut s = Session::default();
             s.execute("file.sample", &json!({"name": "crank-arm"})).unwrap();
             s.execute("mesh.clear", &json!({})).unwrap();
             s.execute("geometry.partition.delete", &json!({"name": "Half"})).unwrap();
             let plan = s.execute("mesh.plan", &json!({"body": "CrankArm", "size": size})).unwrap();
-            let frames: Vec<f64> =
-                plan["cuts"].as_array().unwrap().iter().filter(|c| c["feature"] == 6).map(|c| c["point"][0].as_f64().unwrap()).collect();
-            assert_eq!(frames.len(), 2, "{plan}");
-            assert!(frames.iter().all(|x| (x - (48.0 - size)).abs() < 1e-9 || (x - (130.0 + size)).abs() < 1e-9), "{frames:?}");
+            assert_eq!(plan["mesher"], "project", "size {size}: {plan}");
+            assert!(plan["cuts"].as_array().is_none_or(Vec::is_empty), "{plan}");
             let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
-            assert_eq!(r["skipped_cuts"], json!([]), "{r}");
-            assert_eq!((r["all_hex"].as_bool(), r["conforming"].as_bool()), (Some(true), Some(true)), "{r}");
-            let q = s.execute("mesh.quality", &json!({})).unwrap();
-            let (sj, er) = (q["metrics"]["scaled_jacobian"]["min"].as_f64().unwrap(), q["metrics"]["edge_ratio"]["max"].as_f64().unwrap());
-            assert!(sj >= 0.45 && er <= 10.0, "size {size}: min scaled Jacobian {sj}, max edge ratio {er}");
-            let geometry: f64 =
-                s.execute("geometry.bodies", &json!({})).unwrap().as_array().unwrap().iter().map(|b| b["volume"].as_f64().unwrap()).sum();
-            assert!((q["volume"].as_f64().unwrap() - geometry).abs() < 0.01 * geometry, "{q}");
+            let layout = r["layout"].as_str().unwrap();
+            assert!(layout.contains("2 circle(s) ringed") && layout.contains("pillow layer"), "{r}");
+            accept(&mut s, &r, 0.5, 7.0);
         }
     }
 

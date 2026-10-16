@@ -37,6 +37,24 @@ fn child() {
         end_session();
         return;
     }
+    // Dying while starting up, before any command: in a graphics driver, with or without what
+    // a native crash handler caught.
+    if mode == "startup" || mode == "native" {
+        phase("window");
+        phase("adapter request");
+        set_environment("Renderer: Vulkan Test GPU (driver 1.2.3)");
+        phase("device creation");
+        if mode == "native" {
+            let (info, dump) = native_paths().unwrap();
+            fs::write(
+                info,
+                r#"{"code":"0xC0000005","name":"EXCEPTION_ACCESS_VIOLATION","detail":"read of 0x0000000000000010","address":"0x00007FFB12345678","module":"C:\\Windows\\System32\\DriverStore\\igvk64.dll","offset":"0x64EA72","thread":4242}"#,
+            )
+            .unwrap();
+            fs::write(dump, b"MDMP fake").unwrap();
+        }
+        std::process::abort();
+    }
     let mut s = Session { crash_journal: true, ..Default::default() };
     s.execute("mesh.node.add", &node(1)).unwrap();
     s.execute("mesh.node.add", &node(2)).unwrap();
@@ -273,5 +291,93 @@ fn reports_are_pruned_to_the_limits() {
     assert_eq!(left.len(), MAX_REPORTS);
     assert!(left.iter().all(|r| r.kind == "panic"), "recovered ones go first");
     assert_eq!(clear(&d, None), MAX_REPORTS);
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_crash_while_starting_up_names_the_step_and_the_renderer() {
+    let d = fresh_dir("startup");
+    let (_, ok) = run_child(&d, "startup");
+    assert!(!ok, "the child aborted");
+    let (_, ok) = run_child(&d, "idle");
+    assert!(ok);
+    let (s, v) = only_report(&d);
+    assert_eq!(s.kind, "unclean_exit");
+    assert!(s.message.contains("during startup (device creation"), "{}", s.message);
+    assert_eq!(v["location"], "unclean exit during startup: device creation");
+    assert_eq!(v["startup_phase"]["step"], "device creation");
+    assert_eq!(v["system"]["environment"], "Renderer: Vulkan Test GPU (driver 1.2.3)", "{v}");
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_native_crash_is_reported_with_the_module_the_step_and_the_minidump() {
+    let d = fresh_dir("native");
+    let (_, ok) = run_child(&d, "native");
+    assert!(!ok, "the child aborted");
+    let (_, ok) = run_child(&d, "idle");
+    assert!(ok);
+    let (s, v) = only_report(&d);
+    assert_eq!(s.kind, "unclean_exit");
+    assert!(s.message.contains("EXCEPTION_ACCESS_VIOLATION (0xC0000005) in igvk64.dll+0x64EA72 during startup (device creation"), "{}", s.message);
+    assert_eq!(v["location"], "native exception in igvk64.dll+0x64EA72");
+    assert_eq!(v["native"]["thread"], 4242);
+    let bt: Vec<&str> = v["backtrace"].as_array().unwrap().iter().map(|f| f.as_str().unwrap()).collect();
+    assert_eq!(bt[0], "0xC0000005 EXCEPTION_ACCESS_VIOLATION (read of 0x0000000000000010)");
+    assert!(bt[1].contains("igvk64.dll+0x64EA72"), "{bt:?}");
+    assert_eq!(fs::read(v["minidump_path"].as_str().unwrap()).unwrap(), b"MDMP fake");
+    assert_eq!(v["files"]["minidump"], MINIDUMP_FILE);
+    // Nothing is left behind next to the journals.
+    let left: Vec<_> = fs::read_dir(d.join("sessions")).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert!(left.iter().all(|n| n.to_string_lossy().ends_with(".jsonl")), "{left:?}");
+    // The same crash again is counted, not written again.
+    let _ = run_child(&d, "native");
+    let _ = run_child(&d, "idle");
+    let (s, _) = only_report(&d);
+    assert_eq!(s.count, 2);
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn native_crash_files_without_their_journal_are_removed() {
+    let d = fresh_dir("stray");
+    fs::create_dir_all(d.join("sessions")).unwrap();
+    fs::write(d.join("sessions/20261015-000000-1-0.native.json"), "{}").unwrap();
+    fs::write(d.join("sessions/20261015-000000-1-0.dmp"), "MDMP").unwrap();
+    let (_, ok) = run_child(&d, "idle");
+    assert!(ok);
+    assert!(fs::read_dir(d.join("sessions")).unwrap().next().is_none());
+    assert!(list(&d).is_empty());
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_hostile_native_file_still_makes_a_bounded_report() {
+    // Whatever the filter left (cut short, wrong types, huge strings) is data, never trusted.
+    for native in [json!({}), json!({"code": 5, "module": ["x"], "thread": "t"}), json!({"code": "x".repeat(100_000), "module": "y".repeat(100_000)})]
+    {
+        let p = native_panic(&native, "1.0", "then", "between commands", "idle");
+        assert!(p.message.len() < 2_000 && p.backtrace.iter().all(|f| f.len() < 1_000), "{}", p.message.len());
+        assert!(p.location.starts_with("native exception in "));
+    }
+}
+
+#[test]
+fn startup_steps_survive_a_rebase_and_running_ends_startup() {
+    let d = fresh_dir("rebase");
+    fs::create_dir_all(d.join("sessions")).unwrap();
+    let mut j = Journal::open(&d, &build(), now());
+    j.phase = Some(json!({"phase": "first frame", "ms": 5}).to_string());
+    j.environment = Some(json!({"environment": "Renderer: X"}).to_string());
+    j.rebase(&json!("new"), 1);
+    // Read through the journal's own handle, as `read_live_journal` does (Windows).
+    let r = read_journal_file(j.file.as_ref().unwrap().try_clone().unwrap());
+    assert_eq!(r.phase, Some(("first frame".to_string(), 5)));
+    assert_eq!(r.environment.as_deref(), Some("Renderer: X"));
+    j.write(&json!({"phase": RUNNING, "ms": 9}).to_string());
+    let r = read_journal_file(j.file.as_ref().unwrap().try_clone().unwrap());
+    assert_eq!(r.phase, Some((RUNNING.to_string(), 9)));
+    assert!(from_journal(r, None).fields.get("startup_phase").is_none(), "a running app is past startup");
+    drop(j);
     let _ = fs::remove_dir_all(&d);
 }

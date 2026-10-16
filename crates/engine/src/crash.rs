@@ -19,8 +19,16 @@
 //!   written again; at most [`MAX_NEW_PER_SESSION`] new reports per run, [`MAX_REPORTS`]
 //!   reports, [`MAX_TOTAL_BYTES`] on disk, nothing older than [`MAX_AGE_DAYS`] days.
 //!
+//! - **Startup steps** ([`phase`]): the journal keeps the step the app is in while it gets its
+//!   window and graphics device up (window, graphics instance, adapter, device, shader
+//!   compiles, first frame, [`RUNNING`]), so a crash inside a graphics driver still says where
+//!   it happened, and the renderer ([`set_environment`]) once the adapter is picked.
+//! - **Native crashes** (Windows): the app's exception filter writes what it caught (exception
+//!   code, faulting module and offset) and a minidump next to the journal ([`native_paths`]);
+//!   the next start puts both into the unclean exit's report.
+//!
 //! Reports are folders `crashes/<time>-<signature>/` holding `report.json`, and when known
-//! `model.fieldcraft`, `replay.json` and `log.txt`. Nothing is ever sent anywhere.
+//! `model.fieldcraft`, `replay.json`, `log.txt` and `minidump.dmp`. Nothing is ever sent anywhere.
 //!
 //! Adapted from SolidCraft's `crates/engine/src/crash.rs` (MIT OR Apache-2.0), see ATTRIBUTION.md.
 
@@ -61,6 +69,8 @@ const LOG_TAIL_BYTES: usize = 64 << 10;
 pub const FORMAT: &str = "fieldcraft-crash/1";
 /// The model file in a report folder.
 pub const MODEL_FILE: &str = "model.fieldcraft";
+/// The minidump of a native crash in a report folder (Windows).
+pub const MINIDUMP_FILE: &str = "minidump.dmp";
 
 /// What the app is (shown in every report).
 #[derive(Clone, Debug, Default)]
@@ -112,7 +122,12 @@ struct State {
     known: Mutex<HashMap<u64, (u64, String)>>,
     written: AtomicUsize,
     started: u64,
+    /// When the app started, in milliseconds (for how far into the start a step came).
+    started_ms: u64,
 }
+
+/// The startup step that ends startup: the app is up and drawing.
+pub const RUNNING: &str = "running";
 
 static STATE: OnceLock<State> = OnceLock::new();
 /// The hook is writing a report (a panic inside it must not write another).
@@ -145,6 +160,10 @@ pub fn default_dir() -> Option<PathBuf> {
 
 fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// `secs` since 1970 as (year, month, day, hour, minute, second) in UTC.
@@ -304,10 +323,12 @@ fn frames(bt: &str) -> Vec<String> {
 pub fn install(dir: PathBuf, build: Build) -> Vec<Summary> {
     let _ = fs::create_dir_all(dir.join("sessions"));
     let started = now();
+    let started_ms = now_ms();
     for path in dead_journals(&dir) {
         unclean_exit(&dir, &build, &path);
         remove_journal(&path);
     }
+    remove_stray_native_files(&dir);
     prune(&dir, started);
     // Reports the user has been told about (by id).
     let seen_file = dir.join(".seen");
@@ -320,7 +341,10 @@ pub fn install(dir: PathBuf, build: Build) -> Vec<Summary> {
     let _ = fs::write(&seen_file, all.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join("\n"));
     let known = all.into_iter().filter_map(|s| sig_of(&s.id).map(|sig| (sig, (0, s.id)))).collect();
     let journal = Journal::open(&dir, &build, started);
-    if STATE.set(State { dir, build, journal: Mutex::new(journal), known: Mutex::new(known), written: AtomicUsize::new(0), started }).is_ok() {
+    if STATE
+        .set(State { dir, build, journal: Mutex::new(journal), known: Mutex::new(known), written: AtomicUsize::new(0), started, started_ms })
+        .is_ok()
+    {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if !hook(info) {
@@ -345,6 +369,59 @@ pub fn activity(what: &str) {
         j.write(&line);
         j.activity = Some(line);
         j.activity_text = Some(what.to_string());
+    }
+}
+
+/// The app is about to start a step of getting up (`"window"`, `"device creation"`, …;
+/// [`RUNNING`] once it draws): the journal keeps the latest, so a crash nothing catches (inside a
+/// graphics driver, say) is still reported with the step it happened in.
+pub fn phase(step: &str) {
+    let Some(s) = STATE.get() else { return };
+    if let Ok(mut j) = s.journal.lock() {
+        if j.phase_step.as_deref() == Some(step) {
+            return;
+        }
+        let line = json!({ "phase": limited(step, 200), "ms": now_ms().saturating_sub(s.started_ms) }).to_string();
+        j.write(&line);
+        j.phase = Some(line);
+        j.phase_step = Some(step.to_string());
+    }
+}
+
+/// The renderer, GPU and driver, once known (one short line): reports show it as
+/// `system.environment`.
+pub fn set_environment(text: &str) {
+    let Some(s) = STATE.get() else { return };
+    if let Ok(mut j) = s.journal.lock() {
+        let line = json!({ "environment": limited(text, 500) }).to_string();
+        j.write(&line);
+        j.environment = Some(line);
+    }
+}
+
+/// Where a native crash handler writes what it caught for this run: a small JSON file
+/// (`code`, `name`, `address`, `module`, `offset`, `detail`, `thread`) and a minidump. The next
+/// start reports both with this run's unclean exit. `None` before [`install`] or without a journal.
+pub fn native_paths() -> Option<(PathBuf, PathBuf)> {
+    let s = STATE.get()?;
+    let j = s.journal.lock().ok()?;
+    j.path.as_ref().map(|p| native_paths_for(p))
+}
+
+fn native_paths_for(journal: &Path) -> (PathBuf, PathBuf) {
+    (journal.with_extension("native.json"), journal.with_extension("dmp"))
+}
+
+/// Native crash files whose journal is gone (their report was written, or never will be).
+fn remove_stray_native_files(dir: &Path) {
+    for path in fs::read_dir(dir.join("sessions")).into_iter().flatten().flatten().map(|e| e.path()).take(200) {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        let stem = name.strip_suffix(".native.json").or_else(|| name.strip_suffix(".dmp"));
+        if let Some(stem) = stem
+            && !path.with_file_name(format!("{stem}.jsonl")).exists()
+        {
+            let _ = fs::remove_file(&path);
+        }
     }
 }
 
@@ -514,6 +591,7 @@ pub(crate) fn command_done(s: &Session, journaled: bool, changed: bool, id: &str
             base: json!(if crashed { "the model as it was when the command started" } else { "the model after the command" }),
             notes: notes.clone(),
             fields: serde_json::Map::new(),
+            attach: Vec::new(),
             log_pid: Some(std::process::id()),
         };
         write_report(state, kind, Some(&p), extra);
@@ -571,6 +649,10 @@ struct Journal {
     /// The latest activity's line and text (kept across rebases).
     activity: Option<String>,
     activity_text: Option<String>,
+    /// The latest startup step's line and name, and the renderer's line (kept across rebases).
+    phase: Option<String>,
+    phase_step: Option<String>,
+    environment: Option<String>,
 }
 
 impl Journal {
@@ -590,6 +672,9 @@ impl Journal {
             running_at: None,
             activity: None,
             activity_text: None,
+            phase: None,
+            phase_step: None,
+            environment: None,
         };
         j.rebase(&json!("new"), 0);
         j.document = None;
@@ -621,7 +706,7 @@ impl Journal {
         let h = self.header.clone();
         self.write(&h);
         self.record(&json!({ "base": base }));
-        if let Some(line) = self.activity.clone() {
+        for line in [self.activity.clone(), self.phase.clone(), self.environment.clone()].into_iter().flatten() {
             self.write(&line);
         }
     }
@@ -680,6 +765,10 @@ struct JournalRead {
     reported: bool,
     /// The latest activity outside commands.
     activity: Option<String>,
+    /// The latest startup step and how many milliseconds after the start it began.
+    phase: Option<(String, u64)>,
+    /// The renderer, once known.
+    environment: Option<String>,
 }
 
 // Read through the lock-owning file object: on Windows an independently opened handle cannot
@@ -711,6 +800,14 @@ fn parse_journal(text: &str) -> JournalRead {
         }
         if let Some(a) = v.get("activity").and_then(Value::as_str) {
             r.activity = Some(a.to_string());
+            continue;
+        }
+        if let Some(p) = v.get("phase").and_then(Value::as_str) {
+            r.phase = Some((p.to_string(), v.get("ms").and_then(Value::as_u64).unwrap_or(0)));
+            continue;
+        }
+        if let Some(e) = v.get("environment").and_then(Value::as_str) {
+            r.environment = Some(e.to_string());
             continue;
         }
         r.reported = v.get("reported").is_some();
@@ -766,6 +863,8 @@ fn dead_journals(dir: &Path) -> Vec<PathBuf> {
 
 fn unclean_exit(dir: &Path, build: &Build, journal: &Path) {
     let j = read_journal(journal);
+    let (native_file, dump_file) = native_paths_for(journal);
+    let native = fs::read(&native_file).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).filter(Value::is_object);
     if j.reported {
         return;
     }
@@ -773,17 +872,33 @@ fn unclean_exit(dir: &Path, build: &Build, journal: &Path) {
     let when = j.header.get("start").and_then(Value::as_str).unwrap_or("?").to_string();
     let pid = j.header.get("pid").and_then(Value::as_u64).and_then(|p| u32::try_from(p).ok());
     let doing = j.in_flight.as_ref().and_then(|c| c.get("command")).and_then(Value::as_str).map(str::to_string);
-    let during = match (&doing, &j.activity) {
-        (Some(c), _) => format!("while running `{c}`"),
-        (None, Some(a)) => format!("between commands (last: {a})"),
-        (None, None) => "between commands".to_string(),
+    // A run that never got to drawing died while starting up: say at which step.
+    let starting = j.phase.as_ref().filter(|(p, _)| p != RUNNING).cloned();
+    let during = match (&starting, &doing, &j.activity) {
+        (Some((p, ms)), ..) => format!("during startup ({p}, {:.1} s after launch)", *ms as f64 / 1000.0),
+        (None, Some(c), _) => format!("while running `{c}`"),
+        (None, None, Some(a)) => format!("between commands (last: {a})"),
+        (None, None, None) => "between commands".to_string(),
     };
-    let p = Panic {
-        message: format!("FieldCraft {was} (started {when}) ended without a clean exit {during}"),
-        location: format!("unclean exit in {}", doing.as_deref().unwrap_or("(between commands)")),
-        thread: "(unknown)".into(),
-        backtrace: Vec::new(),
-        signature: signature("unclean exit", doing.as_deref().or(j.activity.as_deref()).unwrap_or("idle")),
+    // What the run was doing, for the signature: the step, the command or the last activity.
+    let what = starting
+        .as_ref()
+        .map(|(p, _)| format!("startup: {p}"))
+        .or_else(|| doing.clone())
+        .or_else(|| j.activity.clone())
+        .unwrap_or_else(|| "idle".into());
+    let p = match &native {
+        Some(n) => native_panic(n, &was, &when, &during, &what),
+        None => Panic {
+            message: format!("FieldCraft {was} (started {when}) ended without a clean exit {during}"),
+            location: match (&starting, &doing) {
+                (Some((p, _)), _) => format!("unclean exit during startup: {p}"),
+                (None, c) => format!("unclean exit in {}", c.as_deref().unwrap_or("(between commands)")),
+            },
+            thread: "(unknown)".into(),
+            backtrace: Vec::new(),
+            signature: signature("unclean exit", &what),
+        },
     };
     // A temporary state just for this report (the app's own is not set up yet).
     let state = State {
@@ -799,10 +914,14 @@ fn unclean_exit(dir: &Path, build: &Build, journal: &Path) {
             running_at: None,
             activity: None,
             activity_text: None,
+            phase: None,
+            phase_step: None,
+            environment: None,
         }),
         known: Mutex::new(list(dir).into_iter().filter_map(|s| sig_of(&s.id).map(|sig| (sig, (0, s.id)))).collect()),
         written: AtomicUsize::new(0),
         started: now(),
+        started_ms: now_ms(),
     };
     if let Ok(mut k) = state.known.lock()
         && let Some(e) = k.get_mut(&p.signature)
@@ -813,7 +932,39 @@ fn unclean_exit(dir: &Path, build: &Build, journal: &Path) {
         bump(dir, &id, n);
         return;
     }
-    write_report(&state, "unclean_exit", Some(&p), from_journal(j, pid));
+    let mut extra = from_journal(j, pid);
+    if let Some(n) = native {
+        extra.fields.insert("native".into(), n);
+        if dump_file.is_file() {
+            extra.attach.push(("minidump".into(), dump_file, MINIDUMP_FILE.into()));
+        }
+    }
+    write_report(&state, "unclean_exit", Some(&p), extra);
+}
+
+/// The report of a crash a native exception filter caught (`native`: what it wrote, untrusted:
+/// every field is cut to length and may be missing).
+fn native_panic(native: &Value, was: &str, when: &str, during: &str, what: &str) -> Panic {
+    let field = |k: &str| native.get(k).and_then(Value::as_str).map(|v| limited(v, 300));
+    let code = field("code").unwrap_or_else(|| "?".into());
+    let name = field("name").unwrap_or_else(|| "exception".into());
+    let module = field("module").unwrap_or_else(|| "(unknown module)".into());
+    let short = module.rsplit(['\\', '/']).next().unwrap_or(&module).to_string();
+    let offset = field("offset").unwrap_or_else(|| "?".into());
+    let at = format!("{short}+{offset}");
+    let mut backtrace = vec![format!("{code} {name}{}", field("detail").map(|d| format!(" ({d})")).unwrap_or_default())];
+    backtrace.push(format!("at {module}+{offset} (address {})", field("address").unwrap_or_else(|| "?".into())));
+    if let Some(t) = native.get("thread").and_then(Value::as_u64) {
+        backtrace.push(format!("on thread {t}"));
+    }
+    Panic {
+        message: format!("FieldCraft {was} (started {when}) crashed with {name} ({code}) in {at} {during}"),
+        location: format!("native exception in {at}"),
+        thread: native.get("thread").and_then(Value::as_u64).map_or_else(|| "(unknown)".into(), |t| format!("native thread {t}")),
+        backtrace,
+        // The place: the module and the offset into it (signature() ignores the digits).
+        signature: signature("native exception", &format!("{code} {short} {what}")),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -826,8 +977,10 @@ struct Extra {
     recent: Vec<Value>,
     base: Value,
     notes: Vec<String>,
-    /// More top-level fields for the report (`last_activity`).
+    /// More top-level fields for the report (`last_activity`, `startup_phase`, `native`).
     fields: serde_json::Map<String, Value>,
+    /// Files moved into the report's folder: (key in `files`, source, name in the folder).
+    attach: Vec<(String, PathBuf, String)>,
     /// The process whose log lines go into the report.
     log_pid: Option<u32>,
 }
@@ -874,6 +1027,12 @@ fn from_journal(j: JournalRead, log_pid: Option<u32>) -> Extra {
     if let Some(a) = j.activity {
         fields.insert("last_activity".into(), json!(a));
     }
+    if let Some((p, ms)) = j.phase.filter(|(p, _)| p != RUNNING) {
+        fields.insert("startup_phase".into(), json!({ "step": p, "ms": ms }));
+    }
+    if let Some(e) = j.environment {
+        fields.insert("environment".into(), json!(e));
+    }
     Extra {
         command: j.in_flight,
         model,
@@ -885,6 +1044,7 @@ fn from_journal(j: JournalRead, log_pid: Option<u32>) -> Extra {
         },
         notes,
         fields,
+        attach: Vec::new(),
         log_pid,
     }
 }
@@ -928,6 +1088,12 @@ fn write_report(state: &State, kind: &str, p: Option<&Panic>, extra: Extra) -> O
     {
         files.insert("log".into(), json!("log.txt"));
     }
+    for (key, from, name) in &extra.attach {
+        let to = folder.join(name);
+        if fs::rename(from, &to).is_ok() || fs::copy(from, &to).is_ok() {
+            files.insert(key.clone(), json!(name));
+        }
+    }
     let reproduce = files.contains_key("replay").then(|| format!("fieldcraft-cli crashes replay {id}"));
     let mut report = json!({
         "format": FORMAT,
@@ -953,6 +1119,13 @@ fn write_report(state: &State, kind: &str, p: Option<&Panic>, extra: Extra) -> O
     });
     if let Some(r) = report.as_object_mut() {
         for (k, v) in extra.fields {
+            // The renderer goes with the system it ran on.
+            if k == "environment"
+                && let Some(system) = r.get_mut("system").and_then(Value::as_object_mut)
+            {
+                system.insert(k, v);
+                continue;
+            }
             r.entry(k).or_insert(v);
         }
     }
@@ -1076,7 +1249,7 @@ pub fn read(dir: &Path, id: &str) -> std::result::Result<Value, String> {
     let folder = dir.join(id);
     let mut v = read_report_file(&folder.join("report.json")).ok_or_else(|| format!("no crash report `{id}`"))?;
     v["path"] = json!(folder.to_string_lossy());
-    for (k, f) in [("model_path", MODEL_FILE), ("replay_path", "replay.json"), ("log_path", "log.txt")] {
+    for (k, f) in [("model_path", MODEL_FILE), ("replay_path", "replay.json"), ("log_path", "log.txt"), ("minidump_path", MINIDUMP_FILE)] {
         if folder.join(f).is_file() {
             v[k] = json!(folder.join(f).to_string_lossy());
         }

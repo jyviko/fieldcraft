@@ -10,7 +10,11 @@
 //! - **Rings.** The frame cell round each circle (concentric circles together) is O-gridded
 //!   through every level, square inside square: the frame, then a square with its corners at
 //!   45° on each circle, then a core. Corners on a circle sit on it before projection, so the
-//!   ring's radial block edges meet the cylinder square on.
+//!   ring's radial block edges meet the cylinder square on. A hole's frame is centred on it: a
+//!   side of the body near the hole is the frame there and the far side is as far; a fillet
+//!   round a corner of the outline that holds a hole (a screw hole in a rounded corner) is taken
+//!   in by the hole's ring, its frame reaching the two sides and its outer corner projected onto
+//!   the fillet's middle, so the corner needs no blend layer.
 //! - **Blend layer.** A side of the body a fillet or chamfer runs along, or that a shell's wall
 //!   stands on, gets a layer of blocks between the grid (on the body shrunk by the blend's
 //!   depth or the wall's thickness) and the side, one block per boundary face of the grid, the
@@ -52,9 +56,22 @@ pub(crate) struct Layout {
     pub(crate) layers: Vec<(String, f64, &'static str)>,
     /// Grid planes per axis of the frame (across, across, along the sweep).
     pub(crate) planes: [usize; 3],
+    /// The frame round each circle group: its axis point (the sweep's coordinate 0) and the
+    /// smallest half-side of the frame.
+    pub(crate) frames: Vec<(V3, f64)>,
 }
 
 impl Layout {
+    /// The half-side of the frame round the circle about the axis through `center` along the
+    /// sweep `direction`.
+    pub(crate) fn frame_of(&self, center: V3, direction: V3) -> Option<f64> {
+        self.frames.iter().find_map(|(p, half)| {
+            let off = sub(center, *p);
+            let along = dot(off, direction);
+            (dot(off, off) - along * along < 1e-12 * dot(center, center).max(1.0)).then_some(*half)
+        })
+    }
+
     pub(crate) fn summary(&self) -> String {
         let layers: Vec<String> = self.layers.iter().map(|(s, d, w)| format!("{s} {d:.4} mm ({w})")).collect();
         format!(
@@ -141,6 +158,9 @@ struct Group {
     circles: Vec<Circle>,
     /// The frame's extent per local axis (0, 1): [low, high].
     frame: [[f64; 2]; 2],
+    /// The frame's half-side per local axis when a corner blend it takes in sets it: the
+    /// distance from the centre to the body's side the blend runs along.
+    forced: [Option<f64>; 2],
 }
 
 /// Plan the block topology of the body.
@@ -221,12 +241,36 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
         }
     }
 
-    // The blend layer: per side, the depth of the blends along it, or the shell's wall.
+    // Circles, concentric ones grouped (radii descending).
+    let mut groups: Vec<Group> = Vec::new();
+    for c in &circles {
+        match groups.iter_mut().find(|g| (g.c[0] - c.c[0]).hypot(g.c[1] - c.c[1]) < 1e-6 * c.r.max(1.0)) {
+            Some(g) => {
+                if !g.circles.iter().any(|x| (x.r - c.r).abs() < 1e-6 * c.r.max(1.0)) {
+                    g.circles.push(*c);
+                }
+            }
+            None => groups.push(Group { c: c.c, circles: vec![*c], frame: [[0.0; 2]; 2], forced: [None; 2] }),
+        }
+    }
+    for g in &mut groups {
+        g.circles.sort_by(|a, b| b.r.total_cmp(&a.r));
+    }
+
+    // The blend layer: per side, the depth of the blends along it, or the shell's wall. A blend
+    // round a corner of the outline that a hole's ring can frame (a screw hole in a rounded
+    // corner) is taken in by the ring instead.
     let mut ring = [[0.0f64; 2]; 3];
     let mut what = [[""; 2]; 3];
     for &f in &blend_faces {
         let pts = face_points.get(f).map_or(&[][..], Vec::as_slice);
         if pts.is_empty() {
+            continue;
+        }
+        if let Some((g, half)) = corner_ring(&groups, pts, lo, hi, eps)
+            && let Some(g) = groups.get_mut(g)
+        {
+            g.forced = half.map(Some);
             continue;
         }
         let mut touched = false;
@@ -291,21 +335,8 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
         fixed[a].dedup_by(|x, y| (*x - *y).abs() < eps);
     }
 
-    // Circles, concentric ones grouped, and their frames.
-    let mut groups: Vec<Group> = Vec::new();
-    for c in &circles {
-        match groups.iter_mut().find(|g| (g.c[0] - c.c[0]).hypot(g.c[1] - c.c[1]) < 1e-6 * c.r.max(1.0)) {
-            Some(g) => {
-                if !g.circles.iter().any(|x| (x.r - c.r).abs() < 1e-6 * c.r.max(1.0)) {
-                    g.circles.push(*c);
-                }
-            }
-            None => groups.push(Group { c: c.c, circles: vec![*c], frame: [[0.0; 2]; 2] }),
-        }
-    }
     let snap = (0.3 * inp.size).min(0.25 * circles.iter().map(|c| c.r).fold(f64::INFINITY, f64::min));
     for g in &mut groups {
-        g.circles.sort_by(|a, b| b.r.total_cmp(&a.r));
         let outer = g.circles.first().copied().ok_or("an empty circle group")?;
         let r0 = outer.r;
         for a in 0..2 {
@@ -313,22 +344,15 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
             if fixed[a].iter().any(|v| (v - c).abs() < r0 - eps) {
                 return Err(format!("a face of the body runs through the circle of radius {r0:.4}"));
             }
+        }
+        let half = match outer.kind {
+            RingKind::Butterfly => [[r0 / 2f64.sqrt(); 2]; 2],
+            RingKind::OGrid => o_grid_frame(g, &fixed, eps)?,
+        };
+        for a in 0..2 {
+            let c = g.c[a];
             for s in 0..2 {
-                let h = match outer.kind {
-                    RingKind::Butterfly => r0 / 2f64.sqrt(),
-                    RingKind::OGrid => {
-                        let dist = fixed[a].iter().map(|v| if s == 0 { c - v } else { v - c }).filter(|x| *x > 0.0).fold(f64::INFINITY, f64::min);
-                        if !dist.is_finite() {
-                            return Err(format!("the hole of radius {r0:.4} has no side of the body round it"));
-                        }
-                        if dist < 1.05 * r0 {
-                            return Err(format!("the hole of radius {r0:.4} is {dist:.4} mm from a face: too close for a ring"));
-                        }
-                        // The side itself frames the ring when a strip narrower than the radius
-                        // would be left between them.
-                        if dist <= 3.0 * r0 + eps { dist } else { 2.0 * r0 }
-                    }
-                };
+                let h = half[a][s];
                 if outer.kind == RingKind::Butterfly && fixed[a].iter().any(|v| (v - c).abs() < h - eps) {
                     return Err(format!("a face of the body runs through the square inside the circle of radius {r0:.4}"));
                 }
@@ -555,7 +579,84 @@ pub(crate) fn layout(inp: &Input) -> Result<Layout, String> {
         .filter(|&(a, s)| ring[a][s] > 0.0)
         .map(|(a, s)| (SIDE_NAMES[perm[a]][s].to_string(), ring[a][s], what[a][s]))
         .collect();
-    Ok(Layout { topology: t, rings, layers, planes: planes.each_ref().map(Vec::len) })
+    let frames = groups
+        .iter()
+        .map(|g| {
+            let half = (0..2).flat_map(|a| [g.c[a] - g.frame[a][0], g.frame[a][1] - g.c[a]]).fold(f64::INFINITY, f64::min);
+            (world([g.c[0], g.c[1], 0.0]), half)
+        })
+        .collect();
+    Ok(Layout { topology: t, rings, layers, planes: planes.each_ref().map(Vec::len), frames })
+}
+
+/// The ring that takes in the blend with points `pts` (local frame): a blend round a corner of
+/// the outline, touching the body's side along both in-plane axes, that lies inside the frame of
+/// an O-grid ring reaching from the hole to those sides, the hole centred in it. Returns the
+/// group and the frame's half-side per axis (the hole's distance to the side). A frame wider
+/// than 6 radii (or narrower than 1.2) does not take a blend in: the hole is not the corner's.
+fn corner_ring(groups: &[Group], pts: &[V3], lo: V3, hi: V3, eps: f64) -> Option<(usize, [f64; 2])> {
+    let (mut bl, mut bh) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for p in pts {
+        for a in 0..2 {
+            bl[a] = bl[a].min(p[a]);
+            bh[a] = bh[a].max(p[a]);
+        }
+    }
+    let tol = 1e3 * eps;
+    groups.iter().enumerate().find_map(|(i, g)| {
+        let outer = g.circles.first()?;
+        if outer.kind != RingKind::OGrid {
+            return None;
+        }
+        let mut half = [0.0; 2];
+        for a in 0..2 {
+            let h = if (bl[a] - lo[a]).abs() < tol {
+                g.c[a] - lo[a]
+            } else if (bh[a] - hi[a]).abs() < tol {
+                hi[a] - g.c[a]
+            } else {
+                return None;
+            };
+            if !(1.2 * outer.r..=6.0 * outer.r).contains(&h) || bl[a] < g.c[a] - h - tol || bh[a] > g.c[a] + h + tol {
+                return None;
+            }
+            half[a] = h;
+        }
+        Some((i, half))
+    })
+}
+
+/// The half-sides of an O-grid ring's frame, per local axis and side: the hole centred in it.
+/// A side of the body within 3 radii (or a corner blend the ring takes in) is the frame on that
+/// side, and the frame's other side is as far from the centre unless the body's side is nearer
+/// there too; an axis with no side near takes the half-side of the other axis's (a square
+/// frame) when that is 1.5 to 3 radii, else 2 radii.
+fn o_grid_frame(g: &Group, fixed: &[Vec<f64>; 3], eps: f64) -> Result<[[f64; 2]; 2], String> {
+    let r0 = g.circles.first().map_or(0.0, |c| c.r);
+    let mut half: [Option<[f64; 2]>; 2] = [None; 2];
+    for a in 0..2 {
+        let c = g.c[a];
+        let mut dist = [0.0; 2];
+        for (s, d) in dist.iter_mut().enumerate() {
+            *d = fixed[a].iter().map(|v| if s == 0 { c - v } else { v - c }).filter(|x| *x > 0.0).fold(f64::INFINITY, f64::min);
+            if !d.is_finite() {
+                return Err(format!("the hole of radius {r0:.4} has no side of the body round it"));
+            }
+            if *d < 1.05 * r0 {
+                return Err(format!("the hole of radius {r0:.4} is {d:.4} mm from a face: too close for a ring"));
+            }
+        }
+        let near = dist[0].min(dist[1]);
+        half[a] = match g.forced[a] {
+            Some(h) => Some([h; 2]),
+            // The side itself frames the ring when a strip narrower than the radius would be
+            // left between them; the other side keeps the frame centred unless it is near too.
+            None if near <= 3.0 * r0 + eps => Some(dist.map(|d| if d <= 3.0 * r0 + eps { d } else { near })),
+            None => None,
+        };
+    }
+    let square = |b: usize| half[b].map(|h| h[0].min(h[1])).filter(|h| (1.5 * r0 - eps..=3.0 * r0 + eps).contains(h)).unwrap_or(2.0 * r0);
+    Ok([half[0].unwrap_or([square(1); 2]), half[1].unwrap_or([square(0); 2])])
 }
 
 /// The six faces of a hex8 block, as corner cycles.

@@ -28,8 +28,9 @@ not guessed. Read it before you plan anything:
    `mesh.plan.apply {"plan": "Plan-<body>"}`. When the plan has rings or blends and the body
    fits, its `mesher` is `project`: one block topology over the whole body (a grid on the
    body's planar faces, an O-grid square-inside-square round every circle, concentric ones
-   nested: a boss and its hole; a blend layer along fillets, chamfers and shell walls at their
-   stored depth) projected and smoothed — no partitions, one conforming mesh, one division
+   nested: a boss and its hole, frames centred on the hole; a screw hole in a rounded corner
+   takes the corner's fillet into its ring; a blend layer along fillets, chamfers and shell walls
+   at their stored depth) projected and smoothed — no partitions, one conforming mesh, one division
    count per sheet of blocks. Read `layout` and `blend_layers`; the plan's `notes` say why a
    body did not fit (a plane at an angle, a curved face that is not a ring or a blend, two
    circles in one frame), and then the frame cuts and swept cells are used instead (`pending`

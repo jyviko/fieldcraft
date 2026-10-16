@@ -818,6 +818,8 @@ pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32,
     }
     let mut cuts = Vec::new();
     let mut rings = Vec::new();
+    // Where the frame cuts could not go: the swept cells' business only.
+    let mut frame_notes = Vec::new();
     if let Some(d) = direction {
         let planes = surfaces
             .iter()
@@ -843,7 +845,7 @@ pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32,
             .collect();
         let body = Clearance { corners, planes, curved, gap: 0.5 * h };
         imprint_cuts(&imprints, d, &body, &mut cuts);
-        notes.extend(frame_cuts(&circle_list, d, &body, &mut cuts));
+        frame_notes = frame_cuts(&circle_list, d, &body, &mut cuts);
         rings = plan_rings(&circle_list, d, &body, &cuts, shape, &surfaces, &features);
     }
     // The tessellation: the meshers' default, finer where the body has small curves (a hundredth
@@ -884,10 +886,21 @@ pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32,
         Some(Ok(layout)) => {
             plan.mesher = PlanMesher::Project;
             plan.cuts.clear();
+            // The rings' frames are the layout's.
+            if let Some(d) = plan.direction {
+                for r in &mut plan.rings {
+                    if let Some(half) = layout.frame_of(r.center, d).filter(|_| r.kind == RingKind::OGrid) {
+                        r.frame = half;
+                    }
+                }
+            }
             plan.notes.push(layout.summary());
         }
-        Some(Err(why)) => plan.notes.push(format!("no projection layout ({why}): the frame cuts box the rings and the cells are swept")),
-        None => {}
+        Some(Err(why)) => {
+            plan.notes.extend(frame_notes);
+            plan.notes.push(format!("no projection layout ({why}): the frame cuts box the rings and the cells are swept"));
+        }
+        None => plan.notes.extend(frame_notes),
     }
     plan.check()?;
     Ok(plan)
@@ -1514,6 +1527,36 @@ mod acceptance {
         let r = plan_and_apply(&mut s, "Plate");
         assert!(r["layout"].as_str().unwrap().contains("4 circle(s) ringed"), "{r}");
         accept(&mut s, &r, 0.5, 10.0);
+    }
+
+    /// An enclosure lid: a plate with rounded corners, a screw hole in each corner close to the
+    /// fillet and a square opening. Each hole's ring reaches the plate's sides and takes the
+    /// corner fillet in (no blend layer, no fan into the hole), its frame centred on the hole.
+    #[test]
+    fn a_lid_with_screw_holes_in_its_rounded_corners_rings_each_hole_to_the_fillet() {
+        let (_d, mut s) = open(json!([
+            {"command": "solid.box", "params": {"length": 128, "width": 98, "height": 4, "body_name": "Lid"}},
+            {"command": "solid.fillet", "params": {"edges": [[0, 0, 2], [128, 0, 2], [128, 98, 2], [0, 98, 2]], "radius": 8}},
+            {"command": "solid.hole", "params": {"position": [7, 7, 4], "diameter": 3.5, "depth": 4}},
+            {"command": "solid.hole", "params": {"position": [121, 7, 4], "diameter": 3.5, "depth": 4}},
+            {"command": "solid.hole", "params": {"position": [7, 91, 4], "diameter": 3.5, "depth": 4}},
+            {"command": "solid.hole", "params": {"position": [121, 91, 4], "diameter": 3.5, "depth": 4}},
+            {"command": "solid.box", "params": {"length": 22, "width": 22, "height": 4, "corner": [41, 40, 0], "operation": "cut"}},
+        ]));
+        let plan = s.execute("mesh.plan", &json!({"body": "Lid", "size": 1.5, "layers": 2})).unwrap();
+        assert_eq!(plan["mesher"], "project", "{plan}");
+        // Every frame is the same square, centred on its hole and reaching the plate's sides.
+        let rings = plan["rings"].as_array().unwrap();
+        assert_eq!(rings.len(), 4, "{plan}");
+        for r in rings {
+            assert!((r["frame"].as_f64().unwrap() - 7.0).abs() < 1e-6, "{r}");
+        }
+        let notes = plan["notes"].as_array().unwrap();
+        assert!(notes.iter().all(|n| !n.as_str().unwrap().contains("frame cut")), "{plan}");
+        let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
+        assert!(r["layout"].as_str().unwrap().contains("4 circle(s) ringed"), "{r}");
+        assert_eq!(r["blend_layers"], json!([]), "the rings take the corner fillets in: {r}");
+        accept(&mut s, &r, 0.6, 6.0);
     }
 
     #[test]

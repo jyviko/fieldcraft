@@ -306,7 +306,7 @@ impl Form<'_> {
                 }
                 fields::combo(ui, id, selected, &labels, fill(ui)).map(|i| options.get(i).map_or(Value::Null, |(v, _)| json!(v)))
             }
-            Kind::Vector { labels, nullable, .. } => self.vector(ui, id, value, f, labels, nullable),
+            Kind::Vector { labels, nullable, .. } => self.vector(ui, id, value, f, labels, nullable, None),
             Kind::Ref(c) => self.reference(ui, id, path, value, c, f.hint, f.required),
             Kind::RefList(c) => self.reference_list(ui, path, value, c),
             Kind::RefChoices(c, options) => self.reference_choices(ui, id, value, c, options),
@@ -371,7 +371,19 @@ impl Form<'_> {
     }
 
     /// A vector: one number per component, each after its caption (X, Y, Z or the field's own).
-    fn vector(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, f: &Field, labels: &[&str], nullable: bool) -> Option<Value> {
+    /// The components of a vector; with `cells`, all on one line at that width and without
+    /// captions (a table row under its column headers).
+    #[allow(clippy::too_many_arguments)]
+    fn vector(
+        &mut self,
+        ui: &mut Ui,
+        id: Id,
+        value: Option<&Value>,
+        f: &Field,
+        labels: &[&str],
+        nullable: bool,
+        cells: Option<f32>,
+    ) -> Option<Value> {
         let current: Vec<Value> = match value {
             Some(Value::Array(a)) if a.len() == labels.len() => a.clone(),
             Some(v) if !v.is_null() => {
@@ -391,15 +403,22 @@ impl Form<'_> {
         let caption_w = labels.iter().map(|l| crate::elide::width(ui, &caption(l), &small)).fold(0.0, f32::max) + 2.0 * gap;
         let room = fill(ui) - fields::unit_width(ui, unit.as_deref());
         let three = labels.len().clamp(1, 3);
-        let per_line = if (room / three as f32 - caption_w) >= VECTOR_MIN { three } else { 1 };
-        let width = (room / per_line as f32 - caption_w - 1.0).max(34.0);
+        let (per_line, width) = match cells {
+            Some(w) => (labels.len().max(1), w),
+            None => {
+                let per_line = if (room / three as f32 - caption_w) >= VECTOR_MIN { three } else { 1 };
+                (per_line, (room / per_line as f32 - caption_w - 1.0).max(34.0))
+            }
+        };
         ui.vertical(|ui| {
             for chunk in (0..labels.len()).collect::<Vec<_>>().chunks(per_line) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = gap;
                     for &i in chunk {
                         let hint = labels.get(i).copied().unwrap_or("");
-                        fields::caption(ui, &self.style, &caption(hint));
+                        if cells.is_none() {
+                            fields::caption(ui, &self.style, &caption(hint));
+                        }
                         let slot = current.get(i).cloned().unwrap_or(Value::Null);
                         let shown = (!slot.is_null()).then_some(&slot);
                         if let Some(v) = self.number(ui, id.with(i), shown, hint, false, width) {
@@ -599,13 +618,34 @@ impl Form<'_> {
         }
         let mut next = current.clone();
         let (mut changed, mut remove) = (false, None);
+        // One line per row: the columns' names head the table once, the cells share the width
+        // left by the remove button and the unit.
+        let gap = 3.0;
+        let remove_w = ui.spacing().interact_size.y + gap;
+        let unit = f.unit_label(self.cx.units);
+        let room = fill(ui) - remove_w - fields::unit_width(ui, unit.as_deref());
+        let n = columns.len().max(1) as f32;
+        let cell = ((room - gap * (n - 1.0)) / n - 1.0).max(34.0);
         ui.vertical(|ui| {
+            if !current.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    ui.add_space(remove_w - gap);
+                    for c in columns {
+                        ui.allocate_ui_with_layout(egui::vec2(cell, 0.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_width(cell);
+                            ui.add(egui::Label::new(RichText::new(caption(c)).small().color(self.style.dim)).truncate());
+                        });
+                    }
+                });
+            }
             for (i, p) in current.iter().enumerate() {
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
                     if ui.small_button("×").on_hover_text("Remove this row").clicked() {
                         remove = Some(i);
                     }
-                    if let Some(v) = self.vector(ui, id.with(i), Some(p), f, columns, false)
+                    if let Some(v) = self.vector(ui, id.with(i), Some(p), f, columns, false, Some(cell))
                         && let Some(slot) = next.get_mut(i)
                     {
                         *slot = v;

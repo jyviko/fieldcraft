@@ -1560,4 +1560,54 @@ mod tests {
         let e = s.execute("results.contour", &json!({"field": "displacement", "deformed": true})).unwrap_err().to_string();
         assert!(e.contains("`deformed`") && e.contains("field"), "{e}");
     }
+
+    /// The top-level keys a params doc names (`"key":` and `"key"?:` directly inside its
+    /// leading `{…}`; keys of nested objects and of the reply described after it are not).
+    fn doc_keys(doc: &str) -> Vec<&str> {
+        let mut keys = Vec::new();
+        let mut depth = 0usize;
+        let mut chars = doc.char_indices();
+        while let Some((i, c)) = chars.next() {
+            match c {
+                '{' | '[' => depth += 1,
+                '}' | ']' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                '"' => {
+                    let rest = &doc[i + 1..];
+                    let Some(end) = rest.find('"') else { break };
+                    let word = &rest[..end];
+                    let tail = &rest[end + 1..];
+                    if depth == 1 && (tail.starts_with(':') || tail.starts_with("?:")) && !word.is_empty() {
+                        keys.push(word);
+                    }
+                    for _ in 0..word.chars().count() + 1 {
+                        chars.next();
+                    }
+                }
+                _ => {}
+            }
+        }
+        keys
+    }
+
+    /// A command's params doc names only parameters its form describes, so a documented
+    /// parameter is never refused as unknown (#471: `mesh.node.relax` listed `set`).
+    #[test]
+    fn every_documented_parameter_is_accepted() {
+        let mut wrong = Vec::new();
+        for spec in crate::commands() {
+            let Some(form) = spec.form else { continue };
+            let keys = accepted_keys(form, &Value::Null);
+            for key in doc_keys(spec.params) {
+                if !keys.contains(&key) {
+                    wrong.push(format!("{}: `{key}`", spec.id));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "documented but not in the form:\n{}", wrong.join("\n"));
+    }
 }

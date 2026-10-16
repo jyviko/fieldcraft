@@ -1198,6 +1198,9 @@ pub const HEX_PROJECT: &[Field] = &[
         .def("\"elliptic\""),
     int("iterations", "Iterations", 1, 100_000).help("Smoothing iterations.").def("100"),
     range("min_quality", "Minimum quality", D::None, 0.0, 1.0).help("Smallest scaled Jacobian accepted.").def("0.2"),
+    range("max_arc_angle", "Max arc angle", D::Degree, 0.0, 90.0)
+        .help("The most a curved face may turn across one element; the divisions grow to keep it. 0 for no limit.")
+        .def("30"),
     range("merge", "Merge distance", D::Millimetre, 0.0, 1.0e9)
         .help("Join this mesh's nodes with other bodies' meshes within this distance; 0 never.")
         .hint("1e-6 of the diagonal"),
@@ -1266,6 +1269,7 @@ pub const HEX_EXTRUDE: &[Field] = &[
         .hint("pick the target surface"),
     face_rows("sides", "Side faces").help("The faces the section's sides follow (they need not be straight); straight paths when empty.").hint("straight sides"),
     xyz("direction", "Direction", D::None).help("The direction every node moves along; along the section's normal toward the target when empty.").hint("the section's normal"),
+    flag("normal", "Along the normal").help("Each node along the section's normal toward the target (the default when no direction is given)."),
     int("layers", "Layers", 1, 10_000).help("The number of element layers; from Size when empty.").hint("from the size"),
     positive("size", "Size", D::Length).help("Layer thickness, and the element size of a section meshed here.").hint("1/25 of the body"),
     range("bias", "Bias", D::None, 0.001, 1000.0).help("The last layer's thickness over the first's: below 1 grades toward the target, above 1 toward the source.").def("1"),
@@ -1404,7 +1408,11 @@ pub const NODE_RELAX: &[Field] = &[
     int("around_element", "Around element", 1, 99_999_999)
         .help("Instead of a centre: a sphere round this element (radius default twice its longest edge).")
         .hint("none"),
+    face_rows("faces", "Faces")
+        .help("Instead of a sphere: every node on these CAD faces and the elements touching them, nodes sliding on the faces. Pick faces in the view, then Use selection.")
+        .hint("pick faces"),
     labels("nodes", "Nodes", LabelOf::Node).help("Instead of a sphere: these nodes.").hint("none"),
+    labels("elements", "Elements", LabelOf::Element).help("Instead of a sphere: the nodes of these elements.").hint("none"),
     references("bodies", "Bodies", C::Body).help("Only the nodes of these bodies.").hint("every body"),
     int("iterations", "Iterations", 1, 100).help("Sweeps over the nodes.").def("5"),
     range("strength", "Strength", D::None, 0.0, 1.0).help("How far each node moves toward its relaxed position, 0 to 1.").def("1"),
@@ -1711,6 +1719,7 @@ pub const MESH_PLAN_APPLY: &[Field] = &[
     flag("symmetry", "Use symmetry")
         .help("Mesh one cell of a body that is its own mirror image across planes through its middle, and mirror it.")
         .def("true"),
+    text("name", "Save as").help("The name a plan given as an object is saved under.").hint("Plan-<body>"),
 ];
 pub const FEATURES: &[Field] = &[reference("body", "Body", C::Body).help("Only this body's features.").hint("every body")];
 pub const GEOMETRY_CHECK: &[Field] = &[

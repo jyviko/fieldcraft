@@ -192,3 +192,65 @@ fn hostile_parameters_never_panic() {
     assert!(s.execute("mesh.node.relax.apply", &json!({"field": "nope"})).is_err());
     assert!(s.execute("mesh.node.relax.apply", &json!({})).is_err());
 }
+
+/// A 20 mm box with an R2 fillet along its edge at x = z = 20 (axis x = z = 18, along y), tet
+/// meshed; its fillet faces' persistent names.
+fn filleted_box() -> (crate::tests::TempDir, Session, Vec<String>) {
+    let script = json!({"commands": [
+        {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 20, "body_name": "B"}},
+        {"command": "solid.fillet", "params": {"edges": [[20, 10, 20]], "radius": 2}},
+    ]});
+    let bytes = fieldcraft_geometry::script_design(&script.to_string()).unwrap();
+    let (dir, path) = crate::tests::design_file(&bytes);
+    let mut s = Session::default();
+    s.execute("geometry.open", &json!({"path": path})).unwrap();
+    let features = s.execute("geometry.features", &json!({"body": "B"})).unwrap();
+    let fillet = features["bodies"][0]["features"].as_array().unwrap().iter().find(|f| f["type"] == "fillet").unwrap().clone();
+    let faces: Vec<String> = fillet["faces"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect();
+    assert!(!faces.is_empty(), "{fillet}");
+    s.execute("mesh.tet.generate", &json!({"size": 1.5})).unwrap();
+    (dir, s, faces)
+}
+
+fn fillet_radius(p: [f64; 3]) -> f64 {
+    ((p[0] - 18.0).powi(2) + (p[2] - 18.0).powi(2)).sqrt()
+}
+
+/// #471: relaxing by CAD face. Relaxing the fillet faces of the tet mesh raises the worst
+/// element there, inverts none, keeps the fillet's nodes on its cylinder
+/// and moves nothing away from the fillet's elements. Faces that are not meshed are refused.
+#[test]
+fn relaxing_fillet_faces_improves_them() {
+    let (_d, mut s, faces) = filleted_box();
+    let perturbed = s.model.clone();
+    let refs: Vec<Value> = faces.iter().map(|f| json!({"body": "B", "face": f})).collect();
+    let r = s.execute("mesh.node.relax", &json!({"faces": refs, "iterations": 10})).unwrap();
+    let (before, after) = (r["before"]["min_scaled_jacobian"].as_f64().unwrap(), r["after"]["min_scaled_jacobian"].as_f64().unwrap());
+    assert!(after > before, "{r}");
+    assert_eq!(r["after"]["invalid"], 0, "{r}");
+    assert_eq!(invalid(&mut s), 0);
+    for (n, p) in s.model.nodes() {
+        let old = perturbed.node(*n).unwrap().xyz;
+        if old[0] > 18.0 && old[2] > 18.0 && (fillet_radius(old) - 2.0).abs() < 1e-6 {
+            assert!((fillet_radius(p.xyz) - 2.0).abs() < 1e-6, "node {n} left the fillet");
+        }
+        if old != p.xyz {
+            assert!(fillet_radius(old) < 6.0, "node {n} far from the fillet moved");
+        }
+    }
+    // Faces: required objects, known and meshed; not with a sphere.
+    for bad in [
+        json!({"faces": []}),
+        json!({"faces": "F1"}),
+        json!({"faces": [{"body": "B", "face": "Nope"}]}),
+        json!({"faces": [{"body": "Nope", "face": faces[0]}]}),
+        json!({"faces": [{"body": "B"}]}),
+        json!({"faces": refs, "center": [0, 0, 0], "radius": 1}),
+    ] {
+        assert!(s.execute("mesh.node.relax", &bad).is_err(), "{bad}");
+    }
+    // Elements by label are accepted too.
+    let e = *s.model.elements().keys().next().unwrap();
+    s.execute("mesh.node.relax", &json!({"elements": [e]})).unwrap();
+    assert!(s.execute("mesh.node.relax", &json!({"set": "All"})).is_err());
+}

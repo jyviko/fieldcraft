@@ -1,5 +1,5 @@
 //! Node relaxation (#398): `mesh.node.relax` moves the nodes inside a sphere of influence (or
-//! listed nodes, elements or a set) to fix the worst elements there, nodes on the geometry
+//! the nodes on listed CAD faces, or listed nodes or elements) to fix the worst elements there, nodes on the geometry
 //! staying on it ([`fieldcraft_mesh::relax`]), and keeps what it did as a relaxation field of the
 //! model; `mesh.node.relax.apply` does a field again on the current mesh (after a remesh), and a
 //! field marked `reapply` is applied by itself after every remesh of its bodies.
@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use fieldcraft_mesh::relax::{self, Constraints, Falloff, Freedom, RegionQuality, Relaxed};
 use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
 use fieldcraft_mesh::tet::geometry::{AnalyticSurface, Tessellation};
-use fieldcraft_model::geometry::Entity;
+use fieldcraft_model::geometry::{Entity, GeometryRef};
 use fieldcraft_model::{Model, Relaxation};
 use serde_json::{Value, json};
 
@@ -28,7 +28,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const RELAX: CommandSpec = CommandSpec {
     id: "mesh.node.relax",
     label: "Relax Nodes",
-    params: r#"{"center": [x, y, z], "radius": mm (the sphere of influence) | "around_element": label (a sphere round that element; radius default twice its longest edge) | "nodes": [labels] | "elements": [labels] | "set": "Name", "bodies"?: ["Body1"] (only their nodes), "iterations"?: 5 (1..=100), "strength"?: 1 (0..1], "falloff"?: "smooth" (default: weight 1 at the centre to 0 at the radius) | "linear" | "none", "field"?: "Name" (the relaxation field to keep; default Relax1, Relax2, …), "reapply"?: false (apply the field again after each remesh of these bodies)} — moves the nodes to improve the worst elements around them (smart Laplacian, then optimization of the worst element; a move is kept only when the worst element around the node does not get worse, and never inverts one). Nodes on a B-rep face slide in its UV parameters and stay on it, nodes on a B-rep edge slide along it, nodes on vertices stay; nodes on partition cut faces move freely (shared by both cells); mid-side nodes follow, on the geometry. Reports the nodes moved, the largest displacement, the region's smallest scaled Jacobian, largest edge ratio and worst elements before and after, and the field kept. One undo step"#,
+    params: r#"{"center": [x, y, z], "radius": mm (the sphere of influence) | "around_element": label (a sphere round that element; radius default twice its longest edge) | "faces": [{"body": "Base", "face": "F3"}] (persistent B-rep face names, as model.set.create takes them: every node on those faces and the nodes of the elements touching them; pick faces in the view) | "nodes": [labels] | "elements": [labels] (their nodes), "bodies"?: ["Body1"] (only their nodes), "iterations"?: 5 (1..=100), "strength"?: 1 (0..1], "falloff"?: "smooth" (default: weight 1 at the centre to 0 at the radius) | "linear" | "none", "field"?: "Name" (the relaxation field to keep; default Relax1, Relax2, …), "reapply"?: false (apply the field again after each remesh of these bodies)} — moves the nodes to improve the worst elements around them (smart Laplacian, then optimization of the worst element; a move is kept only when the worst element around the node does not get worse, and never inverts one). Nodes on a B-rep face slide in its UV parameters and stay on it, nodes on a B-rep edge slide along it, nodes on vertices stay; nodes on partition cut faces move freely (shared by both cells); mid-side nodes follow, on the geometry. Reports the nodes moved, the largest displacement, the region's smallest scaled Jacobian, largest edge ratio and worst elements before and after, and the field kept. One undo step"#,
     form: Some(super::forms::NODE_RELAX),
     kind: CommandKind::Model,
     requires: &[Requirement::Mesh],
@@ -303,6 +303,61 @@ fn point(p: &Value, key: &str) -> Result<Option<[f64; 3]>> {
     }
 }
 
+/// The most faces `faces` may list.
+const MAX_FACES: usize = 10_000;
+
+/// The `faces` parameter: a list of `{body, face}` B-rep face references.
+fn face_refs(p: &Value) -> Result<Vec<GeometryRef>> {
+    let refs: Vec<GeometryRef> = super::req(p, "faces")?;
+    if refs.is_empty() || refs.len() > MAX_FACES {
+        return Err(EngineError::invalid("faces", format!("1 to {MAX_FACES} faces")));
+    }
+    if let Some(r) = refs.iter().find(|r| !matches!(r.entity, Entity::Face(_))) {
+        return Err(EngineError::invalid("faces", format!("`{}`: give {{\"body\", \"face\"}}", r.body.chars().take(80).collect::<String>())));
+    }
+    Ok(refs)
+}
+
+/// The nodes on the B-rep faces `refs` (from the mesh's geometry tags: element faces on them and
+/// shell elements meshing them) and the nodes of every element touching those.
+fn face_nodes(model: &Model, refs: &[GeometryRef]) -> Result<BTreeSet<u32>> {
+    let c = model.classification();
+    let mut tags = BTreeSet::new();
+    for r in refs {
+        let found = c.tags_selected_by(r);
+        if found.is_empty() {
+            let face = r.entity.name().unwrap_or_default();
+            return Err(EngineError::Params(format!(
+                "face `{}` of body `{}` has no tagged mesh (mesh it, or mesh.tag)",
+                face.chars().take(80).collect::<String>(),
+                r.body.chars().take(80).collect::<String>()
+            )));
+        }
+        tags.extend(found);
+    }
+    let mut on = BTreeSet::new();
+    for (&label, t) in c.elements() {
+        let Some(e) = model.element(label) else { continue };
+        if e.kind.dimension() == 2 && t.region.is_some_and(|r| tags.contains(&r)) {
+            on.extend(e.nodes.iter().copied());
+        }
+        for (&face, tag) in &t.faces {
+            if !tags.contains(tag) {
+                continue;
+            }
+            let Some(local) = e.kind.faces().get(usize::from(face).wrapping_sub(1)) else { continue };
+            on.extend(local.iter().filter_map(|&i| e.nodes.get(i).copied()));
+        }
+    }
+    let mut out = on.clone();
+    for e in model.elements().values() {
+        if e.nodes.iter().any(|n| on.contains(n)) {
+            out.extend(e.nodes.iter().copied());
+        }
+    }
+    Ok(out)
+}
+
 /// The sphere around element `label`: its centroid, and twice its longest corner edge.
 fn around_element(model: &Model, label: u32) -> Result<([f64; 3], f64)> {
     let e = model.element(label).ok_or_else(|| EngineError::Params(format!("no element {label}")))?;
@@ -344,11 +399,11 @@ pub(crate) fn weights(model: &Model, p: &Value) -> Result<(BTreeMap<u32, f64>, O
             .map(Some)?,
         None => around.map(|a| a.1),
     };
-    let listed = ["nodes", "elements", "set"].iter().filter(|k| p.get(**k).is_some()).count();
+    let listed = ["faces", "nodes", "elements"].iter().filter(|k| p.get(**k).is_some()).count();
     if let (Some(c), Some(r)) = (center, radius) {
         if listed > 0 {
             return Err(EngineError::Params(
-                "give a sphere (`center` and `radius`, or `around_element`) or `nodes`, `elements` or `set`, not both".into(),
+                "give a sphere (`center` and `radius`, or `around_element`) or `faces`, `nodes` or `elements`, not both".into(),
             ));
         }
         return Ok((relax::sphere_weights(model, c, r, strength, falloff, only.as_ref())?, Some((c, r))));
@@ -364,11 +419,8 @@ pub(crate) fn weights(model: &Model, p: &Value) -> Result<(BTreeMap<u32, f64>, O
     if p.get("elements").is_some() {
         elements.extend(super::labels(p, "elements", fieldcraft_model::MAX_ELEMENTS)?);
     }
-    if let Some(name) = super::opt::<String>(p, "set")? {
-        let set = model.resolve_set(&name)?;
-        nodes.extend(set.nodes.iter().copied());
-        elements.extend(set.elements.iter().copied());
-        elements.extend(set.faces.iter().map(|f| f.element));
+    if p.get("faces").is_some() {
+        nodes.extend(face_nodes(model, &face_refs(p)?)?);
     }
     for e in elements {
         let el = model.element(e).ok_or_else(|| EngineError::Params(format!("no element {e}")))?;
@@ -376,7 +428,7 @@ pub(crate) fn weights(model: &Model, p: &Value) -> Result<(BTreeMap<u32, f64>, O
     }
     if listed == 0 {
         return Err(EngineError::Params(
-            "say which nodes to relax: give one of `center` and `radius`, `around_element`, `nodes`, `elements` or `set`".into(),
+            "say which nodes to relax: give one of `center` and `radius`, `around_element`, `faces`, `nodes` or `elements`".into(),
         ));
     }
     if let Some(only) = &only {

@@ -322,8 +322,8 @@ pub static CATALOGUE: &[Capability] = &[
         "Defeature",
         Geometry,
         "Prepare",
-        "Take small holes, fillets, chamfers and bosses out for meshing: the design rebuilt without their features",
-        &["geometry.defeature.delete"],
+        "Take small holes, fillets, chamfers and bosses out for meshing, from a proposal list with each one on or off",
+        &["geometry.defeature.propose", "geometry.defeature.delete"],
     ),
     covering(
         "geometry.stitch",

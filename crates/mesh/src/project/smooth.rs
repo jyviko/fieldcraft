@@ -328,13 +328,20 @@ struct SweepScore {
 
 impl SweepScore {
     /// A larger smallest scaled Jacobian, or the same one (to rounding) with a larger mean.
-    fn better_than(self, other: SweepScore) -> bool {
-        if (self.min - other.min).abs() > SCORE_TIE { self.min > other.min } else { self.mean > other.mean + SCORE_TIE }
+    /// `tie`: smallest scaled Jacobians this close count as equal.
+    fn better_than(self, other: SweepScore, tie: f64) -> bool {
+        if (self.min - other.min).abs() > tie { self.min > other.min } else { self.mean > other.mean + SCORE_TIE }
     }
 }
 
 /// Two smallest scaled Jacobians this close count as equal.
 const SCORE_TIE: f64 = 1e-9;
+
+/// The lift from the best sweep grid replaces the lift from where the sweeps stopped only when
+/// it raises the smallest scaled Jacobian by more than this: an earlier sweep grid is less smooth
+/// (its lines kink), which a gain in the third decimal does not pay for; within it the higher
+/// mean wins.
+const START_TIE: f64 = 0.01;
 
 fn sweep_score(x: &[P], hexes: &[[u32; 8]]) -> SweepScore {
     let (mut min, mut sum) = (f64::INFINITY, 0.0);
@@ -490,7 +497,7 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
             }
         }
         let score = sweep_score(m.nodes, hexes);
-        if score.better_than(best.0) {
+        if score.better_than(best.0, SCORE_TIE) {
             best = (score, m.nodes.clone());
         }
         if moved <= tol {
@@ -607,7 +614,7 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
             }
         }
         let (score, local) = (sweep_score(m.nodes, hexes), mesh_quality(m.nodes, hexes));
-        let better = finished.as_ref().is_none_or(|(s, l, _)| score.better_than(*s) && local.ratio <= l.ratio.max(EDGE_RATIO_CEILING));
+        let better = finished.as_ref().is_none_or(|(s, l, _)| score.better_than(*s, START_TIE) && local.ratio <= l.ratio.max(EDGE_RATIO_CEILING));
         if better {
             finished = Some((score, local, m.nodes.clone()));
         }

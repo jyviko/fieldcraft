@@ -25,6 +25,7 @@ pub mod partition;
 pub mod sample;
 #[cfg(feature = "scripts")]
 mod script;
+pub mod stitch;
 pub mod virtual_faces;
 
 pub use design::{Design, FeatureError, MAX_DESIGN_BYTES, open_design};

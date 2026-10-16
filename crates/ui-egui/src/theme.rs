@@ -145,7 +145,7 @@ impl Tokens {
             hex: Color32::from_rgb(0x78, 0x9c, 0xc0),
             tet: Color32::from_rgb(0x80, 0xb4, 0x8a),
             wedge: Color32::from_rgb(0xc0, 0xaa, 0x78),
-            pyramid: Color32::from_rgb(0xa8, 0x90, 0xc8),
+            pyramid: Color32::from_rgb(0x8c, 0x80, 0xb0),
             shell: Color32::from_rgb(0xc0, 0x8c, 0x78),
             line_element: Color32::from_rgb(0xc8, 0x8c, 0x1e),
             mesh_edge: Color32::from_rgb(0x1e, 0x23, 0x2a),
@@ -212,7 +212,7 @@ impl Tokens {
         t.hex = Color32::from_rgb(0x82, 0xa6, 0xc8);
         t.tet = Color32::from_rgb(0x8c, 0xc0, 0x96);
         t.wedge = Color32::from_rgb(0xc8, 0xb4, 0x82);
-        t.pyramid = Color32::from_rgb(0xb4, 0x9c, 0xd2);
+        t.pyramid = Color32::from_rgb(0x8c, 0x82, 0xb4);
         t.shell = Color32::from_rgb(0xc8, 0x96, 0x82);
         t.line_element = Color32::from_rgb(0xf0, 0xc0, 0x50);
         t.mesh_edge = Color32::from_rgb(0x14, 0x18, 0x1e);

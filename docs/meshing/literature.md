@@ -1097,6 +1097,13 @@ onto points, then smoothed). No code, manual or text of any commercial mesher wa
 - **Worst-element repair**: compass search on the local smallest scaled Jacobian (optimization-
   based smoothing, L. A. Freitag, C. Ollivier-Gooch, IJNME 40:3979–4002, 1997; metric: P. M. Knupp,
   SIAM J. Sci. Comput. 23(1):193–218, 2001).
+- **Ring-and-pillow layout of a mesh plan** (`mesh.plan`, #455): a swept body whose section is at
+  an angle to the axes (a crank arm) is blocked as an annulus round each boss's hole and a carved
+  grid over the rest, with a layer of blocks inserted between the grid's boundary and the walls
+  it faces: pillowing, S. A. Mitchell, T. J. Tautges, *Pillowing doublets: refining a mesh to
+  ensure that faces share at most one edge*, Proc. 4th International Meshing Roundtable, 231–240,
+  1995, here between a carved grid and the geometry, as the grid-based method projects its
+  boundary layer onto the surface (B1.1, Schneiders 1996).
 
 ### B10. Extrusion up to a surface (implemented in `fieldcraft-mesh::hex::extrude_to`, `mesh.hex.extrude`)
 

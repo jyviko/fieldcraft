@@ -46,8 +46,9 @@ keep the good half and mirror it.
 1. `mesh.plan {"body", "size"?, "layers"?}`: the block plan from the features. Nothing is meshed.
 2. Read the plan before applying it:
    - `mesher`: `project` (one block topology over the body: O-grid rings round circles, blend
-     layers along fillets, chamfers and shell walls) is the target; `cells`/`sweep` is the
-     fallback.
+     layers along fillets, chamfers and shell walls; for a section at an angle to the axes, such
+     as a crank arm, an annulus round each boss's hole and a carved grid with a pillow layer to
+     the outline) is the target; `cells`/`sweep` is the fallback.
    - `rings`: centre, radius, frame half-side. Frames should be near square with even margins.
    - `cuts`: each with its feature and reason.
    - `notes`: why the body did not fit the projection layout.

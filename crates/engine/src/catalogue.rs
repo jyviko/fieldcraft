@@ -405,6 +405,13 @@ pub static CATALOGUE: &[Capability] = &[
     soon("mesh.region.remesh", "Remesh Region", Mesh, "Edit", "M6", "Remesh a region in place; split and collapse elements"),
     soon("mesh.import.orphan", "Orphan Mesh", Mesh, "Edit", "M6", "Import a mesh without geometry"),
     ready("mesh.quality", "Quality", Mesh, "Verify", "Quality metrics and the certified validity check, failing elements listed"),
+    ready(
+        "mesh.quality.mark",
+        "Mark Bad Elements",
+        Mesh,
+        "Verify",
+        "Mark the elements below quality limits as a set, located and drawn in the marker colour",
+    ),
     soon("mesh.verify", "Verify Set", Mesh, "Verify", "M2", "Quality and validity per set"),
     ready("mesh.export.stl", "Export STL", Mesh, "Verify", "Write the mesh's outer surface (or a set's faces) as binary STL"),
     ready_more("mesh.tag", "Tag Geometry", Mesh, "Verify", "Tag elements, faces, edges and nodes with the geometry they mesh", &["mesh.tag.clear"]),

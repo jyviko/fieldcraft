@@ -41,6 +41,8 @@ pub struct Palette {
     pub contour: [Rgb; 5],
     /// Values above a clamped legend's maximum.
     pub contour_over: Rgb,
+    /// The elements `mesh.quality.mark` marked.
+    pub marked: Rgb,
     /// The analysis setup's symbols.
     pub glyphs: GlyphColors,
 }
@@ -73,6 +75,7 @@ impl Palette {
         no_result: Rgb(0x9a, 0xa0, 0xaa),
         contour: [Rgb(0x2b, 0x4f, 0xd8), Rgb(0x2f, 0xb8, 0xe0), Rgb(0x3c, 0xc8, 0x64), Rgb(0xf0, 0xd2, 0x3c), Rgb(0xe0, 0x40, 0x2e)],
         contour_over: CONTOUR_OVER,
+        marked: Rgb(0xe0, 0x2e, 0x2e),
         glyphs: GlyphColors {
             constraint: Rgb(0x00, 0x8a, 0xa8),
             load: Rgb(0xd0, 0x24, 0x24),
@@ -218,6 +221,24 @@ fn model_scene(d: &DisplayMesh, p: &Palette) -> Scene {
     s
 }
 
+/// The elements `mesh.quality.mark` marked (its set), drawn in the marker colour.
+pub fn marked(s: &Session) -> std::collections::BTreeSet<u32> {
+    s.model.set(crate::cmd::mesh::MARKED_SET).map(|set| set.elements.iter().copied().collect()).unwrap_or_default()
+}
+
+/// Colour the faces of the `marked` elements in `scene`, whose triangles start with the element
+/// faces of `display` in order (as [`model_scene`] and the app's viewport build them).
+pub fn mark(scene: &mut Scene, display: &DisplayMesh, marked: &std::collections::BTreeSet<u32>, color: Rgb) {
+    if marked.is_empty() {
+        return;
+    }
+    for (t, d) in scene.tris.iter_mut().zip(&display.tris) {
+        if marked.contains(&d.element) {
+            t.color = color;
+        }
+    }
+}
+
 /// The model part of a picture: the model or the results view's plot, the shape the symbols sit
 /// on (the deformed one of a plot), the box around it and what it shows.
 struct Picture {
@@ -251,6 +272,7 @@ fn picture(s: &Session, p: &Palette, section: Option<Section>, toward: Vec3) -> 
     let glyphs = plot.map_or_else(|| s.glyphs(), |(v, _)| s.step_glyphs(&v.step));
     let Some((view, result)) = plot else {
         let mut scene = model_scene(&base, p);
+        mark(&mut scene, &base, &marked(s), p.marked);
         let bounds = base.bounds;
         let shows = |n: &str| s.shows(fieldcraft_io::ItemKind::Datum, n);
         let datums = fieldcraft_render::glyphs::datums(&s.model, &base.bounds, &shows, None, &p.glyphs, &mut scene);

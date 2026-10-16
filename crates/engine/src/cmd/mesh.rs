@@ -67,6 +67,16 @@ pub const QUALITY: CommandSpec = CommandSpec {
     run: quality_report,
 };
 
+pub const QUALITY_MARK: CommandSpec = CommandSpec {
+    id: "mesh.quality.mark",
+    label: "Mark Bad Elements",
+    params: r#"{"limits"?: {"scaled_jacobian": 0.2, "min_dihedral": 10, "max_dihedral": 165, "aspect_ratio": 10, "min_angle": 15, "max_angle": 165} (the defaults; given limits are merged over them, null drops one; any metric of mesh.quality may be limited: a floor for those where higher is better, a ceiling for max_dihedral, aspect_ratio, edge_ratio, max_angle and skew; angles in degrees), "elements"?: [labels] (default all)} — after meshing, marks the elements that fail a limit (and every solid not proven valid) as the element set `quality_marked`, replaced on every run and removed when none fail; the viewport and `fieldcraft-cli snapshot` draw its elements in the marker colour. Replies `summary`, `measured`, `marked`, `invalid`, the `limits` used and `elements` (worst first: not valid, then lowest scaled Jacobian; at most 1000, `truncated` says when more): each `label`, `kind`, `body`, `at` (its centroid), `valid` and `failed` ({metric, value, limit} per limit it fails). One undo step"#,
+    form: Some(super::forms::QUALITY_MARK),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Mesh],
+    run: quality_mark,
+};
+
 pub const EXPORT_STL: CommandSpec = CommandSpec {
     id: "mesh.export.stl",
     label: "Export STL",
@@ -650,6 +660,103 @@ fn quality_report(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// The element set `mesh.quality.mark` keeps the marked elements in.
+pub const MARKED_SET: &str = "quality_marked";
+
+/// The default limits of `mesh.quality.mark`.
+const MARK_LIMITS: [(quality::Metric, f64); 6] = [
+    (quality::Metric::ScaledJacobian, 0.2),
+    (quality::Metric::MinDihedral, 10.0),
+    (quality::Metric::MaxDihedral, 165.0),
+    (quality::Metric::AspectRatio, 10.0),
+    (quality::Metric::MinAngle, 15.0),
+    (quality::Metric::MaxAngle, 165.0),
+];
+
+/// Most marked elements `mesh.quality.mark` lists.
+const MAX_MARKED_LISTED: usize = 1000;
+
+fn quality_mark(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut limits: std::collections::BTreeMap<quality::Metric, f64> = MARK_LIMITS.into_iter().collect();
+    match p.get("limits") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(given)) => {
+            for (name, v) in given {
+                let metric = quality::Metric::parse(name).ok_or_else(|| {
+                    let known: Vec<&str> = quality::Metric::ALL.iter().map(|m| m.name()).collect();
+                    EngineError::Params(format!("no quality metric `{}` (one of {})", name.chars().take(40).collect::<String>(), known.join(", ")))
+                })?;
+                match v {
+                    Value::Null => {
+                        limits.remove(&metric);
+                    }
+                    v => {
+                        let limit = v
+                            .as_f64()
+                            .filter(|x| x.is_finite())
+                            .ok_or_else(|| EngineError::Params(format!("the limit of `{name}` must be a number")))?;
+                        limits.insert(metric, limit);
+                    }
+                }
+            }
+        }
+        Some(_) => return Err(EngineError::Params("`limits` must be an object of metric names and numbers".into())),
+    }
+    let selection = match p.get("elements") {
+        None => None,
+        Some(_) => Some(labels(p, "elements", MAX_ELEMENTS)?),
+    };
+    let limits: Vec<(quality::Metric, f64)> = limits.into_iter().collect();
+    let (measured, marked) = quality::mark_elements(&s.model, selection.as_deref(), &limits)?;
+    let set = fieldcraft_model::Set { elements: marked.iter().map(|m| m.label).collect(), ..Default::default() };
+    if set.elements.is_empty() {
+        if s.model.set(MARKED_SET).is_some() {
+            s.model.remove_set(MARKED_SET)?;
+        }
+    } else if s.model.set(MARKED_SET).is_some() {
+        s.model.replace_set(MARKED_SET, set)?;
+    } else {
+        s.model.add_set(MARKED_SET, set)?;
+    }
+    let invalid = marked.iter().filter(|m| m.is_invalid()).count();
+    let c = s.model.classification();
+    let body = |label: u32| c.elements().get(&label).and_then(|t| t.region).and_then(|r| c.entity(r)).map(|g| g.body.clone());
+    let elements: Vec<Value> = marked
+        .iter()
+        .take(MAX_MARKED_LISTED)
+        .map(|m| {
+            json!({
+                "label": m.label,
+                "kind": m.kind.name(),
+                "body": body(m.label),
+                "at": m.centroid,
+                "valid": m.validity.map(|v| v == quality::Validity::Valid),
+                "failed": m.failed.iter().map(|(metric, v, limit)| json!({"metric": metric.name(), "value": number(*v), "limit": limit})).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let mut summary = format!("{} of {measured} elements marked", marked.len());
+    if invalid > 0 {
+        summary.push_str(&format!(", {invalid} not valid"));
+    }
+    if let Some(worst) = marked.first().and_then(|m| m.scaled_jacobian) {
+        summary.push_str(&format!("; worst scaled Jacobian {worst:.3}"));
+    }
+    if !marked.is_empty() {
+        summary.push_str(&format!(" (set {MARKED_SET})"));
+    }
+    Ok(json!({
+        "summary": summary,
+        "set": (!marked.is_empty()).then_some(MARKED_SET),
+        "measured": measured,
+        "marked": marked.len(),
+        "invalid": invalid,
+        "limits": limits.iter().map(|(m, v)| (m.name().to_string(), json!(v))).collect::<serde_json::Map<_, _>>(),
+        "elements": elements,
+        "truncated": marked.len() > MAX_MARKED_LISTED,
+    }))
+}
+
 /// A quality report in a line, for the status bar and the CLI: the elements measured, how many
 /// are invalid or undetermined, and the scaled Jacobian's minimum and mean.
 fn quality_summary(r: &QualityReport) -> String {
@@ -822,6 +929,73 @@ mod tests {
             json!({"points": vec![[0, 0, 0]; 20_001]}),
         ] {
             assert!(s.execute("mesh.delaunay.points", &bad).is_err(), "{bad}");
+        }
+    }
+
+    fn mark_session() -> Session {
+        let mut s = Session::default();
+        let corners = json!([[0, 0, 0], [2, 0, 0], [2, 1, 0], [0, 1, 0], [0, 0, 1], [2, 0, 1], [2, 1, 1], [0, 1, 1]]);
+        s.execute("mesh.block", &json!({"body": "Bar", "kind": "hex8", "corners": corners, "divisions": [2, 1, 1]})).unwrap();
+        s
+    }
+
+    /// Two good hexes mark nothing; a corner pulled in marks its element, located, as the set
+    /// the viewport draws; looser limits empty it; undo brings it back.
+    #[test]
+    fn marks_bad_elements_as_a_set() {
+        let mut s = mark_session();
+        let r = s.execute("mesh.quality.mark", &json!({})).unwrap();
+        assert_eq!((r["measured"].as_u64(), r["marked"].as_u64()), (Some(2), Some(0)), "{r}");
+        assert!(s.model.set(super::MARKED_SET).is_none() && r["set"].is_null());
+        assert_eq!(r["limits"]["scaled_jacobian"], 0.2);
+        // Pull the far top corner of the second hex nearly onto its middle.
+        let (&corner, _) = s.model.nodes().iter().find(|(_, n)| n.xyz == [2.0, 1.0, 1.0]).unwrap();
+        let (&bad, _) = s.model.elements().iter().find(|(_, e)| e.nodes.contains(&corner)).unwrap();
+        s.execute("mesh.node.add", &json!({"label": corner, "xyz": [1.7, 0.7, 0.7]})).unwrap();
+        let r = s.execute("mesh.quality.mark", &json!({})).unwrap();
+        assert_eq!((r["marked"].as_u64(), r["invalid"].as_u64()), (Some(1), Some(0)), "{r}");
+        assert_eq!(r["set"], super::MARKED_SET);
+        let e = &r["elements"][0];
+        assert_eq!((e["label"].as_u64(), e["kind"].as_str(), e["body"].as_str()), (Some(bad as u64), Some("hex8"), Some("Bar")), "{e}");
+        assert!(e["failed"].as_array().unwrap().iter().any(|f| f["metric"] == "scaled_jacobian"), "{e}");
+        let at: Vec<f64> = e["at"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert!(at[0] > 1.0 && at[0] < 2.0, "{at:?}");
+        assert!(r["summary"].as_str().unwrap().starts_with("1 of 2 elements marked"), "{r}");
+        assert_eq!(s.model.set(super::MARKED_SET).unwrap().elements, [bad]);
+        assert_eq!(crate::view::marked(&s).into_iter().collect::<Vec<_>>(), [bad]);
+        // The picture draws its faces in the marker colour, and only its.
+        let p = crate::view::Palette::LIGHT;
+        let (scene, _, _) = crate::view::scene(&s, &p);
+        let red = scene.tris.iter().filter(|t| t.color == p.marked).count();
+        assert_eq!(red, 5 * 2, "the bad hex's outer faces (all but the shared one), as triangles");
+        // Without limits the (valid) element passes and the set goes.
+        let all_off = json!({"limits": {"scaled_jacobian": null, "min_dihedral": null, "max_dihedral": null, "aspect_ratio": null, "min_angle": null, "max_angle": null}});
+        let r = s.execute("mesh.quality.mark", &all_off).unwrap();
+        assert_eq!(r["marked"], 0, "{r}");
+        assert!(s.model.set(super::MARKED_SET).is_none());
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.model.set(super::MARKED_SET).unwrap().elements, [bad], "undo restores the marks");
+        // Only the elements asked about.
+        let other = s.model.elements().keys().copied().find(|l| *l != bad).unwrap();
+        assert_eq!(s.execute("mesh.quality.mark", &json!({"elements": [other]})).unwrap()["marked"], 0);
+    }
+
+    #[test]
+    fn mark_rejects_hostile_parameters() {
+        let mut s = Session::default();
+        assert!(s.execute("mesh.quality.mark", &json!({})).is_err(), "needs a mesh");
+        let mut s = mark_session();
+        for p in [
+            json!({"limits": {"nope": 1}}),
+            json!({"limits": {"scaled_jacobian": "low"}}),
+            json!({"limits": {"scaled_jacobian": true}}),
+            json!({"limits": [0.2]}),
+            json!({"limits": {"x".repeat(10000): 1}}),
+            json!({"elements": [0]}),
+            json!({"elements": [99]}),
+            json!({"elements": "all"}),
+        ] {
+            assert!(s.execute("mesh.quality.mark", &p).is_err(), "{p}");
         }
     }
 

@@ -336,6 +336,36 @@ pub fn render_layers(scene: &Scene, overlays: &[&Scene], cam: &Camera, w: usize,
     downsample(&c, w, h)
 }
 
+/// `layers`' labels drawn over finished `w × h` RGBA pixels (a GPU picture), as [`render_layers`]
+/// draws them: the pixels are drawn at the supersampled size, so pixels away from a label come
+/// back unchanged. `radius` is the scene's clipping radius.
+pub fn draw_labels(rgba: &[u8], w: usize, h: usize, layers: &[&Scene], cam: &Camera, radius: f64) -> Result<Vec<u8>, RenderError> {
+    if !size_ok(w, h) || rgba.len() != w * h * 4 {
+        return Err(RenderError::Size { w, h });
+    }
+    let labels: Vec<&SceneLabel> = layers.iter().flat_map(|s| &s.labels).take(MAX_LABELS).collect();
+    if labels.is_empty() {
+        return Ok(rgba.to_vec());
+    }
+    let (sw, sh) = (w * SS, h * SS);
+    let mut c = Canvas::new(sw, sh)?;
+    for y in 0..sh {
+        for x in 0..sw {
+            let (i, o) = (((y / SS) * w + x / SS) * 4, (y * sw + x) * 4);
+            if let (Some(src), Some(dst)) = (rgba.get(i..i + 4), c.rgba.get_mut(o..o + 4)) {
+                dst.copy_from_slice(src);
+            }
+        }
+    }
+    let proj = Projector::new(cam, sw as f64, sh as f64, radius);
+    for l in labels {
+        if let Some(q) = proj.screen(l.p) {
+            label(&mut c, q, &l.text, l.color.f());
+        }
+    }
+    Ok(downsample(&c, w, h)?.rgba)
+}
+
 /// Cover a triangle with screen corners `a`, `b`, `c` (x, y, depth) on a `w × h` pixel grid:
 /// `pixel(x, y, depth)` for every pixel whose centre is inside it (its edges included), the depth
 /// interpolated. Degenerate and off-grid triangles cover nothing. The renderer and the picking
@@ -612,6 +642,20 @@ mod tests {
             ..scene
         };
         let _ = render(&wild, &cam, 32, 32);
+    }
+
+    #[test]
+    fn labels_draw_over_finished_pixels() {
+        let (w, h) = (64, 32);
+        let px: Vec<u8> = (0..w * h).flat_map(|i| [(i % 251) as u8, 40, 200, 255]).collect();
+        let cam = Camera::default();
+        let mut scene = Scene::default();
+        assert_eq!(draw_labels(&px, w, h, &[&scene], &cam, 10.0).unwrap(), px);
+        scene.labels.push(SceneLabel { p: Vec3::ZERO, text: "RP".into(), color: Rgb(0, 0, 0) });
+        let out = draw_labels(&px, w, h, &[&scene], &cam, 10.0).unwrap();
+        let changed = out.chunks(4).zip(px.chunks(4)).filter(|(a, b)| a != b).count();
+        assert!(changed > 10 && changed < w * h / 2, "{changed}");
+        assert!(draw_labels(&px, w + 1, h, &[&scene], &cam, 10.0).is_err());
     }
 
     #[test]

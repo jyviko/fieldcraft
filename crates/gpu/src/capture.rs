@@ -3,13 +3,14 @@
 //! and laid over the viewport's background gradient. Every GPU call sits inside error scopes,
 //! so a device error (out of memory, validation) returns as an error, never a panic.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use fieldcraft_render::{Camera, Rgb, Scene};
 
-use crate::select::{self, Policy, Tier};
+use crate::select::{self, Policy};
 use crate::view::{Frame, GpuScene, GpuTarget, Layer, Pipelines};
 use crate::{GpuError, Result};
+use crate::{Renderer, Tier};
 
 /// Largest picture side and pixel count drawn (the CPU rasterizer's limits).
 pub const MAX_SIDE: u32 = fieldcraft_render::MAX_DIM as u32;
@@ -96,8 +97,10 @@ impl Capturer {
         if let Some(e) = caught {
             return Err(GpuError::Failed(e.to_string()));
         }
-        let pixels = drawn?;
-        Ok(over_background(&pixels, w as usize, h as usize, scene.background.unwrap_or(BACKGROUND)))
+        let pixels = over_background(&drawn?, w as usize, h as usize, scene.background.unwrap_or(BACKGROUND));
+        // Labels in the CPU rasterizer's font (the window draws them with the interface's).
+        let layers: Vec<&Scene> = std::iter::once(scene).chain(layers.iter().copied()).collect();
+        fieldcraft_render::draw_labels(&pixels, w as usize, h as usize, &layers, cam, scene.radius).map_err(|e| GpuError::Failed(e.to_string()))
     }
 
     fn draw(&self, scene: &Scene, layers: &[&Scene], cam: &Camera, w: u32, h: u32) -> Result<Vec<u8>> {
@@ -182,6 +185,46 @@ impl Capturer {
         buffer.unmap();
         pixels.ok_or_else(|| GpuError::Failed("the picture read back has the wrong size".into()))
     }
+}
+
+/// The process's capturer, opened on first use by the `FIELDCRAFT_GPU` policy: `Ok(None)` for
+/// the CPU rasterizer. Its error is kept, so a missing device is not looked for again.
+pub fn shared() -> &'static Result<Option<Capturer>> {
+    static SHARED: OnceLock<Result<Option<Capturer>>> = OnceLock::new();
+    SHARED.get_or_init(|| Policy::from_env().and_then(Capturer::open))
+}
+
+/// A PNG of `scene` with `layers` seen by `cam`, `w` × `h` pixels, drawn by `capturer` (a
+/// [`shared`] result): on its GPU, or by the CPU rasterizer when it is `Ok(None)`. Under the
+/// `auto` policy a GPU failure falls back to the CPU and the reason is reported; under a strict
+/// one it is the error.
+pub fn png(
+    capturer: &Result<Option<Capturer>>,
+    policy: Policy,
+    scene: &Scene,
+    layers: &[&Scene],
+    cam: &Camera,
+    w: u32,
+    h: u32,
+) -> Result<(Vec<u8>, Renderer)> {
+    let gpu = match capturer {
+        Ok(Some(c)) => c.rgba(scene, layers, cam, w, h).map(|px| Some((px, c))),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.clone()),
+    };
+    let why = match gpu {
+        Ok(Some((px, c))) => {
+            let png =
+                fieldcraft_render::png(w as usize, h as usize, &px).ok_or_else(|| GpuError::Failed("the picture could not be encoded".into()))?;
+            return Ok((png, Renderer::Gpu { adapter: c.adapter.clone(), tier: c.tier, samples: c.samples() }));
+        }
+        Ok(None) => (policy == Policy::Auto).then(|| "no GPU adapter".to_string()),
+        Err(e @ GpuError::Size(_)) => return Err(e),
+        Err(e) if policy == Policy::Auto => Some(e.to_string()),
+        Err(e) => return Err(e),
+    };
+    let png = fieldcraft_render::render_layers_png(scene, layers, cam, w as usize, h as usize).map_err(|e| GpuError::Size(e.to_string()))?;
+    Ok((png, Renderer::Cpu { why }))
 }
 
 /// Bytes per row of a `w` pixel RGBA copy, padded to wgpu's 256-byte alignment.

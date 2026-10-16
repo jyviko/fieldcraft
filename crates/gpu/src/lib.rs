@@ -29,3 +29,44 @@ pub enum GpuError {
 }
 
 pub type Result<T> = std::result::Result<T, GpuError>;
+
+/// The kind of device a picture was drawn on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tier {
+    Hardware,
+    Software,
+}
+
+impl Tier {
+    pub fn label(self) -> &'static str {
+        match self {
+            Tier::Hardware => "hardware GPU",
+            Tier::Software => "software GPU",
+        }
+    }
+}
+
+/// What drew a picture.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Renderer {
+    Gpu {
+        adapter: String,
+        tier: Tier,
+        samples: u32,
+    },
+    /// The CPU rasterizer, and why when a GPU was wanted (`auto` with no usable GPU).
+    Cpu {
+        why: Option<String>,
+    },
+}
+
+impl Renderer {
+    /// `"hardware"`, `"software"` or `"cpu"`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Renderer::Gpu { tier: Tier::Hardware, .. } => "hardware",
+            Renderer::Gpu { tier: Tier::Software, .. } => "software",
+            Renderer::Cpu { .. } => "cpu",
+        }
+    }
+}

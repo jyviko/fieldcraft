@@ -44,21 +44,7 @@ impl Policy {
     }
 }
 
-/// The kind of device a picture was drawn on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tier {
-    Hardware,
-    Software,
-}
-
-impl Tier {
-    pub fn label(self) -> &'static str {
-        match self {
-            Tier::Hardware => "hardware GPU",
-            Tier::Software => "software GPU",
-        }
-    }
-}
+pub use crate::Tier;
 
 /// An adapter's tier and its rank within it (lower is better).
 pub fn rank(t: wgpu::DeviceType) -> (Tier, u8) {

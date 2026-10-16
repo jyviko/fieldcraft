@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use fieldcraft_engine::Session;
-use fieldcraft_engine::view::{Palette, Shown};
+use fieldcraft_engine::view::{Aim, Palette, Section, Shown, Target};
 use fieldcraft_gpu::Renderer;
 use fieldcraft_io::roots::Roots;
 use fieldcraft_render::{Orientation, StandardView};
@@ -56,8 +56,11 @@ pub fn picture_report(r: &Renderer, shown: &Shown) -> Value {
 pub struct PictureRequest {
     /// A standard view to turn to first (`iso`, `front`…; `home` and `fit` frame the model).
     pub view: Option<String>,
-    /// A camera orientation to turn to first (degrees; `view` and `camera` are not given together).
-    pub camera: Option<Orientation>,
+    /// A camera to aim first ([`fieldcraft_engine::view::camera`]; `view` and `camera` are not
+    /// given together). Without a target it looks at the model's centre of mass.
+    pub camera: Option<Aim>,
+    /// A section through the mesh, as `fieldcraft-cli snapshot --section` (headless only).
+    pub section: Option<Section>,
     /// The whole app window (`true`) or the model only.
     pub window: bool,
     /// Image size in pixels (a window capture: points); `None` keeps the default.
@@ -108,9 +111,9 @@ fn standard_view(v: &str) -> Result<StandardView, String> {
 /// An in-process headless session; pictures come from the CPU rasterizer.
 pub struct Headless {
     pub session: Session,
-    /// The orientation of pictures; each one frames everything drawn, unless the orientation
-    /// has a distance.
-    pub view: Orientation,
+    /// The camera of pictures: a standard view frames everything drawn (unless it has a
+    /// distance); a camera given aims at its target ([`fieldcraft_engine::view::frame_at`]).
+    pub view: Aim,
     roots: Roots,
 }
 
@@ -125,7 +128,7 @@ impl Headless {
     pub fn new(roots: Roots) -> Self {
         let mut session = Session::default();
         session.file_access = roots.clone();
-        Headless { session, view: Orientation::of(StandardView::Iso), roots }
+        Headless { session, view: Aim::new(Orientation::of(StandardView::Iso)), roots }
     }
 }
 
@@ -140,19 +143,25 @@ impl Backend for Headless {
 
     fn picture(&mut self, r: &PictureRequest) -> Result<Picture, String> {
         if let Some(v) = &r.view {
-            self.view = Orientation::of(standard_view(v)?);
+            self.view = Aim::new(Orientation::of(standard_view(v)?));
         }
-        if let Some(o) = r.camera {
-            self.view = o;
+        if let Some(a) = &r.camera {
+            self.view = Aim { target: Some(a.target.clone().unwrap_or(Target::MODEL)), ..a.clone() };
         }
         let w = r.width.unwrap_or(DEFAULT_SIZE.0).clamp(16, MAX_SIDE);
         let h = r.height.unwrap_or(DEFAULT_SIZE.1).clamp(16, MAX_SIDE);
-        let f = fieldcraft_engine::view::frame(&self.session, &self.view, w as usize, h as usize, &Palette::LIGHT, None);
+        let f = if self.view.target.is_some() {
+            fieldcraft_engine::view::frame_at(&self.session, &self.view, w as usize, h as usize, &Palette::LIGHT, r.section)
+                .map_err(|e| e.to_string())?
+        } else {
+            fieldcraft_engine::view::frame(&self.session, &self.view.at, w as usize, h as usize, &Palette::LIGHT, r.section)
+        };
         let (png, renderer) = draw(&f, w, h)?;
         let mut info = picture_report(&renderer, &f.shown);
         if let Some(o) = info.as_object_mut() {
             o.insert("source".into(), "model".into());
-            o.insert("view".into(), json!(self.view));
+            o.insert("view".into(), self.view.json());
+            o.insert("camera".into(), json!(f.cam));
             o.insert("width".into(), w.into());
             o.insert("height".into(), h.into());
         }
@@ -277,8 +286,13 @@ impl Backend for Remote {
             standard_view(v)?;
             self.call("ui.view", json!({"view": v}))?;
         }
-        if let Some(o) = r.camera {
-            self.call("ui.camera", json!(o))?;
+        if r.section.is_some() {
+            return Err("screenshot: `section` draws headless only (the app's window has no section view)".into());
+        }
+        if let Some(a) = &r.camera {
+            // Aimed as a headless picture is: at the model's centre of mass unless told otherwise.
+            let a = Aim { target: Some(a.target.clone().unwrap_or(Target::MODEL)), ..a.clone() };
+            self.call("ui.camera", a.json())?;
         }
         let path = temp_png();
         let shown = path.to_string_lossy().into_owned();

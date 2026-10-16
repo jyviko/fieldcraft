@@ -327,11 +327,8 @@ pub fn handle(app: &mut ModelApp, ctx: &egui::Context, req: &ControlRequest) -> 
             }
             ok(json!(app.cam))
         }
-        "ui.camera" => match fieldcraft_engine::view::orientation(p) {
-            Ok(o) => {
-                app.cam.orient(&o);
-                ok(json!(app.cam))
-            }
+        "ui.camera" => match fieldcraft_engine::view::camera(p).map_err(|e| e.to_string()).and_then(|a| app.aim_camera(&a)) {
+            Ok(()) => ok(json!(app.cam)),
             Err(e) => err(e),
         },
         "ui.start" => {
@@ -748,6 +745,13 @@ mod tests {
         }
         assert_eq!(app.cam.distance, 250.0);
         assert_eq!(call(&mut app, "ui.camera", json!({"yaw": -1e12, "pitch": 1e300, "distance": 1e300}))["ok"], true);
+        // Aimed at a point it looks at it; at the model's centre of mass, framed (#467).
+        let r = call(&mut app, "ui.camera", json!({"yaw": 30, "pitch": 20, "target": [1, 2, 3], "distance": 40}));
+        assert_eq!((app.cam.target, app.cam.distance), (fieldcraft_render::Vec3::new(1.0, 2.0, 3.0), 40.0), "{r}");
+        let r = call(&mut app, "ui.camera", json!({"yaw": 30, "pitch": 20, "target": {"center_of": "mass"}, "fit": true}));
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(app.cam.target.dist(fieldcraft_render::Vec3::new(1.0, 2.0, 3.0)) > 1.0 && app.cam.distance < 1e8, "{r}");
+        assert_eq!(call(&mut app, "ui.camera", json!({"yaw": 0, "pitch": 0, "target": {"bodies": ["Nope"]}}))["ok"], false);
         assert!(app.cam.is_valid() && app.cam.pitch < std::f64::consts::FRAC_PI_2);
         assert_eq!(call(&mut app, "ui.inspect", json!({}))["result"]["model"]["elements"], 64 + 162);
         assert_eq!(call(&mut app, "ui.screenshot", json!({})), json!({"screenshot": true}));

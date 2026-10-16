@@ -307,15 +307,40 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "screenshot",
             "Look at the model",
-            "A PNG of the model and the results display. Headless: a CPU render framing everything drawn. Connected to \
-             the app: the whole window drawn offscreen (source \"window\", the default; ui.capture) or the model with the \
-             app's camera (source \"model\"; ui.render). `view` turns the camera to a standard view first, or `camera` to \
-             any orientation: {yaw, pitch, distance?} in degrees (yaw 0 looks along +Y, -45 is the iso view's; pitch is \
-             the elevation, clamped to ±90) and model units; a sequence of them orbits smoothly.",
+            "A PNG of the model and the results display. Headless: drawn offscreen framing everything drawn. Connected \
+             to the app: the whole window drawn offscreen (source \"window\", the default; ui.capture) or the model with \
+             the app's camera (source \"model\"; ui.render). `view` turns the camera to a standard view first, or `camera` \
+             aims it: {yaw, pitch} in degrees (yaw 0 looks along +Y, -45 is the iso view's; pitch is the elevation, \
+             clamped to ±90) at `target` (default: the centre of mass of the model drawn, so a sequence of yaws orbits \
+             it), from `distance` (model units), or with `fit` the targeted bodies filling the frame; without either, \
+             from the distance that keeps the whole model in view from every side. A camera given moves the app's too. \
+             `section` cuts the mesh (headless).",
             obj(
                 json!({
                     "view": {"type": "string", "enum": VIEWS, "description": "Standard view (default: keep the current one; headless starts at iso)"},
-                    "camera": {"type": "object", "description": "Camera orientation {yaw, pitch, distance?}: degrees, and the distance from the target in model units (default: framed headless, kept in the app)"},
+                    "camera": {
+                        "type": "object",
+                        "description": "Camera aim; kept for the next screenshot",
+                        "properties": {
+                            "yaw": {"type": "number", "description": "Degrees about Z; 0 looks along +Y"},
+                            "pitch": {"type": "number", "description": "Degrees of elevation, -90 to 90"},
+                            "distance": {"type": "number", "description": "From the target, in model units (not with fit)"},
+                            "target": {
+                                "description": "What to look at: [x, y, z], or {center_of: mass | bbox, bodies?: [design body names]} (default {center_of: mass}, the model drawn)",
+                                "oneOf": [
+                                    {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                                    {"type": "object", "properties": {
+                                        "center_of": {"type": "string", "enum": ["mass", "bbox"]},
+                                        "bodies": {"type": "array", "items": {"type": "string"}},
+                                    }},
+                                ],
+                            },
+                            "fit": {"type": "boolean", "description": "Choose the distance so the targeted bodies (or the model) fill the frame from this direction"},
+                            "fov": {"type": "number", "description": "Vertical field of view in degrees, 0 (orthographic, the default headless) to 150"},
+                        },
+                        "required": ["yaw", "pitch"],
+                    },
+                    "section": string("Cut the mesh normal to an axis, as fieldcraft-cli snapshot --section: x, y, z (at the middle) or AXIS=VALUE (y=2.5); headless only"),
                     "source": {"type": "string", "enum": ["window", "model"], "description": "window = the app's window, model = a model render"},
                     "width": integer("Width in pixels (window: points), 16 to 4096"),
                     "height": integer("Height in pixels (window: points), 16 to 4096"),
@@ -615,13 +640,22 @@ fn capture(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<(Vec<u8>, Valu
         None => None,
     };
     let size = |k: &str| a.get(k).and_then(Value::as_u64).map(|v| u32::try_from(v).unwrap_or(u32::MAX));
-    let camera = a.get("camera").filter(|v| !v.is_null()).map(fieldcraft_engine::view::orientation).transpose().map_err(|e| e.to_string())?;
+    let camera = a.get("camera").filter(|v| !v.is_null()).map(fieldcraft_engine::view::camera).transpose().map_err(|e| e.to_string())?;
+    let section = match a.get("section").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(
+            v.as_str()
+                .and_then(fieldcraft_engine::view::Section::parse)
+                .ok_or("screenshot: `section` is x, y, z or AXIS=VALUE (x=12.5): the mesh cut normal to that axis")?,
+        ),
+    };
     if camera.is_some() && a.get("view").is_some_and(|v| !v.is_null()) {
         return Err("screenshot: give `view` or `camera`, not both".into());
     }
     let request = PictureRequest {
         view: str_arg(a, "view").map(str::to_string),
         camera,
+        section,
         window: str_arg(a, "source") != Some("model"),
         width: size("width"),
         height: size("height"),

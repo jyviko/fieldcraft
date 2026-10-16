@@ -219,11 +219,23 @@ fn screenshot_takes_a_camera_orientation() {
     let (iso, _) = picture(&mut s, json!({"view": "iso", "width": 64, "height": 48}));
     let (turned, info) = picture(&mut s, json!({"camera": {"yaw": 30, "pitch": 1e9, "distance": 1e300}, "width": 64, "height": 48}));
     assert_ne!(iso, turned);
-    assert_eq!(info["view"], json!({"yaw": 30.0, "pitch": 90.0, "distance": 1e9}), "{info}");
+    assert_eq!(info["view"], json!({"yaw": 30.0, "pitch": 90.0, "distance": 1e9, "target": {"center_of": "mass"}}), "{info}");
     // The reply names what drew it: the viewport's pipeline on a GPU, or the CPU rasterizer.
     assert!(matches!(info["renderer"]["kind"].as_str(), Some("hardware" | "software" | "cpu")), "{info}");
     let (again, _) = picture(&mut s, json!({"width": 64, "height": 48}));
     assert_eq!(again, turned);
+    // Aimed at a point, the camera looks at it; a section cuts the mesh.
+    let (_, info) =
+        picture(&mut s, json!({"camera": {"yaw": 0, "pitch": 0, "target": [1, 2, 3], "fit": true, "fov": 30}, "width": 64, "height": 48}));
+    assert_eq!(info["camera"]["target"], json!({"x": 1.0, "y": 2.0, "z": 3.0}), "{info}");
+    assert!((info["camera"]["fov"].as_f64().unwrap() - 30f64.to_radians()).abs() < 1e-12, "{info}");
+    let (whole, _) = picture(&mut s, json!({"width": 64, "height": 48}));
+    let (cut, _) = picture(&mut s, json!({"section": "y", "width": 64, "height": 48}));
+    assert_ne!(whole, cut);
+    for bad in [json!({"section": "w"}), json!({"camera": {"yaw": 0, "pitch": 0, "target": {"center_of": "mass", "bodies": ["Nope"]}}})] {
+        let (text, err) = call(&mut s, "screenshot", bad.clone());
+        assert!(err, "{bad}: {text}");
+    }
 }
 
 /// `probe {at}` reads a structural result at the nodes nearest to points (#105); hostile points

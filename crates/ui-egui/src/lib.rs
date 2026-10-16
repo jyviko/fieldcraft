@@ -1894,6 +1894,16 @@ impl ModelApp {
         self.fit_view();
     }
 
+    /// Aim the camera as `aim` says ([`fieldcraft_engine::view::camera`], the control channel's
+    /// `ui.camera`): turned, and with a target moved to look at it from the view's free part, as
+    /// a standard view moves it. A framing still waiting is dropped.
+    pub fn aim_camera(&mut self, aim: &fieldcraft_engine::view::Aim) -> Result<(), String> {
+        let (aspect, _) = self.free_part();
+        self.cam = fieldcraft_engine::view::aim(&self.session, aim, self.cam, aspect).map_err(|e| e.to_string())?;
+        self.reframe = None;
+        Ok(())
+    }
+
     /// Do the framing asked for ([`framing::Reframe`]) once there is something to frame; the
     /// viewport calls it when it knows its size and its overlays, before drawing.
     pub(crate) fn apply_reframe(&mut self) {

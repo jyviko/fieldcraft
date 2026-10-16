@@ -1,6 +1,6 @@
 //! fieldcraft-cli commands
 //! fieldcraft-cli run <script.json>
-//! fieldcraft-cli snapshot <script.json> --out shot.png [--view V] [--size WxH] [--section x|y|z[=V]] [--field F]
+//! fieldcraft-cli snapshot <script.json> --out shot.png [--view V | --camera JSON] [--size WxH] [--section x|y|z[=V]] [--field F]
 //! fieldcraft-cli features
 //! fieldcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
 //! fieldcraft-cli crashes [list [--json] | show <id> | replay <id> | dir | clear [<id>]]
@@ -25,8 +25,8 @@ usage:
   fieldcraft-cli commands --json       the same as JSON, each command's parameters as JSON Schema
   fieldcraft-cli run <script.json>     run a script (a JSON array of {\"command\", \"params\"})
                                        and print the model summary
-  fieldcraft-cli snapshot <script.json> --out FILE.png [--view V] [--size WxH]
-                      [--section x|y|z[=VALUE]] [--field FIELD]
+  fieldcraft-cli snapshot <script.json> --out FILE.png [--view V | --camera JSON]
+                      [--size WxH] [--section x|y|z[=VALUE]] [--field FIELD]
                                        run a script and draw the model to a PNG with no
                                        window: the viewport's GPU pipeline on a hardware or
                                        software GPU, else the CPU rasterizer (FIELDCRAFT_GPU=
@@ -34,7 +34,10 @@ usage:
                                        front, back, left, right, top, bottom; size 1280x800;
                                        --section hides the elements beyond a plane (at the
                                        mesh's middle, or VALUE); --field contours a nodal
-                                       field of the solved step (results.contour)
+                                       field of the solved step (results.contour);
+                                       --camera '{\"yaw\":30,\"pitch\":20,\"target\":...,
+                                       \"fit\":true,\"fov\":35}' aims as MCP screenshot's camera
+                                       (default target: the model's centre of mass)
   fieldcraft-cli features              print docs/features.md (every capability, ready or
                                        coming soon) from the capability catalogue
   fieldcraft-cli mcp [options]         serve the Model Context Protocol on stdin/stdout

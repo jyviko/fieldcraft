@@ -4,7 +4,7 @@
 //! (lavapipe, llvmpipe, WARP), and by the CPU rasterizer as the last tier (`FIELDCRAFT_GPU`,
 //! [`fieldcraft_gpu::select`]).
 
-use fieldcraft_engine::view::{self, Palette, Section};
+use fieldcraft_engine::view::{self, Aim, Palette, Section, Target};
 use fieldcraft_gpu::Renderer;
 use fieldcraft_gpu::capture::{self, Capturer};
 use fieldcraft_gpu::select::Policy;
@@ -18,6 +18,8 @@ pub struct Options {
     pub script: String,
     pub out: String,
     pub view: StandardView,
+    /// A camera aimed as the MCP `screenshot`'s (`--camera JSON`; not with `--view`).
+    pub camera: Option<Aim>,
     pub size: (u32, u32),
     /// A section through the mesh (`--section x|y|z[=VALUE]`).
     pub section: Option<Section>,
@@ -46,7 +48,7 @@ fn size_of(s: &str) -> Option<(u32, u32)> {
 
 /// The options: the script, then each flag once, as `--flag value` or `--flag=value`.
 pub fn options(args: &[String]) -> Result<Options, String> {
-    let (mut script, mut out, mut view, mut size, mut section, mut field) = (None, None, None, None, None, None);
+    let (mut script, mut out, mut view, mut size, mut section, mut field, mut camera) = (None, None, None, None, None, None, None);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         if !arg.starts_with("--") {
@@ -80,16 +82,24 @@ pub fn options(args: &[String]) -> Result<Options, String> {
                 .replace(Section::parse(&value).ok_or_else(|| format!("--section: `{value}` is not x, y, z or AXIS=VALUE (x=12.5)"))?)
                 .is_some(),
             "--field" => field.replace(value).is_some(),
+            "--camera" => {
+                let v: serde_json::Value = serde_json::from_str(&value).map_err(|e| format!("--camera: not JSON: {e}"))?;
+                camera.replace(view::camera(&v).map_err(|e| format!("--camera: {e}"))?).is_some()
+            }
             other => return Err(format!("snapshot: unknown option `{other}`")),
         };
         if twice {
             return Err(format!("{flag} is given twice"));
         }
     }
+    if view.is_some() && camera.is_some() {
+        return Err("give --view or --camera, not both".into());
+    }
     Ok(Options {
         script: script.ok_or("snapshot needs a script")?,
         out: out.ok_or("snapshot needs --out FILE.png")?,
         view: view.unwrap_or(StandardView::Iso),
+        camera,
         size: size.unwrap_or(DEFAULT_SIZE),
         section,
         field,
@@ -103,7 +113,10 @@ pub fn picture(o: &Options, policy: Policy) -> Result<(Vec<u8>, Renderer, view::
         session.execute("results.contour", &serde_json::json!({"field": field})).map_err(|e| format!("--field: {e}"))?;
     }
     let (w, h) = o.size;
-    let f = view::frame(&session, &Orientation::of(o.view), w as usize, h as usize, &Palette::LIGHT, o.section);
+    let f = match &o.camera {
+        Some(aim) => view::frame_at(&session, aim, w as usize, h as usize, &Palette::LIGHT, o.section).map_err(|e| e.to_string())?,
+        None => view::frame(&session, &Orientation::of(o.view), w as usize, h as usize, &Palette::LIGHT, o.section),
+    };
     let capturer = Capturer::open(policy);
     let (png, renderer) = capture::png(&capturer, policy, &f.scene, &[&f.symbols], &f.cam, w, h).map_err(|e| e.to_string())?;
     Ok((png, renderer, f.shown))
@@ -119,7 +132,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
         r.insert("out".into(), o.out.clone().into());
         r.insert("width".into(), o.size.0.into());
         r.insert("height".into(), o.size.1.into());
-        r.insert("view".into(), o.view.label().into());
+        match &o.camera {
+            Some(aim) => r.insert("camera".into(), Aim { target: Some(aim.target.clone().unwrap_or(Target::MODEL)), ..aim.clone() }.json()),
+            None => r.insert("view".into(), o.view.label().into()),
+        };
     }
     println!("{report}");
     Ok(())
@@ -138,7 +154,15 @@ mod tests {
         let o = opts(&["s.json", "--out", "a.png"]).unwrap();
         assert_eq!(
             o,
-            Options { script: "s.json".into(), out: "a.png".into(), view: StandardView::Iso, size: DEFAULT_SIZE, section: None, field: None }
+            Options {
+                script: "s.json".into(),
+                out: "a.png".into(),
+                view: StandardView::Iso,
+                camera: None,
+                size: DEFAULT_SIZE,
+                section: None,
+                field: None
+            }
         );
         let o = opts(&["s", "--out", "o", "--section", "y=2.5", "--field", "displacement"]).unwrap();
         assert_eq!((o.section, o.field.as_deref()), (Some(Section { axis: 1, at: Some(2.5) }), Some("displacement")));
@@ -147,6 +171,8 @@ mod tests {
         assert_eq!((o.view, o.size), (StandardView::Top, (640, 480)));
         assert_eq!(opts(&["s", "--out", "o", "--view", "X"]).unwrap().view, StandardView::Right);
         assert_eq!(opts(&["s", "--out", "o", "--view", "front"]).unwrap().view, StandardView::Front);
+        let o = opts(&["s", "--out", "o", "--camera", r#"{"yaw": 30, "pitch": 10, "target": [1, 2, 3], "fit": true}"#]).unwrap();
+        assert_eq!(o.camera.and_then(|a| a.target), Some(Target::Point(fieldcraft_render::Vec3::new(1.0, 2.0, 3.0))));
         for bad in [
             vec![],
             vec!["s.json"],
@@ -164,6 +190,9 @@ mod tests {
             vec!["s", "--out", "o", "--section", "w"],
             vec!["s", "--out", "o", "--section", "x=inf"],
             vec!["s", "--out", "o", "--section", "x=", "--field", "f"],
+            vec!["s", "--out", "o", "--camera", "{yaw: 1}"],
+            vec!["s", "--out", "o", "--camera", r#"{"yaw": 0}"#],
+            vec!["s", "--out", "o", "--camera", r#"{"yaw": 0, "pitch": 0}"#, "--view", "x"],
         ] {
             assert!(opts(&bad).is_err(), "{bad:?}");
         }
@@ -189,7 +218,7 @@ mod tests {
     }
 
     fn opts_for(script: String) -> Options {
-        Options { script, out: String::new(), view: StandardView::Iso, size: (320, 200), section: None, field: None }
+        Options { script, out: String::new(), view: StandardView::Iso, camera: None, size: (320, 200), section: None, field: None }
     }
 
     /// The cantilever drawn headless: a PNG of the size asked for, with the model in it (pixels

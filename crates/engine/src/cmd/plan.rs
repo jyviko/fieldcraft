@@ -1559,6 +1559,47 @@ mod acceptance {
         accept(&mut s, &r, 0.6, 6.0);
     }
 
+    /// The enclosure base of the test below without its standoffs: symmetric across x = 28 and
+    /// y = 21, so its four corners mesh alike: the smallest scaled Jacobian round each corner
+    /// boss well above 0.5 (the compass search lifts elements up to 0.7) and nearly the same.
+    #[test]
+    fn an_enclosure_base_meshes_its_four_corners_alike() {
+        let mut commands = vec![
+            json!({"command": "solid.box", "params": {"length": 56, "width": 42, "height": 16, "body_name": "Base"}}),
+            json!({"command": "solid.fillet", "params": {"edges": [[0, 0, 8], [56, 0, 8], [56, 42, 8], [0, 42, 8]], "radius": 5}}),
+            json!({"command": "solid.shell", "params": {"faces": [[28, 21, 16]], "thickness": 3, "body": "Base"}}),
+        ];
+        let corners = [(-1.0, -1.0), (57.0, -1.0), (-1.0, 43.0), (57.0, 43.0)];
+        for (x, y) in corners {
+            commands.push(json!({"command": "solid.cylinder", "params": {"diameter": 13, "height": 16, "base": [x, y, 0], "operation": "join", "targets": ["Base"]}}));
+        }
+        for (x, y) in corners {
+            commands.push(json!({"command": "solid.hole", "params": {"position": [x, y, 16], "diameter": 3.3, "depth": 8}}));
+        }
+        let (_d, mut s) = open(json!(commands));
+        let plan = s.execute("mesh.plan", &json!({"body": "Base", "size": 1.5, "layers": 2})).unwrap();
+        let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
+        accept(&mut s, &r, 0.5, 10.0);
+        // Every element's scaled Jacobian, by the corner (quadrant) its centroid lies in.
+        let m = s.execute("mesh.quality.mark", &json!({"limits": {"scaled_jacobian": 1.01, "min_dihedral": null, "max_dihedral": null, "aspect_ratio": null, "min_angle": null, "max_angle": null}})).unwrap();
+        let mut worst = [f64::INFINITY; 4];
+        for e in m["elements"].as_array().unwrap() {
+            let at = &e["at"];
+            let q = usize::from(at[0].as_f64().unwrap() > 28.0) + 2 * usize::from(at[1].as_f64().unwrap() > 21.0);
+            for f in e["failed"].as_array().unwrap() {
+                if f["metric"] == "scaled_jacobian" {
+                    worst[q] = worst[q].min(f["value"].as_f64().unwrap());
+                }
+            }
+        }
+        // The layout is mirror symmetric and the smoother visits mirror twins alike; what is left
+        // is the projection onto the body's tessellation, which the kernel does not make mirror
+        // symmetric (a chordal tolerance of 0.0165 mm, on 1.5 mm elements).
+        let (lo, hi) = worst.iter().fold((f64::INFINITY, 0.0f64), |(l, h), w| (l.min(*w), h.max(*w)));
+        assert!(hi - lo < 0.03, "per corner min scaled Jacobian {worst:?}: {r}");
+        assert!(lo > 0.65, "per corner min scaled Jacobian {worst:?}");
+    }
+
     /// An enclosure base: a box with rounded vertical edges, shelled open at the top, a screw
     /// boss joined at each corner (centred outside it, nearly touching the inner fillet) with a
     /// blind hole, and standoffs on the floor. Each boss's ring frames the whole circle,

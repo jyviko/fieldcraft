@@ -137,7 +137,7 @@ fn solid_angle(a: V3, b: V3, c: V3) -> f64 {
 }
 
 /// The generalized winding number of the closed surface `mesh` at `p`: 1 inside, 0 outside.
-fn winding(mesh: &SurfaceMesh, p: V3) -> f64 {
+pub(super) fn winding(mesh: &SurfaceMesh, p: V3) -> f64 {
     let at = |i: u32| mesh.positions.get(i as usize).map(|q| sub(*q, p));
     let mut sum = 0.0;
     for t in mesh.triangles.iter().take(MAX_CLASSIFY_TRIANGLES) {

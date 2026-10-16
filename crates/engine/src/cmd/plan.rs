@@ -62,7 +62,7 @@ pub const PLAN: CommandSpec = CommandSpec {
 pub const APPLY: CommandSpec = CommandSpec {
     id: "mesh.plan.apply",
     label: "Apply Mesh Plan",
-    params: r#"{"plan": "Plan-Base" (a saved plan) | {plan object, as mesh.plan replies it; edited}, "name"?: "Plan-Base" (the name an object is saved under; default Plan-<body>)} — carries the plan out with today's meshers: replaces the plan's earlier partitions (`<plan>-cut<k>`) with its `cuts` (datum planes and partitions of the plan's body only; a cut the kernel cannot make, or that leaves a cell no mesher takes, is left out and reported in `skipped_cuts`), then meshes the body: its cells swept together with structured hex (mesh.cells, `default` hex) when there are cuts, else the body swept (mesh.hex.generate, swept), at the plan's size; each of its `copies` is meshed the same way by a plan of its own (`Plan-<copy>`, saved). No fallback: a cell that does not mesh all-hex is the error. Replies the cuts made and skipped, the cells, the element count, the smallest scaled Jacobian, `all_hex`, whether the cells joined node to node into one mesh (`conforming`), the mapped features, what today's meshers cannot build yet (`pending`: the O-grid and butterfly rings, which need the projection blocking mesher, #399), the `unmapped` features, the copies and the mesher's reply (`mesh`); `replaced` names the meshes it replaced. A plan object is checked and saved first"#,
+    params: r#"{"plan": "Plan-Base" (a saved plan) | {plan object, as mesh.plan replies it; edited}, "name"?: "Plan-Base" (the name an object is saved under; default Plan-<body>), "symmetry"?: true (a projection plan on a body mirror symmetric across planes through its middle square to the sweep meshes one cell and mirrors it: false meshes the whole body)} — carries the plan out with today's meshers: replaces the plan's earlier partitions (`<plan>-cut<k>`) with its `cuts` (datum planes and partitions of the plan's body only; a cut the kernel cannot make, or that leaves a cell no mesher takes, is left out and reported in `skipped_cuts`), then meshes the body: its cells swept together with structured hex (mesh.cells, `default` hex) when there are cuts, else the body swept (mesh.hex.generate, swept), at the plan's size; each of its `copies` is meshed the same way by a plan of its own (`Plan-<copy>`, saved). No fallback: a cell that does not mesh all-hex is the error. Replies the cuts made and skipped, the cells, the element count, the smallest scaled Jacobian, `all_hex`, whether the cells joined node to node into one mesh (`conforming`), the mapped features, what today's meshers cannot build yet (`pending`: the O-grid and butterfly rings, which need the projection blocking mesher, #399), the `unmapped` features, the copies and the mesher's reply (`mesh`); `replaced` names the meshes it replaced. A plan object is checked and saved first"#,
     form: Some(super::forms::MESH_PLAN_APPLY),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -677,13 +677,18 @@ fn copies_of(design: &Design, body: &str, features: &[PlanFeature]) -> Result<Ve
     Ok(out)
 }
 
-/// Build the plan of `body` (a body of the design as opened).
+/// The shape of `body`: a body of the design as opened, or a cell partitions cut from one.
+fn plan_shape<'a>(design: &'a Design, body: &str) -> Option<&'a Shape> {
+    design.source_body(body).or_else(|| design.body(body))
+}
+
+/// Build the plan of `body`: a body of the design as opened, or a cell of one (planned from the
+/// features that built the body it was cut from, with the rings the cell holds).
 pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32, max_elements: usize) -> Result<MeshPlan> {
-    let shape = design.source_body(body).ok_or_else(|| {
-        let source = design.source_of(body).map(|s| format!(" (a cell of `{s}`: plan the body it was cut from)")).unwrap_or_default();
-        EngineError::Params(format!("no body `{body}` in the design as opened{source}"))
-    })?;
-    let graph = design.features(Some(body))?;
+    let shape = plan_shape(design, body).ok_or_else(|| EngineError::Params(format!("no body `{body}` in the design")))?;
+    let source = design.source_of(body).unwrap_or(body);
+    let is_cell = source != body;
+    let graph = design.features(Some(source))?;
     let features: Vec<FeatureNode> = graph.into_iter().next().map(|b| b.features).unwrap_or_default();
     let surfaces = shape.face_surfaces()?;
     let m = shape.measure()?;
@@ -869,6 +874,15 @@ pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32,
         imprint_cuts(&imprints, d, &body, &mut cuts);
         frame_notes = frame_cuts(&circle_list, d, &body, &mut cuts);
         rings = plan_rings(&circle_list, d, &body, &cuts, shape, &surfaces, &features);
+        // A cell holds the rings whose axis runs through it.
+        if is_cell {
+            rings.retain(|r| {
+                (0..3).all(|k| {
+                    (r.center[k] - d[k] * dot(r.center, d)) >= lo[k] - d[k] * dot(lo, d) - 1e-9
+                        && (r.center[k] - d[k] * dot(r.center, d)) <= hi[k] - d[k] * dot(hi, d) + 1e-9
+                })
+            });
+        }
     }
     // The tessellation: the meshers' default, finer where the body has small curves (a hundredth
     // of the smallest radius), so short blend edges stay edges.
@@ -885,7 +899,8 @@ pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32,
         notes.push(format!("tolerance {tolerance:.4} mm: a hundredth of the smallest radius ({radius:.4} mm)"));
     }
     let mesher = if cuts.is_empty() { PlanMesher::Sweep } else { PlanMesher::Cells };
-    let copies = copies_of(design, body, &plan_features)?;
+    // A cell's copies are its body's (meshed with it), not its own.
+    let copies = if !is_cell { copies_of(design, body, &plan_features)? } else { Vec::new() };
     let mut plan = MeshPlan {
         body: body.into(),
         size: h,
@@ -937,7 +952,7 @@ fn layout_of(design: &Design, plan: &MeshPlan) -> Result<Option<std::result::Res
         return Ok(None);
     }
     let Some(direction) = plan.direction else { return Ok(Some(Err("no sweep direction".into()))) };
-    let shape = design.source_body(&plan.body).ok_or_else(|| EngineError::Params(format!("no body `{}` in the design", plan.body)))?;
+    let shape = plan_shape(design, &plan.body).ok_or_else(|| EngineError::Params(format!("no body `{}` in the design", plan.body)))?;
     let surfaces = shape.face_surfaces()?;
     let m = shape.measure()?;
     let diagonal = (0..3).map(|k| (m.bbox_max[k] - m.bbox_min[k]).powi(2)).sum::<f64>().sqrt();
@@ -945,7 +960,7 @@ fn layout_of(design: &Design, plan: &MeshPlan) -> Result<Option<std::result::Res
     let blend_faces = blends.iter().flat_map(|f| &f.faces).filter_map(|n| shape.face_index(n)).collect();
     let shell = if plan.features.iter().any(|f| f.kind == "shell") {
         design
-            .features(Some(&plan.body))?
+            .features(Some(design.source_of(&plan.body).unwrap_or(&plan.body)))?
             .into_iter()
             .flat_map(|b| b.features)
             .filter(|f| f.kind == "shell")
@@ -1004,7 +1019,12 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => return Err(EngineError::Params("`plan` must be a saved plan's name or a plan object".into())),
     };
-    let mut reply = apply_one(s, &name, &plan)?;
+    let symmetry: bool = super::opt(p, "symmetry")?.unwrap_or(true);
+    let symmetric = if symmetry { apply_symmetric(s, &name, &plan)? } else { None };
+    let mut reply = match symmetric {
+        Some(r) => r,
+        None => apply_one(s, &name, &plan)?,
+    };
     // The copies: each meshed by a plan of its own at this plan's size, saved beside it.
     let mut copies = Vec::with_capacity(plan.copies.len());
     for copy in &plan.copies {
@@ -1070,8 +1090,7 @@ fn take_replaced(into: &mut Value, from: &Value) {
 /// Carry out one plan: its cuts, then the mesh of the cells (or of the body when it has none).
 fn apply_one(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Value> {
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
-    let source = design
-        .source_body(&plan.body)
+    let source = plan_shape(design, &plan.body)
         .ok_or_else(|| EngineError::Params(format!("the plan is of body `{}`, which the design does not have", plan.body)))?;
     // The chordal tolerance the cells are tessellated with, from the body's extent (as mesh.cells
     // takes it from the cells'), for the check of the cells and the mesher alike.
@@ -1141,6 +1160,156 @@ fn apply_one(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Value> {
         o.remove("results_cleared");
     }
     Ok(reply)
+}
+
+/// Most surface points the symmetry test checks.
+const SYMMETRY_SAMPLES: usize = 3000;
+
+/// The planes the body of `plan` is mirror symmetric about, square to the in-plane principal axes
+/// of the sweep `d` through the middle of its extent (normal, offset), none through a ring: every
+/// point of its surface (the middles of its tessellation's triangles, a little inside and a little
+/// outside along the triangle's normal) has its mirror image inside and outside alike (the
+/// generalized winding number of the tessellation).
+fn symmetry_planes(shape: &Shape, d: V3, rings: &[PlanRing]) -> Result<Vec<(V3, f64)>> {
+    let m = shape.measure()?;
+    let (lo, hi) = (m.bbox_min, m.bbox_max);
+    let diagonal = (0..3).map(|k| (hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt();
+    if !(diagonal.is_finite() && diagonal > 0.0) {
+        return Ok(Vec::new());
+    }
+    // Fine enough that the chords lie well within `delta` of the surface.
+    let mesh = shape.tessellate(2e-4 * diagonal)?;
+    // Each triangle's middle and normal: a point of a face, away from its edges.
+    let samples: Vec<(V3, V3)> = mesh
+        .triangles
+        .iter()
+        .filter_map(|t| {
+            let [a, b, c] = t.map(|i| mesh.positions.get(i as usize).copied().unwrap_or_default());
+            let n = unit(cross(std::array::from_fn(|k| b[k] - a[k]), std::array::from_fn(|k| c[k] - a[k])))?;
+            Some((std::array::from_fn(|k| (a[k] + b[k] + c[k]) / 3.0), n))
+        })
+        .collect();
+    let step = (samples.len() / SYMMETRY_SAMPLES).max(1);
+    let delta = 2e-3 * diagonal;
+    let mut out = Vec::new();
+    for a in in_plane_axes(d).into_iter().filter(|a| AXES.iter().any(|x| parallel(*x, *a))) {
+        let c = 0.5 * (dot(lo, a) + dot(hi, a));
+        if rings.iter().any(|r| (dot(r.center, a) - c).abs() < 1.01 * r.radius) {
+            continue;
+        }
+        let mirror = |x: V3| -> V3 { std::array::from_fn(|k| x[k] - 2.0 * (dot(x, a) - c) * a[k]) };
+        let symmetric = samples.iter().step_by(step).all(|(p, n)| {
+            let inside = mirror(std::array::from_fn(|k| p[k] - delta * n[k]));
+            let outside = mirror(std::array::from_fn(|k| p[k] + delta * n[k]));
+            blocks::winding(&mesh, inside) > 0.5 && blocks::winding(&mesh, outside) < 0.5
+        });
+        if symmetric {
+            out.push((a, c));
+        }
+    }
+    Ok(out)
+}
+
+/// Carry out a projection plan on a mirror-symmetric body by its symmetry: the body cut by its
+/// planes of symmetry (`<plan>-cut<k>`), the cell on the negative side of every plane planned
+/// and meshed (`Plan-<cell>`), and its mesh mirrored across each plane in turn onto the other
+/// cells, joined node to node on the planes — so mirror-image regions mesh alike. `None` when
+/// the body has no symmetry, or its cell does not take a projection layout (the whole body is
+/// meshed then).
+fn apply_symmetric(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Option<Value>> {
+    if plan.mesher != PlanMesher::Project || !plan.copies.is_empty() {
+        return Ok(None);
+    }
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let (Some(shape), Some(d)) = (design.source_body(&plan.body), plan.direction) else { return Ok(None) };
+    let planes = symmetry_planes(shape, d, &plan.rings)?;
+    if planes.is_empty() {
+        return Ok(None);
+    }
+    let tolerance = match plan.tolerance {
+        Some(t) => t,
+        None => {
+            let b = shape.measure()?;
+            1e-3 * (0..3).map(|k| (b.bbox_max[k] - b.bbox_min[k]).powi(2)).sum::<f64>().sqrt()
+        }
+    };
+    let cuts: Vec<PlanCut> = planes
+        .iter()
+        .map(|(a, c)| PlanCut {
+            point: a.map(|x| x * c),
+            normal: *a,
+            role: CutRole::Frame,
+            feature: None,
+            reason: "symmetry: the body is its own mirror image across this plane".into(),
+        })
+        .collect();
+    let refs: Vec<&PlanCut> = cuts.iter().collect();
+    let (cleared, made, skipped) = cut(s, name, &plan.body, &refs, tolerance)?;
+    let undo = |s: &mut Session| -> Result<()> { cut(s, name, &plan.body, &[], tolerance).map(|_| ()) };
+    if !skipped.is_empty() {
+        undo(s)?;
+        return Ok(None);
+    }
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let cells: Vec<(String, V3)> = design
+        .bodies
+        .iter()
+        .filter(|b| design.source_of(&b.name) == Some(plan.body.as_str()))
+        .filter_map(|b| b.measure().ok().map(|m| (b.name.clone(), std::array::from_fn(|k| 0.5 * (m.bbox_min[k] + m.bbox_max[k])))))
+        .collect();
+    let fundamental = cells.iter().find(|(_, mid)| planes.iter().all(|(a, c)| dot(*mid, *a) < *c)).map(|(n, _)| n.clone());
+    let Some(cell) = fundamental else {
+        undo(s)?;
+        return Ok(None);
+    };
+    let mut cell_plan = build(design, &cell, Some(plan.size), plan.layers, MAX_ELEMENTS)?;
+    cell_plan.size = plan.size;
+    cell_plan.tolerance = Some(tolerance);
+    if cell_plan.mesher != PlanMesher::Project {
+        undo(s)?;
+        return Ok(None);
+    }
+    let cell_name = MeshPlan::default_name(&cell);
+    s.model.set_mesh_plan(&cell_name, cell_plan.clone())?;
+    let r = apply_projection(s, &cell_name, &cell_plan, tolerance)?;
+    let mut meshed = vec![cell.clone()];
+    for (a, c) in &planes {
+        (super::mirror::MIRROR.run)(s, &json!({"plane": {"point": a.map(|x| x * c), "normal": a}, "bodies": meshed}))?;
+        meshed = cells.iter().map(|(n, _)| n.clone()).filter(|n| !s.model.body_elements(n).is_empty()).collect();
+    }
+    if let Some((missing, _)) = cells.iter().find(|(n, _)| s.model.body_elements(n).is_empty()) {
+        return Err(EngineError::Params(format!("mesh plan `{name}`: the mirror images do not reach cell `{missing}`")));
+    }
+    let elements: usize = cells.iter().map(|(n, _)| s.model.body_elements(n).len()).sum();
+    let mut reply = json!({
+        "name": name,
+        "body": plan.body,
+        "mesher": "project",
+        "symmetry": planes.iter().map(|(a, c)| json!({"normal": a, "offset": c})).collect::<Vec<_>>(),
+        "layout": r["layout"],
+        "blend_layers": r["blend_layers"],
+        "cuts": made,
+        "skipped_cuts": [],
+        "cells": cells.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        "meshed": cell,
+        "size": plan.size,
+        "tolerance": tolerance,
+        "elements": elements,
+        "min_scaled_jacobian": r["min_scaled_jacobian"],
+        "all_hex": true,
+        // One cell's mesh and its mirror images, joined node to node on the planes.
+        "conforming": true,
+        "mapped": plan.features.iter().map(|f| json!({"id": f.id, "name": f.name, "type": f.kind, "template": f.template})).collect::<Vec<_>>(),
+        "pending": [],
+        "unmapped": plan.unmapped,
+        "mesh": r["mesh"],
+    });
+    reply = cleared.report_if_any(s, reply);
+    take_replaced(&mut reply, &r);
+    if let Some(o) = reply.as_object_mut() {
+        o.remove("results_cleared");
+    }
+    Ok(Some(reply))
 }
 
 /// Carry out a plan whose mesher is projection blocking: its earlier partitions removed, one block
@@ -1338,9 +1507,10 @@ mod tests {
         list.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
     }
 
-    /// Plan, apply, and check the mesh is all-hex, conforming and fills the body.
+    /// Plan, apply (the whole body, not by its symmetry), and check the mesh is all-hex,
+    /// conforming and fills the body.
     fn apply(s: &mut Session, plan: &Value, min_sj: f64) -> Value {
-        let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
+        let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"], "symmetry": false})).unwrap();
         assert_eq!((r["all_hex"].as_bool(), r["conforming"].as_bool()), (Some(true), Some(true)), "{r}");
         let sj = r["min_scaled_jacobian"].as_f64().unwrap();
         assert!(sj >= min_sj, "min scaled Jacobian {sj} < {min_sj}: {r}");
@@ -1385,7 +1555,7 @@ mod tests {
         assert!(r["mesh"]["max_gap"].as_f64().unwrap() < 1e-6, "{r}");
         volume_matches(&mut s);
         // Saved: applied again by name it replaces its mesh.
-        let again = s.execute("mesh.plan.apply", &json!({"plan": "Plan-Plate"})).unwrap();
+        let again = s.execute("mesh.plan.apply", &json!({"plan": "Plan-Plate", "symmetry": false})).unwrap();
         assert_eq!(again["elements"], r["elements"]);
         assert!(s.model.partitions().is_empty());
         assert!(!again["replaced"].as_array().unwrap().is_empty(), "{again}");
@@ -1496,6 +1666,27 @@ mod tests {
         assert!(s.execute("mesh.plan.apply", &json!({"plan": "Nope"})).is_err());
     }
 
+    /// A body partitions have cut is planned whole, and a cell of it on its own (from the features
+    /// that built the body, with the rings the cell holds) (#473).
+    #[test]
+    fn a_partitioned_body_and_its_cells_can_be_planned() {
+        let (_d, mut s) = open(json!([
+            {"command": "solid.box", "params": {"length": 60, "width": 40, "height": 6, "body_name": "Plate"}},
+            {"command": "solid.hole", "params": {"position": [15, 20, 6], "diameter": 8, "depth": 6}},
+            {"command": "solid.hole", "params": {"position": [45, 20, 6], "diameter": 8, "depth": 6}},
+        ]));
+        s.execute("geometry.datum", &json!({"name": "Mid", "by": {"type": "point_normal", "point": [30, 0, 0], "normal": [1, 0, 0]}})).unwrap();
+        s.execute("geometry.partition", &json!({"name": "Half", "datum": "Mid"})).unwrap();
+        let whole = s.execute("mesh.plan", &json!({"body": "Plate"})).unwrap();
+        assert_eq!(whole["rings"].as_array().map(Vec::len), Some(2), "{whole}");
+        let cell = s.execute("mesh.plan", &json!({"body": "Plate/a"})).unwrap();
+        assert_eq!(cell["rings"].as_array().map(Vec::len), Some(1), "{cell}");
+        assert_eq!(cell["mesher"], "project", "{cell}");
+        let r = s.execute("mesh.plan.apply", &json!({"plan": cell["name"]})).unwrap();
+        assert_eq!(r["all_hex"], true, "{r}");
+        assert!(r["min_scaled_jacobian"].as_f64().unwrap() >= 0.5, "{r}");
+    }
+
     /// The feature graph of every corpus design and the crank arm: every body lists the features
     /// that built it, and a plan builds for every body (fillets, revolves and lofts unmapped).
     #[test]
@@ -1583,8 +1774,8 @@ mod acceptance {
     }
 
     /// The enclosure base of the test below without its standoffs: symmetric across x = 28 and
-    /// y = 21, so its four corners mesh alike: the smallest scaled Jacobian round each corner
-    /// boss well above 0.5 (the compass search lifts elements up to 0.7) and nearly the same.
+    /// y = 21, so the plan meshes one quarter and mirrors it: the four corners mesh exactly
+    /// alike, the smallest scaled Jacobian round each corner boss well above 0.5.
     #[test]
     fn an_enclosure_base_meshes_its_four_corners_alike() {
         let mut commands = vec![
@@ -1615,10 +1806,11 @@ mod acceptance {
                 }
             }
         }
-        // The layout is mirror symmetric; the smoother (Gauss-Seidel in node order) and the
-        // projection onto the body's tessellation are not, so the corners differ a little.
+        // Meshed by its symmetry: one quarter, mirrored across both planes.
+        assert_eq!(r["symmetry"].as_array().map(Vec::len), Some(2), "{r}");
+        assert_eq!(r["cells"].as_array().map(Vec::len), Some(4), "{r}");
         let (lo, hi) = worst.iter().fold((f64::INFINITY, 0.0f64), |(l, h), w| (l.min(*w), h.max(*w)));
-        assert!(hi - lo < 0.03, "per corner min scaled Jacobian {worst:?}: {r}");
+        assert!(hi - lo < 1e-9, "per corner min scaled Jacobian {worst:?}: {r}");
         assert!(lo > 0.65, "per corner min scaled Jacobian {worst:?}");
     }
 
@@ -1647,7 +1839,10 @@ mod acceptance {
         let plan = s.execute("mesh.plan", &json!({"body": "Base", "size": 1.5, "layers": 2})).unwrap();
         assert_eq!(plan["mesher"], "project", "{plan}");
         let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
-        assert!(r["layout"].as_str().unwrap().contains("10 circle(s) ringed"), "{r}");
+        // Symmetric across x = 28 only (the standoffs stand on one side of y = 21): one half
+        // meshed (two bosses, their holes and a standoff ringed) and mirrored.
+        assert_eq!(r["symmetry"].as_array().map(Vec::len), Some(1), "{r}");
+        assert!(r["layout"].as_str().unwrap().contains("5 circle(s) ringed"), "{r}");
         accept(&mut s, &r, 0.5, 10.0);
     }
 
@@ -1717,12 +1912,12 @@ mod tests_support {
         (dir, s)
     }
 
-    /// Plan `body` (it must take the projection layout) and apply the plan.
+    /// Plan `body` (it must take the projection layout) and apply the plan to the whole body.
     pub(super) fn plan_and_apply(s: &mut Session, body: &str) -> Value {
         let plan = s.execute("mesh.plan", &json!({"body": body})).unwrap();
         assert_eq!(plan["mesher"], "project", "{plan}");
         assert!(plan["unmapped"].as_array().is_none_or(Vec::is_empty), "{plan}");
-        s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap()
+        s.execute("mesh.plan.apply", &json!({"plan": plan["name"], "symmetry": false})).unwrap()
     }
 
     /// All hex, one conforming mesh on the geometry, the volume the body's, no element below

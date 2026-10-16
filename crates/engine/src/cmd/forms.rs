@@ -1706,7 +1706,12 @@ pub const MESH_PLAN: &[Field] = &[
     int("layers", "Layers through walls", 1, 10).help("Elements through the thinnest wall the features give (a shell, a plate).").hint("2"),
     int("max_elements", "Most elements", 1, 5_000_000).help("The size grows past the walls' when more elements would be needed.").hint("300000"),
 ];
-pub const MESH_PLAN_APPLY: &[Field] = &[text("plan", "Plan").help("The name of a saved mesh plan (mesh.plan).").req()];
+pub const MESH_PLAN_APPLY: &[Field] = &[
+    text("plan", "Plan").help("The name of a saved mesh plan (mesh.plan).").req(),
+    flag("symmetry", "Use symmetry")
+        .help("Mesh one cell of a body that is its own mirror image across planes through its middle, and mirror it.")
+        .def("true"),
+];
 pub const FEATURES: &[Field] = &[reference("body", "Body", C::Body).help("Only this body's features.").hint("every body")];
 pub const GEOMETRY_CHECK: &[Field] = &[
     reference("body", "Body", C::Body).help("The body to check; every body when empty.").hint("every body"),

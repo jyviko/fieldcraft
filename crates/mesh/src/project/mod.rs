@@ -136,6 +136,63 @@ pub struct ProjectedMesh {
     pub report: ProjectReport,
 }
 
+/// Give each target face no boundary quad's centre landed on (a face narrower than the elements:
+/// a fillet's sliver between a cut and the walls) one row of the quads it runs through (of a
+/// target holding the face, centre within half the quad's shortest side of it): one quad of
+/// those beside each other across the face (projecting onto it at nearly the same point), all
+/// along it. A quad keeps its face when it is that face's
+/// last, so no face loses its only quad to a neighbour.
+fn claim_narrow_faces(boundary: &mut [BoundaryFace], centres: &[(P, f64, usize)], targets: &[Vec<u32>], g: &dyn Geometry) {
+    let mut count: BTreeMap<u32, usize> = BTreeMap::new();
+    for b in boundary.iter() {
+        *count.entry(b.brep_face).or_insert(0) += 1;
+    }
+    let targeted: BTreeSet<u32> = targets.iter().flatten().copied().collect();
+    for f in targeted {
+        if count.contains_key(&f) {
+            continue;
+        }
+        // (distance to the face, quad, its centre, the centre's foot on the face, shortest side)
+        let mut near: Vec<(f64, usize, P, P, f64)> = centres
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, tg))| targets.get(*tg).is_some_and(|set| set.contains(&f)))
+            .filter_map(|(i, (centre, shortest, _))| {
+                let foot = g.project(f, *centre)?;
+                let d = dist(foot, *centre);
+                (d <= 0.5 * shortest).then_some((d, i, *centre, foot, *shortest))
+            })
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // The rows across the face: quads beside each other that project onto it at nearly the
+        // same point.
+        let mut rows: Vec<Vec<(usize, P, P, f64)>> = Vec::new();
+        for (_, i, centre, foot, shortest) in near {
+            let across = |(_, c, q, s): &(usize, P, P, f64)| {
+                let apart = dist(*c, centre);
+                apart < 1.5 * s.max(shortest) && dist(*q, foot) < 0.5 * apart
+            };
+            match rows.iter_mut().find(|row| row.iter().any(across)) {
+                Some(row) => row.push((i, centre, foot, shortest)),
+                None => rows.push(vec![(i, centre, foot, shortest)]),
+            }
+        }
+        // One quad per row: from the neighbour with the most quads left (the nearest of equals),
+        // so neighbours on both sides give alike.
+        for row in rows {
+            let left = |i: usize| boundary.get(i).and_then(|b| count.get(&b.brep_face)).copied().unwrap_or(0);
+            let Some(&(i, ..)) = row.iter().max_by_key(|(i, ..)| left(*i)) else { continue };
+            let Some(b) = boundary.get_mut(i) else { continue };
+            let Some(left) = count.get_mut(&b.brep_face) else { continue };
+            if *left > 1 {
+                *left -= 1;
+                b.brep_face = f;
+                *count.entry(f).or_insert(0) += 1;
+            }
+        }
+    }
+}
+
 /// The face groups joined across smooth B-rep edges.
 fn smooth_groups(surface: &BoundarySurface, faces: usize) -> Vec<usize> {
     let mut parent: Vec<usize> = (0..faces).collect();
@@ -626,6 +683,7 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
         }
     }
     let mut boundary = Vec::with_capacity(quads.len());
+    let mut centres = Vec::with_capacity(quads.len());
     let mut enclosed = 0.0;
     for (q, e, f, tg) in &quads {
         let pts = q.map(|v| nodes.get(v as usize).copied().unwrap_or_default());
@@ -634,7 +692,10 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
         let set = targets.get(*tg).map_or(&[][..], Vec::as_slice);
         let brep_face = on_target(g, set, centre).map_or_else(|| set.first().copied().unwrap_or(0), |h| h.2);
         boundary.push(BoundaryFace { element: *e, face: *f, brep_face });
+        let shortest = (0..4).map(|i| dist(pts[i], pts[(i + 1) % 4])).fold(f64::INFINITY, f64::min);
+        centres.push((centre, shortest, *tg));
     }
+    claim_narrow_faces(&mut boundary, &centres, &targets, g);
     let surface_volume = surface.volume();
     let report = ProjectReport {
         blocks: t.blocks.len(),

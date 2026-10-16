@@ -507,6 +507,19 @@ impl Tessellation {
         self.face_tree(face).nearest4(p, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
     }
 
+    /// The B-rep face whose triangles lie nearest to `p`.
+    pub fn nearest_face(&self, p: P) -> Option<u32> {
+        let dist = |t: u32| {
+            let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
+            let d = sub(closest_on_triangle(p, self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2])), p);
+            (dot(d, d), [0.0, 0.0, 0.0, f64::from(t)])
+        };
+        let r = self.tri_tree.nearest4(p, &|_| true, &dist)?;
+        // The triangle index travels through the f64 exactly (triangle counts are capped far
+        // below 2^53).
+        self.tri_face.get(r[3] as usize).copied()
+    }
+
     /// The tree over `face`'s triangles (the whole boundary's for a face out of range, which
     /// the queries' filter then finds nothing in).
     fn face_tree(&self, face: u32) -> &Tree {
@@ -528,38 +541,51 @@ impl Tessellation {
     }
 }
 
-/// How far off a plane face's triangles, in triangle sizes, a point of the plane may lie and
-/// still be on the face (rounding only: the triangles lie on the plane).
+/// How far off a face's triangles, in triangle sizes, a point of its surface may lie and still
+/// be on the face, beyond the triangles' own gap to the surface (rounding only).
 const PLANE_SLACK: f64 = 1e-6;
 
 impl Tessellation {
     /// The closest point to `p` on the trimmed face `face`: the exact surface's closest point
-    /// when it lies on the face (within a fifth of the local triangle size of the face's
-    /// triangles, or on them for a plane, whose triangles can span the whole face), else the closest point of the face's triangles. Unlike
-    /// [`BoundaryGeometry::project_face`] it never returns a point of the surface's extension
-    /// beyond the face's boundary, whatever the distance from `p`.
+    /// when it lies on the face (no further off the face's nearest triangle than twice that
+    /// triangle's own chordal gap to the surface, which is rounding only for a plane), else the
+    /// closest point of the face's triangles. Unlike [`BoundaryGeometry::project_face`] it never
+    /// returns a point of the surface's extension beyond the face's boundary, whatever the
+    /// distance from `p` — nor of the same surface's other faces: the pieces of one fillet split
+    /// by a cut share their cylinder, and a point on one piece is off the others.
     pub fn project_trimmed(&self, face: u32, p: P) -> Option<P> {
         let accept = |t: u32| self.tri_face.get(t as usize) == Some(&face);
-        let nearest = |x: P| {
-            let dist = |t: u32| {
-                let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
-                let (a, b, c) = (self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]));
-                let q = closest_on_triangle(x, a, b, c);
-                let d = sub(q, x);
-                let mut e = [measure::dist(a, b), measure::dist(b, c), measure::dist(c, a)];
-                e.sort_by(f64::total_cmp);
-                (dot(d, d), [q[0], q[1], q[2], e[1]])
-            };
-            self.face_tree(face).nearest4(x, &accept, &dist).map(|r| ([r[0], r[1], r[2]], r[3]))
+        let corners = |t: u32| {
+            let tri = self.triangles.get(t as usize).copied().unwrap_or([0; 3]);
+            (self.pt(tri[0]), self.pt(tri[1]), self.pt(tri[2]))
         };
-        let (near, _) = nearest(p)?;
+        let near = {
+            let dist = |t: u32| {
+                let (a, b, c) = corners(t);
+                let q = closest_on_triangle(p, a, b, c);
+                let d = sub(q, p);
+                (dot(d, d), [q[0], q[1], q[2], 0.0])
+            };
+            let r = self.face_tree(face).nearest4(p, &accept, &dist)?;
+            [r[0], r[1], r[2]]
+        };
         let Some(surface) = self.analytic(face) else { return Some(near) };
         let Some(q) = surface.project(p) else { return Some(near) };
-        let (back, size) = nearest(q)?;
-        // A plane's triangles lie on it, so a point of the plane off them is off the face; a
-        // curved face's triangles are chords, a fraction of their size off the surface.
-        let slack = if matches!(surface, AnalyticSurface::Plane { .. }) { PLANE_SLACK } else { 0.2 };
-        Some(if measure::dist(back, q) <= slack * size { q } else { near })
+        // The nearest triangle to the surface's point, with its slack: the largest gap between
+        // the triangle and the surface (at its edges' midpoints and centre: a chord's deepest
+        // points), doubled, and a millionth of its size for rounding.
+        let gap = |x: P| surface.project(x).map_or(0.0, |y| measure::dist(x, y));
+        let dist = |t: u32| {
+            let (a, b, c) = corners(t);
+            let o = closest_on_triangle(q, a, b, c);
+            let d = sub(o, q);
+            let mid = |u: P, v: P| scale(add(u, v), 0.5);
+            let deepest = [mid(a, b), mid(b, c), mid(c, a), scale(add(add(a, b), c), 1.0 / 3.0)].into_iter().map(gap).fold(0.0, f64::max);
+            let size = measure::dist(a, b).max(measure::dist(b, c)).max(measure::dist(c, a));
+            (dot(d, d), [o[0], o[1], o[2], 2.0 * deepest + PLANE_SLACK * size])
+        };
+        let r = self.face_tree(face).nearest4(q, &accept, &dist)?;
+        Some(if measure::dist([r[0], r[1], r[2]], q) <= r[3] { q } else { near })
     }
 
     /// The outward unit normal of B-rep face `face` near `p`: the exact surface's (oriented like

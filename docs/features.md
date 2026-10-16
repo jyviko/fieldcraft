@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-77 ready, 39 coming soon.
+78 ready, 38 coming soon.
 
 ## Geometry
 
@@ -150,7 +150,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Query | Probe — Displacement, rotation, reaction and stress at nodes, element section forces, a mode shape, or an explicit field frame (or click the model) | ready | `solve.probe`, `solve.history` |
 | Query | Reactions — Reaction force and moment sums per set | ready | `results.reactions`, `results.export.csv` |
 | Query | Free Body — Free-body forces across a cut | coming soon (M9) |  |
-| Plots | XY Plot — Plot a quantity against time or another | coming soon (M9) |  |
+| Plots | XY Plot — Plot a quantity against the load factor, time or mode | ready | `results.xy` |
 | Plots | Path Plot — Plot a quantity along a path | coming soon (M9) |  |
 | Plots | Cut — Section cuts through the model | coming soon (M9) |  |
 | Plots | Display Group — Show and hide parts of the model | coming soon (M9) |  |

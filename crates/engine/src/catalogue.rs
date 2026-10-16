@@ -627,7 +627,7 @@ pub static CATALOGUE: &[Capability] = &[
     ),
     ready_more("results.reactions", "Reactions", Results, "Query", "Reaction force and moment sums per set", &["results.export.csv"]),
     soon("results.free_body", "Free Body", Results, "Query", "M9", "Free-body forces across a cut"),
-    soon("results.xy", "XY Plot", Results, "Plots", "M9", "Plot a quantity against time or another"),
+    ready("results.xy", "XY Plot", Results, "Plots", "Plot a quantity against the load factor, time or mode"),
     soon("results.path", "Path Plot", Results, "Plots", "M9", "Plot a quantity along a path"),
     soon("results.cut", "Cut", Results, "Plots", "M9", "Section cuts through the model"),
     soon("results.display_group", "Display Group", Results, "Plots", "M9", "Show and hide parts of the model"),

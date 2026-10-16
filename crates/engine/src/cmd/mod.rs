@@ -35,6 +35,7 @@ mod symmetry;
 mod tags;
 pub mod update;
 pub(crate) mod view;
+pub mod xy;
 
 use crate::schema::ProblemKind;
 use fieldcraft_model::MAX_LABEL;
@@ -186,6 +187,7 @@ pub static ALL: &[CommandSpec] = &[
     results::EXPORT_CSV,
     results::EXPORT_VTU,
     results::CLEAR,
+    xy::XY,
     diagnostics::CRASH_REPORTS,
     diagnostics::CRASH_REPORT,
     diagnostics::CRASH_REPORTS_DELETE,

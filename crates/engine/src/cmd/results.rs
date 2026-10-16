@@ -112,7 +112,7 @@ fn solved_list(s: &Session) -> String {
 
 /// The steps a command works on.
 #[derive(Clone, Copy, PartialEq)]
-enum Want {
+pub(super) enum Want {
     Any,
     Frequency,
     /// Steps with frames: explicit dynamics and nonlinear static (one per converged increment).
@@ -138,7 +138,7 @@ impl Want {
 
 /// The step a command works on: `step`, else the step shown, else the first solved one
 /// (current results first) of the kind it wants.
-fn step_for(s: &Session, p: &Value, want: Want) -> Result<String> {
+pub(super) fn step_for(s: &Session, p: &Value, want: Want) -> Result<String> {
     if let Some(name) = opt::<String>(p, "step")? {
         if s.latest_result(&name).is_none() {
             return Err(EngineError::Params(format!("step `{name}` has no result; {}", solved_list(s))));
@@ -660,13 +660,13 @@ fn export_csv(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// A table of cells (a number, text, or empty) under a header, written as CSV.
-struct Table {
-    header: Vec<String>,
-    rows: Vec<Vec<Cell>>,
+pub(super) struct Table {
+    pub(super) header: Vec<String>,
+    pub(super) rows: Vec<Vec<Cell>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Cell {
+pub(super) enum Cell {
     Number(f64),
     Text(String),
     Empty,
@@ -675,7 +675,7 @@ enum Cell {
 impl Table {
     /// RFC 4180: comma-separated, CRLF line ends, a field with a comma, quote or line break in
     /// quotes (its quotes doubled); numbers in Rust's shortest round-trip form.
-    fn csv(&self) -> String {
+    pub(super) fn csv(&self) -> String {
         let field = |s: &str| if s.contains([',', '"', '\r', '\n']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
         let mut out = String::new();
         let line = |cells: Vec<String>, out: &mut String| {

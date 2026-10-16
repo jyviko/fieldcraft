@@ -1923,6 +1923,18 @@ pub const EXPORT_CSV: &[Field] = &[
     int("mode", "Mode", 1, 1_000_000).help("Probe: the mode to read, for frequency and buckling steps."),
     int("frame", "Frame", 0, 1_000_000_000).help("Probe: the frame to read, for explicit and transient steps."),
 ];
+pub const RESULTS_XY: &[Field] = &[
+    SOLVED,
+    json("y", "Quantity")
+        .help("What to plot: a nodal field at a node, an explicit energy or history, a history node's quantity, or \"frequency\".")
+        .hint(r#"{"field": "displacement_z", "node": 21}"#)
+        .req(),
+    choice("x", "Against", &[("auto", "The step's own axis"), ("load_factor", "Load factor"), ("time", "Time"), ("mode", "Mode")])
+        .help("The x axis: the load factor (nonlinear static), time (explicit, heat) or mode number (frequency).")
+        .def("\"auto\""),
+    int("every", "Keep one in", 1, 1_000_000_000).help("Keep one point in this many; by default enough to fit 100000 points."),
+    path("path", "CSV file", true).help("Also write the series as a two-column CSV."),
+];
 pub const EXPORT_VTU: &[Field] = &[
     path("path", "File", true).help("A .vtu file for one state, or a .pvd collection for every frame or mode.").req(),
     SOLVED,

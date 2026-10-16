@@ -128,7 +128,7 @@ fn number_repeats(names: &mut [String], centres: &[[f64; 3]]) {
 
 impl Shape {
     /// The name of face `f`: its persistent name, or its index for a shape without names.
-    fn face_label(&self, f: u32) -> String {
+    pub(crate) fn face_label(&self, f: u32) -> String {
         match self.faces.get(f as usize) {
             Some(face) if !face.name.is_empty() => face.name.clone(),
             _ => f.to_string(),
@@ -201,7 +201,7 @@ impl Shape {
     }
 
     /// The edges of `mesh` (a tessellation of this shape) with their persistent names.
-    fn edges_of(&self, mesh: &SurfaceMesh) -> Vec<Edge> {
+    pub(crate) fn edges_of(&self, mesh: &SurfaceMesh) -> Vec<Edge> {
         let names = self.edge_names(mesh);
         names
             .into_iter()

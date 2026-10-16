@@ -433,3 +433,19 @@ fn strong_relaxation_keeps_a_good_mesh_and_refuses_bad_options() {
     }
     assert!(morph(&m, &BTreeSet::new(), MorphOptions::default(), &geo).unwrap().positions.is_empty());
 }
+
+/// The guarded mode never stretches an element past the region's longest one before (the
+/// scaled Jacobian alone does not see an element flattening: on the crank the worst edge ratio
+/// went from 10.5 to 2759, #522).
+#[test]
+fn guarded_relaxation_keeps_the_largest_edge_ratio() {
+    for (amount, radius) in [(0.04, 0.5), (0.08, 0.7), (0.12, 1.0)] {
+        let original = hex_annulus(8);
+        let mut m = original.clone();
+        perturb(&mut m, CENTRE, radius, amount);
+        let weights = sphere_weights(&m, CENTRE, radius + 0.2, 1.0, Falloff::None, None).unwrap();
+        let r = relax(&m, &weights, 50, &Geo { model: original }).unwrap();
+        assert!(r.after.max_edge_ratio <= r.before.max_edge_ratio, "{amount}: {} → {}", r.before.max_edge_ratio, r.after.max_edge_ratio);
+        assert!(r.after.invalid <= r.before.invalid);
+    }
+}

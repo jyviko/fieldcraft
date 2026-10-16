@@ -23,7 +23,8 @@
 //! An element's quality is its scaled Jacobian (a triangle's: its smallest angle over 60°), from
 //! [`crate::quality::element_quality`]; a solid is valid when its certified Jacobian check is,
 //! a shell when its normal keeps its side. So no move inverts an element, and none makes the
-//! worst element around a node worse.
+//! worst element around a node worse, and none makes an element's edge ratio exceed the
+//! region's largest before the relaxation.
 //!
 //! **Constraints** ([`Freedom`]): an interior node moves freely; a node on a geometry face moves
 //! in the face's parameters and is evaluated back on it ([`Constraints::slide_face`]); a node on a
@@ -378,6 +379,12 @@ impl State<'_> {
         (worst, valid)
     }
 
+    /// The largest edge ratio of the elements around `n`.
+    fn local_ratio(&self, n: u32) -> f64 {
+        let around = self.around.get(&n).map(Vec::as_slice).unwrap_or(&[]);
+        around.iter().filter_map(|&i| self.elems.get(i)).map(|e| edge_ratio(e.kind, &self.coords(e))).fold(0.0, f64::max)
+    }
+
     /// The worst element around `n`: its index and quality.
     fn worst_around(&self, n: u32) -> Option<(usize, f64)> {
         let mut best: Option<(usize, f64)> = None;
@@ -428,7 +435,7 @@ impl State<'_> {
         }
         let undo = self.place(n, q);
         let (worst, valid) = self.local(n);
-        let ok = worst >= before.0 + gain && before.1.iter().zip(&valid).all(|(was, is)| !was || *is);
+        let ok = worst >= before.0 + gain && before.1.iter().zip(&valid).all(|(was, is)| !was || *is) && self.local_ratio(n) <= self.ratio_cap;
         if !ok {
             self.restore(undo);
         }
@@ -606,6 +613,9 @@ pub fn relax(model: &Model, weights: &BTreeMap<u32, f64>, iterations: usize, geo
     let mut state = State::new(model, &movers, geometry, false)?;
     let original = state.pos.clone();
     let before = region_quality(&state);
+    // A move may not stretch an element past the region's longest one (the scaled Jacobian alone
+    // lets an element flatten: the crank's worst edge ratio went from 10.5 to 2759).
+    state.ratio_cap = before.max_edge_ratio.max(1.0);
     let mut done = 0;
     for _ in 0..iterations {
         fieldcraft_model::progress::stage("relax sweep", Some(iterations as f64), "sweeps");

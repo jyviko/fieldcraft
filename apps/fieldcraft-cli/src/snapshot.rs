@@ -4,20 +4,25 @@
 //! (lavapipe, llvmpipe, WARP), and by the CPU rasterizer as the last tier (`FIELDCRAFT_GPU`,
 //! [`fieldcraft_gpu::select`]).
 
-use fieldcraft_engine::view::{self, Palette};
-use fieldcraft_gpu::capture::Capturer;
+use fieldcraft_engine::view::{self, Palette, Section};
+use fieldcraft_gpu::Renderer;
+use fieldcraft_gpu::capture::{self, Capturer};
 use fieldcraft_gpu::select::Policy;
 use fieldcraft_render::{Orientation, StandardView};
 
 /// The picture size when `--size` is not given.
 const DEFAULT_SIZE: (u32, u32) = (1280, 800);
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Options {
     pub script: String,
     pub out: String,
     pub view: StandardView,
     pub size: (u32, u32),
+    /// A section through the mesh (`--section x|y|z[=VALUE]`).
+    pub section: Option<Section>,
+    /// A nodal field contoured on the last solved step (`--field von_mises`).
+    pub field: Option<String>,
 }
 
 /// A view name: a standard view, or the axis looked along (`x`: from the right, `y`: from the
@@ -41,7 +46,7 @@ fn size_of(s: &str) -> Option<(u32, u32)> {
 
 /// The options: the script, then each flag once, as `--flag value` or `--flag=value`.
 pub fn options(args: &[String]) -> Result<Options, String> {
-    let (mut script, mut out, mut view, mut size) = (None, None, None, None);
+    let (mut script, mut out, mut view, mut size, mut section, mut field) = (None, None, None, None, None, None);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         if !arg.starts_with("--") {
@@ -71,6 +76,10 @@ pub fn options(args: &[String]) -> Result<Options, String> {
                     )
                 })?)
                 .is_some(),
+            "--section" => section
+                .replace(Section::parse(&value).ok_or_else(|| format!("--section: `{value}` is not x, y, z or AXIS=VALUE (x=12.5)"))?)
+                .is_some(),
+            "--field" => field.replace(value).is_some(),
             other => return Err(format!("snapshot: unknown option `{other}`")),
         };
         if twice {
@@ -82,50 +91,36 @@ pub fn options(args: &[String]) -> Result<Options, String> {
         out: out.ok_or("snapshot needs --out FILE.png")?,
         view: view.unwrap_or(StandardView::Iso),
         size: size.unwrap_or(DEFAULT_SIZE),
+        section,
+        field,
     })
 }
 
-/// What drew a picture.
-#[derive(Debug, PartialEq)]
-pub enum Drawn {
-    Gpu { adapter: String, tier: &'static str, samples: u32 },
-    Cpu { why: Option<String> },
-}
-
-/// The PNG of the session `o` describes, drawn as `policy` says. Under [`Policy::Auto`] a GPU
-/// that cannot be opened or fails to draw falls back to the CPU rasterizer (the reason is
-/// returned); a strict policy returns the error.
-pub fn picture(o: &Options, policy: Policy) -> Result<(Vec<u8>, Drawn), String> {
-    let session = crate::session_of(&o.script)?;
+/// The PNG of the session `o` describes, drawn as `policy` says ([`capture::png`]).
+pub fn picture(o: &Options, policy: Policy) -> Result<(Vec<u8>, Renderer, view::Shown), String> {
+    let mut session = crate::session_of(&o.script)?;
+    if let Some(field) = &o.field {
+        session.execute("results.contour", &serde_json::json!({"field": field})).map_err(|e| format!("--field: {e}"))?;
+    }
     let (w, h) = o.size;
-    let f = view::frame(&session, &Orientation::of(o.view), w as usize, h as usize, &Palette::LIGHT);
-    let gpu = Capturer::open(policy).and_then(|c| match c {
-        Some(c) => c.rgba(&f.scene, &[&f.symbols], &f.cam, w, h).map(|px| Some((px, c))),
-        None => Ok(None),
-    });
-    let why = match gpu {
-        Ok(Some((px, c))) => {
-            let png = fieldcraft_render::png(w as usize, h as usize, &px).ok_or("the picture could not be encoded")?;
-            return Ok((png, Drawn::Gpu { adapter: c.adapter.clone(), tier: c.tier.label(), samples: c.samples() }));
-        }
-        Ok(None) => (policy == Policy::Auto).then(|| "no GPU adapter".to_string()),
-        Err(e) if policy == Policy::Auto => Some(e.to_string()),
-        Err(e) => return Err(e.to_string()),
-    };
-    let png = fieldcraft_render::render_layers_png(&f.scene, &[&f.symbols], &f.cam, w as usize, h as usize).map_err(|e| format!("render: {e}"))?;
-    Ok((png, Drawn::Cpu { why }))
+    let f = view::frame(&session, &Orientation::of(o.view), w as usize, h as usize, &Palette::LIGHT, o.section);
+    let capturer = Capturer::open(policy);
+    let (png, renderer) = capture::png(&capturer, policy, &f.scene, &[&f.symbols], &f.cam, w, h).map_err(|e| e.to_string())?;
+    Ok((png, renderer, f.shown))
 }
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let o = options(args)?;
     let policy = Policy::from_env().map_err(|e| e.to_string())?;
-    let (png, drawn) = picture(&o, policy)?;
+    let (png, renderer, shown) = picture(&o, policy)?;
     std::fs::write(&o.out, &png).map_err(|e| format!("{}: {e}", o.out))?;
-    let renderer = match &drawn {
-        Drawn::Gpu { adapter, tier, samples } => serde_json::json!({"kind": tier, "adapter": adapter, "msaa": samples}),
-        Drawn::Cpu { why } => serde_json::json!({"kind": "CPU rasterizer", "why": why}),
-    };
-    let report = serde_json::json!({"out": o.out, "width": o.size.0, "height": o.size.1, "view": o.view.label(), "renderer": renderer});
+    let mut report = crate::picture_report(&renderer, &shown);
+    if let Some(r) = report.as_object_mut() {
+        r.insert("out".into(), o.out.clone().into());
+        r.insert("width".into(), o.size.0.into());
+        r.insert("height".into(), o.size.1.into());
+        r.insert("view".into(), o.view.label().into());
+    }
     println!("{report}");
     Ok(())
 }
@@ -141,7 +136,13 @@ mod tests {
     #[test]
     fn options_are_checked() {
         let o = opts(&["s.json", "--out", "a.png"]).unwrap();
-        assert_eq!(o, Options { script: "s.json".into(), out: "a.png".into(), view: StandardView::Iso, size: DEFAULT_SIZE });
+        assert_eq!(
+            o,
+            Options { script: "s.json".into(), out: "a.png".into(), view: StandardView::Iso, size: DEFAULT_SIZE, section: None, field: None }
+        );
+        let o = opts(&["s", "--out", "o", "--section", "y=2.5", "--field", "displacement"]).unwrap();
+        assert_eq!((o.section, o.field.as_deref()), (Some(Section { axis: 1, at: Some(2.5) }), Some("displacement")));
+        assert_eq!(opts(&["s", "--out", "o", "--section=Z"]).unwrap().section, Some(Section { axis: 2, at: None }));
         let o = opts(&["--view=z", "s.json", "--size", "640x480", "--out=b.png"]).unwrap();
         assert_eq!((o.view, o.size), (StandardView::Top, (640, 480)));
         assert_eq!(opts(&["s", "--out", "o", "--view", "X"]).unwrap().view, StandardView::Right);
@@ -160,6 +161,9 @@ mod tests {
             vec!["s", "--out", "o", "--size", "8192x8192"],
             vec!["s", "--out", "o", "--size", "-5x10"],
             vec!["s", "--out", "o", "--nope", "1"],
+            vec!["s", "--out", "o", "--section", "w"],
+            vec!["s", "--out", "o", "--section", "x=inf"],
+            vec!["s", "--out", "o", "--section", "x=", "--field", "f"],
         ] {
             assert!(opts(&bad).is_err(), "{bad:?}");
         }
@@ -174,19 +178,31 @@ mod tests {
         (info.width, info.height, buf)
     }
 
+    fn script(dir: &std::path::Path, name: &str, solve: bool) -> String {
+        let mut steps = fieldcraft_engine::sample::cantilever();
+        if solve && let Some(a) = steps.as_array_mut() {
+            a.push(serde_json::json!({"command": "solve.static", "params": {}}));
+        }
+        let path = dir.join(name);
+        std::fs::write(&path, steps.to_string()).unwrap();
+        path.to_string_lossy().into()
+    }
+
+    fn opts_for(script: String) -> Options {
+        Options { script, out: String::new(), view: StandardView::Iso, size: (320, 200), section: None, field: None }
+    }
+
     /// The cantilever drawn headless: a PNG of the size asked for, with the model in it (pixels
     /// of the hex colour) and its element edges (dark pixels). `auto` draws on the GPU when the
     /// machine has one and on the CPU otherwise (a CI box without a software GPU); `cpu` always
-    /// on the CPU, and both pictures show the same model.
+    /// on the CPU, and both pictures show the same model. A section and a field change it.
     #[test]
     fn snapshots_the_model_and_its_mesh_headless() {
         let dir = std::env::temp_dir().join(format!("fieldcraft-snapshot-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let script = dir.join("cantilever.json");
-        std::fs::write(&script, fieldcraft_engine::sample::cantilever().to_string()).unwrap();
-        let o = Options { script: script.to_string_lossy().into(), out: String::new(), view: StandardView::Iso, size: (320, 200) };
+        let o = opts_for(script(&dir, "cantilever.json", false));
         for policy in [Policy::Auto, Policy::Cpu] {
-            let (png, drawn) = picture(&o, policy).unwrap();
+            let (png, drawn, _) = picture(&o, policy).unwrap();
             let (w, h, px) = decode(&png);
             assert_eq!((w, h), (320, 200), "{drawn:?}");
             let hex = Palette::LIGHT.hex;
@@ -197,9 +213,18 @@ mod tests {
             assert!(faces > 500, "{drawn:?}: {faces} face pixels");
             assert!(edges > 100, "{drawn:?}: {edges} edge pixels");
             if policy == Policy::Cpu {
-                assert_eq!(drawn, Drawn::Cpu { why: None });
+                assert_eq!(drawn, Renderer::Cpu { why: None });
             }
         }
+        // A section along the beam draws half of it.
+        let whole = picture(&o, Policy::Cpu).unwrap().0;
+        let cut = picture(&Options { section: Some(Section { axis: 0, at: None }), ..o.clone() }, Policy::Cpu).unwrap().0;
+        assert_ne!(whole, cut);
+        // A field needs a solved step; on a solved one it is the contour reported.
+        assert!(picture(&Options { field: Some("von_mises".into()), ..o.clone() }, Policy::Cpu).is_err());
+        let solved = Options { field: Some("displacement".into()), ..opts_for(script(&dir, "solved.json", true)) };
+        let (_, _, shown) = picture(&solved, Policy::Auto).unwrap();
+        assert_eq!(shown.contour.map(|c| c.0).as_deref(), Some("displacement"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

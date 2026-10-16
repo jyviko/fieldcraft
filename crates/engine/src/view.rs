@@ -122,10 +122,68 @@ pub struct Shown {
     pub sampled: Vec<String>,
 }
 
+/// A section through the mesh: the elements whose centroid lies on the camera's side of a plane
+/// normal to an axis are not drawn, so the element faces inside show (an element cut: whole elements, not
+/// sliced ones). Geometry surfaces are not drawn over a sectioned mesh.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Section {
+    /// 0, 1, 2: the plane is normal to X, Y, Z.
+    pub axis: usize,
+    /// Where the plane crosses the axis; `None` at the middle of the mesh.
+    pub at: Option<f64>,
+}
+
+impl Section {
+    /// `x`, `y`, `z` (the middle of the mesh) or `x=12.5`.
+    pub fn parse(s: &str) -> Option<Section> {
+        let (axis, at) = match s.split_once('=') {
+            Some((a, v)) => (a, Some(v.trim().parse::<f64>().ok().filter(|v| v.is_finite())?)),
+            None => (s, None),
+        };
+        let axis = ["x", "y", "z"].iter().position(|n| n.eq_ignore_ascii_case(axis.trim()))?;
+        Some(Section { axis, at })
+    }
+
+    /// The elements on the side of the plane `toward` points to (the direction toward the eye).
+    fn beyond(&self, m: &fieldcraft_model::Model, toward: Vec3) -> std::collections::BTreeSet<u32> {
+        let sign = match [toward.x, toward.y, toward.z].get(self.axis) {
+            Some(v) if *v < 0.0 => -1.0,
+            _ => 1.0,
+        };
+        let coord = |label: &u32| m.node(*label).and_then(|n| n.xyz.get(self.axis).copied());
+        let centroid = |nodes: &[u32]| {
+            let v: Vec<f64> = nodes.iter().filter_map(coord).collect();
+            (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64)
+        };
+        let at = self.at.unwrap_or_else(|| {
+            let (lo, hi) = m
+                .nodes()
+                .values()
+                .filter_map(|n| n.xyz.get(self.axis).copied())
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+            if lo <= hi { (lo + hi) * 0.5 } else { 0.0 }
+        });
+        m.elements().iter().filter(|(_, e)| centroid(&e.nodes).is_some_and(|c| (c - at) * sign > 0.0)).map(|(l, _)| *l).collect()
+    }
+}
+
 /// The model's display data with the open design's bodies and the imported surfaces.
 pub fn display(s: &Session) -> (DisplayMesh, Vec<String>) {
-    let mut d = DisplayMesh::from_model_hiding(&s.model, &s.hidden_elements());
+    display_cut(s, None, Vec3::Z)
+}
+
+/// [`display`] with a section through the mesh, cut away on the side `toward` points to.
+pub fn display_cut(s: &Session, section: Option<Section>, toward: Vec3) -> (DisplayMesh, Vec<String>) {
+    let mut hidden = s.hidden_elements();
+    let cut = section.filter(|_| !s.model.elements().is_empty());
+    if let Some(c) = cut {
+        hidden.extend(c.beyond(&s.model, toward));
+    }
+    let mut d = DisplayMesh::from_model_hiding(&s.model, &hidden);
     let mut failed = Vec::new();
+    if cut.is_some() {
+        return (d, failed);
+    }
     for body in s.design.iter().flat_map(|d| &d.bodies).filter(|b| s.shows(fieldcraft_io::ItemKind::Body, &b.name)) {
         let mesh = body.measure().and_then(|m| body.tessellate(display_tolerance(&Aabb3 { min: m.bbox_min.into(), max: m.bbox_max.into() })));
         match mesh {
@@ -185,8 +243,8 @@ impl Picture {
     }
 }
 
-fn picture(s: &Session, p: &Palette) -> Picture {
-    let (base, failed) = display(s);
+fn picture(s: &Session, p: &Palette, section: Option<Section>, toward: Vec3) -> Picture {
+    let (base, failed) = display_cut(s, section, toward);
     let mut shown = Shown { failed, ..Shown::default() };
     let plot = s.results_view.as_ref().and_then(|v| s.latest_result(&v.step).map(|(r, _)| (v, r)));
     // Over a results plot, the symbols of what its step used.
@@ -238,7 +296,7 @@ fn picture(s: &Session, p: &Palette) -> Picture {
 /// The scene of the session (the model, or the results view's plot) with the setup's symbols
 /// at the model's own symbol unit, the box around it, and what it shows.
 pub fn scene(s: &Session, p: &Palette) -> (Scene, Aabb3, Shown) {
-    let mut pic = picture(s, p);
+    let mut pic = picture(s, p, None, Vec3::Z);
     let mut symbols = Scene::default();
     let b = pic.symbols(pic.glyphs.model_unit(), &mut symbols);
     let mut scene = pic.scene;
@@ -277,10 +335,12 @@ pub struct Framed {
 /// datums (they are drawn at the model's extent, and framing them would only add margin), or from
 /// `at`'s distance when it has one. The symbols are sized for their default size on screen
 /// ([`glyphs::DEFAULT_SIZE`] pixels) for that camera. The CPU rasterizer ([`render_png`]) and
-/// the GPU (`fieldcraft-cli snapshot`) draw the same [`Framed`].
-pub fn frame(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette) -> Framed {
-    let mut pic = picture(s, p);
+/// the GPU (`fieldcraft-cli snapshot`) draw the same [`Framed`]. A `section` draws the mesh cut
+/// ([`Section`]).
+pub fn frame(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette, section: Option<Section>) -> Framed {
     let mut cam = Camera::default();
+    cam.orient(at);
+    let mut pic = picture(s, p, section, cam.back());
     let aspect = w as f64 / h.max(1) as f64;
     let unit = |cam: &Camera| glyphs::unit_for(cam, h as f64, glyphs::DEFAULT_SIZE, 1.0).unwrap_or(f64::NAN);
     // Framed on the model, then again with its symbols at that camera's size, which reach a
@@ -302,7 +362,7 @@ pub fn frame(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette) -> 
 
 /// A PNG of the session seen from `at`, `w` × `h` pixels ([`frame`]), drawn on the CPU.
 pub fn render_png(s: &Session, at: &Orientation, w: usize, h: usize, p: &Palette) -> Result<(Vec<u8>, Shown)> {
-    let f = frame(s, at, w, h, p);
+    let f = frame(s, at, w, h, p, None);
     let png = fieldcraft_render::render_layers_png(&f.scene, &[&f.symbols], &f.cam, w, h).map_err(|e| EngineError::Params(format!("render: {e}")))?;
     Ok((png, f.shown))
 }

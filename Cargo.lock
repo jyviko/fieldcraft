@@ -1409,6 +1409,7 @@ name = "fieldcraft-mcp"
 version = "0.6.0"
 dependencies = [
  "fieldcraft-engine",
+ "fieldcraft-gpu",
  "fieldcraft-io",
  "fieldcraft-render",
  "fieldcraft-testkit",

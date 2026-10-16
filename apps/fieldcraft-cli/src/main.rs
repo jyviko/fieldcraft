@@ -1,6 +1,6 @@
 //! fieldcraft-cli commands
 //! fieldcraft-cli run <script.json>
-//! fieldcraft-cli snapshot <script.json> --out shot.png [--view iso|x|y|z|front|…] [--size WxH]
+//! fieldcraft-cli snapshot <script.json> --out shot.png [--view V] [--size WxH] [--section x|y|z[=V]] [--field F]
 //! fieldcraft-cli features
 //! fieldcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
 //! fieldcraft-cli crashes [list [--json] | show <id> | replay <id> | dir | clear [<id>]]
@@ -26,11 +26,15 @@ usage:
   fieldcraft-cli run <script.json>     run a script (a JSON array of {\"command\", \"params\"})
                                        and print the model summary
   fieldcraft-cli snapshot <script.json> --out FILE.png [--view V] [--size WxH]
+                      [--section x|y|z[=VALUE]] [--field FIELD]
                                        run a script and draw the model to a PNG with no
                                        window: the viewport's GPU pipeline on a hardware or
                                        software GPU, else the CPU rasterizer (FIELDCRAFT_GPU=
                                        auto|hardware|software|cpu); V: iso (default), x, y, z,
-                                       front, back, left, right, top, bottom; size 1280x800
+                                       front, back, left, right, top, bottom; size 1280x800;
+                                       --section hides the elements beyond a plane (at the
+                                       mesh's middle, or VALUE); --field contours a nodal
+                                       field of the solved step (results.contour)
   fieldcraft-cli features              print docs/features.md (every capability, ready or
                                        coming soon) from the capability catalogue
   fieldcraft-cli mcp [options]         serve the Model Context Protocol on stdin/stdout
@@ -142,6 +146,12 @@ fn mcp(args: &[String]) -> Result<(), String> {
     }
     let mut server = fieldcraft_mcp::Server::new(backend);
     server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| format!("mcp: {e}"))
+}
+
+/// The JSON report of a picture: what drew it and what it shows (the MCP `screenshot` reply's
+/// fields).
+pub fn picture_report(r: &fieldcraft_gpu::Renderer, shown: &fieldcraft_engine::view::Shown) -> serde_json::Value {
+    fieldcraft_mcp::picture_report(r, shown)
 }
 
 /// The session after running the script at `path`.

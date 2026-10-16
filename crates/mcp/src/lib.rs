@@ -21,7 +21,7 @@ mod backend;
 mod server;
 pub mod tools;
 
-pub use backend::{Backend, Headless, Picture, PictureRequest, Remote};
+pub use backend::{Backend, Headless, Picture, PictureRequest, Remote, picture_report};
 pub use server::{MAX_BATCH_MESSAGES, MAX_LINE, PROTOCOL_VERSION, SUPPORTED_VERSIONS, Server};
 
 use fieldcraft_io::roots::Roots;

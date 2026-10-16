@@ -220,6 +220,8 @@ fn screenshot_takes_a_camera_orientation() {
     let (turned, info) = picture(&mut s, json!({"camera": {"yaw": 30, "pitch": 1e9, "distance": 1e300}, "width": 64, "height": 48}));
     assert_ne!(iso, turned);
     assert_eq!(info["view"], json!({"yaw": 30.0, "pitch": 90.0, "distance": 1e9}), "{info}");
+    // The reply names what drew it: the viewport's pipeline on a GPU, or the CPU rasterizer.
+    assert!(matches!(info["renderer"]["kind"].as_str(), Some("hardware" | "software" | "cpu")), "{info}");
     let (again, _) = picture(&mut s, json!({"width": 64, "height": 48}));
     assert_eq!(again, turned);
 }

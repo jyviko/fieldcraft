@@ -9,10 +9,47 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use fieldcraft_engine::Session;
-use fieldcraft_engine::view::{Palette, render_png};
+use fieldcraft_engine::view::{Palette, Shown};
+use fieldcraft_gpu::Renderer;
 use fieldcraft_io::roots::Roots;
 use fieldcraft_render::{Orientation, StandardView};
 use serde_json::{Value, json};
+
+/// A framed picture as PNG: the viewport's GPU pipeline on the process's shared device, or the
+/// CPU rasterizer (`FIELDCRAFT_GPU`).
+#[cfg(not(target_arch = "wasm32"))]
+fn draw(f: &fieldcraft_engine::view::Framed, w: u32, h: u32) -> Result<(Vec<u8>, Renderer), String> {
+    use fieldcraft_gpu::capture;
+    let policy = fieldcraft_gpu::select::Policy::from_env().map_err(|e| e.to_string())?;
+    capture::png(capture::shared(), policy, &f.scene, &[&f.symbols], &f.cam, w, h).map_err(|e| e.to_string())
+}
+
+/// A framed picture as PNG, drawn by the CPU rasterizer (the browser has no headless device).
+#[cfg(target_arch = "wasm32")]
+fn draw(f: &fieldcraft_engine::view::Framed, w: u32, h: u32) -> Result<(Vec<u8>, Renderer), String> {
+    let png = fieldcraft_render::render_layers_png(&f.scene, &[&f.symbols], &f.cam, w as usize, h as usize).map_err(|e| format!("render: {e}"))?;
+    Ok((png, Renderer::Cpu { why: None }))
+}
+
+/// What drew a picture and what it shows, as JSON: `renderer` (`kind` hardware, software or cpu;
+/// the adapter, or why the CPU drew it), `results` (step, scale, contour), `undrawn_bodies` and
+/// `sampled_symbols`. The MCP `screenshot` reply and `fieldcraft-cli snapshot` print it.
+pub fn picture_report(r: &Renderer, shown: &Shown) -> Value {
+    let renderer = match r {
+        Renderer::Gpu { adapter, samples, .. } => json!({"kind": r.kind(), "adapter": adapter, "msaa": samples}),
+        Renderer::Cpu { why } => json!({"kind": r.kind(), "why": why}),
+    };
+    let contour = shown
+        .contour
+        .as_ref()
+        .map(|(field, min, max)| json!({"field": field, "min": {"node": min.0, "value": min.1}, "max": {"node": max.0, "value": max.1}}));
+    json!({
+        "renderer": renderer,
+        "results": shown.step.as_ref().map(|step| json!({"step": step, "scale": shown.scale, "contour": contour})),
+        "undrawn_bodies": shown.failed,
+        "sampled_symbols": shown.sampled,
+    })
+}
 
 /// What a picture shows.
 #[derive(Debug, Clone, PartialEq)]
@@ -110,19 +147,15 @@ impl Backend for Headless {
         }
         let w = r.width.unwrap_or(DEFAULT_SIZE.0).clamp(16, MAX_SIDE);
         let h = r.height.unwrap_or(DEFAULT_SIZE.1).clamp(16, MAX_SIDE);
-        let (png, shown) = render_png(&self.session, &self.view, w as usize, h as usize, &Palette::LIGHT).map_err(|e| e.to_string())?;
-        let contour = shown
-            .contour
-            .map(|(field, min, max)| json!({"field": field, "min": {"node": min.0, "value": min.1}, "max": {"node": max.0, "value": max.1}}));
-        let info = json!({
-            "source": "model",
-            "view": self.view,
-            "width": w,
-            "height": h,
-            "results": shown.step.map(|step| json!({"step": step, "scale": shown.scale, "contour": contour})),
-            "undrawn_bodies": shown.failed,
-            "sampled_symbols": shown.sampled,
-        });
+        let f = fieldcraft_engine::view::frame(&self.session, &self.view, w as usize, h as usize, &Palette::LIGHT, None);
+        let (png, renderer) = draw(&f, w, h)?;
+        let mut info = picture_report(&renderer, &f.shown);
+        if let Some(o) = info.as_object_mut() {
+            o.insert("source".into(), "model".into());
+            o.insert("view".into(), json!(self.view));
+            o.insert("width".into(), w.into());
+            o.insert("height".into(), h.into());
+        }
         Ok(Picture { png, info })
     }
 
@@ -135,7 +168,7 @@ impl Backend for Headless {
     }
 
     fn describe(&self) -> String {
-        "a headless in-process FieldCraft session (no window; screenshots are CPU renders)".into()
+        "a headless in-process FieldCraft session (no window; screenshots drawn offscreen with the viewport's GPU pipeline, or on the CPU without a GPU)".into()
     }
 }
 

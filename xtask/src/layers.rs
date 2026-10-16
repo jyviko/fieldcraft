@@ -71,6 +71,8 @@ pub const TABLE: &[(&str, Class)] = &[
 pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     // The window draws through the GPU crate's pipelines.
     &["gpu", "ui-egui"],
+    // The MCP server's headless screenshots draw with them too.
+    &["gpu", "mcp"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

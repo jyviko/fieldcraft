@@ -53,6 +53,16 @@ pub const CENTRE: CommandSpec = CommandSpec {
     run: centre,
 };
 
+pub const CHECK: CommandSpec = CommandSpec {
+    id: "geometry.check",
+    label: "Check Geometry",
+    params: r#"{"body"?: "Body1" (default: every body of the open design), "size"?: mm (the target element size; default a twentieth of the smallest checked body's bounding-box diagonal), "short_edge": 0.3, "small_face": 0.1, "sliver": 0.3, "gap": 0.3 (fractions of the size, 0..=10), "parallel_angle": 10 (degrees, 0..=60)} — before meshing, finds what is small against the size (read-only): `short_edge` edges shorter than short_edge × size, `small_face` faces with area below small_face × size², `sliver_face` faces narrower (2 × area / perimeter) than sliver × size, and `near_faces` pairs of faces within parallel_angle of parallel that are closer than gap × size without touching (a gap between bodies or cells, an overlap, or a wall thinner than the gap; faces within twice the tessellation tolerance touch). Replies `size`, `counts` per kind, `summary`, and `findings` (by kind, worst first, at most 1000; `truncated` says when more were found), each with `kind`, `body`, `edge`, `faces` (persistent names; near faces: the second on `other_body`), `value` (mm, mm²), `limit` and `at` (a point on it)"#,
+    form: Some(super::forms::GEOMETRY_CHECK),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Design],
+    run: check,
+};
+
 pub const TESSELLATE: CommandSpec = CommandSpec {
     id: "geometry.tessellate",
     label: "Tessellate Body",
@@ -383,6 +393,80 @@ pub(crate) fn body_mesh<'a>(s: &'a Session, p: &Value) -> Result<(&'a Shape, Sur
     Ok((shape, shape.tessellate(tolerance)?))
 }
 
+/// Most findings `geometry.check` lists.
+const MAX_FINDINGS: usize = 1000;
+
+fn check(s: &mut Session, p: &Value) -> Result<Value> {
+    use fieldcraft_geometry::check::{self, CheckOptions, Kind};
+    let shapes: Vec<&Shape> = match p.get("body") {
+        Some(_) => vec![body(s, p)?],
+        None => s.design.as_deref().map(|d| d.bodies.iter().collect()).unwrap_or_default(),
+    };
+    if shapes.is_empty() {
+        return Err(EngineError::Params("the design has no bodies to check".into()));
+    }
+    let size = match p.get("size") {
+        Some(v) => v.as_f64().filter(|x| *x > 0.0 && x.is_finite()).ok_or_else(|| EngineError::param("size", ProblemKind::NotPositive))?,
+        None => {
+            let mut smallest = f64::INFINITY;
+            for b in &shapes {
+                smallest = smallest.min(b.size()?);
+            }
+            smallest / 20.0
+        }
+    };
+    let fraction = |key: &str, default: f64| super::mesh::number_in(p, key, default, 0.0..=10.0);
+    let defaults = CheckOptions::new(size);
+    let options = CheckOptions {
+        size,
+        short_edge: fraction("short_edge", defaults.short_edge)?,
+        small_face: fraction("small_face", defaults.small_face)?,
+        sliver: fraction("sliver", defaults.sliver)?,
+        gap: fraction("gap", defaults.gap)?,
+        parallel_angle: super::mesh::number_in(p, "parallel_angle", defaults.parallel_angle.to_degrees(), 0.0..=60.0)?.to_radians(),
+    };
+    let findings = check::check(&shapes, &options)?;
+    let counts: serde_json::Map<String, Value> =
+        Kind::ALL.iter().map(|k| (k.name().to_string(), json!(findings.iter().filter(|f| f.kind == *k).count()))).collect();
+    // The size to three decimals, without trailing zeros.
+    let shown = format!("{size:.3}").trim_end_matches('0').trim_end_matches('.').to_string();
+    let summary = if findings.is_empty() {
+        format!("nothing small against size {shown}")
+    } else {
+        let parts: Vec<String> = Kind::ALL
+            .iter()
+            .filter_map(|k| {
+                let n = findings.iter().filter(|f| f.kind == *k).count();
+                (n > 0).then(|| format!("{n} {}", k.name().replace('_', " ")))
+            })
+            .collect();
+        format!("{} against size {shown}", parts.join(", "))
+    };
+    let listed: Vec<Value> = findings
+        .iter()
+        .take(MAX_FINDINGS)
+        .map(|f| {
+            json!({
+                "kind": f.kind.name(),
+                "body": f.body,
+                "edge": f.edge,
+                "faces": f.faces,
+                "other_body": f.other_body,
+                "value": f.value,
+                "limit": f.limit,
+                "at": f.at,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "size": size,
+        "counts": counts,
+        "summary": summary,
+        "findings": listed,
+        "truncated": findings.len() > MAX_FINDINGS,
+    }))
+}
+
 fn tessellate(s: &mut Session, p: &Value) -> Result<Value> {
     let (shape, mesh) = body_mesh(s, p)?;
     let mut per_face = vec![0usize; shape.faces().len()];
@@ -419,6 +503,97 @@ mod tests {
     use std::io::{Cursor, Write};
 
     use super::*;
+
+    /// A session with the design the SolidCraft `commands` build open.
+    fn design(commands: Value) -> (crate::tests::TempDir, Session) {
+        let bytes = fieldcraft_geometry::script_design(&json!({"commands": commands}).to_string()).unwrap();
+        let (dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        (dir, s)
+    }
+
+    fn kinds(r: &Value) -> Vec<&str> {
+        r["findings"].as_array().unwrap().iter().map(|f| f["kind"].as_str().unwrap()).collect()
+    }
+
+    /// A plain block is clean at a size it can be meshed with; a 0.4 mm step on its top is a
+    /// sliver riser with two short edges, located on the step; the check changes nothing.
+    #[test]
+    fn check_finds_a_small_step() {
+        let (_dir, mut s) = design(json!([{"command": "solid.box", "params": {"length": 40, "width": 20, "height": 10, "body_name": "Base"}}]));
+        let clean = s.execute("geometry.check", &json!({"size": 5})).unwrap();
+        assert!(kinds(&clean).is_empty(), "{clean}");
+        assert_eq!(clean["summary"], "nothing small against size 5");
+        let (_dir, mut s) = design(json!([
+            {"command": "solid.box", "params": {"length": 40, "width": 20, "height": 10, "body_name": "Base"}},
+            {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 10.4, "operation": "join", "targets": ["Base"]}},
+        ]));
+        let journal = s.journal.len();
+        let r = s.execute("geometry.check", &json!({"body": "Base", "size": 5})).unwrap();
+        assert_eq!(s.journal.len(), journal, "read-only");
+        assert_eq!(r["counts"]["short_edge"], 2, "{r}");
+        assert_eq!(r["counts"]["sliver_face"], 1, "{r}");
+        assert_eq!(r["counts"]["small_face"], 0, "{r}");
+        assert_eq!(r["counts"]["near_faces"], 0, "{r}");
+        let names: Vec<String> = s.execute("geometry.bodies", &json!({})).unwrap()[0]["faces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_string())
+            .collect();
+        for f in r["findings"].as_array().unwrap() {
+            let at: Vec<f64> = f["at"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+            assert!((at[0] - 20.0).abs() < 1e-6 && at[2] >= 10.0 - 1e-6 && at[2] <= 10.4 + 1e-6, "on the riser: {f}");
+            assert!(f["faces"].as_array().unwrap().iter().all(|n| names.contains(&n.as_str().unwrap().to_string())), "{f}");
+            assert!(f["value"].as_f64().unwrap() < f["limit"].as_f64().unwrap());
+        }
+        let short = &r["findings"][0];
+        assert!((short["value"].as_f64().unwrap() - 0.4).abs() < 1e-6, "{short}");
+        assert!(short["edge"].is_string());
+        // The size is what makes the step small: at 1 mm it is a feature like any other.
+        let fine = s.execute("geometry.check", &json!({"size": 1})).unwrap();
+        assert!(kinds(&fine).is_empty(), "{fine}");
+    }
+
+    /// Two bodies 0.5 mm apart: their facing faces are near faces; once they touch they are not.
+    #[test]
+    fn check_finds_a_gap_between_bodies() {
+        let (_dir, mut s) = design(json!([
+            {"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10, "body_name": "A"}},
+            {"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10, "corner": [0, 0, 10.5], "body_name": "B"}},
+        ]));
+        let r = s.execute("geometry.check", &json!({"size": 2.5})).unwrap();
+        assert_eq!(kinds(&r), ["near_faces"], "{r}");
+        let f = &r["findings"][0];
+        assert!((f["value"].as_f64().unwrap() - 0.5).abs() < 1e-6, "{f}");
+        let bodies = [f["body"].as_str().unwrap(), f["other_body"].as_str().unwrap()];
+        assert!(bodies.contains(&"A") && bodies.contains(&"B"), "{f}");
+        assert!(s.execute("geometry.check", &json!({"size": 2.5, "gap": 0.1})).unwrap()["findings"].as_array().unwrap().is_empty());
+        // Without a size the default is a twentieth of the smaller diagonal.
+        let d = s.execute("geometry.check", &json!({})).unwrap();
+        assert!((d["size"].as_f64().unwrap() - 300f64.sqrt() / 20.0).abs() < 1e-9, "{d}");
+    }
+
+    #[test]
+    fn check_rejects_hostile_parameters() {
+        let mut s = Session::default();
+        assert!(s.execute("geometry.check", &json!({})).is_err(), "needs a design");
+        let (_dir, mut s) = design(json!([{"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10, "body_name": "A"}}]));
+        for p in [
+            json!({"size": 0}),
+            json!({"size": -1}),
+            json!({"size": "big"}),
+            json!({"size": 1e308, "gap": 1e308}),
+            json!({"short_edge": -1}),
+            json!({"sliver": 1e9}),
+            json!({"parallel_angle": 90}),
+            json!({"body": "Nope"}),
+            json!({"body": 3}),
+        ] {
+            assert!(s.execute("geometry.check", &p).is_err(), "{p}");
+        }
+    }
 
     fn package(model: &str) -> Vec<u8> {
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));

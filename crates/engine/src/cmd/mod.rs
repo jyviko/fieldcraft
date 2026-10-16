@@ -51,6 +51,7 @@ pub static ALL: &[CommandSpec] = &[
     geometry::BODIES,
     geometry::FEATURES,
     geometry::CENTRE,
+    geometry::CHECK,
     geometry::TESSELLATE,
     geometry::IMPORT_MESH,
     datum::DATUM_PLANE,

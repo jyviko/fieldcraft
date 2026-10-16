@@ -248,6 +248,13 @@ pub static CATALOGUE: &[Capability] = &[
     ),
     ready("geometry.tessellate", "Tessellate", Geometry, "Inspect", "Tessellate a body into a face-tagged boundary surface"),
     ready(
+        "geometry.check",
+        "Check Geometry",
+        Geometry,
+        "Inspect",
+        "Short edges, small and sliver faces and near faces against the element size, located",
+    ),
+    ready(
         "mesh.surface.check",
         "Check Surface",
         Geometry,

@@ -1,0 +1,1 @@
+{"shapes": [{"d": "M9 3 L16 6.5 L16 13 L9 16.5 L2 13 L2 6.5 Z", "fill": "soft", "stroke": "line"}, {"d": "M2 6.5 L9 10 L16 6.5 M9 10 L9 16.5", "stroke": "line"}, {"line": [2, 6.5, 2, 9.5], "stroke": "warm", "width": 2.25}, {"circle": [17, 17, 3.5], "stroke": "accent", "width": 1.75}, {"line": [19.5, 19.5, 22, 22], "stroke": "accent", "width": 2}]}

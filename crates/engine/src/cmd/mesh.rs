@@ -156,7 +156,7 @@ pub(super) fn surface_options(p: &Value, mesh: &SurfaceMesh) -> Result<SurfaceOp
 }
 
 /// An optional number in `range`.
-fn number_in(p: &Value, key: &str, default: f64, range: std::ops::RangeInclusive<f64>) -> Result<f64> {
+pub(super) fn number_in(p: &Value, key: &str, default: f64, range: std::ops::RangeInclusive<f64>) -> Result<f64> {
     let v = optional_number(p, key, default)?;
     if range.contains(&v) { Ok(v) } else { Err(EngineError::param(key, ProblemKind::NotInRange { min: *range.start(), max: *range.end() })) }
 }

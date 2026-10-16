@@ -1635,6 +1635,17 @@ pub const MESH_PLAN: &[Field] = &[
 ];
 pub const MESH_PLAN_APPLY: &[Field] = &[text("plan", "Plan").help("The name of a saved mesh plan (mesh.plan).").req()];
 pub const FEATURES: &[Field] = &[reference("body", "Body", C::Body).help("Only this body's features.").hint("every body")];
+pub const GEOMETRY_CHECK: &[Field] = &[
+    reference("body", "Body", C::Body).help("The body to check; every body when empty.").hint("every body"),
+    positive("size", "Element size", D::Millimetre)
+        .help("The element size you intend to mesh with; features are small against it.")
+        .hint("1/20 of the diagonal"),
+    range("short_edge", "Short edge", D::None, 0.0, 10.0).help("Edges shorter than this fraction of the size are reported.").def("0.3"),
+    range("small_face", "Small face", D::None, 0.0, 10.0).help("Faces with area below this fraction of size² are reported.").def("0.1"),
+    range("sliver", "Sliver width", D::None, 0.0, 10.0).help("Faces narrower than this fraction of the size are reported.").def("0.3"),
+    range("gap", "Gap", D::None, 0.0, 10.0).help("Parallel faces closer than this fraction of the size, but not touching, are reported.").def("0.3"),
+    range("parallel_angle", "Parallel within", D::Degree, 0.0, 60.0).help("Faces this close to parallel count for the gap.").def("10"),
+];
 pub const TESSELLATE: &[Field] = &[reference("body", "Body", C::Body).help("The body to tessellate.").req(), TOLERANCE];
 pub const IMPORT_MESH: &[Field] = &[path("path", "3MF file", false).help("A 3MF surface mesh with named faces.").req()];
 pub const FILE_OPEN: &[Field] = &[path("path", "Model", false).help("The FieldCraft model file to open.").req()];

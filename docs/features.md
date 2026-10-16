@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-75 ready, 39 coming soon.
+76 ready, 39 coming soon.
 
 ## Geometry
 
@@ -16,6 +16,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Import | Tagged Mesh — Read a face-tagged surface mesh (3MF) | ready | `geometry.import.mesh` |
 | Inspect | Bodies — List the open design's bodies, volumes and named faces, edges and vertices | ready | `geometry.bodies`, `geometry.centre`, `geometry.features` |
 | Inspect | Tessellate — Tessellate a body into a face-tagged boundary surface | ready | `geometry.tessellate` |
+| Inspect | Check Geometry — Short edges, small and sliver faces and near faces against the element size, located | ready | `geometry.check` |
 | Inspect | Check Surface — Weld, closed, manifold, orientation and self-intersection checks; feature edges | ready | `mesh.surface.check` |
 | Prepare | Datum Plane — A datum plane: principal plane and offset, three points or datum points, point and normal, normal to an axis | ready | `geometry.datum`, (`geometry.datum.edit`), (`geometry.datum.delete`), (`geometry.datum.suppress`) |
 | Prepare | Datum Axis — A datum axis: principal axis, two points or datum points, point and direction | ready | `geometry.datum.axis`, (`geometry.datum.axis.edit`) |

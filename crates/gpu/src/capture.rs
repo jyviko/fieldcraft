@@ -61,6 +61,12 @@ impl Capturer {
         .map_err(|e| GpuError::Device(e.to_string()))?;
         // Errors outside a scope are logged, replacing wgpu's default handler, which panics.
         device.on_uncaptured_error(Arc::new(|e: wgpu::Error| log::error!("graphics device error: {e}")));
+        Capturer::on_device(adapter, device, queue, tier)
+    }
+
+    /// A capturer on a device already open on `adapter` (the desktop app's), which keeps its
+    /// error handler: pictures share the window's device instead of opening another.
+    pub fn on_device(adapter: &wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue, tier: Tier) -> Result<Capturer> {
         let samples = if adapter.get_texture_format_features(FORMAT).flags.sample_count_supported(SAMPLES)
             && adapter.get_texture_format_features(DEPTH).flags.sample_count_supported(SAMPLES)
         {

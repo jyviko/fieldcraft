@@ -35,10 +35,7 @@ fn draw(f: &fieldcraft_engine::view::Framed, w: u32, h: u32) -> Result<(Vec<u8>,
 /// the adapter, or why the CPU drew it), `results` (step, scale, contour), `undrawn_bodies` and
 /// `sampled_symbols`. The MCP `screenshot` reply and `fieldcraft-cli snapshot` print it.
 pub fn picture_report(r: &Renderer, shown: &Shown) -> Value {
-    let renderer = match r {
-        Renderer::Gpu { adapter, samples, .. } => json!({"kind": r.kind(), "adapter": adapter, "msaa": samples}),
-        Renderer::Cpu { why } => json!({"kind": r.kind(), "why": why}),
-    };
+    let renderer = r.report();
     let contour = shown
         .contour
         .as_ref()

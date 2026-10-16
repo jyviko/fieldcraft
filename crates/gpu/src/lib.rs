@@ -69,4 +69,13 @@ impl Renderer {
             Renderer::Cpu { .. } => "cpu",
         }
     }
+
+    /// What drew a picture, for a reply: `{kind, adapter, msaa}` on a GPU, `{kind, why}` on
+    /// the CPU (`why` null when the CPU was asked for).
+    pub fn report(&self) -> serde_json::Value {
+        match self {
+            Renderer::Gpu { adapter, samples, .. } => serde_json::json!({"kind": self.kind(), "adapter": adapter, "msaa": samples}),
+            Renderer::Cpu { why } => serde_json::json!({"kind": self.kind(), "why": why}),
+        }
+    }
 }

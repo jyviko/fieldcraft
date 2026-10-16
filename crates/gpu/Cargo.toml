@@ -13,6 +13,7 @@ fieldcraft-render = { workspace = true }
 wgpu = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = { workspace = true }

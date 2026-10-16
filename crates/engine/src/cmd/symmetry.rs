@@ -2,7 +2,8 @@
 //! symmetric part can be solved as a half.
 //!
 //! The condition holds the displacement normal to the plane, and the rotations about the two
-//! axes in it, at zero (`type: "symmetry"`). Its set is given, or made of the faces of the open
+//! axes in it, at zero (`type: "symmetry"`): on a plane normal to X, Y or Z those are global
+//! degrees of freedom; on any other plane they are linear constraints along its normal. Its set is given, or made of the faces of the open
 //! design's bodies that lie on the plane (the cut faces of a partition by that datum, `partition:
 //! <name>:a|b`), so it follows the geometry through a remesh.
 
@@ -16,7 +17,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const SYMMETRY: CommandSpec = CommandSpec {
     id: "model.boundary_condition.symmetry",
     label: "Symmetry Plane",
-    params: r#"{"name": "Sym", "datum": "Mid" (a datum plane normal to X, Y or Z), "set"?: "cut" (default: a new set of the same name holding every face of the open design's bodies on the plane, e.g. a partition's cut faces), "bodies"?: ["Part/a"] (only their faces)} — a symmetry boundary condition on the plane: zero displacement normal to it and zero rotation about the axes in it, so half a symmetric part (loaded symmetrically, with half the load) is solved as a half. Add it to the steps (model.step.activate). Planes not normal to X, Y or Z are not supported yet"#,
+    params: r#"{"name": "Sym", "datum": "Mid" (a datum plane, any orientation), "set"?: "cut" (default: a new set of the same name holding every face of the open design's bodies on the plane, e.g. a partition's cut faces), "bodies"?: ["Part/a"] (only their faces)} — a symmetry boundary condition on the plane: zero displacement normal to it and zero rotation about the axes in it, so half a symmetric part (loaded symmetrically, with half the load) is solved as a half. Add it to the steps (model.step.activate). Reports the plane as "x", "y", "z" or its unit normal"#,
     form: Some(super::forms::SYMMETRY),
     kind: CommandKind::Model,
     requires: &[Requirement::DatumPlane],
@@ -30,10 +31,10 @@ fn symmetry(s: &mut Session, p: &Value) -> Result<Value> {
     let name = super::name(p)?.to_string();
     let datum: String = super::req(p, "datum")?;
     let (point, normal) = super::datum::datum_plane_of(&s.model, &datum)?;
-    let axis = (0..3).find(|&k| (normal[k].abs() - 1.0).abs() < 1e-9).ok_or_else(|| {
-        EngineError::Params(format!("not supported yet: symmetry about a plane not normal to X, Y or Z (datum `{datum}` has normal {normal:?})"))
-    })?;
-    let plane = [Symmetry::X, Symmetry::Y, Symmetry::Z][axis];
+    let unusable = || EngineError::Params(format!("datum `{datum}` has no usable normal ({normal:?})"));
+    let plane = Symmetry::from_normal(normal).ok_or_else(unusable)?;
+    let n = plane.unit_normal().ok_or_else(unusable)?;
+    let along = |x: [f64; 3]| (0..3).map(|k| x[k] * n[k]).sum::<f64>();
     let set = match p.get("set") {
         Some(_) => super::req::<String>(p, "set")?,
         None => {
@@ -48,8 +49,9 @@ fn symmetry(s: &mut Session, p: &Value) -> Result<Value> {
                 let tol = ON_PLANE * b.size()?.max(1.0);
                 for (f, surface) in b.faces().iter().zip(b.face_surfaces()?) {
                     if let Some(FaceSurface::Plane { normal: m, point: q }) = surface {
-                        let parallel = (m[axis].abs() - 1.0).abs() < 1e-9;
-                        if parallel && (q[axis] - point[axis]).abs() < tol {
+                        let length = m.iter().map(|c| c * c).sum::<f64>().sqrt();
+                        let parallel = (along(m).abs() - length).abs() < 1e-9 * length;
+                        if parallel && (along(q) - along(point)).abs() < tol {
                             faces.push(GeometryRef::face(b.name.as_str(), f.name.as_str())?);
                         }
                     }
@@ -64,8 +66,11 @@ fn symmetry(s: &mut Session, p: &Value) -> Result<Value> {
     };
     s.model.add_boundary_condition(&name, BoundaryCondition::Symmetry { target: Target::Set(set.clone()), plane })?;
     let faces = s.model.set(&set).map_or(0, |x| x.geometry.len());
-    let axis_name = ["x", "y", "z"].get(axis).copied().unwrap_or("x");
-    Ok(json!({"name": name, "set": set, "plane": axis_name, "faces": faces}))
+    let reported = match plane.axis() {
+        Some(k) => json!(["x", "y", "z"].get(k).copied().unwrap_or("x")),
+        None => json!(n),
+    };
+    Ok(json!({"name": name, "set": set, "plane": reported, "faces": faces}))
 }
 
 #[cfg(test)]
@@ -137,17 +142,117 @@ mod tests {
         assert!((2.0 * halved.1 - full.1).abs() < 1e-9 * full.1.abs(), "reaction {} vs {}", halved.1, full.1);
     }
 
+    /// A 20 × 20 × 2 plate (0..20 in x and y), cut on its diagonal plane x = y (datum `Diag`,
+    /// normal (1, −1, 0)) into `Plate/a` and `Plate/b`, the half below the diagonal (y < x) meshed
+    /// with quadratic tets.
+    fn plate() -> (crate::tests::TempDir, Session, String) {
+        let commands = json!({"commands": [
+            {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 2, "body_name": "Plate"}},
+        ]});
+        let bytes = fieldcraft_geometry::script_design(&commands.to_string()).unwrap();
+        let (dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        s.execute("geometry.datum", &json!({"name": "Diag", "by": {"type": "point_normal", "point": [0, 0, 0], "normal": [1, -1, 0]}})).unwrap();
+        s.execute("geometry.partition", &json!({"name": "Cut", "datum": "Diag"})).unwrap();
+        let design = s.design.as_ref().unwrap();
+        let below = design
+            .bodies
+            .iter()
+            .find(|b| {
+                let c = b.measure().unwrap().centroid;
+                c[0] > c[1]
+            })
+            .unwrap()
+            .name
+            .clone();
+        s.execute("mesh.tet.generate", &json!({"body": below, "size": 2, "order": "quadratic"})).unwrap();
+        (dir, s, below)
+    }
+
+    /// Clamp the faces at y = 0 (and x = 0 when `whole`), press the top faces, solve; the
+    /// displacement of every node of the half below the diagonal, by label.
+    fn press(s: &mut Session, below: &str, whole: bool, extra: &[&str]) -> std::collections::BTreeMap<u64, [f64; 3]> {
+        let bodies: Vec<String> = s.design.as_ref().unwrap().bodies.iter().map(|b| b.name.clone()).collect();
+        let mut clamp = vec![json!({"body": below, "face": face(s, below, [10.0, 0.0, 1.0])})];
+        let mut top = vec![json!({"body": below, "face": face(s, below, [15.0, 5.0, 2.0])})];
+        if whole {
+            let above = bodies.iter().find(|b| b.as_str() != below).unwrap();
+            clamp.push(json!({"body": above, "face": face(s, above, [0.0, 10.0, 1.0])}));
+            top.push(json!({"body": above, "face": face(s, above, [5.0, 15.0, 2.0])}));
+        }
+        let all: Vec<Value> = bodies.iter().filter(|b| whole || b.as_str() == below).map(|b| json!({"body": b})).collect();
+        let mut bcs = vec!["Clamp".to_string()];
+        bcs.extend(extra.iter().map(|x| x.to_string()));
+        let script = json!([
+            {"command": "model.set.create", "params": {"name": "all", "geometry": all}},
+            {"command": "model.set.create", "params": {"name": "clamped", "geometry": clamp}},
+            {"command": "model.set.create", "params": {"name": "top", "geometry": top}},
+            {"command": "model.set.create", "params": {"name": "half", "geometry": [{"body": below}]}},
+            {"command": "model.material.create", "params": {"name": "Steel", "elastic": {"type": "isotropic", "young": 210000, "poisson": 0.3}}},
+            {"command": "model.section.create", "params": {"name": "Plate", "set": "all", "material": "Steel", "kind": {"type": "solid"}}},
+            {"command": "model.boundary_condition.create", "params": {"name": "Clamp", "type": "fixed", "target": {"set": "clamped"}}},
+            {"command": "model.load.create", "params": {"name": "Press", "type": "pressure", "set": "top", "magnitude": 0.1}},
+            {"command": "model.step.create", "params": {"name": "Load", "procedure": {"type": "static"}, "boundary_conditions": bcs, "loads": ["Press"]}},
+        ]);
+        s.run_script(&script).unwrap();
+        s.execute("solve.static", &json!({})).unwrap();
+        let nodes = s.model.resolve_set("half").unwrap().nodes;
+        let probe = s.execute("solve.probe", &json!({"step": "Load", "nodes": nodes})).unwrap();
+        probe["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| (n["node"].as_u64().unwrap(), [0, 1, 2].map(|k| n["displacement"][k].as_f64().unwrap())))
+            .collect()
+    }
+
+    /// The half of the plate below its diagonal, with the inclined symmetry plane (found on the
+    /// cut face) and its half of the pressure, deflects as the whole plate, meshed as that half
+    /// mirrored across the diagonal (conforming there, so the whole is the same mesh twice).
     #[test]
-    fn inclined_planes_and_hostile_params_change_nothing() {
+    fn a_half_cut_on_an_inclined_plane_matches_the_whole() {
+        let (_d1, mut whole, below) = plate();
+        let r = whole.execute("mesh.mirror", &json!({"plane": "Diag", "bodies": [below]})).unwrap();
+        let on_plane = r["on_plane"].as_u64().unwrap();
+        let q = whole.execute("mesh.quality", &json!({})).unwrap();
+        assert_eq!(q["valid"].as_u64().unwrap() as usize, whole.model.elements().len(), "{q}");
+        assert!((q["volume"].as_f64().unwrap() - 800.0).abs() < 1e-9 * 800.0, "{q}");
+        let full = press(&mut whole, &below, true, &[]);
+
+        let (_d2, mut half, below) = plate();
+        let nodes = half.model.nodes().len() as u64;
+        assert_eq!(whole.model.nodes().len() as u64, 2 * nodes - on_plane, "the mirror shares the plane's nodes");
+        let r = half.execute("model.boundary_condition.symmetry", &json!({"name": "Sym", "datum": "Diag", "bodies": [below]})).unwrap();
+        let h = 1.0 / 2f64.sqrt();
+        assert_eq!(r["faces"], json!(1), "{r}");
+        let n: Vec<f64> = r["plane"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert!((n[0] - h).abs() < 1e-15 && (n[1] + h).abs() < 1e-15 && n[2] == 0.0, "{r}");
+        assert_eq!(half.model.resolve_set("Sym").unwrap().nodes.len() as u64, on_plane);
+        let halved = press(&mut half, &below, false, &["Sym"]);
+
+        assert_eq!(full.len(), halved.len());
+        let size = full.values().fold(0.0f64, |m, u| m.max(u.iter().map(|c| c * c).sum::<f64>().sqrt()));
+        let worst = halved.iter().map(|(l, u)| (0..3).map(|k| (u[k] - full[l][k]).powi(2)).sum::<f64>().sqrt()).fold(0.0f64, f64::max);
+        eprintln!("half vs whole plate on the inclined plane: largest deflection {size:.6e}, difference {:.1e}", worst / size);
+        assert!(size > 1e-4 && worst < 1e-9 * size, "{worst} of {size}");
+        // On the plane the nodes move along it: n · u = 0.
+        for l in half.model.resolve_set("Sym").unwrap().nodes {
+            let u = halved[&u64::from(l)];
+            assert!((u[0] - u[1]).abs() * h < 1e-12 * size, "node {l}: {u:?}");
+        }
+    }
+
+    #[test]
+    fn hostile_params_change_nothing() {
         let (_d, mut s) = bar(true);
-        s.execute("geometry.datum", &json!({"name": "Tilt", "by": {"type": "point_normal", "point": [0, 0, 0], "normal": [1, 1, 0]}})).unwrap();
         s.execute("geometry.datum", &json!({"name": "Out", "by": {"type": "offset", "plane": "xy", "offset": 100}})).unwrap();
+        s.execute("geometry.datum", &json!({"name": "Tilt", "by": {"type": "point_normal", "point": [100, 0, 0], "normal": [1, 1, 0]}})).unwrap();
         s.execute("geometry.datum.axis", &json!({"name": "Ax", "by": {"type": "principal", "axis": "x"}})).unwrap();
         let model = s.model.clone();
-        let e = s.execute("model.boundary_condition.symmetry", &json!({"name": "S", "datum": "Tilt"})).unwrap_err();
-        assert!(e.to_string().contains("not supported yet"), "{e}");
         for p in [
             json!({"name": "S", "datum": "Out"}),
+            json!({"name": "S", "datum": "Tilt"}),
             json!({"name": "S", "datum": "Ax"}),
             json!({"name": "S", "datum": "Nope"}),
             json!({"name": "S", "datum": "Mid", "set": "nope"}),

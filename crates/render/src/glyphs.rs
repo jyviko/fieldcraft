@@ -258,6 +258,9 @@ enum Shape {
     /// A prescribed temperature (a boundary condition or a temperature field): a stem off the
     /// part ending in a bulb, a thermometer.
     Temperature,
+    /// A support along a unit direction that is no axis (a symmetry plane's normal): a
+    /// constraint triangle along it, from outside the part.
+    Support(Vec3),
     /// A prescribed motion along a unit direction: an arrow leaving the node from a short bar,
     /// telling it apart from a force (an arrow onto the node) and a support (triangles).
     Prescribed(Vec3),
@@ -568,7 +571,11 @@ impl Builder<'_> {
             }
         }
         // A symmetry plane shows its normal only: the rotations it holds follow from it.
-        if matches!(bc, BoundaryCondition::Symmetry { .. }) {
+        if let BoundaryCondition::Symmetry { plane, .. } = bc {
+            if let Some(n) = plane.inclined().and_then(|n| Vec3::from(n).normalized()) {
+                let (spots, total) = self.spots(bc.target());
+                return self.group(owner, Shape::Support(n), spots, Vec::new(), total, 2.4);
+            }
             dofs &= 0b000_111;
         }
         if dofs == 0 {
@@ -789,7 +796,7 @@ impl Glyphs {
                 continue;
             }
             let color = match g.shape {
-                Shape::Constraint | Shape::Prescribed(_) => colors.constraint,
+                Shape::Constraint | Shape::Support(_) | Shape::Prescribed(_) => colors.constraint,
                 Shape::Thermal | Shape::Temperature | Shape::Convection | Shape::HeatFlux => colors.thermal,
                 Shape::Surface => colors.contact,
                 _ => colors.load,
@@ -1105,6 +1112,14 @@ impl Draw<'_> {
                     }
                 }
             }
+            Shape::Support(n) => {
+                let dir = match s.normal {
+                    Some(f) if f.dot(n) > 0.1 => -n,
+                    _ => n,
+                };
+                let (e1, e2) = perpendiculars(n);
+                self.triangle(p, dir, u, 0.45 * u, e1, e2);
+            }
             Shape::Force(dir) => {
                 let (len, head) = if spread { (2.5 * u, 0.8 * u) } else { (4.0 * u, u) };
                 self.arrow(p - dir * len, dir, len, head);
@@ -1182,7 +1197,13 @@ impl Draw<'_> {
                     self.line(*a, ring.get((k + 1) % 4).copied().unwrap_or(*a));
                 }
             }
-            Shape::Constraint | Shape::Force(_) | Shape::Moment(_) | Shape::Thermal | Shape::Temperature | Shape::Prescribed(_) => {}
+            Shape::Constraint
+            | Shape::Support(_)
+            | Shape::Force(_)
+            | Shape::Moment(_)
+            | Shape::Thermal
+            | Shape::Temperature
+            | Shape::Prescribed(_) => {}
         }
     }
 
@@ -1356,6 +1377,12 @@ mod tests {
         let s = beam(BoundaryCondition::Symmetry { target: end(), plane: fieldcraft_model::Symmetry::Y });
         assert_eq!(s.lines.len(), 6);
         assert_eq!(near(&bases(&s, Vec3::ZERO), -Vec3::Y * u), 2);
+        // An inclined one shows its normal: one triangle along it.
+        let plane = fieldcraft_model::Symmetry::from_normal([1.0, 1.0, 0.0]).unwrap();
+        let s = beam(BoundaryCondition::Symmetry { target: end(), plane });
+        assert_eq!(s.lines.len(), 6);
+        let n = Vec3::new(1.0, 1.0, 0.0).normalized().unwrap();
+        assert_eq!(near(&bases(&s, Vec3::ZERO), -n * u), 2);
         // A rotation alone keeps its place behind the node, apart from it.
         let s = beam(BoundaryCondition::Displacement { target: end(), values: [None, None, None, Some(0.0), None, None] });
         assert_eq!(s.lines.len(), 6);

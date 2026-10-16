@@ -302,6 +302,17 @@ pub struct Viewport {
     pub menu_target: Option<menu::Target>,
 }
 
+/// The XY plot in the results panel (results.xy): the quantity picked, the node it is read at,
+/// and the series the command replied with for `key` (step, result identity, `y`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct XyPlot {
+    /// `results.xy`'s `y`; a nodal field's `node` is filled from [`XyPlot::node`].
+    pub y: Option<Value>,
+    pub node: Option<u32>,
+    pub key: Option<(String, usize, Value)>,
+    pub series: Option<Value>,
+}
+
 /// A probed node: its values as (what, value) rows and as lines of text, for the step, mode
 /// and frame they were read from.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -377,6 +388,8 @@ pub struct ModelApp {
     pub probe: Option<Probe>,
     /// The reaction sums asked for last in the results panel.
     pub reactions: Option<Value>,
+    /// The XY plot, while it is open in the results panel.
+    pub xy: Option<XyPlot>,
     /// The last command reply with more to it than its status line, shown in the context panel.
     pub reply: Option<reply::Reply>,
     /// Whether results were shown last frame (the Results tab comes up when they appear).
@@ -508,6 +521,7 @@ impl ModelApp {
             plot: (None, None),
             probe: None,
             reactions: None,
+            xy: None,
             reply: None,
             results_shown: false,
             reframe: None,
@@ -631,6 +645,19 @@ impl ModelApp {
             && let Ok(v) = &r
         {
             self.reactions = Some(v.clone());
+        }
+        // The XY plot's series, however it was asked for; the panel opens on it.
+        if id == "results.xy" && (r.is_ok() || params.get("path").is_none()) {
+            let xy = self.xy.get_or_insert_with(XyPlot::default);
+            xy.series = r.as_ref().ok().cloned();
+            // The picker follows a series asked for elsewhere (the control channel, a script).
+            if let Some(y) = params.get("y").filter(|_| r.is_ok()) {
+                let mut template = y.clone();
+                if let Some(node) = template.as_object_mut().and_then(|o| o.remove("node")) {
+                    xy.node = node.as_u64().and_then(|n| u32::try_from(n).ok());
+                }
+                xy.y = Some(template);
+            }
         }
         // What the duplicate check found is selected, so the viewport shows it (#234).
         if id == "mesh.check.duplicates"
@@ -1851,6 +1878,7 @@ impl ModelApp {
             // The probe and the reaction sums were of the old document's results.
             self.probe = None;
             self.reactions = None;
+            self.xy = None;
             self.reframe = framing::Reframe::merge(self.reframe, framing::Reframe::Home);
         }
     }
@@ -2776,6 +2804,39 @@ mod tests {
             app.ui(ui);
         });
         out.textures_delta.clear();
+    }
+
+    /// XY Plot from the ribbon opens the plot in the results panel, which runs results.xy for
+    /// its quantity and keeps the series; a nodal field waits for a probed node (#94).
+    #[test]
+    fn the_xy_plot_runs_results_xy() {
+        let ctx = egui::Context::default();
+        let mut app = ModelApp::new(Session::default());
+        app.open_sample("impact");
+        app.run("solve.run", json!({})).unwrap();
+        app.start("results.xy").unwrap();
+        assert!(app.dialog.is_none(), "the plot opens in the panel, not a form");
+        draw(&mut app, &ctx, 1280.0, 800.0);
+        let s = app.xy.as_ref().and_then(|x| x.series.clone()).expect("the panel ran results.xy");
+        assert_eq!((s["step"].as_str(), s["x"]["axis"].as_str()), (Some("Impact"), Some("time")));
+        assert!(s["points"].as_u64().unwrap_or(0) > 1, "{s}");
+        // A nodal field needs a node: the probed one.
+        app.xy.as_mut().unwrap().y = Some(json!({"field": "velocity"}));
+        draw(&mut app, &ctx, 1280.0, 800.0);
+        assert!(app.xy.as_ref().unwrap().series.is_none());
+        app.probe_node(1).unwrap();
+        draw(&mut app, &ctx, 1280.0, 800.0);
+        let s = app.xy.as_ref().and_then(|x| x.series.clone()).expect("read at the probed node");
+        assert_eq!(s["frames"].as_array().map(Vec::len), Some(11), "{s}");
+        // A linear static step offers nothing; a frequency step its frequencies.
+        let mut app = ModelApp::new(Session::default());
+        app.open_sample("cantilever");
+        app.run("solve.run", json!({})).unwrap();
+        app.run("results.modes", json!({"step": "Modes"})).unwrap();
+        app.start("results.xy").unwrap();
+        draw(&mut app, &ctx, 1280.0, 800.0);
+        let s = app.xy.as_ref().and_then(|x| x.series.clone()).expect("the frequencies");
+        assert_eq!(s["x"]["axis"], "mode");
     }
 
     fn is_iso(cam: &Camera) -> bool {

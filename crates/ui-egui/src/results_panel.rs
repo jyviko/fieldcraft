@@ -9,6 +9,8 @@ use fieldcraft_engine::results::{Field, Kind, Quantity, true_scale, with_unit as
 use fieldcraft_explicit::{Energies, ExplicitResult};
 use serde_json::{Value, json};
 
+use std::sync::Arc;
+
 use crate::ModelApp;
 use crate::results::{Plot, components, count, number, number_in, with_unit};
 use crate::theme::Tokens;
@@ -398,12 +400,20 @@ pub fn controls(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens) 
             reactions_table(ui, r, plot, t);
         }
     }
+    let mut xy_export = None;
+    if app.xy.is_some() {
+        ui.separator();
+        xy_export = xy_section(app, plot, ui, t, &mut run);
+    }
     ui.separator();
     if let Some(p) = probed(app, plot, ui, t) {
         export = Some(p);
     }
     if let Some(p) = export {
         app.export_csv(p);
+    }
+    if let Some(p) = xy_export {
+        app.export_csv_with("results.xy", p);
     }
     for (id, params) in run {
         // The reaction sums land in `app.reactions` (ModelApp::run_form).
@@ -465,60 +475,30 @@ fn explicit(ui: &mut egui::Ui, e: &ExplicitResult, plot: &Plot, t: &Tokens, run:
     ];
     let energy_unit = Quantity::Energy.unit(plot.units);
     ui.label(RichText::new(titled("Energies", energy_unit.as_deref())).color(t.text_dim));
-    let (outer, response) = ui.allocate_exact_size(vec2(ui.available_width(), PLOT_HEIGHT + AXIS_BOTTOM), egui::Sense::click_and_drag());
-    let rect = Rect::from_min_max(outer.min + vec2(AXIS_LEFT, 0.0), outer.max - vec2(0.0, AXIS_BOTTOM));
-    let painter = ui.painter_at(outer);
-    painter.rect_filled(rect, 2.0, t.field);
-    let t_end = h.time.last().copied().unwrap_or(0.0).max(f64::MIN_POSITIVE);
-    // The value axis spans every curve and 0 (a curve below 0 stays in the frame).
-    let values = || h.energies.iter().flat_map(|e| series.iter().map(move |(_, _, f)| f(e))).filter(|v| v.is_finite());
-    let hi = values().fold(0.0, f64::max);
-    let lo = values().fold(0.0, f64::min);
-    let span = if hi > lo { hi - lo } else { 1.0 };
-    let at = |time: f64, v: f64| {
-        pos2(rect.left() + (time / t_end) as f32 * rect.width(), rect.bottom() - 2.0 - ((v - lo) / span) as f32 * (rect.height() - 4.0))
-    };
-    // Axes: the value range left, the time range under it.
-    let small = FontId::proportional(10.0);
-    let scale = hi.abs().max(lo.abs());
-    painter.text(pos2(rect.left() - 4.0, rect.top()), Align2::RIGHT_TOP, number_in(hi, scale), small.clone(), t.text_dim);
-    painter.text(pos2(rect.left() - 4.0, rect.bottom()), Align2::RIGHT_BOTTOM, number_in(lo, scale), small.clone(), t.text_dim);
-    if lo < 0.0 && hi > 0.0 {
-        let zero = at(0.0, 0.0).y;
-        painter.line_segment([pos2(rect.left(), zero), pos2(rect.right(), zero)], Stroke::new(1.0, t.border));
-    }
-    painter.text(pos2(rect.left(), rect.bottom() + 2.0), Align2::LEFT_TOP, "0", small.clone(), t.text_dim);
-    let end = format!("t {}", with_unit(number(t_end), time_unit.as_deref()));
-    painter.text(pos2(rect.right(), rect.bottom() + 2.0), Align2::RIGHT_TOP, end, small, t.text_dim);
-    // At most a few hundred points per line, however long the history.
-    let stride = (h.time.len() / MAX_PLOT_POINTS).max(1);
-    for (_, color, f) in &series {
-        let points: Vec<egui::Pos2> =
-            h.time.iter().zip(&h.energies).step_by(stride).filter(|(_, e)| f(e).is_finite()).map(|(time, e)| at(*time, f(e))).collect();
-        painter.add(egui::Shape::line(points, Stroke::new(1.5, *color)));
-    }
+    let lines: Vec<Line> = series
+        .iter()
+        .map(|(_, color, f)| Line { color: *color, points: h.time.iter().zip(&h.energies).map(|(time, e)| (*time, f(e))).collect() })
+        .collect();
+    let t_end = h.time.last().copied().unwrap_or(0.0);
+    let now = plot.frame().map_or(t_end, |(_, time, _)| time);
+    let (response, axes) = line_plot(ui, &lines, "t", time_unit.as_deref(), Some(now), t);
+    let scale = axes.lo.abs().max(axes.hi.abs());
     let nearest = |time: f64| h.time.iter().enumerate().min_by(|a, b| (a.1 - time).abs().total_cmp(&(b.1 - time).abs())).map_or(0, |(i, _)| i);
-    let time_at = |x: f32| f64::from(((x - rect.left()) / rect.width()).clamp(0.0, 1.0)) * t_end;
     // A click or drag on the plot shows the frame nearest that time.
     if (response.clicked() || response.dragged())
         && let Some(p) = response.interact_pointer_pos()
     {
-        run.push(("results.frame", json!({"time": time_at(p.x)})));
+        run.push(("results.frame", json!({"time": axes.x_of(p.x)})));
     }
     // Hover reads the curves at the pointer's time.
-    if let Some(p) = response.hover_pos().filter(|p| rect.contains(*p)) {
-        let x = p.x;
-        painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, t.border));
-        if let Some(e) = h.energies.get(nearest(time_at(x))) {
-            let mut lines = vec![format!("t = {}", with_unit(number(time_at(x)), time_unit.as_deref()))];
-            lines.extend(series.iter().map(|(name, _, f)| format!("{name} {}", number_in(f(e), scale))));
-            response.clone().on_hover_text(lines.join("\n"));
-        }
+    if let Some(p) = response.hover_pos().filter(|p| axes.rect.contains(*p))
+        && let Some(e) = h.energies.get(nearest(axes.x_of(p.x)))
+    {
+        let mut text = vec![format!("t = {}", with_unit(number(axes.x_of(p.x)), time_unit.as_deref()))];
+        text.extend(series.iter().map(|(name, _, f)| format!("{name} {}", number_in(f(e), scale))));
+        response.on_hover_text(text.join("\n"));
     }
-    // The frame's time: the cursor, and the values there.
-    let now = plot.frame().map_or(t_end, |(_, time, _)| time);
-    let x = at(now, 0.0).x;
-    painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.5, t.text));
+    // The values at the frame's time.
     let Some(at_now) = h.energies.get(nearest(now)) else { return };
     let frame = plot.frame().map_or_else(String::new, |(k, ..)| format!(", frame {k}"));
     ui.label(RichText::new(format!("At t = {}{frame}", with_unit(number(now), time_unit.as_deref()))).small().color(t.text_dim));
@@ -532,6 +512,233 @@ fn explicit(ui: &mut egui::Ui, e: &ExplicitResult, plot: &Plot, t: &Tokens, run:
         ui.label(number(at_now.balance));
         ui.end_row();
     });
+}
+
+/// A line of a plot: its colour and its (x, y) points (those not finite are left out).
+struct Line {
+    color: Color32,
+    points: Vec<(f64, f64)>,
+}
+
+/// Where a plot's values land: its drawing area and the x and value ranges it spans.
+struct Axes {
+    rect: Rect,
+    x0: f64,
+    x1: f64,
+    lo: f64,
+    hi: f64,
+}
+
+impl Axes {
+    fn at(&self, x: f64, y: f64) -> Pos2 {
+        let (w, h) = ((self.x1 - self.x0).max(f64::MIN_POSITIVE), (self.hi - self.lo).max(f64::MIN_POSITIVE));
+        pos2(
+            self.rect.left() + ((x - self.x0) / w) as f32 * self.rect.width(),
+            self.rect.bottom() - 2.0 - ((y - self.lo) / h) as f32 * (self.rect.height() - 4.0),
+        )
+    }
+
+    /// The x value under the screen x `px` (clamped to the range).
+    fn x_of(&self, px: f32) -> f64 {
+        self.x0 + f64::from(((px - self.rect.left()) / self.rect.width()).clamp(0.0, 1.0)) * (self.x1 - self.x0)
+    }
+}
+
+/// A line plot the panel's width: the lines (at most [`MAX_PLOT_POINTS`] points each), the
+/// value range left (spanning 0, with a 0 line when it crosses it), the x range under it named
+/// `x_name` with `x_unit`, and a cursor at x `cursor`. The response senses clicks and drags.
+fn line_plot(ui: &mut egui::Ui, lines: &[Line], x_name: &str, x_unit: Option<&str>, cursor: Option<f64>, t: &Tokens) -> (egui::Response, Axes) {
+    let (outer, response) = ui.allocate_exact_size(vec2(ui.available_width(), PLOT_HEIGHT + AXIS_BOTTOM), egui::Sense::click_and_drag());
+    let rect = Rect::from_min_max(outer.min + vec2(AXIS_LEFT, 0.0), outer.max - vec2(0.0, AXIS_BOTTOM));
+    let painter = ui.painter_at(outer);
+    painter.rect_filled(rect, 2.0, t.field);
+    let finite = || lines.iter().flat_map(|l| l.points.iter()).filter(|(x, y)| x.is_finite() && y.is_finite());
+    let (mut x0, mut x1) = finite().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), (x, _)| (a.min(*x), b.max(*x)));
+    if !(x0 <= x1) {
+        (x0, x1) = (0.0, 1.0);
+    } else if x0 == x1 {
+        x1 = x0 + 1.0;
+    }
+    let hi = finite().map(|p| p.1).fold(0.0, f64::max);
+    let lo = finite().map(|p| p.1).fold(0.0, f64::min);
+    let hi = if hi > lo { hi } else { lo + 1.0 };
+    let axes = Axes { rect, x0, x1, lo, hi };
+    let small = FontId::proportional(10.0);
+    let scale = hi.abs().max(lo.abs());
+    painter.text(pos2(rect.left() - 4.0, rect.top()), Align2::RIGHT_TOP, number_in(hi, scale), small.clone(), t.text_dim);
+    painter.text(pos2(rect.left() - 4.0, rect.bottom()), Align2::RIGHT_BOTTOM, number_in(lo, scale), small.clone(), t.text_dim);
+    if lo < 0.0 && hi > 0.0 {
+        let zero = axes.at(x0, 0.0).y;
+        painter.line_segment([pos2(rect.left(), zero), pos2(rect.right(), zero)], Stroke::new(1.0, t.border));
+    }
+    painter.text(pos2(rect.left(), rect.bottom() + 2.0), Align2::LEFT_TOP, number(x0), small.clone(), t.text_dim);
+    let end = format!("{x_name} {}", with_unit(number(x1), x_unit));
+    painter.text(pos2(rect.right(), rect.bottom() + 2.0), Align2::RIGHT_TOP, end, small, t.text_dim);
+    for line in lines {
+        let stride = (line.points.len() / MAX_PLOT_POINTS).max(1);
+        let points: Vec<Pos2> =
+            line.points.iter().step_by(stride).filter(|(x, y)| x.is_finite() && y.is_finite()).map(|(x, y)| axes.at(*x, *y)).collect();
+        // A single point (a steady heat step) shows as a dot.
+        if let [p] = points.as_slice() {
+            painter.circle_filled(*p, 2.5, line.color);
+        }
+        painter.add(egui::Shape::line(points, Stroke::new(1.5, line.color)));
+    }
+    if let Some(x) = cursor.filter(|x| x.is_finite()) {
+        let x = axes.at(x, 0.0).x.clamp(rect.left(), rect.right());
+        painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.5, t.text));
+    }
+    if let Some(p) = response.hover_pos().filter(|p| rect.contains(*p)) {
+        painter.line_segment([pos2(p.x, rect.top()), pos2(p.x, rect.bottom())], Stroke::new(1.0, t.border));
+    }
+    (response, axes)
+}
+
+/// The quantities the XY plot offers for a result, as (label, `results.xy`'s `y`); a nodal
+/// field's `node` is filled in from the probed node.
+pub fn xy_options(r: &fieldcraft_engine::StepResult) -> Vec<(String, Value)> {
+    use fieldcraft_engine::cmd::xy;
+    let mut out = Vec::new();
+    if let Kind::Frequency(f) = r.kind() {
+        out.push(if f.buckling.is_some() {
+            ("Buckling load factor".to_string(), json!("load_factor"))
+        } else {
+            ("Frequency".to_string(), json!("frequency"))
+        });
+    }
+    if let Kind::Explicit(e) = r.kind() {
+        out.extend(xy::ENERGIES.iter().map(|n| (format!("Energy: {}", n.replace('_', " ")), json!({"energy": n}))));
+        out.extend(xy::HISTORIES.iter().map(|n| (n.replace('_', " "), json!({"history": n}))));
+        for node in e.history.nodes.iter().take(8) {
+            out.extend(
+                xy::NODE_QUANTITIES
+                    .iter()
+                    .map(|q| (format!("History node {node}: {}", q.replace('_', " ")), json!({"history_node": node, "quantity": q}))),
+            );
+        }
+    }
+    let linear = matches!(r.kind(), Kind::Static(s) if s.nonlinear.is_none());
+    if !linear {
+        out.extend(xy::plottable(r).into_iter().map(|f| (format!("{} at a node", f.label()), json!({"field": f.id()}))));
+    }
+    out
+}
+
+/// The XY plot (results.xy): a quantity picker, the series plotted against the step's own axis
+/// with the frame (mode) shown marked (a click shows the nearest one), and its export's
+/// parameters when Export CSV… is clicked. A nodal field is read at the probed node.
+fn xy_section(app: &mut ModelApp, plot: &Plot, ui: &mut egui::Ui, t: &Tokens, run: &mut Vec<(&'static str, Value)>) -> Option<Value> {
+    let step = plot.view.step.clone();
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("XY Plot").strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            close = ui.small_button("×").on_hover_text("Close the XY plot").clicked();
+        });
+    });
+    if close {
+        app.xy = None;
+        return None;
+    }
+    let options = xy_options(&plot.result);
+    if options.is_empty() {
+        ui.label(
+            RichText::new("A linear static step has one state: plot a nonlinear static, explicit, heat or frequency step").small().color(t.text_dim),
+        );
+        return None;
+    }
+    let probed = app.probe.as_ref().filter(|p| p.step == step).map(|p| p.node);
+    let xy = app.xy.get_or_insert_with(Default::default);
+    if probed.is_some() {
+        xy.node = probed;
+    }
+    let template = xy.y.clone().filter(|y| options.iter().any(|(_, o)| o == y)).unwrap_or_else(|| options[0].1.clone());
+    let shown = options.iter().find(|(_, o)| *o == template).map_or("", |(l, _)| l.as_str());
+    let mut picked = template.clone();
+    egui::ComboBox::from_id_salt("fc_results_xy").selected_text(shown).width(ui.available_width() - 8.0).truncate().show_ui(ui, |ui| {
+        for (label, y) in &options {
+            if ui.selectable_label(*y == template, label).clicked() {
+                picked = y.clone();
+            }
+        }
+    });
+    xy.y = Some(picked.clone());
+    let y = if picked.get("field").is_some() {
+        let Some(node) = xy.node else {
+            (xy.key, xy.series) = (None, None);
+            ui.label(RichText::new("Click the model to pick the node").small().color(t.text_dim));
+            return None;
+        };
+        let mut y = picked;
+        y["node"] = json!(node);
+        y
+    } else {
+        picked
+    };
+    let key = (step.clone(), Arc::as_ptr(&plot.result) as usize, y.clone());
+    if xy.key.as_ref() != Some(&key) {
+        xy.key = Some(key);
+        xy.series = None;
+        run.push(("results.xy", json!({"step": step, "y": y})));
+        return None;
+    }
+    let s = xy.series.clone().filter(|s| s["step"] == step.as_str())?;
+    let floats = |v: &Value| -> Vec<f64> { v.as_array().into_iter().flatten().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect() };
+    let (xs, ys) = (floats(&s["x"]["values"]), floats(&s["y"]["values"]));
+    let frames: Vec<usize> = s["frames"].as_array().into_iter().flatten().filter_map(|f| f.as_u64().and_then(|f| usize::try_from(f).ok())).collect();
+    let axis = s["x"]["axis"].as_str().unwrap_or_default();
+    // The point shown: the frame's, or the mode's.
+    let nearest =
+        |x: f64| xs.iter().enumerate().filter(|(_, v)| v.is_finite()).min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map(|(i, _)| i);
+    let current = match plot.frame() {
+        Some((k, ..)) if !frames.is_empty() => frames.iter().position(|f| *f == k),
+        // A history against time: the sample nearest the frame's time.
+        Some((_, time, _)) if axis == "time" => nearest(time),
+        _ if axis == "mode" => Some(plot.view.mode.saturating_sub(1)),
+        _ => None,
+    };
+    ui.label(RichText::new(s["y"]["label"].as_str().unwrap_or_default()).small().color(t.text_dim));
+    let x_name = match axis {
+        "load_factor" => "λ",
+        "time" => "t",
+        _ => "mode",
+    };
+    let x_unit = (axis == "time").then(|| Quantity::Time.unit(plot.units)).flatten();
+    let line = Line { color: t.accent, points: xs.iter().copied().zip(ys.iter().copied()).collect() };
+    let (response, axes) = line_plot(ui, &[line], x_name, x_unit.as_deref(), current.and_then(|i| xs.get(i).copied()), t);
+    let x_label = s["x"]["label"].as_str().unwrap_or_default().to_string();
+    if response.clicked()
+        && let Some(i) = response.interact_pointer_pos().and_then(|p| nearest(axes.x_of(p.x)))
+    {
+        if let Some(f) = frames.get(i) {
+            run.push(("results.frame", json!({"step": step, "frame": f})));
+        } else if axis == "time" {
+            run.push(("results.frame", json!({"step": step, "time": xs.get(i)})));
+        } else if axis == "mode" {
+            run.push(("results.modes", json!({"step": step, "mode": i + 1})));
+        }
+    }
+    if let Some(i) = response.hover_pos().filter(|p| axes.rect.contains(*p)).and_then(|p| nearest(axes.x_of(p.x))) {
+        let (x, y) = (xs.get(i).copied().unwrap_or(f64::NAN), ys.get(i).copied().unwrap_or(f64::NAN));
+        let scale = axes.lo.abs().max(axes.hi.abs());
+        response.on_hover_text(format!("{x_label} {}\n{}", number(x), number_in(y, scale)));
+    }
+    if let Some(i) = current {
+        let at = |v: &[f64]| v.get(i).map_or("—".into(), |x| number(*x));
+        ui.label(RichText::new(format!("{x_label} {}: {}", at(&xs), at(&ys))).small().color(t.text_dim));
+    }
+    ui.button("Export CSV…").on_hover_text("Write the series to a CSV file (results.xy)").clicked().then(|| json!({"step": step, "y": y}))
+}
+
+impl ModelApp {
+    /// XY Plot from the ribbon: the plot opens in the results panel, on the step shown (the
+    /// first solved one when none is).
+    pub(crate) fn open_xy(&mut self) {
+        if self.session.results_view.is_none() {
+            let _ = self.run("results.deformed", json!({}));
+        }
+        self.xy.get_or_insert_with(Default::default);
+    }
 }
 
 /// A heat step's balance: the heat each heat load carries in (negative: out), the prescribed

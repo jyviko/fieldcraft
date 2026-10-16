@@ -125,6 +125,11 @@ pub fn done(command: &str, label: &str, params: &Value, v: &Value) -> String {
             None => format!("Showing {step}, last frame"),
         }),
         "results.clear" => Some("Back to the model".to_string()),
+        "results.xy" => {
+            let points = v.get("points").and_then(Value::as_u64).unwrap_or(0);
+            let what = v.pointer("/y/label").and_then(Value::as_str).unwrap_or("the series");
+            Some(format!("Plotted {what}: {}", plural(points, "point")))
+        }
         "file.sample" => {
             let label = v.get("sample").and_then(Value::as_str).and_then(fieldcraft_engine::sample::find).map(|s| s.label);
             label.map(|l| format!("Opened the {l} sample"))

@@ -902,12 +902,19 @@ impl ModelApp {
     /// them): asks the save picker for `<model>-<step>-<what>.csv`; without a picker, the
     /// command's form opens instead.
     pub fn export_csv(&mut self, params: Value) {
+        self.export_csv_with("results.export.csv", params);
+    }
+
+    /// [`Self::export_csv`] through `command`, which takes a `path` (results.export.csv,
+    /// results.xy).
+    pub fn export_csv_with(&mut self, command: &str, params: Value) {
         let Some(pick) = self.services.pick_save.as_ref() else {
-            self.open_form("results.export.csv", params);
+            self.open_form(command, params);
             return;
         };
         let part = |k: &str| params.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
-        let name = format!("{}-{}-{}.csv", self.model_name(), part("step"), part("what"));
+        let what = if command == "results.xy" { "xy".to_string() } else { part("what") };
+        let name = format!("{}-{}-{what}.csv", self.model_name(), part("step"));
         let Some(path) = pick(&name, &[Filter { name: "CSV", extensions: &["csv"] }]) else { return };
         let path = if Path::new(&path).extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case("csv")) {
             path
@@ -916,7 +923,7 @@ impl ModelApp {
         };
         let mut params = params;
         params["path"] = json!(path);
-        if self.run("results.export.csv", params).is_ok() {
+        if self.run(command, params).is_ok() {
             self.set_status(format!("Wrote {}", file_name(&path)), false);
         }
     }
@@ -969,6 +976,7 @@ impl ModelApp {
             "diagnostics.bug_report" => self.report_bug(None),
             "diagnostics.crash_reports" | "diagnostics.crash_report" | "diagnostics.crash_reports.delete" => self.open_crash_reports(),
             "solve.run" => self.solve_all(),
+            "results.xy" => self.open_xy(),
             "deck.write" if can_save => match preset.get("format").and_then(Value::as_str) {
                 Some(f) => self.write_deck(f),
                 None => return false,

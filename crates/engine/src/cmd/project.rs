@@ -544,9 +544,58 @@ fn hex_project(s: &mut Session, raw: &Value) -> Result<Value> {
         max_elements: fieldcraft_model::MAX_ELEMENTS / 8,
         min_quality,
         fixed,
+        planes: Vec::new(),
     };
     let merge = merge_distance(p.merge, diag)?;
     project_body(s, &p.body, b, &t, &opts, merge)
+}
+
+/// The projection mesh of topology `t` over body `b`, not added to the model.
+pub(crate) fn project_only(b: &Body, name: &str, t: &Topology, opts: &ProjectOptions) -> Result<fieldcraft_mesh::project::ProjectedMesh> {
+    project_mesh(t, &b.surface, &b.target, opts).map_err(|e| EngineError::of_body(name, e))
+}
+
+/// Replace body `name`'s mesh (opened as `b`) with `nodes` and `hexes` made for it elsewhere
+/// (a part of another body's mesh): its outer faces (those no other of the hexes shares) tagged
+/// with the B-rep face of `b` nearest their middle. Nodes within `merge` of other meshes' join
+/// them.
+pub(crate) fn add_hexes(s: &mut Session, b: &Body, name: &str, nodes: &[[f64; 3]], hexes: &[[u32; 8]], merge: f64) -> Result<Value> {
+    use fieldcraft_mesh::project::Geometry;
+    let faces = ElementKind::Hex8.faces();
+    let mut count: BTreeMap<[u32; 4], usize> = BTreeMap::new();
+    let quad = |h: &[u32; 8], f: &[usize]| -> [u32; 4] { [0, 1, 2, 3].map(|i| f.get(i).and_then(|&l| h.get(l)).copied().unwrap_or(0)) };
+    for h in hexes {
+        for f in faces {
+            let mut k = quad(h, f);
+            k.sort_unstable();
+            *count.entry(k).or_insert(0) += 1;
+        }
+    }
+    let face_count = b.input.face_names.len() as u32;
+    let mut boundary = Vec::new();
+    for (e, h) in hexes.iter().enumerate() {
+        for (fi, f) in faces.iter().enumerate() {
+            let q = quad(h, f);
+            let mut k = q;
+            k.sort_unstable();
+            if count.get(&k) != Some(&1) {
+                continue;
+            }
+            let mid = q.iter().fold([0.0; 3], |a, &v| {
+                let p = nodes.get(v as usize).copied().unwrap_or_default();
+                [a[0] + 0.25 * p[0], a[1] + 0.25 * p[1], a[2] + 0.25 * p[2]]
+            });
+            let nearest = (0..face_count)
+                .filter_map(|f| b.target.project(f, mid).map(|p| ((0..3).map(|i| (p[i] - mid[i]).powi(2)).sum::<f64>(), f)))
+                .min_by(|x, y| x.0.total_cmp(&y.0));
+            if let Some((_, brep_face)) = nearest {
+                boundary.push(BoundaryFace { element: e as u32, face: fi as u8 + 1, brep_face });
+            }
+        }
+    }
+    let _ = name;
+    let (reply, _, _) = add_mesh(s, &b.input, nodes, hexes, &boundary, merge)?;
+    Ok(reply)
 }
 
 /// Fraction of the element size within which a node of another mesh lies on a face.

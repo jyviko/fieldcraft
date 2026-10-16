@@ -94,6 +94,10 @@ pub struct ProjectOptions {
     /// Already-meshed patches of the boundary taken as given ([`fixed`]): the block faces on
     /// them take their divisions and nodes from the patch, held through smoothing.
     pub fixed: Vec<FixedPatch>,
+    /// Planes `(point, unit normal)` inner block faces are held on: a sheet of block faces whose
+    /// corners lie on one (within a tenth of the size) keeps its nodes on it through smoothing, so
+    /// the mesh can be cut there into two meshes with planar faces.
+    pub planes: Vec<(P, P)>,
 }
 
 impl Default for ProjectOptions {
@@ -108,6 +112,7 @@ impl Default for ProjectOptions {
             max_elements: 2_000_000,
             min_quality: DEFAULT_MIN_QUALITY,
             fixed: Vec::new(),
+            planes: Vec::new(),
         }
     }
 }
@@ -197,6 +202,34 @@ fn claim_narrow_faces(boundary: &mut [BoundaryFace], centres: &[(P, f64, usize)]
                 b.brep_face = f;
                 *count.entry(f).or_insert(0) += 1;
             }
+        }
+    }
+}
+
+/// Most planes inner faces are held on.
+pub const MAX_PLANES: usize = 64;
+
+/// The geometry with planes added as faces `first`, `first + 1`, ….
+struct Planed<'a> {
+    g: &'a dyn Geometry,
+    first: u32,
+    planes: &'a [(P, P)],
+}
+
+impl Geometry for Planed<'_> {
+    fn project(&self, face: u32, p: P) -> Option<P> {
+        match face.checked_sub(self.first) {
+            Some(k) => {
+                let (o, n) = self.planes.get(k as usize)?;
+                Some(crate::vec3::sub(p, scale(*n, crate::vec3::dot(crate::vec3::sub(p, *o), *n))))
+            }
+            None => self.g.project(face, p),
+        }
+    }
+    fn normal(&self, face: u32, p: P) -> Option<P> {
+        match face.checked_sub(self.first) {
+            Some(k) => self.planes.get(k as usize).map(|x| x.1),
+            None => self.g.normal(face, p),
         }
     }
 }
@@ -302,6 +335,13 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
     let groups = smooth_groups(surface, face_count);
     let diag = t.diagonal().max(opts.size);
     let tol = 1e-9 * diag;
+    if opts.planes.len() > MAX_PLANES
+        || opts.planes.iter().any(|(p, n)| !(p.iter().chain(n).all(|x| x.is_finite()) && (crate::vec3::norm(*n) - 1.0).abs() < 1e-6))
+    {
+        return Err(Error::Invalid(format!("at most {MAX_PLANES} planes, each a finite point and a unit normal")));
+    }
+    let planed = Planed { g, first: face_count as u32, planes: &opts.planes };
+    let g: &dyn Geometry = &planed;
 
     // Targets of the outer block faces.
     let explicit: BTreeMap<(usize, u8), Vec<u32>> = opts.faces.iter().map(|(b, f, s)| ((*b, *f), s.clone())).collect();
@@ -370,10 +410,31 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
             face_target.insert(key, target_of(set));
         }
     }
+    // Inner block faces on a plane: a target of their own.
+    let mut sheets: Vec<(usize, usize, usize)> = Vec::new();
+    let mut sheet_targets: BTreeSet<usize> = BTreeSet::new();
+    for (b, block) in t.blocks.iter().enumerate() {
+        for (d, s) in FACE_SIDES {
+            let key = face_key(block, d, s);
+            if uses.get(&key) != Some(&2) || face_target.contains_key(&key) {
+                continue;
+            }
+            let on = opts.planes.iter().position(|(p, n)| {
+                key.iter()
+                    .all(|&v| t.vertices.get(v as usize).is_some_and(|x| crate::vec3::dot(crate::vec3::sub(*x, *p), *n).abs() <= 0.1 * opts.size))
+            });
+            if let Some(k) = on {
+                let tg = target_of(vec![face_count as u32 + k as u32]);
+                face_target.insert(key, tg);
+                sheet_targets.insert(tg);
+                sheets.push((b, d, s));
+            }
+        }
+    }
     // Targets of the vertices and edges on the outside.
     let mut vertex_on: BTreeMap<u32, BTreeSet<usize>> = BTreeMap::new();
     let mut edge_on: BTreeMap<[u32; 2], BTreeSet<usize>> = BTreeMap::new();
-    for &(b, d, s) in &outer {
+    for &(b, d, s) in outer.iter().chain(&sheets) {
         let block = t.blocks.get(b).copied().unwrap_or([0; 8]);
         let tg = face_target.get(&face_key(&block, d, s)).copied().unwrap_or(0);
         let cyc = face_cycle(&block, d, s);
@@ -690,6 +751,7 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
     // The outer quads (outward, hex8 face order) and the target each lies on.
     let hex8_faces = ElementKind::Hex8.faces();
     let mut quads: Vec<([u32; 4], u32, u8, usize)> = Vec::new();
+    let mut sheet_quads: Vec<[u32; 4]> = Vec::new();
     for (e, (hex, (b, cell))) in lat.hexes.iter().zip(&lat.hex_cell).enumerate() {
         let block = t.blocks.get(*b as usize).copied().unwrap_or([0; 8]);
         let nd = lat.divisions.get(*b as usize).copied().unwrap_or([1; 3]);
@@ -700,10 +762,15 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
             let Some(&tg) = face_target.get(&face_key(&block, d, s)) else { continue };
             let local = hex8_faces.get(fi).copied().unwrap_or(&[]);
             let q = [0, 1, 2, 3].map(|i| local.get(i).and_then(|&l| hex.get(l)).copied().unwrap_or(0));
-            quads.push((q, e as u32, fi as u8 + 1, tg));
+            if sheet_targets.contains(&tg) {
+                sheet_quads.push(q);
+            } else {
+                quads.push((q, e as u32, fi as u8 + 1, tg));
+            }
         }
     }
-    let boundary_quads: Vec<[u32; 4]> = quads.iter().map(|q| q.0).collect();
+    // Nodes on a sheet slide along it among their neighbours on it, as boundary nodes do.
+    let boundary_quads: Vec<[u32; 4]> = quads.iter().map(|q| q.0).chain(sheet_quads).collect();
     let smoothing = smooth::smooth(
         smooth::Mesh { nodes: &mut nodes, hexes: &lat.hexes, constraint: &constraint, held: &held, boundary: &boundary_quads },
         g,

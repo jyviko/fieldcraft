@@ -17,6 +17,7 @@
 //! index space, carved, projected face → surface, edge → curve, vertex → point, then smoothed);
 //! the algorithms are the papers cited in each module.
 
+pub mod fixed;
 mod lattice;
 pub mod smooth;
 pub mod target;
@@ -29,6 +30,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use fieldcraft_model::ElementKind;
 
+pub use fixed::FixedPatch;
 pub use smooth::{QUALITY_FLOOR, SmoothReport, Smoothing};
 pub use target::Geometry;
 pub use topology::Topology;
@@ -89,6 +91,9 @@ pub struct ProjectOptions {
     /// The smallest scaled Jacobian accepted: a mesh with a worse element is an error that
     /// says where a template is missing (0 accepts any valid mesh).
     pub min_quality: f64,
+    /// Already-meshed patches of the boundary taken as given ([`fixed`]): the block faces on
+    /// them take their divisions and nodes from the patch, held through smoothing.
+    pub fixed: Vec<FixedPatch>,
 }
 
 impl Default for ProjectOptions {
@@ -102,6 +107,7 @@ impl Default for ProjectOptions {
             iterations: 100,
             max_elements: 2_000_000,
             min_quality: DEFAULT_MIN_QUALITY,
+            fixed: Vec::new(),
         }
     }
 }
@@ -125,6 +131,8 @@ pub struct ProjectReport {
     pub targets: Vec<Vec<u32>>,
     /// Divisions per block.
     pub divisions: Vec<[usize; 3]>,
+    /// Nodes taken from the fixed patches, held where they are.
+    pub fixed_nodes: usize,
 }
 
 /// An all-hex mesh of a projected topology.
@@ -383,6 +391,18 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
     for (v, p) in vpos.iter_mut().enumerate() {
         *p = place(g, &targets, vertex_c(v as u32), *p, tol);
     }
+    // Vertices on fixed patches go to their patch nodes.
+    let fixed = if opts.fixed.is_empty() {
+        fixed::Fixed::default()
+    } else {
+        let target_of = |k: &[u32; 4]| face_target.get(k).and_then(|&i| targets.get(i)).cloned();
+        fixed::match_patches(t, &outer, &target_of, &opts.fixed, &vpos)?
+    };
+    for (&v, &p) in &fixed.vertex {
+        if let Some(slot) = vpos.get_mut(v as usize) {
+            *slot = p;
+        }
+    }
     // Inner vertices follow: the projected vertices' moves blended through the block edges
     // (a bounded Jacobi solve of Laplace's equation for the displacement), so a block the
     // projection stretches does not leave its inner corners behind.
@@ -535,6 +555,14 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
             *slot = n;
         }
     }
+    for (class, n) in fixed::class_divisions(t, &classes, &fixed)? {
+        if let Some(slot) = class_n.get_mut(class) {
+            if opts.divisions.iter().any(|&(b, d, _)| classes.get(b).and_then(|c| c.get(d)) == Some(&class)) && *slot != n {
+                return Err(Error::Invalid(format!("divisions set by hand ({}) differ from the fixed patch's ({n})", *slot)));
+            }
+            *slot = n;
+        }
+    }
     let divisions: Vec<[usize; 3]> = classes.iter().map(|c| c.map(|k| class_n.get(k).copied().unwrap_or(1))).collect();
     let lat = build(t, &divisions, opts.max_elements)?;
 
@@ -552,8 +580,30 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
     let n = lat.entity.len();
     let mut nodes = vec![[0.0; 3]; n];
     let mut placed = vec![false; n];
+    // Nodes on fixed patches: placed and held.
+    let mut held = vec![false; n];
+    for ((b, d, s), grid) in &fixed.faces {
+        let (Some(nd), Some(bn)) = (lat.divisions.get(*b), lat.block_nodes.get(*b)) else { continue };
+        let (e1, e2) = other(*d);
+        for j in 0..=nd[e2] {
+            for i in 0..=nd[e1] {
+                let mut at = [0; 3];
+                at[*d] = s * nd[*d];
+                at[e1] = i;
+                at[e2] = j;
+                let (Some(&id), Some(&p)) = (bn.get(crate::quad::lattice_index(*nd, at)), grid.get(i + (nd[e1] + 1) * j)) else {
+                    return Err(Error::Failed("a fixed patch's grid does not fit its block face".into()));
+                };
+                if let (Some(slot), Some(h), Some(pl)) = (nodes.get_mut(id as usize), held.get_mut(id as usize), placed.get_mut(id as usize)) {
+                    *slot = p;
+                    *h = true;
+                    *pl = true;
+                }
+            }
+        }
+    }
     for (i, e) in lat.entity.iter().enumerate() {
-        if let Entity::Vertex(v) = e {
+        if let (Entity::Vertex(v), false) = (e, held[i]) {
             nodes[i] = vpos.get(*v as usize).copied().unwrap_or_default();
             placed[i] = true;
         }
@@ -655,7 +705,7 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
     }
     let boundary_quads: Vec<[u32; 4]> = quads.iter().map(|q| q.0).collect();
     let smoothing = smooth::smooth(
-        smooth::Mesh { nodes: &mut nodes, hexes: &lat.hexes, constraint: &constraint, boundary: &boundary_quads },
+        smooth::Mesh { nodes: &mut nodes, hexes: &lat.hexes, constraint: &constraint, held: &held, boundary: &boundary_quads },
         g,
         &targets,
         opts.smoothing,
@@ -709,6 +759,7 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
         surface_volume,
         targets: targets.clone(),
         divisions: lat.divisions.clone(),
+        fixed_nodes: held.iter().filter(|h| **h).count(),
     };
     // Where the worst element is, for the error messages.
     let worst = || {

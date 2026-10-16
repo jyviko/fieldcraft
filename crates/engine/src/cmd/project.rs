@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fieldcraft_mesh::hex::BoundaryFace;
 use fieldcraft_mesh::join::{check_conforming, weld};
-use fieldcraft_mesh::project::{ProjectOptions, Smoothing, Topology, project_mesh};
+use fieldcraft_mesh::project::{FixedPatch, ProjectOptions, Smoothing, Topology, project_mesh};
 use fieldcraft_mesh::surface::BoundarySurface;
 use fieldcraft_mesh::tet::geometry::Tessellation;
 use fieldcraft_model::{ElementKind, GeometryRef};
@@ -19,7 +19,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const HEX_PROJECT: CommandSpec = CommandSpec {
     id: "mesh.hex.project",
     label: "Projection Blocking",
-    params: r#"{"body": "Body1", "size": 2.0 (element size, mm; default 1/25 of the body's diagonal), "template": "grid" (default) | "sphere" | "butterfly" | "blocks", "center": [x, y, z], "radius": r, "axis": [0, 0, 1], "levels": [z0, z1, …] (sphere and butterfly: default from the body's bounding box; butterfly levels are distances along the axis from the centre), "inset": 0.55 (inner square or cube corner at this fraction of the radius), "grid": {"planes": {"x": [...], "y": [...], "z": [...]} or "cells": [ni, nj, nk] (even planes over the bounding box, default [1, 1, 1]), "carve": [{"i": [a, b], "j": [c, d], "k": [e, f]}] (block index ranges, inclusive, removed)}, "blocks": {"vertices": [[x, y, z], ...], "blocks": [[v1..v8], ...] (0-based vertices, hex8 order)}, "operations": [{"op": "o_grid", "block": b, "open": [faces], "inset": 0.5 or [i1, i2, i3], "extrude": {"offset": [dx, dy, dz], "layers": 1, "faces": "all" (the open face's butterfly: a round branch) | "inner" (its inner face: a square stub)}} | {"op": "extrude", "faces": [[block, face], ...], "offset": [dx, dy, dz], "layers": 1} | {"op": "connect", "from": [block, face], "to": [block, face], "layers": 1} (blocks bridging two faces: closes a handle) | {"op": "remove", "blocks": [...]} (carve; later blocks renumber) | {"op": "merge", "distance": d} | {"op": "split", "block": b, "direction": 1|2|3 or "x"|"y"|"z", "at": [fractions]} (cuts the block and the whole sheet of blocks the cut runs through, so the topology stays conforming; fractions from the block's side-0 face, or from the low end along an axis; the block keeps its first slab, the others are appended)] (applied in order; blocks are 0-based, new blocks appended, the O-grid's inner block keeping the old index; a face is its hex8 number 1-6 or the direction it faces, "+x" … "-z"), "preview": true (return the topology without meshing), "faces": [{"block": b, "face": 1-6, "to": ["face names"]}] (targets set by hand; other outer block faces go to the smooth group of B-rep faces nearest them), "divisions": [{"block": b, "direction": 1|2|3, "count": n}], "smoothing": "elliptic" (default) | "elliptic-controlled" (Thomas–Middlecoff) | "laplace" | "none", "iterations": 100, "min_quality": 0.2 (smallest scaled Jacobian accepted), "max_arc_angle": 30 (degrees: the most a curved face may turn across one element; the divisions grow to keep it, 0 for no limit, at most 90), "merge": distance (join nodes of other bodies' meshes within it; default 1e-6 of the diagonal, 0 never), "tolerance": chordal tolerance of the tessellation} — replaces the body's mesh with an all-hex mesh of the block topology: outer block faces projected onto their B-rep faces, edges between faces with different targets onto the curve where those meet (tangent-plane iteration), vertices on three onto their point, nodes placed by transfinite interpolation and smoothed with the boundary held on the geometry. Elements are tagged with the body and boundary faces with their B-rep faces. Reports blocks, divisions, targets and quality before and after smoothing; a corner that flattens on a curved face is an error that says to use an O-grid or template there"#,
+    params: r#"{"body": "Body1", "size": 2.0 (element size, mm; default 1/25 of the body's diagonal), "template": "grid" (default) | "sphere" | "butterfly" | "blocks", "center": [x, y, z], "radius": r, "axis": [0, 0, 1], "levels": [z0, z1, …] (sphere and butterfly: default from the body's bounding box; butterfly levels are distances along the axis from the centre), "inset": 0.55 (inner square or cube corner at this fraction of the radius), "grid": {"planes": {"x": [...], "y": [...], "z": [...]} or "cells": [ni, nj, nk] (even planes over the bounding box, default [1, 1, 1]), "carve": [{"i": [a, b], "j": [c, d], "k": [e, f]}] (block index ranges, inclusive, removed)}, "blocks": {"vertices": [[x, y, z], ...], "blocks": [[v1..v8], ...] (0-based vertices, hex8 order)}, "operations": [{"op": "o_grid", "block": b, "open": [faces], "inset": 0.5 or [i1, i2, i3], "extrude": {"offset": [dx, dy, dz], "layers": 1, "faces": "all" (the open face's butterfly: a round branch) | "inner" (its inner face: a square stub)}} | {"op": "extrude", "faces": [[block, face], ...], "offset": [dx, dy, dz], "layers": 1} | {"op": "connect", "from": [block, face], "to": [block, face], "layers": 1} (blocks bridging two faces: closes a handle) | {"op": "remove", "blocks": [...]} (carve; later blocks renumber) | {"op": "merge", "distance": d} | {"op": "split", "block": b, "direction": 1|2|3 or "x"|"y"|"z", "at": [fractions]} (cuts the block and the whole sheet of blocks the cut runs through, so the topology stays conforming; fractions from the block's side-0 face, or from the low end along an axis; the block keeps its first slab, the others are appended)] (applied in order; blocks are 0-based, new blocks appended, the O-grid's inner block keeping the old index; a face is its hex8 number 1-6 or the direction it faces, "+x" … "-z"), "preview": true (return the topology without meshing), "faces": [{"block": b, "face": 1-6, "to": ["face names"]}] (targets set by hand; other outer block faces go to the smooth group of B-rep faces nearest them), "divisions": [{"block": b, "direction": 1|2|3, "count": n}], "smoothing": "elliptic" (default) | "elliptic-controlled" (Thomas–Middlecoff) | "laplace" | "none", "iterations": 100, "min_quality": 0.2 (smallest scaled Jacobian accepted), "max_arc_angle": 30 (degrees: the most a curved face may turn across one element; the divisions grow to keep it, 0 for no limit, at most 90), "fixed": ["face names"] (faces of the body another body's mesh already covers: its element faces there are taken as given, their nodes held and the block divisions there taken from them, so the two meshes meet node to node), "merge": distance (join nodes of other bodies' meshes within it; default 1e-6 of the diagonal, 0 never), "tolerance": chordal tolerance of the tessellation} — replaces the body's mesh with an all-hex mesh of the block topology: outer block faces projected onto their B-rep faces, edges between faces with different targets onto the curve where those meet (tangent-plane iteration), vertices on three onto their point, nodes placed by transfinite interpolation and smoothed with the boundary held on the geometry. Elements are tagged with the body and boundary faces with their B-rep faces. Reports blocks, divisions, targets and quality before and after smoothing; a corner that flattens on a curved face is an error that says to use an O-grid or template there"#,
     form: Some(super::forms::HEX_PROJECT),
     kind: CommandKind::Model,
     requires: &[Requirement::Geometry],
@@ -242,6 +242,8 @@ struct ProjectParams {
     min_quality: Option<f64>,
     max_arc_angle: Option<f64>,
     merge: Option<f64>,
+    #[serde(default)]
+    fixed: Vec<String>,
     // Read from the raw parameters by the surface preparation (mesh.tet.generate's options).
     #[allow(dead_code)]
     weld: Option<f64>,
@@ -475,6 +477,7 @@ fn hex_project(s: &mut Session, raw: &Value) -> Result<Value> {
     bounded(&p.operations, "operations")?;
     bounded(&p.faces, "faces")?;
     bounded(&p.divisions, "divisions")?;
+    bounded(&p.fixed, "fixed")?;
     let b = open_body(s, &p.body, p.tolerance, raw)?;
     let diag = b.input.diagonal;
     let size = element_size(p.size, diag)?;
@@ -514,6 +517,7 @@ fn hex_project(s: &mut Session, raw: &Value) -> Result<Value> {
     if !(0.0..=90.0).contains(&max_arc_angle) {
         return Err(EngineError::invalid("max_arc_angle", "from 0 to 90 degrees"));
     }
+    let fixed = if p.fixed.is_empty() { Vec::new() } else { vec![fixed_patch(s, &b, &p.body, &p.fixed, size)?] };
     let opts = ProjectOptions {
         size,
         max_arc_angle: max_arc_angle.to_radians(),
@@ -523,9 +527,61 @@ fn hex_project(s: &mut Session, raw: &Value) -> Result<Value> {
         iterations,
         max_elements: fieldcraft_model::MAX_ELEMENTS / 8,
         min_quality,
+        fixed,
     };
     let merge = merge_distance(p.merge, diag)?;
     project_body(s, &p.body, b, &t, &opts, merge)
+}
+
+/// Fraction of the element size within which a node of another mesh lies on a face.
+const ON_FACE: f64 = 0.05;
+
+/// The quads other bodies' meshes have on faces `names` of body `body` (opened as `b`), as one
+/// fixed patch: the element faces of other bodies, tagged as on their boundary, whose nodes all
+/// lie on one of those faces (within [`ON_FACE`] of the element size `size`).
+pub(crate) fn fixed_patch(s: &Session, b: &Body, body: &str, names: &[String], size: f64) -> Result<FixedPatch> {
+    use fieldcraft_mesh::project::Geometry;
+    let faces: Vec<u32> = names.iter().map(|n| face_index(b, body, n)).collect::<Result<_>>()?;
+    let tol = (ON_FACE * size).max(1e-9 * b.diagonal());
+    let c = s.model.classification();
+    let mut on: BTreeMap<u32, Option<usize>> = BTreeMap::new();
+    let mut index: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut seen: BTreeSet<[u32; 4]> = BTreeSet::new();
+    let mut patch = FixedPatch { faces: faces.clone(), ..FixedPatch::default() };
+    for (&element, tags) in c.elements() {
+        let theirs = tags.region.and_then(|r| c.entity(r)).is_some_and(|g| g.body != body);
+        if !theirs {
+            continue;
+        }
+        for &face in tags.faces.keys() {
+            let Some(labels) = s.model.face_nodes(fieldcraft_model::ElementFace { element, face }) else { continue };
+            let Ok(quad) = <[u32; 4]>::try_from(labels) else { continue };
+            let mut lies = true;
+            for l in quad {
+                let hit = *on.entry(l).or_insert_with(|| {
+                    let x = s.model.node(l)?.xyz;
+                    faces.iter().position(|&f| b.target.project(f, x).is_some_and(|q| (0..3).map(|k| (q[k] - x[k]).powi(2)).sum::<f64>().sqrt() <= tol))
+                });
+                lies &= hit.is_some();
+            }
+            let mut key = quad;
+            key.sort_unstable();
+            if !lies || !seen.insert(key) {
+                continue;
+            }
+            let q = quad.map(|l| {
+                *index.entry(l).or_insert_with(|| {
+                    patch.nodes.push(s.model.node(l).map_or([0.0; 3], |n| n.xyz));
+                    patch.nodes.len() as u32 - 1
+                })
+            });
+            patch.quads.push(q);
+        }
+    }
+    if patch.quads.is_empty() {
+        return Err(EngineError::Params(format!("`fixed`: no other body's mesh has element faces on faces {names:?} of `{body}`; mesh the neighbour first")));
+    }
+    Ok(patch)
 }
 
 /// Mesh body `name` (opened as `b`) with the block topology `t` projected onto it, replace its
@@ -547,6 +603,7 @@ pub(crate) fn project_body(s: &mut Session, name: &str, b: Body, t: &Topology, o
         "min_scaled_jacobian": round3(r.min_scaled_jacobian),
         "mean_scaled_jacobian": round3(r.mean_scaled_jacobian),
         "smoothing": {"iterations": r.smoothing.iterations, "refused": r.smoothing.refused},
+        "fixed_nodes": r.fixed_nodes,
         "max_gap": r.max_gap,
         "volume": r.volume,
         "body_volume": r.surface_volume,

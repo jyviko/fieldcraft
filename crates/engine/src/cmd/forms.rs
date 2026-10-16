@@ -1193,6 +1193,9 @@ pub const HEX_PROJECT: &[Field] = &[
     json("operations", "Operations").help("O-grids, extrusions, connections, removals and merges applied in order, as JSON.").hint(r#"[{"op": "o_grid", "block": 0, "open": ["+z"]}]"#),
     json("faces", "Face targets").help("Block faces sent to chosen B-rep faces; other outer faces go to the nearest surfaces.").hint(r#"[{"block": 0, "face": "+x", "to": ["F1:+x"]}]"#),
     json("divisions", "Divisions").help("Element counts per block direction.").hint(r#"[{"block": 0, "direction": 1, "count": 8}]"#),
+    json("fixed", "Fixed faces")
+        .help("Faces of the body another body's mesh already covers: its element faces there are kept as they are and this mesh meets them node to node.")
+        .hint(r#"["F3:partition:P:b"]"#),
     choice("smoothing", "Smoothing", &[("elliptic", "Elliptic"), ("elliptic-controlled", "Elliptic, controlled (Thomas–Middlecoff)"), ("laplace", "Laplace"), ("none", "None")])
         .help("How interior nodes are smoothed after projection, with the boundary held on the geometry.")
         .def("\"elliptic\""),

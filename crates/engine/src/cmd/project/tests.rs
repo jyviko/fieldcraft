@@ -256,3 +256,43 @@ fn thin_enclosure_layers() {
         assert!(sj(&r) > 0.99, "{r}");
     }
 }
+
+/// Two discs stacked as two bodies: the lower meshed fine, the upper meshed against it with its
+/// bottom face fixed (#490) takes the lower's top quads as given — the same divisions though its
+/// own size is coarser, its nodes there the lower's (joined, not copied), all hex and valid.
+#[test]
+fn a_fixed_face_takes_the_neighbours_mesh_as_given() {
+    let (_d, mut s) = session(json!([
+        {"command": "solid.cylinder", "params": {"radius": 10, "height": 2, "body_name": "Low"}},
+        {"command": "solid.cylinder", "params": {"base": [0, 0, 2], "radius": 10, "height": 2, "body_name": "High"}}
+    ]));
+    s.execute("mesh.hex.project", &json!({"body": "Low", "template": "butterfly", "size": 0.75})).unwrap();
+    let nodes_before = s.model.nodes().len();
+    let top_quads = |s: &Session, body: &str, z: f64| {
+        let c = s.model.classification();
+        s.model
+            .body_elements(body)
+            .into_iter()
+            .flat_map(|e| c.elements().get(&e).map(|t| t.faces.keys().map(|&f| (e, f)).collect::<Vec<_>>()).unwrap_or_default())
+            .filter(|&(element, face)| {
+                s.model.face_nodes(fieldcraft_model::ElementFace { element, face }).is_some_and(|ns| ns.iter().all(|n| (s.model.node(*n).unwrap().xyz[2] - z).abs() < 1e-9))
+            })
+            .count()
+    };
+    let shared = top_quads(&s, "Low", 2.0);
+    let r = s.execute("mesh.hex.project", &json!({"body": "High", "template": "butterfly", "size": 1.5, "fixed": ["F2:bottom"]})).unwrap();
+    assert!(sj(&r) >= 0.5, "{r}");
+    // Every node of the lower's top joined: the upper adds only its own.
+    let on_face = r["fixed_nodes"].as_u64().unwrap() as usize;
+    assert!(on_face > 0 && r["joined"].as_u64().unwrap() as usize == on_face, "{r}");
+    assert_eq!(s.model.nodes().len(), nodes_before + r["nodes"].as_u64().unwrap() as usize);
+    assert_eq!(top_quads(&s, "High", 4.0), shared, "{r}");
+    let q = s.execute("mesh.quality", &json!({})).unwrap();
+    assert_eq!(q["valid"].as_u64(), Some(s.model.elements().len() as u64), "{q}");
+    // A face no other mesh covers, or not the body's, is an error that changes nothing.
+    let before = s.model.clone();
+    for bad in [json!(["F2:top"]), json!(["nope"])] {
+        assert!(s.execute("mesh.hex.project", &json!({"body": "High", "template": "butterfly", "size": 1.5, "fixed": bad})).is_err(), "{bad}");
+    }
+    assert!(s.model == before);
+}

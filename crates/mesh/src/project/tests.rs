@@ -273,3 +273,68 @@ fn hostile_topologies_are_errors() {
     let mut g3 = Topology::grid([&[0.0, 1.0], &[0.0, 1.0], &[0.0, 1.0]]).unwrap();
     assert!(g3.carve([1, 1, 1], &[[[0, 0], [0, 0], [0, 0]]]).is_err());
 }
+
+/// The quads of `m` on B-rep face `face`, as a patch over its own nodes.
+fn patch_of(m: &ProjectedMesh, face: u32) -> FixedPatch {
+    let mut index: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    let mut patch = FixedPatch { faces: vec![face], ..FixedPatch::default() };
+    for b in m.boundary.iter().filter(|b| b.brep_face == face) {
+        let hex = m.hexes[b.element as usize];
+        let local = ElementKind::Hex8.faces()[b.face as usize - 1];
+        let q = [0, 1, 2, 3].map(|i| {
+            let v = hex[local[i]];
+            *index.entry(v).or_insert_with(|| {
+                patch.nodes.push(m.nodes[v as usize]);
+                patch.nodes.len() as u32 - 1
+            })
+        });
+        patch.quads.push(q);
+    }
+    patch
+}
+
+/// A fixed patch is taken as given (#490): a disc meshed against the top quads of another disc's
+/// mesh (moved down onto its bottom face, as the face two stacked bodies share) keeps those nodes
+/// exactly and their divisions, though its own size asks for coarser elements, and smooths the
+/// rest around them.
+#[test]
+fn a_fixed_patch_sets_the_nodes_and_divisions_of_the_faces_on_it() {
+    let (r, h) = (10.0, 2.0);
+    let (s, t) = cylinder(r, h, 128);
+    let topo = Topology::butterfly([0.0; 3], [0.0, 0.0, 1.0], r, &[0.0, h], 0.55).unwrap();
+    let below = project_mesh(&topo, &s, &t, &options(0.75)).unwrap();
+    let mut patch = patch_of(&below, 1);
+    for p in &mut patch.nodes {
+        p[2] -= h;
+    }
+    patch.faces = vec![0];
+    let m = project_mesh(&topo, &s, &t, &ProjectOptions { fixed: vec![patch.clone()], ..options(1.5) }).unwrap();
+    assert_eq!(m.report.fixed_nodes, patch.nodes.len());
+    assert!(m.report.min_scaled_jacobian >= 0.5, "{:?}", m.report);
+    let bottom = patch_of(&m, 0);
+    assert_eq!(bottom.quads.len(), patch.quads.len());
+    for p in &patch.nodes {
+        assert!(bottom.nodes.iter().any(|q| dist(*p, *q) == 0.0), "{p:?} is not a node of the mesh");
+    }
+    // The top is meshed at the patch's divisions, not the coarser size's.
+    assert_eq!(patch_of(&m, 1).quads.len(), patch.quads.len());
+}
+
+/// A patch the blocks do not match is an error that names the patch, not a mesh that leaves a
+/// gap: here half the bottom's quads, and a patch on a face no block lies on.
+#[test]
+fn a_fixed_patch_the_blocks_do_not_match_is_an_error() {
+    let (r, h) = (10.0, 2.0);
+    let (s, t) = cylinder(r, h, 128);
+    let topo = Topology::butterfly([0.0; 3], [0.0, 0.0, 1.0], r, &[0.0, h], 0.55).unwrap();
+    let m = project_mesh(&topo, &s, &t, &options(1.0)).unwrap();
+    let mut half = patch_of(&m, 0);
+    half.quads.retain(|q| q.iter().all(|&v| half.nodes[v as usize][0] <= 1e-9));
+    let e = project_mesh(&topo, &s, &t, &ProjectOptions { fixed: vec![half], ..options(1.0) }).unwrap_err().to_string();
+    assert!(e.contains("fixed patch 0"), "{e}");
+    let elsewhere = FixedPatch { faces: vec![7], ..patch_of(&m, 0) };
+    let e = project_mesh(&topo, &s, &t, &ProjectOptions { fixed: vec![elsewhere], ..options(1.0) }).unwrap_err().to_string();
+    assert!(e.contains("fixed patch 0"), "{e}");
+    let broken = FixedPatch { quads: vec![[0, 0, 1, 2]], ..patch_of(&m, 0) };
+    assert!(project_mesh(&topo, &s, &t, &ProjectOptions { fixed: vec![broken], ..options(1.0) }).is_err());
+}

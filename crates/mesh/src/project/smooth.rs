@@ -287,6 +287,8 @@ pub(crate) struct Mesh<'a> {
     pub nodes: &'a mut Vec<P>,
     pub hexes: &'a [[u32; 8]],
     pub constraint: &'a [Constraint],
+    /// Nodes held where they are (a fixed patch's).
+    pub held: &'a [bool],
     /// Boundary quads (outward), for the neighbours of boundary nodes.
     pub boundary: &'a [[u32; 4]],
 }
@@ -403,6 +405,7 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
         }
     }
     let cons = |v: u32| m.constraint.get(v as usize).copied().unwrap_or(Constraint::Free);
+    let is_held = |v: u32| m.held.get(v as usize).copied().unwrap_or(false);
     let mut stencils: Vec<Option<Stencil>> = vec![None; n];
     if matches!(method, Smoothing::Elliptic | Smoothing::EllipticControlled) {
         for v in 0..n as u32 {
@@ -445,6 +448,9 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
         report.iterations = it + 1;
         let mut moved = 0.0f64;
         for v in 0..n as u32 {
+            if is_held(v) {
+                continue;
+            }
             let c = cons(v);
             let p = at(m.nodes, v);
             let mean = |nbrs: &mut dyn Iterator<Item = u32>| -> Option<P> {
@@ -531,7 +537,7 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
             let mut improved = false;
             for &v in &poor {
                 let c = cons(v);
-                if matches!(c, Constraint::Corner(..)) {
+                if matches!(c, Constraint::Corner(..)) || is_held(v) {
                     continue;
                 }
                 let p = at(m.nodes, v);
@@ -577,7 +583,7 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
             let mut moved = false;
             for v in 0..n as u32 {
                 let c = cons(v);
-                if !matches!(c, Constraint::Surface(_)) {
+                if !matches!(c, Constraint::Surface(_)) || is_held(v) {
                     continue;
                 }
                 let p = at(m.nodes, v);

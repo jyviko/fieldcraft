@@ -319,6 +319,33 @@ fn mesh_quality(x: &[P], hexes: &[[u32; 8]]) -> Local {
     l
 }
 
+/// A grid's smallest and mean scaled Jacobian, to pick the best grid the sweeps passed through.
+#[derive(Debug, Clone, Copy)]
+struct SweepScore {
+    min: f64,
+    mean: f64,
+}
+
+impl SweepScore {
+    /// A larger smallest scaled Jacobian, or the same one (to rounding) with a larger mean.
+    fn better_than(self, other: SweepScore) -> bool {
+        if (self.min - other.min).abs() > SCORE_TIE { self.min > other.min } else { self.mean > other.mean + SCORE_TIE }
+    }
+}
+
+/// Two smallest scaled Jacobians this close count as equal.
+const SCORE_TIE: f64 = 1e-9;
+
+fn sweep_score(x: &[P], hexes: &[[u32; 8]]) -> SweepScore {
+    let (mut min, mut sum) = (f64::INFINITY, 0.0);
+    for hex in hexes {
+        let sj = hex_scaled_jacobian(&hex.map(|q| at(x, q)));
+        min = min.min(sj);
+        sum += sj;
+    }
+    SweepScore { min, mean: if hexes.is_empty() { 0.0 } else { sum / hexes.len() as f64 } }
+}
+
 /// Smooth in place: at most `iterations` sweeps, stopping when no node moves more than `tol`.
 ///
 /// The sweeps let a move take an element down to [`SWEEP_FLOOR`] (a sheared block straightens
@@ -403,6 +430,10 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
         return report;
     }
     let ptol = 1e-3 * tol;
+    // The sweeps do not raise the smallest scaled Jacobian monotonically (a move may take an
+    // element down to the sweep floor), so where they stop decides the result; keep the best grid
+    // seen (smallest scaled Jacobian, then the mean) and lift the worst elements from that.
+    let mut best = (sweep_score(m.nodes, hexes), m.nodes.clone());
     for it in 0..iterations {
         report.iterations = it + 1;
         let mut moved = 0.0f64;
@@ -458,107 +489,131 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
                 }
             }
         }
+        let score = sweep_score(m.nodes, hexes);
+        if score.better_than(best.0) {
+            best = (score, m.nodes.clone());
+        }
         if moved <= tol {
             break;
         }
     }
-    // The worst elements: each of their nodes searched for the place that raises the smallest
-    // scaled Jacobian around it (a compass search, the optimization-based smoothing of L. A.
-    // Freitag and C. Ollivier-Gooch, *Tetrahedral mesh improvement using swapping and smoothing*,
-    // IJNME 40:3979–4002, 1997, on Knupp's hexahedral metric), boundary nodes kept on their
-    // targets.
-    for _ in 0..OPTIMIZE_ROUNDS {
-        let mut poor: Vec<u32> =
-            m.hexes.iter().filter(|h| hex_scaled_jacobian(&h.map(|q| at(m.nodes, q))) < LIFT_BELOW).flat_map(|h| h.iter().copied()).collect();
-        poor.sort_unstable();
-        poor.dedup();
-        if poor.is_empty() {
-            break;
+    // Where the sweeps stopped and the best grid they passed through each go through the lift
+    // and the straightening; the better result is kept (the lift can raise an element the best
+    // sweep grid left low, so neither start always wins).
+    let end = m.nodes.clone();
+    let mut starts = vec![end];
+    if best.1 != starts[0] {
+        starts.push(best.1);
+    }
+    let mut finished: Option<(SweepScore, Local, Vec<P>)> = None;
+    for start in starts {
+        *m.nodes = start;
+        // The worst elements: each of their nodes searched for the place that raises the smallest
+        // scaled Jacobian around it (a compass search, the optimization-based smoothing of L. A.
+        // Freitag and C. Ollivier-Gooch, *Tetrahedral mesh improvement using swapping and smoothing*,
+        // IJNME 40:3979–4002, 1997, on Knupp's hexahedral metric), boundary nodes kept on their
+        // targets.
+        for _ in 0..OPTIMIZE_ROUNDS {
+            let mut poor: Vec<u32> =
+                m.hexes.iter().filter(|h| hex_scaled_jacobian(&h.map(|q| at(m.nodes, q))) < LIFT_BELOW).flat_map(|h| h.iter().copied()).collect();
+            poor.sort_unstable();
+            poor.dedup();
+            if poor.is_empty() {
+                break;
+            }
+            let mut improved = false;
+            for &v in &poor {
+                let c = cons(v);
+                if matches!(c, Constraint::Corner(..)) {
+                    continue;
+                }
+                let p = at(m.nodes, v);
+                let reach = edges.get(v as usize).map_or(0.0, |e| e.iter().map(|&w| dist(at(m.nodes, w), p)).fold(f64::INFINITY, f64::min));
+                if !(reach > 0.0 && reach.is_finite()) {
+                    continue;
+                }
+                let start_quality = quality(m.nodes, v);
+                let mut best = (start_quality.sj, p);
+                let mut h = 0.25 * reach;
+                for _ in 0..6 {
+                    let start = best.1;
+                    for dir in COMPASS {
+                        let x = place(g, targets, c, add(start, scale(dir, h)), ptol);
+                        if let Some(slot) = m.nodes.get_mut(v as usize) {
+                            *slot = x;
+                        }
+                        let qx = quality(m.nodes, v);
+                        if qx.sj > best.0 + 1e-9 && qx.keeps(start_quality) {
+                            best = (qx.sj, x);
+                        }
+                    }
+                    if best.1 == start {
+                        h *= 0.5;
+                    }
+                }
+                if let Some(slot) = m.nodes.get_mut(v as usize) {
+                    *slot = best.1;
+                }
+                improved |= best.1 != p;
+            }
+            if !improved {
+                break;
+            }
         }
-        let mut improved = false;
-        for &v in &poor {
-            let c = cons(v);
-            if matches!(c, Constraint::Corner(..)) {
-                continue;
-            }
-            let p = at(m.nodes, v);
-            let reach = edges.get(v as usize).map_or(0.0, |e| e.iter().map(|&w| dist(at(m.nodes, w), p)).fold(f64::INFINITY, f64::min));
-            if !(reach > 0.0 && reach.is_finite()) {
-                continue;
-            }
-            let start_quality = quality(m.nodes, v);
-            let mut best = (start_quality.sj, p);
-            let mut h = 0.25 * reach;
-            for _ in 0..6 {
-                let start = best.1;
-                for dir in COMPASS {
-                    let x = place(g, targets, c, add(start, scale(dir, h)), ptol);
+        // The search moves boundary nodes one at a time, each to its own best place, which leaves the
+        // grid lines on a face zigzagging from node to node. Straighten them: each surface node back
+        // toward the mean of its neighbours on the surface, as far as no element round it falls below
+        // the lower of its own value and the mesh's smallest after the search (so the mesh's worst
+        // element is no worse for it).
+        let floor = hexes.iter().map(|h| hex_scaled_jacobian(&h.map(|q| at(m.nodes, q)))).fold(f64::INFINITY, f64::min);
+        for _ in 0..STRAIGHTEN_SWEEPS {
+            let mut moved = false;
+            for v in 0..n as u32 {
+                let c = cons(v);
+                if !matches!(c, Constraint::Surface(_)) {
+                    continue;
+                }
+                let p = at(m.nodes, v);
+                let Some(q) = along_boundary.get(&v).and_then(|e| {
+                    let (mut s, mut k) = ([0.0; 3], 0usize);
+                    for &w in e {
+                        s = add(s, at(m.nodes, w));
+                        k += 1;
+                    }
+                    (k > 0).then(|| place(g, targets, c, scale(s, 1.0 / k as f64), ptol))
+                }) else {
+                    continue;
+                };
+                if dist(q, p) <= ptol {
+                    continue;
+                }
+                let before = quality(m.nodes, v);
+                for step in [1.0, 0.5, 0.25] {
+                    let x = if step == 1.0 { q } else { place(g, targets, c, add(p, scale(sub(q, p), step)), ptol) };
                     if let Some(slot) = m.nodes.get_mut(v as usize) {
                         *slot = x;
                     }
-                    let qx = quality(m.nodes, v);
-                    if qx.sj > best.0 + 1e-9 && qx.keeps(start_quality) {
-                        best = (qx.sj, x);
+                    if quality(m.nodes, v).keeps_above(before, floor) {
+                        moved = true;
+                        break;
+                    }
+                    if let Some(slot) = m.nodes.get_mut(v as usize) {
+                        *slot = p;
                     }
                 }
-                if best.1 == start {
-                    h *= 0.5;
-                }
             }
-            if let Some(slot) = m.nodes.get_mut(v as usize) {
-                *slot = best.1;
+            if !moved {
+                break;
             }
-            improved |= best.1 != p;
         }
-        if !improved {
-            break;
+        let (score, local) = (sweep_score(m.nodes, hexes), mesh_quality(m.nodes, hexes));
+        let better = finished.as_ref().is_none_or(|(s, l, _)| score.better_than(*s) && local.ratio <= l.ratio.max(EDGE_RATIO_CEILING));
+        if better {
+            finished = Some((score, local, m.nodes.clone()));
         }
     }
-    // The search moves boundary nodes one at a time, each to its own best place, which leaves the
-    // grid lines on a face zigzagging from node to node. Straighten them: each surface node back
-    // toward the mean of its neighbours on the surface, as far as no element round it falls below
-    // the lower of its own value and the mesh's smallest after the search (so the mesh's worst
-    // element is no worse for it).
-    let floor = hexes.iter().map(|h| hex_scaled_jacobian(&h.map(|q| at(m.nodes, q)))).fold(f64::INFINITY, f64::min);
-    for _ in 0..STRAIGHTEN_SWEEPS {
-        let mut moved = false;
-        for v in 0..n as u32 {
-            let c = cons(v);
-            if !matches!(c, Constraint::Surface(_)) {
-                continue;
-            }
-            let p = at(m.nodes, v);
-            let Some(q) = along_boundary.get(&v).and_then(|e| {
-                let (mut s, mut k) = ([0.0; 3], 0usize);
-                for &w in e {
-                    s = add(s, at(m.nodes, w));
-                    k += 1;
-                }
-                (k > 0).then(|| place(g, targets, c, scale(s, 1.0 / k as f64), ptol))
-            }) else {
-                continue;
-            };
-            if dist(q, p) <= ptol {
-                continue;
-            }
-            let before = quality(m.nodes, v);
-            for step in [1.0, 0.5, 0.25] {
-                let x = if step == 1.0 { q } else { place(g, targets, c, add(p, scale(sub(q, p), step)), ptol) };
-                if let Some(slot) = m.nodes.get_mut(v as usize) {
-                    *slot = x;
-                }
-                if quality(m.nodes, v).keeps_above(before, floor) {
-                    moved = true;
-                    break;
-                }
-                if let Some(slot) = m.nodes.get_mut(v as usize) {
-                    *slot = p;
-                }
-            }
-        }
-        if !moved {
-            break;
-        }
+    if let Some((_, _, nodes)) = finished {
+        *m.nodes = nodes;
     }
     report
 }

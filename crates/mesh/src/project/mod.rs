@@ -514,11 +514,17 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
     // lengths). A class runs through every block its edges are parallel in, so its edges can
     // differ a lot in length (a cup's wall, 4 mm thick, and its floor's radial edges, twice
     // that); the longest edge alone would cut the thin blocks into flat slivers. No element is
-    // longer than [`MAX_STRETCH`] sizes, so a coarse size still follows the geometry.
+    // longer than [`MAX_STRETCH`] sizes, so a coarse size still follows the geometry. An edge
+    // that bends with a curved target is the exception: its elements' sides are chords of the
+    // surface, and one longer than the size cuts off more of the part than the size allows (a
+    // butterfly's rim shares its class with the shorter sides of its middle square), so a class
+    // takes at least the geometric mean of its bent edges' lengths in sizes (rounded,
+    // as the mean; an annulus's rim and bore balance each other as its straight edges do).
     let (classes, nclass) = edge_classes(t);
     let mut class_log = vec![(0.0f64, 0usize); nclass];
     // Per class, its longest edge in element sizes.
     let mut class_max = vec![0.0f64; nclass];
+    let mut class_bent = vec![(0.0f64, 0usize); nclass];
     let mut seen: BTreeSet<[u32; 2]> = BTreeSet::new();
     for (block, cls) in t.blocks.iter().zip(&classes) {
         for d in 0..3 {
@@ -549,6 +555,12 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
                 };
                 if let Some(m) = class_max.get_mut(cls[d]) {
                     *m = m.max(measured);
+                }
+                if len - dist(pa, pb) > tol
+                    && let Some(l) = class_bent.get_mut(cls[d])
+                {
+                    l.0 += libm::log(measured);
+                    l.1 += 1;
                 }
                 if let Some(l) = class_log.get_mut(cls[d]).filter(|_| len > tol) {
                     l.0 += libm::log(measured);
@@ -615,9 +627,11 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
         .iter()
         .zip(&class_max)
         .zip(&class_arc)
-        .map(|((&(sum, k), &longest), &arc)| {
+        .zip(&class_bent)
+        .map(|(((&(sum, k), &longest), &arc), &(bent_sum, bent_k))| {
             let mean = if k == 0 { 1.0 } else { libm::exp(sum / k as f64).round() };
-            (mean.max((longest / MAX_STRETCH).ceil()) as usize).max(arc).clamp(1, crate::block::MAX_DIVISIONS)
+            let bent = if bent_k == 0 { 0 } else { libm::exp(bent_sum / bent_k as f64).round().min(crate::block::MAX_DIVISIONS as f64) as usize };
+            (mean.max((longest / MAX_STRETCH).ceil()) as usize).max(arc).max(bent).clamp(1, crate::block::MAX_DIVISIONS)
         })
         .collect();
     for &(b, d, n) in &opts.divisions {

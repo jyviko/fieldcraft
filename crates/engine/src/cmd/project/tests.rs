@@ -202,8 +202,12 @@ fn squeezed_junction_elements_are_reported_not_meshed() {
     p["min_quality"] = json!(0.3);
     let model = s.model.clone();
     let e = s.execute("mesh.hex.project", &p).unwrap_err().to_string();
-    // Smoothing leaves the worst element in the squeezed ring block (34) or in block 36.
-    assert!(e.contains("smallest scaled Jacobian") && (e.contains("worst in block 34") || e.contains("worst in block 36")), "{e}");
+    // Smoothing leaves the worst element in the squeezed ring block (34) or in block 36; with
+    // the cup's rim divided by its own length, the junction's corner (block 13) folds instead,
+    // and the validity gate refuses it.
+    let squeezed = e.contains("smallest scaled Jacobian") && (e.contains("worst in block 34") || e.contains("worst in block 36"));
+    let folded = e.contains("inverted, twisted or degenerate") && e.contains("block 13");
+    assert!(squeezed || folded, "{e}");
     assert_eq!(s.model, model);
 }
 

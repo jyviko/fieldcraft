@@ -307,6 +307,7 @@ impl Form<'_> {
                 fields::combo(ui, id, selected, &labels, fill(ui)).map(|i| options.get(i).map_or(Value::Null, |(v, _)| json!(v)))
             }
             Kind::Vector { labels, nullable, .. } => self.vector(ui, id, value, f, labels, nullable, None),
+            Kind::Tuple { labels, whole, .. } => self.tuple(ui, id, value, labels, whole),
             Kind::Ref(c) => self.reference(ui, id, path, value, c, f.hint, f.required),
             Kind::RefList(c) => self.reference_list(ui, path, value, c),
             Kind::RefChoices(c, options) => self.reference_choices(ui, id, value, c, options),
@@ -438,6 +439,53 @@ impl Form<'_> {
         // A vector left empty is not written until edited (a required one shows as missing).
         // The slots left empty of a vector that takes no blanks are 0.
         changed.then(|| Value::Array(next.into_iter().map(|x| if x.is_null() && !nullable { json!(0.0) } else { x }).collect()))
+    }
+
+    /// A number per label on one line, captioned; trailing empty slots are left out (a 2D
+    /// block's divisions are the first two of three).
+    fn tuple(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, labels: &[&str], whole: bool) -> Option<Value> {
+        let mut slots: Vec<Value> = match value {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(a)) if a.len() <= labels.len() => a.clone(),
+            Some(_) => {
+                self.json_only(ui);
+                return None;
+            }
+        };
+        slots.resize(labels.len(), Value::Null);
+        let gap = 3.0;
+        let small = egui::TextStyle::Small.resolve(ui.style());
+        let caption_w = labels.iter().map(|l| crate::elide::width(ui, &caption(l), &small)).fold(0.0, f32::max) + 2.0 * gap;
+        // All on one line when each still shows a value whole; otherwise one per line.
+        let room = fill(ui);
+        let n = labels.len().max(1);
+        let per_line = if (room - gap * (n as f32 - 1.0)) / n as f32 - caption_w >= VECTOR_MIN { n } else { 1 };
+        let width = ((room - gap * (per_line as f32 - 1.0)) / per_line as f32 - caption_w - 1.0).max(1.0);
+        let mut changed = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (i, label) in labels.iter().enumerate() {
+                if per_line == 1 && i > 0 {
+                    ui.end_row();
+                }
+                fields::caption(ui, &self.style, &caption(label));
+                let slot = slots.get(i).cloned().unwrap_or(Value::Null);
+                let shown = (!slot.is_null()).then_some(&slot);
+                if let Some(v) = self.number(ui, id.with(i), shown, label, whole, width) {
+                    if let Some(s) = slots.get_mut(i) {
+                        *s = v;
+                    }
+                    changed = true;
+                }
+            }
+        });
+        if !changed {
+            return None;
+        }
+        while slots.last().is_some_and(Value::is_null) {
+            slots.pop();
+        }
+        Some(if slots.is_empty() { Value::Null } else { Value::Array(slots) })
     }
 
     /// A drop-down of the collection's items; never free text. With none, the drop-down is

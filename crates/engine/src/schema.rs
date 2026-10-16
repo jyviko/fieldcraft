@@ -119,6 +119,13 @@ pub enum Kind {
         min: Option<f64>,
         labels: &'static [&'static str],
     },
+    /// A list of `min_len` to `labels.len()` positive numbers, one per label in order (a block's
+    /// divisions: 3 in 3D, 2 in 2D); `whole` numbers only when set.
+    Tuple {
+        labels: &'static [&'static str],
+        min_len: usize,
+        whole: bool,
+    },
     /// Any JSON: what the schema does not describe.
     Json,
 }
@@ -523,6 +530,10 @@ pub const fn number_or_auto(key: &'static str, label: &'static str, dim: Dim, mi
 /// One number at least `min`, or one per axis of `labels`.
 pub const fn per_axis(key: &'static str, label: &'static str, dim: Dim, min: Option<f64>, labels: &'static [&'static str]) -> Field {
     field(key, label, Kind::PerAxis { dim, min, labels })
+}
+/// `min_len` to `labels.len()` positive numbers, whole ones when `whole`.
+pub const fn tuple(key: &'static str, label: &'static str, labels: &'static [&'static str], min_len: usize, whole: bool) -> Field {
+    field(key, label, Kind::Tuple { labels, min_len, whole })
 }
 pub const fn json(key: &'static str, label: &'static str) -> Field {
     field(key, label, Kind::Json)
@@ -1072,6 +1083,21 @@ fn value_problem(f: &'static Field, v: &Value, path: &str, out: &mut Vec<Problem
                 None => Some(ProblemKind::Invalid(format!("a number, or {} numbers (one per axis)", labels.len()))),
             }
         }
+        Kind::Tuple { labels, min_len, whole } => match v.as_array() {
+            Some(a) if (min_len..=labels.len()).contains(&a.len()) => {
+                let ok = |x: &Value| x.as_f64().is_some_and(|x| x.is_finite() && x > 0.0 && (!whole || x.fract() == 0.0));
+                (!a.iter().all(ok)).then_some(if whole {
+                    ProblemKind::Invalid("whole numbers of at least 1".into())
+                } else {
+                    ProblemKind::NotPositive
+                })
+            }
+            _ => Some(ProblemKind::Invalid(if min_len == labels.len() {
+                format!("{min_len} numbers")
+            } else {
+                format!("{min_len} to {} numbers", labels.len())
+            })),
+        },
         Kind::Rows { fields, max } => match v.as_array() {
             Some(a) if a.len() <= max => {
                 for (i, row) in a.iter().enumerate() {
@@ -1191,6 +1217,10 @@ fn field_schema(f: &Field, depth: usize) -> Value {
         }
         Kind::Multi(options) => {
             json!({"type": "array", "items": {"enum": options.iter().map(|(o, _)| multi_value(o)).collect::<Vec<_>>()}, "uniqueItems": true})
+        }
+        Kind::Tuple { labels, min_len, whole } => {
+            let item = if whole { json!({"type": "integer", "minimum": 1}) } else { json!({"type": "number", "exclusiveMinimum": 0}) };
+            json!({"type": "array", "items": item, "minItems": min_len, "maxItems": labels.len(), "x-labels": labels})
         }
         Kind::NumberOrAuto { min, .. } => {
             let mut n = json!({"type": "number"});
@@ -1320,6 +1350,26 @@ mod tests {
         }
         let s = json_schema(F);
         assert_eq!(s["properties"]["k"]["oneOf"][1]["maxItems"], 3);
+    }
+
+    /// A tuple takes its minimum to its full length of positive numbers, whole ones when asked.
+    #[test]
+    fn tuple_takes_two_or_three_positive_numbers() {
+        const F: &[Field] = &[tuple("n", "N", &["a", "b", "c"], 2, true), tuple("r", "R", &["a", "b", "c"], 2, false)];
+        assert!(problems(F, &json!({"n": [2, 3, 4], "r": [1.5, 1]})).is_empty());
+        for bad in [
+            json!({"n": [2]}),
+            json!({"n": [1, 2, 3, 4]}),
+            json!({"n": [1.5, 2]}),
+            json!({"n": [0, 2]}),
+            json!({"r": [1, -1]}),
+            json!({"r": [1, null]}),
+        ] {
+            assert_eq!(problems(F, &bad).len(), 1, "{bad}");
+        }
+        let s = json_schema(F);
+        assert_eq!(s["properties"]["n"]["minItems"], 2);
+        assert_eq!(s["properties"]["n"]["items"]["type"], "integer");
     }
 
     #[test]

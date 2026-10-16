@@ -1238,6 +1238,9 @@ pub const HEX_EXTRUDE: &[Field] = &[
     TOLERANCE,
 ];
 
+/// A block's edge directions, from corner 1.
+const BLOCK_DIRECTIONS: &[&str] = &["1-2", "1-4", "1-5"];
+
 pub const BLOCK: &[Field] = &[
     text("body", "Body").help("Name of the new block body.").req().def("\"Block\""),
     choice(
@@ -1259,8 +1262,12 @@ pub const BLOCK: &[Field] = &[
     .req()
     .def("\"hex8\""),
     points("corners", "Corners", D::Length, 8).help("The eight corner points (four for 2D, at z = 0).").req(),
-    json("divisions", "Divisions").help("Elements along each edge direction, as JSON.").req().hint("[n12, n14, n15] (2D: [n12, n14])"),
-    json("bias", "Bias").help("Element size ratio along each direction, as JSON; 1 is uniform.").hint("[1, 1, 1]"),
+    tuple("divisions", "Divisions", BLOCK_DIRECTIONS, 2, true)
+        .help("Elements along each edge direction: corner 1 to 2, 1 to 4 and 1 to 5; a 2D block takes the first two.")
+        .req(),
+    tuple("bias", "Bias", BLOCK_DIRECTIONS, 2, false)
+        .help("Last over first element size along each direction; 1 is uniform. A 2D block takes the first two.")
+        .hint("uniform"),
     json("edges", "Curved and named edges").help("Edge curves and names, as JSON."),
     json("faces", "Face names").help("Names of the block's faces, as JSON.").hint("{\"1\": \"bottom\"}"),
     json("vertices", "Corner names").help("Names of the block's corners, as JSON."),

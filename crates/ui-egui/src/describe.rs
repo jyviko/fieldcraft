@@ -151,6 +151,7 @@ fn scalar(f: &Field, v: &Value, units: UnitSystem) -> String {
             options.iter().find(|(o, _)| *o == s).map_or_else(|| s.to_string(), |(_, l)| (*l).to_string())
         }
         Kind::Vector { labels, .. } => vector(labels, v, unit.as_deref()),
+        Kind::Tuple { labels, .. } => vector(labels, v, None),
         Kind::Ref(_) | Kind::Text | Kind::Path { .. } => v.as_str().map_or_else(|| crate::context::value_text(v), str::to_string),
         Kind::RefList(_) => list(v, |x| x.as_str().map(str::to_string)),
         // `Bracket.3: Tet, Bracket.7: Swept`.

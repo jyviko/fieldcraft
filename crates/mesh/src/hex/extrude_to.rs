@@ -410,7 +410,7 @@ fn section_boundary(quads: &[[u32; 4]]) -> Result<SectionBoundary> {
 /// The layer parameters `0 = t_0 < … < t_n = 1`, thicknesses in geometric progression with the
 /// last over the first equal to `bias`.
 pub(crate) fn parameters(n: usize, bias: f64) -> Vec<f64> {
-    let r = if n > 1 { bias.powf(1.0 / (n - 1) as f64) } else { 1.0 };
+    let r = if n > 1 { libm::pow(bias, 1.0 / (n - 1) as f64) } else { 1.0 };
     let mut out = Vec::with_capacity(n + 1);
     let (mut sum, mut h) = (0.0, 1.0);
     out.push(0.0);

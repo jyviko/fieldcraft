@@ -479,7 +479,7 @@ impl CellGrid {
             }
             (lo, hi)
         });
-        let per_axis = ((ctxs.len() as f64).cbrt().ceil() as usize * 2).clamp(1, MAX_GRID_DIM);
+        let per_axis = (crate::vec3::cbrt(ctxs.len() as f64).ceil() as usize * 2).clamp(1, MAX_GRID_DIM);
         let extent = (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max);
         let step = if extent > 0.0 && extent.is_finite() { extent / per_axis as f64 } else { 1.0 };
         let dim = |k: usize| (((hi[k] - lo[k]) / step).ceil() as usize).clamp(1, MAX_GRID_DIM);

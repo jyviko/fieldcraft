@@ -68,7 +68,7 @@ fn angles(lp: &[Vec<Q>], ccw: bool) -> Option<Vec<f64>> {
         let next = lp.get(k)?;
         let (a, o, b) = (*prev.get(prev.len().checked_sub(2)?)?, *next.first()?, *next.get(1)?);
         let (u, v) = ([o[0] - a[0], o[1] - a[1]], [b[0] - o[0], b[1] - o[1]]);
-        let turn = (u[0] * v[1] - u[1] * v[0]).atan2(u[0] * v[0] + u[1] * v[1]);
+        let turn = crate::vec3::atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]);
         out.push(PI - if ccw { turn } else { -turn });
     }
     Some(out)
@@ -443,8 +443,11 @@ fn disk(loops: &[Vec<Q>], size: &dyn SizeField, opts: &QuadOptions) -> Result<Op
     // ∫y², ∫x² (both × 12) and ∫xy (× 24), signed as the loop: the region's long direction is
     // the principal axis of the largest ∫ along², the angle of 0.5 · atan2(2 ∫xy, ∫x² − ∫y²).
     let sign = a2.signum();
-    let theta = 0.5 * (sign * ixy).atan2(sign * (iyy - ixx));
-    let (u, v) = ([theta.cos(), theta.sin()], [-theta.sin(), theta.cos()]);
+    let theta = 0.5 * crate::vec3::atan2(sign * ixy, sign * (iyy - ixx));
+    let (u, v) = {
+        let (s, c) = (libm::sin(theta), libm::cos(theta));
+        ([c, s], [-s, c])
+    };
     let local = |p: Q| {
         let d = [p[0] - centre[0], p[1] - centre[1]];
         [d[0] * u[0] + d[1] * u[1], d[0] * v[0] + d[1] * v[1]]

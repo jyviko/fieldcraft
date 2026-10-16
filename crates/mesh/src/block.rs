@@ -146,7 +146,7 @@ impl Path {
             if norm(sub(back, p)) > 1e-9 * la.max(lb) || ((c * c + s * s).sqrt() - 1.0).abs() > 1e-9 {
                 return Err(Error::Invalid(format!("corner {p:?} is not on the edge's ellipse or arc about {center:?}")));
             }
-            Ok(s.atan2(c))
+            Ok(crate::vec3::atan2(s, c))
         };
         let start = angle(from)?;
         let mut sweep = angle(to)? - start;
@@ -170,7 +170,7 @@ impl Path {
             Path::Line { from, to } => add_scaled(from, s, sub(to, from)),
             Path::Ellipse { center, a, b, start, sweep, .. } => {
                 let t = start + s * sweep;
-                add_scaled(add_scaled(center, t.cos(), a), t.sin(), b)
+                add_scaled(add_scaled(center, libm::cos(t), a), libm::sin(t), b)
             }
         }
     }
@@ -179,7 +179,7 @@ impl Path {
 /// The parameters of `n` elements along one direction with last/first size ratio `bias`, at
 /// `order` points per element (`order · n + 1` values from 0 to 1; mid-side values halfway).
 fn parameters(n: usize, bias: f64, order: usize) -> Vec<f64> {
-    let q = if n > 1 { bias.powf(1.0 / (n - 1) as f64) } else { 1.0 };
+    let q = if n > 1 { libm::pow(bias, 1.0 / (n - 1) as f64) } else { 1.0 };
     let mut ends = Vec::with_capacity(n + 1);
     let (mut sum, mut size) = (0.0, 1.0);
     ends.push(0.0);
@@ -645,7 +645,7 @@ mod tests {
         ];
         let m = block(&Block { kind: ElementKind::Hex20, corners, divisions: [3, 6, 2], bias: [1.0; 3], curves }).unwrap();
         for p in &m.points {
-            let r = p[0].hypot(p[1]);
+            let r = libm::hypot(p[0], p[1]);
             assert!(r > a - 1e-12 && r < b + 1e-12, "{p:?}");
         }
         let exact = std::f64::consts::PI / 4.0 * (b * b - a * a) * 0.5;

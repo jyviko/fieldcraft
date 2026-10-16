@@ -98,8 +98,8 @@ impl Frame {
                 let w = sub(p, o);
                 let z = dot(w, a);
                 let (x, y) = (dot(w, e1), dot(w, e2));
-                let t = y.atan2(x);
-                ([z, x.hypot(y)], if t < 0.0 { t + TAU } else { t })
+                let t = crate::vec3::atan2(y, x);
+                ([z, libm::hypot(x, y)], if t < 0.0 { t + TAU } else { t })
             }
         }
     }
@@ -107,7 +107,7 @@ impl Frame {
     pub(crate) fn point(&self, q: Q, h: f64) -> P {
         match *self {
             Frame::Translate { o, u, v, d } => add(o, add(add(scale(u, q[0]), scale(v, q[1])), scale(d, h))),
-            Frame::Rotate { o, a, e1, e2 } => add(o, add(scale(a, q[0]), scale(add(scale(e1, h.cos()), scale(e2, h.sin())), q[1]))),
+            Frame::Rotate { o, a, e1, e2 } => add(o, add(scale(a, q[0]), scale(add(scale(e1, libm::cos(h)), scale(e2, libm::sin(h))), q[1]))),
         }
     }
 

@@ -101,7 +101,7 @@ impl Surface {
                 let h = dot(w, axis);
                 let radial = unit(sub(w, scale(axis, h)))?;
                 let rho = norm(sub(w, scale(axis, h)));
-                let (c, s) = (half_angle.cos(), half_angle.sin());
+                let (c, s) = (libm::cos(half_angle), libm::sin(half_angle));
                 let t = (h * c + rho * s).max(0.0);
                 add(apex, add(scale(axis, t * c), scale(radial, t * s)))
             }
@@ -128,7 +128,7 @@ impl Surface {
             Surface::Cone { apex, axis, half_angle } => {
                 let w = sub(p, apex);
                 let radial = unit(sub(w, scale(axis, dot(w, axis))))?;
-                unit(sub(scale(radial, half_angle.cos()), scale(axis, half_angle.sin())))
+                unit(sub(scale(radial, libm::cos(half_angle)), scale(axis, libm::sin(half_angle))))
             }
             Surface::Sphere { center, .. } => unit(sub(p, center)),
             Surface::Torus { center, axis, major, .. } => {
@@ -383,7 +383,7 @@ impl<'a> Inside<'a> {
             let (a, b, c) = (sub(*a, x), sub(*b, x), sub(*c, x));
             let (la, lb, lc) = (norm(a), norm(b), norm(c));
             let den = la * lb * lc + dot(a, b) * lc + dot(a, c) * lb + dot(b, c) * la;
-            sum += 2.0 * dot(a, cross(b, c)).atan2(den);
+            sum += 2.0 * crate::vec3::atan2(dot(a, cross(b, c)), den);
         }
         Ok(sum / (4.0 * std::f64::consts::PI))
     }

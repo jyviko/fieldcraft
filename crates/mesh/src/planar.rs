@@ -266,7 +266,7 @@ pub fn face_boundary(positions: &[[f64; 3]], triangles: &[[u32; 3]], tri_face: &
             .map(|i| {
                 let (p, q, r) = (at(i + n - 1), at(i), at(i + 1));
                 let (u, w) = ([q[0] - p[0], q[1] - p[1]], [r[0] - q[0], r[1] - q[1]]);
-                let turn = (u[0] * w[1] - u[1] * w[0]).atan2(u[0] * w[0] + u[1] * w[1]).abs();
+                let turn = crate::vec3::atan2(u[0] * w[1] - u[1] * w[0], u[0] * w[0] + u[1] * w[1]).abs();
                 ids[i] != ids[(i + n - 1) % n] || turn > CORNER_ANGLE
             })
             .collect();

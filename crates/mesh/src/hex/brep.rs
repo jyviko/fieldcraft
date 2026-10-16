@@ -372,7 +372,7 @@ fn composite_tags(surface: &BoundarySurface, surfaces: &[Option<Surface>]) -> Ve
             unit(cross(sub(b, a), sub(c, a)))
         })
     };
-    let cos_min = SMOOTH_ANGLE.cos();
+    let cos_min = libm::cos(SMOOTH_ANGLE);
     // Per pair of faces (low tag, high tag): whether every segment between them is smooth.
     let mut pairs: BTreeMap<(u32, u32), bool> = BTreeMap::new();
     for fe in surface.feature_edges().iter().filter(|e| e.kind == FeatureKind::FaceBoundary) {

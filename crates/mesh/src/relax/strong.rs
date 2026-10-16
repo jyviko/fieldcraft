@@ -65,7 +65,7 @@ enum Phase {
 /// The objective's term for one element of quality `q` whose size went from `v0` to `v`.
 fn phi(phase: Phase, q: f64, valid: bool, v: f64, v0: f64) -> f64 {
     if valid && q > 0.0 {
-        let g = if v > 0.0 && v0 > 0.0 { (v / v0).ln() } else { 0.0 };
+        let g = if v > 0.0 && v0 > 0.0 { libm::log(v / v0) } else { 0.0 };
         let shape = match phase {
             Phase::Smooth => (1.0 / q - 1.0).powi(2),
             Phase::MinMax => q.powi(-MIN_MAX_POWER) - 1.0,

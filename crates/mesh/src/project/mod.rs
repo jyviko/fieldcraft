@@ -551,7 +551,7 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
                     *m = m.max(measured);
                 }
                 if let Some(l) = class_log.get_mut(cls[d]).filter(|_| len > tol) {
-                    l.0 += measured.ln();
+                    l.0 += libm::log(measured);
                     l.1 += 1;
                 }
             }
@@ -598,7 +598,7 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
                             let Some(nx) = g.normal(fa, qx) else { continue };
                             let h = dist(pa, qx);
                             if h > 0.5 * probe {
-                                kappa = kappa.max(crate::vec3::dot(na, nx).clamp(-1.0, 1.0).acos() / h);
+                                kappa = kappa.max(libm::acos(crate::vec3::dot(na, nx).clamp(-1.0, 1.0)) / h);
                             }
                         }
                     }
@@ -616,7 +616,7 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
         .zip(&class_max)
         .zip(&class_arc)
         .map(|((&(sum, k), &longest), &arc)| {
-            let mean = if k == 0 { 1.0 } else { (sum / k as f64).exp().round() };
+            let mean = if k == 0 { 1.0 } else { libm::exp(sum / k as f64).round() };
             (mean.max((longest / MAX_STRETCH).ceil()) as usize).max(arc).clamp(1, crate::block::MAX_DIVISIONS)
         })
         .collect();

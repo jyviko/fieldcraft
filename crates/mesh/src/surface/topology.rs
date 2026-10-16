@@ -236,7 +236,7 @@ fn solid_angle(s: &Surface, t: usize, x: [f64; 3]) -> f64 {
     let [a, b, c] = s.tri_xyz(t).map(|p| sub(p, x));
     let (la, lb, lc) = (norm(a), norm(b), norm(c));
     let den = la * lb * lc + dot(a, b) * lc + dot(a, c) * lb + dot(b, c) * la;
-    2.0 * det(a, b, c).atan2(den)
+    2.0 * crate::vec3::atan2(det(a, b, c), den)
 }
 
 /// Edges between different B-rep faces, and edges inside a face whose normals turn by more than

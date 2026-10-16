@@ -462,7 +462,7 @@ fn to_frame(f: &[[f64; 3]; 3], p: P) -> P {
 /// The grid axes (rows): the coordinate axes, or the normals of the two largest orthogonal planar
 /// patches when more boundary area is aligned with them.
 fn choose_frame(g: &Geometry) -> [[f64; 3]; 3] {
-    let tol = 1f64.to_radians().sin();
+    let tol = libm::sin(1f64.to_radians());
     let normal = |t: u32| g.normals.get(t as usize).copied().unwrap_or([0.0; 3]);
     let mut planar: Vec<(f64, usize, P)> = Vec::new();
     for (i, p) in g.patches.iter().enumerate() {
@@ -501,7 +501,7 @@ fn choose_frame(g: &Geometry) -> [[f64; 3]; 3] {
 /// that only measures how near the edge it started; the faces of a wall face each other.
 fn triangle_thickness(g: &Geometry) -> Vec<f64> {
     let far = 2.0 * norm(sub(g.bounds.hi, g.bounds.lo)) + 1.0;
-    let opposed = -WALL_OPENING.to_radians().cos();
+    let opposed = -libm::cos(WALL_OPENING.to_radians());
     (0..g.surface.triangles().len() as u32)
         .map(|t| {
             let n = g.normals.get(t as usize).copied().unwrap_or([0.0; 3]);
@@ -625,7 +625,7 @@ impl Context<'_> {
             return Ok(true);
         }
         let reach = 0.5 * 3f64.sqrt() * e * 1.05;
-        let cos = self.options.curvature_angle.to_radians().cos();
+        let cos = libm::cos(self.options.curvature_angle.to_radians());
         let mut first: BTreeMap<u32, P> = BTreeMap::new();
         for t in self.g.overlapping(&bx) {
             let [a, b, c] = self.g.triangle(t);

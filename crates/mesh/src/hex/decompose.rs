@@ -166,7 +166,7 @@ fn sub(a: Q, b: Q) -> Q {
 }
 
 fn len(a: Q) -> f64 {
-    a[0].hypot(a[1])
+    libm::hypot(a[0], a[1])
 }
 
 fn cross(a: Q, b: Q) -> f64 {
@@ -186,14 +186,17 @@ fn unit(a: Q) -> Option<Q> {
 /// region on the left: π on a straight line, less at a convex corner, more at a concave one.
 fn interior(a: Q, o: Q, b: Q) -> f64 {
     let (u, v) = (sub(o, a), sub(b, o));
-    std::f64::consts::PI - cross(u, v).atan2(dot(u, v))
+    std::f64::consts::PI - crate::vec3::atan2(cross(u, v), dot(u, v))
 }
 
 /// The inward bisector at a corner of interior angle `theta` whose outgoing edge runs along unit
 /// `w`: `w` turned left by half the angle.
 fn bisector(w: Q, theta: f64) -> Q {
     let half = 0.5 * theta;
-    [w[0] * half.cos() - w[1] * half.sin(), w[0] * half.sin() + w[1] * half.cos()]
+    {
+        let (s, c) = (libm::sin(half), libm::cos(half));
+        [w[0] * c - w[1] * s, w[0] * s + w[1] * c]
+    }
 }
 
 fn centroid(pts: &[Q]) -> Q {
@@ -1320,7 +1323,7 @@ mod tests {
     /// The half crank's cross-section (y ≤ 0) as the extrusion projects it: the outline, the
     /// bosses' circles where they rise above the arm, and the pocket's outline.
     fn crank_half() -> (Profile, Vec<Vec<Q>>) {
-        let deg = |p: Q, c: Q| (p[1] - c[1]).atan2(p[0] - c[0]).to_degrees();
+        let deg = |p: Q, c: Q| crate::vec3::atan2(p[1] - c[1], p[0] - c[0]).to_degrees();
         let spindle = [0.0, 0.0];
         let pedal = [170.0, 0.0];
         let j1 = [13.455063072993756, -18.65372021077189];
@@ -1344,7 +1347,7 @@ mod tests {
         };
         let outer = vec![
             a(spindle, 23.0, [-23.0, 0.0], j1, true),
-            a(c1, (j1[0] - c1[0]).hypot(j1[1] - c1[1]), j1, r1, false),
+            a(c1, libm::hypot(j1[0] - c1[0], j1[1] - c1[1]), j1, r1, false),
             line(r1, r2),
             a(c2, 6.0, r2, j2, false),
             a(pedal, 15.0, j2, [185.0, 0.0], true),

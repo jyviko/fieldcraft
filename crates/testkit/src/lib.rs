@@ -5,6 +5,9 @@
 //! volumes. Meshing tests load their geometry from here; [`runner`] (the `corpus` binary,
 //! `cargo xtask corpus`) builds and meshes every part and writes docs/meshing/corpus.md.
 //!
+//! [`skill`] (the `skill` binary, `cargo xtask skill-results`) meshes every corpus part and
+//! sample design by following the meshing skill and writes docs/meshing/skill-results.md.
+//!
 //! [`oracle`] (the `oracle` binary, `cargo xtask oracle`) runs the verification and validation
 //! cases of `tests/oracle` against their references and fixtures and writes docs/oracle.md.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -13,3 +16,4 @@
 pub mod corpus;
 pub mod oracle;
 pub mod runner;
+pub mod skill;

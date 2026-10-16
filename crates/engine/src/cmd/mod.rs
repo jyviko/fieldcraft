@@ -19,6 +19,7 @@ pub use datum::edit_params as datum_edit_params;
 pub use datum::preview as datum_preview;
 pub use mesh::analytic_surfaces;
 pub use nodes::merge_preview as node_merge_preview;
+pub use plan::untagged_faces;
 pub use relax::{Preview as RelaxPreview, preview as relax_preview, sphere as relax_sphere};
 mod mirror;
 mod model;

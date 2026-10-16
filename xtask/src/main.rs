@@ -11,6 +11,7 @@ mod assets;
 mod icons;
 mod layers;
 mod licences;
+mod skill;
 mod test;
 
 use std::path::{Path, PathBuf};
@@ -38,6 +39,10 @@ commands:
                   build every meshing test corpus part (tests/corpus, analytic shapes), tessellate
                   and mesh it, and write the results to docs/meshing/corpus.md (release build);
                   --part NAME --design PATH writes that part's .solidcraft design instead
+  skill-results [--part NAME] [--no-write]
+                  mesh every corpus part and sample by following the meshing skill
+                  (skills/fieldcraft-meshing) and write docs/meshing/skill-results.md and each
+                  part's section picture (docs/meshing/skill/*.png; release build)
   oracle [--case NAME]... [--bless NAME|all]... [--quick] [--no-write]
                   run the verification and validation cases (tests/oracle, docs/verification.md)
                   against their references and fixtures; write docs/oracle.md after a full run;
@@ -90,6 +95,7 @@ fn main() -> ExitCode {
             c.args(["run", "--release", "-p", "fieldcraft-testkit", "--bin", "corpus", "--"]).args(&rest);
             run(c, "corpus")
         }
+        Some("skill-results") => skill::run(&root(), &rest),
         Some("oracle") => {
             // A binary of the testkit, which has the engine and SolidCraft scripts for geometry.
             let mut c = cargo();

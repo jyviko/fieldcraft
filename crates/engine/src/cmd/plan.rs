@@ -1074,7 +1074,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
 /// The faces of `bodies` (as the design has them) that no element face of the mesh is tagged
 /// with: a set, load or relaxation by such a face finds nothing. Only a face narrower than the
 /// elements beside it should be one.
-fn untagged_faces(s: &Session, bodies: &[String]) -> Vec<Value> {
+pub fn untagged_faces(s: &Session, bodies: &[String]) -> Vec<Value> {
     let c = s.model.classification();
     let mut tagged: BTreeSet<u32> = BTreeSet::new();
     for t in c.elements().values() {

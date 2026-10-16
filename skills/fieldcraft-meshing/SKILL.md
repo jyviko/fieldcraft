@@ -1,168 +1,128 @@
 ---
 name: fieldcraft-meshing
-description: Agentic hex meshing (AHM) in FieldCraft — read the part, plan partitions, and build a structured all-hex (or hex-dominant) mesh an analyst would accept. Use before any mesh.* command on a part that matters, and whenever a mesh comes back with fans, slivers or a low scaled Jacobian.
+description: Agentic hex meshing (AHM) in FieldCraft — look at the part, use its symmetry, plan the blocks, mesh, mark and fix the bad elements, and show sections an analyst would accept. Use before any mesh.* command on a part that matters, and whenever a mesh comes back with fans, slivers or a low scaled Jacobian.
 ---
 
 # Agentic hex meshing (AHM)
 
-You mesh like an experienced analyst: you look first, plan the blocks, and only then call a mesher.
-A mesh is judged by its worst elements, not its count. A fast mesh with fans, slivers or collapsed
-corners is a failed mesh, even when every element is "valid".
+Mesh like an analyst: look first, plan the blocks, then call a mesher. A mesh is judged by its
+worst elements, not its count. A fast mesh with fans, slivers or collapsed corners is a failed
+mesh, even when every element is valid.
 
-## 0. Start from the provenance graph (SolidCraft designs)
+The loop: **look → symmetry → plan → inspect the plan → apply → quality + mark → relax → section
+pictures → report.** Never skip a step because the last mesh looked fine.
 
-A `.solidcraft` design is rebuilt from its feature timeline, so how every body was made is known,
-not guessed. Read it before you plan anything:
-1. `geometry.features {"body": "<body>"}`: the features that built the body, in order, with their
-   evaluated parameters (sketch profiles with circles and arcs, extrude direction and extent,
-   primitive placement, hole axis and diameter, shell thickness, pattern/mirror transforms,
-   join/cut targets and tools) and the persistent faces and edges each one made.
-2. `mesh.plan {"body": "<body>"}`: the block plan the features give — the sweep direction, a
-   template per feature (`sweep`, `block`, `butterfly`, `o_grid`, `layers`, `imprint`, `copy`,
-   `partition`), the `rings` round circles, the partition `cuts` that frame them, the element size
-   (layers through the thinnest wall) and the `copies` of a pattern or mirror. Read the
-   `unmapped` list: revolves, sweeps and lofts have no template yet, and a feature not
-   prismatic along the sweep needs projection blocking (#399). Fillets and chamfers map to a
-   `blend` layer.
-3. Edit the plan if the size is wrong (apply the edited object), then
-   `mesh.plan.apply {"plan": "Plan-<body>"}`. When the plan has rings or blends and the body
-   fits, its `mesher` is `project`: one block topology over the whole body (a grid on the
-   body's planar faces, an O-grid square-inside-square round every circle, concentric ones
-   nested: a boss and its hole, frames centred on the hole; a screw hole in a rounded corner
-   takes the corner's fillet into its ring; a blend layer along fillets, chamfers and shell walls
-   at their stored depth) projected and smoothed — no partitions, one conforming mesh, one division
-   count per sheet of blocks. Read `layout` and `blend_layers`; the plan's `notes` say why a
-   body did not fit (a plane at an angle, a curved face that is not a ring or a blend, two
-   circles in one frame), and then the frame cuts and swept cells are used instead (`pending`
-   lists the rings left boxed). Check `all_hex`, `conforming`, `min_scaled_jacobian`.
-   A boss the walls run into (an enclosure's corner screw boss) is ringed over the square round
-   its whole circle, the ring split where the walls join it; the inner fillet where the walls
-   meet is taken in by the ring's corner, even where the boss just touches it.
-4. Then verify as in §4. When the plan does not fit (unmapped primary features, a failed cell),
-   fall back to the manual process below, keeping the plan's cuts that work.
+## 1. Look before you mesh
 
-Shapes without a timeline (STEP, 3MF) start at §1.
-
-## 1. Look before you mesh (always)
-
-Before the first mesh command:
 1. `inspect_model` / `geometry.bodies`: bodies, volumes, bounding boxes, faces, holes, fillets.
-2. Take screenshots from the principal views and an iso view. Name, in words, what the part is.
-3. **Symmetry.** Test it geometrically (mirror the bounding box and the key faces). If the part (and
-   the loads you will apply) are symmetric, mesh one half or quarter only and mirror the mesh
-   (`mesh.mirror`). Never mesh a symmetric part whole.
-4. **Primary vs secondary features.**
-   - Primary: what carries the physics and sets the topology — the main body, walls, bosses,
-     the load path, thin directions, the direction a section is swept along.
-   - Secondary: small fillets, chamfers, logos, small holes far from the region of interest.
-   Start the block structure from the primary features. Secondary features are fitted into it
-   (or defeatured), never allowed to drive it.
-5. **Where to split.** Before meshing, list the cuts: planes or curved surfaces that turn every
-   region into a six-sided block or a sweepable prism. Say why each cut is there.
+   For a `.solidcraft` design also `geometry.features {"body"}`: how each body was built
+   (profiles, extrude directions, holes, shells, fillets, patterns, mirrors).
+2. `geometry.check {"body", "size"}` at the size you intend: short edges, small and sliver faces,
+   near faces (gaps, overlaps, walls thinner than the gap). Each finding names its faces and a
+   point `at`, and is marked in pictures. Defeature or resize before meshing; never mesh over a
+   finding you have not explained.
+3. Take pictures. Headless: `fieldcraft-cli snapshot script.json --out a.png` with
+   `--view iso|front|top|…` or `--camera '{"yaw":-45,"pitch":30,"target":[x,y,z],"fit":true}'`,
+   and `--section x|y|z[=VALUE]`. Over MCP: `screenshot {view | camera: {yaw, pitch, target,
+   distance | fit}, section}`. Aim `target` at the feature you are judging (a boss, a corner), not
+   the model's centre. Read every PNG. Name, in words, what the part is.
+4. Primary vs secondary features. Primary (walls, bosses, the load path, thin directions, the
+   sweep direction) set the block topology. Secondary (small fillets, chamfers, logos, small holes
+   far from the region of interest) fit into it or are defeatured; they never drive it.
 
-## 2. Plan the blocks (the rules)
+## 2. Symmetry first
 
-- **Never make sharp corners.** No element angle near 0° or 180°. Where a block would have a
-  corner angle far from 90°, cut differently or add a block (an O-grid) so every corner in the mesh
-  is close to 90°.
-- **Partitions must never create skewed, tapered or high-aspect-ratio hex.** Check every cell you
-  create: if it is a wedge, a sliver or a long thin strip relative to the element size, the cut is
-  wrong. Move or remove it.
-- **Butterfly (O-grid) around curved parts.** Around a hole, a boss, a cylinder or a fillet, cut a
-  square block around it and an O-grid ring between the square and the curve, so element lines run
-  radially and the corners of the square sit at 45° on the curve. Never let a mesh fan into a hole
-  or pinch at a tangency.
-- **Split and merge to make it square.** When a region is far from a square (an L, a long strip
-  with a bump), split it into pieces and merge pieces again so each final cell is closer to a cube.
-  Aim for cells with aspect ratio near 1 at the target size.
-- **Curved splits are allowed.** A cut does not have to be a plane: use a cylindrical or offset
-  surface (a ring around a boss, an offset of a fillet) when a plane would create slivers.
-- **Never cut along an existing face** (a plane coincident with a face within tolerance leaves
-  micrometre slivers, #384; where the kernel can only make it by nudging its cut off the plane,
-  `geometry.partition` refuses it, #427) and never through the axis of a small hole (degenerate tessellation at the
-  hole edge). Offset the cut to just outside the feature instead.
-- **Keep cuts consistent across touching bodies** so their meshes can match, or tie them
-  deliberately (`interaction.tie`; linear faces only today).
+Test symmetry geometrically (mirror the bounding box and the key faces). If the part and its
+loads are symmetric, mesh one half or quarter and mirror the mesh: `mesh.mirror {"plane": <datum
+plane> | {point, normal}}`. Nodes on the plane are merged, so the result is conforming. Never mesh
+a symmetric part whole. If the halves come out unequal (one corner good, its mirror image bad),
+keep the good half and mirror it.
 
-## 3. Mesh
+`mesh.plan` refuses a partitioned body and its cells today (#473): for a half, mesh the cell with
+`mesh.cells` or `mesh.hex.project`, then mirror.
 
-- Mesh each cell with the structured method that fits (`mesh.hex.generate` extrude/sweep/revolve/
-  mapped; `mesh.cells` for partitioned parts; `mesh.hex.blocks` when every cell is a block).
-- Use edge seeds (`mesh.seed.edge`) so counts match across shared edges and so there are enough
-  elements through thin walls (at least 2–3 through a wall for bending, 1 for pure conduction only).
-- Tet (`tet10` preferred for stress) only for cells that are not worth blocking, and only where
-  they are far from the region of interest. Before falling back to tet on a region that ends on a
-  curved face, try extrude-to-surface (§3b).
+## 3. Plan, then inspect the plan
 
-## 3b. Extrude up to a surface — try it before giving up on a region
+1. `mesh.plan {"body", "size"?, "layers"?}`: the block plan from the features. Nothing is meshed.
+2. Read the plan before applying it:
+   - `mesher`: `project` (one block topology over the body: O-grid rings round circles, blend
+     layers along fillets, chamfers and shell walls) is the target; `cells`/`sweep` is the
+     fallback.
+   - `rings`: centre, radius, frame half-side. Frames should be near square with even margins.
+   - `cuts`: each with its feature and reason.
+   - `notes`: why the body did not fit the projection layout.
+   - `pending` (rings left boxed) and `unmapped` (features with no template: revolves, sweeps,
+     lofts).
+   - `size` and `layers` against the thinnest wall (§5).
+   Fix what is wrong by editing the plan object and applying the edit.
+3. `mesh.plan.apply {"plan": "Plan-<body>" | edited object}`. Read `skipped_cuts`, `all_hex`,
+   `conforming`, `min_scaled_jacobian`, `layout`, `blend_layers`. A skipped cut is a defect to
+   explain.
+4. When the plan does not fit, mesh regions by hand and keep the plan's cuts that work:
+   `geometry.partition` + `mesh.cells`; `mesh.hex.generate` / `mesh.hex.sweep` / `mesh.hex.mapped`;
+   `mesh.hex.extrude` for a section carried to a curved or tilted end (`source`, `to_surface`,
+   `sides`); `mesh.hex.project` for a block topology projected on the part (`template` `sphere` or
+   `butterfly`, ops `o_grid`, `split`, `extrude`, `connect`; `preview: true` lists block indices).
+   Tet (`tet10` for stress) only for cells not worth blocking, far from the region of interest.
 
-A region that is one section carried to a curved or tilted end (a boss or rib meeting a curved
-wall, an air column under a domed lid, a fillet region capped by a curved face) is not sweepable
-between parallel faces, but `mesh.hex.extrude` meshes it:
+Shapes without a timeline (STEP, 3MF) skip `mesh.plan` and go to step 4.
 
-- `source`: the section's face. If a neighbour (or the cell below) is already meshed there, its
-  quads are reused and the two meshes share nodes; else a planar face is meshed here at `size`.
-  A 2D mesh works too (`source_set`).
-- `to_surface`: the end faces; `sides`: the region's side faces (give them whenever they are not
-  straight along the path, so every layer follows them).
-- `direction` for a straight region, else `normal`; `layers` (or `size`) and `bias` (< 1 grades
-  toward the target, e.g. for a boundary layer under a lid).
-- Check the reply: `max_target_gap` ≈ 0, `min_scaled_jacobian` ≥ 0.5, `section.shared_nodes`
-  equal to the section's nodes when it should conform. An error names the node whose path
-  misses the target or the element that would invert: shorten the region (cut it where the end
-  turns steep) rather than falling back to tets.
+## 4. Block rules
 
-## 3a. Projection blocking
+- **No sharp corners.** Every element corner near 90°. Where a block corner is far from 90°, cut
+  differently or add an O-grid.
+- **No skewed, tapered or long thin cells.** Check every cell a cut makes; a wedge, sliver or
+  strip means the cut is wrong.
+- **O-grid round every hole, boss, cylinder and fillet**: a square round the curve and a ring
+  between, element lines radial, square corners at 45° on the curve. Never fan into a hole or
+  pinch at a tangency.
+- **Never cut on an existing face.** A coincident cut leaves slivers, and one the kernel can only
+  make by nudging off the plane is refused (`geometry.partition`). Offset the cut one element out
+  of the feature. Never cut through the axis of a small hole.
+- **Parity at corners.** Division counts must close round every block loop. Where a corner comes
+  out bad and its mirror image is good, change the count by one on the edges leading into it
+  (`mesh.seed.edge`) first.
+- **Pattern a good corner.** When identical features (four corner bosses) mesh unequally, the
+  good one is the template: mirror it onto the others (`mesh.mirror`) instead of accepting the
+  worst.
+- **Accept a wedge column** where the layout forces one node to absorb a corner: one column of
+  `wedge6` is better than a column of skewed hex. State it in the report.
+- **Keep cuts consistent across touching bodies** so the meshes match, or tie them
+  (`interaction.tie`).
 
-When partitioning the real geometry into sweepable cells is awkward (round parts, branches,
-handles, curved caps), lay a block topology over the part and project it (`mesh.hex.project`):
+## 5. Size and walls
 
-- **Sphere or ball-like region**: `"template": "sphere"` (inner cube + six blocks). Never a single
-  block on a sphere.
-- **Disc, rod, tube, any round section**: `"template": "butterfly"` (centre square + four petals)
-  along the axis, with `levels` at every change along it. A plain grid block projected onto a
-  cylinder flattens its corners to 180° — the command refuses it (`min_quality`).
-- **Holes, bosses, floors of cups**: O-grid the block (`{"op": "o_grid", "block", "open", "inset"}`);
-  open faces let the inner block reach that face. A cup floor needs its own O-grid inside the
-  wall's butterfly (`open: [1, 2]` on the centre block), the cavity is then `remove`d.
-- **Side branch**: O-grid the block under the branch's footprint open toward it and extrude the
-  open face (`"extrude": {"offset", "layers"}`, faces `all` = round branch). The junction edges go
-  onto the curve where the two surfaces meet automatically.
-- **Square stubs, handles, ribs**: O-grid open toward the stub, extrude `inner`, chain `extrude`
-  ops, and close loops with `connect`. Inner corners of a stretched topology follow the
-  projection, but keep the initial blocks roughly where the geometry is (offsets measured from
-  the block faces, not from the surface).
-- **Footprint margins**: a stub's footprint must sit in the O-gridded block face with roughly even
-  margins all round. A 6 mm footprint in a 30 mm wide petal face with 2 mm above and below leaves
-  ring corners near 170° that twist. Split first (before the O-grid),
-  `{"op": "split", "block", "direction": "y", "at": [0.36, 0.64]}`, so the side margins match the
-  levels' margins; the split runs through the whole sheet of blocks, so preview again for the
-  new indices.
-- A twisted-element error names the block, cell and the block vertex (junction) with the blocks
-  meeting there: fix the topology at that junction (split, move a level, change the inset).
-- Use `"preview": true` to list block indices before meshing; faces can be given as `"+x"` … `"-z"`.
-- Targets default to the smooth group of B-rep faces each outer block face faces; set them with
-  `faces: [{block, face, to}]` when a block face is near two surfaces.
-- Read the reply: `initial_min_scaled_jacobian` (transfinite grid) vs `min_scaled_jacobian`
-  (after elliptic smoothing), `max_gap` (should be ~0). An error names the worst block and where.
+- Through a thin wall: at least 2 elements for bending (3 for stress in the wall), 1 only for
+  pure conduction. Set `layers` in `mesh.plan`, or `mesh.seed.edge` across the wall.
+- Matching counts on shared edges: `mesh.seed.edge`.
+- Size from the physics: finer at stress gradients, fillets and contact; in explicit, from the
+  wave length.
 
-## 4. Verify (every time, before solving)
+## 6. Quality, mark, relax
 
-1. `mesh.quality`: all valid; scaled Jacobian min ≥ 0.3 (≥ 0.5 in the region of interest);
-   edge ratio max ≤ 10; no element below these is acceptable without a stated reason.
-   **Isolated spikes** (a few bad elements in an otherwise good mesh) are fixed last, with
-   `mesh.node.relax {"around_element": <worst>}` (or `center` + `radius`): nodes there relax, surface
-   nodes sliding on their faces, nothing inverting. It is a final touch, never a substitute for a
-   better block plan: many bad elements mean the cuts are wrong (§2). Pass `"reapply": true` (or
-   run `mesh.node.relax.apply {field}`) so the relaxation follows a later remesh.
-2. Look at it: screenshots of each body and a section. Fans, pinches, wedges, slivers → back to §2.
-3. Volume: `mesh.quality` volume equals the geometry volume (a mismatch means orphan or missing
-   cells, #385).
-4. `mesh.check.duplicates`: no cracks or free edges inside a body.
-5. After solving, refine once and compare the quantity of interest (convergence).
+1. `mesh.quality`: all valid; volume equal to the geometry's (a mismatch means missing or orphan
+   cells).
+2. `mesh.quality.mark {"limits": {"scaled_jacobian": 0.3, "edge_ratio": 10}}`: failing elements
+   become the set `quality_marked`, drawn red in pictures, each with `label`, `at`, `failed`.
+   Acceptance limits:
+   - scaled Jacobian ≥ 0.3 everywhere, ≥ 0.5 in the region of interest;
+   - edge ratio and aspect ratio ≤ 10;
+   - face angles 15°–165°, dihedrals 10°–165° (the defaults).
+3. Picture the marked elements (camera `target` at their `at`, a `section` through them).
+   Clustered marks mean the blocks are wrong: back to §3/§4. Isolated spikes only:
+   `mesh.node.relax {"set": "quality_marked"}` or `{"around_element": <label>}`. Surface nodes
+   slide on their faces; nothing inverts. Add `"reapply": true` so it follows a remesh. Relaxing
+   is the final touch, never a substitute for a better plan.
+4. Mark again until nothing is marked, or every remaining mark has a stated reason.
+5. `mesh.check.duplicates`: no cracks or free edges inside a body.
+6. Section pictures through every primary feature: fans, pinches, wedges, slivers or zigzag lines
+   → back to §3.
+7. After solving, refine once and compare the quantity of interest (convergence).
 
-## 5. Report
+## 7. Report
 
-State: symmetry used, primary features, every cut and why, method per cell, element counts,
-quality numbers, and anything you defeatured. If the plan failed, say which rule failed and the
-next cut you will try — don't silently fall back to a worse mesh.
+State: symmetry used, primary features, the plan's mesher, every cut and skipped cut with its
+reason, method per region, element counts, min scaled Jacobian, max edge ratio, marked count, what
+was relaxed, any wedge column, anything defeatured, and the section pictures. If the plan failed,
+name the rule that failed and the next thing you will try. Never silently fall back to a worse
+mesh.

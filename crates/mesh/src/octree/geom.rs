@@ -249,25 +249,6 @@ impl<'a> Geometry<'a> {
         for e in surface.feature_edges().iter().filter(kept) {
             edge_set.insert((e.vertices[0], e.vertices[1]), e.triangles);
         }
-        let mut adj: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-        for &(a, b) in edge_set.keys() {
-            adj.entry(a).or_default().push(b);
-            adj.entry(b).or_default().push(a);
-        }
-        let mut corners: Vec<u32> = adj
-            .iter()
-            .filter(|(v, n)| {
-                if n.len() != 2 {
-                    return true;
-                }
-                let (p, a, b) = (xyz(**v), xyz(n[0]), xyz(n[1]));
-                let (u, w) = (sub(p, a), sub(b, p));
-                crate::vec3::angle_deg(u, w) > CORNER_TURN
-            })
-            .map(|(v, _)| *v)
-            .collect();
-        corners.sort_unstable();
-
         // Patches: flood fill across non-feature edges.
         let neighbors = surface.neighbors();
         let mut tri_patch = vec![u32::MAX; tris.len()];
@@ -305,6 +286,16 @@ impl<'a> Geometry<'a> {
             }
             patch.faces.sort_unstable();
             patch.faces.dedup();
+            patches.push(patch);
+        }
+
+        // A crease with the same patch on both sides (one inside a face that does not run from
+        // feature to feature, such as a tessellation crease across a fillet) separates nothing:
+        // no region border can follow it and its open ends could never be mapped, so it is not a
+        // feature.
+        edge_set.retain(|_, t| t.map(|t| tri_patch.get(t as usize).copied()).iter().collect::<std::collections::BTreeSet<_>>().len() == 2);
+        // The widths count only the curves that bound the patches.
+        for patch in &mut patches {
             let mut perimeter = 0.0;
             for &t in &patch.triangles {
                 let tri = tris.get(t as usize).copied().unwrap_or([0; 3]);
@@ -315,11 +306,26 @@ impl<'a> Geometry<'a> {
                     }
                 }
             }
-            if perimeter > 0.0 {
-                patch.width = 2.0 * patch.area / perimeter;
-            }
-            patches.push(patch);
+            patch.width = if perimeter > 0.0 { 2.0 * patch.area / perimeter } else { f64::INFINITY };
         }
+        let mut adj: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        for &(a, b) in edge_set.keys() {
+            adj.entry(a).or_default().push(b);
+            adj.entry(b).or_default().push(a);
+        }
+        let mut corners: Vec<u32> = adj
+            .iter()
+            .filter(|(v, n)| {
+                if n.len() != 2 {
+                    return true;
+                }
+                let (p, a, b) = (xyz(**v), xyz(n[0]), xyz(n[1]));
+                let (u, w) = (sub(p, a), sub(b, p));
+                crate::vec3::angle_deg(u, w) > CORNER_TURN
+            })
+            .map(|(v, _)| *v)
+            .collect();
+        corners.sort_unstable();
 
         // Curves: chains from corners, then closed loops.
         let mut used: BTreeMap<(u32, u32), bool> = edge_set.keys().map(|k| (*k, false)).collect();

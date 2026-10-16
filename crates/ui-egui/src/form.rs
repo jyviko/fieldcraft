@@ -234,6 +234,7 @@ impl Form<'_> {
         let path = join(prefix, f.key);
         match f.kind {
             Kind::Group(_) | Kind::Variants { .. } | Kind::Rows { .. } => self.section(ui, f, obj, &path, depth),
+            Kind::NameOr { name, object, fields } => self.name_or(ui, f, name, object, fields, obj, &path, depth),
             _ => {
                 let value = obj.get(f.key).cloned();
                 let style = self.style;
@@ -311,6 +312,7 @@ impl Form<'_> {
             Kind::Ref(c) => self.reference(ui, id, path, value, c, f.hint, f.required),
             Kind::RefList(c) => self.reference_list(ui, path, value, c),
             Kind::RefChoices(c, options) => self.reference_choices(ui, id, value, c, options),
+            Kind::RefText(c) => self.reference_text(ui, id, value, c, f.hint),
             Kind::Either(options) => {
                 let key = match value {
                     Some(Value::String(s)) => Some(s.as_str()),
@@ -335,7 +337,7 @@ impl Form<'_> {
             Kind::Multi(options) => self.multi(ui, value, options),
             Kind::NumberOrAuto { .. } => self.number_or_auto(ui, id, value, f),
             Kind::PerAxis { labels, .. } => self.per_axis(ui, id, value, f, labels),
-            Kind::Unit | Kind::Group(_) | Kind::Variants { .. } | Kind::Rows { .. } => None,
+            Kind::Unit | Kind::Group(_) | Kind::Variants { .. } | Kind::Rows { .. } | Kind::NameOr { .. } => None,
         }
     }
 
@@ -587,6 +589,92 @@ impl Form<'_> {
             }
         });
         changed
+    }
+
+    /// A text per item of `c`, each after the item's name; an empty text leaves the item out.
+    fn reference_text(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, c: Collection, hint: &str) -> Option<Value> {
+        let current = value.and_then(Value::as_object).cloned().unwrap_or_default();
+        let names = self.names(c).to_vec();
+        let mut changed = None;
+        ui.vertical(|ui| {
+            if names.is_empty() {
+                ui.label(RichText::new(format!("No {} yet", plural(c.label()))).color(self.style.dim));
+            }
+            for (i, n) in names.iter().take(MAX_ROWS).enumerate() {
+                let mut text = current.get(n).and_then(Value::as_str).unwrap_or_default().to_string();
+                let row = ui.horizontal(|ui| {
+                    let width = (ui.available_width() * 0.5).max(FIELD_MIN);
+                    ui.add_sized([width, ui.spacing().interact_size.y], egui::Label::new(n.as_str()).truncate());
+                    fields::text(ui, &self.style, id.with(i), &mut text, hint, fill(ui))
+                });
+                if row.response.contains_pointer() && c == Collection::Body {
+                    self.out.hover_body = Some(n.clone());
+                }
+                if row.inner {
+                    let mut next = current.clone();
+                    if text.is_empty() {
+                        next.remove(n);
+                    } else {
+                        next.insert(n.clone(), json!(text));
+                    }
+                    changed = Some(if next.is_empty() { Value::Null } else { Value::Object(next) });
+                }
+            }
+        });
+        changed
+    }
+
+    /// A [`Kind::NameOr`] field: a choice between the name and the object, then the chosen one's
+    /// field or fields. Switching starts the other form empty.
+    #[allow(clippy::too_many_arguments)]
+    fn name_or(
+        &mut self,
+        ui: &mut Ui,
+        f: &Field,
+        name: &'static Field,
+        object: &str,
+        fields: &'static [Field],
+        obj: &mut Map<String, Value>,
+        path: &str,
+        depth: usize,
+    ) {
+        let is_object = matches!(obj.get(f.key), Some(Value::Object(_)));
+        let id = self.id(path);
+        let help = f.help_text(self.cx.units);
+        let style = self.style;
+        let labels = [name.label, object];
+        let selected = if is_object { object } else { name.label };
+        if let Some(i) = fields::row(ui, &style, f.label, f.required, &help, |ui| fields::combo(ui, id.with("form"), selected, &labels, fill(ui)))
+            && (i == 1) != is_object
+        {
+            if i == 1 {
+                obj.insert(f.key.into(), schema::prefill(fields, &json!({})));
+            } else {
+                obj.remove(f.key);
+            }
+            self.touch(path);
+        }
+        if is_object {
+            ui.horizontal(|ui| {
+                ui.add_space(INDENT);
+                ui.vertical(|ui| {
+                    if let Some(Value::Object(child)) = obj.get_mut(f.key) {
+                        self.fields(ui, fields, fields, child, path, depth + 1);
+                    }
+                });
+            });
+        } else {
+            let value = obj.get(f.key).cloned();
+            let help = name.help_text(self.cx.units);
+            let new = fields::row(ui, &style, name.label, false, &help, |ui| self.scalar(ui, name, value.as_ref(), path));
+            if let Some(new) = new {
+                match new {
+                    Value::Null => obj.remove(f.key),
+                    v => obj.insert(f.key.into(), v),
+                };
+                self.touch(path);
+            }
+        }
     }
 
     /// "Create material…": opens the command that makes an item of `c`, then returns here.
@@ -927,7 +1015,9 @@ pub fn has_system_units(fields: &[Field], depth: usize) -> bool {
     depth <= MAX_DEPTH
         && fields.iter().any(|f| match f.kind {
             Kind::Number { dim, .. } | Kind::Vector { dim, .. } | Kind::PerAxis { dim, .. } => dim.follows_system(),
-            Kind::Group(inner) | Kind::Rows { fields: inner, .. } | Kind::Either(inner) => has_system_units(inner, depth + 1),
+            Kind::Group(inner) | Kind::Rows { fields: inner, .. } | Kind::Either(inner) | Kind::NameOr { fields: inner, .. } => {
+                has_system_units(inner, depth + 1)
+            }
             Kind::Variants { variants, .. } => variants.iter().any(|v| has_system_units(v.fields, depth + 1)),
             _ => false,
         })

@@ -1179,15 +1179,20 @@ pub const CLEAR_MESH: &[Field] = &[references("bodies", "Bodies", C::Body)
     .help("The bodies whose meshes go. When none is ticked: the meshes of bodies the open design no longer has because its partitions changed (model.check lists them).")
     .hint("the bodies partitions removed")];
 
+const MIRROR_DATUM: Field = reference("", "Datum plane", C::DatumPlane).help("A datum plane of the model.");
+const MIRROR_POINT_NORMAL: &[Field] = &[
+    xyz("point", "Point", D::Length).help("A point on the plane.").req(),
+    xyz("normal", "Normal", D::None).help("The plane's normal; its length does not matter.").req(),
+];
+
 pub const MIRROR: &[Field] = &[
-    json("plane", "Plane")
-        .help("The mirror plane: a datum plane's name, or a point and normal as JSON.")
-        .req()
-        .hint(r#""Datum" or {"point": [x, y, z], "normal": [nx, ny, nz]}"#),
+    name_or("plane", "Plane", &MIRROR_DATUM, "Point and normal", MIRROR_POINT_NORMAL)
+        .help("The mirror plane: a datum plane, or a point on it and its normal.")
+        .req(),
     references("bodies", "Bodies", C::Body).help("The meshed bodies to mirror; every meshed body when empty.").hint("every meshed body"),
-    json("as", "Images")
-        .help("Names for the mirrored bodies, as JSON.")
-        .hint(r#"{"body": "image body"}; default: the design's body at the reflected place"#),
+    reference_text("as", "Images", C::Body)
+        .help("The body each mirrored body becomes; when empty, the design's body at the reflected place, else <body>/mirror.")
+        .hint("default"),
 ];
 
 pub const SYMMETRY: &[Field] = &[

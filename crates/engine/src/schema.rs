@@ -126,6 +126,17 @@ pub enum Kind {
         min_len: usize,
         whole: bool,
     },
+    /// A name (`name`, a [`Kind::Ref`] or [`Kind::Choice`] whose key is unused) as a bare
+    /// string, or an object of `fields` (`object` labels that choice): a mirror plane is a datum
+    /// plane's name or a point and a normal.
+    NameOr {
+        name: &'static Field,
+        object: &'static str,
+        fields: &'static [Field],
+    },
+    /// A text per item: an object from the names of a collection's items to a string; an item
+    /// left out takes the command's default.
+    RefText(Collection),
     /// Any JSON: what the schema does not describe.
     Json,
 }
@@ -535,6 +546,14 @@ pub const fn per_axis(key: &'static str, label: &'static str, dim: Dim, min: Opt
 pub const fn tuple(key: &'static str, label: &'static str, labels: &'static [&'static str], min_len: usize, whole: bool) -> Field {
     field(key, label, Kind::Tuple { labels, min_len, whole })
 }
+/// A name as `name` gives it, or an object of `fields` (labelled `object`).
+pub const fn name_or(key: &'static str, label: &'static str, name: &'static Field, object: &'static str, fields: &'static [Field]) -> Field {
+    field(key, label, Kind::NameOr { name, object, fields })
+}
+/// A text per item of `c`.
+pub const fn reference_text(key: &'static str, label: &'static str, c: Collection) -> Field {
+    field(key, label, Kind::RefText(c))
+}
 pub const fn json(key: &'static str, label: &'static str) -> Field {
     field(key, label, Kind::Json)
 }
@@ -930,7 +949,7 @@ pub fn field_at(fields: &'static [Field], path: &str) -> Option<&'static Field> 
         }
         field = match field.kind {
             Kind::Rows { .. } if segment.parse::<usize>().is_ok() => field,
-            Kind::Group(inner) | Kind::Rows { fields: inner, .. } => find(inner, segment)?,
+            Kind::Group(inner) | Kind::Rows { fields: inner, .. } | Kind::NameOr { fields: inner, .. } => find(inner, segment)?,
             Kind::Variants { tag, .. } if tag == segment => field,
             Kind::Variants { variants, .. } => variants.iter().find_map(|v| find(v.fields, segment))?,
             Kind::Either(options) => options.iter().find(|o| o.key == segment)?,
@@ -1023,6 +1042,19 @@ fn value_problem(f: &'static Field, v: &Value, path: &str, out: &mut Vec<Problem
                 check(fields, o, path, out, depth + 1);
                 None
             }
+            None => Some(ProblemKind::NotAnObject),
+        },
+        Kind::NameOr { name, fields, .. } => match v {
+            Value::String(_) => value_problem(name, v, path, out, depth + 1),
+            Value::Object(o) => {
+                check(fields, o, path, out, depth + 1);
+                None
+            }
+            _ => Some(ProblemKind::Invalid(format!("a {} or an object", name.label.to_lowercase()))),
+        },
+        Kind::RefText(_) => match v.as_object() {
+            Some(o) if o.len() <= MAX_NAMES && o.values().all(Value::is_string) => None,
+            Some(_) => Some(ProblemKind::NotText),
             None => Some(ProblemKind::NotAnObject),
         },
         Kind::Variants { tag, .. } => match v.as_object() {
@@ -1197,6 +1229,10 @@ fn field_schema(f: &Field, depth: usize) -> Value {
             "additionalProperties": {"enum": options.iter().map(|(o, _)| *o).collect::<Vec<_>>()},
         }),
         Kind::Group(fields) if depth <= MAX_DEPTH => object_schema(fields, depth + 1),
+        Kind::NameOr { name, fields, .. } if depth <= MAX_DEPTH => {
+            json!({"oneOf": [field_schema(name, depth + 1), object_schema(fields, depth + 1)]})
+        }
+        Kind::RefText(c) => json!({"type": "object", "x-references": c.label(), "additionalProperties": {"type": "string"}}),
         Kind::Variants { tag, variants } if depth <= MAX_DEPTH => json!({"oneOf": variant_schemas(tag, variants, depth + 1)}),
         Kind::Either(options) if depth <= MAX_DEPTH => json!({"oneOf": options.iter().map(|o| match o.kind {
             Kind::Unit => json!({"const": o.key}),
@@ -1350,6 +1386,24 @@ mod tests {
         }
         let s = json_schema(F);
         assert_eq!(s["properties"]["k"]["oneOf"][1]["maxItems"], 3);
+    }
+
+    /// A name-or-object field takes the name's kind as a string or its fields as an object; a
+    /// text per item takes an object of strings.
+    #[test]
+    fn name_or_object_and_text_per_item() {
+        const NAME: Field = reference("", "Datum plane", Collection::DatumPlane);
+        const OBJ: &[Field] = &[xyz("point", "Point", Dim::Length).req()];
+        const F: &[Field] = &[name_or("plane", "Plane", &NAME, "Point", OBJ), reference_text("as", "Images", Collection::Body)];
+        assert!(problems(F, &json!({"plane": "Sym", "as": {"A": "B"}})).is_empty());
+        assert!(problems(F, &json!({"plane": {"point": [0, 0, 1]}})).is_empty());
+        for bad in [json!({"plane": 3}), json!({"plane": {}}), json!({"plane": {"point": [0, 0]}}), json!({"as": {"A": 1}}), json!({"as": "B"})] {
+            assert_eq!(problems(F, &bad).len(), 1, "{bad}");
+        }
+        assert_eq!(problems(F, &json!({"plane": {}})).first().map(|p| p.path.as_str()), Some("plane/point"));
+        let s = json_schema(F);
+        assert_eq!(s["properties"]["plane"]["oneOf"][0]["type"], "string");
+        assert_eq!(s["properties"]["as"]["additionalProperties"]["type"], "string");
     }
 
     /// A tuple takes its minimum to its full length of positive numbers, whole ones when asked.

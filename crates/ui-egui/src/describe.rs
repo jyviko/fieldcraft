@@ -167,6 +167,14 @@ fn scalar(f: &Field, v: &Value, units: UnitSystem) -> String {
                     .join(", ")
             },
         ),
+        Kind::NameOr { .. } => match v {
+            Value::String(s) => s.clone(),
+            _ => crate::context::value_text(v),
+        },
+        Kind::RefText(_) => v.as_object().map_or_else(
+            || crate::context::value_text(v),
+            |o| o.iter().map(|(k, x)| format!("{k}: {}", x.as_str().unwrap_or_default())).collect::<Vec<_>>().join(", "),
+        ),
         Kind::Either(options) => match v {
             Value::String(s) => options.iter().find(|o| o.key == s).map_or_else(|| s.clone(), |o| o.label.to_string()),
             Value::Object(o) => o

@@ -584,6 +584,24 @@ const FACE_CONDITION: &[Variant] = &[
     variant("periodic", "Periodic", &[]),
 ];
 
+const BOX_FACE: Field =
+    choice("", "Box face", &[("x_min", "X min"), ("x_max", "X max"), ("y_min", "Y min"), ("y_max", "Y max"), ("z_min", "Z min"), ("z_max", "Z max")])
+        .help("A face of the domain's box, at the smallest or largest X, Y or Z.")
+        .req();
+const OBSTACLE_FACE_FIELDS: &[Field] = &[
+    reference("body", "Body", C::Body).help("An obstacle body of the design.").req(),
+    text("face", "Face").help("A persistent face name of the body (e.g. F3); it also selects the face's split pieces.").req(),
+];
+const OBSTACLE_FACE: Field = group("face", "Face", OBSTACLE_FACE_FIELDS).help("The obstacle face.").req();
+const SURFACE_CONDITION: &[Variant] = &[
+    variant("wall", "Wall at rest", &[]),
+    variant(
+        "moving_wall",
+        "Moving wall",
+        &[xyz("velocity", "Velocity", D::Velocity).help("The wall's tangential velocity; the body itself does not move.").req()],
+    ),
+];
+
 const fn face(key: &'static str, label: &'static str) -> Field {
     variants(key, label, FACE_CONDITION).hint("wall")
 }
@@ -610,9 +628,16 @@ pub const FLUID_DOMAIN: &[Field] = &[
     )
     .help("The condition on each face of the box."),
     references("obstacles", "Obstacles", C::Body).help("Bodies of the design the flow goes around."),
-    json("surfaces", "Obstacle faces")
-        .help("Conditions on single obstacle faces, as JSON; walls by default.")
-        .hint("[{\"face\", \"condition\"}]; walls by default"),
+    rows(
+        "surfaces",
+        "Obstacle faces",
+        &[
+            OBSTACLE_FACE,
+            variants("condition", "Condition", SURFACE_CONDITION).help("The flow condition on that face.").req().def(r#"{"type": "wall"}"#),
+        ],
+    )
+    .help("Conditions on single obstacle faces; every other obstacle face is a wall at rest.")
+    .hint("walls by default"),
     xyz("initial_velocity", "Initial velocity", D::Velocity).help("The fluid's velocity at the start."),
     xyz("acceleration", "Acceleration", D::Acceleration).help("A body acceleration on the fluid, such as gravity."),
     positive("tolerance", "Obstacle tolerance", D::Length)
@@ -622,11 +647,10 @@ pub const FLUID_DOMAIN: &[Field] = &[
 
 pub const FLUID_BOUNDARY: &[Field] = &[
     reference("domain", "Domain", C::FluidDomain).help("The fluid domain to change.").req(),
-    json("at", "Boundary")
-        .help("A box face (x_min … z_max) or an obstacle face, as JSON.")
+    name_or("at", "Boundary", &BOX_FACE, "Obstacle face", OBSTACLE_FACE_FIELDS)
+        .help("A face of the domain's box, or a named face of an obstacle body.")
         .req()
-        .def("\"x_min\"")
-        .hint("\"x_min\" … \"z_max\", or {\"body\", \"face\"}"),
+        .def("\"x_min\""),
     variants("condition", "Condition", FACE_CONDITION).help("The flow condition on that boundary.").req().def(r#"{"type": "velocity"}"#),
 ];
 
@@ -2074,6 +2098,10 @@ mod tests {
                 }
                 match f.kind {
                     Kind::Group(g) | Kind::Rows { fields: g, .. } | Kind::Either(g) => walk(id, g, missing),
+                    Kind::NameOr { name, fields, .. } => {
+                        walk(id, std::slice::from_ref(name), missing);
+                        walk(id, fields, missing);
+                    }
                     Kind::Variants { variants, .. } => variants.iter().for_each(|v| walk(id, v.fields, missing)),
                     _ => {}
                 }

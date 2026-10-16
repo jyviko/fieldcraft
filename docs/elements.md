@@ -72,7 +72,8 @@ hex8/20/27 with first and second derivatives).
 | hex8 (full, incompatible modes), hex20 (full, reduced) | Structured and swept meshes | done |
 | wedge6 | Swept meshes from triangles, transitions | done |
 | hex8 one-point with hourglass control, nodal-pressure tet4 (explicit) | Explicit dynamics | done |
-| wedge15, pyramid5/13 | Quadratic transitions, tet–hex transition | planned (M5); wedge15 and pyramid5 shape functions done |
+| pyramid5 | Conforming tet–hex transition (a hexahedron's face to tetrahedra) | done (Bedrosian's rational functions, a collapsed 2 × 2 × 2 Gauss rule; C3D5, CPYRAM, LS-DYNA degenerate solid) |
+| wedge15, pyramid13 | Quadratic transitions | planned (M5); wedge15 shape functions done |
 | Hybrid (mixed u–p) solids | Nearly incompressible materials (rubber) | done for hex8 (constant pressure), hex20 (linear pressure) and tet10 (constant pressure), discontinuous pressure condensed, isotropic materials; tet4/wedge6 refused (they lock); continuous-pressure (Taylor–Hood) elements planned with an indefinite factorization |
 | Modified quadratic tet (tet10 for contact/plasticity) | Robust quadratic tets | planned |
 

@@ -36,7 +36,7 @@ impl Keyword {
     pub(crate) fn of(kind: ElementKind) -> Keyword {
         match kind {
             ElementKind::Hex20 => Keyword::SolidH20,
-            ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Wedge6 | ElementKind::Hex8 => Keyword::Solid,
+            ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Wedge6 | ElementKind::Pyramid5 | ElementKind::Hex8 => Keyword::Solid,
             ElementKind::Tri3 | ElementKind::Tri6 | ElementKind::Quad4 | ElementKind::Quad8 => Keyword::Shell,
             ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => Keyword::Beam,
         }
@@ -64,6 +64,8 @@ pub(crate) fn order(kind: ElementKind) -> &'static [usize] {
         ElementKind::Tet4 => &[0, 1, 2, 3, 3, 3, 3, 3],
         ElementKind::Tet10 => &[0, 1, 2, 3, 4, 5, 6, 8, 9, 7],
         ElementKind::Wedge6 => &[1, 0, 3, 4, 2, 2, 5, 5],
+        // The degenerate hexahedron: the base, then the apex four times.
+        ElementKind::Pyramid5 => &[0, 1, 2, 3, 4, 4, 4, 4],
         ElementKind::Hex8 => &[0, 1, 2, 3, 4, 5, 6, 7],
         ElementKind::Hex20 => &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
     }
@@ -95,7 +97,7 @@ pub(crate) struct Elform {
 ///
 /// Solids: hex8 2 (eight-point), reduced 1 (one-point) with hourglass control, incompatible
 /// modes −18 (eight-point enhanced strain with incompatible modes); wedges 2 (as degenerate
-/// hexahedra), reduced 15 (two-point pentahedron); tet4 10 (one point, exact for a linear
+/// hexahedra), reduced 15 (two-point pentahedron); pyramids 2 (as degenerate hexahedra); tet4 10 (one point, exact for a linear
 /// tetrahedron), hybrid 13 (nodal pressure); tet10 16; hex20 23. Shells: quad4 16 (fully
 /// integrated), reduced 2 (one-point) with hourglass control; tri3 4 (C0 triangle); quad8 23;
 /// tri6 24. Rods: 3 (truss). 2D (in the XY plane): plane stress 12, plane strain 13, both one-point
@@ -122,6 +124,8 @@ pub(crate) fn elform(kind: ElementKind, section: &SectionKind, f: Formulation, s
                 ElementKind::Hex8 => plain(2),
                 ElementKind::Wedge6 if reduced => plain(15),
                 ElementKind::Wedge6 => plain(2),
+                ElementKind::Pyramid5 if reduced => no("there is no reduced-integration form of"),
+                ElementKind::Pyramid5 => plain(2),
                 ElementKind::Tet4 => plain(10),
                 _ if reduced && kind.is_quadratic() => no("there is no reduced-integration form of"),
                 ElementKind::Tet10 => plain(16),

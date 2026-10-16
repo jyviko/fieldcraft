@@ -461,10 +461,11 @@ fn written_connectivity_has_a_positive_jacobian_in_abaqus_conventions() {
 #[test]
 fn model_faces_are_abaqus_faces() {
     // Each face's node positions (1-based, Abaqus element library, our transcription).
-    let table: [(ElementKind, &[&[usize]]); 3] = [
+    let table: [(ElementKind, &[&[usize]]); 4] = [
         (ElementKind::Hex8, &[&[1, 2, 3, 4], &[5, 8, 7, 6], &[1, 5, 6, 2], &[2, 6, 7, 3], &[3, 7, 8, 4], &[4, 8, 5, 1]]),
         (ElementKind::Tet4, &[&[1, 2, 3], &[1, 4, 2], &[2, 4, 3], &[3, 4, 1]]),
         (ElementKind::Wedge6, &[&[1, 2, 3], &[4, 6, 5], &[1, 4, 5, 2], &[2, 5, 6, 3], &[3, 6, 4, 1]]),
+        (ElementKind::Pyramid5, &[&[1, 2, 3, 4], &[1, 5, 2], &[2, 5, 3], &[3, 5, 4], &[4, 5, 1]]),
     ];
     for (kind, faces) in table {
         assert_eq!(kind.faces().len(), faces.len());

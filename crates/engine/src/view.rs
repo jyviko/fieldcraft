@@ -28,6 +28,7 @@ pub struct Palette {
     pub hex: Rgb,
     pub tet: Rgb,
     pub wedge: Rgb,
+    pub pyramid: Rgb,
     pub shell: Rgb,
     pub line_element: Rgb,
     pub mesh_edge: Rgb,
@@ -61,6 +62,7 @@ impl Palette {
         hex: Rgb(0x78, 0x9c, 0xc0),
         tet: Rgb(0x80, 0xb4, 0x8a),
         wedge: Rgb(0xc0, 0xaa, 0x78),
+        pyramid: Rgb(0xa8, 0x90, 0xc8),
         shell: Rgb(0xc0, 0x8c, 0x78),
         line_element: Rgb(0xc8, 0x8c, 0x1e),
         mesh_edge: Rgb(0x1e, 0x23, 0x2a),
@@ -100,6 +102,7 @@ impl Palette {
             ElementKind::Hex8 | ElementKind::Hex20 => self.hex,
             ElementKind::Tet4 | ElementKind::Tet10 => self.tet,
             ElementKind::Wedge6 => self.wedge,
+            ElementKind::Pyramid5 => self.pyramid,
             ElementKind::Tri3 | ElementKind::Tri6 | ElementKind::Quad4 | ElementKind::Quad8 => self.shell,
             ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => self.line_element,
         }

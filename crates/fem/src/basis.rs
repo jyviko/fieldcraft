@@ -207,6 +207,7 @@ impl Basis {
             ElementKind::Tet4 => Basis::Tet4,
             ElementKind::Tet10 => Basis::Tet10,
             ElementKind::Wedge6 => Basis::Wedge6,
+            ElementKind::Pyramid5 => Basis::Pyramid5,
             ElementKind::Hex8 => Basis::Hex8,
             ElementKind::Hex20 => Basis::Hex20,
         }

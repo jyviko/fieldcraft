@@ -47,6 +47,7 @@ use crate::{Error, Result};
 pub enum Family {
     Tetrahedron,
     Wedge,
+    Pyramid,
     Hexahedron,
     /// The 2D elements of plane and axisymmetric models ([`crate::plane`]).
     Triangle,
@@ -74,7 +75,7 @@ pub struct ElementType {
 }
 
 /// The element table.
-pub static ELEMENT_TYPES: [ElementType; 5] = [
+pub static ELEMENT_TYPES: [ElementType; 6] = [
     ElementType {
         kind: ElementKind::Tet4,
         family: Family::Tetrahedron,
@@ -109,6 +110,17 @@ pub static ELEMENT_TYPES: [ElementType; 5] = [
         incompatible_modes: false,
     },
     ElementType {
+        kind: ElementKind::Pyramid5,
+        family: Family::Pyramid,
+        nodes: 5,
+        corners: 5,
+        shape: shape::pyramid5,
+        full: Rule::Pyramid(2),
+        reduced: None,
+        mass: Rule::Pyramid(3),
+        incompatible_modes: false,
+    },
+    ElementType {
         kind: ElementKind::Hex8,
         family: Family::Hexahedron,
         nodes: 8,
@@ -137,7 +149,7 @@ pub fn element_type(kind: ElementKind) -> Result<&'static ElementType> {
     ELEMENT_TYPES
         .iter()
         .find(|t| t.kind == kind)
-        .ok_or_else(|| Error::NotSupported(format!("{} elements (the solver has tet4, tet10, wedge6, hex8 and hex20 so far)", kind.name())))
+        .ok_or_else(|| Error::NotSupported(format!("{} elements (the solver has tet4, tet10, wedge6, pyramid5, hex8 and hex20 so far)", kind.name())))
 }
 
 /// How a solid element is formulated.
@@ -730,6 +742,7 @@ pub fn extrapolation(ty: &ElementType, rule: Rule) -> Result<Extrapolation> {
     let corner_basis = |xi: [f64; 3]| match ty.family {
         Family::Tetrahedron => shape::tet4(xi),
         Family::Wedge => shape::wedge6(xi),
+        Family::Pyramid => shape::pyramid5(xi),
         Family::Hexahedron => shape::hex8(xi),
         Family::Triangle => Basis::Tri3.eval(xi),
         Family::Quadrilateral => Basis::Quad4.eval(xi),

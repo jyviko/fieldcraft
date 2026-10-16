@@ -66,6 +66,10 @@ pub enum Rule {
     /// Three triangle points times two Gauss points in ζ on the reference wedge: point k of each
     /// layer sits near corner k, the lower layer first.
     Wedge,
+    /// The collapsed (Duffy) product on the reference pyramid, n points per direction: Gauss–Legendre
+    /// in u, v ∈ [−1, 1] and w ∈ [0, 1], mapped by ξ = u(1 − w), η = v(1 − w), ζ = w with the
+    /// weight times (1 − w)², which makes the pyramid's rational functions polynomials in (u, v, w).
+    Pyramid(u8),
 }
 
 impl Rule {
@@ -125,6 +129,19 @@ impl Rule {
                 let tri = [[b, b], [a, b], [b, a]];
                 gauss_legendre(2).iter().flat_map(|&(z, wz)| tri.iter().map(move |t| Point { xi: [t[0], t[1], z], weight: wz / 6.0 })).collect()
             }
+            Rule::Pyramid(n) => {
+                let g = gauss_legendre(usize::from(n));
+                let mut out = Vec::with_capacity(g.len().pow(3));
+                for &(z, wz) in g {
+                    let (w, ww) = ((z + 1.0) / 2.0, wz / 2.0);
+                    for &(v, wv) in g {
+                        for &(u, wu) in g {
+                            out.push(Point { xi: [u * (1.0 - w), v * (1.0 - w), w], weight: wu * wv * ww * (1.0 - w) * (1.0 - w) });
+                        }
+                    }
+                }
+                out
+            }
         }
     }
 }
@@ -182,6 +199,21 @@ mod tests {
                 }
             }
         }
+        // Pyramid: ∫ ξ^a η^b ζ^c over the pyramid of base [−1, 1]² at ζ = 0 and apex (0, 0, 1)
+        // = ∫_0^1 ζ^c ∫ ξ^a ∫ η^b over the square of half-width 1 − ζ: for even a, b,
+        // 4/((a+1)(b+1)) ∫_0^1 ζ^c (1 − ζ)^(a+b+2) = 4/((a+1)(b+1)) · B(c + 1, a + b + 3).
+        let beta = |p: i32, q: i32| f(p - 1) * f(q - 1) / f(p + q - 1);
+        // Three points per direction are exact to degree 5 in w, i.e. a + b + c ≤ 3.
+        for a in 0..=3 {
+            for b in 0..=3 - a {
+                for c in 0..=3 - a - b {
+                    let exact = if a % 2 == 1 || b % 2 == 1 { 0.0 } else { 4.0 / f64::from((a + 1) * (b + 1)) * beta(c + 1, a + b + 3) };
+                    let got = integrate(Rule::Pyramid(3), a, b, c);
+                    assert!((got - exact).abs() < 1e-14, "pyramid ξ^{a} η^{b} ζ^{c}: {got} vs {exact}");
+                }
+            }
+        }
+        assert!((integrate(Rule::Pyramid(2), 0, 0, 0) - 4.0 / 3.0).abs() < 1e-15);
         // Triangle: ∫ ξ^a η^b = a! b! / (a + b + 2)!.
         for (rule, degree) in [(Rule::TriConical(3), 4), (Rule::TriConical(4), 6), (Rule::TriCentroid, 1), (Rule::Tri3, 2)] {
             for a in 0..=degree {

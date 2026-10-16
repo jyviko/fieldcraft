@@ -97,6 +97,65 @@ pub fn grid(n: [usize; 3], kind: ElementKind, map: impl Fn([f64; 3]) -> [f64; 3]
     Grid { model, param, kind }
 }
 
+/// A hex–tet transition mesh on [0, 1]³ with `n` cells per direction: the cells with x below
+/// one half are hex8, every other cell is split from its centre into six pyramids over its faces,
+/// and each pyramid whose face is not shared with a hex cell into two tetrahedra (split along
+/// the diagonal through the face's lowest node label, so neighbours agree). The mesh is
+/// conforming: hexahedra meet pyramids on whole quadrilaterals, everything else on triangles.
+pub fn transition_grid(n: [usize; 3], map: impl Fn([f64; 3]) -> [f64; 3]) -> Grid {
+    let size = n.map(|k| 2 * k + 1);
+    let label = |i: [usize; 3]| (1 + i[0] + size[0] * (i[1] + size[1] * i[2])) as u32;
+    let param_of = |i: [usize; 3]| [0, 1, 2].map(|k| i[k] as f64 / (2 * n[k]) as f64);
+    let mut model = Model::default();
+    let mut param = BTreeMap::new();
+    let mut node = |model: &mut Model, i: [usize; 3]| -> u32 {
+        let l = label(i);
+        if let std::collections::btree_map::Entry::Vacant(slot) = param.entry(l) {
+            let p = param_of(i);
+            model.set_node(l, map(p)).unwrap();
+            slot.insert(p);
+        }
+        l
+    };
+    let is_hex = |c: [isize; 3]| (0..3).all(|k| c[k] >= 0 && (c[k] as usize) < n[k]) && 2 * c[0] < n[0] as isize;
+    const CORNERS: [[usize; 3]; 8] = [[0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0], [0, 0, 2], [2, 0, 2], [2, 2, 2], [0, 2, 2]];
+    // Hex8's faces (outward) and the cell across each.
+    let across: [[isize; 3]; 6] = [[0, 0, -1], [0, 0, 1], [0, -1, 0], [1, 0, 0], [0, 1, 0], [-1, 0, 0]];
+    let mut next = 1u32;
+    for cz in 0..n[2] {
+        for cy in 0..n[1] {
+            for cx in 0..n[0] {
+                let base = [2 * cx, 2 * cy, 2 * cz];
+                let at = |d: [usize; 3]| [base[0] + d[0], base[1] + d[1], base[2] + d[2]];
+                let cell = [cx as isize, cy as isize, cz as isize];
+                let corners: Vec<u32> = CORNERS.iter().map(|c| node(&mut model, at(*c))).collect();
+                if is_hex(cell) {
+                    model.set_element(next, ElementKind::Hex8, corners).unwrap();
+                    next += 1;
+                    continue;
+                }
+                let apex = node(&mut model, at([1, 1, 1]));
+                for (face, d) in ElementKind::Hex8.faces().iter().zip(across) {
+                    // Reversed, the outward face's normal points into the cell, at the apex.
+                    let q: Vec<u32> = face.iter().rev().map(|&i| corners[i]).collect();
+                    if is_hex([cell[0] + d[0], cell[1] + d[1], cell[2] + d[2]]) {
+                        model.set_element(next, ElementKind::Pyramid5, vec![q[0], q[1], q[2], q[3], apex]).unwrap();
+                        next += 1;
+                        continue;
+                    }
+                    let lowest = (0..4).min_by_key(|&i| q[i]).unwrap();
+                    let (a, b, c, e) = if lowest % 2 == 0 { (q[0], q[1], q[2], q[3]) } else { (q[1], q[2], q[3], q[0]) };
+                    for tet in [[a, b, c, apex], [a, c, e, apex]] {
+                        model.set_element(next, ElementKind::Tet4, tet.to_vec()).unwrap();
+                        next += 1;
+                    }
+                }
+            }
+        }
+    }
+    Grid { model, param, kind: ElementKind::Pyramid5 }
+}
+
 pub fn near(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-9
 }

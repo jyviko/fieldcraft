@@ -38,7 +38,7 @@ const PART: &str = "mesh.bin";
 const NO_TAG: u32 = u32::MAX;
 
 /// The element kind codes of the format.
-pub const KIND_CODES: [(ElementKind, u8); 12] = [
+pub const KIND_CODES: [(ElementKind, u8); 13] = [
     (ElementKind::Rod2, 1),
     (ElementKind::Beam2, 2),
     (ElementKind::Tri3, 3),
@@ -51,6 +51,7 @@ pub const KIND_CODES: [(ElementKind, u8); 12] = [
     (ElementKind::Hex8, 10),
     (ElementKind::Hex20, 11),
     (ElementKind::Rod3, 12),
+    (ElementKind::Pyramid5, 13),
 ];
 
 fn kind_code(kind: ElementKind) -> u8 {

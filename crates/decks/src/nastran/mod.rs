@@ -6,7 +6,7 @@
 //! data (the entries). What the model holds becomes:
 //!
 //! - nodes and reference points: `GRID`;
-//! - solids: `CTETRA` (tet4, tet10), `CPENTA` (wedge6), `CHEXA` (hex8, hex20) with `PSOLID`;
+//! - solids: `CTETRA` (tet4, tet10), `CPENTA` (wedge6), `CPYRAM` (pyramid5), `CHEXA` (hex8, hex20) with `PSOLID`;
 //!   shells: `CTRIA3`, `CQUAD4`, `CTRIA6`, `CQUAD8` with `PSHELL`; beams: `CBEAM` with `PBEAML`;
 //!   rods: `CROD` with `PROD`. Nastran numbers a 20-node hexahedron's mid-side nodes bottom
 //!   edges, vertical edges, top edges, where the model has bottom, top, vertical
@@ -113,6 +113,7 @@ pub fn element_card(kind: ElementKind) -> &'static str {
         ElementKind::Quad8 => "CQUAD8",
         ElementKind::Tet4 | ElementKind::Tet10 => "CTETRA",
         ElementKind::Wedge6 => "CPENTA",
+        ElementKind::Pyramid5 => "CPYRAM",
         ElementKind::Hex8 | ElementKind::Hex20 => "CHEXA",
     }
 }

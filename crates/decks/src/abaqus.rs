@@ -85,6 +85,7 @@
 //! | tet4 | C3D4 (H) | | | |
 //! | tet10 | C3D10 (H) | | | |
 //! | wedge6 | C3D6 (H) | | | |
+//! | pyramid5 | C3D5 (H) | | | |
 //! | hex8 | C3D8, C3D8R, C3D8I (H) | | | |
 //! | hex20 | C3D20, C3D20R (H) | | | |
 //! | tri3, quad4 | | S3 / S3R, S4 / S4R | | |
@@ -231,11 +232,12 @@ pub fn element_type(kind: ElementKind, section: &Section) -> std::result::Result
         (S::Solid {}, _, true, true) => return Err("incompatible modes with reduced integration".into()),
         (S::Solid {}, _, _, true) => return Err(format!("incompatible modes on {} elements (hex8 only)", kind.name())),
         (S::Solid {}, K::Tet4, ..) => "C3D4",
-        (S::Solid {}, K::Tet10 | K::Wedge6, true, _) => {
+        (S::Solid {}, K::Tet10 | K::Wedge6 | K::Pyramid5, true, _) => {
             return Err(format!("reduced integration of {} elements (Abaqus has no reduced-integration variant)", kind.name()));
         }
         (S::Solid {}, K::Tet10, ..) => "C3D10",
         (S::Solid {}, K::Wedge6, ..) => "C3D6",
+        (S::Solid {}, K::Pyramid5, ..) => "C3D5",
         (S::Solid {}, K::Hex8, r, _) => ["C3D8", "C3D8R"][usize::from(r)],
         (S::Solid {}, K::Hex20, r, _) => ["C3D20", "C3D20R"][usize::from(r)],
         (S::Shell { .. }, K::Tri3, r, _) => ["S3", "S3R"][usize::from(r)],

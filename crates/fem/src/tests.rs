@@ -13,6 +13,7 @@ fn distorted(kind: ElementKind, curved: bool) -> Vec<[f64; 3]> {
     let corners: Vec<[f64; 3]> = match kind {
         ElementKind::Tet4 | ElementKind::Tet10 => vec![[0.1, -0.05, 0.0], [1.2, 0.1, 0.05], [0.2, 0.9, -0.1], [0.05, 0.15, 1.1]],
         ElementKind::Wedge6 => vec![[0.0, 0.0, 0.0], [2.1, 0.1, -0.1], [0.2, 1.3, 0.05], [0.1, -0.1, 0.9], [2.0, 0.05, 1.1], [0.15, 1.2, 1.0]],
+        ElementKind::Pyramid5 => vec![[0.0, 0.0, 0.0], [2.1, 0.1, -0.1], [2.3, 1.2, 0.05], [-0.1, 0.9, 0.1], [0.9, 0.6, 1.3]],
         _ => vec![
             [0.0, 0.0, 0.0],
             [2.1, 0.1, -0.1],
@@ -34,10 +35,11 @@ fn distorted(kind: ElementKind, curved: bool) -> Vec<[f64; 3]> {
     xyz
 }
 
-const CASES: [(ElementKind, Formulation); 10] = [
+const CASES: [(ElementKind, Formulation); 11] = [
     (ElementKind::Tet4, Formulation::Full),
     (ElementKind::Tet10, Formulation::Full),
     (ElementKind::Wedge6, Formulation::Full),
+    (ElementKind::Pyramid5, Formulation::Full),
     (ElementKind::Hex8, Formulation::Full),
     (ElementKind::Hex8, Formulation::IncompatibleModes),
     (ElementKind::Hex20, Formulation::Full),
@@ -156,6 +158,7 @@ fn extrapolation_reproduces_linear_fields_on_affine_elements() {
         let mut xyz: Vec<[f64; 3]> = match kind {
             ElementKind::Tet10 => vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]],
             ElementKind::Wedge6 => vec![[0., 0., 0.], [2., 0., 0.], [0.5, 1., 0.], [0., 0.2, 1.], [2., 0.2, 1.], [0.5, 1.2, 1.]],
+            ElementKind::Pyramid5 => vec![[0., 0., 0.], [2., 0., 0.], [2.5, 1., 0.], [0.5, 1., 0.], [1.2, 0.5, 1.]],
             _ => vec![[0., 0., 0.], [2., 0., 0.], [2.5, 1., 0.], [0.5, 1., 0.], [0., 0., 1.], [2., 0., 1.], [2.5, 1., 1.], [0.5, 1., 1.]],
         };
         let c = xyz.clone();

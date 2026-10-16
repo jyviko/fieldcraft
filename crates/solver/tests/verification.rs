@@ -77,6 +77,56 @@ fn patch_test_every_element() {
     }
 }
 
+/// The patch test and uniaxial tension on a conforming hex8–pyramid5–tet4 transition mesh
+/// ([`transition_grid`]), distorted inside: the linear field is reproduced exactly, so the three
+/// kinds are compatible across their shared faces.
+#[test]
+fn hex_pyramid_tet_transition_passes_the_patch_test() {
+    let a = [[1e-3, 2e-4, -3e-4], [5e-4, -2e-3, 1e-4], [-1e-4, 3e-4, 7e-4]];
+    let field = |x: [f64; 3]| [0, 1, 2].map(|i| (0..3).map(|j| a[i][j] * x[j]).sum::<f64>());
+    let map = |p: [f64; 3]| {
+        let b = (PI * p[0]).sin() * (PI * p[1]).sin() * (PI * p[2]).sin();
+        [p[0] + 0.08 * b, p[1] - 0.06 * b, p[2] + 0.07 * b]
+    };
+    let mut g = transition_grid([4, 2, 2], map);
+    let kinds: std::collections::BTreeSet<&str> = g.model.elements().values().map(|e| e.kind.name()).collect();
+    assert_eq!(kinds.into_iter().collect::<Vec<_>>(), ["hex8", "pyramid5", "tet4"]);
+    g.define(iso(1000.0, 0.25), None, full(), Procedure::Static {});
+    let on_boundary = |p: [f64; 3]| p.iter().any(|c| near(*c, 0.0) || near(*c, 1.0));
+    for (i, label) in g.nodes_where(on_boundary).into_iter().enumerate() {
+        let u = field(g.model.node(label).unwrap().xyz);
+        let set = format!("b{i}");
+        g.model.add_set(&set, fieldcraft_model::Set { nodes: vec![label], ..Default::default() }).unwrap();
+        g.bc(
+            &set,
+            BoundaryCondition::Displacement { target: Target::Set(set.clone()), values: [Some(u[0]), Some(u[1]), Some(u[2]), None, None, None] },
+        );
+    }
+    let r = static_solve(&g);
+    let mut worst: f64 = 0.0;
+    for (label, u) in r.nodes.iter().zip(&r.displacement) {
+        let want = field(g.model.node(*label).unwrap().xyz);
+        worst = worst.max((0..3).map(|k| (u[k] - want[k]).abs()).fold(0.0, f64::max));
+    }
+    eprintln!("transition patch: displacement error {worst:.1e}");
+    assert!(worst < 1e-12, "{worst}");
+
+    // Uniaxial tension with symmetry planes: σxx = p and ux = p x / E everywhere.
+    let (young, nu, p) = (2000.0, 0.3, 5.0);
+    let mut g = transition_grid([4, 2, 2], map);
+    g.define(iso(young, nu), None, full(), Procedure::Static {});
+    g.symmetry("x0", Symmetry::X, |q| near(q[0], 0.0));
+    g.symmetry("y0", Symmetry::Y, |q| near(q[1], 0.0));
+    g.symmetry("z0", Symmetry::Z, |q| near(q[2], 0.0));
+    g.face_set("end", |q| near(q[0], 1.0));
+    g.load("pull", Load::Pressure { set: "end".into(), magnitude: -p });
+    let r = static_solve(&g);
+    let worst = r.nodes.iter().zip(&r.displacement).map(|(l, u)| (u[0] - p * g.model.node(*l).unwrap().xyz[0] / young).abs()).fold(0.0, f64::max);
+    let s_err = r.stress.iter().map(|s| (s[0] - p).abs()).fold(0.0, f64::max);
+    eprintln!("transition tension: displacement error {worst:.1e}, stress error {s_err:.1e}");
+    assert!(worst < 1e-11 && s_err < 1e-9, "{worst} {s_err}");
+}
+
 /// Uniaxial tension by a consistent surface load on a distorted block with symmetry planes:
 /// σxx = p exactly, ux = p L / E, the lateral contraction −ν p y / E, and the reactions balance
 /// the load (the force form of the patch test, and a check of pressure loads).

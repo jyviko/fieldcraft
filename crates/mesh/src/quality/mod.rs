@@ -197,7 +197,13 @@ fn checked(kind: ElementKind, xyz: &[[f64; 3]], p: &[[f64; 3]]) -> Result<(Optio
     }
     let jacobian::Jacobian { columns, det } = jacobian::jacobian(kind, p)?;
     let floor = jacobian::admissible_floor(&columns);
-    Ok((Some(columns), jacobian::certify(det, floor)?))
+    let mut check = jacobian::certify(det, floor)?;
+    if kind == ElementKind::Pyramid5 {
+        // The determinant lives on the base's unit square; the pyramid's reference volume is 4/3
+        // of it (jacobian.rs).
+        check.volume *= 4.0 / 3.0;
+    }
+    Ok((Some(columns), check))
 }
 
 /// The exact orientation of a tetrahedron (positive for node 4 on the side of face 1-2-3's
@@ -248,6 +254,11 @@ pub fn element_quality(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<ElementQua
             let c: [[f64; 3]; 6] = corners(&p)?;
             let edges = [(0, 1), (1, 2), (2, 0), (3, 4), (4, 5), (5, 3), (0, 3), (1, 4), (2, 5)];
             vec![(Metric::ScaledJacobian, shape::wedge_scaled_jacobian(c)), (Metric::EdgeRatio, shape::edge_ratio(&c, &edges))]
+        }
+        ElementKind::Pyramid5 => {
+            let c: [[f64; 3]; 5] = corners(&p)?;
+            let edges = [(0, 1), (1, 2), (2, 3), (3, 0), (0, 4), (1, 4), (2, 4), (3, 4)];
+            vec![(Metric::ScaledJacobian, shape::pyramid_scaled_jacobian(c)), (Metric::EdgeRatio, shape::edge_ratio(&c, &edges))]
         }
         ElementKind::Hex8 | ElementKind::Hex20 => vec![(Metric::EdgeRatio, shape::edge_ratio(&corners::<8>(&p)?, &jacobian::HEX_EDGES))],
     };

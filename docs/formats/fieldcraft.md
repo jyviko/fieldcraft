@@ -61,7 +61,7 @@ tagged nodes × { u32 node, u32 tag }
 ```
 
 Element kind codes: 1 rod2, 2 beam2, 3 tri3, 4 tri6, 5 quad4, 6 quad8, 7 tet4, 8 tet10, 9 wedge6,
-10 hex8, 11 hex20. Node order is the model's (Abaqus/VTK). A tag indexes the entity list, which
+10 hex8, 11 hex20, 12 rod3, 13 pyramid5. Node order is the model's (Abaqus/VTK). A tag indexes the entity list, which
 lists each geometry entity once. Coordinates keep every bit (signed zero included).
 
 ## Reading a file safely

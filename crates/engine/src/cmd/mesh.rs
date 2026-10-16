@@ -40,7 +40,7 @@ pub const NODE_REMOVE: CommandSpec = CommandSpec {
 pub const ELEMENT_ADD: CommandSpec = CommandSpec {
     id: "mesh.element.add",
     label: "Add Element",
-    params: r#"{"label": 1, "kind": "rod2|beam2|tri3|tri6|quad4|quad8|tet4|tet10|wedge6|hex8|hex20", "nodes": [labels]} — adds or replaces"#,
+    params: r#"{"label": 1, "kind": "rod2|beam2|tri3|tri6|quad4|quad8|tet4|tet10|wedge6|pyramid5|hex8|hex20", "nodes": [labels]} — adds or replaces"#,
     form: Some(super::forms::ELEMENT_ADD),
     kind: CommandKind::Model,
     requires: &[Requirement::Nodes],

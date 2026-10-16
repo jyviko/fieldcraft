@@ -116,6 +116,13 @@ pub fn wedge6(xi: [f64; 3]) -> Shape {
     s
 }
 
+/// Five-node pyramid: base [−1, 1]² at ζ = 0, apex (0, 0, 1), the rational functions of
+/// [`crate::basis`] (Bedrosian 1992), conforming with tetrahedra on its triangles and with
+/// hexahedra on its base.
+pub fn pyramid5(xi: [f64; 3]) -> Shape {
+    crate::basis::Basis::Pyramid5.eval(xi)
+}
+
 /// Twenty-node serendipity hexahedron.
 pub fn hex20(xi: [f64; 3]) -> Shape {
     let mut s = Shape::new(20);

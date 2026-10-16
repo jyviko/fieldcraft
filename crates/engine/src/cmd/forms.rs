@@ -1384,6 +1384,7 @@ pub const ELEMENT_ADD: &[Field] = &[
             ("tet4", "tet4"),
             ("tet10", "tet10"),
             ("wedge6", "wedge6"),
+            ("pyramid5", "pyramid5"),
             ("hex8", "hex8"),
             ("hex20", "hex20"),
         ],

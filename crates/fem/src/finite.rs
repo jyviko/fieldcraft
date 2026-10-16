@@ -833,9 +833,15 @@ mod tests {
         let x8: Vec<[f64; 3]> = x20[..8].to_vec();
         let x6 = vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.1], [0., 0., 1.], [1.1, 0., 1.], [0., 1., 1.2]];
         let x4 = vec![x10[0], x10[1], x10[2], x10[3]];
-        for (kind, x) in
-            [(ElementKind::Tet4, &x4), (ElementKind::Tet10, &x10), (ElementKind::Wedge6, &x6), (ElementKind::Hex8, &x8), (ElementKind::Hex20, &x20)]
-        {
+        let x5 = vec![[0., 0., 0.], [1., 0., 0.1], [1.1, 1., 0.], [0., 1., 0.], [0.5, 0.4, 0.9]];
+        for (kind, x) in [
+            (ElementKind::Tet4, &x4),
+            (ElementKind::Tet10, &x10),
+            (ElementKind::Wedge6, &x6),
+            (ElementKind::Pyramid5, &x5),
+            (ElementKind::Hex8, &x8),
+            (ElementKind::Hex20, &x20),
+        ] {
             for m in [&svk, &neo] {
                 let solid = Solid::new(kind, x, Formulation::Full).unwrap();
                 check_tangent(&solid, m, &displacement(x.len(), 0.08));

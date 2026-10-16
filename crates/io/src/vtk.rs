@@ -38,6 +38,7 @@ pub fn cell_type(kind: ElementKind) -> u8 {
         ElementKind::Tet4 => 10,                     // VTK_TETRA
         ElementKind::Tet10 => 24,                    // VTK_QUADRATIC_TETRA
         ElementKind::Wedge6 => 13,                   // VTK_WEDGE
+        ElementKind::Pyramid5 => 14,                 // VTK_PYRAMID
         ElementKind::Hex8 => 12,                     // VTK_HEXAHEDRON
         ElementKind::Hex20 => 25,                    // VTK_QUADRATIC_HEXAHEDRON
     }
@@ -347,6 +348,7 @@ mod tests {
                 [0., 0.5, 0.5],
             ],
             ElementKind::Wedge6 => &[[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [1., 0., 1.], [0., 1., 1.]],
+            ElementKind::Pyramid5 => &[[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0.5, 0.5, 1.]],
             ElementKind::Hex8 => &[[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0., 0., 1.], [1., 0., 1.], [1., 1., 1.], [0., 1., 1.]],
             ElementKind::Hex20 => &[
                 [0., 0., 0.],
@@ -433,8 +435,8 @@ mod tests {
             assert_eq!(written, e.nodes, "{kind:?}");
         }
         let ids: Vec<u8> = ElementKind::ALL.iter().map(|&k| cell_type(k)).collect();
-        // rod2, rod3, beam2, tri3, tri6, quad4, quad8, tet4, tet10, wedge6, hex8, hex20
-        assert_eq!(ids, [3, 21, 3, 5, 22, 9, 23, 10, 24, 13, 12, 25]);
+        // rod2, rod3, beam2, tri3, tri6, quad4, quad8, tet4, tet10, wedge6, pyramid5, hex8, hex20
+        assert_eq!(ids, [3, 21, 3, 5, 22, 9, 23, 10, 24, 13, 14, 12, 25]);
     }
 
     /// The points of the one cell as written, in VTK's order.
@@ -459,7 +461,7 @@ mod tests {
 
     /// VTK's convention for each 3D cell, from its parametric coordinates: the base face's
     /// right-hand normal points to the rest of the cell (tetrahedron 0-1-2 to 3, hexahedron
-    /// 0-1-2-3 to 4-7, wedge 0-1-2 to 3-5). The signed measure is positive when the written cell
+    /// 0-1-2-3 to 4-7, wedge 0-1-2 to 3-5, pyramid 0-1-2-3 to 4). The signed measure is positive when the written cell
     /// follows it; VTK 9.7's vtkCellSizeFilter and vtkMeshQuality agree (a unit wedge written
     /// this way measures +0.5, reordered 0-2-1-3-5-4 it measures -0.5).
     #[test]
@@ -470,6 +472,7 @@ mod tests {
             (ElementKind::Hex8, 4, 4..8),
             (ElementKind::Hex20, 4, 4..8),
             (ElementKind::Wedge6, 3, 3..6),
+            (ElementKind::Pyramid5, 4, 4..5),
         ] {
             let p = cell_points(&write_vtu(&one(kind), &[], &[], Encoding::Ascii).unwrap());
             let b = &p[..base];

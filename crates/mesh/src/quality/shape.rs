@@ -184,6 +184,17 @@ pub(crate) fn wedge_scaled_jacobian(p: [P; 6]) -> f64 {
         .fold(f64::INFINITY, |m, &x| m.min(x))
 }
 
+/// Pyramid scaled Jacobian: the smallest determinant of the unit edge vectors at the four base
+/// corners (to the next and previous base corners and to the apex, right-handed), divided by its
+/// value √2/2 on the pyramid whose edges are all equal, so that pyramid scores 1.
+pub(crate) fn pyramid_scaled_jacobian(p: [P; 5]) -> f64 {
+    let worst = [(0, 1, 3), (1, 2, 0), (2, 3, 1), (3, 0, 2)]
+        .map(|(o, a, b)| corner_det(sub(p[a], p[o]), sub(p[b], p[o]), sub(p[4], p[o])))
+        .iter()
+        .fold(f64::INFINITY, |m, &x| m.min(x));
+    (worst / std::f64::consts::FRAC_1_SQRT_2).clamp(-1.0, 1.0)
+}
+
 /// Scaled Jacobian and Knupp shape of one Jacobian matrix `[a b c]` (hexahedron corners and centre).
 pub(crate) fn jacobian_metrics(a: P, b: P, c: P) -> (f64, f64) {
     let d = det(a, b, c);

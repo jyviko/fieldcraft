@@ -19,6 +19,13 @@
 //!   lies on the side of face 1-2-3 that its right-hand normal points to.
 //! - wedge6: triangle 1-2-3, then 4-5-6 above it; positive when 4-5-6 lies on the side of 1-2-3's
 //!   right-hand normal.
+//! - pyramid5: base 1-2-3-4, then the apex 5 on the side of its right-hand normal. Its map is
+//!   rational in the pyramid's coordinates (ξ, η, ζ), but its Jacobian determinant is not: with
+//!   the base's bilinear map `B(s, t)` on the unit square (ξ = (2s − 1)(1 − ζ), likewise η),
+//!   the columns are `∂x/∂ξ = ½ B_s`, `∂x/∂η = ½ B_t` and `∂x/∂ζ = x₅ − B + (s − ½) B_s +
+//!   (t − ½) B_t`, all bilinear in (s, t) and constant along each line to the apex, so the
+//!   determinant is a polynomial of degree (3, 3) on the square and the element's volume is
+//!   4/3 of its integral there.
 //! - hex8/hex20: face 1-2-3-4, then 5-6-7-8 above it; mid-side nodes 9–12 on the edges of 1-2-3-4,
 //!   13–16 on those of 5-6-7-8, 17–20 on edges 1-5, 2-6, 3-7, 4-8.
 
@@ -213,12 +220,43 @@ fn geometry(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<[Bernstein; 3]> {
     Ok(g)
 }
 
+/// The pyramid's Jacobian columns (see the module docs) as bilinear polynomials on the unit
+/// square of its base.
+fn pyramid_columns(xyz: &[[f64; 3]]) -> Result<[[Bernstein; 3]; 3]> {
+    let node = |i: usize| xyz.get(i).copied().ok_or_else(|| Error::Invalid("pyramid5 needs 5 nodes".into()));
+    let [p0, p1, p2, p3, apex] = [node(0)?, node(1)?, node(2)?, node(3)?, node(4)?];
+    let square = [Factor { dim: 1, deg: 1 }, Factor { dim: 1, deg: 1 }];
+    let zero = Bernstein::zero(&square)?;
+    let mut columns = [[zero.clone(), zero.clone(), zero.clone()], [zero.clone(), zero.clone(), zero.clone()], [zero.clone(), zero.clone(), zero]];
+    // A bilinear polynomial's coefficients are its values at the square's corners.
+    for (s, t) in [(0usize, 0usize), (1, 0), (1, 1), (0, 1)] {
+        let (sf, tf) = (s as f64, t as f64);
+        let base = |k: usize| p0[k] * (1.0 - sf) * (1.0 - tf) + p1[k] * sf * (1.0 - tf) + p2[k] * sf * tf + p3[k] * (1.0 - sf) * tf;
+        let b_s = |k: usize| (p1[k] - p0[k]) * (1.0 - tf) + (p2[k] - p3[k]) * tf;
+        let b_t = |k: usize| (p3[k] - p0[k]) * (1.0 - sf) + (p2[k] - p1[k]) * sf;
+        for (k, top) in apex.iter().enumerate() {
+            let values = [0.5 * b_s(k), 0.5 * b_t(k), top - base(k) + (sf - 0.5) * b_s(k) + (tf - 0.5) * b_t(k)];
+            for (column, v) in columns.iter_mut().zip(values) {
+                if let Some(c) = column.get_mut(k) {
+                    c.set([s, t, 0], v);
+                }
+            }
+        }
+    }
+    Ok(columns)
+}
+
 /// The Jacobian of a solid element whose node coordinates are already checked.
 pub(crate) fn jacobian(kind: ElementKind, xyz: &[[f64; 3]]) -> Result<Jacobian> {
-    let (_, dirs) = domain(kind)?;
-    let g = geometry(kind, xyz)?;
-    let column = |(f, k): (usize, usize)| -> Result<[Bernstein; 3]> { Ok([g[0].derivative(f, k)?, g[1].derivative(f, k)?, g[2].derivative(f, k)?]) };
-    let columns = [column(dirs[0])?, column(dirs[1])?, column(dirs[2])?];
+    let columns = if kind == ElementKind::Pyramid5 {
+        pyramid_columns(xyz)?
+    } else {
+        let (_, dirs) = domain(kind)?;
+        let g = geometry(kind, xyz)?;
+        let column =
+            |(f, k): (usize, usize)| -> Result<[Bernstein; 3]> { Ok([g[0].derivative(f, k)?, g[1].derivative(f, k)?, g[2].derivative(f, k)?]) };
+        [column(dirs[0])?, column(dirs[1])?, column(dirs[2])?]
+    };
     let [a, b, c] = &columns;
     // det [a b c] = a · (b × c)
     let cross = |i: usize, j: usize| -> Result<Bernstein> { b[i].mul(&c[j])?.axpy(-1.0, &b[j].mul(&c[i])?) };

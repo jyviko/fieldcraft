@@ -76,7 +76,8 @@ rational pyramid, 2 for the quadratic ones).
 Evaluation at a natural point `xi: [f64; 3]` (unused coordinates are zero):
 
 - `eval(xi) -> Shape`: values `n` and first derivatives `dn[i] = ∂Nᵢ/∂(ξ, η, ζ)`. tet4, tet10,
-  wedge6, hex8, hex20 use the hand-written functions of `shape.rs` (the solid kernels' path).
+  wedge6, hex8, hex20 use the hand-written functions of `shape.rs` (the solid kernels' path);
+  the solid kernel's pyramid5 uses this module's.
 - `eval2(xi) -> Shape2`: adds `d2n[i][a][b] = ∂²Nᵢ/∂ξₐ∂ξ_b`, from second-order forward-mode
   automatic differentiation of the same formulas (`jet::Jet`): exact to round-off.
 - `gradients(&shape, xyz) -> Gradients`: physical `dx[i] = ∇ₓNᵢ = J⁻¹ ∇_ξNᵢ` and `det J`, with

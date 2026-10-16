@@ -207,6 +207,34 @@ fn wedges() {
 }
 
 #[test]
+fn pyramids() {
+    let h = 0.5_f64.sqrt();
+    let regular = [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0.5, 0.5, h]];
+    let q = element_quality(ElementKind::Pyramid5, &regular).unwrap();
+    assert!(close(q.size, h / 3.0), "{}", q.size);
+    assert_eq!(q.validity(), Some(Validity::Valid));
+    assert!(close(metric(&q, Metric::ScaledJacobian), 1.0));
+    assert!(close(metric(&q, Metric::EdgeRatio), 1.0));
+
+    // A sheared apex keeps the volume (base × height / 3) and stays valid while it is over the base.
+    let sheared = [[0., 0., 0.], [2., 0., 0.], [2., 1., 0.], [0., 1., 0.], [1.7, 0.2, 1.0]];
+    let q = element_quality(ElementKind::Pyramid5, &sheared).unwrap();
+    assert!(close(q.size, 2.0 / 3.0), "{}", q.size);
+    assert_eq!(q.validity(), Some(Validity::Valid));
+
+    // Over a planar base the map is valid wherever the apex is above the base's plane, even past
+    // an edge (an oblique pyramid). A bow-tie base folds it; an apex below turns it inside out.
+    let oblique = [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [1.6, 0.5, 0.3]];
+    assert_eq!(element_quality(ElementKind::Pyramid5, &oblique).unwrap().validity(), Some(Validity::Valid));
+    let bow_tie = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.], [0.5, 0.5, h]];
+    assert_eq!(element_quality(ElementKind::Pyramid5, &bow_tie).unwrap().validity(), Some(Validity::Invalid));
+    let below: Vec<[f64; 3]> = regular.iter().map(|p| [p[0], p[1], -p[2]]).collect();
+    let q = element_quality(ElementKind::Pyramid5, &below).unwrap();
+    assert!(close(q.size, -h / 3.0));
+    assert_eq!(q.validity(), Some(Validity::Invalid));
+}
+
+#[test]
 fn shells() {
     let h = 3.0_f64.sqrt() / 2.0;
     let q = element_quality(ElementKind::Tri3, &[[0., 0., 0.], [1., 0., 0.], [0.5, h, 0.]]).unwrap();

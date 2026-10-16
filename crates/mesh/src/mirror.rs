@@ -23,6 +23,8 @@ pub fn reflected_order(kind: ElementKind) -> Option<&'static [usize]> {
         ElementKind::Tet10 => &[0, 2, 1, 3, 6, 5, 4, 7, 9, 8],
         // Each triangle's last two corners swap.
         ElementKind::Wedge6 => &[0, 2, 1, 3, 5, 4],
+        // The base's corners in reverse cyclic order; the apex stays.
+        ElementKind::Pyramid5 => &[0, 3, 2, 1, 4],
         // Each quadrilateral's corners in reverse cyclic order from its first.
         ElementKind::Hex8 => &[0, 3, 2, 1, 4, 7, 6, 5],
         ElementKind::Hex20 => &[0, 3, 2, 1, 4, 7, 6, 5, 11, 10, 9, 8, 15, 14, 13, 12, 16, 19, 18, 17],

@@ -17,6 +17,7 @@ pub struct Node {
 /// - rod3: the two ends, then the middle node;
 /// - tet10: mid-side nodes 5–10 on edges 1-2, 2-3, 3-1, 1-4, 2-4, 3-4;
 /// - wedge6: triangle 1-2-3, then 4-5-6 on the side its right-hand normal points to;
+/// - pyramid5: base 1-2-3-4, then the apex 5 on the side its right-hand normal points to;
 /// - hex8/hex20: face 1-2-3-4, then 5-6-7-8 above it; hex20's mid-side nodes 9–12 lie on the
 ///   edges of 1-2-3-4, 13–16 on those of 5-6-7-8, and 17–20 on edges 1-5, 2-6, 3-7, 4-8.
 ///
@@ -47,6 +48,9 @@ pub enum ElementKind {
     Tet10,
     /// Six-node wedge (pentahedron).
     Wedge6,
+    /// Five-node pyramid: a quadrilateral base and an apex; the transition between a hexahedron's
+    /// face and tetrahedra.
+    Pyramid5,
     /// Eight-node hexahedron.
     Hex8,
     /// Twenty-node hexahedron.
@@ -54,7 +58,7 @@ pub enum ElementKind {
 }
 
 impl ElementKind {
-    pub const ALL: [ElementKind; 12] = [
+    pub const ALL: [ElementKind; 13] = [
         ElementKind::Rod2,
         ElementKind::Rod3,
         ElementKind::Beam2,
@@ -65,6 +69,7 @@ impl ElementKind {
         ElementKind::Tet4,
         ElementKind::Tet10,
         ElementKind::Wedge6,
+        ElementKind::Pyramid5,
         ElementKind::Hex8,
         ElementKind::Hex20,
     ];
@@ -74,6 +79,7 @@ impl ElementKind {
             ElementKind::Rod2 | ElementKind::Beam2 => 2,
             ElementKind::Rod3 | ElementKind::Tri3 => 3,
             ElementKind::Quad4 | ElementKind::Tet4 => 4,
+            ElementKind::Pyramid5 => 5,
             ElementKind::Tri6 | ElementKind::Wedge6 => 6,
             ElementKind::Quad8 | ElementKind::Hex8 => 8,
             ElementKind::Tet10 => 10,
@@ -87,6 +93,7 @@ impl ElementKind {
             ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => 2,
             ElementKind::Tri3 | ElementKind::Tri6 => 3,
             ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Tet4 | ElementKind::Tet10 => 4,
+            ElementKind::Pyramid5 => 5,
             ElementKind::Wedge6 => 6,
             ElementKind::Hex8 | ElementKind::Hex20 => 8,
         }
@@ -102,7 +109,7 @@ impl ElementKind {
         match self {
             ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => 1,
             ElementKind::Tri3 | ElementKind::Tri6 | ElementKind::Quad4 | ElementKind::Quad8 => 2,
-            ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Wedge6 | ElementKind::Hex8 | ElementKind::Hex20 => 3,
+            ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Wedge6 | ElementKind::Pyramid5 | ElementKind::Hex8 | ElementKind::Hex20 => 3,
         }
     }
 
@@ -119,6 +126,7 @@ impl ElementKind {
             ElementKind::Tet4 => "tet4",
             ElementKind::Tet10 => "tet10",
             ElementKind::Wedge6 => "wedge6",
+            ElementKind::Pyramid5 => "pyramid5",
             ElementKind::Hex8 => "hex8",
             ElementKind::Hex20 => "hex20",
         }
@@ -135,7 +143,8 @@ impl ElementKind {
     ///   normal points out of the element. Hexahedra: 1 is the face of nodes 1-2-3-4, 2 the face
     ///   of 5-6-7-8, then the four sides along edges 1-2, 2-3, 3-4 and 4-1. Tetrahedra: 1 is
     ///   1-2-3, then the faces opposite node 3, node 1 and node 2. Wedges: the two triangles, then
-    ///   the sides along edges 1-2, 2-3 and 3-1.
+    ///   the sides along edges 1-2, 2-3 and 3-1. Pyramids: 1 is the base 1-2-3-4, then the
+    ///   triangles on edges 1-2, 2-3, 3-4 and 4-1 with the apex 5.
     /// - Shells: face 1 is the side the element's right-hand normal points to, face 2 the other.
     /// - Line elements have none.
     pub fn faces(self) -> &'static [&'static [usize]] {
@@ -148,6 +157,7 @@ impl ElementKind {
             ElementKind::Tet4 => &[&[0, 2, 1], &[0, 1, 3], &[1, 2, 3], &[0, 3, 2]],
             ElementKind::Tet10 => &[&[0, 2, 1, 6, 5, 4], &[0, 1, 3, 4, 8, 7], &[1, 2, 3, 5, 9, 8], &[0, 3, 2, 7, 9, 6]],
             ElementKind::Wedge6 => &[&[0, 2, 1], &[3, 4, 5], &[0, 1, 4, 3], &[1, 2, 5, 4], &[2, 0, 3, 5]],
+            ElementKind::Pyramid5 => &[&[0, 3, 2, 1], &[0, 1, 4], &[1, 2, 4], &[2, 3, 4], &[3, 0, 4]],
             ElementKind::Hex8 => &[&[0, 3, 2, 1], &[4, 5, 6, 7], &[0, 1, 5, 4], &[1, 2, 6, 5], &[2, 3, 7, 6], &[3, 0, 4, 7]],
             ElementKind::Hex20 => &[
                 &[0, 3, 2, 1, 11, 10, 9, 8],
@@ -174,6 +184,7 @@ impl ElementKind {
             ElementKind::Tet4 => &[&[0, 1], &[1, 2], &[2, 0], &[0, 3], &[1, 3], &[2, 3]],
             ElementKind::Tet10 => &[&[0, 1, 4], &[1, 2, 5], &[2, 0, 6], &[0, 3, 7], &[1, 3, 8], &[2, 3, 9]],
             ElementKind::Wedge6 => &[&[0, 1], &[1, 2], &[2, 0], &[3, 4], &[4, 5], &[5, 3], &[0, 3], &[1, 4], &[2, 5]],
+            ElementKind::Pyramid5 => &[&[0, 1], &[1, 2], &[2, 3], &[3, 0], &[0, 4], &[1, 4], &[2, 4], &[3, 4]],
             ElementKind::Hex8 => &[&[0, 1], &[1, 2], &[2, 3], &[3, 0], &[4, 5], &[5, 6], &[6, 7], &[7, 4], &[0, 4], &[1, 5], &[2, 6], &[3, 7]],
             ElementKind::Hex20 => &[
                 &[0, 1, 8],
@@ -539,6 +550,7 @@ mod tests {
             ElementKind::Quad4 | ElementKind::Quad8 => vec![[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]],
             ElementKind::Tet4 | ElementKind::Tet10 => vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]],
             ElementKind::Wedge6 => vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [1., 0., 1.], [0., 1., 1.]],
+            ElementKind::Pyramid5 => vec![[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0.5, 0.5, 1.]],
             ElementKind::Hex8 | ElementKind::Hex20 => {
                 vec![[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0., 0., 1.], [1., 0., 1.], [1., 1., 1.], [0., 1., 1.]]
             }
@@ -589,6 +601,7 @@ mod tests {
         assert_eq!(ElementKind::Hex8.faces().len(), 6);
         assert_eq!(ElementKind::Tet4.faces().len(), 4);
         assert_eq!(ElementKind::Wedge6.faces().len(), 5);
+        assert_eq!(ElementKind::Pyramid5.faces().len(), 5);
         assert_eq!(ElementKind::Hex20.edges().len(), 12);
         for kind in ElementKind::ALL {
             let mid_sides = kind.edges().iter().filter(|e| e.len() == 3).count();

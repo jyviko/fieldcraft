@@ -57,6 +57,7 @@ pub struct Tokens {
     pub hex: Color32,
     pub tet: Color32,
     pub wedge: Color32,
+    pub pyramid: Color32,
     pub shell: Color32,
     pub line_element: Color32,
     /// Element edges (the mesh wireframe).
@@ -144,6 +145,7 @@ impl Tokens {
             hex: Color32::from_rgb(0x78, 0x9c, 0xc0),
             tet: Color32::from_rgb(0x80, 0xb4, 0x8a),
             wedge: Color32::from_rgb(0xc0, 0xaa, 0x78),
+            pyramid: Color32::from_rgb(0xa8, 0x90, 0xc8),
             shell: Color32::from_rgb(0xc0, 0x8c, 0x78),
             line_element: Color32::from_rgb(0xc8, 0x8c, 0x1e),
             mesh_edge: Color32::from_rgb(0x1e, 0x23, 0x2a),
@@ -210,6 +212,7 @@ impl Tokens {
         t.hex = Color32::from_rgb(0x82, 0xa6, 0xc8);
         t.tet = Color32::from_rgb(0x8c, 0xc0, 0x96);
         t.wedge = Color32::from_rgb(0xc8, 0xb4, 0x82);
+        t.pyramid = Color32::from_rgb(0xb4, 0x9c, 0xd2);
         t.shell = Color32::from_rgb(0xc8, 0x96, 0x82);
         t.line_element = Color32::from_rgb(0xf0, 0xc0, 0x50);
         t.mesh_edge = Color32::from_rgb(0x14, 0x18, 0x1e);
@@ -265,6 +268,7 @@ impl Tokens {
             hex: rgb(self.hex),
             tet: rgb(self.tet),
             wedge: rgb(self.wedge),
+            pyramid: rgb(self.pyramid),
             shell: rgb(self.shell),
             line_element: rgb(self.line_element),
             mesh_edge: rgb(self.mesh_edge),
@@ -287,6 +291,7 @@ impl Tokens {
             ElementKind::Hex8 | ElementKind::Hex20 => self.hex,
             ElementKind::Tet4 | ElementKind::Tet10 => self.tet,
             ElementKind::Wedge6 => self.wedge,
+            ElementKind::Pyramid5 => self.pyramid,
             ElementKind::Tri3 | ElementKind::Tri6 | ElementKind::Quad4 | ElementKind::Quad8 => self.shell,
             ElementKind::Rod2 | ElementKind::Rod3 | ElementKind::Beam2 => self.line_element,
         }

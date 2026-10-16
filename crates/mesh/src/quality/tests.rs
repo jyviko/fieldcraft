@@ -309,3 +309,29 @@ fn report_and_gate() {
     assert!(validity_gate(&model, &GateOptions { expected_volume: Some(f64::NAN), ..Default::default() }).is_err());
     assert!(enclosed_volume(&c, &[[0, 1, 99]]).is_err());
 }
+
+/// A cube passes; a sheared hex fails a scaled-Jacobian floor above its value and passes one
+/// below; a mirrored hex is marked whatever the limits; worst first.
+#[test]
+fn marks_elements_below_their_limits() {
+    let sheared: Vec<[f64; 3]> = UNIT_CUBE.iter().map(|c| [c[0] + 0.75 * c[2], c[1], c[2]]).collect();
+    let mirrored: Vec<[f64; 3]> = UNIT_CUBE.iter().map(|c| [-c[0], c[1], c[2]]).collect();
+    let m = model_of(&[(ElementKind::Hex8, UNIT_CUBE.to_vec()), (ElementKind::Hex8, sheared), (ElementKind::Hex8, mirrored)]);
+    let (measured, marked) = mark_elements(&m, None, &[(Metric::ScaledJacobian, 0.9)]).unwrap();
+    assert_eq!(measured, 3);
+    assert_eq!(marked.iter().map(|k| k.label).collect::<Vec<_>>(), [3, 2]);
+    assert!(marked[0].is_invalid());
+    let (f, v, limit) = marked[1].failed[0];
+    assert_eq!((f, limit), (Metric::ScaledJacobian, 0.9));
+    assert!(close(v, 0.8));
+    assert!(close(marked[1].centroid[0], 0.5 + 0.375) && close(marked[1].centroid[2], 0.5));
+    let (_, loose) = mark_elements(&m, None, &[(Metric::ScaledJacobian, 0.5), (Metric::EdgeRatio, 10.0)]).unwrap();
+    assert_eq!(loose.iter().map(|k| k.label).collect::<Vec<_>>(), [3]);
+    // An edge ratio ceiling below the sheared hex's (its slanted edges are 1.25 long).
+    let (_, edges) = mark_elements(&m, Some(&[2]), &[(Metric::EdgeRatio, 1.2)]).unwrap();
+    assert_eq!(edges.len(), 1);
+    assert!(mark_elements(&m, None, &[(Metric::ScaledJacobian, f64::NAN)]).is_err());
+    assert!(mark_elements(&m, Some(&[9]), &[]).is_err());
+    assert_eq!(Metric::parse("min_dihedral"), Some(Metric::MinDihedral));
+    assert!(Metric::ALL.iter().all(|m| Metric::parse(m.name()) == Some(*m)));
+}

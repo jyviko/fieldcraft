@@ -144,6 +144,71 @@ pub fn quality_report(model: &Model, labels: Option<&[u32]>, bins: usize) -> Res
     Ok(report)
 }
 
+/// An element that fails a quality limit, or is not proven valid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Marked {
+    pub label: u32,
+    pub kind: ElementKind,
+    /// The mean of its nodes.
+    pub centroid: [f64; 3],
+    /// The certified validity, for solids.
+    pub validity: Option<Validity>,
+    /// Each limit it fails: the metric, its value and the limit.
+    pub failed: Vec<(Metric, f64, f64)>,
+    /// Its scaled Jacobian, when it has one (the worst-first order).
+    pub scaled_jacobian: Option<f64>,
+}
+
+impl Marked {
+    /// Not proven valid (inverted or undetermined).
+    pub fn is_invalid(&self) -> bool {
+        matches!(self.validity, Some(Validity::Invalid | Validity::Undetermined))
+    }
+}
+
+/// The elements (all, or the given labels) that fail a limit: a value below the limit of a
+/// metric where higher is better ([`Metric::higher_is_better`]), above it otherwise, or no value
+/// (NaN). Solids not proven valid are always marked. A metric an element does not have does not
+/// apply to it. Returns how many elements were measured and the marked ones, worst first: not
+/// valid, then by scaled Jacobian (lowest first; none counts as 1), then by label.
+pub fn mark_elements(model: &Model, labels: Option<&[u32]>, limits: &[(Metric, f64)]) -> Result<(usize, Vec<Marked>)> {
+    if let Some((m, v)) = limits.iter().find(|(_, v)| !v.is_finite()) {
+        return Err(Error::Invalid(format!("the limit of {} must be a finite number, got {v}", m.name())));
+    }
+    let mut measured = 0;
+    let mut marked = Vec::new();
+    for (label, element) in selection(model, labels)? {
+        if !is_measured(element.kind) {
+            continue;
+        }
+        let xyz = coordinates(model, label, element)?;
+        let q = element_quality(element.kind, &xyz)?;
+        measured += 1;
+        let failed: Vec<(Metric, f64, f64)> = limits
+            .iter()
+            .filter_map(|&(metric, limit)| {
+                let v = q.get(metric)?;
+                let fails = v.is_nan() || if metric.higher_is_better() { v < limit } else { v > limit };
+                fails.then_some((metric, v, limit))
+            })
+            .collect();
+        let validity = q.validity();
+        let invalid = matches!(validity, Some(Validity::Invalid | Validity::Undetermined));
+        if failed.is_empty() && !invalid {
+            continue;
+        }
+        let n = xyz.len().max(1) as f64;
+        let centroid = [0, 1, 2].map(|k| xyz.iter().map(|p| p[k]).sum::<f64>() / n);
+        marked.push(Marked { label, kind: element.kind, centroid, validity, failed, scaled_jacobian: q.get(Metric::ScaledJacobian) });
+    }
+    let key = |m: &Marked| (!m.is_invalid(), m.scaled_jacobian.filter(|v| !v.is_nan()).unwrap_or(1.0));
+    marked.sort_by(|a, b| {
+        let (ka, kb) = (key(a), key(b));
+        ka.0.cmp(&kb.0).then(ka.1.total_cmp(&kb.1)).then(a.label.cmp(&b.label))
+    });
+    Ok((measured, marked))
+}
+
 /// What the validity gate checks besides element validity.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GateOptions {

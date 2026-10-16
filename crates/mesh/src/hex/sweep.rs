@@ -33,7 +33,7 @@ use super::region;
 use super::{Ctx, Raw, project_to_face, project_to_faces};
 use crate::quad::transfinite_grid;
 use crate::size::ideal_divisions;
-use crate::vec3::{P, sub};
+use crate::vec3::{P, dot, sub};
 use crate::{Error, Result};
 
 /// The most source faces tried.
@@ -118,7 +118,10 @@ fn topology(brep: &Brep, s: usize) -> std::result::Result<Topology, String> {
                     run.push((e, fwd));
                     k += 1;
                 }
-                ring.push(link(brep, f, &run)?);
+                ring.push(link(brep, f, &run).map_err(|e| match cap(brep, s, f) {
+                    Some(why) => why,
+                    None => e,
+                })?);
             }
             used.extend(ring.iter().map(|l| l.face));
             front = ring.iter().flat_map(|l| l.top.iter().map(move |&(e, fwd)| (e, fwd, l.face))).collect();
@@ -138,6 +141,21 @@ fn topology(brep: &Brep, s: usize) -> std::result::Result<Topology, String> {
         return Err("the source and target have different numbers of loops".into());
     }
     Ok(Topology { source: s, target, rings })
+}
+
+/// Why face `f`, reached from a front swept from source `s`, cannot be a linking face when it is
+/// a plane parallel to the source: a cap that only part of the ring reaches. The body then ends
+/// at several levels (a step, a boss, a pocket floor), which no one-to-one sweep takes; saying so
+/// names the reason where the linking-face split would only report the symptom (#444).
+fn cap(brep: &Brep, s: usize, f: usize) -> Option<String> {
+    let (_, ns) = brep.faces.get(s)?.plane?;
+    let (_, nf) = brep.faces.get(f)?.plane?;
+    (dot(ns, nf).abs() > 1.0 - 1e-9).then(|| {
+        format!(
+            "face {} is parallel to the source and only part of the ring reaches it: the body ends at more than one level (a step, a boss or a pocket), and a one-to-one sweep has one target face; method `extrude` meshes such bodies level by level",
+            brep.face_tag(f)
+        )
+    })
 }
 
 /// Whether the front's edges are exactly one loop of face `t`.

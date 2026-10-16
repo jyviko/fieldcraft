@@ -821,6 +821,38 @@ mod tests {
         }
     }
 
+    /// The one-to-one sweep and the crank (#444). The arm's profile extruded alone is a
+    /// one-to-one sweep (one source, one target) and sweeps all-hex as well as extrude does. The
+    /// crank itself ends at several levels (pocket floor at 8 mm, arm 16, pedal boss 20, spindle
+    /// boss 22), so no one-to-one sweep takes it: the sweep says so, naming a cap only part of a
+    /// ring reaches, where it reported a "linking face with no top side"; extrude meshes it.
+    #[test]
+    fn the_sweep_takes_the_arm_profile_and_names_the_crank_levels() {
+        let session = |script: &str| {
+            let bytes = fieldcraft_geometry::script_design(script).unwrap();
+            let (dir, path) = crate::tests::design_file(&bytes);
+            let mut s = Session::default();
+            s.execute("geometry.open", &json!({"path": path})).unwrap();
+            (dir, s)
+        };
+        let quality = |s: &mut Session, method: &str| -> crate::Result<f64> {
+            let r = s.execute("mesh.hex.generate", &json!({"body": "CrankArm", "size": 3, "method": method}))?;
+            assert_eq!(r["bodies"][0]["method"], method, "{r}");
+            Ok(r["bodies"][0]["quality"]["min_scaled_jacobian"].as_f64().unwrap())
+        };
+        // The script up to the arm's extrusion: the profile alone.
+        let end = CRANK_ARM.find("{\"command\": \"solid.cylinder\"").unwrap();
+        let profile = format!("{}]}}", CRANK_ARM[..end].trim_end().trim_end_matches(','));
+        let (_dir, mut s) = session(&profile);
+        let (sweep, extrude) = (quality(&mut s, "sweep").unwrap(), quality(&mut s, "extrude").unwrap());
+        assert!(sweep > 0.3 && sweep > 0.95 * extrude, "sweep {sweep}, extrude {extrude}");
+
+        let (_dir, mut s) = session(CRANK_ARM);
+        let e = quality(&mut s, "sweep").unwrap_err().to_string();
+        assert!(e.contains("is parallel to the source and only part of the ring reaches it") && e.contains("method `extrude`"), "{e}");
+        assert!(quality(&mut s, "extrude").unwrap() > 0.35);
+    }
+
     /// `file.sample NAME`, checked clean: ready, no errors or warnings.
     fn open(name: &str) -> Session {
         let mut s = Session::default();

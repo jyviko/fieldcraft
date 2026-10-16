@@ -12,7 +12,7 @@ use serde::Serialize;
 use fieldcraft_parallel as parallel;
 
 use crate::cholesky::{Factor, FactorError, UpperColumns};
-use crate::constraints::{Budget, Reduction, coupling_rows};
+use crate::constraints::{Budget, Reduction, coupling_rows, symmetry_rows};
 use crate::eigen::{Operator, Wanted, lanczos};
 use crate::ldlt::{Kind, Symmetric};
 use crate::ordering::nested_dissection;
@@ -342,6 +342,13 @@ pub(crate) struct Setup<'a> {
 pub(crate) fn reduction(s: &Setup, values: bool, order: &[usize], budget: Budget, warnings: &mut Vec<String>) -> Result<Reduction> {
     let mut rows = coupling_rows(s.model, s.resolved, s.mesh)?;
     rows.extend(crate::tie::rows(s.model, s.resolved, s.mesh, warnings)?);
+    // Reference point directions exist when a coupling, tie or discrete element uses them.
+    let used: std::collections::BTreeSet<usize> = rows.iter().flat_map(|r| r.terms.iter().map(|t| t.0)).chain(s.mesh.discrete.dofs()).collect();
+    let node_dofs = s.mesh.layout.node_dofs();
+    // Boundary conditions first, as the elimination takes them.
+    let mut symmetry = symmetry_rows(s.model, s.resolved, s.mesh, s.step, |d| d < node_dofs || used.contains(&d))?;
+    symmetry.append(&mut rows);
+    let rows = symmetry;
     Reduction::new(
         &s.mesh.layout,
         s.mesh.discrete.dofs(),

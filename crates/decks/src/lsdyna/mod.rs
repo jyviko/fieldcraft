@@ -40,7 +40,8 @@
 //!   LS-DYNA's defaults; a step without nonlinear geometry and hyperelastic materials in nonlinear
 //!   steps are refused); boundary conditions
 //!   as `*BOUNDARY_SPC_*_ID` (named) and `*BOUNDARY_PRESCRIBED_MOTION_*_ID` for non-zero
-//!   displacements; forces, moments and tractions as `*LOAD_NODE_SET`/`_POINT` from the
+//!   displacements, a symmetry plane not normal to X, Y or Z as `*BOUNDARY_SPC_*_ID` in a
+//!   `*DEFINE_COORDINATE_SYSTEM` whose x axis is the plane's normal; forces, moments and tractions as `*LOAD_NODE_SET`/`_POINT` from the
 //!   resolved nodal values; pressure as `*LOAD_SEGMENT_SET`; gravity as `*LOAD_BODY_X/Y/Z`
 //!   (with `*LOAD_BODY_PARTS` when it acts on a set); output as `*DATABASE_BINARY_D3PLOT`,
 //!   `*DATABASE_SPCFORC` and `*DATABASE_EXTENT_BINARY`.
@@ -1048,6 +1049,24 @@ fn boundary_condition(
             (r.reference_point_nodes.get(p).copied().ok_or_else(|| broken(format!("boundary condition `{name}`: reference point `{p}`")))?, "NODE")
         }
     };
+    // A symmetry plane not normal to an axis: held in a coordinate system whose x axis is its
+    // normal and whose xy plane holds its first in-plane axis (translation x, rotations y and z).
+    if let BoundaryCondition::Symmetry { plane, .. } = bc
+        && let (Some(n), Some([t1, _])) = (plane.inclined(), plane.in_plane())
+    {
+        *constraint_id = constraint_id.saturating_add(1);
+        let cid = *constraint_id;
+        d.line("*DEFINE_COORDINATE_SYSTEM");
+        d.header(&["cid", "xo", "yo", "zo", "xl", "yl", "zl", "cidl"]);
+        d.card([Field::from(cid), Field::from(0.0), Field::from(0.0), Field::from(0.0), Field::from(n[0]), Field::from(n[1]), Field::from(n[2])]);
+        d.header(&["xp", "yp", "zp"]);
+        d.card([Field::from(t1[0]), Field::from(t1[1]), Field::from(t1[2])]);
+        d.line(&format!("*BOUNDARY_SPC_{suffix}_ID"));
+        id_card(d, constraint_id, name);
+        d.header(&["nsid", "cid", "dofx", "dofy", "dofz", "dofrx", "dofry", "dofrz"]);
+        d.card([Field::from(entity), Field::from(cid)].into_iter().chain([1, 0, 0, 0, 1, 1].map(|v: i32| Field::from(v))));
+        return Ok(());
+    }
     let dofs = bc.dofs();
     // Held degrees of freedom (in a frequency step every constrained one is held).
     let held: Vec<u8> = dofs.list().into_iter().filter(|dof| !is_static || bc.value(*dof).is_none_or(|v| v == 0.0)).collect();

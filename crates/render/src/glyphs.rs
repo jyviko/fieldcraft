@@ -354,19 +354,6 @@ fn scan<T>(items: &[T]) -> impl Iterator<Item = &T> {
     items.iter().step_by(items.len().div_ceil(MAX_SCAN).max(1))
 }
 
-/// The nodes that can rotate: shell and beam nodes (not those of 2D sections: plane stress,
-/// plane strain, axisymmetric), as the model check counts them.
-fn rotating_nodes(model: &Model) -> BTreeSet<u32> {
-    let planar: BTreeSet<u32> = model
-        .sections()
-        .values()
-        .filter(|s| s.kind.extent().is_some())
-        .filter_map(|s| model.resolve_set_partial(&s.set))
-        .flat_map(|r| r.elements)
-        .collect();
-    model.rotational_nodes(|l| planar.contains(&l))
-}
-
 /// The corner node labels of an element face, in the face's order.
 fn face_corners(model: &Model, f: ElementFace) -> Option<Vec<u32>> {
     let kind = model.element(f.element)?.kind;
@@ -589,7 +576,7 @@ impl Builder<'_> {
         }
         let (spots, total) = self.spots(bc.target());
         if dofs & 0b111_000 != 0 && self.rotating.is_none() {
-            self.rotating = Some(rotating_nodes(self.model));
+            self.rotating = Some(self.model.rotating_nodes());
         }
         let none = BTreeSet::new();
         let rotating = self.rotating.as_ref().unwrap_or(&none);

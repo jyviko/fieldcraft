@@ -110,25 +110,101 @@ impl std::fmt::Display for Target {
     }
 }
 
-/// The plane of a symmetry boundary condition, named by its normal axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// The plane of a symmetry boundary condition, named by its normal: an axis (`"x"`), or any
+/// direction (`{"normal": [1, 1, 0]}`, not necessarily of unit length).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Symmetry {
     /// The plane normal to X: no X translation, no rotation about Y or Z.
     X,
     Y,
     Z,
+    /// A plane normal to a direction: no translation along it, no rotation about the two axes
+    /// in the plane (n · u = 0, and θ ∥ n at nodes with rotations).
+    Normal([f64; 3]),
 }
 
+/// A normal whose component along an axis is within this of 1 (unit length) is that axis.
+const ALONG_AXIS: f64 = 1e-12;
+
 impl Symmetry {
-    /// The fixed degrees of freedom.
-    pub fn dofs(self) -> Dofs {
+    /// The plane normal to `normal`: [`Symmetry::X`], `Y` or `Z` when it lies along an axis,
+    /// otherwise [`Symmetry::Normal`] with the unit normal; `None` for a zero or non-finite one.
+    pub fn from_normal(normal: [f64; 3]) -> Option<Symmetry> {
+        let unit = unit(normal)?;
+        Some(match (0..3).find(|&k| (unit[k].abs() - 1.0).abs() < ALONG_AXIS) {
+            Some(0) => Symmetry::X,
+            Some(1) => Symmetry::Y,
+            Some(2) => Symmetry::Z,
+            _ => Symmetry::Normal(unit),
+        })
+    }
+
+    /// The unit normal (`None` for a zero or non-finite [`Symmetry::Normal`]).
+    pub fn unit_normal(self) -> Option<[f64; 3]> {
         match self {
-            Symmetry::X => Dofs(0b110_001),
-            Symmetry::Y => Dofs(0b101_010),
-            Symmetry::Z => Dofs(0b011_100),
+            Symmetry::X => Some([1.0, 0.0, 0.0]),
+            Symmetry::Y => Some([0.0, 1.0, 0.0]),
+            Symmetry::Z => Some([0.0, 0.0, 1.0]),
+            Symmetry::Normal(n) => unit(n),
         }
     }
+
+    /// The axis (0–2) the normal lies along, so the condition holds global degrees of freedom;
+    /// `None` for an inclined plane, which is a linear constraint instead.
+    pub fn axis(self) -> Option<usize> {
+        let n = self.unit_normal()?;
+        (0..3).find(|&k| (n[k].abs() - 1.0).abs() < ALONG_AXIS)
+    }
+
+    /// The held global degrees of freedom: those of an axis-aligned plane; none for an inclined
+    /// one, which holds combinations of them ([`Symmetry::unit_normal`]).
+    pub fn dofs(self) -> Dofs {
+        match self.axis() {
+            Some(0) => Dofs(0b110_001),
+            Some(1) => Dofs(0b101_010),
+            Some(2) => Dofs(0b011_100),
+            _ => Dofs::none(),
+        }
+    }
+
+    /// The inclined plane's unit normal; `None` for one normal to an axis.
+    pub fn inclined(self) -> Option<[f64; 3]> {
+        if self.axis().is_some() { None } else { self.unit_normal() }
+    }
+
+    /// Two unit vectors in the plane, perpendicular to each other and to the unit normal n:
+    /// t₁ = n × e / |n × e| with e the axis n leans on least, and t₂ = n × t₁ (`None` for a
+    /// zero or non-finite normal).
+    pub fn in_plane(self) -> Option<[[f64; 3]; 2]> {
+        let n = self.unit_normal()?;
+        let least = (0..3).fold(0, |m, k| if n[k].abs() < n[m].abs() { k } else { m });
+        let mut e = [0.0; 3];
+        e[least] = 1.0;
+        let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        let t1 = unit(cross(n, e))?;
+        Some([t1, cross(n, t1)])
+    }
+
+    fn validate(self) -> Result<()> {
+        if let Symmetry::Normal(n) = self
+            && unit(n).is_none()
+        {
+            return Err(Error::Invalid(format!("the symmetry plane's normal must be a finite, non-zero vector, got {n:?}")));
+        }
+        Ok(())
+    }
+}
+
+/// `v` scaled to unit length; `None` for a zero or non-finite vector.
+fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
+    let scale = v.iter().fold(0.0f64, |m, c| m.max(c.abs()));
+    if !(scale > 0.0 && v.iter().all(|c| c.is_finite())) {
+        return None;
+    }
+    let w = v.map(|c| c / scale);
+    let length = w.iter().map(|c| c * c).sum::<f64>().sqrt();
+    Some(w.map(|c| c / length))
 }
 
 /// A boundary condition.
@@ -198,6 +274,9 @@ impl BoundaryCondition {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let BoundaryCondition::Symmetry { plane, .. } = self {
+            plane.validate()?;
+        }
         if let BoundaryCondition::Temperature { target, value } = self {
             finite("temperature", *value)?;
             if let Target::ReferencePoint(r) = target {
@@ -283,6 +362,37 @@ mod tests {
         assert!(BoundaryCondition::Temperature { target: Target::ReferencePoint("RP".into()), value: 1.0 }.validate().is_err());
         let json = serde_json::json!({"type": "symmetry", "target": {"reference_point": "RP"}, "plane": "z"});
         let parsed: BoundaryCondition = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), json);
+    }
+
+    #[test]
+    fn inclined_symmetry_planes() {
+        let tilt = Symmetry::from_normal([1.0, 1.0, 0.0]).unwrap();
+        let h = 1.0 / 2f64.sqrt();
+        assert_eq!(tilt, Symmetry::Normal([h, h, 0.0]));
+        assert_eq!((tilt.axis(), tilt.dofs(), tilt.inclined()), (None, Dofs::none(), Some([h, h, 0.0])));
+        assert_eq!(Symmetry::from_normal([0.0, -2.0, 0.0]), Some(Symmetry::Y));
+        assert_eq!(Symmetry::Normal([0.0, 0.0, 3.0]).dofs(), Symmetry::Z.dofs());
+        assert_eq!(Symmetry::Normal([0.0, 0.0, 3.0]).inclined(), None);
+        for bad in [[0.0; 3], [f64::NAN, 1.0, 0.0], [f64::INFINITY, 0.0, 0.0]] {
+            assert_eq!(Symmetry::from_normal(bad), None);
+            let bc = BoundaryCondition::Symmetry { target: Target::Set("s".into()), plane: Symmetry::Normal(bad) };
+            assert!(bc.validate().is_err(), "{bad:?}");
+        }
+        // The tiniest and the largest finite normals still give a unit one.
+        assert_eq!(Symmetry::from_normal([1e-300, 1e-300, 0.0]), Some(Symmetry::Normal([h, h, 0.0])));
+        assert_eq!(Symmetry::from_normal([f64::MAX, f64::MAX, 0.0]), Some(Symmetry::Normal([h, h, 0.0])));
+        for plane in [tilt, Symmetry::X, Symmetry::Normal([0.3, -2.0, 7.0])] {
+            let n = plane.unit_normal().unwrap();
+            let [a, b] = plane.in_plane().unwrap();
+            let dot = |u: [f64; 3], v: [f64; 3]| (0..3).map(|k| u[k] * v[k]).sum::<f64>();
+            for (u, v, want) in [(a, a, 1.0), (b, b, 1.0), (a, b, 0.0), (a, n, 0.0), (b, n, 0.0)] {
+                assert!((dot(u, v) - want).abs() < 1e-15, "{plane:?}");
+            }
+        }
+        let json = serde_json::json!({"type": "symmetry", "target": {"set": "s"}, "plane": {"normal": [1.0, 1.0, 0.0]}});
+        let parsed: BoundaryCondition = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(parsed, BoundaryCondition::Symmetry { target: Target::Set("s".into()), plane: Symmetry::Normal([1.0, 1.0, 0.0]) });
         assert_eq!(serde_json::to_value(&parsed).unwrap(), json);
     }
 }

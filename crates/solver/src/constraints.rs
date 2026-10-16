@@ -53,7 +53,7 @@ use std::collections::BTreeMap;
 
 use fieldcraft_fem::dense::inverse3;
 use fieldcraft_fem::{DofKind, DofLayout, DofSet};
-use fieldcraft_model::{CouplingKind, Model, Resolved};
+use fieldcraft_model::{BoundaryCondition, CouplingKind, Model, Resolved, Step};
 
 use crate::sparse::Csr;
 use crate::system::Mesh;
@@ -74,6 +74,9 @@ pub struct Row<'m> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     Coupling,
+    /// A symmetry boundary condition on an inclined plane: n · u = 0, and θ ∥ n at nodes with
+    /// rotations.
+    Symmetry,
     /// A tie: its secondary node follows a weighted average of main nodes.
     Tie,
 }
@@ -82,6 +85,7 @@ impl Source {
     fn what(self) -> &'static str {
         match self {
             Source::Coupling => "coupling",
+            Source::Symmetry => "boundary condition",
             Source::Tie => "tie",
         }
     }
@@ -224,6 +228,64 @@ pub fn coupling_rows<'m>(model: &'m Model, resolved: &Resolved, mesh: &Mesh) -> 
     Ok(rows)
 }
 
+/// The constraint rows of a step's symmetry conditions on inclined planes (those on a plane
+/// normal to an axis hold global degrees of freedom and are prescribed values instead), in the
+/// step's order, nodes by label. At every target node the translation along the unit normal n
+/// is zero, n · u = 0, eliminating the translation of the largest |nₖ|; at a node with
+/// rotations (shells, beams, a reference point whose rotations exist) the rotation about each of
+/// two in-plane axes t₁, t₂ is zero too, tᵢ · θ = 0: a mirror image turns only about the normal.
+/// `exists` says whether a reference point direction exists (mesh node ones always do).
+pub fn symmetry_rows<'m>(model: &Model, resolved: &Resolved, mesh: &Mesh, step: &'m Step, exists: impl Fn(usize) -> bool) -> Result<Vec<Row<'m>>> {
+    let mut rows = Vec::new();
+    for name in &step.boundary_conditions {
+        let Some(BoundaryCondition::Symmetry { target, plane }) = model.boundary_condition(name) else { continue };
+        let (Some(n), Some([t1, t2])) = (plane.inclined(), plane.in_plane()) else { continue };
+        let rp = target.reference_point();
+        if rp.is_some_and(|r| mesh.point(r).is_none()) {
+            // Reported by `prescribed` as holding nothing, like any condition on such a point.
+            continue;
+        }
+        for &label in resolved.target_nodes(target) {
+            let slot = match rp {
+                Some(r) => mesh.point(r).map(|k| mesh.layout.point_slot(k)),
+                None => mesh.layout.slot(label),
+            };
+            let Some(slot) = slot else { continue };
+            let kinds = mesh.layout.kinds(slot);
+            let dof = |kind: Option<DofKind>| kind.and_then(|k| kinds.contains(k).then(|| mesh.layout.dof(slot, k)).flatten()).filter(|d| exists(*d));
+            let row = |axis: [f64; 3], rotation: bool| -> Result<Option<Row<'m>>> {
+                let mut terms = Vec::with_capacity(3);
+                let mut missing = false;
+                for (k, c) in axis.into_iter().enumerate().filter(|(_, c)| *c != 0.0) {
+                    match dof(if rotation { DofKind::rotation(k) } else { DofKind::translation(k) }) {
+                        Some(d) => terms.push((d, c)),
+                        None => missing = true,
+                    }
+                }
+                if missing {
+                    // No rotation exists at a solid node: only its translation is held.
+                    if rotation && terms.is_empty() {
+                        return Ok(None);
+                    }
+                    return Err(Error::Invalid(format!(
+                        "boundary condition `{name}`: node {label} cannot move along the symmetry plane's normal {n:?} (it has no {} along some axis the normal leans on); in a 2D model the plane must contain the Z axis",
+                        if rotation { "rotation" } else { "translation" }
+                    )));
+                }
+                let pivot = terms.iter().fold(None, |best: Option<(usize, f64)>, t| match best {
+                    Some(b) if b.1.abs() >= t.1.abs() => Some(b),
+                    _ => Some(*t),
+                });
+                Ok(pivot.map(|(pivot, _)| Row { terms, pivot, coupling: name, source: Source::Symmetry }))
+            };
+            rows.extend(row(n, false)?);
+            rows.extend(row(t1, true)?);
+            rows.extend(row(t2, true)?);
+        }
+    }
+    Ok(rows)
+}
+
 /// The degrees of freedom that exist: every mesh node's, and the reference point directions
 /// some constraint row or `extra` (the discrete elements') involves.
 fn active_dofs(layout: &DofLayout, extra: impl Iterator<Item = usize>, rows: &[Row]) -> Vec<bool> {
@@ -346,6 +408,10 @@ pub struct Reduction {
     prescribed_motion: Vec<f64>,
     /// Whether any degree of freedom depends on others (T is not a plain selection).
     has_dependents: bool,
+    /// The degrees of freedom an inclined symmetry plane supports (those of its rows that are not
+    /// prescribed): their share of K u − f is the plane's reaction on them, n λ, and is reported
+    /// where it acts rather than carried to prescribed degrees of freedom.
+    supports: Vec<bool>,
     budget: Budget,
 }
 
@@ -447,7 +513,7 @@ impl Reduction {
         for row in rows {
             let scale = row.terms.iter().fold(0.0f64, |m, t| m.max(t.1.abs()));
             if !(scale > 0.0 && scale.is_finite()) {
-                return Err(Error::Invalid(format!("coupling `{}`: a constraint with no finite coefficient", row.coupling)));
+                return Err(Error::Invalid(format!("{} `{}`: a constraint with no finite coefficient", row.source.what(), row.coupling)));
             }
             // The row in current free and prescribed degrees of freedom.
             let mut expanded = Vec::with_capacity(row.terms.len());
@@ -497,7 +563,8 @@ impl Reduction {
                 let size: f64 = terms.iter().map(|t| value(t).abs()).sum();
                 if residual.abs() > 1e-9 * size.max(f64::MIN_POSITIVE) && residual.abs() > 0.0 {
                     return Err(Error::Invalid(format!(
-                        "coupling `{}` contradicts the prescribed values (boundary conditions or other couplings hold its nodes in a way it cannot follow)",
+                        "{} `{}` contradicts the prescribed values (boundary conditions or couplings hold its nodes in a way it cannot follow)",
+                        row.source.what(),
                         row.coupling
                     )));
                 }
@@ -572,7 +639,17 @@ impl Reduction {
         }
         let prescribed_motion = (0..n).map(|d| fixed.row(d).map(|(p, c)| c * values.get(p).copied().unwrap_or(0.0)).sum()).collect();
         let columns = free.transpose(eq_dof.len());
-        Ok(Reduction { eq_dof, active, free, columns, fixed, prescribed_motion, has_dependents: !exprs.is_empty(), budget })
+        let mut supports = vec![false; n];
+        for row in rows.iter().filter(|r| r.source == Source::Symmetry) {
+            for &(dof, _) in &row.terms {
+                if state.get(dof) != Some(&State::Fixed)
+                    && let Some(x) = supports.get_mut(dof)
+                {
+                    *x = true;
+                }
+            }
+        }
+        Ok(Reduction { eq_dof, active, free, columns, fixed, prescribed_motion, has_dependents: !exprs.is_empty(), supports, budget })
     }
 
     /// Free equations.
@@ -737,10 +814,17 @@ impl Reduction {
     }
 
     /// T_pᵀ g for a vector g over every degree of freedom (the reactions of the out-of-balance
-    /// forces g = f_int − f_ext), zero where nothing is prescribed.
+    /// forces g = f_int − f_ext), zero where nothing is prescribed; at the degrees of freedom an
+    /// inclined symmetry plane supports, g itself.
     pub fn reactions_of(&self, g: &[f64]) -> Vec<f64> {
         let mut out = vec![0.0; self.prescribed_motion.len()];
         for (dof, v) in g.iter().enumerate() {
+            if self.supports.get(dof).copied().unwrap_or(false) {
+                if let Some(x) = out.get_mut(dof) {
+                    *x += v;
+                }
+                continue;
+            }
             for (p, c) in self.fixed.row(dof) {
                 if let Some(x) = out.get_mut(p) {
                     *x += c * v;
@@ -750,24 +834,23 @@ impl Reduction {
         out
     }
 
-    /// The reactions at the prescribed degrees of freedom, T_pᵀ (K u − f), over every degree of
-    /// freedom (zero where nothing is prescribed).
+    /// The reactions at the prescribed degrees of freedom, T_pᵀ (K u − f), and at those an
+    /// inclined symmetry plane supports ([`Reduction::reactions_of`]), over every degree of
+    /// freedom (zero elsewhere).
     pub fn reactions(&self, k: &Csr, u: &[f64], f: &[f64]) -> Vec<f64> {
-        let mut out = vec![0.0; self.prescribed_motion.len()];
-        for (dof, fv) in f.iter().enumerate() {
-            if self.fixed.is_empty_row(dof) {
-                continue;
-            }
-            let (cols, vals) = k.row(dof);
-            let ku: f64 = cols.iter().zip(vals).map(|(j, v)| v * u.get(*j).copied().unwrap_or(0.0)).sum();
-            let r = ku - fv;
-            for (p, c) in self.fixed.row(dof) {
-                if let Some(x) = out.get_mut(p) {
-                    *x += c * r;
+        let residual: Vec<f64> = f
+            .iter()
+            .enumerate()
+            .map(|(dof, fv)| {
+                if self.fixed.is_empty_row(dof) && !self.supports.get(dof).copied().unwrap_or(false) {
+                    return 0.0;
                 }
-            }
-        }
-        out
+                let (cols, vals) = k.row(dof);
+                let ku: f64 = cols.iter().zip(vals).map(|(j, v)| v * u.get(*j).copied().unwrap_or(0.0)).sum();
+                ku - fv
+            })
+            .collect();
+        self.reactions_of(&residual)
     }
 }
 

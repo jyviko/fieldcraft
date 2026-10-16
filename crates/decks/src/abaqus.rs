@@ -148,7 +148,7 @@ use std::fmt::Write as _;
 
 use fieldcraft_model::{
     BeamProfile, BoundaryCondition, ContactSurfaces, CouplingKind, Elastic, Element, ElementKind, Hardening, Hyperelastic, InitialPenetration,
-    Integration, Load, Model, OutputVariable, Plastic, Procedure, Resolved, Section, SectionKind, Step, Symmetry, Target,
+    Integration, Load, Model, OutputVariable, Plastic, Procedure, Resolved, Section, SectionKind, Step, Target,
 };
 
 use crate::{Error, Result, unsupported};
@@ -193,6 +193,7 @@ pub fn write_resolved(model: &Model, r: &Resolved) -> Result<String> {
     d.couplings(model, r);
     d.contacts(model, r)?;
     d.ties(model)?;
+    d.equations(model, r)?;
     d.steps(model, r)?;
     Ok(d.out)
 }
@@ -370,7 +371,34 @@ fn check_expressible(model: &Model) -> Result<()> {
             bad.insert(format!("coupling `{name}`: an Abaqus distributing coupling always couples translations 1-3"));
         }
     }
+    for name in inclined_symmetries(model) {
+        if !model.steps().iter().all(|s| s.boundary_conditions.contains(name)) {
+            bad.insert(format!(
+                "boundary condition `{name}`: a symmetry plane not normal to X, Y or Z active in some steps only (it is written as `*EQUATION`, which is model data and holds in every step)"
+            ));
+        }
+    }
     unsupported(FORMAT, bad)
+}
+
+/// The symmetry conditions on inclined planes some step uses: linear equations rather than held
+/// degrees of freedom.
+fn inclined_symmetries(model: &Model) -> BTreeSet<&String> {
+    model
+        .boundary_conditions()
+        .iter()
+        .filter(|(n, bc)| {
+            matches!(bc, BoundaryCondition::Symmetry { plane, .. } if plane.axis().is_none()) && !model.boundary_condition_users(n).is_empty()
+        })
+        .map(|(n, _)| n)
+        .collect()
+}
+
+/// The boundary conditions of `names` that `*BOUNDARY` writes (inclined symmetry planes are
+/// `*EQUATION`s).
+fn held_conditions(model: &Model, names: &BTreeSet<String>) -> BTreeSet<String> {
+    let inclined = inclined_symmetries(model);
+    names.iter().filter(|n| !inclined.contains(n)).cloned().collect()
 }
 
 /// The property of a group of discrete elements.
@@ -1076,10 +1104,12 @@ impl Deck {
             match bc {
                 BoundaryCondition::Fixed { .. } => self.line(&format!("{target}, ENCASTRE")),
                 BoundaryCondition::Symmetry { plane, .. } => {
-                    let s = match plane {
-                        Symmetry::X => "XSYMM",
-                        Symmetry::Y => "YSYMM",
-                        Symmetry::Z => "ZSYMM",
+                    let s = match plane.axis() {
+                        Some(0) => "XSYMM",
+                        Some(1) => "YSYMM",
+                        Some(2) => "ZSYMM",
+                        // An inclined plane is an `*EQUATION` (model data), never here.
+                        _ => continue,
                     };
                     self.line(&format!("{target}, {s}"));
                 }
@@ -1097,8 +1127,74 @@ impl Deck {
         Ok(())
     }
 
+    /// The inclined symmetry planes: one `*EQUATION` per node and held direction (n · u = 0, and
+    /// the rotations about the plane's axes at shell and beam nodes), whose first term Abaqus
+    /// eliminates; it is chosen among the degrees of freedom no boundary condition, coupling
+    /// or tie constrains ([`crate::symmetry_equations`]).
+    fn equations(&mut self, model: &Model, r: &Resolved) -> Result<()> {
+        let inclined = inclined_symmetries(model);
+        if inclined.is_empty() {
+            return Ok(());
+        }
+        let steps = model.steps();
+        // Per node and degree of freedom: the value it is held at in each step that holds it.
+        let mut held: BTreeMap<(u32, u8), Vec<f64>> = BTreeMap::new();
+        for step in steps {
+            for name in held_conditions(model, &step.boundary_conditions) {
+                let Some(bc) = model.boundary_condition(&name) else { continue };
+                for &node in r.target_nodes(bc.target()) {
+                    for dof in bc.dofs().list() {
+                        let v = if matches!(step.procedure, Procedure::Frequency { .. } | Procedure::Buckle { .. }) {
+                            0.0
+                        } else {
+                            bc.value(dof).unwrap_or(0.0)
+                        };
+                        held.entry((node, dof)).or_default().push(v);
+                    }
+                }
+            }
+        }
+        let mut dependent: BTreeSet<(u32, u8)> = BTreeSet::new();
+        for c in model.couplings().values().filter(|c| c.kind == CouplingKind::Kinematic) {
+            for &node in r.sets.get(&c.set).map(|s| s.nodes.as_slice()).unwrap_or_default() {
+                dependent.extend(c.dofs.list().into_iter().map(|d| (node, d)));
+            }
+        }
+        for t in model.ties().values() {
+            for &node in r.sets.get(&t.secondary).map(|s| s.nodes.as_slice()).unwrap_or_default() {
+                dependent.extend((1..=6).map(|d| (node, d)));
+            }
+        }
+        let state = |node: u32, dof: u8| {
+            if dependent.contains(&(node, dof)) {
+                return crate::Held::Sometimes;
+            }
+            match held.get(&(node, dof)) {
+                None => crate::Held::Free,
+                Some(v) if v.len() == steps.len() && v.iter().all(|x| *x == v[0]) => crate::Held::Always(v[0]),
+                Some(_) => crate::Held::Sometimes,
+            }
+        };
+        let mut problems = BTreeSet::new();
+        let equations = crate::symmetry_equations(model, r, inclined, &model.rotating_nodes(), state, &mut problems);
+        unsupported(FORMAT, problems)?;
+        self.comment("Symmetry planes not normal to X, Y or Z: per node, no motion along the normal (and no rotation about the plane's axes)");
+        for e in &equations {
+            self.line("*EQUATION");
+            self.line(&e.terms.len().to_string());
+            let mut fields = Vec::new();
+            for (dof, c) in &e.terms {
+                fields.push(format!("{}, {dof}", e.node));
+                fields.push(number(*c)?);
+            }
+            self.line(&fields.join(", "));
+        }
+        Ok(())
+    }
+
     /// Boundary conditions of a step against the state it starts from.
     fn step_boundaries(&mut self, model: &Model, r: &Resolved, base: &BTreeSet<String>, active: &BTreeSet<String>) -> Result<()> {
+        let (base, active) = (&held_conditions(model, base), &held_conditions(model, active));
         if active == base {
             self.comment("boundary conditions: as in the base state");
             Ok(())
@@ -1188,7 +1284,8 @@ impl Deck {
             BTreeSet::new()
         } else {
             let in_every_step = |n: &String| steps.iter().all(|s| s.boundary_conditions.contains(n));
-            model.boundary_conditions().iter().filter(|(n, bc)| holds_at_zero(bc) && in_every_step(n)).map(|(n, _)| n.clone()).collect()
+            let all = model.boundary_conditions().iter().filter(|(n, bc)| holds_at_zero(bc) && in_every_step(n)).map(|(n, _)| n.clone()).collect();
+            held_conditions(model, &all)
         };
         if !initial.is_empty() {
             self.comment("Initial state: boundary conditions active in every step");

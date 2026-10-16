@@ -22,6 +22,9 @@
 //!   the basic X axis through a `CORD2R`;
 //! - boundary conditions: per step, one constraint set of `SPC1` (held degrees of freedom) and
 //!   `SPC` (prescribed values); in a modes step every constrained degree of freedom is held;
+//!   symmetry about a plane not normal to X, Y or Z: one `MPC` set per step, an equation per node
+//!   and held direction (n · u = 0, and t · θ = 0 about the plane's two axes at shell and beam
+//!   grids), its dependent component one no `SPC` or rigid element constrains;
 //! - forces, moments and tractions: `FORCE` and `MOMENT` at the nodal values the model resolves,
 //!   so every writer and the solver share one distribution; pressure: `PLOAD4` per element face;
 //!   gravity: `GRAV`; a step with several loads combines them with `LOAD`;
@@ -241,6 +244,8 @@ type Constraints = BTreeMap<u32, [Option<f64>; 6]>;
 struct Subcase<'m> {
     step: &'m Step,
     spc: Option<u32>,
+    /// The equations of its inclined symmetry planes.
+    mpc: Option<u32>,
     load: Option<u32>,
     method: Option<u32>,
 }
@@ -269,6 +274,8 @@ struct Deck<'m> {
     dependent: BTreeMap<u32, (Dofs, &'m str)>,
     /// Constraint sets by id.
     spc_sets: Vec<(u32, Constraints)>,
+    /// Multipoint constraint sets (inclined symmetry planes) by id.
+    mpc_sets: Vec<(u32, Vec<crate::Equation>)>,
     /// Load name → load set id.
     load_sids: BTreeMap<&'m str, u32>,
     /// Combinations: (id, load set ids).
@@ -310,7 +317,7 @@ impl<'m> Deck<'m> {
             model,
             r,
             sol,
-            subcases: steps.into_iter().map(|step| Subcase { step, spc: None, load: None, method: None }).collect(),
+            subcases: steps.into_iter().map(|step| Subcase { step, spc: None, mpc: None, load: None, method: None }).collect(),
             problems,
             next_sid: 1,
             materials: BTreeMap::new(),
@@ -321,6 +328,7 @@ impl<'m> Deck<'m> {
             discrete: Vec::new(),
             dependent: BTreeMap::new(),
             spc_sets: Vec::new(),
+            mpc_sets: Vec::new(),
             load_sids: BTreeMap::new(),
             combinations: Vec::new(),
         }
@@ -587,6 +595,7 @@ impl<'m> Deck<'m> {
     /// One constraint set per distinct step constraint, checked against coupled nodes.
     fn plan_constraints(&mut self) -> Result<()> {
         let (model, r) = (self.model, self.r);
+        let rotating = model.rotating_nodes();
         // Conflicts, one problem per pair of definitions: the nodes they meet on.
         let mut clashes: BTreeMap<(&str, &str, &str), BTreeSet<u32>> = BTreeMap::new();
         let mut on_dependent: BTreeMap<(&str, &str), BTreeSet<u32>> = BTreeMap::new();
@@ -598,6 +607,10 @@ impl<'m> Deck<'m> {
             for name in &step.boundary_conditions {
                 let Some(bc) = model.boundary_condition(name) else { continue };
                 let dofs = bc.dofs();
+                // Inclined symmetry planes hold no global degree of freedom: they are equations.
+                if dofs.is_empty() {
+                    continue;
+                }
                 // In a modes step every constrained degree of freedom is held.
                 let values: Vec<(u8, f64)> = dofs.list().into_iter().filter_map(|d| Some((d, if modes { 0.0 } else { bc.value(d)? }))).collect();
                 for &node in r.target_nodes(bc.target()) {
@@ -621,6 +634,19 @@ impl<'m> Deck<'m> {
                         }
                     }
                 }
+            }
+            let dependent = &self.dependent;
+            let held = |node: u32, dof: u8| match (
+                dependent.get(&node),
+                set.get(&node).and_then(|v| v.get(usize::from(dof).checked_sub(1)?).copied().flatten()),
+            ) {
+                (Some((d, _)), _) if d.contains(dof) => crate::Held::Sometimes,
+                (_, Some(v)) => crate::Held::Always(v),
+                _ => crate::Held::Free,
+            };
+            let equations = crate::symmetry_equations(model, r, &step.boundary_conditions, &rotating, held, &mut self.problems);
+            if !equations.is_empty() {
+                sub.mpc = Some(intern(&mut self.mpc_sets, &mut self.next_sid, equations)?);
             }
             if !set.is_empty() {
                 sub.spc = Some(intern(&mut self.spc_sets, &mut self.next_sid, set)?);
@@ -707,7 +733,7 @@ impl<'m> Deck<'m> {
             let _ = writeln!(out, "SUBCASE {}", i + 1);
             let title: String = format!("  SUBTITLE = {}", sub.step.name).chars().take(72).collect();
             let _ = writeln!(out, "{title}");
-            for (key, sid) in [("SPC", sub.spc), ("LOAD", sub.load), ("METHOD", sub.method)] {
+            for (key, sid) in [("SPC", sub.spc), ("MPC", sub.mpc), ("LOAD", sub.load), ("METHOD", sub.method)] {
                 if let Some(sid) = sid {
                     let _ = writeln!(out, "  {key} = {sid}");
                 }
@@ -715,6 +741,7 @@ impl<'m> Deck<'m> {
             for v in &sub.step.output {
                 let request = match v {
                     OutputVariable::Displacement => "DISPLACEMENT",
+                    OutputVariable::ReactionForce if sub.mpc.is_some() => "SPCFORCES = ALL\n  MPCFORCES",
                     OutputVariable::ReactionForce => "SPCFORCES",
                     OutputVariable::Stress => "STRESS",
                     OutputVariable::Strain => "STRAIN",
@@ -890,6 +917,23 @@ impl<'m> Deck<'m> {
             }
             for (node, mask, value) in prescribed {
                 Card::new("SPC").int(*sid).int(node).int(component(Dofs::from_bits(mask))).real(value).write(out)?;
+            }
+        }
+        for (sid, equations) in &self.mpc_sets {
+            for sub in self.subcases.iter().filter(|s| s.mpc == Some(*sid)) {
+                comment(out, &format!("step {}: inclined symmetry planes, MPC {sid} (the first grid component is dependent)", sub.step.name));
+            }
+            for e in equations {
+                // SID, then (G, C, A) triples: two on the first line (its last field blank), two
+                // per continuation after a blank first field.
+                let mut card = Card::new("MPC").int(*sid);
+                for (i, (dof, c)) in e.terms.iter().enumerate() {
+                    if i % 2 == 0 && i > 0 {
+                        card = card.blank().blank();
+                    }
+                    card = card.int(e.node).int(i64::from(*dof)).real(*c);
+                }
+                card.write(out)?;
             }
         }
         Ok(())

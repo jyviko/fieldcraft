@@ -16,7 +16,7 @@ pub mod nastran;
 use std::collections::{BTreeMap, BTreeSet};
 
 use fieldcraft_model::nodal::edge_pressure;
-use fieldcraft_model::{Diagnostic, Load, Model, Resolved, ResolvedDirection};
+use fieldcraft_model::{BoundaryCondition, Diagnostic, Load, Model, Resolved, ResolvedDirection};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
@@ -174,6 +174,120 @@ pub fn edge_pressure_loads<'a>(model: &Model, r: &Resolved, active: impl IntoIte
     }
     out.retain(|_, v| *v != 0.0);
     Ok(out)
+}
+
+/// How a degree of freedom is constrained apart from the inclined symmetry planes, for choosing
+/// the dependent one of a plane's equation (formats eliminate it, so it may carry no other
+/// constraint).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Held {
+    Free,
+    /// Held at this value wherever the equation applies: it cannot depend on the others, and an
+    /// equation of held ones alone is redundant when the values satisfy it.
+    Always(f64),
+    /// Held in some steps only, or made dependent by a coupling or tie: it cannot be dependent,
+    /// nor can the equation be dropped.
+    Sometimes,
+}
+
+/// A linear equation Σ cⱼ u(node, dofⱼ) = 0 of an inclined symmetry plane, dependent degree of
+/// freedom first.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Equation {
+    pub node: u32,
+    pub terms: Vec<(u8, f64)>,
+}
+
+/// A coefficient below this fraction of its row's largest is round-off of the elimination.
+const NEGLIGIBLE: f64 = 1e-12;
+
+/// The equations of the inclined symmetry conditions `names` (others are skipped), node by node
+/// in label order: n · u = 0 and, at a node in `rotating`, t₁ · θ = 0 and t₂ · θ = 0 for the
+/// plane's in-plane axes ([`fieldcraft_model::Symmetry`]). The rows of one node (several planes
+/// meet at an edge) are reduced against each other, so each has a dependent degree of freedom
+/// of its own: the largest coefficient among those `held` says are free. A row of held degrees
+/// of freedom only is left out when their values satisfy it; otherwise it is a problem, as is a
+/// row with none free that cannot be left out.
+pub(crate) fn symmetry_equations<'a>(
+    model: &Model,
+    r: &Resolved,
+    names: impl IntoIterator<Item = &'a String>,
+    rotating: &BTreeSet<u32>,
+    held: impl Fn(u32, u8) -> Held,
+    problems: &mut BTreeSet<String>,
+) -> Vec<Equation> {
+    let mut rows: BTreeMap<u32, Vec<(&str, [f64; 6])>> = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    for name in names {
+        if !seen.insert(name.as_str()) {
+            continue;
+        }
+        let Some(BoundaryCondition::Symmetry { target, plane }) = model.boundary_condition(name) else { continue };
+        let (Some(n), Some([t1, t2])) = (plane.inclined(), plane.in_plane()) else { continue };
+        for &node in r.target_nodes(target) {
+            let at = rows.entry(node).or_default();
+            at.push((name, [n[0], n[1], n[2], 0.0, 0.0, 0.0]));
+            if rotating.contains(&node) || target.reference_point().is_some() {
+                at.push((name, [0.0, 0.0, 0.0, t1[0], t1[1], t1[2]]));
+                at.push((name, [0.0, 0.0, 0.0, t2[0], t2[1], t2[2]]));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (node, rows) in rows {
+        // The equations of this node so far: (dependent index, coefficients).
+        let mut done: Vec<(usize, [f64; 6])> = Vec::new();
+        for (name, mut c) in rows {
+            let scale = c.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            for (d, e) in &done {
+                let f = c[*d] / e[*d];
+                for k in 0..6 {
+                    c[k] -= f * e[k];
+                }
+                c[*d] = 0.0;
+            }
+            for v in &mut c {
+                if v.abs() <= NEGLIGIBLE * scale {
+                    *v = 0.0;
+                }
+            }
+            if c.iter().all(|v| *v == 0.0) {
+                continue;
+            }
+            let dof = |k: usize| k as u8 + 1;
+            let pivot = (0..6).filter(|&k| c[k] != 0.0 && held(node, dof(k)) == Held::Free).fold(None, |best: Option<usize>, k| match best {
+                Some(b) if c[b].abs() >= c[k].abs() => Some(b),
+                _ => Some(k),
+            });
+            let Some(pivot) = pivot else {
+                let mut residual = 0.0;
+                let mut size = 0.0;
+                let mut always = true;
+                for k in (0..6).filter(|&k| c[k] != 0.0) {
+                    match held(node, dof(k)) {
+                        Held::Always(v) => {
+                            residual += c[k] * v;
+                            size += (c[k] * v).abs();
+                        }
+                        _ => always = false,
+                    }
+                }
+                if !always {
+                    problems.insert(format!(
+                        "boundary condition `{name}`: at node {node} every degree of freedom the inclined symmetry plane relates is held in some steps only or follows a coupling or tie, so none can be eliminated by its equation"
+                    ));
+                } else if residual.abs() > 1e-9 * size {
+                    problems.insert(format!("boundary condition `{name}`: node {node} is held off the inclined symmetry plane"));
+                }
+                continue;
+            };
+            let mut terms = vec![(dof(pivot), c[pivot])];
+            terms.extend((0..6).filter(|&k| k != pivot && c[k] != 0.0).map(|k| (dof(k), c[k])));
+            out.push(Equation { node, terms });
+            done.push((pivot, c));
+        }
+    }
+    out
 }
 
 /// The global degree of freedom (1–6) a spring or dashpot direction acts along, when it is one

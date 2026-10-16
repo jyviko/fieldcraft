@@ -176,6 +176,19 @@ impl Model {
             .collect()
     }
 
+    /// The mesh nodes with rotational degrees of freedom under the model's own sections: those of
+    /// shells and beams, not of plane stress, plane strain or axisymmetric elements.
+    pub fn rotating_nodes(&self) -> BTreeSet<u32> {
+        let planar: BTreeSet<u32> = self
+            .sections
+            .values()
+            .filter(|s| s.kind.extent().is_some())
+            .filter_map(|s| self.resolve_set_partial(&s.set))
+            .flat_map(|r| r.elements)
+            .collect();
+        self.rotational_nodes(|l| planar.contains(&l))
+    }
+
     fn analyze(&self) -> (Resolved, Vec<Diagnostic>) {
         let mut d = Diagnostics::default();
         let mut resolved = Resolved::default();

@@ -4,7 +4,7 @@
 //! A hexahedron's face is a quadrilateral and a tetrahedron's a triangle, so a tet mesh cannot
 //! share a hex mesh's faces. A pyramid can: its base is the quadrilateral and its four sides are
 //! triangles. [`pyramid_surface`] puts one pyramid on every interface quadrilateral (its apex
-//! inside the tet region, about 0.6 of the quadrilateral's mean edge above its centre) and builds
+//! inside the tet region, [`APEX_HEIGHT`] of the quadrilateral's mean edge above its centre) and builds
 //! the surface the tetrahedra fill: the tet region's own surface without the interface faces,
 //! closed by the pyramids' sides. Where the interface meets the tet region's other faces (the
 //! rim), those faces' triangles are re-stitched to the hex mesh's rim nodes: each rim vertex of
@@ -35,8 +35,10 @@ use crate::tet::QualityMesh;
 use crate::tet::complex::face_toward;
 use crate::{Error, Result};
 
-/// The apex's height above the quadrilateral's centre, over the quadrilateral's mean edge.
-pub const APEX_HEIGHT: f64 = 0.6;
+/// The apex's height above the quadrilateral's centre, over the quadrilateral's mean edge. Below
+/// one half, so the sides of two pyramids on faces that meet at a right angle (a box-shaped tet
+/// cell's corner between hex cells) lean apart instead of crossing.
+pub const APEX_HEIGHT: f64 = 0.4;
 
 /// The tet region's surface for a pyramid transition ([`pyramid_surface`]).
 #[derive(Debug, Clone)]
@@ -294,10 +296,10 @@ mod tests {
     use crate::surface::SurfaceOptions;
     use crate::tet::{QualityOptions, quality_mesh};
 
-    /// A box [0, 2] × [0, 2] × [0, 1] as twelve triangles (two per side, outward), sides tagged
+    /// A box [0, 2] × [0, 2] × [0, height] as twelve triangles (two per side, outward), sides tagged
     /// 0..6 (−x, +x, −y, +y, −z, +z).
-    fn slab() -> BoundarySurface {
-        let p: Vec<[f64; 3]> = (0..8).map(|i| [2.0 * (i & 1) as f64, 2.0 * ((i >> 1) & 1) as f64, ((i >> 2) & 1) as f64]).collect();
+    fn slab(height: f64) -> BoundarySurface {
+        let p: Vec<[f64; 3]> = (0..8).map(|i| [2.0 * (i & 1) as f64, 2.0 * ((i >> 1) & 1) as f64, height * ((i >> 2) & 1) as f64]).collect();
         let quads = [([0, 4, 6, 2], 0), ([1, 3, 7, 5], 1), ([0, 1, 5, 4], 2), ([2, 6, 7, 3], 3), ([0, 2, 3, 1], 4), ([4, 5, 7, 6], 5)];
         let (mut t, mut f) = (Vec::new(), Vec::new());
         for (q, tag) in quads {
@@ -322,7 +324,7 @@ mod tests {
 
     #[test]
     fn pyramids_on_a_face_are_kept_by_the_tet_mesh() {
-        let s = slab();
+        let s = slab(1.0);
         let quads = bottom_quads();
         let t = pyramid_surface(&s, &[4], &quads, 6).unwrap();
         assert_eq!(t.apexes.len(), 16);
@@ -342,16 +344,14 @@ mod tests {
 
     #[test]
     fn a_pyramid_through_a_thin_region_is_refused() {
-        let s = slab();
-        // 1 × 1 quads: apexes 0.6 up, inside the 1 mm slab; one 2 × 2 quad: its apex 1.2 up, outside.
+        // 1 × 1 quads: apexes 0.4 up, inside a 1 mm slab, through a 0.3 mm one.
         let quads: Vec<[[f64; 3]; 4]> = (0..4)
             .map(|k| ((k % 2) as f64, (k / 2) as f64))
             .map(|(x, y)| [[x, y, 0.0], [x + 1.0, y, 0.0], [x + 1.0, y + 1.0, 0.0], [x, y + 1.0, 0.0]])
             .collect();
-        let t = pyramid_surface(&s, &[4], &quads, 6).unwrap();
-        let big: Vec<[[f64; 3]; 4]> = vec![[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 2.0, 0.0], [0.0, 2.0, 0.0]]];
-        let tall = pyramid_surface(&s, &[4], &big, 6).unwrap();
-        assert!(BoundarySurface::new(&t.positions, &t.triangles, &t.tri_face, &SurfaceOptions::default()).is_ok());
-        assert!(BoundarySurface::new(&tall.positions, &tall.triangles, &tall.tri_face, &SurfaceOptions::default()).is_err());
+        for (height, ok) in [(1.0, true), (0.3, false)] {
+            let t = pyramid_surface(&slab(height), &[4], &quads, 6).unwrap();
+            assert_eq!(BoundarySurface::new(&t.positions, &t.triangles, &t.tri_face, &SurfaceOptions::default()).is_ok(), ok, "{height}");
+        }
     }
 }

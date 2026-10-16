@@ -1169,6 +1169,9 @@ pub const CELLS: &[Field] = &[
     HEX_SIZE,
     HEX_ORDER,
     TOLERANCE,
+    choice("transition", "Hex–tet joint", &[("pyramid", "Pyramids (conforming)"), ("tie", "Tie")])
+        .help("How a tet cell meets the hex cells across its partitions: a layer of pyramids on the hex faces, one conforming mesh (linear elements), or a tie between the two meshes.")
+        .def("\"pyramid\""),
 ];
 
 pub const HEX_PROJECT: &[Field] = &[

@@ -255,10 +255,16 @@ pub(super) struct BodyTets {
     surface_volume: f64,
 }
 
+impl BodyTets {
+    pub(super) fn new(name: String, face_names: Vec<String>, mesh: QualityMesh, steiner: usize, cavities: usize, surface_volume: f64) -> Self {
+        BodyTets { name, face_names, mesh, steiner, cavities, surface_volume }
+    }
+}
+
 /// Mesh one body or imported surface; the model is not touched. With `several` bodies an error
 /// names the body.
 pub(super) fn mesh_body(
-    s: &Session,
+    design: Option<&fieldcraft_geometry::Design>,
     p: &Value,
     input: super::hex::Input,
     cdt: &CdtOptions,
@@ -269,7 +275,7 @@ pub(super) fn mesh_body(
     let mesh = || -> Result<BodyTets> {
         // The exact faces of a design body; an imported surface keeps to its triangles.
         let analytic = match p.get("surface") {
-            None => s.design.as_deref().and_then(|d| d.body(&input.name)).map(analytic_surfaces).unwrap_or_default(),
+            None => design.and_then(|d| d.body(&input.name)).map(analytic_surfaces).unwrap_or_default(),
             Some(_) => Vec::new(),
         };
         fieldcraft_model::progress::stage(&format!("{}: boundary", input.name), None, "");
@@ -303,7 +309,7 @@ fn tet_generate(s: &mut Session, p: &Value) -> Result<Value> {
     let several = inputs.len() > 1;
     let mut meshed = Vec::with_capacity(inputs.len());
     for input in inputs {
-        meshed.push(mesh_body(s, p, input, &cdt_options, &options, quality, several)?);
+        meshed.push(mesh_body(s.design.as_deref(), p, input, &cdt_options, &options, quality, several)?);
     }
 
     // Replace the bodies' meshes (replace.rs); other bodies and the definitions stay.

@@ -359,7 +359,7 @@ pub static CATALOGUE: &[Capability] = &[
         "Partitioned Mesh",
         Mesh,
         "Structured Hex",
-        "One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions",
+        "One mesh of a partitioned part, a method per cell (hex, tet, or all hex as conforming blocks); cells joined across partitions, tet cells to hex cells through conforming pyramids",
         &["mesh.hex.blocks"],
     ),
     ready(
@@ -393,7 +393,6 @@ pub static CATALOGUE: &[Capability] = &[
         "M5",
         "Find sweepable and mappable regions of 3D parts (extruded cross-sections are already cut into blocks by Hex Mesh)",
     ),
-    soon("mesh.transition", "Transition", Mesh, "Structured Hex", "M5", "Conforming tet–hex interfaces with pyramids"),
     ready(
         "mesh.hex.octree",
         "Octree Hex",

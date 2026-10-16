@@ -35,14 +35,14 @@ use fieldcraft_model::{ElementFace, GeometryRef, Model, Set, Tie};
 use serde_json::{Value, json};
 
 use super::hex::{Input, add_cells, add_hex, hex_body};
-use super::mesh::{BodyTets, add_tets, mesh_body, quality_options};
+use super::mesh::{add_tets, mesh_body, quality_options};
 use crate::requirement::Requirement;
 use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 
 pub const CELLS: CommandSpec = CommandSpec {
     id: "mesh.cells",
     label: "Partitioned Mesh",
-    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); otherwise, as between a hex and a tet cell, they are tied: each cell's tied cut faces make one tie, `tie_<cell>` (`/` as `_`; sets `<tie>_main`, the facing cells' cut faces, and `<tie>_secondary`, the cell's own), hex cells main to tet cells and otherwise by name, so a node is a secondary node of one such tie only; the ties an earlier run made on these cells are replaced. The cells of one design body that may sweep (auto, hex, swept, extrude, revolve) are swept together first: one cross-section and one set of layers for all of them, so they share their nodes across every cut, T-junctions included, with no edge seeds (`swept_together` names the body; `not_swept_together` says why not, and those cells are meshed one by one). Reports each cell's method (and why auto fell back to tet), its `quality` (volume, smallest and mean scaled Jacobian, largest edge ratio), and each interface: `merged` with the nodes merged or shared, or `tied` (with `why` when both cells are of one design body: the tet cell and why auto fell back, or why the body's cells were not swept together)"#,
+    params: r#"{"methods": {"Body1/a": "tet", "Body1/b": "swept"} (per cell; default `default`), "default": "auto", "bodies": ["Body1/a", "Body1/b"] (default: every body of the open design), "size": 2.0 (element size, mm; default 1/25 of the bounding-box diagonal of all of them), "order": 1 | 2 (hex8 and tet4, or hex20 and tet10), "tolerance": 0.05 (chordal tolerance, mm), "transition": "pyramid" | "tie" (how a tet cell meets hex cells; default pyramid)} — replaces the cells' meshes (as mesh.tet.generate; other bodies keep theirs) with one mesh of the cells, each with its method: "auto" (structured hex where a method fits, else tet), "hex" (any structured hex method), "swept", "extrude", "sweep", "revolve", "mapped" or "tet"; or "default": "blocks" (with no `methods`): every cell a mapped block, division counts assigned over all cells together, exactly mesh.hex.blocks with the same parameters. Cells on either side of a partition (faces `partition:<name>:a` and `:b`) are joined: where their element faces match node for node the nodes are merged (conforming); between a tet cell and the hex cells across its partitions, with "transition": "pyramid" (linear meshes), the tet cell is meshed after them with a pyramid (pyramid5) on every hex element face of the cut, its tetrahedra sharing the pyramids' sides, so the mesh is conforming there (`joined`: `pyramids`, with their count); where that cannot be built (a cut the hex faces do not cover exactly, quadratic elements, a pyramid that would reach through a thin cell) the cell says why in `no_pyramids` and is tied; otherwise, as between a hex and a tet cell with "transition": "tie", they are tied: each cell's tied cut faces make one tie, `tie_<cell>` (`/` as `_`; sets `<tie>_main`, the facing cells' cut faces, and `<tie>_secondary`, the cell's own), hex cells main to tet cells and otherwise by name, so a node is a secondary node of one such tie only; the ties an earlier run made on these cells are replaced. The cells of one design body that may sweep (auto, hex, swept, extrude, revolve) are swept together first: one cross-section and one set of layers for all of them, so they share their nodes across every cut, T-junctions included, with no edge seeds (`swept_together` names the body; `not_swept_together` says why not, and those cells are meshed one by one). Reports each cell's method (and why auto fell back to tet), its `quality` (volume, smallest and mean scaled Jacobian, largest edge ratio), and each interface: `merged` with the nodes merged or shared, or `tied` (with `why` when both cells are of one design body: the tet cell and why auto fell back, or why the body's cells were not swept together)"#,
     form: Some(super::forms::CELLS),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -80,10 +80,22 @@ impl Method {
     }
 }
 
-/// A meshed cell.
+mod transition;
+
+/// A meshed cell; tet cells are meshed after the hex cells are in the model, so they can meet
+/// them through pyramids.
 enum Meshed<'a> {
-    Hex(Input<'a>, HexMesh),
-    Tet(BodyTets),
+    Hex(Box<(Input<'a>, HexMesh)>),
+    Tet,
+}
+
+/// How a tet cell joins the hex cells across its partitions.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Transition {
+    /// Pyramids on the hex faces, conforming (falls back to a tie with the reason).
+    Pyramid,
+    /// A tie (dual mortar), each mesh as its method made it.
+    Tie,
 }
 
 fn cells(s: &mut Session, p: &Value) -> Result<Value> {
@@ -104,6 +116,11 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
             Some(2) => true,
             _ => return Err(EngineError::invalid("order", "must be 1 or 2")),
         },
+    };
+    let transition = match p.get("transition").map(|v| v.as_str()) {
+        None | Some(Some("pyramid")) => Transition::Pyramid,
+        Some(Some("tie")) => Transition::Tie,
+        Some(_) => return Err(EngineError::invalid("transition", "must be \"pyramid\" or \"tie\"")),
     };
     let default = p.get("default").map(Method::parse).transpose()?.unwrap_or(Method::Auto);
     let methods: BTreeMap<String, Method> = match p.get("methods") {
@@ -215,20 +232,19 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
             let mesh = hex_body(&hex_params, &b, m, quadratic, size)?;
             Ok((b, mesh))
         };
-        let tet = |s: &Session| mesh_body(s, &tet_params, input()?, &cdt, &tet_options, quality, true);
         let (cell, mut info) = match method {
             Method::Hex(m) => {
                 let (b, mesh) = hex(m)?;
                 let info = json!({"method": mesh.report.method.name()});
-                (Meshed::Hex(b, mesh), info)
+                (Meshed::Hex(Box::new((b, mesh))), info)
             }
-            Method::Tet => (Meshed::Tet(tet(s)?), json!({"method": "tet"})),
+            Method::Tet => (Meshed::Tet, json!({"method": "tet"})),
             Method::Auto => match hex(HexMethod::Auto) {
                 Ok((b, mesh)) => {
                     let info = json!({"method": mesh.report.method.name()});
-                    (Meshed::Hex(b, mesh), info)
+                    (Meshed::Hex(Box::new((b, mesh))), info)
                 }
-                Err(e) => (Meshed::Tet(tet(s)?), json!({"method": "tet", "why": e.to_string()})),
+                Err(e) => (Meshed::Tet, json!({"method": "tet", "why": e.to_string()})),
             },
         };
         if let Some(o) = info.as_object_mut() {
@@ -259,19 +275,50 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
         }
         interfaces.extend(swept_interfaces(&design, inputs, cm));
     }
-    let mut k = 0;
-    for (i, _) in shapes.iter().enumerate() {
-        if joint.get(i).copied().flatten().is_some() {
-            continue;
-        }
-        let Some((cell, mut info)) = meshed.get_mut(k).map(|(c, v)| (c, std::mem::take(v))) else { break };
-        k += 1;
-        let (kind, elements, nodes) = match &*cell {
-            Meshed::Hex(b, m) => {
+    // The cells meshed alone, in the order of `shapes`: the hex ones first, then the tet ones,
+    // which may meet the hex cells through pyramids.
+    let alone: Vec<usize> = (0..shapes.len()).filter(|&i| joint.get(i).copied().flatten().is_none()).collect();
+    let mut hex_cells: Vec<String> = swept.iter().flat_map(|(_, _, inputs, _)| inputs.iter().map(|b| b.name.clone())).collect();
+    let mut tet_cells = Vec::new();
+    for (&i, (cell, info)) in alone.iter().zip(meshed.iter_mut()) {
+        let mut info = std::mem::take(info);
+        match &*cell {
+            Meshed::Hex(hex) => {
+                let (b, m) = &**hex;
                 add_hex(model, b, m)?;
-                (m.kind, m.element_count(), m.nodes.len())
+                hex_cells.push(b.name.clone());
+                if let Some(o) = info.as_object_mut() {
+                    o.insert("kind".into(), json!(m.kind.name()));
+                    o.insert("elements".into(), json!(m.element_count()));
+                    o.insert("nodes".into(), json!(m.nodes.len()));
+                }
+                report.push((i, info));
             }
-            Meshed::Tet(t) => {
+            Meshed::Tet => tet_cells.push((i, info)),
+        }
+    }
+    for (i, mut info) in tet_cells {
+        let Some(shape) = shapes.get(i) else { continue };
+        let input = Input { seeds: seeds.clone(), ..super::hex::shape_input(shape, Some(tolerance))? };
+        let pyramids = if transition == Transition::Tie {
+            Err("`transition` is \"tie\"".to_string())
+        } else if quadratic {
+            Err("pyramid transitions are linear (pyramid5); order 2 is tied".to_string())
+        } else {
+            transition::mesh_with_pyramids(&design, model, &tet_params, &input, &hex_cells, &cdt, &tet_options)?
+        };
+        let (kind, elements, nodes) = match pyramids {
+            Ok(c) => {
+                interfaces.extend(c.interfaces.iter().cloned());
+                let kind = c.tets.mesh.kind;
+                let (elements, nodes) = transition::add(model, c)?;
+                (kind, elements, nodes)
+            }
+            Err(why) => {
+                if let Some(o) = info.as_object_mut() {
+                    o.insert("no_pyramids".into(), json!(why));
+                }
+                let t = mesh_body(Some(&design), &tet_params, input, &cdt, &tet_options, quality, true)?;
                 add_tets(model, &t.name, &t.face_names, &t.mesh)?;
                 (t.mesh.kind, t.mesh.elements.len(), t.mesh.points.len())
             }
@@ -660,7 +707,7 @@ mod tests {
     fn hex_and_tet_cells_are_tied_and_matching_hex_cells_merged() {
         let (_dir, mut s) = cut_plate();
         // A tet cell next to a hex cell: tied, the hex cell main.
-        let r = s.execute("mesh.cells", &json!({"methods": {"Body1/a": "tet", "Body1/b": "mapped"}, "size": 2.5})).unwrap();
+        let r = s.execute("mesh.cells", &json!({"methods": {"Body1/a": "tet", "Body1/b": "mapped"}, "size": 2.5, "transition": "tie"})).unwrap();
         assert_eq!(r["cells"][0]["kind"], "tet4", "{r}");
         assert_eq!(r["cells"][1]["kind"], "hex8", "{r}");
         let i = &r["interfaces"][0];
@@ -679,7 +726,7 @@ mod tests {
         let separate = r["cells"].as_array().unwrap().iter().map(|c| c["nodes"].as_u64().unwrap()).sum::<u64>();
         assert_eq!(r["nodes"].as_u64().unwrap() + i["nodes"].as_u64().unwrap(), separate, "{r}");
         // Rerunning replaces the tie it made rather than adding another.
-        s.execute("mesh.cells", &json!({"methods": {"Body1/a": "tet"}, "size": 2.5})).unwrap();
+        s.execute("mesh.cells", &json!({"methods": {"Body1/a": "tet"}, "size": 2.5, "transition": "tie"})).unwrap();
         assert_eq!(s.model.ties().len(), 1);
     }
 
@@ -762,11 +809,10 @@ mod tests {
     }
 
     /// A 40 × 10 × 10 bar in uniaxial tension, cut in the middle: one half hex, the other tet,
-    /// tied. With ν = 0, symmetry conditions on three faces and the end load spread by consistent
-    /// weights, the stress is uniform, which both elements and the dual mortar tie carry exactly:
-    /// the end moves F L / (E A).
-    #[test]
-    fn a_tied_hex_tet_bar_in_tension_stretches_as_the_formula_says() {
+    /// joined by `transition` (`joined` in the reply). With ν = 0, symmetry conditions on three
+    /// faces and the end load spread by consistent weights, the stress is uniform, which the
+    /// elements, the pyramids and the dual mortar tie all carry exactly: the end moves F L / (E A).
+    fn hex_tet_bar_in_tension(transition: &str, joined: &str) -> Session {
         let commands = json!({"commands": [
             {"command": "solid.box", "params": {"length": 40, "width": 10, "height": 10, "body_name": "Bar"}},
         ]});
@@ -786,8 +832,8 @@ mod tests {
         point[axis] = mid;
         s.execute("geometry.datum", &json!({"name": "Mid", "by": {"type": "point_normal", "point": point, "normal": normal}})).unwrap();
         s.execute("geometry.partition", &json!({"name": "Cut", "datum": "Mid"})).unwrap();
-        let r = s.execute("mesh.cells", &json!({"methods": {"Bar/a": "mapped", "Bar/b": "tet"}, "size": 2.5})).unwrap();
-        assert_eq!(r["interfaces"][0]["joined"], "tied", "{r}");
+        let r = s.execute("mesh.cells", &json!({"methods": {"Bar/a": "mapped", "Bar/b": "tet"}, "size": 2.5, "transition": transition})).unwrap();
+        assert_eq!(r["interfaces"][0]["joined"], joined, "{r}");
 
         let m = &s.model;
         let on = |k: usize, v: f64| -> Vec<u32> { m.nodes().iter().filter(|(_, n)| (n.xyz[k] - v).abs() < 1e-9).map(|(l, _)| *l).collect() };
@@ -829,6 +875,27 @@ mod tests {
             let u = n["displacement"][axis].as_f64().unwrap();
             assert!((u - expected).abs() < 1e-6 * expected, "{u} vs {expected}: {n}");
         }
+        s
+    }
+
+    #[test]
+    fn a_tied_hex_tet_bar_in_tension_stretches_as_the_formula_says() {
+        let s = hex_tet_bar_in_tension("tie", "tied");
+        assert_eq!(s.model.ties().len(), 1);
+    }
+
+    /// Through pyramids the bar is one conforming mesh: no tie, no free faces inside, every
+    /// element valid.
+    #[test]
+    fn a_hex_tet_bar_joined_by_pyramids_is_conforming_and_stretches_as_the_formula_says() {
+        let mut s = hex_tet_bar_in_tension("pyramid", "pyramids");
+        assert!(s.model.ties().is_empty());
+        let kinds: BTreeSet<&str> = s.model.elements().values().map(|e| e.kind.name()).collect();
+        assert_eq!(kinds.into_iter().collect::<Vec<_>>(), ["hex8", "pyramid5", "tet4"]);
+        let d = s.execute("mesh.check.duplicates", &json!({})).unwrap();
+        assert_eq!(d["counts"], json!({"coincident": 0, "cracks": 0, "duplicate_elements": 0, "free_edges": 0}), "{d}");
+        let q = s.execute("mesh.quality", &json!({})).unwrap();
+        assert_eq!(q["invalid"]["count"], 0, "{q}");
     }
 
     /// A box cut by planes into cells, `methods` per cell, a heat source in every cell and

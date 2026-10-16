@@ -769,6 +769,23 @@ mod tests {
         }
     }
 
+    /// The whole crank extruded all-hex (#198): its back pocket's floor is a rounded rectangle,
+    /// straight sides running tangent into corner arcs, so the region is a disk whose O-grid's
+    /// middle block follows its 6:1 elongation; a square middle block squashed its elements to a
+    /// scaled Jacobian of 0.16 (now 0.39 at 2 mm, the worst elements elsewhere at 3 and 5 mm).
+    #[test]
+    fn the_crank_pocket_floor_keeps_its_elements_square() {
+        let bytes = fieldcraft_geometry::script_design(CRANK_ARM).unwrap();
+        let (_dir, path) = crate::tests::design_file(&bytes);
+        let mut s = Session::default();
+        s.execute("geometry.open", &json!({"path": path})).unwrap();
+        for size in [2.0, 3.0, 5.0] {
+            let r = s.execute("mesh.hex.generate", &json!({"body": "CrankArm", "size": size, "method": "extrude"})).unwrap();
+            let min = r["bodies"][0]["quality"]["min_scaled_jacobian"].as_f64().unwrap();
+            assert!(min > 0.35, "{size}: {r}");
+        }
+    }
+
     /// `file.sample NAME`, checked clean: ready, no errors or warnings.
     fn open(name: &str) -> Session {
         let mut s = Session::default();

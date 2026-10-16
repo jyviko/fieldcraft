@@ -19,9 +19,12 @@
 //!   `m_{k-1}` and `m_{k+1}` divisions, the counts of the lines that end on the sides before
 //!   and after it, so `m_k = (n_{k+1} + n_{k+2} − n_k) / 2`: the loop's count is even and each
 //!   side shorter than the other two together.
-//! - **Disk**: one smooth loop (no corners): an O-grid ("butterfly"): a mapped square in the
-//!   middle, its corners halfway from the centroid to the loop's quarter points, and rings of
-//!   quadrilaterals from the square out to the loop. The loop's count is a multiple of four.
+//! - **Disk**: one smooth loop (no corners; a straight side running tangent into an arc is no
+//!   corner): an O-grid ("butterfly"): a mapped rectangle in the middle on the region's principal
+//!   axes, inset from the boundary by the same distance all round (on a circle, the square whose
+//!   corners are halfway to the boundary; on a slot, a long thin block), and rings of
+//!   quadrilaterals from it out to the loop, then smoothed. The loop's count is a multiple of
+//!   four.
 //! - **Free**: anything else: even loops for the free all-quad mesher
 //!   ([`crate::quad::free_quad_mesh`]).
 //!
@@ -363,7 +366,7 @@ fn annulus(loops: &[Vec<Q>], size: &dyn SizeField, opts: &QuadOptions) -> Result
     let inner_ids: Vec<u32> = (0..n).map(|k| (n + ii.get((k + shift) % n).copied().unwrap_or(0)) as u32).collect();
     let mut nodes: Vec<Q> = outer.iter().chain(inner.iter()).copied().collect();
     let mut quads = Vec::with_capacity(quads_count);
-    if !rings(&mut nodes, &outer_ids, &inner_ids, m, &mut quads)? {
+    if !rings(&mut nodes, &outer_ids, &inner_ids, m, true, &mut quads)? {
         return Ok(None);
     }
     Ok(Some(QuadMesh { nodes, quads, boundary_nodes: 2 * n, stats: QuadStats::default() }))
@@ -371,8 +374,9 @@ fn annulus(loops: &[Vec<Q>], size: &dyn SizeField, opts: &QuadOptions) -> Result
 
 /// Rings of quadrilaterals between a closed outer node sequence (counter-clockwise) and an inner
 /// one of the same length, node `k` of each joined by a straight radial line divided into `m`.
-/// `false` when a quadrilateral would not be strictly convex.
-fn rings(nodes: &mut Vec<Q>, outer: &[u32], inner: &[u32], m: usize, quads: &mut Vec<[u32; 4]>) -> Result<bool> {
+/// `false` when a quadrilateral would not be strictly convex, unless `check` is off (a caller
+/// that smooths and checks the mesh itself).
+fn rings(nodes: &mut Vec<Q>, outer: &[u32], inner: &[u32], m: usize, check: bool, quads: &mut Vec<[u32; 4]>) -> Result<bool> {
     let n = outer.len();
     let at = |nodes: &[Q], i: u32| nodes.get(i as usize).copied().unwrap_or([0.0; 2]);
     let mut ring_ids: Vec<Vec<u32>> = vec![outer.to_vec()];
@@ -395,7 +399,7 @@ fn rings(nodes: &mut Vec<Q>, outer: &[u32], inner: &[u32], m: usize, quads: &mut
             };
             // Outer ring counter-clockwise, inner ring inside it: (p0, p1, q1, q0) turns left.
             let q = [p0, p1, q1, q0];
-            if planar_quad_validity(&q.map(|i| at(nodes, i)))? != Validity::Valid {
+            if check && planar_quad_validity(&q.map(|i| at(nodes, i)))? != Validity::Valid {
                 return Ok(false);
             }
             quads.push(q);
@@ -412,12 +416,10 @@ fn disk(loops: &[Vec<Q>], size: &dyn SizeField, opts: &QuadOptions) -> Result<Op
     if n < 8 || !n.is_multiple_of(4) || n > MAX_ANNULUS_NODES {
         return Ok(None);
     }
-    let q = n / 4;
     let ccw = signed_area(outer) > 0.0;
-    let order: Vec<u32> = if ccw { (0..n as u32).collect() } else { (0..n as u32).rev().collect() };
     let at = |nodes: &[Q], i: u32| nodes.get(i as usize).copied().unwrap_or([0.0; 2]);
-    // The area centroid.
-    let (mut cx, mut cy, mut a2) = (0.0, 0.0, 0.0);
+    // The area centroid and second moments about it (Green's theorem over the polygon).
+    let (mut a2, mut cx, mut cy) = (0.0, 0.0, 0.0);
     for k in 0..n {
         let (p, r) = (outer[k], outer[(k + 1) % n]);
         let c = p[0] * r[1] - r[0] * p[1];
@@ -429,17 +431,90 @@ fn disk(loops: &[Vec<Q>], size: &dyn SizeField, opts: &QuadOptions) -> Result<Op
         return Ok(None);
     }
     let centre = [cx / (3.0 * a2), cy / (3.0 * a2)];
-    let mut nodes: Vec<Q> = outer.clone();
-    // The middle square's corners, halfway to the loop's quarter points, and its perimeter.
-    let corner = |k: usize| {
-        let b = at(outer, order.get((k * q) % n).copied().unwrap_or(0));
-        [centre[0] + 0.5 * (b[0] - centre[0]), centre[1] + 0.5 * (b[1] - centre[1])]
+    let (mut ixx, mut iyy, mut ixy) = (0.0, 0.0, 0.0);
+    for k in 0..n {
+        let (p, r) = (outer[k], outer[(k + 1) % n]);
+        let (p, r) = ([p[0] - centre[0], p[1] - centre[1]], [r[0] - centre[0], r[1] - centre[1]]);
+        let c = p[0] * r[1] - r[0] * p[1];
+        ixx += c * (p[1] * p[1] + p[1] * r[1] + r[1] * r[1]);
+        iyy += c * (p[0] * p[0] + p[0] * r[0] + r[0] * r[0]);
+        ixy += c * (p[0] * r[1] + 2.0 * p[0] * p[1] + 2.0 * r[0] * r[1] + r[0] * p[1]);
+    }
+    // ∫y², ∫x² (both × 12) and ∫xy (× 24), signed as the loop: the region's long direction is
+    // the principal axis of the largest ∫ along², the angle of 0.5 · atan2(2 ∫xy, ∫x² − ∫y²).
+    let sign = a2.signum();
+    let theta = 0.5 * (sign * ixy).atan2(sign * (iyy - ixx));
+    let (u, v) = ([theta.cos(), theta.sin()], [-theta.sin(), theta.cos()]);
+    let local = |p: Q| {
+        let d = [p[0] - centre[0], p[1] - centre[1]];
+        [d[0] * u[0] + d[1] * u[1], d[0] * v[0] + d[1] * v[1]]
     };
+    // Half-widths of the region along its axes, from the centroid to the farther boundary.
+    let (mut a, mut b) = (0.0f64, 0.0f64);
+    for &p in outer.iter() {
+        let l = local(p);
+        a = a.max(l[0].abs());
+        b = b.max(l[1].abs());
+    }
+    if !(a > 0.0 && b > 0.0) {
+        return Ok(None);
+    }
+    // The middle block: a rectangle on the axes inset from the boundary by the same distance all
+    // round, its half-widths (a − b + c, c) with c = b / (2√2) (on a circle, the square whose
+    // corners are halfway to the boundary). A square middle block on an elongated region (a slot,
+    // a rounded pocket) squashes the elements at its long sides (#198).
+    let half_short = b / (2.0 * std::f64::consts::SQRT_2);
+    let half_long = (a - b + half_short).max(half_short);
+    let signs: [Q; 4] = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+    let world = |l: Q| [centre[0] + l[0] * u[0] + l[1] * v[0], centre[1] + l[0] * u[1] + l[1] * v[1]];
+    let corners: [Q; 4] = signs.map(|s| world([s[0] * half_long, s[1] * half_short]));
+    // Each corner's partner on the loop is a node near the point the inset carries the corner
+    // out to, along its diagonal; the loop nodes between two partners pair with the side between
+    // the corners, so the sides' divisions follow: q1 along the long axis, q2 across, their sum
+    // half the loop's.
+    let inset = b - half_short;
+    let ccw_order: Vec<u32> = if ccw { (0..n as u32).collect() } else { (0..n as u32).rev().collect() };
+    let targets: [Q; 4] = std::array::from_fn(|k| world([signs[k][0] * (half_long + inset), signs[k][1] * (half_short + inset)]));
+    let dist = |i: usize, t: Q| {
+        let p = at(outer, ccw_order.get(i % n).copied().unwrap_or(0));
+        (p[0] - t[0]).powi(2) + (p[1] - t[1]).powi(2)
+    };
+    let nearest = |t: Q| (0..n).min_by(|&x, &y| dist(x, t).total_cmp(&dist(y, t))).unwrap_or(0);
+    let p: [usize; 4] = targets.map(nearest);
+    let run = |k: usize| (p[(k + 1) % 4] + n - p[k]) % n;
+    let half = n / 2;
+    // The four partners sit at `start`, `start + q1`, `start + half` and `start + half + q1`:
+    // the start and q1 (near the mean of the two long runs) that put them nearest their targets.
+    let mean = (run(0) + run(2)) / 2;
+    let mut best = (f64::INFINITY, p[0], mean.clamp(1, half - 1));
+    for q1 in mean.saturating_sub(2).max(1)..=(mean + 2).min(half - 1) {
+        for shift in 0..5 {
+            let start = (p[0] + n + shift - 2) % n;
+            let offsets = [0, q1, half, half + q1];
+            let cost: f64 = (0..4).map(|k| dist(start + offsets[k], targets[k])).sum();
+            if cost < best.0 {
+                best = (cost, start, q1);
+            }
+        }
+    }
+    let (_, start, q1) = best;
+    let q2 = half - q1;
+    let offsets = [0, q1, q1 + q2, 2 * q1 + q2];
+    let lengths = [q1, q2, q1, q2];
+    let order: Vec<u32> = (0..n).map(|k| ccw_order.get((start + k) % n).copied().unwrap_or(0)).collect();
+    let mut nodes: Vec<Q> = outer.clone();
     let mut square: Vec<u32> = Vec::with_capacity(n);
+    // Each side's nodes spaced as the loop nodes they pair with (by chord length along the
+    // run), so the lines between the two run straight across and do not shear.
     for k in 0..4 {
-        let (c0, c1) = (corner(k), corner(k + 1));
-        for j in 0..q {
-            let t = j as f64 / q as f64;
+        let (c0, c1) = (corners[k], corners[(k + 1) % 4]);
+        let run: Vec<Q> = (0..=lengths[k]).map(|j| at(outer, order.get((offsets[k] + j) % n).copied().unwrap_or(0))).collect();
+        let along: Vec<f64> = run.windows(2).map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt()).collect();
+        let total: f64 = along.iter().sum();
+        let mut acc = 0.0;
+        for j in 0..lengths[k] {
+            let t = if total > 0.0 { acc / total } else { j as f64 / lengths[k] as f64 };
+            acc += along.get(j).copied().unwrap_or(0.0);
             nodes.push([c0[0] + t * (c1[0] - c0[0]), c0[1] + t * (c1[1] - c0[1])]);
             square.push(nodes.len() as u32 - 1);
         }
@@ -451,17 +526,18 @@ fn disk(loops: &[Vec<Q>], size: &dyn SizeField, opts: &QuadOptions) -> Result<Op
     let mean_gap = gap.sum::<f64>() / n as f64;
     let h = crate::size::checked_size(size, [centre[0], centre[1], 0.0])?;
     let m = (mean_gap / h).round().max(1.0) as usize;
-    let count = n.saturating_mul(m).saturating_add(q * q);
+    let count = n.saturating_mul(m).saturating_add(q1 * q2);
     if count > opts.max_elements {
         return Err(Error::Limit(format!("the mesh would have {count} quadrilaterals; the limit is {}", opts.max_elements)));
     }
     let mut quads = Vec::with_capacity(count);
-    if !rings(&mut nodes, &order, &square, m, &mut quads)? {
+    if !rings(&mut nodes, &order, &square, m, false, &mut quads)? {
         return Ok(None);
     }
-    // The square: a q × q transfinite grid on its perimeter (counter-clockwise from corner 0).
+    // The middle block: a q1 × q2 transfinite grid on its perimeter (counter-clockwise from
+    // corner 0).
     let side = |k: usize, rev: bool| -> Vec<u32> {
-        let mut v: Vec<u32> = (0..=q).map(|j| square.get((k * q + j) % n).copied().unwrap_or(0)).collect();
+        let mut v: Vec<u32> = (0..=lengths[k]).map(|j| square.get((offsets[k] + j) % n).copied().unwrap_or(0)).collect();
         if rev {
             v.reverse();
         }
@@ -470,6 +546,16 @@ fn disk(loops: &[Vec<Q>], size: &dyn SizeField, opts: &QuadOptions) -> Result<Op
     let (bottom, right, top, left) = (side(0, false), side(1, false), side(2, true), side(3, true));
     if !fill_block(&mut nodes, [&bottom, &right, &top, &left], false, &mut quads)? {
         return Ok(None);
+    }
+    // The rings and the middle block are placed by construction only; where the loop's nodes
+    // crowd round the block's corners (a slot's round ends) the straight radial lines shear the
+    // rings, even fold them on a coarse loop: smooth them (the smoother untangles first), then
+    // every quadrilateral must be valid.
+    crate::quad::smooth::smooth(&mut nodes, &quads, n, TRIANGLE_SWEEPS)?;
+    for q in &quads {
+        if planar_quad_validity(&q.map(|i| at(&nodes, i)))? != Validity::Valid {
+            return Ok(None);
+        }
     }
     Ok(Some(QuadMesh { nodes, quads, boundary_nodes: n, stats: QuadStats::default() }))
 }
@@ -570,5 +656,86 @@ mod tests {
         let (_, s) =
             mesh(std::slice::from_ref(&pts), &[vec![0, 1, 2]], Scheme::Triangle([0, 1, 2]), &UniformSize(1.0), &QuadOptions::default()).unwrap();
         assert_eq!(s, Scheme::Free);
+    }
+
+    /// A rounded rectangle `w` × `h` with corner radius `r` (counter-clockwise from the bottom
+    /// side's start), each side and each quarter arc one curve use divided about `size` apart (a
+    /// side of no length left out): every junction is a straight side tangent to an arc (180°),
+    /// so the loop has no corners.
+    fn rounded_rectangle(w: f64, h: f64, r: f64, size: f64) -> (Vec<Q>, Vec<Vec<Q>>, Vec<usize>) {
+        let (a, b) = (0.5 * w - r, 0.5 * h - r);
+        let count = |len: f64| ((len / size).round() as usize).max(1);
+        let mut curves: Vec<Vec<Q>> = Vec::new();
+        for k in 0..4 {
+            let (half, other) = if k % 2 == 0 { (a, b) } else { (b, a) };
+            // Side k runs along direction d at distance other + r from the centre, then the arc
+            // round the corner after it.
+            let t = 0.5 * PI * k as f64;
+            let (d, nrm) = ([t.cos(), t.sin()], [t.sin(), -t.cos()]);
+            let at = |s: f64, off: f64| [d[0] * s + nrm[0] * off, d[1] * s + nrm[1] * off];
+            let n = count(2.0 * half);
+            if half > 0.0 {
+                curves.push((0..=n).map(|j| at(-half + 2.0 * half * j as f64 / n as f64, other + r)).collect());
+            }
+            let centre = at(half, other);
+            let m = count(0.5 * PI * r);
+            curves.push(
+                (0..=m)
+                    .map(|j| {
+                        let u = t - 0.5 * PI + 0.5 * PI * j as f64 / m as f64;
+                        [centre[0] + r * u.cos(), centre[1] + r * u.sin()]
+                    })
+                    .collect(),
+            );
+        }
+        let mut pts = Vec::new();
+        let mut starts = Vec::new();
+        for c in &curves {
+            starts.push(pts.len());
+            pts.extend(c.iter().take(c.len() - 1).copied());
+        }
+        (pts, curves, starts)
+    }
+
+    /// The smallest corner scaled Jacobian of a planar quad mesh.
+    fn min_scaled_jacobian(m: &QuadMesh) -> f64 {
+        m.quads
+            .iter()
+            .flat_map(|q| {
+                let p = q.map(|i| m.nodes[i as usize]);
+                (0..4).map(move |i| crate::quality::planar_corner(&p, i).1.unwrap_or(-1.0))
+            })
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    /// A slot-like region whose straight sides run tangent into its corner arcs (#198): its
+    /// tangent junctions are no corners, so it is a disk, and its O-grid's middle block follows
+    /// its elongation, so no element is squashed (a square middle block on a 6:1 region gave a
+    /// scaled Jacobian of 0.16).
+    #[test]
+    fn elongated_disks_keep_their_elements_square() {
+        for (w, h, r, size) in [
+            (82.0, 14.0, 3.0, 1.0),
+            (82.0, 14.0, 5.0, 3.0),
+            (82.0, 14.0, 5.0, 2.0),
+            (82.0, 14.0, 7.0, 1.5),
+            (40.0, 30.0, 5.0, 2.0),
+            (10.0, 10.0, 5.0, 0.5),
+        ] {
+            let (mut pts, curves, starts) = rounded_rectangle(w, h, r, size);
+            assert_eq!(classify(std::slice::from_ref(&curves)), Scheme::Disk);
+            // Pad to a multiple of four nodes, as the interval assignment would.
+            while pts.len() % 4 != 0 {
+                let (p, q) = (pts[0], pts[1]);
+                pts.insert(1, [0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1])]);
+            }
+            let (m, s) = mesh(std::slice::from_ref(&pts), &[starts], Scheme::Disk, &UniformSize(size), &QuadOptions::default()).unwrap();
+            assert_eq!(s, Scheme::Disk, "{w} × {h}");
+            assert_eq!(&m.nodes[..pts.len()], &pts[..]);
+            let area: f64 = m.quads.iter().map(|q| signed_area(&q.map(|i| m.nodes[i as usize]))).sum();
+            assert!((area - signed_area(&pts)).abs() < 1e-9 * w * h, "{w} × {h}: {area}");
+            let min = min_scaled_jacobian(&m);
+            assert!(min > 0.5, "{w} × {h} r {r}: min scaled Jacobian {min}");
+        }
     }
 }

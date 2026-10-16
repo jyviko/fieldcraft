@@ -178,6 +178,7 @@ impl Design {
             source: std::sync::Arc::clone(&self.source),
             opened: std::sync::Arc::clone(&self.source),
             history: self.history.clone(),
+            defeat: self.defeat.clone(),
         })
     }
 }

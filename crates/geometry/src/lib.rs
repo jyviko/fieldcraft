@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 pub mod check;
+pub mod defeature;
 mod design;
 mod edges;
 pub mod face_split;

@@ -32,6 +32,8 @@ pub struct Design {
     pub(crate) opened: std::sync::Arc<Vec<Shape>>,
     /// The timeline the design was rebuilt from ([`Design::features`]).
     pub(crate) history: Option<std::sync::Arc<crate::features::History>>,
+    /// The defeatures applied ([`Design::defeatured`]) and the design as opened before them.
+    pub(crate) defeat: Option<std::sync::Arc<crate::defeature::Applied>>,
 }
 
 /// A feature of the design that failed to rebuild.
@@ -164,6 +166,7 @@ pub(crate) fn rebuild(doc: &Document) -> Result<Design> {
         errors,
         cuts: Vec::new(),
         history: Some(std::sync::Arc::new(history)),
+        defeat: None,
     })
 }
 

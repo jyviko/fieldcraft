@@ -83,33 +83,49 @@ impl Capturer {
         self.target.samples
     }
 
+    /// The device pictures are drawn on, its queue and the target its passes have, for a caller
+    /// that draws through its own [`Pipelines`] in [`Capturer::offscreen`].
+    pub fn device(&self) -> (&wgpu::Device, &wgpu::Queue, GpuTarget) {
+        (&self.device, &self.queue, self.target)
+    }
+
     /// RGBA pixels (`w × h`, rows top to bottom) of `scene` with `layers` (the symbols, then
     /// the overlay) seen by `cam`, over the scene's background. Widths are taken as pixels.
     pub fn rgba(&self, scene: &Scene, layers: &[&Scene], cam: &Camera, w: u32, h: u32) -> Result<Vec<u8>> {
+        let (d, q) = (&self.device, &self.queue);
+        let drawn = self.offscreen(w, h, |pass| {
+            let mut uploaded = [Layer::default(), Layer::default(), Layer::default()];
+            for (layer, s) in uploaded.iter_mut().zip(std::iter::once(scene).chain(layers.iter().copied())) {
+                layer.upload(d, q, &GpuScene::from_scene(s, 1.0));
+            }
+            self.pipelines.write_frame(q, &Frame::of(cam, w as f32, h as f32, scene.radius));
+            let [s, y, o] = &uploaded;
+            self.pipelines.paint(pass, s, y, o);
+        })?;
+        finish(&drawn, scene, layers, cam, w, h)
+    }
+
+    /// The premultiplied RGBA pixels (`w × h`, rows top to bottom, transparent where nothing
+    /// is drawn) of one render pass with the viewport's MSAA and depth, whose contents `paint`
+    /// records (uploads included). Sizes are checked first; device errors in `paint` and the
+    /// read-back are caught and returned.
+    pub fn offscreen(&self, w: u32, h: u32, paint: impl FnOnce(&mut wgpu::RenderPass<'static>)) -> Result<Vec<u8>> {
         let max = self.device.limits().max_texture_dimension_2d.min(MAX_SIDE);
         if w == 0 || h == 0 || w > max || h > max || u64::from(w) * u64::from(h) > MAX_PIXELS {
             return Err(GpuError::Size(format!("picture size {w} x {h} is out of range (1..={max} per side, at most {MAX_PIXELS} pixels)")));
         }
         let oom = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let drawn = self.draw(scene, layers, cam, w, h);
+        let drawn = self.draw(w, h, paint);
         let caught = popped(validation.pop()).or_else(|| popped(oom.pop()));
         if let Some(e) = caught {
             return Err(GpuError::Failed(e.to_string()));
         }
-        let pixels = over_background(&drawn?, w as usize, h as usize, scene.background.unwrap_or(BACKGROUND));
-        // Labels in the CPU rasterizer's font (the window draws them with the interface's).
-        let layers: Vec<&Scene> = std::iter::once(scene).chain(layers.iter().copied()).collect();
-        fieldcraft_render::draw_labels(&pixels, w as usize, h as usize, &layers, cam, scene.radius).map_err(|e| GpuError::Failed(e.to_string()))
+        drawn
     }
 
-    fn draw(&self, scene: &Scene, layers: &[&Scene], cam: &Camera, w: u32, h: u32) -> Result<Vec<u8>> {
-        let (d, q) = (&self.device, &self.queue);
-        let mut uploaded = [Layer::default(), Layer::default(), Layer::default()];
-        for (layer, s) in uploaded.iter_mut().zip(std::iter::once(scene).chain(layers.iter().copied())) {
-            layer.upload(d, q, &GpuScene::from_scene(s, 1.0));
-        }
-        self.pipelines.write_frame(q, &Frame::of(cam, w as f32, h as f32, scene.radius));
+    fn draw(&self, w: u32, h: u32, paint: impl FnOnce(&mut wgpu::RenderPass<'static>)) -> Result<Vec<u8>> {
+        let d = &self.device;
         let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
         let texture = |label: &str, format: wgpu::TextureFormat, samples: u32, usage: wgpu::TextureUsages| {
             d.create_texture(&wgpu::TextureDescriptor {
@@ -143,25 +159,26 @@ impl Capturer {
         });
         let mut encoder = d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("fc_capture") });
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("fc_capture"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: resolve,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            let [s, y, o] = &uploaded;
-            self.pipelines.paint(&mut pass, s, y, o);
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("fc_capture"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: resolve,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &depth_view,
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            paint(&mut pass);
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo { texture: &out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
@@ -171,7 +188,7 @@ impl Capturer {
             },
             size,
         );
-        q.submit([encoder.finish()]);
+        self.queue.submit([encoder.finish()]);
         let slice = buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
@@ -225,6 +242,15 @@ pub fn png(
     };
     let png = fieldcraft_render::render_layers_png(scene, layers, cam, w as usize, h as usize).map_err(|e| GpuError::Size(e.to_string()))?;
     Ok((png, Renderer::Cpu { why }))
+}
+
+/// A picture from [`Capturer::offscreen`]'s pixels of `scene` and `layers`: laid over the
+/// scene's background gradient, with the name labels drawn in the CPU rasterizer's font (the
+/// window draws them with the interface's).
+pub fn finish(drawn: &[u8], scene: &Scene, layers: &[&Scene], cam: &Camera, w: u32, h: u32) -> Result<Vec<u8>> {
+    let pixels = over_background(drawn, w as usize, h as usize, scene.background.unwrap_or(BACKGROUND));
+    let layers: Vec<&Scene> = std::iter::once(scene).chain(layers.iter().copied()).collect();
+    fieldcraft_render::draw_labels(&pixels, w as usize, h as usize, &layers, cam, scene.radius).map_err(|e| GpuError::Failed(e.to_string()))
 }
 
 /// Bytes per row of a `w` pixel RGBA copy, padded to wgpu's 256-byte alignment.

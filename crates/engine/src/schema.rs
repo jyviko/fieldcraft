@@ -225,6 +225,8 @@ pub enum Collection {
     FaceSplit,
     /// A size control (`mesh.size.set`).
     SizeControl,
+    /// A defeature (`geometry.defeature`).
+    Defeature,
 }
 
 impl Collection {
@@ -254,6 +256,7 @@ impl Collection {
             Collection::Stitch => "stitch",
             Collection::FaceSplit => "face split",
             Collection::SizeControl => "size control",
+            Collection::Defeature => "defeature",
         }
     }
 }
@@ -287,6 +290,7 @@ impl Session {
             Collection::Stitch => Box::new(m.stitches().iter().map(|f| f.name.as_str())),
             Collection::FaceSplit => Box::new(m.face_splits().iter().map(|f| f.name.as_str())),
             Collection::SizeControl => Box::new(m.size_controls().keys().map(String::as_str)),
+            Collection::Defeature => Box::new(m.defeatures().iter().map(|f| f.name.as_str())),
         };
         names.take(MAX_NAMES).map(str::to_string).collect()
     }

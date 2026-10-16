@@ -470,14 +470,19 @@ fn cuts(model: &Model) -> Vec<Cut> {
         .collect()
 }
 
-/// `design` cut by `model`'s partitions, then with its face merges and its face splits (those
-/// along a suppressed datum left out; the design as opened when the model has none).
+/// `design` without the features `model` defeatures, cut by its partitions, then with its face
+/// merges (after those of the features defeatured virtually) and its face splits (those along a
+/// suppressed datum left out; the design as opened when the model has none).
 pub(crate) fn partitioned(design: &Design, model: &Model) -> Result<Design> {
-    let merges: Vec<Merge> = model
-        .face_merges()
-        .iter()
-        .map(|m| Merge { name: m.name.clone(), body: m.body.clone(), faces: m.faces.clone(), into: m.into.clone() })
-        .collect();
+    let defeatures: Vec<fieldcraft_geometry::defeature::Defeature> =
+        model.defeatures().iter().map(|d| fieldcraft_geometry::defeature::Defeature { name: d.name.clone(), features: d.features.clone() }).collect();
+    let (design, mut merges) = design.defeatured(&defeatures)?;
+    merges.extend(model.face_merges().iter().map(|m| Merge {
+        name: m.name.clone(),
+        body: m.body.clone(),
+        faces: m.faces.clone(),
+        into: m.into.clone(),
+    }));
     let splits: Vec<fieldcraft_geometry::face_split::FaceSplit> = model
         .face_splits()
         .iter()

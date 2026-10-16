@@ -5,6 +5,7 @@ mod cells;
 mod contact;
 pub(crate) mod datum;
 pub(crate) mod deck;
+mod defeature;
 pub(crate) mod define;
 pub mod diagnostics;
 mod edit;
@@ -79,6 +80,8 @@ pub static ALL: &[CommandSpec] = &[
     virtual_faces::FACE_ABSORB,
     virtual_faces::FACE_SPLIT,
     virtual_faces::FACE_SPLIT_DELETE,
+    defeature::DEFEATURE,
+    defeature::DEFEATURE_DELETE,
     stitch::STITCH,
     stitch::STITCH_DELETE,
     mesh::NODE_ADD,

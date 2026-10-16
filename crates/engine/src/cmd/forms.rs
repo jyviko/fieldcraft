@@ -1780,6 +1780,13 @@ pub const FACE_SPLIT: &[Field] = &[
 ];
 pub const FACE_SPLIT_DELETE: &[Field] = existing!("Face split", C::FaceSplit);
 pub const FACES_MERGE_DELETE: &[Field] = existing!("Face merge", C::FaceMerge);
+pub const DEFEATURE: &[Field] = &[
+    NAME,
+    text("features", "Features")
+        .help("The feature ids to take out for meshing (3 or F3), as the feature graph (geometry.features) lists them; separate them with commas.")
+        .req(),
+];
+pub const DEFEATURE_DELETE: &[Field] = existing!("Defeature", C::Defeature);
 pub const MESH_PLAN: &[Field] = &[
     reference("body", "Body", C::Body).help("The body of the design to plan (as opened, not a partition cell).").req(),
     text("name", "Name").help("The name the plan is saved under.").hint("Plan-<body>"),

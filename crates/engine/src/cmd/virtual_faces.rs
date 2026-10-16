@@ -98,7 +98,7 @@ fn stale_sets(s: &Session, body: &str) -> Vec<String> {
 /// Apply the model's partitions, merges and splits to the design again, failing with the error of
 /// one of `features` (`merge <name>`, `split <name>`) when it has one; the meshes of `bodies` go
 /// (their faces changed).
-fn reapply(s: &mut Session, features: &[String], bodies: &[String], reply: Value) -> Result<Value> {
+pub(super) fn reapply(s: &mut Session, features: &[String], bodies: &[String], reply: Value) -> Result<Value> {
     let mut cleared = super::datum::recut(s)?;
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
     let errors: Vec<String> =

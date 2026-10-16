@@ -318,6 +318,14 @@ pub static CATALOGUE: &[Capability] = &[
         &["geometry.face.split.delete"],
     ),
     covering(
+        "geometry.defeature",
+        "Defeature",
+        Geometry,
+        "Prepare",
+        "Take small holes, fillets, chamfers and bosses out for meshing: the design rebuilt without their features",
+        &["geometry.defeature.delete"],
+    ),
+    covering(
         "geometry.stitch",
         "Stitch",
         Geometry,

@@ -38,6 +38,8 @@ pub enum Requirement {
     Stitch,
     /// A face split.
     FaceSplit,
+    /// A defeature.
+    Defeature,
     /// An edge seed.
     Seed,
     /// A size control.
@@ -90,6 +92,7 @@ impl Requirement {
             Requirement::FaceMerge => !m.face_merges().is_empty(),
             Requirement::Stitch => !m.stitches().is_empty(),
             Requirement::FaceSplit => !m.face_splits().is_empty(),
+            Requirement::Defeature => !m.defeatures().is_empty(),
             Requirement::Seed => !m.seeds().is_empty(),
             Requirement::SizeControl => !m.size_controls().is_empty(),
             Requirement::Nodes => !m.nodes().is_empty(),
@@ -134,6 +137,7 @@ impl Requirement {
             Requirement::FaceMerge => "a face merge",
             Requirement::Stitch => "a stitch",
             Requirement::FaceSplit => "a face split",
+            Requirement::Defeature => "a defeature",
             Requirement::Seed => "an edge seed",
             Requirement::SizeControl => "a local size",
             Requirement::Nodes => "mesh nodes",
@@ -168,6 +172,7 @@ impl Requirement {
             Requirement::FaceMerge => "geometry.faces.merge",
             Requirement::Stitch => "geometry.stitch",
             Requirement::FaceSplit => "geometry.face.split",
+            Requirement::Defeature => "geometry.defeature",
             Requirement::Seed => "mesh.seed.edge",
             Requirement::SizeControl => "mesh.size.set",
             Requirement::Nodes => "mesh.node.add",
@@ -230,6 +235,7 @@ impl crate::schema::Collection {
             C::Stitch => Requirement::Stitch,
             C::FaceSplit => Requirement::FaceSplit,
             C::SizeControl => Requirement::SizeControl,
+            C::Defeature => Requirement::Defeature,
         }
     }
 }
@@ -373,6 +379,7 @@ mod tests {
             C::FaceMerge,
             C::Stitch,
             C::FaceSplit,
+            C::Defeature,
         ];
         let empty = Session::default();
         for c in all {

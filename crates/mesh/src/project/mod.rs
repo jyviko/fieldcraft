@@ -56,12 +56,22 @@ const VERTEX_SWEEPS: usize = 500;
 /// Rounds of arc-length redistribution of an edge's nodes.
 const EDGE_ROUNDS: usize = 4;
 
+/// The default largest turn of the surface across one element: 30°.
+pub const DEFAULT_MAX_ARC_ANGLE: f64 = std::f64::consts::PI / 6.0;
+
+/// Samples per side of an outer block face when measuring how much its target turns.
+const CURVATURE_SAMPLES: usize = 32;
+
 /// How to project.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectOptions {
     /// The element size: each class of parallel block edges gets `round(length / size)`
     /// divisions (at least one), from its longest projected edge.
     pub size: f64,
+    /// The largest angle (radians) the surface may turn through across one element on a curved
+    /// target face: a class takes enough divisions that its elements are no longer than the
+    /// face's radius of curvature times this (0 for no limit).
+    pub max_arc_angle: f64,
     /// Division counts set by hand: `(block, direction 0..3, count)`; the count applies to the
     /// whole class of parallel edges.
     pub divisions: Vec<(usize, usize, usize)>,
@@ -80,6 +90,7 @@ impl Default for ProjectOptions {
     fn default() -> Self {
         ProjectOptions {
             size: 1.0,
+            max_arc_angle: DEFAULT_MAX_ARC_ANGLE,
             divisions: Vec::new(),
             faces: Vec::new(),
             smoothing: Smoothing::Elliptic,
@@ -376,7 +387,62 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
             }
         }
     }
-    let mut class_n: Vec<usize> = class_len.iter().map(|l| ((l / opts.size).round() as usize).clamp(1, crate::block::MAX_DIVISIONS)).collect();
+    // Curved targets: across each outer block face, along each of its two directions, the
+    // largest normal curvature of the target in that direction (at a grid of points projected
+    // onto it, from the turn of the B-rep face's normal over a short step on that face) times
+    // the face's length there, over the largest turn an element may span, is the least count
+    // of that direction's class.
+    let probe = 1e-3 * opts.size;
+    let mut class_arc = vec![0usize; nclass];
+    if opts.max_arc_angle > 0.0 {
+        for &(b, d, s) in &outer {
+            let Some(block) = t.blocks.get(b) else { continue };
+            let Some(&tg) = face_target.get(&face_key(block, d, s)) else { continue };
+            let Some(set) = targets.get(tg) else { continue };
+            let c: [P; 8] = std::array::from_fn(|k| vpos.get(block[k] as usize).copied().unwrap_or_default());
+            let (e1, e2) = other(d);
+            let m = CURVATURE_SAMPLES;
+            let mut grid: Vec<Option<(P, P, u32)>> = Vec::with_capacity((m + 1) * (m + 1));
+            for j in 0..=m {
+                for i in 0..=m {
+                    let mut u = [0.0; 3];
+                    u[d] = s as f64;
+                    u[e1] = i as f64 / m as f64;
+                    u[e2] = j as f64 / m as f64;
+                    grid.push(target::on_target(g, set, trilinear(&c, u)));
+                }
+            }
+            let at = |i: usize, j: usize| grid.get(j * (m + 1) + i).copied().flatten();
+            for (dir, axis) in [(0, e1), (1, e2)] {
+                let (mut kappa, mut length) = (0.0f64, 0.0f64);
+                for line in 0..=m {
+                    let mut run = 0.0;
+                    for k in 0..m {
+                        let (p, q) = if dir == 0 { (at(k, line), at(k + 1, line)) } else { (at(line, k), at(line, k + 1)) };
+                        let (Some((pa, na, fa)), Some((pb, _, _))) = (p, q) else { continue };
+                        let step = dist(pa, pb);
+                        run += step;
+                        if step > tol {
+                            let x = add(pa, scale(crate::vec3::sub(pb, pa), probe / step));
+                            let Some(qx) = g.project(fa, x) else { continue };
+                            let Some(nx) = g.normal(fa, qx) else { continue };
+                            let h = dist(pa, qx);
+                            if h > 0.5 * probe {
+                                kappa = kappa.max(crate::vec3::dot(na, nx).clamp(-1.0, 1.0).acos() / h);
+                            }
+                        }
+                    }
+                    length = length.max(run);
+                }
+                let need = (kappa * length / opts.max_arc_angle).ceil();
+                if let Some(slot) = classes.get(b).and_then(|cl| cl.get(axis)).and_then(|&k| class_arc.get_mut(k)) {
+                    *slot = (*slot).max(need.min(crate::block::MAX_DIVISIONS as f64) as usize);
+                }
+            }
+        }
+    }
+    let mut class_n: Vec<usize> =
+        class_len.iter().zip(&class_arc).map(|(l, &arc)| ((l / opts.size).round() as usize).max(arc).clamp(1, crate::block::MAX_DIVISIONS)).collect();
     for &(b, d, n) in &opts.divisions {
         let cls = classes.get(b).and_then(|c| c.get(d)).ok_or_else(|| Error::Invalid(format!("no direction {d} of block {b}")))?;
         if !(1..=crate::block::MAX_DIVISIONS).contains(&n) {

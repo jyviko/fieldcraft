@@ -73,6 +73,7 @@ pub static ALL: &[CommandSpec] = &[
     datum::PARTITION_DELETE,
     virtual_faces::FACES_MERGE,
     virtual_faces::FACES_MERGE_DELETE,
+    virtual_faces::FACE_ABSORB,
     mesh::NODE_ADD,
     mesh::NODE_REMOVE,
     mesh::ELEMENT_ADD,

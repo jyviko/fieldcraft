@@ -444,7 +444,9 @@ fn check(s: &mut Session, p: &Value) -> Result<Value> {
                 } else {
                     f.face_indices.iter().map(|&i| (f.body.clone(), i)).collect()
                 };
-                crate::view::GeometryMark { faces, path: f.path.clone(), at: f.at }
+                let small =
+                    matches!(f.kind, Kind::SmallFace | Kind::SliverFace).then(|| f.faces.first().map(|n| (f.body.clone(), n.clone()))).flatten();
+                crate::view::GeometryMark { faces, path: f.path.clone(), at: f.at, small }
             })
             .collect();
         Arc::new(crate::view::GeometryMarks { design: Arc::downgrade(design), marks })
@@ -522,13 +524,13 @@ fn import_mesh(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::io::{Cursor, Write};
 
     use super::*;
 
     /// A session with the design the SolidCraft `commands` build open.
-    fn design(commands: Value) -> (crate::tests::TempDir, Session) {
+    pub(crate) fn design(commands: Value) -> (crate::tests::TempDir, Session) {
         let bytes = fieldcraft_geometry::script_design(&json!({"commands": commands}).to_string()).unwrap();
         let (dir, path) = crate::tests::design_file(&bytes);
         let mut s = Session::default();

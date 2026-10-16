@@ -1,4 +1,6 @@
-//! Virtual topology: faces merged for meshing only (`geometry.faces.merge`).
+//! Virtual topology: faces merged for meshing only (`geometry.faces.merge`), and tiny or sliver
+//! faces absorbed into a neighbour (`geometry.face.absorb`, a merge that keeps the neighbour's
+//! name).
 //!
 //! A face merge is part of the model (`fieldcraft_model::virtual_faces`); the geometry layer
 //! applies it to the open design's bodies (`fieldcraft_geometry::virtual_faces`), after the
@@ -33,6 +35,16 @@ pub const FACES_MERGE_DELETE: CommandSpec = CommandSpec {
     run: delete,
 };
 
+pub const FACE_ABSORB: CommandSpec = CommandSpec {
+    id: "geometry.face.absorb",
+    label: "Absorb Faces",
+    params: r#"{"name": "Sliver", "face": {"body": "Base", "face": "F4:side#2"}, "into"?: "F1:+z" (default: the neighbour it shares the longest edges with)} | {"name"?: "Absorb", "from_check": true} — absorbs a tiny or sliver face into a neighbour for meshing only (virtual topology, as geometry.faces.merge): the meshers, the checks and the viewport take the two as one face that keeps the neighbour's name, so sets on the neighbour still select it and the tiny face no longer drives the mesh. The B-rep is not changed. `from_check`: every small and sliver face the last geometry.check found (and marked) on the open design, each into its best neighbour, as `<name>-1`, `<name>-2`, … in the check's order (a face already absorbed by an earlier one is `skipped`). Kept in the model and applied again by persistent names whenever the design is opened (delete one with geometry.faces.merge.delete); the bodies lose their meshes (`replaced`); sets naming an absorbed face are `stale_sets`. Replies `absorbed` ([{name, body, face, into}]) and `skipped`. One undo step"#,
+    form: Some(super::forms::FACE_ABSORB),
+    kind: CommandKind::Model,
+    requires: &[Requirement::Design],
+    run: absorb,
+};
+
 /// Most faces one merge lists.
 const MAX_FACES: usize = fieldcraft_model::virtual_faces::MAX_FACE_MERGE_FACES;
 
@@ -63,17 +75,19 @@ fn stale_sets(s: &Session, body: &str) -> Vec<String> {
     s.model.sets().iter().filter(|(_, set)| set.geometry.iter().any(gone)).map(|(n, _)| n.clone()).collect()
 }
 
-/// Apply the model's partitions and merges to the design again, failing with `feature`'s error
-/// when it has one; the meshes of `body` go (its faces changed).
-fn reapply(s: &mut Session, feature: &str, body: &str, reply: Value) -> Result<Value> {
+/// Apply the model's partitions and merges to the design again, failing with the error of a merge
+/// named in `merges` when it has one; the meshes of `bodies` go (their faces changed).
+fn reapply(s: &mut Session, merges: &[String], bodies: &[String], reply: Value) -> Result<Value> {
     let mut cleared = super::datum::recut(s)?;
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
-    let errors: Vec<&str> = design.errors.iter().filter(|e| e.feature == feature).map(|e| e.message.as_str()).collect();
+    let features: Vec<String> = merges.iter().map(|m| format!("merge {m}")).collect();
+    let errors: Vec<String> =
+        design.errors.iter().filter(|e| features.contains(&e.feature)).map(|e| format!("{}: {}", e.feature, e.message)).collect();
     if !errors.is_empty() {
-        return Err(EngineError::Params(format!("{feature}: {}", errors.join("; "))));
+        return Err(EngineError::Params(errors.join("; ")));
     }
-    cleared.extend(super::replace::clear(&mut s.model, [body]));
-    let stale = stale_sets(s, body);
+    cleared.extend(super::replace::clear(&mut s.model, bodies.iter().map(String::as_str)));
+    let stale: Vec<String> = bodies.iter().flat_map(|b| stale_sets(s, b)).collect();
     let mut reply = cleared.report_if_any(s, reply);
     if !stale.is_empty()
         && let Some(o) = reply.as_object_mut()
@@ -93,16 +107,100 @@ fn merge(s: &mut Session, p: &Value) -> Result<Value> {
     if s.design.as_deref().and_then(|d| d.body(&body)).is_none() {
         return Err(EngineError::Params(format!("the open design has no body `{}`", body.chars().take(200).collect::<String>())));
     }
-    s.model.add_face_merge(FaceMerge { name: name.clone(), body: body.clone(), faces: faces.clone() })?;
+    s.model.add_face_merge(FaceMerge { name: name.clone(), body: body.clone(), faces: faces.clone(), into: None })?;
     let face = merged_face_name(&name);
     let reply = json!({"name": name, "body": body, "face": face});
-    let mut reply = reapply(s, &format!("merge {name}"), &body, reply)?;
+    let mut reply = reapply(s, std::slice::from_ref(&name), std::slice::from_ref(&body), reply)?;
     let shape = s.design.as_deref().and_then(|d| d.body(&body));
     let brep = shape.and_then(|b| b.face_index(&face)).and_then(|f| shape?.merged_faces().into_iter().find(|(g, _)| *g == f)).map_or(0, |(_, n)| n);
     if let Some(o) = reply.as_object_mut() {
         o.insert("brep_faces".into(), json!(brep));
     }
     Ok(reply)
+}
+
+/// The faces to absorb, by body and name: the one named, or the small and sliver faces of the
+/// last geometry.check.
+fn to_absorb(s: &Session, p: &Value) -> Result<Vec<(String, String)>> {
+    let from_check: bool = super::opt(p, "from_check")?.unwrap_or(false);
+    match (p.get("face"), from_check) {
+        (Some(_), false) => {
+            let r: GeometryRef = super::req(p, "face")?;
+            match r.entity {
+                Entity::Face(f) => Ok(vec![(r.body, f)]),
+                _ => Err(EngineError::invalid("face", "give {\"body\", \"face\"}")),
+            }
+        }
+        (None, true) => {
+            let marks = crate::view::geometry_marks(s)
+                .ok_or_else(|| EngineError::Params("`from_check`: run geometry.check (with marks) on the open design first".into()))?;
+            let mut faces: Vec<(String, String)> = Vec::new();
+            for f in marks.marks.iter().filter_map(|m| m.small.clone()) {
+                if !faces.contains(&f) {
+                    faces.push(f);
+                }
+            }
+            if faces.is_empty() {
+                return Err(EngineError::Params("`from_check`: the last geometry.check found no small or sliver face".into()));
+            }
+            Ok(faces)
+        }
+        _ => Err(EngineError::Params("give either `face` or `from_check: true`".into())),
+    }
+}
+
+fn absorb(s: &mut Session, p: &Value) -> Result<Value> {
+    let faces = to_absorb(s, p)?;
+    let one = faces.len() == 1 && p.get("face").is_some();
+    let name = match p.get("name") {
+        None if !one => "Absorb".to_string(),
+        _ => super::name(p)?.to_string(),
+    };
+    let into: Option<String> = super::opt(p, "into")?;
+    if into.is_some() && !one {
+        return Err(EngineError::invalid("into", "goes with `face`"));
+    }
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    // The bodies as each absorption leaves them, to find the next one's neighbour.
+    let mut shapes: Vec<fieldcraft_geometry::Shape> = Vec::new();
+    let (mut absorbed, mut skipped, mut merges) = (Vec::new(), Vec::new(), Vec::new());
+    for (k, (body, face)) in faces.into_iter().enumerate() {
+        if !shapes.iter().any(|b| b.name == body) {
+            let shape = design
+                .body(&body)
+                .ok_or_else(|| EngineError::Params(format!("the open design has no body `{}`", body.chars().take(200).collect::<String>())))?;
+            shapes.push(shape.clone());
+        }
+        let Some(shape) = shapes.iter_mut().find(|b| b.name == body) else { continue };
+        let target = match &into {
+            Some(i) => Ok(i.clone()),
+            None => shape.absorbing_neighbour(&face),
+        };
+        let merged = target.map_err(EngineError::from).and_then(|t| Ok((shape.merge_faces(&t, &[face.clone(), t.clone()])?, t)));
+        let (next, target) = match merged {
+            Ok(m) => m,
+            Err(e) if !one => {
+                skipped.push(json!({"body": body, "face": face, "reason": e.to_string()}));
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        *shape = next;
+        let merge = if one { name.clone() } else { format!("{name}-{}", k + 1) };
+        s.model.add_face_merge(FaceMerge {
+            name: merge.clone(),
+            body: body.clone(),
+            faces: vec![face.clone(), target.clone()],
+            into: Some(target.clone()),
+        })?;
+        absorbed.push(json!({"name": merge, "body": body, "face": face, "into": target}));
+        merges.push(merge);
+    }
+    if merges.is_empty() {
+        return Err(EngineError::Params(format!("no face could be absorbed: {}", json!(skipped))));
+    }
+    let bodies: Vec<String> = shapes.into_iter().map(|b| b.name).collect();
+    reapply(s, &merges, &bodies, json!({"absorbed": absorbed, "skipped": skipped}))
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -319,5 +417,72 @@ mod tests {
         let r = merge_hole(&mut s);
         assert_eq!(r["stale_sets"], json!(["Bore"]), "{r}");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A block with a 0.4 mm step on its top: the riser is a sliver at size 5.
+    fn stepped() -> (crate::tests::TempDir, Session) {
+        super::super::geometry::tests::design(json!([
+            {"command": "solid.box", "params": {"length": 40, "width": 20, "height": 10, "body_name": "Base"}},
+            {"command": "solid.box", "params": {"length": 20, "width": 20, "height": 10.4, "operation": "join", "targets": ["Base"]}},
+        ]))
+    }
+
+    fn small_faces(s: &mut Session) -> usize {
+        let r = s.execute("geometry.check", &json!({"size": 5})).unwrap();
+        r["findings"].as_array().unwrap().iter().filter(|f| matches!(f["kind"].as_str(), Some("small_face" | "sliver_face"))).count()
+    }
+
+    /// `from_check` absorbs every sliver the check found into its best neighbour, which keeps its
+    /// name; the check then finds none, the tet mesher tags no element face with the sliver, and
+    /// undo brings it back.
+    #[test]
+    fn absorbing_the_check_findings_clears_them() {
+        let (_dir, mut s) = stepped();
+        let before = small_faces(&mut s);
+        assert!(before > 0);
+        let start = faces(&s);
+        assert!(s.execute("geometry.face.absorb", &json!({"from_check": true, "into": "x"})).is_err());
+        let r = s.execute("geometry.face.absorb", &json!({"from_check": true})).unwrap();
+        let absorbed = r["absorbed"].as_array().unwrap();
+        assert_eq!(absorbed.len(), before, "{r}");
+        assert_eq!(absorbed[0]["name"], "Absorb-1");
+        let (gone, into) = (absorbed[0]["face"].as_str().unwrap().to_string(), absorbed[0]["into"].as_str().unwrap().to_string());
+        assert!(!faces(&s).contains(&gone) && faces(&s).contains(&into));
+        assert_eq!(faces(&s).len(), start.len() - before);
+        assert_eq!(small_faces(&mut s), 0);
+        s.execute("mesh.tet.generate", &json!({"size": 2})).unwrap();
+        let c = s.model.classification();
+        let used: BTreeSet<String> =
+            c.elements().values().flat_map(|t| t.faces.values()).filter_map(|&t| c.entity(t)?.entity.name().map(str::to_string)).collect();
+        assert!(used.contains(&into) && !used.contains(&gone), "{used:?}");
+        s.execute("edit.undo", &json!({})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(faces(&s), start);
+    }
+
+    /// One face into a named neighbour, or its best one; bad requests change nothing.
+    #[test]
+    fn absorbing_one_face() {
+        let (_dir, mut s) = stepped();
+        let r = s.execute("geometry.check", &json!({"size": 5})).unwrap();
+        let sliver =
+            r["findings"].as_array().unwrap().iter().find(|f| f["kind"] == "sliver_face" || f["kind"] == "small_face").unwrap()["faces"][0].clone();
+        let face = json!({"body": "Base", "face": sliver});
+        let journal = s.journal.len();
+        for p in [
+            json!({"name": "A"}),
+            json!({"name": "A", "face": face, "from_check": true}),
+            json!({"face": face}),
+            json!({"name": "A", "face": {"body": "Base", "face": "nope"}}),
+            json!({"name": "A", "face": face, "into": "nope"}),
+            json!({"name": "A", "face": {"body": "Nobody", "face": "x"}}),
+            json!({"name": "A", "face": face, "from_check": "yes"}),
+        ] {
+            assert!(s.execute("geometry.face.absorb", &p).is_err(), "{p}");
+        }
+        assert_eq!(s.journal.len(), journal);
+        let r = s.execute("geometry.face.absorb", &json!({"name": "Riser", "face": face})).unwrap();
+        assert_eq!(r["absorbed"][0]["name"], "Riser", "{r}");
+        assert!(s.model.face_merges()[0].into.is_some());
     }
 }

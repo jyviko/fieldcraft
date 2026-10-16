@@ -25,6 +25,9 @@ pub struct FaceMerge {
     /// Two or more faces by persistent name (a name also stands for the pieces a partition cut
     /// it into).
     pub faces: Vec<String>,
+    /// Absorb (`geometry.face.absorb`): the merged face keeps this one's name (one of `faces`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub into: Option<String>,
 }
 
 impl Model {
@@ -59,6 +62,9 @@ impl Model {
                 return Err(invalid(format!("face `{f}` is listed twice")));
             }
         }
+        if merge.into.as_ref().is_some_and(|i| !merge.faces.contains(i)) {
+            return Err(invalid("the face it keeps is not one of its faces".into()));
+        }
         self.face_merges.push(merge);
         Ok(())
     }
@@ -74,7 +80,7 @@ mod tests {
     use super::*;
 
     fn merge(name: &str, faces: &[&str]) -> FaceMerge {
-        FaceMerge { name: name.into(), body: "Base".into(), faces: faces.iter().map(|f| f.to_string()).collect() }
+        FaceMerge { name: name.into(), body: "Base".into(), faces: faces.iter().map(|f| f.to_string()).collect(), into: None }
     }
 
     /// Merges keep their order, are saved and read back, and bad ones are refused.
@@ -89,10 +95,12 @@ mod tests {
         assert!(m.add_face_merge(merge("Blank", &["x", " "])).is_err());
         assert!(m.add_face_merge(merge("9bad", &["x", "y"])).is_err());
         assert!(m.add_face_merge(FaceMerge { body: String::new(), ..merge("NoBody", &["x", "y"]) }).is_err());
+        assert!(m.add_face_merge(FaceMerge { into: Some("z".into()), ..merge("Into", &["x", "y"]) }).is_err());
+        m.add_face_merge(FaceMerge { into: Some("y".into()), ..merge("Absorb", &["x", "y"]) }).unwrap();
         let back: Model = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
         assert_eq!(back.face_merges(), m.face_merges());
         assert_eq!(m.remove_face_merge("Fillet").unwrap().name, "Fillet");
         assert!(m.remove_face_merge("Fillet").is_err());
-        assert_eq!(m.face_merges().len(), 1);
+        assert_eq!(m.face_merges().len(), 2);
     }
 }

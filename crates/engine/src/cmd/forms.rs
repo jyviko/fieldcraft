@@ -1717,6 +1717,12 @@ pub const FACES_MERGE: &[Field] = &[
         .req()
         .hint("Shift-click faces"),
 ];
+pub const FACE_ABSORB: &[Field] = &[
+    text("name", "Name").help("The absorption's name (with From check: the prefix of each one's, Name-1, Name-2, …).").hint("Absorb"),
+    group("face", "Face", FACE_ROW).help("The tiny or sliver face to absorb; leave empty with From check."),
+    text("into", "Into").help("The neighbour face that absorbs it, by persistent name.").hint("the neighbour sharing the longest edges"),
+    flag("from_check", "From check").help("Absorb every small and sliver face the last Check Geometry found, each into its best neighbour."),
+];
 pub const FACES_MERGE_DELETE: &[Field] = existing!("Face merge", C::FaceMerge);
 pub const MESH_PLAN: &[Field] = &[
     reference("body", "Body", C::Body).help("The body of the design to plan (as opened, not a partition cell).").req(),

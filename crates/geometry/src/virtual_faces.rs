@@ -37,6 +37,9 @@ pub struct Merge {
     pub body: String,
     /// The faces, by persistent name (a name also selects the pieces a partition cut it into).
     pub faces: Vec<String>,
+    /// Absorb: the merged face keeps the name of this one of `faces` instead of `merge:<name>`
+    /// (a tiny face absorbed into a neighbour leaves the neighbour, by its own name).
+    pub into: Option<String>,
 }
 
 /// The name of the face merge `name` makes.
@@ -65,7 +68,13 @@ impl Design {
                 self.errors.push(FeatureError { feature, message: format!("no body `{}`", m.body), bodies: vec![m.body.clone()] });
                 continue;
             };
-            match body.merge_faces(&merged_face_name(&m.name), &m.faces) {
+            let name = m.into.clone().unwrap_or_else(|| merged_face_name(&m.name));
+            if m.into.as_ref().is_some_and(|i| !m.faces.contains(i)) {
+                let message = format!("the face it keeps, `{name}`, is not one it merges");
+                self.errors.push(FeatureError { feature, message, bodies: vec![m.body.clone()] });
+                continue;
+            }
+            match body.merge_faces(&name, &m.faces) {
                 Ok(merged) => *body = merged,
                 Err(e) => self.errors.push(FeatureError { feature, message: e.to_string(), bodies: vec![m.body.clone()] }),
             }
@@ -105,13 +114,10 @@ impl Shape {
     }
 
     /// This shape with the faces named `faces` (two or more, touching along edges) made one face
-    /// named `name`, in place of the first of them.
+    /// named `name` (a new name, or the name of one of them), in place of the first of them.
     pub fn merge_faces(&self, name: &str, faces: &[String]) -> Result<Shape> {
         if faces.len() > MAX_MERGE_FACES {
             return Err(Error::Invalid(format!("a merge takes at most {MAX_MERGE_FACES} faces")));
-        }
-        if self.faces.iter().any(|f| f.name == name) {
-            return Err(Error::Invalid(format!("body `{}` already has a face `{name}`", self.name)));
         }
         let mut members = BTreeSet::new();
         for f in faces {
@@ -120,6 +126,9 @@ impl Shape {
                 return Err(Error::Invalid(format!("body `{}` has no face `{f}`", self.name)));
             }
             members.extend(found);
+        }
+        if self.faces.iter().zip(0u32..).any(|(f, i)| f.name == name && !members.contains(&i)) {
+            return Err(Error::Invalid(format!("body `{}` already has a face `{name}`", self.name)));
         }
         if members.len() < 2 {
             return Err(Error::Invalid("a merge needs two or more faces".into()));
@@ -154,6 +163,28 @@ impl Shape {
         let brep = if self.face_map.is_empty() { (0..u32::try_from(self.faces.len()).unwrap_or(0)).collect() } else { self.face_map.clone() };
         let face_map = brep.iter().map(|&v| renumber.get(v as usize).copied().unwrap_or(v)).collect();
         Ok(Shape { name: self.name.clone(), body: self.body.clone(), faces: kept, face_map })
+    }
+
+    /// The neighbour face `face` shares the longest edges with (by name): where a tiny or sliver
+    /// face is best absorbed. An error for a face the body lacks or one with no neighbour.
+    pub fn absorbing_neighbour(&self, face: &str) -> Result<String> {
+        let own = self.faces_named(face);
+        let [f] = own.as_slice() else {
+            return Err(Error::Invalid(format!("body `{}` has no face `{face}` (or several pieces of it: name one)", self.name)));
+        };
+        let mesh = self.tessellate((self.size()? * EDGE_TOLERANCE).max(1e-4))?;
+        let mut shared: std::collections::BTreeMap<u32, f64> = std::collections::BTreeMap::new();
+        for (points, faces) in mesh.edges.iter().zip(&mesh.edge_faces) {
+            if !faces.contains(f) {
+                continue;
+            }
+            let length: f64 = points.windows(2).map(|w| (0..3).map(|k| (w[1][k] - w[0][k]).powi(2)).sum::<f64>().sqrt()).sum();
+            for g in faces.iter().filter(|g| *g != f) {
+                *shared.entry(*g).or_default() += length;
+            }
+        }
+        let best = shared.into_iter().max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0))).map(|(g, _)| g);
+        best.map(|g| self.face_label(g)).ok_or_else(|| Error::Invalid(format!("face `{face}` of body `{}` has no neighbour to absorb it", self.name)))
     }
 
     /// An error unless `members` touch one another along edges, all in one piece.
@@ -335,7 +366,7 @@ mod tests {
         assert_eq!(hole.len(), 2, "{hole:?}");
         let before = d.bodies[0].tessellate(0.01).unwrap();
         let body = d.bodies[0].name.clone();
-        let d = d.merged(&[Merge { name: "Hole".into(), body, faces: hole.clone() }]).unwrap();
+        let d = d.merged(&[Merge { name: "Hole".into(), body, faces: hole.clone(), into: None }]).unwrap();
         assert!(d.errors.is_empty(), "{:?}", d.errors);
         let body = &d.bodies[0];
         assert_eq!(body.faces().len(), 7);
@@ -375,7 +406,7 @@ mod tests {
             .map(|(n, _)| n)
             .collect();
         assert_eq!(planes.len(), 2, "top and bottom");
-        let m = |name: &str, body: &str, faces: Vec<String>| Merge { name: name.into(), body: body.into(), faces };
+        let m = |name: &str, body: &str, faces: Vec<String>| Merge { name: name.into(), body: body.into(), faces, into: None };
         let merged = d
             .clone()
             .merged(&[
@@ -400,18 +431,35 @@ mod tests {
         let d = plate();
         let body = d.bodies[0].name.clone();
         let hole = halves(&d);
-        let d = d.merged(&[Merge { name: "Hole".into(), body: body.clone(), faces: hole }]).unwrap();
+        let d = d.merged(&[Merge { name: "Hole".into(), body: body.clone(), faces: hole, into: None }]).unwrap();
         let b = &d.bodies[0];
         let f = b.face_index("merge:Hole").unwrap();
         let mesh = b.tessellate(0.01).unwrap();
         let next = mesh.edge_faces.iter().find(|fs| fs.contains(&f)).and_then(|fs| fs.iter().find(|&&g| g != f)).copied().unwrap();
         let next = b.faces()[next as usize].name.clone();
-        let d = d.merged(&[Merge { name: "More".into(), body, faces: vec!["merge:Hole".into(), next] }]).unwrap();
+        let d = d.merged(&[Merge { name: "More".into(), body, faces: vec!["merge:Hole".into(), next], into: None }]).unwrap();
         assert!(d.errors.is_empty(), "{:?}", d.errors);
         let b = &d.bodies[0];
         let f = b.face_index("merge:More").unwrap();
         assert_eq!(b.faces().len(), 6);
         assert_eq!(b.merged_faces(), vec![(f, 3)]);
         assert_eq!(b.face_surfaces().unwrap()[f as usize], None);
+    }
+
+    /// The neighbour a half of the hole is best absorbed into is the other half (two 10 mm seams,
+    /// against a 15.7 mm rim arc with each cap); absorbing it keeps the other half's name.
+    #[test]
+    fn an_absorbed_face_leaves_its_neighbour_by_name() {
+        let d = plate();
+        let body = d.bodies[0].name.clone();
+        let hole = halves(&d);
+        let best = d.bodies[0].absorbing_neighbour(&hole[0]).unwrap();
+        assert_eq!(best, hole[1]);
+        let d = d.merged(&[Merge { name: "A".into(), body, faces: vec![hole[0].clone(), hole[1].clone()], into: Some(hole[1].clone()) }]).unwrap();
+        assert!(d.errors.is_empty(), "{:?}", d.errors);
+        let b = &d.bodies[0];
+        assert_eq!(b.faces().len(), 7);
+        assert!(b.face_index(&hole[1]).is_some() && b.face_index(&hole[0]).is_none());
+        assert!(b.absorbing_neighbour("nope").is_err());
     }
 }

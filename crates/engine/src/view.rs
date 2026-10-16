@@ -226,6 +226,9 @@ pub struct GeometryMark {
     /// A short edge's polyline (empty for the other kinds).
     pub path: Vec<[f64; 3]>,
     pub at: [f64; 3],
+    /// A small or sliver face, by body and persistent name: what `geometry.face.absorb`
+    /// `from_check` absorbs.
+    pub small: Option<(String, String)>,
 }
 
 /// The findings of the last `geometry.check`, while the design it checked is still open.

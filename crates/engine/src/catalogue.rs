@@ -302,6 +302,13 @@ pub static CATALOGUE: &[Capability] = &[
         "Mesh adjacent faces as one (virtual topology): a fillet in pieces, a face split by an imprint; the B-rep is unchanged",
         &["geometry.faces.merge.delete"],
     ),
+    ready(
+        "geometry.face.absorb",
+        "Absorb Faces",
+        Geometry,
+        "Prepare",
+        "Absorb tiny and sliver faces into a neighbour for meshing, one picked or every one Check Geometry found",
+    ),
     soon("geometry.midsurface", "Midsurface", Geometry, "Prepare", "M8", "Extract midsurfaces of thin parts for shell meshes"),
     // ---- Mesh ----
     soon("mesh.size.global", "Global Size", Mesh, "Size", "M2", "One element size for the whole part"),

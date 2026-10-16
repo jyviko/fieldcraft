@@ -473,8 +473,11 @@ fn cuts(model: &Model) -> Vec<Cut> {
 /// `design` cut by `model`'s partitions, then with its face merges (the design as opened when
 /// the model has neither).
 pub(crate) fn partitioned(design: &Design, model: &Model) -> Result<Design> {
-    let merges: Vec<Merge> =
-        model.face_merges().iter().map(|m| Merge { name: m.name.clone(), body: m.body.clone(), faces: m.faces.clone() }).collect();
+    let merges: Vec<Merge> = model
+        .face_merges()
+        .iter()
+        .map(|m| Merge { name: m.name.clone(), body: m.body.clone(), faces: m.faces.clone(), into: m.into.clone() })
+        .collect();
     Ok(design.partitioned(&cuts(model))?.merged(&merges)?)
 }
 

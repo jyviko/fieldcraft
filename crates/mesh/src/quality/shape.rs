@@ -199,6 +199,6 @@ pub(crate) fn pyramid_scaled_jacobian(p: [P; 5]) -> f64 {
 pub(crate) fn jacobian_metrics(a: P, b: P, c: P) -> (f64, f64) {
     let d = det(a, b, c);
     let frob = dot(a, a) + dot(b, b) + dot(c, c);
-    let shape = if d > 0.0 { ratio(3.0 * d.cbrt().powi(2), frob, 0.0) } else { 0.0 };
+    let shape = if d > 0.0 { ratio(3.0 * crate::vec3::cbrt(d).powi(2), frob, 0.0) } else { 0.0 };
     (corner_det(a, b, c), shape)
 }

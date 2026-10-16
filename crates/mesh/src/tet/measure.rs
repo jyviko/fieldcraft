@@ -104,7 +104,7 @@ pub fn dihedral_range(x: &[P; 4]) -> (f64, f64) {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
     for (sv, cv) in s.iter().zip(c) {
-        let a = sv.abs().atan2(cv).to_degrees();
+        let a = crate::vec3::atan2(sv.abs(), cv).to_degrees();
         lo = lo.min(a);
         hi = hi.max(a);
     }

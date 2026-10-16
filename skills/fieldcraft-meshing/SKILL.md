@@ -110,7 +110,8 @@ Shapes without a timeline (STEP, 3MF) skip `mesh.plan` and go to step 4.
    - face angles 15°–165°, dihedrals 10°–165° (the defaults).
 3. Picture the marked elements (camera `target` at their `at`, a `section` through them).
    Clustered marks mean the blocks are wrong: back to §3/§4. Isolated spikes only:
-   `mesh.node.relax {"set": "quality_marked"}` or `{"around_element": <label>}`. Surface nodes
+   `mesh.node.relax {"around_element": <label>}` for each marked element (by CAD face once #471
+   lands; sets are for the analysis steps, not for relaxing). Surface nodes
    slide on their faces; nothing inverts. Add `"reapply": true` so it follows a remesh. Relaxing
    is the final touch, never a substitute for a better plan.
 4. Mark again until nothing is marked, or every remaining mark has a stated reason.

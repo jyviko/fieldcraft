@@ -133,10 +133,13 @@ jobs:
           shared-key: ci
           save-if: ${{ github.ref == 'refs/heads/develop' }}
       - name: Software GPU (lavapipe), so headless snapshots run the GPU pipeline
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends mesa-vulkan-drivers
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends mesa-vulkan-drivers libvulkan1
       - name: cargo xtask ci (the affected crates, or everything)
         env:
           BASE: ${{ needs.plan.outputs.base }}
+          # The drawing tests run on lavapipe and fail, instead of skipping, without it.
+          FIELDCRAFT_GPU: software
+          FIELDCRAFT_REQUIRE_GPU: "1"
         run: |
           if [ -n "$BASE" ]; then cargo xtask ci --affected "$BASE"; else cargo xtask ci; fi
 

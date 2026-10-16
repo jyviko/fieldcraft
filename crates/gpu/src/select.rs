@@ -46,6 +46,15 @@ impl Policy {
 
 pub use crate::Tier;
 
+/// Set to `1` where a GPU adapter must exist (CI with lavapipe): tests that draw then fail
+/// instead of skipping when none is found, so the GPU path is proven to draw.
+pub const REQUIRE_ENV: &str = "FIELDCRAFT_REQUIRE_GPU";
+
+/// Whether [`REQUIRE_ENV`] is set to `1`.
+pub fn gpu_required() -> bool {
+    std::env::var(REQUIRE_ENV).is_ok_and(|v| v.trim() == "1")
+}
+
 /// An adapter's tier and its rank within it (lower is better).
 pub fn rank(t: wgpu::DeviceType) -> (Tier, u8) {
     match t {

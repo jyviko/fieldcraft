@@ -222,6 +222,9 @@ fn screenshot_takes_a_camera_orientation() {
     assert_eq!(info["view"], json!({"yaw": 30.0, "pitch": 90.0, "distance": 1e9, "target": {"center_of": "mass"}}), "{info}");
     // The reply names what drew it: the viewport's pipeline on a GPU, or the CPU rasterizer.
     assert!(matches!(info["renderer"]["kind"].as_str(), Some("hardware" | "software" | "cpu")), "{info}");
+    if fieldcraft_gpu::select::gpu_required() {
+        assert!(matches!(info["renderer"]["kind"].as_str(), Some("hardware" | "software")), "FIELDCRAFT_REQUIRE_GPU=1: {info}");
+    }
     let (again, _) = picture(&mut s, json!({"width": 64, "height": 48}));
     assert_eq!(again, turned);
     // Aimed at a point, the camera looks at it; a section cuts the mesh.

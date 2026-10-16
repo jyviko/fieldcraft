@@ -304,12 +304,14 @@ mod tests {
     }
 
     /// A picture on whatever adapter the machine has: the right size, the triangle's red and
-    /// the edge's black on the white background. A machine with no adapter (a CI box without
-    /// a software GPU) is reported, not failed: `auto` then draws on the CPU.
+    /// the edge's black on the white background. A machine with no adapter is reported, not
+    /// failed (`auto` then draws on the CPU), unless `FIELDCRAFT_REQUIRE_GPU=1` (CI).
     #[test]
     fn draws_offscreen_when_an_adapter_exists() {
-        let cap = match Capturer::open(Policy::Auto) {
+        let cap = match Capturer::open(Policy::from_env().unwrap()) {
             Ok(Some(c)) => c,
+            Ok(None) if crate::select::gpu_required() => panic!("FIELDCRAFT_REQUIRE_GPU=1 but no GPU adapter"),
+            Err(e) if crate::select::gpu_required() => panic!("FIELDCRAFT_REQUIRE_GPU=1 but no GPU device: {e}"),
             Ok(None) => return eprintln!("no GPU adapter: skipped"),
             Err(e) => return eprintln!("no GPU device ({e}): skipped"),
         };

@@ -223,7 +223,7 @@ mod tests {
 
     /// The cantilever drawn headless: a PNG of the size asked for, with the model in it (pixels
     /// of the hex colour) and its element edges (dark pixels). `auto` draws on the GPU when the
-    /// machine has one and on the CPU otherwise (a CI box without a software GPU); `cpu` always
+    /// machine has one and on the CPU otherwise (it must be the GPU under `FIELDCRAFT_REQUIRE_GPU=1`); `cpu` always
     /// on the CPU, and both pictures show the same model. A section and a field change it.
     #[test]
     fn snapshots_the_model_and_its_mesh_headless() {
@@ -243,6 +243,8 @@ mod tests {
             assert!(edges > 100, "{drawn:?}: {edges} edge pixels");
             if policy == Policy::Cpu {
                 assert_eq!(drawn, Renderer::Cpu { why: None });
+            } else if fieldcraft_gpu::select::gpu_required() {
+                assert!(matches!(drawn, Renderer::Gpu { .. }), "FIELDCRAFT_REQUIRE_GPU=1 but drawn by {drawn:?}");
             }
         }
         // A section along the beam draws half of it.

@@ -37,7 +37,7 @@ getrandom = "0.3"
 
 # A termination signal (SIGTERM, SIGINT) closes the window the normal way (terminate.rs).
 [target.'cfg(unix)'.dependencies]
-signal-hook = "0.3"
+signal-hook = "0.4"
 
 # The exception filter and minidump of a native crash (src/native_crash.rs).
 [target.'cfg(windows)'.dependencies]

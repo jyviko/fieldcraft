@@ -351,23 +351,21 @@ fn distorted_annulus(n: usize, amount: f64) -> (Model, Model) {
     (original, m)
 }
 
-/// Strong mode on a distorted block: the region optimised as a whole lifts the smallest and the
-/// mean scaled Jacobian well above where they were; nothing inverts; nodes on faces stay on them
-/// (the cylinders exactly); nodes on edges and vertices do not move; the same input gives the
-/// same output.
+/// Strong mode on a distorted block: rounds of bad nodes moved and the mesh morphed round them
+/// lift the smallest scaled Jacobian well above where it was and the mean with it; nothing
+/// inverts; nodes on faces stay on them (the cylinders exactly); nodes on edges and vertices do
+/// not move; the same input gives the same output.
 #[test]
 fn strong_relaxation_of_a_distorted_block_keeps_faces_and_edges() {
     let (original, m) = distorted_annulus(6, 0.06);
     let geo = Geo { model: original.clone() };
     let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
-    let r = optimize(&m, &nodes, 200, &geo).unwrap();
-    assert!(r.after.min_quality > r.before.min_quality + 0.2, "{:?} → {:?}", r.before.min_quality, r.after.min_quality);
+    let options = MorphOptions { below: 0.9, reach: None, rounds: 40 };
+    let r = morph(&m, &nodes, options, &geo).unwrap();
+    assert!(r.after.min_quality > r.before.min_quality + 0.2, "{:?} → {:?}: {:?}", r.before.min_quality, r.after.min_quality, r.rounds);
     assert!(r.mean_after > r.mean_before, "mean {} → {}", r.mean_before, r.mean_after);
     assert_eq!(r.after.invalid, 0);
-    assert!(r.kept > 0 && r.history.len() > 2);
-    // Within a phase the objective falls sweep by sweep (the descent keeps only lowering moves).
-    assert!(r.history.windows(2).filter(|w| w[0].phase == w[1].phase).all(|w| w[1].objective <= w[0].objective), "{:?}", r.history);
-    assert!(r.history.iter().any(|h| h.phase == Phase::MinMax), "{:?}", r.history);
+    assert!(!r.rounds.is_empty() && r.rounds.iter().all(|k| k.region_nodes >= k.bad_nodes && k.reach > 0.0), "{:?}", r.rounds);
     let out = applied(&m, &Relaxed { positions: r.positions.clone(), ..Relaxed::default() });
     let elements: Vec<u32> = m.elements().keys().copied().collect();
     let (after, invalid) = region_min(&out, &elements);
@@ -379,11 +377,27 @@ fn strong_relaxation_of_a_distorted_block_keeps_faces_and_edges() {
             assert_eq!(p.xyz, m.node(*n).unwrap().xyz, "node {n} on an edge moved");
         }
     }
-    assert_eq!(optimize(&m, &nodes, 200, &geo).unwrap(), r, "not deterministic");
+    assert_eq!(morph(&m, &nodes, options, &geo).unwrap(), r, "not deterministic");
+}
+
+/// The morph is local: one bad spot moves only the nodes within the reach.
+#[test]
+fn strong_relaxation_moves_only_nodes_within_the_reach() {
+    let original = hex_annulus(8);
+    let mut m = original.clone();
+    perturb(&mut m, CENTRE, 0.2, 0.06);
+    let geo = Geo { model: original };
+    let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
+    let reach = 0.4;
+    let r = morph(&m, &nodes, MorphOptions { below: 0.8, reach: Some(reach), rounds: 20 }, &geo).unwrap();
+    assert!(r.after.min_quality > r.before.min_quality, "{:?}", r.rounds);
+    for n in r.positions.keys() {
+        assert!(dist(m.node(*n).unwrap().xyz, CENTRE) < 0.2 + 2.0 * reach, "node {n} far from the bad spot moved");
+    }
 }
 
 /// Strong mode untangles: an interior node pushed through its neighbours inverts elements; the
-/// optimisation brings every element back to valid.
+/// morph brings every element back to valid.
 #[test]
 fn strong_relaxation_untangles_inverted_elements() {
     let (original, mut m) = distorted_annulus(4, 0.0);
@@ -393,21 +407,29 @@ fn strong_relaxation_untangles_inverted_elements() {
     m.set_node(inside, [p[0] + 0.4, p[1] + 0.4, p[2] + 0.3]).unwrap();
     let geo = Geo { model: original };
     let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
-    let r = optimize(&m, &nodes, 100, &geo).unwrap();
+    let r = morph(&m, &nodes, MorphOptions::default(), &geo).unwrap();
     assert!(r.before.invalid > 0, "{:?}", r.before);
     assert_eq!(r.after.invalid, 0, "{:?}", r.after);
     assert!(r.after.min_quality > 0.5, "{:?}", r.after);
 }
 
-/// Nothing better found leaves the mesh as it is; bad parameters are errors.
+/// A good mesh is left as it is; bad options are errors.
 #[test]
-fn strong_relaxation_keeps_a_perfect_mesh_and_refuses_bad_sweeps() {
+fn strong_relaxation_keeps_a_good_mesh_and_refuses_bad_options() {
     let m = hex_annulus(3);
     let geo = Geo { model: m.clone() };
     let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
-    let r = optimize(&m, &nodes, 20, &geo).unwrap();
-    assert!(r.after.min_quality >= r.before.min_quality && r.after.invalid == 0);
-    assert!(optimize(&m, &nodes, 0, &geo).is_err());
-    assert!(optimize(&m, &nodes, MAX_SWEEPS + 1, &geo).is_err());
-    assert!(optimize(&m, &BTreeSet::new(), 5, &geo).unwrap().positions.is_empty());
+    let r = morph(&m, &nodes, MorphOptions { below: 0.5, ..MorphOptions::default() }, &geo).unwrap();
+    assert!(r.positions.is_empty() && r.rounds.is_empty());
+    for bad in [
+        MorphOptions { below: 0.0, ..MorphOptions::default() },
+        MorphOptions { below: 1.5, ..MorphOptions::default() },
+        MorphOptions { reach: Some(-1.0), ..MorphOptions::default() },
+        MorphOptions { reach: Some(f64::NAN), ..MorphOptions::default() },
+        MorphOptions { rounds: 0, ..MorphOptions::default() },
+        MorphOptions { rounds: MAX_ROUNDS + 1, ..MorphOptions::default() },
+    ] {
+        assert!(morph(&m, &nodes, bad, &geo).is_err(), "{bad:?}");
+    }
+    assert!(morph(&m, &BTreeSet::new(), MorphOptions::default(), &geo).unwrap().positions.is_empty());
 }

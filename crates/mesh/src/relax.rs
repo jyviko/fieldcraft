@@ -608,6 +608,9 @@ pub fn relax(model: &Model, weights: &BTreeMap<u32, f64>, iterations: usize, geo
     let before = region_quality(&state);
     let mut done = 0;
     for _ in 0..iterations {
+        fieldcraft_model::progress::stage("relax sweep", Some(iterations as f64), "sweeps");
+        fieldcraft_model::progress::count(done as f64);
+        fieldcraft_model::progress::check()?;
         done += 1;
         let mut any = false;
         for (&n, &w) in weights {
@@ -926,7 +929,7 @@ pub fn apply_field(
 }
 
 mod strong;
-pub use strong::{MAX_SWEEPS, Optimized, Phase, Sweep, optimize};
+pub use strong::{MAX_ROUNDS, MorphOptions, Morphed, Round, morph};
 
 #[cfg(test)]
 mod tests;

@@ -43,41 +43,8 @@ use fieldcraft_model::Model;
 use super::{Constraints, Elem, Freedom, P, RegionQuality, State, add, dist, dot, measure, region_quality, scale, sub};
 use crate::{Error, Result};
 
-/// Most sweeps of a strong relaxation.
-pub const MAX_SWEEPS: usize = 2000;
 /// Weight of an invalid element in the objective.
 const INVALID: f64 = 1e8;
-/// A phase stops when a sweep lowers its objective by less than this fraction.
-const CONVERGED: f64 = 1e-5;
-
-/// One sweep's numbers.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Sweep {
-    pub phase: Phase,
-    /// The phase's objective.
-    pub objective: f64,
-    pub min_quality: f64,
-    pub mean_quality: f64,
-    pub invalid: usize,
-}
-
-/// What [`optimize`] did.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Optimized {
-    /// The new position of every node that moved.
-    pub positions: BTreeMap<u32, P>,
-    /// Corner nodes that moved.
-    pub moved: usize,
-    pub max_displacement: f64,
-    pub before: RegionQuality,
-    pub after: RegionQuality,
-    pub mean_before: f64,
-    pub mean_after: f64,
-    /// Before the first sweep, then after each.
-    pub history: Vec<Sweep>,
-    /// The sweep whose state was kept (0: the start, nothing moved).
-    pub kept: usize,
-}
 
 /// Weight of the size term.
 const SIZE_WEIGHT: f64 = 0.5;
@@ -87,7 +54,7 @@ const MIN_MAX_POWER: i32 = 16;
 
 /// What a phase minimises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Phase {
+enum Phase {
     /// `(1/q − 1)²`: every element toward 1, the worst weighted most.
     #[default]
     Smooth,
@@ -264,38 +231,261 @@ impl State<'_> {
         *step = (t * 2.0).max(1e-6);
         moved
     }
+}
 
-    fn sweep_numbers(&self, phase: Phase) -> Sweep {
-        let mut s = Sweep { phase, min_quality: f64::INFINITY, ..Sweep::default() };
-        for e in &self.elems {
-            let (f, q, valid) = term_of(phase, e, self, true);
-            s.objective += f;
-            s.min_quality = s.min_quality.min(q);
-            s.mean_quality += q;
-            s.invalid += usize::from(!valid);
-        }
-        if self.elems.is_empty() {
-            s.min_quality = 0.0;
-        } else {
-            s.mean_quality /= self.elems.len() as f64;
-        }
-        s
+/// What [`morph`] does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MorphOptions {
+    /// Elements below this quality are the bad ones.
+    pub below: f64,
+    /// The radius round the bad nodes whose nodes follow them; `None`: three times the bad
+    /// elements' mean edge length.
+    pub reach: Option<f64>,
+    /// Most rounds (bad nodes moved, the region morphed after them).
+    pub rounds: usize,
+}
+
+impl Default for MorphOptions {
+    fn default() -> Self {
+        MorphOptions { below: 0.7, reach: None, rounds: 20 }
     }
 }
 
-/// Whether `a` is a better state than `b`: fewer invalid elements, then a higher smallest
-/// quality, then a higher mean.
-fn better(a: &Sweep, b: &Sweep) -> bool {
-    a.invalid < b.invalid
-        || (a.invalid == b.invalid && (a.min_quality > b.min_quality || (a.min_quality == b.min_quality && a.mean_quality > b.mean_quality)))
+/// One round of [`morph`].
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Round {
+    /// Elements below the threshold, and their movable corner nodes (the ones moved first).
+    pub bad_elements: usize,
+    pub bad_nodes: usize,
+    /// Nodes within the reach of the clusters (the ones that follow), summed.
+    pub region_nodes: usize,
+    pub reach: f64,
+    /// Clusters of bad nodes (within the reach of each other), and those whose morph was kept.
+    pub clusters: usize,
+    pub kept: usize,
+    /// Over all the elements, after the round.
+    pub min_quality: f64,
+    pub mean_quality: f64,
 }
 
-/// Optimise the corner nodes `nodes` (and the mid-side nodes following them) for up to `sweeps`
-/// sweeps, faces' nodes sliding on them and edges' and vertices' nodes held, as `geometry` says.
-/// The model is not changed: the result has the new positions.
-pub fn optimize(model: &Model, nodes: &BTreeSet<u32>, sweeps: usize, geometry: &dyn Constraints) -> Result<Optimized> {
-    if sweeps == 0 || sweeps > MAX_SWEEPS {
-        return Err(Error::Invalid(format!("sweeps must be 1 to {MAX_SWEEPS}, got {sweeps}")));
+/// What [`morph`] did.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Morphed {
+    /// The new position of every node that moved.
+    pub positions: BTreeMap<u32, P>,
+    /// Corner nodes that moved.
+    pub moved: usize,
+    pub max_displacement: f64,
+    pub before: RegionQuality,
+    pub after: RegionQuality,
+    pub mean_before: f64,
+    pub mean_after: f64,
+    pub rounds: Vec<Round>,
+}
+
+/// A certified look at some elements ([`State::certified`]).
+struct Checked {
+    invalid: usize,
+    worst: f64,
+    objective: f64,
+    ratio: f64,
+}
+
+impl Checked {
+    /// Whether `self` (after a move) is better than `was`: fewer invalid elements, or as many
+    /// with the worst valid one no worse and the objective lower.
+    fn improves(&self, was: &Checked) -> bool {
+        self.invalid < was.invalid || (self.invalid == was.invalid && self.worst >= was.worst && self.objective < was.objective)
+    }
+}
+
+/// Sweeps of the bad nodes' own optimisation (their neighbours held).
+const TARGET_SWEEPS: usize = 5;
+/// Most Gauss–Seidel sweeps of the harmonic solve, and its tolerance (of the largest prescribed
+/// displacement).
+const HARMONIC_SWEEPS: usize = 2000;
+const HARMONIC_TOL: f64 = 1e-6;
+/// Most rounds of [`morph`].
+pub const MAX_ROUNDS: usize = 200;
+
+/// Nodes within `r` of `centres`, from a uniform grid of cell `r` over `points` (a k-d tree's
+/// fixed-radius query, deterministic: the result is a sorted set).
+fn within(points: &BTreeMap<u32, P>, centres: &[P], r: f64) -> BTreeSet<u32> {
+    let cell = |p: P| p.map(|x| (x / r).floor() as i64);
+    let mut grid: BTreeMap<[i64; 3], Vec<(u32, P)>> = BTreeMap::new();
+    for (&n, &p) in points {
+        grid.entry(cell(p)).or_default().push((n, p));
+    }
+    let mut out = BTreeSet::new();
+    for &c in centres {
+        let [i, j, k] = cell(c);
+        for di in -1..=1 {
+            for dj in -1..=1 {
+                for dk in -1..=1 {
+                    for &(n, p) in grid.get(&[i + di, j + dj, k + dk]).map(Vec::as_slice).unwrap_or(&[]) {
+                        if dist(p, c) <= r {
+                            out.insert(n);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `bad` split into clusters: nodes within `reach` of each other (transitively) are one.
+fn clusters(s: &State<'_>, bad: &BTreeSet<u32>, reach: f64) -> Vec<BTreeSet<u32>> {
+    let points: BTreeMap<u32, P> = bad.iter().map(|&n| (n, s.at(n))).collect();
+    let mut left = bad.clone();
+    let mut out = Vec::new();
+    while let Some(first) = left.pop_first() {
+        let mut cluster = BTreeSet::from([first]);
+        let mut front = vec![first];
+        while let Some(n) = front.pop() {
+            for m in within(&points, &[s.at(n)], reach) {
+                if left.remove(&m) {
+                    cluster.insert(m);
+                    front.push(m);
+                }
+            }
+        }
+        out.push(cluster);
+    }
+    out
+}
+
+impl State<'_> {
+    /// Morph round one cluster of bad nodes: their own optimisation (the rest held) gives their
+    /// displacements, the harmonic extension carries them to the nodes within `reach`, applied at
+    /// full or a halved scale when that improves the elements it touches. The region's size and
+    /// whether it was kept.
+    fn morph_cluster(&mut self, bad: &BTreeSet<u32>, reach: f64, movable: &dyn Fn(&State<'_>, u32) -> bool) -> Result<(usize, bool)> {
+        let start: BTreeMap<u32, P> = bad.iter().map(|&n| (n, self.at(n))).collect();
+        let mut undo = Vec::new();
+        let mut steps: BTreeMap<u32, f64> = bad.iter().map(|&n| (n, 0.1)).collect();
+        for _ in 0..TARGET_SWEEPS {
+            for &n in bad {
+                let before = self.at(n);
+                let mut step = steps.get(&n).copied().unwrap_or(0.1);
+                if self.optimize_node(Phase::MinMax, n, &mut step) {
+                    undo.push((n, before));
+                }
+                steps.insert(n, step);
+            }
+        }
+        let targets: BTreeMap<u32, P> = start.iter().map(|(&n, p0)| (n, sub(self.at(n), *p0))).collect();
+        for (n, p) in undo.into_iter().rev() {
+            self.place(n, p);
+        }
+        let points: BTreeMap<u32, P> = self.around.keys().map(|&n| (n, self.at(n))).collect();
+        let centres: Vec<P> = start.values().copied().collect();
+        let region = within(&points, &centres, reach);
+        let free: Vec<u32> = region.iter().copied().filter(|&n| !bad.contains(&n) && movable(self, n)).collect();
+        let u = self.harmonic(&free, &targets)?;
+        let touched: BTreeSet<usize> = u.keys().flat_map(|n| self.around.get(n).into_iter().flatten().copied()).collect();
+        let was = self.certified(&touched);
+        for t in [1.0, 0.5, 0.25, 0.125] {
+            let mut undo = Vec::new();
+            for (&n, d) in &u {
+                if dot(*d, *d) == 0.0 {
+                    continue;
+                }
+                let p0 = self.at(n);
+                if let Some(p) = self.moved(self.freedom(n), p0, scale(*d, t)) {
+                    undo.extend(self.place(n, p));
+                }
+            }
+            let now = self.certified(&touched);
+            if now.improves(&was) && now.ratio <= self.ratio_cap.max(was.ratio) {
+                return Ok((region.len(), true));
+            }
+            self.restore(undo);
+        }
+        Ok((region.len(), false))
+    }
+
+    /// Every element's fast quality, its smallest and mean.
+    fn qualities(&self) -> (Vec<f64>, f64, f64) {
+        let q: Vec<f64> = self.elems.iter().map(|e| term_of(Phase::Smooth, e, self, false).1).collect();
+        if q.is_empty() {
+            return (q, 0.0, 0.0);
+        }
+        let min = q.iter().copied().fold(f64::INFINITY, f64::min);
+        let mean = q.iter().sum::<f64>() / q.len() as f64;
+        (q, min, mean)
+    }
+
+    /// Over elements `elems`, certified: how many are invalid, the worst quality of the valid
+    /// ones, the smooth objective's sum and the largest edge ratio.
+    fn certified(&self, elems: &BTreeSet<usize>) -> Checked {
+        let mut c = Checked { invalid: 0, worst: f64::INFINITY, objective: 0.0, ratio: 0.0 };
+        for &i in elems {
+            let Some(e) = self.elems.get(i) else { continue };
+            let x = self.coords(e);
+            let (q, valid) = measure(e, &x);
+            if valid {
+                c.worst = c.worst.min(q);
+            } else {
+                c.invalid += 1;
+            }
+            c.objective += phi(Phase::Smooth, q, valid, size(e.kind, &x), e.size0);
+            c.ratio = c.ratio.max(super::edge_ratio(e.kind, &x));
+        }
+        c
+    }
+
+    /// The harmonic extension over `free` of the displacements `fixed` (zero at every other
+    /// node): Gauss–Seidel on the graph Laplacian of the element edges.
+    fn harmonic(&self, free: &[u32], fixed: &BTreeMap<u32, P>) -> Result<BTreeMap<u32, P>> {
+        let mut u: BTreeMap<u32, P> = fixed.clone();
+        for &n in free {
+            u.insert(n, [0.0; 3]);
+        }
+        let scale_of = fixed.values().map(|d| dot(*d, *d).sqrt()).fold(0.0, f64::max);
+        for sweep in 0..HARMONIC_SWEEPS {
+            if sweep % 64 == 0 {
+                fieldcraft_model::progress::check()?;
+            }
+            let mut change = 0.0f64;
+            for &n in free {
+                let Some(nb) = self.neighbours.get(&n) else { continue };
+                if nb.is_empty() {
+                    continue;
+                }
+                let sum = nb.iter().fold([0.0; 3], |s, m| add(s, u.get(m).copied().unwrap_or([0.0; 3])));
+                let v = scale(sum, 1.0 / nb.len() as f64);
+                let old = u.insert(n, v).unwrap_or([0.0; 3]);
+                change = change.max(dist(old, v));
+            }
+            if change <= HARMONIC_TOL * scale_of {
+                break;
+            }
+        }
+        Ok(u)
+    }
+}
+
+/// Morph the mesh round its bad elements: each round finds the elements of quality below
+/// `options.below` and, cluster by cluster (bad nodes within the reach of each other), moves
+/// their movable corner nodes to better places (a few sweeps of their own
+/// optimisation, the rest of the mesh held), and carries that displacement to the nodes within
+/// the reach by harmonic interpolation (the graph Laplacian solved with the bad nodes'
+/// displacements and zero beyond the reach and at held nodes). Face nodes are put back on their
+/// face, edge and vertex nodes do not move, nodes outside the reach stay exactly as they are. A
+/// cluster's morph is kept, at full or a halved scale, only if no more elements are invalid, no element
+/// gets longer than the longest one was, the worst element it touches is no worse and the smooth
+/// objective there drops. Only nodes of `nodes`
+/// move. The model is not changed: the result has the new positions.
+pub fn morph(model: &Model, nodes: &BTreeSet<u32>, options: MorphOptions, geometry: &dyn Constraints) -> Result<Morphed> {
+    if !(options.below > 0.0 && options.below <= 1.0) {
+        return Err(Error::Invalid(format!("below must be in (0, 1], got {}", options.below)));
+    }
+    if options.reach.is_some_and(|r| !(r > 0.0 && r.is_finite())) {
+        return Err(Error::Invalid("the reach must be positive".into()));
+    }
+    if options.rounds == 0 || options.rounds > MAX_ROUNDS {
+        return Err(Error::Invalid(format!("rounds must be 1 to {MAX_ROUNDS}, got {}", options.rounds)));
     }
     if nodes.len() > super::MAX_NODES {
         return Err(Error::Limit(format!("more than {} nodes to relax", super::MAX_NODES)));
@@ -303,63 +493,61 @@ pub fn optimize(model: &Model, nodes: &BTreeSet<u32>, sweeps: usize, geometry: &
     let mut state = State::new(model, nodes, geometry, true)?;
     let original = state.pos.clone();
     let before = region_quality(&state);
-    // No element may end up more stretched than the most stretched one was.
     state.ratio_cap = before.max_edge_ratio.max(1.0);
-    let start = state.sweep_numbers(Phase::Smooth);
-    let mut history = vec![start];
-    let (mut best, mut best_pos, mut kept) = (start, None::<BTreeMap<u32, P>>, 0);
-    let movers: Vec<u32> = nodes.iter().copied().filter(|n| state.around.contains_key(n) && state.freedom(*n) != Freedom::Fixed).collect();
-    let mut steps: BTreeMap<u32, f64> = movers.iter().map(|&n| (n, 0.1)).collect();
-    // Phase 1 has up to half the sweeps (the rest when it stops early); phase 2 the rest. Each
-    // sweep visits the nodes whose neighbourhood changed in the previous one.
-    let mut k = 0;
-    for (phase, budget) in [(Phase::Smooth, sweeps.div_ceil(2)), (Phase::MinMax, sweeps)] {
-        let mut active: BTreeSet<u32> = movers.iter().copied().collect();
-        let mut last = state.sweep_numbers(phase).objective;
-        while k < budget && !active.is_empty() {
-            k += 1;
-            let mut next = BTreeSet::new();
-            for &n in &movers {
-                if !active.contains(&n) {
-                    continue;
+    let (_, _, mean_before) = state.qualities();
+    let movable = |s: &State<'_>, n: u32| nodes.contains(&n) && s.around.contains_key(&n) && s.freedom(n) != Freedom::Fixed;
+    let mut rounds = Vec::new();
+    for round in 0..options.rounds {
+        fieldcraft_model::progress::stage(&format!("morph round {}", round + 1), Some(options.rounds as f64), "rounds");
+        fieldcraft_model::progress::count(round as f64);
+        fieldcraft_model::progress::check()?;
+        let (q, _, _) = state.qualities();
+        let bad_elems: Vec<usize> = (0..q.len()).filter(|&i| q.get(i).is_some_and(|v| *v < options.below)).collect();
+        let mut bad: BTreeSet<u32> = BTreeSet::new();
+        let mut edge_sum = (0.0, 0usize);
+        for &i in &bad_elems {
+            let Some(e) = state.elems.get(i) else { continue };
+            bad.extend(e.nodes.iter().take(e.kind.corner_count()).copied().filter(|&n| movable(&state, n)));
+            let x = state.coords(e);
+            for edge in e.kind.edges() {
+                if let (Some(a), Some(b)) = (edge.first().and_then(|&k| x.get(k)), edge.get(1).and_then(|&k| x.get(k))) {
+                    edge_sum = (edge_sum.0 + dist(*a, *b), edge_sum.1 + 1);
                 }
-                let mut step = steps.get(&n).copied().unwrap_or(0.1);
-                if state.optimize_node(phase, n, &mut step) {
-                    next.insert(n);
-                    next.extend(state.neighbours.get(&n).into_iter().flatten().copied());
-                }
-                steps.insert(n, step);
             }
-            active = next;
-            let now = state.sweep_numbers(phase);
-            history.push(now);
-            if better(&now, &best) {
-                best = now;
-                best_pos = Some(state.pos.clone());
-                kept = k;
-            }
-            // Converged: the objective no longer drops.
-            if last - now.objective <= CONVERGED * last.max(f64::MIN_POSITIVE) {
-                break;
-            }
-            last = now.objective;
         }
-        // Phase 2 starts from the best state.
-        if let Some(p) = &best_pos {
-            state.pos = p.clone();
+        if bad.is_empty() {
+            break;
+        }
+        let reach = options.reach.unwrap_or(if edge_sum.1 > 0 { 3.0 * edge_sum.0 / edge_sum.1 as f64 } else { 0.0 });
+        if !(reach > 0.0) {
+            break;
+        }
+        // Bad nodes within the reach of each other are one cluster, morphed and checked together.
+        let clusters = clusters(&state, &bad, reach);
+        let mut round_out = Round { bad_elements: bad_elems.len(), bad_nodes: bad.len(), reach, clusters: clusters.len(), ..Round::default() };
+        for cluster in &clusters {
+            fieldcraft_model::progress::check()?;
+            let (region, kept) = state.morph_cluster(cluster, reach, &|s: &State<'_>, n| movable(s, n))?;
+            round_out.region_nodes += region;
+            round_out.kept += usize::from(kept);
+        }
+        let (_, min, mean) = state.qualities();
+        (round_out.min_quality, round_out.mean_quality) = (min, mean);
+        let any = round_out.kept > 0;
+        rounds.push(round_out);
+        if !any {
+            break;
         }
     }
-    let accept = best.invalid == 0 && best.min_quality >= start.min_quality;
-    match best_pos {
-        Some(p) if accept => state.pos = p,
-        _ => {
-            state.pos = original.clone();
-            kept = 0;
-        }
+    let mut after = region_quality(&state);
+    let (_, _, mut mean_after) = state.qualities();
+    // Never worse than the start.
+    if after.invalid > before.invalid || after.min_quality < before.min_quality {
+        state.pos = original.clone();
+        after = before.clone();
+        mean_after = mean_before;
     }
-    let after = region_quality(&state);
-    let end = state.sweep_numbers(Phase::Smooth);
-    let mut out = Optimized { before, after, mean_before: start.mean_quality, mean_after: end.mean_quality, history, kept, ..Default::default() };
+    let mut out = Morphed { before, after, mean_before, mean_after, rounds, ..Default::default() };
     for (n, p) in &state.pos {
         let Some(o) = original.get(n) else { continue };
         let d = dist(*o, *p);

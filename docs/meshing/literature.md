@@ -970,16 +970,17 @@ input points), Steiner points kept half the local spacing from the boundary.
   mesh takes the displacement at each node's parametric coordinates in the old cell holding it (barycentric or
   trilinear shape functions), slides it onto its face or edge, undoes any move that would invert an element, and
   smooths once (`mesh.node.relax.apply`, or `reapply` after every remesh).
-- **Strong mode** (`"mode": "strong"`, `fieldcraft-mesh::relax::optimize`). An optimisation of every corner node
-  of the region at once: interior nodes in space, face nodes in their face's parameters, edge and vertex nodes held.
-  It minimises Σ φ(SJ) over the elements by nonlinear Gauss–Seidel (per node: the neighbours' centroid, then a
-  central-difference gradient step with backtracking, each kept when it lowers the node's part of the sum), first
-  with φ = (1/SJ − 1)², then with φ = SJ⁻¹⁶ (a smooth stand-in for the smallest SJ); an invalid element costs
-  far more than any valid one (a barrier, and an untangling objective while elements are inverted; P. Knupp,
-  *Hexahedral and tetrahedral mesh untangling*, Eng. Comput. 17, 2001; L. Freitag, P. Plassmann, IJNME 49, 2000).
-  A term ½ ln²(V/V₀) keeps element sizes, and no element may exceed the region's largest edge ratio before: the
-  scaled Jacobian alone lets elements flatten against the boundary. The best state passed through is kept, and
-  only if it is valid and its smallest SJ is not below the start.
+- **Strong mode** (`"mode": "strong"`, `fieldcraft-mesh::relax::morph`). A mesh morph round the bad elements
+  (scaled Jacobian below `below`): their movable corner nodes are grouped into clusters (nodes within the reach of
+  each other, from a fixed-radius grid query); per cluster, the bad nodes first move to better places by a few
+  sweeps of their own optimisation with the rest held (a central-difference gradient step with backtracking on
+  Σ SJ⁻¹⁶ + ½ ln²(V/V₀) over their elements, an invalid element costing far more than any valid one), then that
+  displacement is carried to every node within the reach by harmonic interpolation: the graph Laplacian of the
+  element edges solved (Gauss–Seidel) with the bad nodes' displacements and zero at held nodes and beyond the reach.
+  Face nodes go back on their face (UV), edge and vertex nodes are held, nodes outside the reach do not move. A
+  cluster's morph is kept, at full or a halved scale, only when no more elements are invalid, the worst element it
+  touches is no worse, the smooth objective Σ (1/SJ − 1)² there drops, and no element gets longer than the longest
+  was; rounds repeat while any cluster is kept. The result never has a lower smallest SJ than the start.
 
 ---
 

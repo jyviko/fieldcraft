@@ -1419,11 +1419,11 @@ pub const NODE_RELAX: &[Field] = &[
     labels("elements", "Elements", LabelOf::Element).help("Instead of a sphere: the nodes of these elements.").hint("none"),
     references("bodies", "Bodies", C::Body).help("Only the nodes of these bodies.").hint("every body"),
     choice("mode", "Mode", &[("guarded", "Guarded (local)"), ("strong", "Strong (optimise the region)")])
-        .help("Guarded: each move keeps the worst element around the node from getting worse. Strong: optimise every node of the region together toward scaled Jacobian 1, nodes on CAD edges held.")
+        .help("Guarded: each move keeps the worst element around the node from getting worse. Strong: move the nodes of the bad elements and morph the mesh round them, nodes on CAD edges held.")
         .def("\"guarded\""),
-    range("below", "Below", D::None, 0.0, 1.0).help("Strong: relax the elements below this scaled Jacobian (and the layers around them).").hint("every element of the region"),
-    int("layers", "Layers", 0, 20).help("Strong: rings of elements added around the elements below the threshold.").def("2"),
-    int("iterations", "Iterations", 1, 2000).help("Sweeps over the nodes (guarded: 1 to 100, default 5; strong: default 200).").hint("5 (strong: 200)"),
+    range("below", "Below", D::None, 0.0, 1.0).help("Strong: the elements below this scaled Jacobian are moved.").hint("0.7"),
+    positive("reach", "Reach", D::Length).help("Strong: nodes this close to a moved node follow it, blended to zero at the reach.").hint("three element lengths"),
+    int("iterations", "Iterations", 1, 200).help("Guarded: sweeps over the nodes (1 to 100). Strong: morph rounds.").hint("5 (strong: 20)"),
     range("strength", "Strength", D::None, 0.0, 1.0).help("How far each node moves toward its relaxed position, 0 to 1.").def("1"),
     choice("falloff", "Falloff", &[("smooth", "Smooth"), ("linear", "Linear"), ("none", "None")])
         .help("How the strength falls from the centre to the radius, so the edit blends into the mesh.")

@@ -1222,6 +1222,10 @@ fn apply_symmetric(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Optio
     }
     let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
     let (Some(shape), Some(d)) = (design.source_body(&plan.body), plan.direction) else { return Ok(None) };
+    // A body other partitions have cut already is its cells (the whole body's plan is refused).
+    if plan_cut_names(s, name).is_empty() && design.body(&plan.body).is_none() {
+        return Ok(None);
+    }
     let planes = symmetry_planes(shape, d, &plan.rings)?;
     if planes.is_empty() {
         return Ok(None);
@@ -1724,6 +1728,9 @@ mod tests {
         assert_eq!(cell["rings"].as_array().map(Vec::len), Some(1), "{cell}");
         let whole = s.execute("mesh.plan", &json!({"body": "Plate"})).unwrap();
         assert_eq!(whole["body"], "Plate", "{whole}");
+        // The plate is symmetric too, but the user's partition has cut it: refused, not mirrored.
+        let e = s.execute("mesh.plan.apply", &json!({"plan": whole["name"]})).unwrap_err().to_string();
+        assert!(e.contains("cut into the cells"), "{e}");
         s.execute("mesh.plan.apply", &json!({"plan": cell["name"]})).unwrap();
     }
 

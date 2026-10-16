@@ -4,7 +4,7 @@
 //! choices, so a definition is described by the same words as the form that edits it, never as
 //! its JSON.
 
-use fieldcraft_engine::schema::{Field, Kind};
+use fieldcraft_engine::schema::{self, Field, Kind};
 use fieldcraft_model::{Model, UnitSystem};
 use serde_json::{Map, Value};
 
@@ -183,7 +183,9 @@ fn scalar(f: &Field, v: &Value, units: UnitSystem) -> String {
             Some(l) => crate::fields::format_labels(&l),
             None => crate::context::value_text(v),
         },
-        Kind::Points { .. } => v.as_array().map_or_else(|| crate::context::value_text(v), |a| plural(a.len(), "point")),
+        Kind::Points { columns, .. } => {
+            v.as_array().map_or_else(|| crate::context::value_text(v), |a| plural(a.len(), if columns == schema::XYZ { "point" } else { "row" }))
+        }
         Kind::Multi(options) => {
             list(v, |x| options.iter().find(|(o, _)| fieldcraft_engine::schema::multi_value(o) == *x).map(|(_, l)| (*l).to_string()))
         }

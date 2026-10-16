@@ -661,9 +661,9 @@ const PROCEDURE: Field = variants(
                 flag("line_search", "Line search")
                     .help("Scale each Newton correction to reduce the residual; helps with hard convergence.")
                     .def("false"),
-                json("load_path", "Load path")
-                    .help("How the load factor varies through the step, as JSON pairs of step fraction and factor; a linear ramp when empty.")
-                    .hint("[[fraction, factor], …]; a ramp when empty"),
+                table("load_path", "Load path", D::None, &["fraction", "factor"], fieldcraft_model::MAX_LOAD_PATH_POINTS)
+                    .help("How the load factor varies through the step: rows of step fraction (0 to 1) and load factor; a linear ramp when empty.")
+                    .hint("a ramp when empty"),
                 group(
                     "imperfection",
                     "Imperfection",

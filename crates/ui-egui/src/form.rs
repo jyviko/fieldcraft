@@ -330,7 +330,7 @@ impl Form<'_> {
             }
             Kind::Json => self.json(ui, id, value, f.hint),
             Kind::Labels(of) => self.labels(ui, id, value, of, f.hint),
-            Kind::Points { max, .. } => self.points(ui, id, value, f, max),
+            Kind::Points { columns, max, .. } => self.points(ui, id, value, f, columns, max),
             Kind::Multi(options) => self.multi(ui, value, options),
             Kind::NumberOrAuto { .. } => self.number_or_auto(ui, id, value, f),
             Kind::Unit | Kind::Group(_) | Kind::Variants { .. } | Kind::Rows { .. } => None,
@@ -584,7 +584,7 @@ impl Form<'_> {
     }
 
     /// A list of points: a row of x, y, z each, removable, and Add point.
-    fn points(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, f: &Field, max: usize) -> Option<Value> {
+    fn points(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, f: &Field, columns: &[&str], max: usize) -> Option<Value> {
         let current: Vec<Value> = match value {
             None | Some(Value::Null) => Vec::new(),
             Some(Value::Array(a)) if a.iter().all(Value::is_array) => a.clone(),
@@ -602,10 +602,10 @@ impl Form<'_> {
         ui.vertical(|ui| {
             for (i, p) in current.iter().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.small_button("×").on_hover_text("Remove this point").clicked() {
+                    if ui.small_button("×").on_hover_text("Remove this row").clicked() {
                         remove = Some(i);
                     }
-                    if let Some(v) = self.vector(ui, id.with(i), Some(p), f, &["x", "y", "z"], false)
+                    if let Some(v) = self.vector(ui, id.with(i), Some(p), f, columns, false)
                         && let Some(slot) = next.get_mut(i)
                     {
                         *slot = v;
@@ -613,8 +613,14 @@ impl Form<'_> {
                     }
                 });
             }
-            if ui.add_enabled(current.len() < max.min(MAX_ROWS), egui::Button::new(RichText::new("Add point").small())).clicked() {
-                next.push(json!([0.0, 0.0, 0.0]));
+            if ui
+                .add_enabled(
+                    current.len() < max.min(MAX_ROWS),
+                    egui::Button::new(RichText::new(if columns == schema::XYZ { "Add point" } else { "Add row" }).small()),
+                )
+                .clicked()
+            {
+                next.push(Value::Array(vec![json!(0.0); columns.len()]));
                 changed = true;
             }
         });

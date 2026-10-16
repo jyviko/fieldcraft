@@ -97,9 +97,11 @@ pub enum Kind {
     },
     /// A list of mesh labels, nodes or elements (at most [`MAX_LABELS`]).
     Labels(LabelOf),
-    /// A list of points `[x, y, z]`, at most `max`.
+    /// A list of points `[x, y, z]`, or of number rows with these `columns` (a load path's
+    /// `[fraction, factor]` pairs), at most `max`.
     Points {
         dim: Dim,
+        columns: &'static [&'static str],
         max: usize,
     },
     /// Any of these values, as a list: (the value as JSON text, label), e.g. `("1", "UX")` or
@@ -489,9 +491,15 @@ pub const fn rows(key: &'static str, label: &'static str, fields: &'static [Fiel
 pub const fn labels(key: &'static str, label: &'static str, of: LabelOf) -> Field {
     field(key, label, Kind::Labels(of))
 }
+/// The columns of a point, `[x, y, z]`.
+pub const XYZ: &[&str] = &["x", "y", "z"];
 /// A list of points `[x, y, z]`.
 pub const fn points(key: &'static str, label: &'static str, dim: Dim, max: usize) -> Field {
-    field(key, label, Kind::Points { dim, max })
+    field(key, label, Kind::Points { dim, columns: XYZ, max })
+}
+/// A table: a list of number rows with these columns.
+pub const fn table(key: &'static str, label: &'static str, dim: Dim, columns: &'static [&'static str], max: usize) -> Field {
+    field(key, label, Kind::Points { dim, columns, max })
 }
 /// Any of `options` (each a value as JSON text, and a label), as a list.
 pub const fn multi(key: &'static str, label: &'static str, options: &'static [(&'static str, &'static str)]) -> Field {
@@ -1016,14 +1024,16 @@ fn value_problem(f: &'static Field, v: &Value, path: &str, out: &mut Vec<Problem
             Some(a) if a.len() <= MAX_LABELS && a.iter().all(|x| x.as_u64().is_some_and(|n| n >= 1 && n <= u64::from(u32::MAX))) => None,
             _ => Some(ProblemKind::NotAList { max: MAX_LABELS, what: "labels" }),
         },
-        Kind::Points { max, .. } => match v.as_array() {
+        Kind::Points { columns, max, .. } => match v.as_array() {
             Some(a)
                 if a.len() <= max
-                    && a.iter().all(|p| p.as_array().is_some_and(|c| c.len() == 3 && c.iter().all(|x| x.as_f64().is_some_and(f64::is_finite)))) =>
+                    && a.iter().all(|p| {
+                        p.as_array().is_some_and(|c| c.len() == columns.len() && c.iter().all(|x| x.as_f64().is_some_and(f64::is_finite)))
+                    }) =>
             {
                 None
             }
-            _ => Some(ProblemKind::NotAList { max, what: "points [x, y, z]" }),
+            _ => Some(ProblemKind::NotAList { max, what: if columns == XYZ { "points [x, y, z]" } else { "rows of numbers" } }),
         },
         Kind::Multi(options) => match v.as_array() {
             Some(a) if a.iter().all(|x| options.iter().any(|(o, _)| multi_value(o) == *x)) => None,
@@ -1144,8 +1154,9 @@ fn field_schema(f: &Field, depth: usize) -> Value {
         Kind::Labels(of) => {
             json!({"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": u32::MAX}, "maxItems": MAX_LABELS, "x-labels": of.label()})
         }
-        Kind::Points { dim, max } => {
-            let mut item = json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3});
+        Kind::Points { dim, columns, max } => {
+            let n = columns.len();
+            let mut item = json!({"type": "array", "items": {"type": "number"}, "minItems": n, "maxItems": n, "x-columns": columns});
             if dim != Dim::None {
                 item["x-dimension"] = json!(format!("{dim:?}").to_lowercase());
             }
@@ -1244,6 +1255,19 @@ mod tests {
         assert_eq!(s["properties"]["output"]["items"]["enum"], json!(["stress"]));
         assert_eq!(s["properties"]["at"]["maxItems"], 2);
         assert_eq!(s["properties"]["scale"]["oneOf"][1]["const"], "auto");
+    }
+
+    /// A table is a list of number rows of its column count: a load path's [fraction, factor].
+    #[test]
+    fn table_rows_have_its_columns() {
+        const F: &[Field] = &[table("path", "Path", Dim::None, &["fraction", "factor"], 3)];
+        assert!(problems(F, &json!({"path": [[0, 0], [0.5, 1], [1, 1]]})).is_empty());
+        for bad in [json!({"path": [[0, 0, 0]]}), json!({"path": [[0]]}), json!({"path": [[0, 0], [0, 0], [0, 0], [1, 1]]})] {
+            assert_eq!(problems(F, &bad).len(), 1, "{bad}");
+        }
+        let s = json_schema(F);
+        assert_eq!(s["properties"]["path"]["items"]["minItems"], 2);
+        assert_eq!(s["properties"]["path"]["items"]["x-columns"], json!(["fraction", "factor"]));
     }
 
     #[test]

@@ -127,8 +127,16 @@ pub fn is_long(command: &str) -> bool {
         )
 }
 
-pub const BACKGROUND: &[&str] =
-    &["mesh.tet.generate", "mesh.hex.generate", "mesh.hex.sweep", "mesh.hex.mapped", "mesh.hex.blocks", "mesh.hex.octree", "mesh.hex.project"];
+pub const BACKGROUND: &[&str] = &[
+    "mesh.tet.generate",
+    "mesh.hex.generate",
+    "mesh.hex.sweep",
+    "mesh.hex.mapped",
+    "mesh.hex.blocks",
+    "mesh.hex.octree",
+    "mesh.hex.project",
+    "mesh.node.relax",
+];
 
 /// Most entries the recent-files list keeps, and the longest path it keeps.
 pub const MAX_RECENT: usize = 10;

@@ -210,6 +210,11 @@ When `mesh.quality` shows a handful of spikes in an otherwise good mesh:
    vertex nodes stay; nodes on a partition cut face move freely (both cells share them). The
    reply gives the nodes moved, the largest displacement, and the region's smallest scaled
    Jacobian, largest edge ratio and worst elements before and after. One undo step.
+   For a whole region at once, `mesh.node.relax {"mode": "strong", "bodies": ["Base"]}` (or
+   `"below": 0.7, "layers": 2` for the elements below 0.7 and two rings round them) optimises
+   every node together toward scaled Jacobian 1, edge and vertex nodes held, single elements
+   allowed to get worse on the way; it keeps the best state, never one with a lower smallest
+   scaled Jacobian, and replies the objective, min and mean per sweep (`history`).
 2. The relaxation is kept as a field of the model (`field`, default `Relax1`, …; saved with it).
    After a remesh, `mesh.node.relax.apply {"field": "Relax1"}` puts the relaxed shape on the new
    mesh (each node takes the displacement interpolated in the old cell it lies in, on its face,

@@ -970,6 +970,16 @@ input points), Steiner points kept half the local spacing from the boundary.
   mesh takes the displacement at each node's parametric coordinates in the old cell holding it (barycentric or
   trilinear shape functions), slides it onto its face or edge, undoes any move that would invert an element, and
   smooths once (`mesh.node.relax.apply`, or `reapply` after every remesh).
+- **Strong mode** (`"mode": "strong"`, `fieldcraft-mesh::relax::optimize`). An optimisation of every corner node
+  of the region at once: interior nodes in space, face nodes in their face's parameters, edge and vertex nodes held.
+  It minimises Σ φ(SJ) over the elements by nonlinear Gauss–Seidel (per node: the neighbours' centroid, then a
+  central-difference gradient step with backtracking, each kept when it lowers the node's part of the sum), first
+  with φ = (1/SJ − 1)², then with φ = SJ⁻¹⁶ (a smooth stand-in for the smallest SJ); an invalid element costs
+  far more than any valid one (a barrier, and an untangling objective while elements are inverted; P. Knupp,
+  *Hexahedral and tetrahedral mesh untangling*, Eng. Comput. 17, 2001; L. Freitag, P. Plassmann, IJNME 49, 2000).
+  A term ½ ln²(V/V₀) keeps element sizes, and no element may exceed the region's largest edge ratio before: the
+  scaled Jacobian alone lets elements flatten against the boundary. The best state passed through is kept, and
+  only if it is valid and its smallest SJ is not below the start.
 
 ---
 

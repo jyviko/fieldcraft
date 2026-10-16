@@ -260,3 +260,100 @@ fn relaxing_fillet_faces_improves_them() {
     s.execute("mesh.node.relax", &json!({"elements": [e]})).unwrap();
     assert!(s.execute("mesh.node.relax", &json!({"set": "All"})).is_err());
 }
+
+/// Whether a node of the 20 mm box lies on two of its planes (an edge or a vertex of the box,
+/// or a tangent line of its fillet).
+fn on_box_edge(p: [f64; 3]) -> bool {
+    p.iter().filter(|c| c.abs() < 1e-6 || (**c - 20.0).abs() < 1e-6).count() >= 2
+}
+
+/// Strong mode on the whole filleted box: the smallest and the mean scaled Jacobian do not drop,
+/// nothing inverts, the fillet's nodes stay on its cylinder, the plane faces' nodes on their
+/// planes, and the nodes on the box's edges and the fillet's tangent lines do not move. The
+/// reply carries the objective, min and mean per sweep.
+#[test]
+fn strong_relaxation_of_a_filleted_box_keeps_faces_and_edges() {
+    let (_d, mut s, _) = filleted_box();
+    let before = s.model.clone();
+    let r = s.execute("mesh.node.relax", &json!({"mode": "strong", "bodies": ["B"], "iterations": 40})).unwrap();
+    let (b, a) = (&r["before"], &r["after"]);
+    assert!(a["min_scaled_jacobian"].as_f64().unwrap() > b["min_scaled_jacobian"].as_f64().unwrap(), "{r}");
+    assert!(a["mean_scaled_jacobian"].as_f64().unwrap() > b["mean_scaled_jacobian"].as_f64().unwrap(), "{r}");
+    assert_eq!(a["invalid"], 0, "{r}");
+    assert_eq!(invalid(&mut s), 0);
+    let history = r["history"].as_array().unwrap();
+    assert!(history.len() > 2 && history.iter().all(|h| h["objective"].is_number() && h["min"].is_number() && h["mean"].is_number()), "{r}");
+    for (n, p) in s.model.nodes() {
+        let (old, new) = (before.node(*n).unwrap().xyz, p.xyz);
+        if on_box_edge(old) {
+            assert_eq!(old, new, "node {n} on an edge moved");
+        }
+        if old[0] > 18.0 && old[2] > 18.0 && (fillet_radius(old) - 2.0).abs() < 1e-6 {
+            assert!((fillet_radius(new) - 2.0).abs() < 1e-6, "node {n} left the fillet");
+        }
+        for k in 0..3 {
+            for plane in [0.0, 20.0] {
+                if (old[k] - plane).abs() < 1e-9 {
+                    assert!((new[k] - plane).abs() < 1e-6, "node {n} left the plane {k} = {plane}");
+                }
+            }
+        }
+    }
+}
+
+/// Strong mode on a distorted hex plate: over the guarded mode's sphere it lifts the smallest
+/// scaled Jacobian as far as the guarded mode (to the elements on the sphere's rim, which
+/// neither moves) (with nodes on edges held, where the guarded mode slides
+/// them); by quality threshold (the elements below 0.5 and two layers round them) it untangles
+/// every element. Nothing inverts, nodes on the hole stay on its cylinder and the caps' on their
+/// planes, nodes on the hole's edges do not move.
+#[test]
+fn strong_relaxation_untangles_a_distorted_plate() {
+    let mut s = plate();
+    s.execute("mesh.hex.generate", &json!({"size": 2.0})).unwrap();
+    perturb(&mut s, ON_HOLE, 6.0, 0.35);
+    let perturbed = s.model.clone();
+    let sphere = json!({"center": ON_HOLE, "radius": 7.0, "iterations": 20});
+    let guarded = s.execute("mesh.node.relax", &sphere).unwrap();
+    let min = |r: &Value, at: &str| r[at]["min_scaled_jacobian"].as_f64().unwrap();
+    for strong in [json!({"mode": "strong", "center": ON_HOLE, "radius": 7.0}), json!({"mode": "strong", "below": 0.5, "layers": 2})] {
+        s.model = perturbed.clone();
+        let r = s.execute("mesh.node.relax", &strong).unwrap();
+        assert!(min(&r, "after") > 0.5 && min(&r, "before") < 0.0, "{strong}: {r}");
+        if strong.get("center").is_some() {
+            assert!(min(&r, "after") >= min(&guarded, "after") - 1e-9, "strong {r}\nguarded {guarded}");
+        }
+        assert_eq!(r["after"]["invalid"], 0, "{r}");
+        assert_eq!(invalid(&mut s), 0);
+        check_on_geometry(&perturbed, &s.model);
+        for (n, p) in s.model.nodes() {
+            let old = perturbed.node(*n).unwrap().xyz;
+            if on_faces(old).len() >= 2 {
+                assert_eq!(old, p.xyz, "node {n} on the hole's edge moved");
+            }
+        }
+    }
+}
+
+#[test]
+fn strong_mode_parameters_are_checked() {
+    let mut s = plate();
+    s.execute("mesh.hex.generate", &json!({"size": 4.0})).unwrap();
+    for p in [
+        json!({"mode": "strong"}),
+        json!({"mode": "wild", "nodes": [1]}),
+        json!({"mode": "strong", "below": 0}),
+        json!({"mode": "strong", "below": 1.5}),
+        json!({"mode": "strong", "below": 0.5, "layers": 21}),
+        json!({"mode": "strong", "below": 0.5, "layers": -1}),
+        json!({"mode": "strong", "bodies": ["nope"]}),
+        json!({"mode": "strong", "nodes": [1], "iterations": 0}),
+        json!({"mode": "strong", "nodes": [1], "iterations": 2001}),
+        json!({"below": 0.5}),
+        json!({"nodes": [1], "layers": 1}),
+    ] {
+        assert!(s.execute("mesh.node.relax", &p).is_err(), "{p}");
+    }
+    // An undistorted mesh above the threshold: nothing to relax.
+    assert!(s.execute("mesh.node.relax", &json!({"mode": "strong", "below": 0.01})).is_err());
+}

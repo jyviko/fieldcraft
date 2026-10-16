@@ -28,7 +28,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const RELAX: CommandSpec = CommandSpec {
     id: "mesh.node.relax",
     label: "Relax Nodes",
-    params: r#"{"center": [x, y, z], "radius": mm (the sphere of influence) | "around_element": label (a sphere round that element; radius default twice its longest edge) | "faces": [{"body": "Base", "face": "F3"}] (persistent B-rep face names, as model.set.create takes them: every node on those faces and the nodes of the elements touching them; pick faces in the view) | "nodes": [labels] | "elements": [labels] (their nodes), "bodies"?: ["Body1"] (only their nodes), "iterations"?: 5 (1..=100), "strength"?: 1 (0..1], "falloff"?: "smooth" (default: weight 1 at the centre to 0 at the radius) | "linear" | "none", "field"?: "Name" (the relaxation field to keep; default Relax1, Relax2, …), "reapply"?: false (apply the field again after each remesh of these bodies)} — moves the nodes to improve the worst elements around them (smart Laplacian, then optimization of the worst element; a move is kept only when the worst element around the node does not get worse, and never inverts one). Nodes on a B-rep face slide in its UV parameters and stay on it, nodes on a B-rep edge slide along it, nodes on vertices stay; nodes on partition cut faces move freely (shared by both cells); mid-side nodes follow, on the geometry. Reports the nodes moved, the largest displacement, the region's smallest scaled Jacobian, largest edge ratio and worst elements before and after, the field kept, and the listed faces no mesh is tagged with (`faces_without_mesh`; an error when none is). One undo step"#,
+    params: r#"{"center": [x, y, z], "radius": mm (the sphere of influence) | "around_element": label (a sphere round that element; radius default twice its longest edge) | "faces": [{"body": "Base", "face": "F3"}] (persistent B-rep face names, as model.set.create takes them: every node on those faces and the nodes of the elements touching them; pick faces in the view) | "nodes": [labels] | "elements": [labels] (their nodes), "bodies"?: ["Body1"] (only their nodes; a partitioned body's cells count as it), "iterations"?: 5 (1..=100), "strength"?: 1 (0..1], "falloff"?: "smooth" (default: weight 1 at the centre to 0 at the radius) | "linear" | "none", "field"?: "Name" (the relaxation field to keep; default Relax1, Relax2, …), "reapply"?: false (apply the field again after each remesh of these bodies), "mode"?: "guarded" (default) | "strong", "below"?: 0.7 (strong: the elements below this scaled Jacobian), "layers"?: 2 (strong: rings of elements added around them, 0..=20)} — moves the nodes to improve the worst elements around them (smart Laplacian, then optimization of the worst element; a move is kept only when the worst element around the node does not get worse, and never inverts one). `"mode": "strong"` optimises the whole region instead (`bodies` alone is the whole body; `iterations` are sweeps, default 200, 1..=2000): nodes on B-rep edges and vertices are held, nodes on faces slide on them, interior nodes are free, and the node positions minimise Σ (1/SJ − 1)² over the elements (a barrier: nothing inverts), so single elements may get worse on the way; the best state passed through is kept, and nothing moves unless it is valid and its smallest scaled Jacobian is not below the start. Its reply adds the mean scaled Jacobian and the objective, min and mean per sweep (`history`). Nodes on a B-rep face slide in its UV parameters and stay on it, nodes on a B-rep edge slide along it, nodes on vertices stay; nodes on partition cut faces move freely (shared by both cells); mid-side nodes follow, on the geometry. Reports the nodes moved, the largest displacement, the region's smallest scaled Jacobian, largest edge ratio and worst elements before and after, the field kept, and the listed faces no mesh is tagged with (`faces_without_mesh`; an error when none is). One undo step"#,
     form: Some(super::forms::NODE_RELAX),
     kind: CommandKind::Model,
     requires: &[Requirement::Mesh],
@@ -281,8 +281,11 @@ fn design_geometry(s: &Session, nodes: &BTreeSet<u32>) -> Result<DesignGeometry>
 fn body_nodes(model: &Model, p: &Value) -> Result<Option<(Vec<String>, BTreeSet<u32>)>> {
     let Some(bodies) = super::opt::<Vec<String>>(p, "bodies")? else { return Ok(None) };
     let mut nodes = BTreeSet::new();
+    // A body cut into cells by partitions is meshed as its cells (`Base/a`, `Base/b/a`, …).
+    let meshed: BTreeSet<String> = model.classification().entities().iter().map(|r| r.body.clone()).collect();
     for b in &bodies {
-        let elements = model.body_elements(b);
+        let cell = format!("{b}/");
+        let elements: Vec<u32> = meshed.iter().filter(|m| *m == b || m.starts_with(&cell)).flat_map(|m| model.body_elements(m)).collect();
         if elements.is_empty() {
             return Err(EngineError::Params(format!("body `{}` has no mesh", b.chars().take(80).collect::<String>())));
         }
@@ -497,7 +500,156 @@ pub fn sphere(s: &Session, params: &Value) -> Option<([f64; 3], f64)> {
     Some((c, r))
 }
 
+/// Elements below this scaled Jacobian, with `layers` rings of elements around them: their
+/// nodes (only of `only` when given).
+fn below_nodes(model: &Model, below: f64, layers: usize, only: Option<&BTreeSet<u32>>) -> Result<BTreeSet<u32>> {
+    let mut nodes = BTreeSet::new();
+    for e in model.elements().values() {
+        if !fieldcraft_mesh::quality::is_measured(e.kind) || only.is_some_and(|o| !e.nodes.iter().all(|n| o.contains(n))) {
+            continue;
+        }
+        let x: Vec<[f64; 3]> = e.nodes.iter().filter_map(|n| model.node(*n).map(|p| p.xyz)).collect();
+        let q = fieldcraft_mesh::quality::element_quality(e.kind, &x).ok().and_then(|q| {
+            q.get(fieldcraft_mesh::quality::Metric::ScaledJacobian).or_else(|| q.get(fieldcraft_mesh::quality::Metric::MinAngle).map(|a| a / 60.0))
+        });
+        if q.is_none_or(|q| q < below) {
+            nodes.extend(e.nodes.iter().copied());
+        }
+    }
+    for _ in 0..layers {
+        let mut grown = nodes.clone();
+        for e in model.elements().values() {
+            if e.nodes.iter().any(|n| nodes.contains(n)) {
+                grown.extend(e.nodes.iter().copied());
+            }
+        }
+        nodes = grown;
+    }
+    if let Some(only) = only {
+        nodes.retain(|n| only.contains(n));
+    }
+    Ok(nodes)
+}
+
+/// The most layers `layers` may add.
+const MAX_LAYERS: usize = 20;
+/// Default sweeps of the strong mode.
+const STRONG_SWEEPS: usize = 200;
+
+/// `mesh.node.relax` with `"mode": "strong"`: optimise the region globally ([`relax::optimize`]).
+fn relax_strong(s: &mut Session, p: &Value) -> Result<Value> {
+    let only = body_nodes(&s.model, p)?;
+    let below = match p.get("below") {
+        None => None,
+        Some(_) => {
+            let b = super::optional_number(p, "below", 0.0)?;
+            if !(b > 0.0 && b <= 1.0) {
+                return Err(EngineError::param("below", ProblemKind::NotInRange { min: 0.0, max: 1.0 }));
+            }
+            Some(b)
+        }
+    };
+    let layers = match p.get("layers") {
+        None => 2,
+        Some(v) => v
+            .as_u64()
+            .and_then(|l| usize::try_from(l).ok())
+            .filter(|l| *l <= MAX_LAYERS)
+            .ok_or_else(|| EngineError::param("layers", ProblemKind::NotInRange { min: 0.0, max: MAX_LAYERS as f64 }))?,
+    };
+    let listed = ["center", "radius", "around_element", "faces", "nodes", "elements"].iter().any(|k| p.get(*k).is_some());
+    let mut nodes: BTreeSet<u32> = if listed {
+        weights(&s.model, p)?.0.into_keys().collect()
+    } else if let Some((_, n)) = &only {
+        n.clone()
+    } else if below.is_none() {
+        return Err(EngineError::Params(
+            "say which nodes to relax: give `bodies`, `below`, `center` and `radius`, `around_element`, `faces`, `nodes` or `elements`".into(),
+        ));
+    } else {
+        s.model.nodes().keys().copied().collect()
+    };
+    if let Some(b) = below {
+        let low = below_nodes(&s.model, b, layers, only.as_ref().map(|(_, n)| n))?;
+        nodes.retain(|n| low.contains(n));
+    }
+    let nodes: BTreeSet<u32> = relax::uniform_weights(&s.model, &nodes, 1.0)?.into_keys().collect();
+    if nodes.is_empty() {
+        return Err(EngineError::Params("no mesh nodes in the region to relax".into()));
+    }
+    let sweeps = match p.get("iterations") {
+        None => STRONG_SWEEPS,
+        Some(v) => v
+            .as_u64()
+            .and_then(|i| usize::try_from(i).ok())
+            .filter(|i| (1..=relax::MAX_SWEEPS).contains(i))
+            .ok_or_else(|| EngineError::param("iterations", ProblemKind::NotInRange { min: 1.0, max: relax::MAX_SWEEPS as f64 }))?,
+    };
+    let g = design_geometry(s, &touched(&s.model, &nodes.iter().map(|&n| (n, 1.0)).collect()))?;
+    let r = relax::optimize(&s.model, &nodes, sweeps, &g)?;
+    let field_name = match super::opt::<String>(p, "field")? {
+        Some(n) => n,
+        None => (1..).map(|i| format!("Relax{i}")).find(|n| s.model.relaxation(n).is_none()).unwrap_or_else(|| "Relax".into()),
+    };
+    let bodies = only.map(|(b, _)| b).unwrap_or_default();
+    let reapply = super::opt::<bool>(p, "reapply")?.unwrap_or(false);
+    let as_relaxed = Relaxed { positions: r.positions.clone(), ..Relaxed::default() };
+    if !r.positions.is_empty() {
+        let cells = relax::field_cells(&s.model, &as_relaxed);
+        s.model.set_relaxation(&field_name, Relaxation { bodies, cells, reapply })?;
+    }
+    for (n, x) in &r.positions {
+        s.model.set_node(*n, *x)?;
+    }
+    let summary = format!(
+        "strong: moved {} node{} (largest {:.3e}) over {} sweep{}; scaled Jacobian min {:.3} → {:.3}, mean {:.3} → {:.3}{}",
+        r.moved,
+        if r.moved == 1 { "" } else { "s" },
+        r.max_displacement,
+        r.history.len().saturating_sub(1),
+        if r.history.len() == 2 { "" } else { "s" },
+        r.before.min_quality,
+        r.after.min_quality,
+        r.mean_before,
+        r.mean_after,
+        if r.positions.is_empty() { "; nothing better found, nothing moved".to_string() } else { format!("; kept as field {field_name}") }
+    );
+    let history: Vec<Value> = r
+        .history
+        .iter()
+        .map(|h| json!({"phase": match h.phase { relax::Phase::Smooth => "smooth", relax::Phase::MinMax => "min_max" }, "objective": h.objective, "min": h.min_quality, "mean": h.mean_quality, "invalid": h.invalid}))
+        .collect();
+    let mut before = quality_json(&r.before);
+    let mut after = quality_json(&r.after);
+    if let (Some(b), Some(a)) = (before.as_object_mut(), after.as_object_mut()) {
+        b.insert("mean_scaled_jacobian".into(), json!(r.mean_before));
+        a.insert("mean_scaled_jacobian".into(), json!(r.mean_after));
+    }
+    Ok(json!({
+        "mode": "strong",
+        "moved": r.moved,
+        "nodes_changed": r.positions.len(),
+        "max_displacement": r.max_displacement,
+        "iterations": r.history.len().saturating_sub(1),
+        "kept_sweep": r.kept,
+        "history": history,
+        "before": before,
+        "after": after,
+        "field": (!r.positions.is_empty()).then_some(field_name),
+        "faces_without_mesh": unmeshed_faces(&s.model, p),
+        "summary": summary,
+    }))
+}
+
 fn relax_nodes(s: &mut Session, p: &Value) -> Result<Value> {
+    match super::opt::<String>(p, "mode")?.as_deref() {
+        None | Some("guarded") => {}
+        Some("strong") => return relax_strong(s, p),
+        Some(_) => return Err(EngineError::param("mode", ProblemKind::NotAChoice)),
+    }
+    if p.get("below").is_some() || p.get("layers").is_some() {
+        return Err(EngineError::Params("`below` and `layers` go with \"mode\": \"strong\"".into()));
+    }
     let (w, sphere) = weights(&s.model, p)?;
     if w.is_empty() {
         return Err(EngineError::Params("no mesh nodes in the region to relax".into()));

@@ -7,6 +7,7 @@ use fieldcraft_mesh::cdt::{CdtOptions, tetrahedralize};
 use fieldcraft_mesh::delaunay::Triangulation;
 use fieldcraft_mesh::quality::{self, QualityReport};
 use fieldcraft_mesh::surface::{BoundarySurface, Defect, FeatureKind, SurfaceOptions};
+use fieldcraft_mesh::tet::canonical::CanonicalSoup;
 use fieldcraft_mesh::tet::geometry::AnalyticSurface;
 use fieldcraft_mesh::tet::improve::ImproveOptions;
 use fieldcraft_mesh::tet::{Order, QualityMesh, QualityOptions, TetQuality, quality_mesh, raw_mesh};
@@ -288,15 +289,19 @@ pub(super) fn mesh_body(
             Some(_) => Vec::new(),
         };
         fieldcraft_model::progress::stage(&format!("{}: boundary", input.name), None, "");
-        let surface = BoundarySurface::new(&input.mesh.positions, &input.mesh.triangles, &input.mesh.tri_face, &surface_options(p, &input.mesh)?)?;
+        // The mesh depends on the geometry only, not on the order the kernel lists it in.
+        let soup = CanonicalSoup::new(&input.mesh.positions, &input.mesh.triangles, &input.mesh.tri_face)?;
+        let surface = BoundarySurface::new(&soup.positions, &soup.triangles, &soup.tri_face, &surface_options(p, &input.mesh)?)?;
         fieldcraft_model::progress::stage(&format!("{}: Delaunay", input.name), None, "");
         let tets = tetrahedralize(&surface, cdt)?;
-        let mesh = if quality {
-            let options = QualityOptions { seeds: input.seeds.clone(), ..options.clone() };
-            quality_mesh(&surface, &tets, analytic, &options)?
+        let mut mesh = if quality {
+            let frozen_faces = options.frozen_faces.iter().filter_map(|&f| soup.canonical_tag(f)).collect();
+            let options = QualityOptions { seeds: input.seeds.clone(), frozen_faces, ..options.clone() };
+            quality_mesh(&surface, &tets, soup.analytic(&analytic), &options)?
         } else {
             raw_mesh(&surface, &tets)?
         };
+        soup.restore_tags(&mut mesh);
         Ok(BodyTets {
             name: input.name.clone(),
             face_names: input.face_names.clone(),

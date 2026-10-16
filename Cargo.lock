@@ -1470,6 +1470,7 @@ dependencies = [
  "fieldcraft-engine",
  "fieldcraft-geometry",
  "fieldcraft-mesh",
+ "fieldcraft-parallel",
  "serde_json",
  "thiserror 2.0.21",
 ]

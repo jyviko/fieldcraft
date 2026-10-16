@@ -33,6 +33,7 @@
 // clearer than iterator chains (as in the fem and solver crates).
 #![allow(clippy::needless_range_loop)]
 
+pub mod canonical;
 pub mod complex;
 pub mod geometry;
 pub mod improve;

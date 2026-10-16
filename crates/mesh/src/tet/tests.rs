@@ -349,3 +349,108 @@ mod pipeline {
         }
     }
 }
+
+/// Determinism (#115): the quality mesh is a function of the geometry, the same bit for bit on
+/// every platform, run and listing order of the input.
+mod determinism {
+    use crate::cdt::{CdtOptions, tetrahedralize};
+    use crate::surface::{BoundarySurface, SurfaceOptions};
+    use crate::tet::canonical::CanonicalSoup;
+    use crate::tet::{Order, QualityMesh, QualityOptions, quality_mesh};
+
+    /// cos and sin of k · 15° from square roots only (correctly rounded everywhere), so the
+    /// test input itself is the same on every platform.
+    fn unit_24(k: usize) -> [f64; 2] {
+        let (s2, s3, s6) = (2f64.sqrt(), 3f64.sqrt(), 6f64.sqrt());
+        let c = [1.0, (s6 + s2) / 4.0, s3 / 2.0, s2 / 2.0, 0.5, (s6 - s2) / 4.0, 0.0];
+        // Quadrant q, step j: cos(90° q + 15° j).
+        let (q, j) = (k / 6 % 4, k % 6);
+        let (x, y) = (c[j], c[6 - j]);
+        match q {
+            0 => [x, y],
+            1 => [-y, x],
+            2 => [-x, -y],
+            _ => [y, -x],
+        }
+    }
+
+    /// A washer (inner radius 6, outer 15, height 4) as a 24-sided prism ring: faces bottom 0,
+    /// top 1, inside 2, outside 3; triangles oriented outward.
+    pub(crate) fn washer() -> (Vec<[f64; 3]>, Vec<[u32; 3]>, Vec<u32>) {
+        const N: usize = 24;
+        let mut p = Vec::new();
+        for (r, z) in [(6.0, 0.0), (15.0, 0.0), (6.0, 4.0), (15.0, 4.0)] {
+            for k in 0..N {
+                let [c, s] = unit_24(k);
+                p.push([r * c, r * s, z]);
+            }
+        }
+        let id = |ring: usize, k: usize| (ring * N + k % N) as u32;
+        let (mut t, mut f) = (Vec::new(), Vec::new());
+        for k in 0..N {
+            // (ring a, ring b): quad a_k b_k b_k+1 a_k+1, outward when listed this way.
+            for (a, b, tag) in [(1, 0, 0), (2, 3, 1), (0, 2, 2), (3, 1, 3)] {
+                let q = [id(a, k), id(b, k), id(b, k + 1), id(a, k + 1)];
+                t.push([q[0], q[1], q[2]]);
+                t.push([q[0], q[2], q[3]]);
+                f.extend([tag, tag]);
+            }
+        }
+        (p, t, f)
+    }
+
+    fn mesh(p: &[[f64; 3]], t: &[[u32; 3]], f: &[u32]) -> QualityMesh {
+        let soup = CanonicalSoup::new(p, t, f).unwrap();
+        let s = BoundarySurface::new(&soup.positions, &soup.triangles, &soup.tri_face, &SurfaceOptions::default()).unwrap();
+        assert!(s.volume() > 0.0);
+        let cdt = tetrahedralize(&s, &CdtOptions::default()).unwrap();
+        let mut m =
+            quality_mesh(&s, &cdt, Vec::new(), &QualityOptions { size: Some(3.0), order: Order::Quadratic, ..QualityOptions::default() }).unwrap();
+        soup.restore_tags(&mut m);
+        m
+    }
+
+    /// FNV-1a over every coordinate's bits, the elements and the tagged boundary faces.
+    pub(crate) fn fingerprint(m: &QualityMesh) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        let mut eat = |x: u64| {
+            for b in x.to_le_bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        m.points.iter().flatten().for_each(|c| eat(c.to_bits()));
+        m.elements.iter().flatten().for_each(|&v| eat(u64::from(v)));
+        m.boundary.iter().for_each(|b| eat(u64::from(b.tet) << 40 | u64::from(b.opposite) << 32 | u64::from(b.face)));
+        h
+    }
+
+    /// The washer's tet10 mesh has one fingerprint on every platform (CI checks it on Linux
+    /// x86-64, macOS arm64 and Windows): only correctly rounded arithmetic and the crate's own
+    /// `atan2` and `cbrt` make its decisions, and no hash map is iterated into it. A change that
+    /// moves the tet mesh on purpose updates the constant.
+    #[test]
+    fn the_quality_mesh_is_the_same_on_every_platform() {
+        let (p, t, f) = washer();
+        let m = mesh(&p, &t, &f);
+        assert!(m.elements.len() > 100, "{:?}", m.report);
+        assert_eq!(fingerprint(&m), 6_285_915_972_108_509_003, "{} tets, {} nodes", m.elements.len(), m.points.len());
+    }
+
+    /// Listing the triangles, their corners and the vertices in another order, and numbering
+    /// the faces differently, gives the same mesh with the faces' own tags.
+    #[test]
+    fn the_quality_mesh_does_not_depend_on_the_input_order() {
+        let (p, t, f) = washer();
+        let a = mesh(&p, &t, &f);
+        let n = p.len() as u32;
+        let q: Vec<[f64; 3]> = p.iter().rev().copied().collect();
+        let u: Vec<[u32; 3]> = t.iter().rev().map(|x| [n - 1 - x[1], n - 1 - x[2], n - 1 - x[0]]).collect();
+        let g: Vec<u32> = f.iter().rev().map(|&x| 10 + 3 - x).collect();
+        let b = mesh(&q, &u, &g);
+        assert_eq!((&a.points, &a.elements), (&b.points, &b.elements));
+        assert_eq!(a.boundary.len(), b.boundary.len());
+        for (x, y) in a.boundary.iter().zip(&b.boundary) {
+            assert_eq!((x.tet, x.opposite, 10 + 3 - x.face), (y.tet, y.opposite, y.face));
+        }
+    }
+}

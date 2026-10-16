@@ -19,6 +19,7 @@ use fieldcraft_mesh::hex::{Cell, HexOptions, Surface, hex_mesh, hex_mesh_cells};
 use fieldcraft_mesh::octree::{OctreeOptions, octree_hex_mesh};
 use fieldcraft_mesh::size::UniformSize;
 use fieldcraft_mesh::surface::{BoundarySurface, SurfaceOptions};
+use fieldcraft_mesh::tet::canonical::CanonicalSoup;
 use fieldcraft_mesh::tet::{QualityOptions, quality_mesh};
 
 pub const FILE: &str = "docs/meshing/corpus.md";
@@ -107,8 +108,7 @@ impl Stage for TetCdt {
         let start = Instant::now();
         let (mut tets, mut steiner, mut cavities, mut inadmissible) = (0, 0, 0, 0);
         for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
-            let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
-            let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).map_err(|e| format!("{}: {e}", body.name))?;
+            let (s, _) = tet_surface(mesh).map_err(|e| format!("{}: {e}", body.name))?;
             let m = tetrahedralize(&s, &CdtOptions::default()).map_err(|e| format!("{}: {e}", body.name))?;
             let report = m.gate(s.volume()).map_err(|e| format!("{}: rounded mesh: {e}", body.name))?;
             if !report.volume_matches() {
@@ -125,6 +125,13 @@ impl Stage for TetCdt {
     }
 }
 
+/// A body's boundary as the tet mesher takes it ([`CanonicalSoup`], as `mesh.tet.generate` does).
+pub fn tet_surface(mesh: &SurfaceMesh) -> fieldcraft_mesh::Result<(BoundarySurface, CanonicalSoup)> {
+    let soup = CanonicalSoup::new(&mesh.positions, &mesh.triangles, &mesh.tri_face)?;
+    let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
+    Ok((BoundarySurface::new(&soup.positions, &soup.triangles, &soup.tri_face, &options)?, soup))
+}
+
 /// The quality stage (`fieldcraft_mesh::tet`) on each body's CDT, with the default options: the
 /// mesh's tetrahedra, its extreme dihedral angles, the slivers (a dihedral angle below 10° or
 /// above 170°) of the CDT and of the result, and the validity gate.
@@ -139,10 +146,9 @@ impl Stage for TetQualityStage {
         let start = Instant::now();
         let (mut tets, mut lo, mut hi, mut rr, mut before, mut after) = (0, 180.0_f64, 0.0_f64, 1.0_f64, 0, 0);
         for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
-            let options = SurfaceOptions { weld_distance: mesh.weld_distance, ..SurfaceOptions::default() };
-            let s = BoundarySurface::new(&mesh.positions, &mesh.triangles, &mesh.tri_face, &options).map_err(|e| format!("{}: {e}", body.name))?;
+            let (s, soup) = tet_surface(mesh).map_err(|e| format!("{}: {e}", body.name))?;
             let m = tetrahedralize(&s, &CdtOptions::default()).map_err(|e| format!("{}: {e}", body.name))?;
-            let q = quality_mesh(&s, &m, fieldcraft_engine::analytic_surfaces(body), &QualityOptions::default())
+            let q = quality_mesh(&s, &m, soup.analytic(&fieldcraft_engine::analytic_surfaces(body)), &QualityOptions::default())
                 .map_err(|e| format!("{}: {e}", body.name))?;
             let r = &q.report;
             tets += r.output.tets;
@@ -478,6 +484,59 @@ mod tests {
             let cells = TetCdt.run(&loaded).unwrap_or_else(|e| panic!("{}: {e}", part.name));
             assert_eq!(cells[3], "pass", "{}: {cells:?}", part.name);
             assert!(cells[0].parse::<usize>().unwrap() > 0);
+        }
+    }
+
+    /// The tet mesh of a SolidCraft part, as `mesh.tet.generate` makes it (tet10, default
+    /// options): every coordinate's bits, the elements and the boundary faces with their faces' names.
+    fn tet_fingerprint(part: &Part) -> Vec<u64> {
+        let (l, _) = load(part).unwrap();
+        let mut out = Vec::new();
+        for (body, mesh) in l.design.bodies.iter().zip(&l.surfaces) {
+            let (s, soup) = tet_surface(mesh).unwrap();
+            let cdt = tetrahedralize(&s, &CdtOptions::default()).unwrap();
+            let o = QualityOptions { order: fieldcraft_mesh::tet::Order::Quadratic, ..QualityOptions::default() };
+            let mut m = quality_mesh(&s, &cdt, soup.analytic(&fieldcraft_engine::analytic_surfaces(body)), &o).unwrap();
+            soup.restore_tags(&mut m);
+            out.extend(m.points.iter().flatten().map(|c| c.to_bits()));
+            out.extend(m.elements.iter().flatten().map(|&v| u64::from(v)));
+            // A face by its persistent name: SolidCraft may number the faces differently each run.
+            let faces = body.faces();
+            let name = |f: u32| {
+                faces
+                    .get(f as usize)
+                    .map_or(0, |x| x.name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)))
+            };
+            out.extend(m.boundary.iter().flat_map(|b| [u64::from(b.tet) << 8 | u64::from(b.opposite), name(b.face)]));
+        }
+        out
+    }
+
+    /// The same part gives the same tet mesh bit for bit on repeated runs and with 1 and 8
+    /// threads (#115). SolidCraft lists the rounded box's faces in a different order from run to
+    /// run; the mesher's canonical input order ([`CanonicalSoup`]) keeps the mesh the same.
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn tet_meshes_do_not_depend_on_the_run_or_the_thread_count() {
+        let mut parts = corpus::parts().unwrap();
+        parts.retain(|p| ["rounded-box", "filleted-bracket"].contains(&p.name.as_str()));
+        assert_eq!(parts.len(), 2);
+        for part in &parts {
+            let one = fieldcraft_parallel::with_threads(1, || tet_fingerprint(part));
+            let many = fieldcraft_parallel::with_threads(8, || tet_fingerprint(part));
+            let again = fieldcraft_parallel::with_threads(1, || tet_fingerprint(part));
+            assert!(!one.is_empty());
+            let first = |a: &[u64], b: &[u64]| a.iter().zip(b).position(|(x, y)| x != y);
+            assert!(
+                one == many && one == again,
+                "{}: the tet mesh changed between runs ({} / {} / {} words, first difference {:?} / {:?})",
+                part.name,
+                one.len(),
+                many.len(),
+                again.len(),
+                first(&one, &many),
+                first(&one, &again)
+            );
         }
     }
 }

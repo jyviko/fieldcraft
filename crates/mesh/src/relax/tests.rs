@@ -145,7 +145,7 @@ fn region_min(m: &Model, labels: &[u32]) -> (f64, usize) {
     for l in labels {
         let e = m.element(*l).unwrap();
         let x: Vec<P> = e.nodes.iter().map(|n| m.node(*n).unwrap().xyz).collect();
-        let el = Elem { label: *l, kind: e.kind, nodes: e.nodes.clone(), normal: None };
+        let el = Elem { label: *l, kind: e.kind, nodes: e.nodes.clone(), normal: None, size0: 0.0 };
         let (q, v) = measure(&el, &x);
         worst = worst.min(q);
         invalid += usize::from(!v);
@@ -341,4 +341,73 @@ fn hostile_parameters_are_refused() {
     // Without geometry, skin nodes stay put.
     let r = relax(&m, &w, 3, &NoGeometry).unwrap();
     assert!(r.positions.is_empty() || r.positions.keys().all(|n| Annulus::faces(m.node(*n).unwrap().xyz).is_empty()));
+}
+
+/// Every node of the annulus pushed about (surface nodes on their faces).
+fn distorted_annulus(n: usize, amount: f64) -> (Model, Model) {
+    let original = hex_annulus(n);
+    let mut m = original.clone();
+    perturb(&mut m, [1.0, 1.0, 0.5], 10.0, amount);
+    (original, m)
+}
+
+/// Strong mode on a distorted block: the region optimised as a whole lifts the smallest and the
+/// mean scaled Jacobian well above where they were; nothing inverts; nodes on faces stay on them
+/// (the cylinders exactly); nodes on edges and vertices do not move; the same input gives the
+/// same output.
+#[test]
+fn strong_relaxation_of_a_distorted_block_keeps_faces_and_edges() {
+    let (original, m) = distorted_annulus(6, 0.06);
+    let geo = Geo { model: original.clone() };
+    let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
+    let r = optimize(&m, &nodes, 200, &geo).unwrap();
+    assert!(r.after.min_quality > r.before.min_quality + 0.2, "{:?} → {:?}", r.before.min_quality, r.after.min_quality);
+    assert!(r.mean_after > r.mean_before, "mean {} → {}", r.mean_before, r.mean_after);
+    assert_eq!(r.after.invalid, 0);
+    assert!(r.kept > 0 && r.history.len() > 2);
+    // Within a phase the objective falls sweep by sweep (the descent keeps only lowering moves).
+    assert!(r.history.windows(2).filter(|w| w[0].phase == w[1].phase).all(|w| w[1].objective <= w[0].objective), "{:?}", r.history);
+    assert!(r.history.iter().any(|h| h.phase == Phase::MinMax), "{:?}", r.history);
+    let out = applied(&m, &Relaxed { positions: r.positions.clone(), ..Relaxed::default() });
+    let elements: Vec<u32> = m.elements().keys().copied().collect();
+    let (after, invalid) = region_min(&out, &elements);
+    assert!((after - r.after.min_quality).abs() < 1e-12 && invalid == 0);
+    for (n, p) in out.nodes() {
+        let faces = Annulus::faces(original.node(*n).unwrap().xyz);
+        assert!(Annulus::on(p.xyz, &faces), "node {n} left its faces {faces:?}");
+        if faces.len() >= 2 {
+            assert_eq!(p.xyz, m.node(*n).unwrap().xyz, "node {n} on an edge moved");
+        }
+    }
+    assert_eq!(optimize(&m, &nodes, 200, &geo).unwrap(), r, "not deterministic");
+}
+
+/// Strong mode untangles: an interior node pushed through its neighbours inverts elements; the
+/// optimisation brings every element back to valid.
+#[test]
+fn strong_relaxation_untangles_inverted_elements() {
+    let (original, mut m) = distorted_annulus(4, 0.0);
+    // An interior node (i = j = k = 2 of 4) pushed past its neighbour.
+    let inside = (1 + 2 + 5 * (2 + 5 * 2)) as u32;
+    let p = m.node(inside).unwrap().xyz;
+    m.set_node(inside, [p[0] + 0.4, p[1] + 0.4, p[2] + 0.3]).unwrap();
+    let geo = Geo { model: original };
+    let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
+    let r = optimize(&m, &nodes, 100, &geo).unwrap();
+    assert!(r.before.invalid > 0, "{:?}", r.before);
+    assert_eq!(r.after.invalid, 0, "{:?}", r.after);
+    assert!(r.after.min_quality > 0.5, "{:?}", r.after);
+}
+
+/// Nothing better found leaves the mesh as it is; bad parameters are errors.
+#[test]
+fn strong_relaxation_keeps_a_perfect_mesh_and_refuses_bad_sweeps() {
+    let m = hex_annulus(3);
+    let geo = Geo { model: m.clone() };
+    let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
+    let r = optimize(&m, &nodes, 20, &geo).unwrap();
+    assert!(r.after.min_quality >= r.before.min_quality && r.after.invalid == 0);
+    assert!(optimize(&m, &nodes, 0, &geo).is_err());
+    assert!(optimize(&m, &nodes, MAX_SWEEPS + 1, &geo).is_err());
+    assert!(optimize(&m, &BTreeSet::new(), 5, &geo).unwrap().positions.is_empty());
 }

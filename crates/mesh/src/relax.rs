@@ -274,6 +274,8 @@ struct Elem {
     nodes: Vec<u32>,
     /// A shell's normal as it was: its side, which a move must keep.
     normal: Option<P>,
+    /// Its size as it was ([`strong::size`]): the strong mode keeps sizes near it.
+    size0: f64,
 }
 
 /// The shell normal from its corners (`None` for solids).
@@ -327,6 +329,10 @@ struct State<'a> {
     mids_of: BTreeMap<u32, Vec<u32>>,
     skin: BTreeSet<u32>,
     geometry: &'a dyn Constraints,
+    /// Hold nodes on geometry edges (the strong mode keeps feature lines as they are).
+    pin_curves: bool,
+    /// The largest edge ratio the strong mode may make.
+    ratio_cap: f64,
 }
 
 impl State<'_> {
@@ -341,6 +347,7 @@ impl State<'_> {
     /// How `n` may move: a skin node the caller left free is held.
     fn freedom(&self, n: u32) -> Freedom {
         match self.geometry.freedom(n) {
+            Some(Freedom::Curve(_)) if self.pin_curves => Freedom::Fixed,
             Some(f) => f,
             None if self.skin.contains(&n) => Freedom::Fixed,
             None => Freedom::Free,
@@ -500,6 +507,68 @@ impl State<'_> {
     }
 }
 
+impl<'a> State<'a> {
+    /// The elements with a corner among `movers`, their nodes' positions and adjacency; with
+    /// `pin_curves`, nodes on geometry edges are held.
+    fn new(model: &Model, movers: &BTreeSet<u32>, geometry: &'a dyn Constraints, pin_curves: bool) -> Result<State<'a>> {
+        let mut state = State {
+            pos: BTreeMap::new(),
+            elems: Vec::new(),
+            around: BTreeMap::new(),
+            neighbours: BTreeMap::new(),
+            mids: BTreeMap::new(),
+            mids_of: BTreeMap::new(),
+            skin: skin_nodes(model, movers),
+            geometry,
+            pin_curves,
+            ratio_cap: f64::INFINITY,
+        };
+        for (&label, e) in model.elements() {
+            if !quality::is_measured(e.kind) || e.nodes.len() != e.kind.node_count() {
+                continue;
+            }
+            let corners = e.kind.corner_count();
+            if !e.nodes.iter().take(corners).any(|n| movers.contains(n)) {
+                continue;
+            }
+            let mut x = Vec::with_capacity(e.nodes.len());
+            for &n in &e.nodes {
+                let p = model.node(n).map(|n| n.xyz).ok_or_else(|| Error::Invalid(format!("element {label} refers to missing node {n}")))?;
+                state.pos.insert(n, p);
+                x.push(p);
+            }
+            let index = state.elems.len();
+            for &n in e.nodes.iter().take(corners) {
+                if movers.contains(&n) {
+                    state.around.entry(n).or_default().push(index);
+                }
+            }
+            for edge in e.kind.edges() {
+                let (Some(&a), Some(&b)) = (edge.first().and_then(|&i| e.nodes.get(i)), edge.get(1).and_then(|&i| e.nodes.get(i))) else { continue };
+                for (u, v) in [(a, b), (b, a)] {
+                    if movers.contains(&u) {
+                        state.neighbours.entry(u).or_default().insert(v);
+                    }
+                }
+                if let Some(&m) = edge.get(2).and_then(|&i| e.nodes.get(i)) {
+                    let (pa, pb, pm) = (x.get(edge[0]).copied(), x.get(edge[1]).copied(), x.get(edge[2]).copied());
+                    if let (Some(pa), Some(pb), Some(pm)) = (pa, pb, pm) {
+                        state.mids.entry(m).or_insert((a, b, sub(pm, scale(add(pa, pb), 0.5))));
+                        for c in [a, b] {
+                            let list = state.mids_of.entry(c).or_default();
+                            if !list.contains(&m) {
+                                list.push(m);
+                            }
+                        }
+                    }
+                }
+            }
+            state.elems.push(Elem { label, kind: e.kind, normal: shell_normal(e.kind, &x), size0: strong::size(e.kind, &x), nodes: e.nodes.clone() });
+        }
+        Ok(state)
+    }
+}
+
 /// Quality over the region.
 fn region_quality(s: &State<'_>) -> RegionQuality {
     let mut r = RegionQuality { elements: s.elems.len(), min_quality: f64::INFINITY, max_edge_ratio: 0.0, invalid: 0, worst: Vec::new() };
@@ -534,58 +603,7 @@ pub fn relax(model: &Model, weights: &BTreeMap<u32, f64>, iterations: usize, geo
         return Err(Error::Invalid(format!("node {n} has weight {w}; weights are in (0, 1]")));
     }
     let movers: BTreeSet<u32> = weights.keys().copied().collect();
-    let mut state = State {
-        pos: BTreeMap::new(),
-        elems: Vec::new(),
-        around: BTreeMap::new(),
-        neighbours: BTreeMap::new(),
-        mids: BTreeMap::new(),
-        mids_of: BTreeMap::new(),
-        skin: skin_nodes(model, &movers),
-        geometry,
-    };
-    for (&label, e) in model.elements() {
-        if !quality::is_measured(e.kind) || e.nodes.len() != e.kind.node_count() {
-            continue;
-        }
-        let corners = e.kind.corner_count();
-        if !e.nodes.iter().take(corners).any(|n| movers.contains(n)) {
-            continue;
-        }
-        let mut x = Vec::with_capacity(e.nodes.len());
-        for &n in &e.nodes {
-            let p = model.node(n).map(|n| n.xyz).ok_or_else(|| Error::Invalid(format!("element {label} refers to missing node {n}")))?;
-            state.pos.insert(n, p);
-            x.push(p);
-        }
-        let index = state.elems.len();
-        for &n in e.nodes.iter().take(corners) {
-            if movers.contains(&n) {
-                state.around.entry(n).or_default().push(index);
-            }
-        }
-        for edge in e.kind.edges() {
-            let (Some(&a), Some(&b)) = (edge.first().and_then(|&i| e.nodes.get(i)), edge.get(1).and_then(|&i| e.nodes.get(i))) else { continue };
-            for (u, v) in [(a, b), (b, a)] {
-                if movers.contains(&u) {
-                    state.neighbours.entry(u).or_default().insert(v);
-                }
-            }
-            if let Some(&m) = edge.get(2).and_then(|&i| e.nodes.get(i)) {
-                let (pa, pb, pm) = (x.get(edge[0]).copied(), x.get(edge[1]).copied(), x.get(edge[2]).copied());
-                if let (Some(pa), Some(pb), Some(pm)) = (pa, pb, pm) {
-                    state.mids.entry(m).or_insert((a, b, sub(pm, scale(add(pa, pb), 0.5))));
-                    for c in [a, b] {
-                        let list = state.mids_of.entry(c).or_default();
-                        if !list.contains(&m) {
-                            list.push(m);
-                        }
-                    }
-                }
-            }
-        }
-        state.elems.push(Elem { label, kind: e.kind, normal: shell_normal(e.kind, &x), nodes: e.nodes.clone() });
-    }
+    let mut state = State::new(model, &movers, geometry, false)?;
     let original = state.pos.clone();
     let before = region_quality(&state);
     let mut done = 0;
@@ -865,7 +883,7 @@ pub fn apply_field(
         let mut reverted = false;
         for (label, kind, nodes) in &touched {
             let x0 = at(model, nodes);
-            let e = Elem { label: *label, kind: *kind, nodes: nodes.clone(), normal: shell_normal(*kind, &x0) };
+            let e = Elem { label: *label, kind: *kind, nodes: nodes.clone(), normal: shell_normal(*kind, &x0), size0: 0.0 };
             if measure(&e, &x0).1 && !measure(&e, &at(&work, nodes)).1 {
                 for n in nodes {
                     if moved.remove(n).is_some()
@@ -906,6 +924,9 @@ pub fn apply_field(
     out.iterations = 1;
     Ok(out)
 }
+
+mod strong;
+pub use strong::{MAX_SWEEPS, Optimized, Phase, Sweep, optimize};
 
 #[cfg(test)]
 mod tests;

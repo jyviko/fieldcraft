@@ -28,7 +28,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const RELAX: CommandSpec = CommandSpec {
     id: "mesh.node.relax",
     label: "Relax Nodes",
-    params: r#"{"center": [x, y, z], "radius": mm (the sphere of influence) | "around_element": label (a sphere round that element; radius default twice its longest edge) | "faces": [{"body": "Base", "face": "F3"}] (persistent B-rep face names, as model.set.create takes them: every node on those faces and the nodes of the elements touching them; pick faces in the view) | "nodes": [labels] | "elements": [labels] (their nodes), "bodies"?: ["Body1"] (only their nodes), "iterations"?: 5 (1..=100), "strength"?: 1 (0..1], "falloff"?: "smooth" (default: weight 1 at the centre to 0 at the radius) | "linear" | "none", "field"?: "Name" (the relaxation field to keep; default Relax1, Relax2, …), "reapply"?: false (apply the field again after each remesh of these bodies)} — moves the nodes to improve the worst elements around them (smart Laplacian, then optimization of the worst element; a move is kept only when the worst element around the node does not get worse, and never inverts one). Nodes on a B-rep face slide in its UV parameters and stay on it, nodes on a B-rep edge slide along it, nodes on vertices stay; nodes on partition cut faces move freely (shared by both cells); mid-side nodes follow, on the geometry. Reports the nodes moved, the largest displacement, the region's smallest scaled Jacobian, largest edge ratio and worst elements before and after, and the field kept. One undo step"#,
+    params: r#"{"center": [x, y, z], "radius": mm (the sphere of influence) | "around_element": label (a sphere round that element; radius default twice its longest edge) | "faces": [{"body": "Base", "face": "F3"}] (persistent B-rep face names, as model.set.create takes them: every node on those faces and the nodes of the elements touching them; pick faces in the view) | "nodes": [labels] | "elements": [labels] (their nodes), "bodies"?: ["Body1"] (only their nodes), "iterations"?: 5 (1..=100), "strength"?: 1 (0..1], "falloff"?: "smooth" (default: weight 1 at the centre to 0 at the radius) | "linear" | "none", "field"?: "Name" (the relaxation field to keep; default Relax1, Relax2, …), "reapply"?: false (apply the field again after each remesh of these bodies)} — moves the nodes to improve the worst elements around them (smart Laplacian, then optimization of the worst element; a move is kept only when the worst element around the node does not get worse, and never inverts one). Nodes on a B-rep face slide in its UV parameters and stay on it, nodes on a B-rep edge slide along it, nodes on vertices stay; nodes on partition cut faces move freely (shared by both cells); mid-side nodes follow, on the geometry. Reports the nodes moved, the largest displacement, the region's smallest scaled Jacobian, largest edge ratio and worst elements before and after, the field kept, and the listed faces no mesh is tagged with (`faces_without_mesh`; an error when none is). One undo step"#,
     form: Some(super::forms::NODE_RELAX),
     kind: CommandKind::Model,
     requires: &[Requirement::Mesh],
@@ -318,22 +318,39 @@ fn face_refs(p: &Value) -> Result<Vec<GeometryRef>> {
     Ok(refs)
 }
 
-/// The nodes on the B-rep faces `refs` (from the mesh's geometry tags: element faces on them and
-/// shell elements meshing them) and the nodes of every element touching those.
-fn face_nodes(model: &Model, refs: &[GeometryRef]) -> Result<BTreeSet<u32>> {
+/// The tags of the faces `refs` select, and the faces with no tagged mesh.
+fn face_tags<'a>(model: &Model, refs: &'a [GeometryRef]) -> (BTreeSet<u32>, Vec<&'a GeometryRef>) {
     let c = model.classification();
     let mut tags = BTreeSet::new();
+    let mut missing = Vec::new();
     for r in refs {
         let found = c.tags_selected_by(r);
         if found.is_empty() {
-            let face = r.entity.name().unwrap_or_default();
-            return Err(EngineError::Params(format!(
-                "face `{}` of body `{}` has no tagged mesh (mesh it, or mesh.tag)",
-                face.chars().take(80).collect::<String>(),
-                r.body.chars().take(80).collect::<String>()
-            )));
+            missing.push(r);
         }
         tags.extend(found);
+    }
+    (tags, missing)
+}
+
+/// The listed faces with no tagged mesh, as `{body, face}` (the reply names them).
+fn unmeshed_faces(model: &Model, p: &Value) -> Vec<Value> {
+    match p.get("faces").map(|_| face_refs(p)) {
+        Some(Ok(refs)) => face_tags(model, &refs).1.into_iter().map(|r| json!(r)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The nodes on the B-rep faces `refs` (from the mesh's geometry tags: element faces on them and
+/// shell elements meshing them) and the nodes of every element touching those. Faces with no
+/// tagged mesh are left out (the reply names them); none with one is an error.
+fn face_nodes(model: &Model, refs: &[GeometryRef]) -> Result<BTreeSet<u32>> {
+    let c = model.classification();
+    let (tags, missing) = face_tags(model, refs);
+    if tags.is_empty() {
+        let names: Vec<String> =
+            missing.iter().take(5).map(|r| format!("{}/{}", r.body, r.entity.name().unwrap_or_default()).chars().take(120).collect()).collect();
+        return Err(EngineError::Params(format!("no mesh is tagged with the faces ({}): mesh their bodies, or mesh.tag", names.join(", "))));
     }
     let mut on = BTreeSet::new();
     for (&label, t) in c.elements() {
@@ -522,6 +539,7 @@ fn relax_nodes(s: &mut Session, p: &Value) -> Result<Value> {
         "before": quality_json(&r.before),
         "after": quality_json(&r.after),
         "field": (!r.positions.is_empty()).then_some(field_name),
+        "faces_without_mesh": unmeshed_faces(&s.model, p),
         "summary": summary,
     }))
 }

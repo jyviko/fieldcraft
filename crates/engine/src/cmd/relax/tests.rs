@@ -243,12 +243,18 @@ fn relaxing_fillet_faces_improves_them() {
         json!({"faces": []}),
         json!({"faces": "F1"}),
         json!({"faces": [{"body": "B", "face": "Nope"}]}),
+        json!({"faces": [{"body": "B", "face": "Nope"}, {"body": "B", "face": "Nope2"}]}),
         json!({"faces": [{"body": "Nope", "face": faces[0]}]}),
         json!({"faces": [{"body": "B"}]}),
         json!({"faces": refs, "center": [0, 0, 0], "radius": 1}),
     ] {
         assert!(s.execute("mesh.node.relax", &bad).is_err(), "{bad}");
     }
+    // A listed face with no mesh is named, the others relaxed.
+    let mut some = refs.clone();
+    some.push(json!({"body": "B", "face": "Nope"}));
+    let r = s.execute("mesh.node.relax", &json!({"faces": some})).unwrap();
+    assert_eq!(r["faces_without_mesh"], json!([{"body": "B", "face": "Nope"}]), "{r}");
     // Elements by label are accepted too.
     let e = *s.model.elements().keys().next().unwrap();
     s.execute("mesh.node.relax", &json!({"elements": [e]})).unwrap();

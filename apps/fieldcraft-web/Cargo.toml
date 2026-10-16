@@ -31,4 +31,4 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "DomTokenList", "CssStyleDeclaration", "Event", "EventTarget", "BeforeUnloadEvent", "Storage", "Crypto", "Headers", "Request", "RequestInit", "RequestCache", "Response"] }
 # Autosaves kept in the browser's local storage, which holds text.
-base64 = "0.22"
+base64 = "0.23"

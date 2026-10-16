@@ -54,6 +54,81 @@ const MAX_ELEMENTS: usize = 5_000_000;
 const DEFAULT_RELATIVE_SIZE: f64 = 1.0 / 25.0;
 /// The finest tessellation a plan asks for, as a fraction of the diagonal (as the meshers take).
 const MIN_RELATIVE_TOLERANCE: f64 = 1e-5;
+/// The share of the body's volume the chords of its curved faces may cost at the plan's size: a
+/// linear element's face spans a chord of the surface, and the sag between them is volume lost
+/// (or gained, in a hole).
+const CHORD_VOLUME_BUDGET: f64 = 0.005;
+
+/// The principal curvatures' magnitudes, larger first, of an analytic surface at `p` (none for a
+/// plane or a free-form surface).
+fn curvatures(s: &FaceSurface, p: V3) -> Option<(f64, f64)> {
+    let off_axis = |origin: V3, axis: V3| {
+        let v = std::array::from_fn(|k| p[k] - origin[k]);
+        let a = unit(axis)?;
+        let along = dot(v, a);
+        let r: V3 = std::array::from_fn(|k| v[k] - along * a[k]);
+        Some(dot(r, r).sqrt())
+    };
+    let k = match *s {
+        FaceSurface::Plane { .. } => return None,
+        FaceSurface::Cylinder { radius, .. } => (1.0 / radius, 0.0),
+        FaceSurface::Sphere { radius, .. } => (1.0 / radius, 1.0 / radius),
+        FaceSurface::Cone { apex, axis, half_angle } => (half_angle.cos() / off_axis(apex, axis)?, 0.0),
+        // Round the tube 1/minor; round the axis cos φ / ρ, with ρ the distance from the axis.
+        FaceSurface::Torus { center, axis, major, minor } => {
+            let rho = off_axis(center, axis)?;
+            (1.0 / minor, ((rho - major) / (minor * rho)).abs())
+        }
+    };
+    let k = (k.0.abs(), k.1.abs());
+    (k.0.is_finite() && k.1.is_finite()).then_some(if k.0 >= k.1 { k } else { (k.1, k.0) })
+}
+
+/// The largest element size whose chords cost each curved face at most [`CHORD_VOLUME_BUDGET`]
+/// of the body's `volume`, with the curved face that needs the finest size and its radius.
+///
+/// A linear face of size h across a surface of principal curvatures κ1, κ2 sags h²(κ1 + κ2)/12
+/// on average below it, so a face of area A costs A h²(κ1 + κ2)/12 of volume. A face's share is
+/// bounded two ways, and the looser bound is enough: its cost of all the faces against the body's volume (a
+/// small blend costs little whatever its curvature), and per face its cost against the volume it
+/// bounds itself, the turning angle per element (a thin tube's wall, whose inner and outer chords nearly
+/// cancel, needs no finer size than a solid bar of its radius).
+fn curvature_size(surfaces: &[Option<FaceSurface>], mesh: &fieldcraft_geometry::SurfaceMesh, volume: f64) -> Option<(f64, usize, f64)> {
+    let n = surfaces.len();
+    // Per face: ∫(κ1 + κ2) dA, area, ∫ κ1 (κ1 + κ2) dA, ∫ κ1 dA.
+    let mut sums = vec![[0.0f64; 4]; n];
+    for (t, &f) in mesh.triangles.iter().zip(&mesh.tri_face) {
+        let Some(Some(surface)) = surfaces.get(f as usize) else { continue };
+        let [a, b, c] = t.map(|i| mesh.positions.get(i as usize).copied().unwrap_or_default());
+        let centroid = std::array::from_fn(|k| (a[k] + b[k] + c[k]) / 3.0);
+        let Some((k1, k2)) = curvatures(surface, centroid) else { continue };
+        let area = 0.5 * {
+            let n = cross(std::array::from_fn(|k| b[k] - a[k]), std::array::from_fn(|k| c[k] - a[k]));
+            dot(n, n).sqrt()
+        };
+        if let Some(s) = sums.get_mut(f as usize) {
+            s[0] += area * (k1 + k2);
+            s[1] += area;
+            s[2] += area * k1 * (k1 + k2);
+            s[3] += area * k1;
+        }
+    }
+    let e = CHORD_VOLUME_BUDGET;
+    // The whole body's cost against its volume, then the face that needs the finest size by its
+    // own turning angle, never finer than the body's bound.
+    let total: f64 = sums.iter().map(|s| s[0]).sum();
+    let global = (12.0 * e * volume.abs() / total).sqrt();
+    let (local, face, radius) = sums
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s[1] > 0.0 && s[2] > 0.0 && s[3] > 0.0)
+        // A circle split into arcs of angle θ loses θ²/6 of its area, a sphere's θ²/3: h² κ1 (κ1 + κ2)/6.
+        .map(|(i, s)| ((6.0 * e * s[1] / s[2]).sqrt(), i, s[1] / s[3]))
+        .filter(|(h, _, _)| h.is_finite() && *h > 0.0)
+        .min_by(|a, b| a.0.total_cmp(&b.0))?;
+    let h = global.max(local);
+    h.is_finite().then_some((h, face, radius))
+}
 
 pub const PLAN: CommandSpec = CommandSpec {
     id: "mesh.plan",
@@ -848,6 +923,18 @@ pub(crate) fn build(design: &Design, body: &str, size: Option<f64>, layers: u32,
             notes.push(format!("size {through:.4} mm: {layers} layers through the {t:.4} mm wall ({why})"));
             h = through;
         }
+    }
+    // The curved faces: fine enough that the chords keep the volume.
+    let chords = shape.tessellate(1e-3 * diagonal)?;
+    if let Some((c, face, r)) = curvature_size(&surfaces, &chords, m.volume)
+        && c < h
+    {
+        let name = shape.faces().get(face).map_or_else(|| format!("face {face}"), |f| f.name.clone());
+        notes.push(format!(
+            "size {c:.4} mm: the chords of {name} (radius ~{r:.4} mm) cost at most {:.1} % of the volume",
+            100.0 * CHORD_VOLUME_BUDGET
+        ));
+        h = c;
     }
     let floor = (m.volume.abs() / max_elements as f64).cbrt();
     if h < floor {
@@ -2443,6 +2530,24 @@ mod acceptance {
         accept(&mut s, &r, 0.65, 10.0);
     }
 
+    #[test]
+    fn curved_bodies_mesh_within_a_percent_of_their_volume_at_the_plan_s_size() {
+        // The plan's size keeps the chords of a torus (swept) and a cylinder (butterfly) within
+        // the volume budget; the butterfly's rim is divided by its length, not its class's mean.
+        for cmds in [
+            json!([{"command": "solid.torus", "params": {"major": 30.0, "minor": 8.0, "body_name": "B"}}]),
+            json!([{"command": "solid.cylinder", "params": {"radius": 10.0, "height": 40.0, "body_name": "B"}}]),
+        ] {
+            let (_d, mut s) = open(cmds.clone());
+            let body = s.execute("geometry.bodies", &json!({})).unwrap()[0]["volume"].as_f64().unwrap();
+            let plan = s.execute("mesh.plan", &json!({"body": "B"})).unwrap();
+            assert!(plan["notes"].to_string().contains("the chords of"), "{plan}");
+            s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
+            let mesh = s.execute("mesh.quality", &json!({})).unwrap()["volume"].as_f64().unwrap();
+            assert!(((mesh - body) / body).abs() < 0.01, "{cmds}: mesh {mesh} against {body}");
+        }
+    }
+
     /// The crank arm sample, whole (#455, #190): its sides are at an angle to the axes and its
     /// root arcs meet the bosses at a kink, so it takes the ring-and-pillow layout: each boss an
     /// annulus from its bore or pedal hole to its circle through every level, the arm a carved
@@ -2462,7 +2567,9 @@ mod acceptance {
             let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
             let layout = r["layout"].as_str().unwrap();
             assert!(layout.contains("2 circle(s) ringed") && layout.contains("pillow layer"), "{r}");
-            accept(&mut s, &r, 0.5, 7.0);
+            // The rims are divided by their own length (no chord longer than the size), which
+            // thins the bore's ring elements a little at 2.5 mm (edge ratio 7.1).
+            accept(&mut s, &r, 0.5, 7.5);
         }
     }
 

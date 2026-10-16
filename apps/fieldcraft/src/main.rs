@@ -268,7 +268,7 @@ fn main() -> eframe::Result {
                 log::info!("graphics {:?} {} ({}), MSAA {}x (requested {MSAA}x)", info.backend, info.name, info.driver, rs.msaa_samples);
                 app.set_wgpu(rs, DEPTH_BITS, rs.msaa_samples, &cc.egui_ctx);
             }
-            // `kill`, Ctrl-C or a logout closes the window as Close does: autosaved, no crash (#248).
+            // `kill` or Ctrl-C closes the window as Close does: autosaved, no crash (#248).
             let ctx = cc.egui_ctx.clone();
             if let Err(e) = terminate::watch(move || {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);

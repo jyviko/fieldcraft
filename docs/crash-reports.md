@@ -78,8 +78,8 @@ diagnostics.bug_report` opens the form, `ui.prompt {"answer": "set", …}` sets 
 **Check that reporting works:** with `FIELDCRAFT_CRASH_TEST=1`, `diagnostics.crash_test {mode}`
 crashes on purpose: `panic`, `recovered` or `abort` (reported at the next start).
 
-A request to terminate is no crash: on Linux and macOS, SIGTERM (`kill PID`), SIGINT (Ctrl-C)
-and SIGHUP close the window as **Close** does (unsaved work is autosaved for recovery, the
+A request to terminate is no crash: on Linux and macOS, SIGTERM (`kill PID`) and SIGINT (Ctrl-C)
+close the window as **Close** does (unsaved work is autosaved for recovery, the
 journal ends, no report). A second signal ends the app at once.
 
 ### How it stays cheap and small

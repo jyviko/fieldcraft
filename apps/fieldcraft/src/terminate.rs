@@ -1,6 +1,6 @@
-//! A request to terminate (SIGTERM, SIGINT, SIGHUP on Unix) closes the window the normal way.
+//! A request to terminate (SIGTERM, SIGINT on Unix) closes the window the normal way.
 //!
-//! Without this, `kill PID`, Ctrl-C in the terminal, a session logout or a test harness's timeout
+//! Without this, `kill PID`, Ctrl-C in the terminal, a system shutdown or a test harness's timeout
 //! ended the process on the spot: no `on_exit`, so no last autosave and no clean end of the crash
 //! journal, and the next start filed an `unclean_exit` crash report for what was no crash (#248:
 //! "ended without a clean exit between commands (last: control ui.capture)" was an automation run
@@ -9,6 +9,10 @@
 //! so a run that still dies while closing says why. A second signal, for a window that does not
 //! close, ends the process at once with the signal's default action.
 //!
+//! SIGHUP is left alone: `nohup fieldcraft &` ignores it on purpose so the app outlives its
+//! terminal, and a handler would override that (a safe API cannot ask whether a signal was
+//! ignored at launch).
+//!
 //! Windows has no such signals: a window there is closed through its messages, which eframe
 //! already turns into a normal close.
 
@@ -16,7 +20,7 @@ use std::io;
 
 /// The signals that ask the app to terminate.
 #[cfg(unix)]
-const SIGNALS: [i32; 3] = [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT, signal_hook::consts::SIGHUP];
+const SIGNALS: [i32; 2] = [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT];
 
 /// The signal's usual name, for the log and the crash journal.
 #[cfg(unix)]
@@ -24,7 +28,6 @@ fn name(signal: i32) -> &'static str {
     match signal {
         signal_hook::consts::SIGTERM => "SIGTERM",
         signal_hook::consts::SIGINT => "SIGINT",
-        signal_hook::consts::SIGHUP => "SIGHUP",
         _ => "signal",
     }
 }

@@ -308,12 +308,15 @@ struct Imprint {
     extent: Option<(f64, f64)>,
     /// A cut's side planes along the sweep (normal, offset): a rectangle's four.
     sides: Vec<(V3, f64)>,
+    /// The middle of the cut's rectangle: which way is out of the opening from each side.
+    center: Option<V3>,
 }
 
 /// The imprint of `f` (a join or cut, `cut` saying which) along `d`.
 fn imprint_of(f: &FeatureNode, d: V3, cut: bool) -> Option<Imprint> {
     let v = |k: &str| f.values.get(k).copied();
     let mut sides = Vec::new();
+    let mut center = None;
     let extent = match f.kind.as_str() {
         "box" => {
             let p = f.placement?;
@@ -323,6 +326,7 @@ fn imprint_of(f: &FeatureNode, d: V3, cut: bool) -> Option<Imprint> {
                 sides.push((AXES[j], p[j]));
                 sides.push((AXES[j], p[j] + dims[j]));
             }
+            center = Some(std::array::from_fn(|i| p[i] + 0.5 * dims[i]));
             Some((p[k], p[k] + dims[k]))
         }
         "cylinder" => {
@@ -347,8 +351,10 @@ fn imprint_of(f: &FeatureNode, d: V3, cut: bool) -> Option<Imprint> {
                     && p.holes.is_empty()
                     && lines.iter().all(|(a, b)| (a[0] - b[0]).abs() < 1e-9 || (a[1] - b[1]).abs() < 1e-9);
                 if square {
+                    let world = |q: [f64; 2]| -> V3 { std::array::from_fn(|k| sk.origin[k] + q[0] * sk.x_dir[k] + q[1] * sk.y_dir[k]) };
+                    let mid = lines.iter().fold([0.0; 2], |m, (a, _)| [m[0] + a[0] / 4.0, m[1] + a[1] / 4.0]);
+                    center = Some(world(mid));
                     for (a, b) in lines {
-                        let world = |q: [f64; 2]| -> V3 { std::array::from_fn(|k| sk.origin[k] + q[0] * sk.x_dir[k] + q[1] * sk.y_dir[k]) };
                         let (wa, wb) = (world(a), world(b));
                         if let Some(n) = unit(cross(std::array::from_fn(|k| wb[k] - wa[k]), d)) {
                             sides.push((n, dot(n, wa)));
@@ -361,25 +367,32 @@ fn imprint_of(f: &FeatureNode, d: V3, cut: bool) -> Option<Imprint> {
         }
         _ => None,
     };
-    Some(Imprint { feature: f.id, cut, extent, sides: if cut { sides } else { Vec::new() } })
+    Some(Imprint { feature: f.id, cut, extent, sides: if cut { sides } else { Vec::new() }, center })
 }
 
 /// The cuts that imprint the tools: a plane square to the sweep where each tool's cross-section
 /// starts or ends inside the body (a level), and for a cutting tool with a rectangular section,
 /// its four sides extended across the body (the frame of the opening). A plane goes in only
 /// inside the body (`gap` from its extent), not through a curved face, not near but off a face, not on a face a feature
-/// other than the tools made (exactly on a tool's own face is that face carried on: no sliver), and not
-/// next to another cut.
+/// other than the tools made (a level exactly on a tool's own face is that face carried on: no
+/// sliver), and not next to another cut. A frame side on a face of the body (an opening's end
+/// wall) is moved one element (twice `gap`) out of the opening: the kernel cannot cut along a
+/// face (#427, #455), and a strip one element wide is left between the cut and the face.
 fn imprint_cuts(tools: &[Imprint], d: V3, body: &Clearance, cuts: &mut Vec<PlanCut>) {
     let tool_ids: Vec<u64> = tools.iter().map(|t| t.feature).collect();
-    let mut add = |n: V3, t: f64, reason: String, feature: u64| {
+    // `off`: the distance from `t` of the face a frame side was moved off, allowed exactly.
+    let mut add = |n: V3, t: f64, reason: String, feature: u64, off: Option<f64>| {
         if !body.inside(n, t) || body.crosses_curved(n, t) {
             return;
         }
         // Near a face but off it, or on a face some other feature made (a floor a boss stands
         // on): a sliver, or a cut along a face that the kernel splits badly.
-        let near_face =
-            body.faces_near(n, t).any(|(x, name)| x > 1e-6 || !fieldcraft_geometry::features::feature_ids(name).any(|id| tool_ids.contains(&id)));
+        let near_face = body.faces_near(n, t).any(|(x, name)| {
+            if let Some(o) = off {
+                return (x - o).abs() > 1e-6;
+            }
+            x > 1e-6 || !fieldcraft_geometry::features::feature_ids(name).any(|id| tool_ids.contains(&id))
+        });
         if near_face || cuts.iter().any(|k| parallel(k.normal, n) && (dot(k.point, n) - t).abs() < body.gap) {
             return;
         }
@@ -390,11 +403,20 @@ fn imprint_cuts(tools: &[Imprint], d: V3, body: &Clearance, cuts: &mut Vec<PlanC
         let what = if tool.cut { "cut" } else { "joined" };
         if let Some((a, b)) = tool.extent {
             for (t, end) in [(a.min(b), "starts"), (a.max(b), "ends")] {
-                add(d, t, format!("level: the {what} section of F{} {end} here", tool.feature), tool.feature);
+                add(d, t, format!("level: the {what} section of F{} {end} here", tool.feature), tool.feature, None);
             }
         }
         for (n, off) in &tool.sides {
-            add(*n, *off, format!("frame: a side of the opening F{} cuts, carried across the body", tool.feature), tool.feature);
+            let why = format!("frame: a side of the opening F{} cuts, carried across the body", tool.feature);
+            let on_face = body.faces_near(*n, *off).any(|(x, _)| x <= 1e-6);
+            match tool.center.filter(|_| on_face) {
+                Some(c) => {
+                    let out = (off - dot(*n, c)).signum();
+                    let shift = 2.0 * body.gap;
+                    add(*n, off + out * shift, format!("{why}, {shift:.4} mm out of the opening off its end face"), tool.feature, Some(shift));
+                }
+                None => add(*n, *off, why, tool.feature, None),
+            }
         }
     }
 }
@@ -1514,6 +1536,7 @@ mod acceptance {
     use serde_json::{Value, json};
 
     use super::tests_support::*;
+    use crate::Session;
 
     #[test]
     fn a_plate_with_four_holes_has_round_o_grid_rings() {
@@ -1626,6 +1649,33 @@ mod acceptance {
         let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
         assert!(r["layout"].as_str().unwrap().contains("10 circle(s) ringed"), "{r}");
         accept(&mut s, &r, 0.5, 10.0);
+    }
+
+    /// The crank arm sample, whole: the back pocket's frame cuts lie on its end faces (x = 48 and
+    /// x = 130), which the kernel cannot cut along; the plan moves them one element out of the
+    /// pocket, so both are made and the cells between the bosses mesh structured (#455).
+    #[test]
+    fn the_crank_arm_meshes_from_its_plan_with_its_pocket_framed() {
+        for size in [3.0, 4.0] {
+            let mut s = Session::default();
+            s.execute("file.sample", &json!({"name": "crank-arm"})).unwrap();
+            s.execute("mesh.clear", &json!({})).unwrap();
+            s.execute("geometry.partition.delete", &json!({"name": "Half"})).unwrap();
+            let plan = s.execute("mesh.plan", &json!({"body": "CrankArm", "size": size})).unwrap();
+            let frames: Vec<f64> =
+                plan["cuts"].as_array().unwrap().iter().filter(|c| c["feature"] == 6).map(|c| c["point"][0].as_f64().unwrap()).collect();
+            assert_eq!(frames.len(), 2, "{plan}");
+            assert!(frames.iter().all(|x| (x - (48.0 - size)).abs() < 1e-9 || (x - (130.0 + size)).abs() < 1e-9), "{frames:?}");
+            let r = s.execute("mesh.plan.apply", &json!({"plan": plan["name"]})).unwrap();
+            assert_eq!(r["skipped_cuts"], json!([]), "{r}");
+            assert_eq!((r["all_hex"].as_bool(), r["conforming"].as_bool()), (Some(true), Some(true)), "{r}");
+            let q = s.execute("mesh.quality", &json!({})).unwrap();
+            let (sj, er) = (q["metrics"]["scaled_jacobian"]["min"].as_f64().unwrap(), q["metrics"]["edge_ratio"]["max"].as_f64().unwrap());
+            assert!(sj >= 0.45 && er <= 10.0, "size {size}: min scaled Jacobian {sj}, max edge ratio {er}");
+            let geometry: f64 =
+                s.execute("geometry.bodies", &json!({})).unwrap().as_array().unwrap().iter().map(|b| b["volume"].as_f64().unwrap()).sum();
+            assert!((q["volume"].as_f64().unwrap() - geometry).abs() < 0.01 * geometry, "{q}");
+        }
     }
 
     #[test]

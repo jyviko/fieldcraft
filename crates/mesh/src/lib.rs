@@ -24,6 +24,7 @@ pub mod seeds;
 pub mod size;
 pub mod surface;
 pub mod tet;
+pub mod transition;
 mod vec3;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

@@ -97,6 +97,11 @@ pub struct QualityOptions {
     /// grows from it at the grading rate. A seed finer than the global size refines along its
     /// edge; one coarser leaves it to the global size.
     pub seeds: Vec<crate::seeds::EdgeSeed>,
+    /// B-rep face tags whose boundary triangles are kept exactly: their vertices stay where they
+    /// are and no triangle of theirs is split, flipped or removed. The faces a pyramid
+    /// transition shares with the tetrahedra ([`crate::transition`]) are frozen, so the two
+    /// meshes stay conforming.
+    pub frozen_faces: Vec<u32>,
 }
 
 impl Default for QualityOptions {
@@ -117,6 +122,7 @@ impl Default for QualityOptions {
             max_tets: 5_000_000,
             max_points: 1_000_000,
             seeds: Vec::new(),
+            frozen_faces: Vec::new(),
         }
     }
 }
@@ -359,6 +365,8 @@ pub fn complex_from_cdt(surface: &BoundarySurface, cdt: &TetMesh, o: &QualityOpt
     // Vertex kinds from the boundary faces and curve edges at each vertex.
     let mut face_tag: Vec<Option<u32>> = vec![None; cdt.points.len()];
     let mut mixed = vec![false; cdt.points.len()];
+    let mut frozen = vec![false; cdt.points.len()];
+    cx.freeze_faces(&o.frozen_faces);
     for (t, vs) in cx.live_tets() {
         let (ns, tg) = (cx.adj(t)?, cx.tags(t)?);
         for k in 0..4 {
@@ -367,6 +375,11 @@ pub fn complex_from_cdt(surface: &BoundarySurface, cdt: &TetMesh, o: &QualityOpt
             }
             for v in face_toward(vs, k) {
                 let i = v as usize;
+                if o.frozen_faces.contains(&tg[k])
+                    && let Some(f) = frozen.get_mut(i)
+                {
+                    *f = true;
+                }
                 match face_tag.get(i).copied().flatten() {
                     None => {
                         if let Some(s) = face_tag.get_mut(i) {
@@ -390,6 +403,7 @@ pub fn complex_from_cdt(surface: &BoundarySurface, cdt: &TetMesh, o: &QualityOpt
     }
     for v in 0..cdt.points.len() as u32 {
         let kind = match (face_tag.get(v as usize).copied().flatten(), curve_count.get(&v).map(Vec::as_slice)) {
+            _ if frozen.get(v as usize).copied().unwrap_or(false) => VertexKind::Corner,
             (None, _) => VertexKind::Interior,
             (Some(tag), None) if !mixed.get(v as usize).copied().unwrap_or(true) => VertexKind::Face(tag),
             (Some(_), Some(&[c1, c2])) if c1 == c2 => VertexKind::Curve(c1),

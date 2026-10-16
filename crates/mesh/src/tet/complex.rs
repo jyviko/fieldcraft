@@ -195,6 +195,8 @@ pub struct TetComplex {
     /// only at it, so stars never miss a piece).
     vtets: Vec<Vec<u32>>,
     curves: IdMap<(u32, u32), u32>,
+    /// Boundary face tags no change may remove or add a face of ([`Self::freeze_faces`]).
+    frozen: Vec<u32>,
     mark: Vec<u32>,
     epoch: u32,
     live: usize,
@@ -276,6 +278,7 @@ impl TetComplex {
             tags: vec![[NONE; 4]; tets.len()],
             free: Vec::new(),
             curves: IdMap::default(),
+            frozen: Vec::new(),
             mark: vec![0; tets.len()],
             epoch: 0,
             live: tets.len(),
@@ -404,6 +407,19 @@ impl TetComplex {
         let mut e: Vec<_> = self.curves.iter().map(|(k, v)| (*k, *v)).collect();
         e.sort_unstable();
         e
+    }
+
+    /// Keep the boundary faces tagged with `tags` exactly as they are: [`Self::replace`] refuses
+    /// every change that would remove one of them (a split, flip or collapse) or add one. Their
+    /// vertices must also be [`VertexKind::Corner`]s, so nothing moves them.
+    pub fn freeze_faces(&mut self, tags: &[u32]) {
+        self.frozen = tags.to_vec();
+        self.frozen.sort_unstable();
+        self.frozen.dedup();
+    }
+
+    fn is_frozen(&self, tag: u32) -> bool {
+        self.frozen.binary_search(&tag).is_ok()
     }
 
     pub fn set_curve(&mut self, a: u32, b: u32, curve: Option<u32>) {
@@ -881,13 +897,13 @@ impl TetComplex {
             used_declared += usize::from(declared_face.is_some());
             if let Some((n, back, tag, seen)) = outside.remove(&key) {
                 // The new tetrahedron lies on the side of the face the old one did.
-                if !same_cycle(face, seen) {
+                if !same_cycle(face, seen) || (n == NONE && self.is_frozen(tag) && declared_face.is_some_and(|d| d.1 != tag)) {
                     return Ok(None);
                 }
                 links.push((i, k, if n == NONE { Link::Boundary(declared_face.map_or(tag, |d| d.1)) } else { Link::Old(n, back) }));
             } else if let Some((oriented, tag)) = declared_face {
                 // A new boundary face, oriented as declared (into the mesh).
-                if !same_cycle(face, oriented) {
+                if !same_cycle(face, oriented) || self.is_frozen(tag) {
                     return Ok(None);
                 }
                 links.push((i, k, Link::Boundary(tag)));
@@ -898,8 +914,8 @@ impl TetComplex {
         if used_declared != declared.len() {
             return Ok(None);
         }
-        // What is left outside must be boundary faces the change removes.
-        if outside.values().any(|(n, _, _, _)| *n != NONE) || (!outside.is_empty() && change.new_boundary.is_empty()) {
+        // What is left outside must be boundary faces the change removes, and none frozen.
+        if outside.values().any(|(n, _, tag, _)| *n != NONE || self.is_frozen(*tag)) || (!outside.is_empty() && change.new_boundary.is_empty()) {
             return Ok(None);
         }
         // Feature edges strictly inside the old region must survive (or be the split one).

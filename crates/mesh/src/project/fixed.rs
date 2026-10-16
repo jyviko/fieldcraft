@@ -78,15 +78,8 @@ impl<'a> Grid<'a> {
     /// The node after `p` on the grid line coming from `q`: the one neighbour of `p` in no quad
     /// with the edge `q`–`p`.
     fn straight_on(&self, q: u32, p: u32) -> Option<u32> {
-        let beside: BTreeSet<u32> = self
-            .quads_at
-            .get(p as usize)
-            .into_iter()
-            .flatten()
-            .map(|&k| self.quad(k))
-            .filter(|quad| quad.contains(&q))
-            .flatten()
-            .collect();
+        let beside: BTreeSet<u32> =
+            self.quads_at.get(p as usize).into_iter().flatten().map(|&k| self.quad(k)).filter(|quad| quad.contains(&q)).flatten().collect();
         let mut on = self.nbrs.get(p as usize)?.iter().filter(|r| **r != q && !beside.contains(r));
         let r = on.next()?;
         on.next().is_none().then_some(*r)
@@ -207,10 +200,12 @@ impl<'a> Grid<'a> {
             }
         }
         for &v in vertices {
-            if !node_of.contains_key(&v) {
-                let nearest = (0..self.patch.nodes.len() as u32).filter(|n| !taken.contains(n)).min_by(|x, y| dist(node(*x), at(v)).total_cmp(&dist(node(*y), at(v))));
+            if let std::collections::btree_map::Entry::Vacant(slot) = node_of.entry(v) {
+                let nearest = (0..self.patch.nodes.len() as u32)
+                    .filter(|n| !taken.contains(n))
+                    .min_by(|x, y| dist(node(*x), at(v)).total_cmp(&dist(node(*y), at(v))));
                 if let Some(n) = nearest {
-                    node_of.insert(v, n);
+                    slot.insert(n);
                     taken.insert(n);
                 }
             }

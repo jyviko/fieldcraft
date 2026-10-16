@@ -17,7 +17,8 @@ pictures → report.** Never skip a step because the last mesh looked fine.
 1. `inspect_model` / `geometry.bodies`: bodies, volumes, bounding boxes, faces, holes, fillets.
    For a `.solidcraft` design also `geometry.features {"body"}`: how each body was built
    (profiles, extrude directions, holes, shells, fillets, patterns, mirrors).
-2. `geometry.check {"body", "size"}` at the size you intend: short edges, small and sliver faces,
+2. `geometry.check {"body", "size"}` at the size you intend (run `mesh.plan` first and take its
+   `size`): short edges, small and sliver faces,
    near faces (gaps, overlaps, walls thinner than the gap). Each finding names its faces and a
    point `at`, and is marked in pictures. Defeature or resize before meshing; never mesh over a
    finding you have not explained.
@@ -32,8 +33,13 @@ pictures → report.** Never skip a step because the last mesh looked fine.
 
 ## 2. Symmetry first
 
-Test symmetry geometrically (mirror the bounding box and the key faces). If the part and its
-loads are symmetric, mesh one half or quarter and mirror the mesh: `mesh.mirror {"plane": <datum
+Test symmetry geometrically (mirror the bounding box and the key faces). `mesh.plan.apply` does it
+itself for a projection plan (`symmetry`, default true): it meshes one cell of a body mirror
+symmetric across planes through its middle and mirrors it, and lists the planes it used in its
+reply's `symmetry`. Read that list. An empty one on a part you know is symmetric (the crank arm
+comes back without its y = 0 plane) means the plan meshed it whole: check that the halves came
+out alike, or partition and mirror by hand. If the part and its loads are symmetric, mesh one
+half or quarter and mirror the mesh: `mesh.mirror {"plane": <datum
 plane> | {point, normal}}`. Nodes on the plane are merged, so the result is conforming. Never mesh
 a symmetric part whole. If the halves come out unequal (one corner good, its mirror image bad),
 keep the good half and mirror it.
@@ -56,7 +62,8 @@ keep the good half and mirror it.
      lofts).
    - `size` and `layers` against the thinnest wall (§5).
    Fix what is wrong by editing the plan object and applying the edit.
-3. `mesh.plan.apply {"plan": "Plan-<body>" | edited object}`. Read `skipped_cuts`, `all_hex`,
+3. `mesh.plan.apply {"plan": <the plan reply's `name`> | edited object}`. The saved name is not
+   always `Plan-<body>`: names with spaces or punctuation are made safe (`Plan-Clamp_body`). Read `skipped_cuts`, `all_hex`,
    `conforming`, `min_scaled_jacobian`, `layout`, `blend_layers`. A skipped cut is a defect to
    explain.
 4. When the plan does not fit, mesh regions by hand and keep the plan's cuts that work:
@@ -65,6 +72,13 @@ keep the good half and mirror it.
    `sides`); `mesh.hex.project` for a block topology projected on the part (`template` `sphere` or
    `butterfly`, ops `o_grid`, `split`, `extrude`, `connect`; `preview: true` lists block indices).
    Tet (`tet10` for stress) only for cells not worth blocking, far from the region of interest.
+   In that order: `mesh.hex.generate` (it picks extrude, sweep, revolve or mapped), then
+   `mesh.hex.project` with the template the shape asks for (`sphere` for a ball), then tet10.
+   Name each failure in the report.
+5. Mesh touching bodies one at a time and read the error: `mesh.plan.apply` on a body that
+   touches one already meshed must meet that mesh face to face, and fails ("must meet the mesh
+   face to face") when the divisions differ. Plan both with the same size, or mesh the second
+   with `mesh.hex.generate` and tie them (§4).
 
 Shapes without a timeline (STEP, 3MF) skip `mesh.plan` and go to step 4.
 
@@ -102,7 +116,8 @@ Shapes without a timeline (STEP, 3MF) skip `mesh.plan` and go to step 4.
 ## 6. Quality, mark, relax
 
 1. `mesh.quality`: all valid; volume equal to the geometry's (a mismatch means missing or orphan
-   cells).
+   cells, or elements too coarse for the curvature: a 1 mm tube wall swept at the default size
+   loses 17 %). A tet mesh has no `edge_ratio`: judge it by `aspect_ratio`.
 2. `mesh.quality.mark {"limits": {"scaled_jacobian": 0.3, "edge_ratio": 10}}`: failing elements
    become the set `quality_marked`, drawn red in pictures, each with `label`, `at`, `failed`.
    Acceptance limits:
@@ -113,10 +128,15 @@ Shapes without a timeline (STEP, 3MF) skip `mesh.plan` and go to step 4.
    Clustered marks mean the blocks are wrong: back to §3/§4. Isolated spikes only:
    `mesh.node.relax {"around_element": <label>}` for each marked element (by CAD face once #471
    lands; sets are for the analysis steps, not for relaxing). Surface nodes
-   slide on their faces; nothing inverts. Add `"reapply": true` so it follows a remesh. Relaxing
-   is the final touch, never a substitute for a better plan.
+   slide on their faces; nothing inverts. Add `"reapply": true` so it follows a remesh. Read the
+   reply's `before` and `after`: relaxing guards the scaled Jacobian, not the edge ratio, and on
+   the crank arm's bore corner it raised the region's edge ratio from 10.5 to over 2000. When
+   `after` is worse on either, `edit.undo` it. Relaxing is the final touch, never a substitute
+   for a better plan.
 4. Mark again until nothing is marked, or every remaining mark has a stated reason.
-5. `mesh.check.duplicates`: no cracks or free edges inside a body.
+5. `mesh.check.duplicates`: no cracks or free edges inside a body. Cells of one part meshed one
+   by one (split bodies) join with `mesh.node.merge`; separate parts that touch are tied, never
+   merged.
 6. Section pictures through every primary feature: fans, pinches, wedges, slivers or zigzag lines
    → back to §3.
 7. After solving, refine once and compare the quantity of interest (convergence).
@@ -128,3 +148,6 @@ reason, method per region, element counts, min scaled Jacobian, max edge ratio, 
 was relaxed, any wedge column, anything defeatured, and the section pictures. If the plan failed,
 name the rule that failed and the next thing you will try. Never silently fall back to a worse
 mesh.
+
+What this procedure gives today on every corpus part and sample, and why each failure fails:
+docs/meshing/skill-results.md (`cargo xtask skill-results`).

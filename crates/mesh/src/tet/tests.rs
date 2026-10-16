@@ -171,6 +171,29 @@ mod pipeline {
         BoundarySurface::new(s.points(), s.triangles(), &faces, &SurfaceOptions::default()).unwrap()
     }
 
+    /// A point of a side's plane past the side's edge is off the face, however large the side's
+    /// triangles: the fillet box's nodes landed on the untrimmed planes, keeping the sharp
+    /// corners (#402, #418).
+    #[test]
+    fn a_plane_is_trimmed_to_its_face() {
+        let s = box_surface();
+        let analytic = (0..6)
+            .map(|f: usize| {
+                let (k, e) = (f / 2, f % 2);
+                let mut normal = [0.0; 3];
+                normal[k] = if e == 0 { -1.0 } else { 1.0 };
+                let mut point = [0.0; 3];
+                point[k] = 10.0 * e as f64;
+                Some(crate::tet::geometry::AnalyticSurface::Plane { normal, point })
+            })
+            .collect();
+        let t = crate::tet::geometry::Tessellation::new(&s, analytic);
+        let q = t.project_trimmed(0, [0.5, 11.0, 5.0]).unwrap();
+        assert!(crate::vec3::dist(q, [0.0, 10.0, 5.0]) < 1e-9, "{q:?}");
+        let q = t.project_trimmed(0, [0.5, 9.0, 5.0]).unwrap();
+        assert!(crate::vec3::dist(q, [0.0, 9.0, 5.0]) < 1e-9, "{q:?}");
+    }
+
     #[test]
     fn a_box_is_refined_improved_and_deterministic() {
         let s = box_surface();

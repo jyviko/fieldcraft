@@ -343,27 +343,6 @@ pub(crate) fn smooth(m: Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Sm
     report
 }
 
-/// The order nodes are visited in, a sweep being Gauss–Seidel (each node sees the moves made
-/// before it): by distance from the nodes' centroid, then by height along each axis's absolute
-/// offset from it, so a mesh and its mirror image (or a quarter turn of it) about the centroid
-/// visit corresponding nodes alike and smooth alike. Keys are rounded so mirror twins tie; twins
-/// lie apart, so their order among themselves does not matter.
-fn sweep_order(x: &[P]) -> Vec<u32> {
-    let n = x.len().max(1) as f64;
-    let c = x.iter().fold([0.0; 3], |a, p| add(a, scale(*p, 1.0 / n)));
-    let span = x.iter().map(|p| dist(*p, c)).fold(0.0, f64::max).max(f64::MIN_POSITIVE);
-    let q = |v: f64| (v / span * 1e7).round() as i64;
-    let mut order: Vec<u32> = (0..x.len() as u32).collect();
-    order.sort_by_key(|&v| {
-        let p = at(x, v);
-        let d = sub(p, c);
-        let mut offs = [q(d[0].abs()), q(d[1].abs()), q(d[2].abs())];
-        offs.sort_unstable();
-        (q(norm(d)), offs, v)
-    });
-    order
-}
-
 /// One smoothing run; sweep moves keep every element at or above the lower of its scaled
 /// Jacobian before and `sweep_floor`.
 fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing, iterations: usize, tol: f64, sweep_floor: f64) -> SmoothReport {
@@ -420,21 +399,11 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
     if method == Smoothing::None {
         return report;
     }
-    let order = sweep_order(m.nodes);
-    let rank: Vec<usize> = {
-        let mut r = vec![0; n];
-        for (i, &v) in order.iter().enumerate() {
-            if let Some(x) = r.get_mut(v as usize) {
-                *x = i;
-            }
-        }
-        r
-    };
     let ptol = 1e-3 * tol;
     for it in 0..iterations {
         report.iterations = it + 1;
         let mut moved = 0.0f64;
-        for &v in &order {
+        for v in 0..n as u32 {
             let c = cons(v);
             let p = at(m.nodes, v);
             let mean = |nbrs: &mut dyn Iterator<Item = u32>| -> Option<P> {
@@ -498,7 +467,7 @@ fn pass(m: &mut Mesh, g: &dyn Geometry, targets: &[Vec<u32>], method: Smoothing,
     for _ in 0..OPTIMIZE_ROUNDS {
         let mut poor: Vec<u32> =
             m.hexes.iter().filter(|h| hex_scaled_jacobian(&h.map(|q| at(m.nodes, q))) < LIFT_BELOW).flat_map(|h| h.iter().copied()).collect();
-        poor.sort_unstable_by_key(|&v| rank.get(v as usize).copied().unwrap_or(usize::MAX));
+        poor.sort_unstable();
         poor.dedup();
         if poor.is_empty() {
             break;

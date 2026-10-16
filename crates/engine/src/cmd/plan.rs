@@ -1592,9 +1592,8 @@ mod acceptance {
                 }
             }
         }
-        // The layout is mirror symmetric and the smoother visits mirror twins alike; what is left
-        // is the projection onto the body's tessellation, which the kernel does not make mirror
-        // symmetric (a chordal tolerance of 0.0165 mm, on 1.5 mm elements).
+        // The layout is mirror symmetric; the smoother (Gauss-Seidel in node order) and the
+        // projection onto the body's tessellation are not, so the corners differ a little.
         let (lo, hi) = worst.iter().fold((f64::INFINITY, 0.0f64), |(l, h), w| (l.min(*w), h.max(*w)));
         assert!(hi - lo < 0.03, "per corner min scaled Jacobian {worst:?}: {r}");
         assert!(lo > 0.65, "per corner min scaled Jacobian {worst:?}");

@@ -178,12 +178,13 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
             };
         });
     }
-    // The nodes and elements picked in the viewport, for the label lists' Use selection.
+    // The nodes, elements and element faces picked in the viewport, for Use selection.
     let mut picked = crate::form::Picked::default();
     for item in app.pick.selection.items() {
         match item {
             selection::Item::Node(n) => picked.nodes.push(u64::from(*n)),
             selection::Item::Element(e) => picked.elements.push(u64::from(*e)),
+            selection::Item::Face(f) => picked.faces.push((u64::from(f.element), u64::from(f.face))),
             _ => {}
         }
     }

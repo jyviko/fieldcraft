@@ -47,6 +47,8 @@ pub struct Context<'a> {
 pub struct Picked {
     pub nodes: Vec<u64>,
     pub elements: Vec<u64>,
+    /// Element faces: (element, local face).
+    pub faces: Vec<(u64, u64)>,
 }
 
 /// What a frame of the form did.
@@ -333,6 +335,7 @@ impl Form<'_> {
             }
             Kind::Json => self.json(ui, id, value, f.hint),
             Kind::Labels(of) => self.labels(ui, id, value, of, f.hint),
+            Kind::Sides(side) => self.sides(ui, id, value, side, f.hint),
             Kind::Points { columns, max, .. } => self.points(ui, id, value, f, columns, max),
             Kind::Multi(options) => self.multi(ui, value, options),
             Kind::NumberOrAuto { .. } => self.number_or_auto(ui, id, value, f),
@@ -734,6 +737,58 @@ impl Form<'_> {
         });
         let over = out.as_ref().map_or(shown, |v| {
             v.as_array().map_or_else(String::new, |a| fields::format_labels(&a.iter().filter_map(Value::as_u64).collect::<Vec<_>>()))
+        });
+        ui.data_mut(|d| d.insert_temp(id, (text, over)));
+        out
+    }
+
+    /// Element faces or edges typed as `element:side` ranges ([`fields::parse_sides`]); for faces,
+    /// Use selection takes the faces picked in the viewport.
+    fn sides(&mut self, ui: &mut Ui, id: Id, value: Option<&Value>, side: schema::Side, hint: &str) -> Option<Value> {
+        let key = side.key();
+        let current: Option<Vec<(u64, u64)>> = match value {
+            None | Some(Value::Null) => Some(Vec::new()),
+            Some(v) => v.as_array().and_then(|a| a.iter().map(|x| Some((x.get("element")?.as_u64()?, x.get(key)?.as_u64()?))).collect()),
+        };
+        let Some(current) = current else {
+            self.json_only(ui);
+            return None;
+        };
+        let to_value =
+            |l: &[(u64, u64)]| if l.is_empty() { Value::Null } else { Value::Array(l.iter().map(|(e, s)| json!({"element": e, key: s})).collect()) };
+        let shown = fields::format_sides(&current);
+        let mut text = ui.data(|d| d.get_temp::<(String, String)>(id)).filter(|(_, over)| *over == shown).map_or_else(|| shown.clone(), |(t, _)| t);
+        let mut out = None;
+        let mut over = shown.clone();
+        ui.vertical(|ui| {
+            let parsed = fields::parse_sides(&text, schema::MAX_LABELS);
+            let mut edit =
+                egui::TextEdit::singleline(&mut text).id(id).desired_width(fill(ui)).hint_text(RichText::new(hint).italics().color(self.style.dim));
+            if parsed.is_none() {
+                edit = edit.text_color(self.style.error);
+                self.out.invalid += 1;
+            }
+            if ui.add(edit).changed()
+                && let Some(l) = fields::parse_sides(&text, schema::MAX_LABELS)
+            {
+                over = fields::format_sides(&l);
+                out = Some(to_value(&l));
+            }
+            if side == schema::Side::Face {
+                let picked = self.cx.picked.faces.clone();
+                let label = format!("Use selection ({} face{})", picked.len(), if picked.len() == 1 { "" } else { "s" });
+                let tip = "The element faces picked in the viewport (Select: Element faces)";
+                if ui
+                    .add_enabled(!picked.is_empty(), egui::Button::new(RichText::new(label).small()))
+                    .on_hover_text(tip)
+                    .on_disabled_hover_text(tip)
+                    .clicked()
+                {
+                    text = fields::format_sides(&picked);
+                    over = text.clone();
+                    out = Some(to_value(&picked));
+                }
+            }
         });
         ui.data_mut(|d| d.insert_temp(id, (text, over)));
         out
@@ -1312,7 +1367,7 @@ mod tests {
                 attempted: false,
                 refused: None,
                 problems: &[],
-                picked: Picked { nodes: vec![4, 5], elements: Vec::new() },
+                picked: Picked { nodes: vec![4, 5], ..Picked::default() },
             };
             show(ui, &Tokens::get(false), &cx, form, &mut params);
         });

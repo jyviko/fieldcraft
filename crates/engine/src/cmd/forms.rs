@@ -58,8 +58,14 @@ pub const SET: &[Field] = &[
     labels("elements", "Elements", LabelOf::Element)
         .help("Mesh element labels; Use selection takes the picked elements.")
         .hint("labels: 1, 2, 10-20"),
-    json("faces", "Element faces").help("Element faces, as a JSON list of element label and local face number.").hint("[{\"element\", \"face\"}]"),
-    json("edges", "Element edges").help("Element edges, as a JSON list of element label and local edge number.").hint("[{\"element\", \"edge\"}]"),
+    sides("faces", "Element faces", Side::Face)
+        .help(
+            "Element faces as element:face (local face number), ranges of elements sharing one: 1-20:3, 25:1. Use selection takes the picked faces.",
+        )
+        .hint("element:face, e.g. 1-20:3, 25:1"),
+    sides("edges", "Element edges", Side::Edge)
+        .help("Element edges as element:edge (local edge number), ranges of elements sharing one: 1-20:3, 25:1.")
+        .hint("element:edge, e.g. 1-20:3"),
 ];
 
 const ELASTIC: Field = variants(
@@ -1468,8 +1474,8 @@ pub const TAG: &[Field] = &[
     .help("The geometry the mesh entities are tagged with.")
     .req(),
     labels("elements", "Elements", LabelOf::Element).help("Element labels."),
-    json("faces", "Element faces").help("Element faces, as JSON."),
-    json("edges", "Element edges").help("Element edges, as JSON."),
+    sides("faces", "Element faces", Side::Face).help("Element faces as element:face: 1-20:3, 25:1.").hint("element:face"),
+    sides("edges", "Element edges", Side::Edge).help("Element edges as element:edge: 1-20:3, 25:1.").hint("element:edge"),
     labels("nodes", "Nodes", LabelOf::Node).help("Node labels."),
 ];
 

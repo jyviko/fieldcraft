@@ -228,6 +228,44 @@ pub fn parse_labels(text: &str, max: usize) -> Option<Vec<u64>> {
     Some(out)
 }
 
+/// Element faces or edges as typed: `element:side`, runs of consecutive elements with the same
+/// side as `a-b:side` ("1-5:3, 8:1").
+pub fn format_sides(sides: &[(u64, u64)]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while let Some(&(a, side)) = sides.get(i) {
+        let mut j = i;
+        while sides.get(j + 1).is_some_and(|&(n, s)| s == side && Some(n) == sides.get(j).and_then(|(m, _)| m.checked_add(1))) {
+            j += 1;
+        }
+        let b = sides.get(j).map_or(a, |(n, _)| *n);
+        out.push(match j - i {
+            0 => format!("{a}:{side}"),
+            1 => format!("{a}:{side}, {b}:{side}"),
+            _ => format!("{a}-{b}:{side}"),
+        });
+        i = j + 1;
+    }
+    out.join(", ")
+}
+
+/// Element faces or edges typed as `element:side` or `a-b:side`, separated by commas or spaces;
+/// `None` when an element is not a label from 1, a side not 1–255, or there would be more than
+/// `max`.
+pub fn parse_sides(text: &str, max: usize) -> Option<Vec<(u64, u64)>> {
+    let mut out = Vec::new();
+    for part in text.split(|c: char| c == ',' || c.is_whitespace()).filter(|p| !p.is_empty()) {
+        let (elements, side) = part.split_once(':')?;
+        let side = side.parse::<u64>().ok().filter(|s| (1..=u64::from(u8::MAX)).contains(s))?;
+        let labels = parse_labels(elements, max.saturating_sub(out.len()))?;
+        if labels.is_empty() {
+            return None;
+        }
+        out.extend(labels.into_iter().map(|e| (e, side)));
+    }
+    Some(out)
+}
+
 /// A short label before a field ("X"), dim.
 pub fn caption(ui: &mut Ui, s: &Style, text: &str) {
     ui.label(RichText::new(text).small().color(s.dim));
@@ -255,6 +293,18 @@ mod tests {
             assert_eq!(parse_labels(bad, 100), None, "{bad}");
         }
         assert_eq!(parse_labels(&format_labels(&[3, 4, 5, 9]), 100), Some(vec![3, 4, 5, 9]));
+    }
+
+    #[test]
+    fn sides_print_and_parse_as_ranges() {
+        let s = [(1, 3), (2, 3), (3, 3), (5, 1), (6, 2), (7, 2)];
+        assert_eq!(format_sides(&s), "1-3:3, 5:1, 6:2, 7:2");
+        assert_eq!(parse_sides(&format_sides(&s), 100).as_deref(), Some(&s[..]));
+        assert_eq!(parse_sides("4:1 9-10:6", 100), Some(vec![(4, 1), (9, 6), (10, 6)]));
+        assert_eq!(parse_sides("", 100), Some(vec![]));
+        for bad in ["4", "4:", ":3", "0:1", "4:0", "4:256", "1-200:1", "x:1"] {
+            assert_eq!(parse_sides(bad, 100), None, "{bad}");
+        }
     }
 
     #[test]

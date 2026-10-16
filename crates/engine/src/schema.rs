@@ -137,6 +137,9 @@ pub enum Kind {
     /// A text per item: an object from the names of a collection's items to a string; an item
     /// left out takes the command's default.
     RefText(Collection),
+    /// A list of element faces or edges, `{"element", "face"}` or `{"element", "edge"}` (at most
+    /// [`MAX_LABELS`]).
+    Sides(Side),
     /// Any JSON: what the schema does not describe.
     Json,
 }
@@ -146,6 +149,23 @@ pub enum Kind {
 pub enum LabelOf {
     Node,
     Element,
+}
+
+/// What a [`Kind::Sides`] list holds: element faces or element edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Face,
+    Edge,
+}
+
+impl Side {
+    /// The key of the local number in each entry, and its word.
+    pub fn key(self) -> &'static str {
+        match self {
+            Side::Face => "face",
+            Side::Edge => "edge",
+        }
+    }
 }
 
 impl LabelOf {
@@ -519,6 +539,10 @@ pub const fn rows(key: &'static str, label: &'static str, fields: &'static [Fiel
 /// A list of node or element labels.
 pub const fn labels(key: &'static str, label: &'static str, of: LabelOf) -> Field {
     field(key, label, Kind::Labels(of))
+}
+/// A list of element faces or edges.
+pub const fn sides(key: &'static str, label: &'static str, side: Side) -> Field {
+    field(key, label, Kind::Sides(side))
 }
 /// The columns of a point, `[x, y, z]`.
 pub const XYZ: &[&str] = &["x", "y", "z"];
@@ -1078,6 +1102,21 @@ fn value_problem(f: &'static Field, v: &Value, path: &str, out: &mut Vec<Problem
             (!ok).then_some(ProblemKind::NotAChoice)
         }
         Kind::Unit | Kind::Json => None,
+        Kind::Sides(side) => match v.as_array() {
+            Some(a)
+                if a.len() <= MAX_LABELS
+                    && a.iter().all(|x| {
+                        x.as_object().is_some_and(|o| {
+                            o.len() == 2
+                                && o.get("element").and_then(Value::as_u64).is_some_and(|n| n >= 1 && n <= u64::from(u32::MAX))
+                                && o.get(side.key()).and_then(Value::as_u64).is_some_and(|n| n >= 1 && n <= u64::from(u8::MAX))
+                        })
+                    }) =>
+            {
+                None
+            }
+            _ => Some(ProblemKind::NotAList { max: MAX_LABELS, what: if side == Side::Face { "element faces" } else { "element edges" } }),
+        },
         Kind::Labels(_) => match v.as_array() {
             Some(a) if a.len() <= MAX_LABELS && a.iter().all(|x| x.as_u64().is_some_and(|n| n >= 1 && n <= u64::from(u32::MAX))) => None,
             _ => Some(ProblemKind::NotAList { max: MAX_LABELS, what: "labels" }),
@@ -1240,6 +1279,16 @@ fn field_schema(f: &Field, depth: usize) -> Value {
         }).collect::<Vec<_>>()}),
         Kind::Rows { fields, max } if depth <= MAX_DEPTH => json!({"type": "array", "items": object_schema(fields, depth + 1), "maxItems": max}),
         Kind::Unit => json!({"const": f.key}),
+        Kind::Sides(side) => json!({
+            "type": "array",
+            "maxItems": MAX_LABELS,
+            "items": {
+                "type": "object",
+                "properties": {"element": {"type": "integer", "minimum": 1, "maximum": u32::MAX}, side.key(): {"type": "integer", "minimum": 1, "maximum": u8::MAX}},
+                "required": ["element", side.key()],
+                "additionalProperties": false,
+            },
+        }),
         Kind::Labels(of) => {
             json!({"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": u32::MAX}, "maxItems": MAX_LABELS, "x-labels": of.label()})
         }
@@ -1404,6 +1453,24 @@ mod tests {
         let s = json_schema(F);
         assert_eq!(s["properties"]["plane"]["oneOf"][0]["type"], "string");
         assert_eq!(s["properties"]["as"]["additionalProperties"]["type"], "string");
+    }
+
+    /// A sides list holds element and local face (or edge) objects, many more than a form's rows.
+    #[test]
+    fn sides_hold_element_and_local_number() {
+        const F: &[Field] = &[sides("faces", "Faces", Side::Face), sides("edges", "Edges", Side::Edge)];
+        let many: Vec<Value> = (1..=5000).map(|e| json!({"element": e, "face": 3})).collect();
+        assert!(problems(F, &json!({"faces": many, "edges": [{"element": 2, "edge": 12}]})).is_empty());
+        for bad in [
+            json!({"faces": [{"element": 0, "face": 1}]}),
+            json!({"faces": [{"element": 1, "face": 0}]}),
+            json!({"faces": [{"element": 1, "edge": 1}]}),
+            json!({"faces": [{"element": 1, "face": 1, "x": 1}]}),
+            json!({"edges": [3]}),
+        ] {
+            assert_eq!(problems(F, &bad).len(), 1, "{bad}");
+        }
+        assert_eq!(json_schema(F)["properties"]["edges"]["items"]["required"], json!(["element", "edge"]));
     }
 
     /// A tuple takes its minimum to its full length of positive numbers, whole ones when asked.

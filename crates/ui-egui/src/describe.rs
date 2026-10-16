@@ -188,6 +188,13 @@ fn scalar(f: &Field, v: &Value, units: UnitSystem) -> String {
             _ => crate::context::value_text(v),
         },
         Kind::Rows { .. } => v.as_array().map_or_else(|| crate::context::value_text(v), |a| plural(a.len(), "row")),
+        Kind::Sides(side) => match v
+            .as_array()
+            .and_then(|a| a.iter().map(|x| Some((x.get("element")?.as_u64()?, x.get(side.key())?.as_u64()?))).collect::<Option<Vec<_>>>())
+        {
+            Some(l) => crate::fields::format_sides(&l),
+            None => crate::context::value_text(v),
+        },
         Kind::Labels(_) => match v.as_array().and_then(|a| a.iter().map(Value::as_u64).collect::<Option<Vec<_>>>()) {
             Some(l) => crate::fields::format_labels(&l),
             None => crate::context::value_text(v),

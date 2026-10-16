@@ -684,9 +684,18 @@ const PROCEDURE: Field = variants(
                             .help("Cylindrical: displacements only. Spherical: displacements and load factor.")
                             .def("\"cylindrical\""),
                         positive("max_load_factor", "Max load factor", D::None).help("Stop when the load factor reaches this.").def("1"),
-                        json("displacement_limit", "Displacement limit")
-                            .help("Stop when a node's displacement reaches a value, as JSON.")
-                            .hint("{\"node\": 1, \"direction\": 3, \"displacement\": -10}"),
+                        group(
+                            "displacement_limit",
+                            "Displacement limit",
+                            &[
+                                int("node", "Node", 1, u32::MAX as i64).help("The label of the node watched.").req(),
+                                int("direction", "Direction", 1, 3).help("1, 2, 3: its translation along X, Y, Z.").req().def("3"),
+                                num("displacement", "Displacement", D::Length)
+                                    .help("The step stops when that translation reaches this size (its sign is ignored).")
+                                    .req(),
+                            ],
+                        )
+                        .help("Stop when a node's displacement reaches a value; at the max load factor when empty."),
                     ],
                 )
                 .help("Follow the load-displacement path through limit points (snap-through), with the load factor as an unknown."),

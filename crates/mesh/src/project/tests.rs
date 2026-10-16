@@ -98,6 +98,22 @@ fn seven_block_sphere_converges_without_losing_quality() {
     assert!(last_error < 0.01, "{last_error}");
 }
 
+/// More smoothing iterations never leave a worse mesh: the smoother keeps the best grid its
+/// sweeps passed through (#489), so where the sweeps happen to stop does not decide the result.
+#[test]
+fn more_iterations_never_lower_the_smallest_scaled_jacobian() {
+    let (r, h) = (10.0, 2.0);
+    let (s, t) = cylinder(r, h, 128);
+    let topo = Topology::butterfly([0.0; 3], [0.0, 0.0, 1.0], r, &[0.0, h], 0.55).unwrap();
+    let mut last = f64::NEG_INFINITY;
+    for iterations in [5, 20, 100, 300] {
+        let m = project_mesh(&topo, &s, &t, &ProjectOptions { iterations, ..options(0.75) }).unwrap();
+        let sj = m.report.min_scaled_jacobian;
+        assert!(sj >= last - 1e-9, "{iterations} iterations: {sj} after {last}");
+        last = sj;
+    }
+}
+
 /// A disc: the five-block butterfly, its rim on the circle where the side meets the caps.
 #[test]
 fn butterfly_disc_meshes_with_its_rim_on_the_circle() {

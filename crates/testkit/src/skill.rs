@@ -28,7 +28,7 @@ const MIN_SCALED_JACOBIAN: f64 = 0.3;
 const MAX_EDGE_RATIO: f64 = 10.0;
 /// The mesh's volume against the geometry's (§6.1): a larger difference is a missing cell or a
 /// mesh too coarse for the curvature.
-const MAX_VOLUME_ERROR: f64 = 0.02;
+const MAX_VOLUME_ERROR: f64 = 0.01;
 /// The most marked elements relaxed one by one; more than this is a clustered failure (the
 /// blocks are wrong, §6.3), which relaxing does not fix.
 const MAX_RELAXED: usize = 20;
@@ -53,10 +53,6 @@ const PLAIN_CUP: &str = r#"[
 /// Shown only while the part fails.
 const CAUSES: &[(&str, &str)] = &[
     (
-        "bent-tube",
-        "the plan's default size (1/25 of the diagonal) puts six elements round the Ø10 tube: the swept section is a hexagon and loses 17 % of the volume. Size from the tube's radius (§5), not the part's diagonal.",
-    ),
-    (
         "filleted-bracket",
         "no structured method takes the whole body (the plan has no cuts for the fillet beside the holes), and tet10 at the plan's size leaves slivers (min SJ 0.04, 1709 marked). The same part partitioned into mapped cells (`filleted-bracket-blocks`) passes: partition (§3.4).",
     ),
@@ -70,21 +66,9 @@ const CAUSES: &[(&str, &str)] = &[
     ),
     (
         "sharp-wedge",
-        "the wedge's sharp edge is swept as hex, so every element tapers to it (min SJ 0.01, edge ratio 150). §4: a column of wedge6 at the edge; the plan has no wedge template.",
+        "the wedge's sharp edge is swept as hex, so every element tapers to it (min SJ 0.01, edge ratio 150). A column of wedge6 at the edge (§4) raises the SJ but not the ratio: any element with a corner on a 2.9° edge has sides at least 1/tan 2.9° ≈ 20 times its width there, twice the limit. The edge has to be blunted (defeatured) or the limit waived along it.",
     ),
     ("sphere-on-plate", "no structured method takes the plate with the sunk sphere, and tet10 leaves slivers (min SJ 0.12, 662 marked)."),
-    (
-        "analytic-sphere",
-        "the sphere template meshes it cleanly, but hex8 faces chord the sphere at the plan's size and the mesh is 3 % short of its volume: refine, or hex20 (`order: 2`).",
-    ),
-    (
-        "analytic-torus",
-        "the revolve is clean, but hex8 faces chord the torus at the plan's size and the mesh is 4.7 % short of its volume: refine, or hex20.",
-    ),
-    (
-        "crank-arm",
-        "the edge ratio is 10.5 in the nine elements at the square bore's R1.5 corners, just over the limit. Relaxing each raised its region's edge ratio, so each was undone (§6.3). `mesh.plan.apply` did not find the y = 0 symmetry plane; the sample meshes the partitioned half and mirrors it.",
-    ),
     (
         "cross-cylinders",
         "the boundary tessellation of the joined cylinders is invalid (inconsistent orientation at the two singular points), so every mesher refuses the body.",
@@ -518,7 +502,7 @@ with (a set on them finds nothing); `marked` the elements failing the limits bef
 relaxing, and what relaxing changed; ¹ a tet mesh has no edge ratio: its largest aspect ratio\n\
 stands in; `duplicates` coincident nodes and cracks; `geometry.check` its findings at the size;\n\
 `verdict` pass when the minimum scaled Jacobian and the largest edge ratio meet the limits and\n\
-the volume is within 2 % (`pass (fallback)` when a fallback meshed it).\n\
+the volume is within 1 % (`pass (fallback)` when a fallback meshed it).\n\
 The section pictures cut each part through the middle of its longest side, marked elements red.\n\
 Times are wall clock on the machine that ran it.\n\n## Results\n\n",
     );

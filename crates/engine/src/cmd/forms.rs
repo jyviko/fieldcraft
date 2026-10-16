@@ -1736,6 +1736,9 @@ pub const MESH_PLAN_APPLY: &[Field] = &[
     flag("symmetry", "Use symmetry")
         .help("Mesh one cell of a body that is its own mirror image across planes through its middle, and mirror it.")
         .def("true"),
+    flag("corners", "Copy corners")
+        .help("With symmetry: when the body's two ends along another axis are alike (an enclosure's corners), mesh one end and mirror it onto the other, the middle meshed to fit both.")
+        .def("true"),
     text("name", "Save as").help("The name a plan given as an object is saved under.").hint("Plan-<body>"),
 ];
 pub const FEATURES: &[Field] = &[reference("body", "Body", C::Body).help("Only this body's features.").hint("every body")];

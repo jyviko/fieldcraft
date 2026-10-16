@@ -33,6 +33,7 @@
 use std::collections::BTreeSet;
 
 use fieldcraft_geometry::{Curve, Design, FaceSurface, FeatureNode, Shape};
+use fieldcraft_mesh::project::Topology;
 use fieldcraft_model::geometry::Entity;
 use fieldcraft_model::{CutRole, Datum, MeshPlan, Partition, PlanCut, PlanFeature, PlanMesher, PlanRing, PlanUnmapped, RingKind};
 use serde_json::{Value, json};
@@ -66,7 +67,7 @@ pub const PLAN: CommandSpec = CommandSpec {
 pub const APPLY: CommandSpec = CommandSpec {
     id: "mesh.plan.apply",
     label: "Apply Mesh Plan",
-    params: r#"{"plan": "Plan-Base" (a saved plan) | {plan object, as mesh.plan replies it; edited}, "name"?: "Plan-Base" (the name an object is saved under; default Plan-<body>), "symmetry"?: true (a projection plan on a body mirror symmetric across planes through its middle square to the sweep meshes one cell and mirrors it: false meshes the whole body)} — carries the plan out with today's meshers: replaces the plan's earlier partitions (`<plan>-cut<k>`) with its `cuts` (datum planes and partitions of the plan's body only; a cut the kernel cannot make, or that leaves a cell no mesher takes, is left out and reported in `skipped_cuts`), then meshes the body: its cells swept together with structured hex (mesh.cells, `default` hex) when there are cuts, else the body swept (mesh.hex.generate, swept), at the plan's size; each of its `copies` is meshed the same way by a plan of its own (`Plan-<copy>`, saved). No fallback: a cell that does not mesh all-hex is the error. Replies the cuts made and skipped, the cells, the element count, the smallest scaled Jacobian, `all_hex`, whether the cells joined node to node into one mesh (`conforming`), the mapped features, what today's meshers cannot build yet (`pending`: the O-grid and butterfly rings, which need the projection blocking mesher, #399), the `unmapped` features, the copies and the mesher's reply (`mesh`); `untagged_faces` names each face of the meshed bodies no element face is tagged with (a set by it finds nothing: only a face narrower than the elements beside it); `replaced` names the meshes it replaced. A plan object is checked and saved first"#,
+    params: r#"{"plan": "Plan-Base" (a saved plan) | {plan object, as mesh.plan replies it; edited}, "name"?: "Plan-Base" (the name an object is saved under; default Plan-<body>), "symmetry"?: true (a projection plan on a body mirror symmetric across planes through its middle square to the sweep meshes one cell and mirrors it: false meshes the whole body), "corners"?: true (with symmetry: when the cell's two ends along another in-plane axis are alike — the planes of its block layout mirror one another from both ends inward, and its surface there too — the cell is cut midway into the next sheet of blocks and at its image, the low end meshed and mirrored onto the high one, and the middle meshed with both cut faces fixed to those meshes, so both ends mesh exactly alike; reported in `corners`; false meshes the cell whole)} — carries the plan out with today's meshers: replaces the plan's earlier partitions (`<plan>-cut<k>`) with its `cuts` (datum planes and partitions of the plan's body only; a cut the kernel cannot make, or that leaves a cell no mesher takes, is left out and reported in `skipped_cuts`), then meshes the body: its cells swept together with structured hex (mesh.cells, `default` hex) when there are cuts, else the body swept (mesh.hex.generate, swept), at the plan's size; each of its `copies` is meshed the same way by a plan of its own (`Plan-<copy>`, saved). No fallback: a cell that does not mesh all-hex is the error. Replies the cuts made and skipped, the cells, the element count, the smallest scaled Jacobian, `all_hex`, whether the cells joined node to node into one mesh (`conforming`), the mapped features, what today's meshers cannot build yet (`pending`: the O-grid and butterfly rings, which need the projection blocking mesher, #399), the `unmapped` features, the copies and the mesher's reply (`mesh`); `untagged_faces` names each face of the meshed bodies no element face is tagged with (a set by it finds nothing: only a face narrower than the elements beside it); `replaced` names the meshes it replaced. A plan object is checked and saved first"#,
     form: Some(super::forms::MESH_PLAN_APPLY),
     kind: CommandKind::Model,
     requires: &[Requirement::Design],
@@ -1031,7 +1032,8 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(EngineError::Params("`plan` must be a saved plan's name or a plan object".into())),
     };
     let symmetry: bool = super::opt(p, "symmetry")?.unwrap_or(true);
-    let symmetric = if symmetry { apply_symmetric(s, &name, &plan)? } else { None };
+    let corners: bool = super::opt(p, "corners")?.unwrap_or(true);
+    let symmetric = if symmetry { apply_symmetric(s, &name, &plan, corners)? } else { None };
     let mut reply = match symmetric {
         Some(r) => r,
         None => apply_one(s, &name, &plan)?,
@@ -1213,41 +1215,65 @@ const SYMMETRY_SAMPLES: usize = 3000;
 fn symmetry_planes(shape: &Shape, d: V3, rings: &[PlanRing]) -> Result<Vec<(V3, f64)>> {
     let m = shape.measure()?;
     let (lo, hi) = (m.bbox_min, m.bbox_max);
-    let diagonal = (0..3).map(|k| (hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt();
-    if !(diagonal.is_finite() && diagonal > 0.0) {
-        return Ok(Vec::new());
-    }
-    // Fine enough that the chords lie well within `delta` of the surface.
-    let mesh = shape.tessellate(2e-4 * diagonal)?;
-    // Each triangle's middle and normal: a point of a face, away from its edges.
-    let samples: Vec<(V3, V3)> = mesh
-        .triangles
-        .iter()
-        .filter_map(|t| {
-            let [a, b, c] = t.map(|i| mesh.positions.get(i as usize).copied().unwrap_or_default());
-            let n = unit(cross(std::array::from_fn(|k| b[k] - a[k]), std::array::from_fn(|k| c[k] - a[k])))?;
-            Some((std::array::from_fn(|k| (a[k] + b[k] + c[k]) / 3.0), n))
-        })
-        .collect();
-    let step = (samples.len() / SYMMETRY_SAMPLES).max(1);
-    let delta = 2e-3 * diagonal;
+    let Some(mirror) = Mirror::of(shape)? else { return Ok(Vec::new()) };
     let mut out = Vec::new();
     for a in in_plane_axes(d).into_iter().filter(|a| AXES.iter().any(|x| parallel(*x, *a))) {
         let c = 0.5 * (dot(lo, a) + dot(hi, a));
         if rings.iter().any(|r| (dot(r.center, a) - c).abs() < 1.01 * r.radius) {
             continue;
         }
-        let mirror = |x: V3| -> V3 { std::array::from_fn(|k| x[k] - 2.0 * (dot(x, a) - c) * a[k]) };
-        let symmetric = samples.iter().step_by(step).all(|(p, n)| {
-            let inside = mirror(std::array::from_fn(|k| p[k] - delta * n[k]));
-            let outside = mirror(std::array::from_fn(|k| p[k] + delta * n[k]));
-            blocks::winding(&mesh, inside) > 0.5 && blocks::winding(&mesh, outside) < 0.5
-        });
-        if symmetric {
+        if mirror.symmetric(a, c, |_| true) {
             out.push((a, c));
         }
     }
     Ok(out)
+}
+
+/// The mirror test of a body's surface: points of its faces (the middles of its tessellation's
+/// triangles, a little inside and a little outside along the triangle's normal) whose mirror
+/// images are inside and outside alike (the generalized winding number of the tessellation).
+struct Mirror {
+    mesh: fieldcraft_geometry::SurfaceMesh,
+    /// Each triangle's middle and normal: a point of a face, away from its edges.
+    samples: Vec<(V3, V3)>,
+    delta: f64,
+}
+
+impl Mirror {
+    /// `None` for a body with no extent.
+    fn of(shape: &Shape) -> Result<Option<Mirror>> {
+        let m = shape.measure()?;
+        let diagonal = (0..3).map(|k| (m.bbox_max[k] - m.bbox_min[k]).powi(2)).sum::<f64>().sqrt();
+        if !(diagonal.is_finite() && diagonal > 0.0) {
+            return Ok(None);
+        }
+        // Fine enough that the chords lie well within `delta` of the surface.
+        let mesh = shape.tessellate(2e-4 * diagonal)?;
+        let samples: Vec<(V3, V3)> = mesh
+            .triangles
+            .iter()
+            .filter_map(|t| {
+                let [a, b, c] = t.map(|i| mesh.positions.get(i as usize).copied().unwrap_or_default());
+                let n = unit(cross(std::array::from_fn(|k| b[k] - a[k]), std::array::from_fn(|k| c[k] - a[k])))?;
+                Some((std::array::from_fn(|k| (a[k] + b[k] + c[k]) / 3.0), n))
+            })
+            .collect();
+        Ok(Some(Mirror { mesh, samples, delta: 2e-3 * diagonal }))
+    }
+
+    /// Whether the samples `keep` takes (at most [`SYMMETRY_SAMPLES`] of them, evenly) have
+    /// their mirror images across the plane `x·a = c` inside and outside alike.
+    fn symmetric(&self, a: V3, c: f64, keep: impl Fn(V3) -> bool) -> bool {
+        let kept: Vec<&(V3, V3)> = self.samples.iter().filter(|(p, _)| keep(*p)).collect();
+        let step = (kept.len() / SYMMETRY_SAMPLES).max(1);
+        let mirror = |x: V3| -> V3 { std::array::from_fn(|k| x[k] - 2.0 * (dot(x, a) - c) * a[k]) };
+        let delta = self.delta;
+        kept.iter().step_by(step).all(|(p, n)| {
+            let inside = mirror(std::array::from_fn(|k| p[k] - delta * n[k]));
+            let outside = mirror(std::array::from_fn(|k| p[k] + delta * n[k]));
+            blocks::winding(&self.mesh, inside) > 0.5 && blocks::winding(&self.mesh, outside) < 0.5
+        })
+    }
 }
 
 /// Carry out a projection plan on a mirror-symmetric body by its symmetry: the body cut by its
@@ -1256,7 +1282,7 @@ fn symmetry_planes(shape: &Shape, d: V3, rings: &[PlanRing]) -> Result<Vec<(V3, 
 /// cells, joined node to node on the planes — so mirror-image regions mesh alike. `None` when
 /// the body has no symmetry, or its cell does not take a projection layout (the whole body is
 /// meshed then).
-fn apply_symmetric(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Option<Value>> {
+fn apply_symmetric(s: &mut Session, name: &str, plan: &MeshPlan, corners: bool) -> Result<Option<Value>> {
     if plan.mesher != PlanMesher::Project || !plan.copies.is_empty() {
         return Ok(None);
     }
@@ -1313,18 +1339,27 @@ fn apply_symmetric(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Optio
         undo(s)?;
         return Ok(None);
     }
-    let cell_name = MeshPlan::default_name(&cell);
-    s.model.set_mesh_plan(&cell_name, cell_plan.clone())?;
-    let r = apply_projection(s, &cell_name, &cell_plan, tolerance)?;
-    let mut meshed = vec![cell.clone()];
+    let copied = if corners { copy_corner(s, name, plan, &cuts, &cell, &cell_plan, tolerance)? } else { None };
+    let (r, mut meshed, corner) = match copied {
+        Some(c) => (c.reply, c.cells, Some(c.summary)),
+        None => {
+            let cell_name = MeshPlan::default_name(&cell);
+            s.model.set_mesh_plan(&cell_name, cell_plan.clone())?;
+            (apply_projection(s, &cell_name, &cell_plan, tolerance)?, vec![cell.clone()], None)
+        }
+    };
+    // The cells now (the corner copy cuts the body further).
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let cells: Vec<String> = design.bodies.iter().filter(|b| design.source_of(&b.name) == Some(plan.body.as_str())).map(|b| b.name.clone()).collect();
+    let meshed_first = meshed.clone();
     for (a, c) in &planes {
         (super::mirror::MIRROR.run)(s, &json!({"plane": {"point": a.map(|x| x * c), "normal": a}, "bodies": meshed}))?;
-        meshed = cells.iter().map(|(n, _)| n.clone()).filter(|n| !s.model.body_elements(n).is_empty()).collect();
+        meshed = cells.iter().filter(|n| !s.model.body_elements(n).is_empty()).cloned().collect();
     }
-    if let Some((missing, _)) = cells.iter().find(|(n, _)| s.model.body_elements(n).is_empty()) {
+    if let Some(missing) = cells.iter().find(|n| s.model.body_elements(n).is_empty()) {
         return Err(EngineError::Params(format!("mesh plan `{name}`: the mirror images do not reach cell `{missing}`")));
     }
-    let elements: usize = cells.iter().map(|(n, _)| s.model.body_elements(n).len()).sum();
+    let elements: usize = cells.iter().map(|n| s.model.body_elements(n).len()).sum();
     let mut reply = json!({
         "name": name,
         "body": plan.body,
@@ -1334,8 +1369,9 @@ fn apply_symmetric(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Optio
         "blend_layers": r["blend_layers"],
         "cuts": made,
         "skipped_cuts": [],
-        "cells": cells.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-        "meshed": cell,
+        "cells": cells,
+        "meshed": meshed_first,
+        "corners": corner,
         "size": plan.size,
         "tolerance": tolerance,
         "elements": elements,
@@ -1354,6 +1390,244 @@ fn apply_symmetric(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Optio
         o.remove("results_cleared");
     }
     Ok(Some(reply))
+}
+
+/// The fundamental cell meshed by copying one end's corner onto the other end.
+struct CornerCopy {
+    /// The middle cell's mesh reply, with the smallest scaled Jacobian of both meshes.
+    reply: Value,
+    /// The cells meshed: the corner, the middle and the corner's image.
+    cells: Vec<String>,
+    summary: Value,
+}
+
+/// A block's corners in parameter space (hex8 order).
+const BLOCK_CORNERS: [[usize; 3]; 8] = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
+
+/// The corner planes of layout `t` along axis `a`, over a body from `lo` to `hi` along it: the
+/// planes of the layout's vertices from the low end inward whose mirror images across the
+/// middle `c` are planes too, up to the first that is not; the cut `x1` midway between the last
+/// of them and that one, and its image `x2`. `None` when there is none (or only the end), or the
+/// planes mirror past the middle (the body's own symmetry meshes it then).
+fn corner_planes(t: &Topology, a: V3, lo: f64, hi: f64, eps: f64) -> Option<(f64, f64, f64)> {
+    let c = 0.5 * (lo + hi);
+    let mut xs: Vec<f64> = t.vertices.iter().map(|v| dot(*v, a)).collect();
+    xs.sort_by(f64::total_cmp);
+    xs.dedup_by(|x, y| (*x - *y).abs() <= eps);
+    let has = |x: f64| xs.iter().any(|y| (y - x).abs() <= eps);
+    let k = xs.iter().take_while(|&&x| x < c - eps && has(2.0 * c - x)).count();
+    if k < 2 {
+        return None;
+    }
+    let (&p, &q) = (xs.get(k - 1)?, xs.get(k)?);
+    if q >= c - eps {
+        return None;
+    }
+    let x1 = 0.5 * (p + q);
+    let x2 = 2.0 * c - x1;
+    // The high end holds as many planes beyond the image as the low end before the cut, and the
+    // image cuts none.
+    let low = xs.iter().filter(|&&x| x < x1).count();
+    let high = xs.iter().filter(|&&x| x > x2).count();
+    (low == high && !has(x2)).then_some((x1, x2, c))
+}
+
+/// The blocks of `t` that `keep` takes, over their own vertices.
+fn sub_topology(t: &Topology, keep: impl Fn(&[u32; 8]) -> bool) -> Topology {
+    let mut index: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    let mut out = Topology::default();
+    for block in t.blocks.iter().filter(|b| keep(b)) {
+        let b = block.map(|v| {
+            *index.entry(v).or_insert_with(|| {
+                out.vertices.push(t.vertices.get(v as usize).copied().unwrap_or_default());
+                out.vertices.len() as u32 - 1
+            })
+        });
+        out.blocks.push(b);
+    }
+    out
+}
+
+/// Split the sheet of blocks of `t` the plane `p·a = x` runs through, there.
+fn split_at(t: &mut Topology, a: V3, x: f64) -> Result<()> {
+    let span = |t: &Topology, b: usize| -> Option<(f64, f64)> {
+        let xs = t.corners(b).ok()?.map(|p| dot(p, a));
+        Some((xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max)))
+    };
+    let Some(b) = (0..t.blocks.len()).find(|&b| span(t, b).is_some_and(|(lo, hi)| lo < x && x < hi)) else {
+        return Err(EngineError::Params(format!("no block crosses the corner cut at {x}")));
+    };
+    let (d, _) = t.direction_along(b, a)?;
+    let c = t.corners(b)?;
+    // Where the block's side-0 and side-1 faces are along `a`, on average.
+    let side = |s: usize| {
+        let at: Vec<f64> = BLOCK_CORNERS.iter().zip(&c).filter(|(bits, _)| bits[d] == s).map(|(_, p)| dot(*p, a)).collect();
+        at.iter().sum::<f64>() / at.len().max(1) as f64
+    };
+    let f = (x - side(0)) / (side(1) - side(0));
+    if !(f > 0.0 && f < 1.0) {
+        return Err(EngineError::Params(format!("the corner cut at {x} does not cross block {b}")));
+    }
+    t.split(b, d, &[f])?;
+    Ok(())
+}
+
+/// Mesh the fundamental cell `cell` of a symmetric plan by copying one corner onto the other.
+/// Along an in-plane axis the body is not symmetric about, when the planes of the cell's layout
+/// mirror one another from both ends inward up to a pair (an end with the same features, such as
+/// an enclosure's corners with their bosses), and the cell's surface beyond them is mirror
+/// symmetric too, the cell is cut midway into the next sheet of blocks and at its image. The low
+/// corner is meshed with its blocks of the layout and mirrored onto the high one; the middle is
+/// meshed with its blocks, both cut faces fixed (taken from the corner meshes as they are). Both
+/// corners then mesh exactly alike. `None`, with nothing changed, when there is no such corner
+/// or its meshes fail.
+fn copy_corner(
+    s: &mut Session,
+    name: &str,
+    plan: &MeshPlan,
+    sym: &[PlanCut],
+    cell: &str,
+    cell_plan: &MeshPlan,
+    tolerance: f64,
+) -> Result<Option<CornerCopy>> {
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    let (Some(shape), Some(d)) = (design.body(cell), cell_plan.direction) else { return Ok(None) };
+    let layout = match layout_of(design, cell_plan)? {
+        Some(Ok(l)) => l,
+        _ => return Ok(None),
+    };
+    let m = shape.measure()?;
+    let (lo, hi) = (m.bbox_min, m.bbox_max);
+    let diagonal = (0..3).map(|k| (hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt();
+    let eps = 1e-6 * diagonal.max(1.0);
+    let Some(mirror) = Mirror::of(shape)? else { return Ok(None) };
+    let mut found = None;
+    for a in in_plane_axes(d).into_iter().filter(|a| AXES.iter().any(|x| parallel(*x, *a))) {
+        if sym.iter().any(|c| parallel(c.normal, a)) {
+            continue;
+        }
+        let Some((x1, x2, c)) = corner_planes(&layout.topology, a, dot(lo, a), dot(hi, a), eps) else { continue };
+        let clear = |x: f64| cell_plan.rings.iter().all(|r| (dot(r.center, a) - x).abs() >= 1.01 * r.radius);
+        if clear(x1) && clear(x2) && mirror.symmetric(a, c, |p| dot(p, a) < x1 || dot(p, a) > x2) {
+            found = Some((a, [x1, x2], c));
+            break;
+        }
+    }
+    let Some((a, at, c)) = found else { return Ok(None) };
+    let before = s.snapshot();
+    match corner_meshes(s, name, plan, sym, &layout.topology, a, at, c, tolerance) {
+        Ok(copy) => Ok(Some(copy)),
+        // A corner copy that does not mesh leaves the cell to be meshed whole.
+        Err(_) => {
+            s.restore(before);
+            Ok(None)
+        }
+    }
+}
+
+/// Carry out [`copy_corner`] along axis `a`: cuts at `at` (low, high), mirror plane `p·a = c`.
+#[allow(clippy::too_many_arguments)]
+fn corner_meshes(
+    s: &mut Session,
+    name: &str,
+    plan: &MeshPlan,
+    sym: &[PlanCut],
+    t: &Topology,
+    a: V3,
+    at: [f64; 2],
+    c: f64,
+    tolerance: f64,
+) -> Result<CornerCopy> {
+    let [x1, x2] = at;
+    let mut cuts: Vec<PlanCut> = sym.to_vec();
+    for x in at {
+        cuts.push(PlanCut {
+            point: a.map(|k| k * x),
+            normal: a,
+            role: CutRole::Frame,
+            feature: None,
+            reason: "corner: the body's two ends mesh alike, the low one meshed and mirrored onto the high one".into(),
+        });
+    }
+    let refs: Vec<&PlanCut> = cuts.iter().collect();
+    let (_, _, skipped) = cut(s, name, &plan.body, &refs, tolerance)?;
+    if !skipped.is_empty() {
+        return Err(EngineError::Params("a corner cut was left out".into()));
+    }
+    let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
+    // The fundamental cells (on the negative side of every symmetry plane), by where they lie
+    // along the axis.
+    let fundamental: Vec<(String, f64)> = design
+        .bodies
+        .iter()
+        .filter(|b| design.source_of(&b.name) == Some(plan.body.as_str()))
+        .filter_map(|b| b.measure().ok().map(|m| (b.name.clone(), std::array::from_fn::<f64, 3, _>(|k| 0.5 * (m.bbox_min[k] + m.bbox_max[k])))))
+        .filter(|(_, mid)| sym.iter().all(|cut| dot(*mid, cut.normal) < dot(cut.point, cut.normal)))
+        .map(|(n, mid)| (n, dot(mid, a)))
+        .collect();
+    let pick = |test: &dyn Fn(f64) -> bool| -> Result<String> {
+        let mut found = fundamental.iter().filter(|(_, x)| test(*x)).map(|(n, _)| n.clone());
+        match (found.next(), found.next()) {
+            (Some(n), None) => Ok(n),
+            _ => Err(EngineError::Params("the corner cuts do not leave one cell at each end and one between".into())),
+        }
+    };
+    let (low, middle, high) = (pick(&|x| x < x1)?, pick(&|x| x > x1 && x < x2)?, pick(&|x| x > x2)?);
+    let mut t = t.clone();
+    split_at(&mut t, a, x1)?;
+    split_at(&mut t, a, x2)?;
+    let centre = |b: &[u32; 8]| b.iter().map(|&v| t.vertices.get(v as usize).map_or(0.0, |p| dot(*p, a))).sum::<f64>() / 8.0;
+    let low_blocks = sub_topology(&t, |b| centre(b) < x1);
+    let middle_blocks = sub_topology(&t, |b| (x1..x2).contains(&centre(b)));
+    let opts = fieldcraft_mesh::project::ProjectOptions { size: plan.size, ..Default::default() };
+    let body = super::project::open_body(s, &low, Some(tolerance), &json!({}))?;
+    let merge = super::project::merge_distance(None, body.diagonal())?;
+    let corner = super::project::project_body(s, &low, body, &low_blocks, &opts, merge)?;
+    (super::mirror::MIRROR.run)(s, &json!({"plane": {"point": a.map(|k| k * c), "normal": a}, "bodies": [low]}))?;
+    let body = super::project::open_body(s, &middle, Some(tolerance), &json!({}))?;
+    let (fixed, fixed_faces) = cut_face_patches(s, &body, &middle, plan.size)?;
+    if fixed_faces.len() < 2 {
+        return Err(EngineError::Params("the middle cell does not meet both corners' meshes".into()));
+    }
+    let opts = fieldcraft_mesh::project::ProjectOptions { fixed, ..opts };
+    let mut mesh = super::project::project_body(s, &middle, body, &middle_blocks, &opts, merge)?;
+    let corner_sj = corner["min_scaled_jacobian"].as_f64();
+    let summary = json!({
+        "axis": a,
+        "cuts": at,
+        "meshed": low,
+        "image": high,
+        "middle": middle,
+        "fixed": fixed_faces,
+        "min_scaled_jacobian": {"corner": corner_sj, "middle": mesh["min_scaled_jacobian"]},
+    });
+    let min = [corner_sj, mesh["min_scaled_jacobian"].as_f64()].into_iter().flatten().reduce(f64::min);
+    if let Some(o) = mesh.as_object_mut() {
+        o.remove("topology");
+    }
+    let reply = json!({"min_scaled_jacobian": min, "mesh": mesh});
+    Ok(CornerCopy { reply, cells: vec![low, middle, high], summary })
+}
+
+/// The fixed patches of body `name` (opened as `b`): each of its cut faces another cell's mesh
+/// already covers, with the faces' names.
+fn cut_face_patches(
+    s: &Session,
+    b: &super::project::Body,
+    name: &str,
+    size: f64,
+) -> Result<(Vec<fieldcraft_mesh::project::FixedPatch>, Vec<String>)> {
+    let mut fixed = Vec::new();
+    let mut faces: Vec<String> = Vec::new();
+    let cut_faces: Vec<String> = b.face_names().iter().filter(|n| n.starts_with("partition:")).cloned().collect();
+    for face in cut_faces {
+        let patch = super::project::fixed_patch(s, b, name, std::slice::from_ref(&face), size)?;
+        if !patch.quads.is_empty() {
+            fixed.push(patch);
+            faces.push(face);
+        }
+    }
+    Ok((fixed, faces))
 }
 
 /// Carry out a plan whose mesher is projection blocking: its earlier partitions removed, one block
@@ -1380,7 +1654,10 @@ fn apply_projection(s: &mut Session, name: &str, plan: &MeshPlan, tolerance: f64
     }
     let body = super::project::open_body(s, &plan.body, Some(tolerance), &json!({}))?;
     let merge = super::project::merge_distance(None, body.diagonal())?;
-    let opts = fieldcraft_mesh::project::ProjectOptions { size: plan.size, ..Default::default() };
+    // Cut faces another cell's mesh already covers are taken as given, so the cells meet node
+    // to node there.
+    let (fixed, fixed_faces) = cut_face_patches(s, &body, &plan.body, plan.size)?;
+    let opts = fieldcraft_mesh::project::ProjectOptions { size: plan.size, fixed, ..Default::default() };
     let mut mesh = super::project::project_body(s, &plan.body, body, &layout.topology, &opts, merge)
         .map_err(|e| EngineError::Params(format!("mesh plan `{name}`: the projected layout does not mesh: {e}")))?;
     if let Some(m) = mesh.as_object_mut() {
@@ -1398,6 +1675,7 @@ fn apply_projection(s: &mut Session, name: &str, plan: &MeshPlan, tolerance: f64
         "cells": [plan.body],
         "size": plan.size,
         "tolerance": tolerance,
+        "fixed": fixed_faces,
         "blocks": mesh["blocks"],
         "elements": mesh["elements"],
         "min_scaled_jacobian": mesh["min_scaled_jacobian"],

@@ -265,6 +265,11 @@ pub(crate) struct Body {
 }
 
 impl Body {
+    /// The body's face names, by face index.
+    pub(crate) fn face_names(&self) -> &[String] {
+        &self.input.face_names
+    }
+
     /// The body's bounding-box diagonal.
     pub(crate) fn diagonal(&self) -> f64 {
         self.input.diagonal
@@ -517,7 +522,18 @@ fn hex_project(s: &mut Session, raw: &Value) -> Result<Value> {
     if !(0.0..=90.0).contains(&max_arc_angle) {
         return Err(EngineError::invalid("max_arc_angle", "from 0 to 90 degrees"));
     }
-    let fixed = if p.fixed.is_empty() { Vec::new() } else { vec![fixed_patch(s, &b, &p.body, &p.fixed, size)?] };
+    let fixed = if p.fixed.is_empty() {
+        Vec::new()
+    } else {
+        let patch = fixed_patch(s, &b, &p.body, &p.fixed, size)?;
+        if patch.quads.is_empty() {
+            return Err(EngineError::Params(format!(
+                "`fixed`: no other body's mesh has element faces on faces {:?} of `{}`; mesh the neighbour first",
+                p.fixed, p.body
+            )));
+        }
+        vec![patch]
+    };
     let opts = ProjectOptions {
         size,
         max_arc_angle: max_arc_angle.to_radians(),
@@ -538,7 +554,8 @@ const ON_FACE: f64 = 0.05;
 
 /// The quads other bodies' meshes have on faces `names` of body `body` (opened as `b`), as one
 /// fixed patch: the element faces of other bodies, tagged as on their boundary, whose nodes all
-/// lie on one of those faces (within [`ON_FACE`] of the element size `size`).
+/// lie on one of those faces (within [`ON_FACE`] of the element size `size`). Empty when no other
+/// mesh is there.
 pub(crate) fn fixed_patch(s: &Session, b: &Body, body: &str, names: &[String], size: f64) -> Result<FixedPatch> {
     use fieldcraft_mesh::project::Geometry;
     let faces: Vec<u32> = names.iter().map(|n| face_index(b, body, n)).collect::<Result<_>>()?;
@@ -579,11 +596,6 @@ pub(crate) fn fixed_patch(s: &Session, b: &Body, body: &str, names: &[String], s
             });
             patch.quads.push(q);
         }
-    }
-    if patch.quads.is_empty() {
-        return Err(EngineError::Params(format!(
-            "`fixed`: no other body's mesh has element faces on faces {names:?} of `{body}`; mesh the neighbour first"
-        )));
     }
     Ok(patch)
 }

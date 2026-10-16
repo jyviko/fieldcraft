@@ -349,6 +349,8 @@ fn strong_mode_parameters_are_checked() {
         json!({"mode": "strong", "nodes": [1], "iterations": 201}),
         json!({"below": 0.5}),
         json!({"nodes": [1], "reach": 1}),
+        json!({"nodes": [1], "guards": "strict"}),
+        json!({"mode": "strong", "nodes": [1], "guards": "loose"}),
         json!({"nodes": [1], "mode": "strong", "layers": 1}),
     ] {
         assert!(s.execute("mesh.node.relax", &p).is_err(), "{p}");

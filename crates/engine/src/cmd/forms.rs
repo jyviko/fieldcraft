@@ -1427,7 +1427,10 @@ pub const NODE_RELAX: &[Field] = &[
         .help("Guarded: each move keeps the worst element around the node from getting worse. Strong: move the nodes of the bad elements and morph the mesh round them, nodes on CAD edges held.")
         .def("\"guarded\""),
     range("below", "Below", D::None, 0.0, 1.0).help("Strong: the elements below this scaled Jacobian are moved.").hint("0.7"),
-    positive("reach", "Reach", D::Length).help("Strong: nodes this close to a moved node follow it, blended to zero at the reach.").hint("three element lengths"),
+    positive("reach", "Reach", D::Length).help("Strong: nodes this close to a moved node follow it, blended to zero at the reach.").hint("five element lengths"),
+    choice("guards", "Keep a morph", &[("valid", "Unless an element inverts"), ("strict", "Only when it improves the elements")])
+        .help("Strong: valid keeps every morph that inverts no element; strict keeps one only when the worst element it touches improves and no element gets longer.")
+        .def("\"valid\""),
     int("iterations", "Iterations", 1, 200).help("Guarded: sweeps over the nodes (1 to 100). Strong: morph rounds.").hint("5 (strong: 20)"),
     range("strength", "Strength", D::None, 0.0, 1.0).help("How far each node moves toward its relaxed position, 0 to 1.").def("1"),
     choice("falloff", "Falloff", &[("smooth", "Smooth"), ("linear", "Linear"), ("none", "None")])

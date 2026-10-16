@@ -254,21 +254,37 @@ impl State<'_> {
     }
 }
 
+/// When [`morph`] keeps a cluster's morph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Guards {
+    /// Kept whenever no element it touches inverts (more invalid elements than before).
+    #[default]
+    Valid,
+    /// Kept (at full or a halved scale) only when, besides, the worst element it touches is no
+    /// worse, the smooth objective there drops and no element gets longer than the longest was.
+    Strict,
+}
+
+/// Default reach of [`morph`], in mean edge lengths of the bad elements.
+pub const DEFAULT_REACH_LENGTHS: f64 = 5.0;
+
 /// What [`morph`] does.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MorphOptions {
     /// Elements below this quality are the bad ones.
     pub below: f64,
-    /// The radius round the bad nodes whose nodes follow them; `None`: three times the bad
-    /// elements' mean edge length.
+    /// The radius round the bad nodes whose nodes follow them; `None`:
+    /// [`DEFAULT_REACH_LENGTHS`] times the bad elements' mean edge length.
     pub reach: Option<f64>,
     /// Most rounds (bad nodes moved, the region morphed after them).
     pub rounds: usize,
+    /// When a cluster's morph is kept.
+    pub guards: Guards,
 }
 
 impl Default for MorphOptions {
     fn default() -> Self {
-        MorphOptions { below: 0.7, reach: None, rounds: 20 }
+        MorphOptions { below: 0.7, reach: None, rounds: 20, guards: Guards::Valid }
     }
 }
 
@@ -380,8 +396,9 @@ impl State<'_> {
     /// Morph round one cluster of bad nodes: their own optimisation (the rest held) gives their
     /// displacements, the harmonic extension carries them to the nodes within `reach`, applied at
     /// full or a halved scale when that improves the elements it touches. The region's size and
-    /// whether it was kept.
-    fn morph_cluster(&mut self, bad: &BTreeSet<u32>, reach: f64, movable: &dyn Fn(&State<'_>, u32) -> bool) -> Result<(usize, bool)> {
+    /// whether it was kept. With [`Guards::Valid`] the full morph is kept unless an element
+    /// it touches inverts; with [`Guards::Strict`] only a scale that improves the elements is.
+    fn morph_cluster(&mut self, bad: &BTreeSet<u32>, reach: f64, guards: Guards, movable: &dyn Fn(&State<'_>, u32) -> bool) -> Result<(usize, bool)> {
         let start: BTreeMap<u32, P> = bad.iter().map(|&n| (n, self.at(n))).collect();
         let mut undo = Vec::new();
         let mut steps: BTreeMap<u32, f64> = bad.iter().map(|&n| (n, 0.1)).collect();
@@ -418,7 +435,11 @@ impl State<'_> {
                 }
             }
             let now = self.certified(&touched);
-            if now.improves(&was) && now.ratio <= self.ratio_cap.max(was.ratio) {
+            let keep = match guards {
+                Guards::Valid => now.invalid <= was.invalid,
+                Guards::Strict => now.improves(&was) && now.ratio <= self.ratio_cap.max(was.ratio),
+            };
+            if keep {
                 return Ok((region.len(), true));
             }
             self.restore(undo);
@@ -494,10 +515,11 @@ impl State<'_> {
 /// the reach by harmonic interpolation (the graph Laplacian solved with the bad nodes'
 /// displacements and zero beyond the reach and at held nodes). Face nodes are put back on their
 /// face, edge and vertex nodes do not move, nodes outside the reach stay exactly as they are. A
-/// cluster's morph is kept, at full or a halved scale, only if no more elements are invalid, no element
-/// gets longer than the longest one was, the worst element it touches is no worse and the smooth
-/// objective there drops. Only nodes of `nodes`
-/// move. The model is not changed: the result has the new positions.
+/// cluster's morph is kept as long as no element it touches inverts ([`Guards::Valid`]), or, with
+/// [`Guards::Strict`], at full or a halved scale only if besides no element gets longer than the
+/// longest one was, the worst element it touches is no worse and the smooth objective there drops.
+/// The result is the round with the highest smallest quality (never below the start). Only nodes
+/// of `nodes` move. The model is not changed: the result has the new positions.
 pub fn morph(model: &Model, nodes: &BTreeSet<u32>, options: MorphOptions, geometry: &dyn Constraints) -> Result<Morphed> {
     if !(options.below > 0.0 && options.below <= 1.0) {
         return Err(Error::Invalid(format!("below must be in (0, 1], got {}", options.below)));
@@ -518,6 +540,14 @@ pub fn morph(model: &Model, nodes: &BTreeSet<u32>, options: MorphOptions, geomet
     let (_, _, mean_before) = state.qualities();
     let movable = |s: &State<'_>, n: u32| nodes.contains(&n) && s.around.contains_key(&n) && s.freedom(n) != Freedom::Fixed;
     let mut rounds = Vec::new();
+    // The best state of the run: the highest smallest quality, then the fewest elements below
+    // `below`, then the highest mean; the start until a round beats it.
+    let score = |s: &State<'_>| {
+        let (q, min, mean) = s.qualities();
+        (min, q.iter().filter(|v| **v < options.below).count(), mean)
+    };
+    let better = |a: (f64, usize, f64), b: (f64, usize, f64)| a.0 > b.0 || (a.0 == b.0 && (a.1 < b.1 || (a.1 == b.1 && a.2 > b.2)));
+    let mut best = (score(&state), original.clone());
     for round in 0..options.rounds {
         fieldcraft_model::progress::stage(&format!("morph round {}", round + 1), Some(options.rounds as f64), "rounds");
         fieldcraft_model::progress::count(round as f64);
@@ -539,7 +569,7 @@ pub fn morph(model: &Model, nodes: &BTreeSet<u32>, options: MorphOptions, geomet
         if bad.is_empty() {
             break;
         }
-        let reach = options.reach.unwrap_or(if edge_sum.1 > 0 { 3.0 * edge_sum.0 / edge_sum.1 as f64 } else { 0.0 });
+        let reach = options.reach.unwrap_or(if edge_sum.1 > 0 { DEFAULT_REACH_LENGTHS * edge_sum.0 / edge_sum.1 as f64 } else { 0.0 });
         if !(reach > 0.0) {
             break;
         }
@@ -548,18 +578,22 @@ pub fn morph(model: &Model, nodes: &BTreeSet<u32>, options: MorphOptions, geomet
         let mut round_out = Round { bad_elements: bad_elems.len(), bad_nodes: bad.len(), reach, clusters: clusters.len(), ..Round::default() };
         for cluster in &clusters {
             fieldcraft_model::progress::check()?;
-            let (region, kept) = state.morph_cluster(cluster, reach, &|s: &State<'_>, n| movable(s, n))?;
+            let (region, kept) = state.morph_cluster(cluster, reach, options.guards, &|s: &State<'_>, n| movable(s, n))?;
             round_out.region_nodes += region;
             round_out.kept += usize::from(kept);
         }
-        let (_, min, mean) = state.qualities();
-        (round_out.min_quality, round_out.mean_quality) = (min, mean);
+        let now = score(&state);
+        (round_out.min_quality, round_out.mean_quality) = (now.0, now.2);
+        if better(now, best.0) {
+            best = (now, state.pos.clone());
+        }
         let any = round_out.kept > 0;
         rounds.push(round_out);
         if !any {
             break;
         }
     }
+    state.pos = best.1;
     let mut after = region_quality(&state);
     let (_, _, mut mean_after) = state.qualities();
     // Never worse than the start.

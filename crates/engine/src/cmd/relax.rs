@@ -28,7 +28,7 @@ use crate::{CommandKind, CommandSpec, EngineError, Result, Session};
 pub const RELAX: CommandSpec = CommandSpec {
     id: "mesh.node.relax",
     label: "Relax Nodes",
-    params: r#"{"center": [x, y, z], "radius": mm (the sphere of influence) | "around_element": label (a sphere round that element; radius default twice its longest edge) | "faces": [{"body": "Base", "face": "F3"}] (persistent B-rep face names, as model.set.create takes them: every node on those faces and the nodes of the elements touching them; pick faces in the view) | "nodes": [labels] | "elements": [labels] (their nodes), "bodies"?: ["Body1"] (only their nodes; a partitioned body's cells count as it), "iterations"?: 5 (1..=100), "strength"?: 1 (0..1], "falloff"?: "smooth" (default: weight 1 at the centre to 0 at the radius) | "linear" | "none", "field"?: "Name" (the relaxation field to keep; default Relax1, Relax2, …), "reapply"?: false (apply the field again after each remesh of these bodies), "mode"?: "guarded" (default) | "strong", "below"?: 0.7 (strong: the elements below this scaled Jacobian are the bad ones), "reach"?: mm (strong: nodes this close to a bad node follow it; default three times the bad elements' mean edge length)} — moves the nodes to improve the worst elements around them (smart Laplacian, then optimization of the worst element; a move is kept only when the worst element around the node does not get worse, and never inverts one). `"mode": "strong"` morphs the region instead (`bodies` alone is the whole body, nothing listed the whole mesh; `iterations` are rounds, default 20, 1..=200): each round moves the corner nodes of the elements below `below` to better places (their own optimisation, the rest held) and carries that displacement to the nodes within `reach` by harmonic (graph Laplacian) interpolation, zero beyond; nodes on B-rep edges and vertices are held, nodes on faces put back on them, nodes outside the reach unchanged. A round is kept (at full or a halved scale) only when nothing inverts, no element gets longer than the longest was, and the worst element it touches improves; the result never has a lower smallest scaled Jacobian than the start. Its reply adds the mean scaled Jacobian and, per round, the bad elements and nodes, their clusters (bad nodes within the reach of each other, each morphed and checked on its own) and how many were kept, the region's nodes, the reach and the min and mean (`rounds`). Nodes on a B-rep face slide in its UV parameters and stay on it, nodes on a B-rep edge slide along it, nodes on vertices stay; nodes on partition cut faces move freely (shared by both cells); mid-side nodes follow, on the geometry. Reports the nodes moved, the largest displacement, the region's smallest scaled Jacobian, largest edge ratio and worst elements before and after, the field kept, and the listed faces no mesh is tagged with (`faces_without_mesh`; an error when none is). One undo step"#,
+    params: r#"{"center": [x, y, z], "radius": mm (the sphere of influence) | "around_element": label (a sphere round that element; radius default twice its longest edge) | "faces": [{"body": "Base", "face": "F3"}] (persistent B-rep face names, as model.set.create takes them: every node on those faces and the nodes of the elements touching them; pick faces in the view) | "nodes": [labels] | "elements": [labels] (their nodes), "bodies"?: ["Body1"] (only their nodes; a partitioned body's cells count as it), "iterations"?: 5 (1..=100), "strength"?: 1 (0..1], "falloff"?: "smooth" (default: weight 1 at the centre to 0 at the radius) | "linear" | "none", "field"?: "Name" (the relaxation field to keep; default Relax1, Relax2, …), "reapply"?: false (apply the field again after each remesh of these bodies), "mode"?: "guarded" (default) | "strong", "below"?: 0.7 (strong: the elements below this scaled Jacobian are the bad ones), "reach"?: mm (strong: nodes this close to a bad node follow it; default five times the bad elements' mean edge length), "guards"?: "valid" (default) | "strict" (strong: when a cluster's morph is kept)} — moves the nodes to improve the worst elements around them (smart Laplacian, then optimization of the worst element; a move is kept only when the worst element around the node does not get worse, and never inverts one). `"mode": "strong"` morphs the region instead (`bodies` alone is the whole body, nothing listed the whole mesh; `iterations` are rounds, default 20, 1..=200): each round moves the corner nodes of the elements below `below` to better places (their own optimisation, the rest held) and carries that displacement to the nodes within `reach` by harmonic (graph Laplacian) interpolation, zero beyond; nodes on B-rep edges and vertices are held, nodes on faces put back on them, nodes outside the reach unchanged. A cluster's morph is kept whenever no element it touches inverts (`"guards": "valid"`); with `"guards": "strict"` it is kept (at full or a halved scale) only when besides no element gets longer than the longest was, and the worst element it touches improves. The result is the round with the highest smallest scaled Jacobian, never lower than the start. Its reply adds the mean scaled Jacobian and, per round, the bad elements and nodes, their clusters (bad nodes within the reach of each other, each morphed and checked on its own) and how many were kept, the region's nodes, the reach and the min and mean (`rounds`). Nodes on a B-rep face slide in its UV parameters and stay on it, nodes on a B-rep edge slide along it, nodes on vertices stay; nodes on partition cut faces move freely (shared by both cells); mid-side nodes follow, on the geometry. Reports the nodes moved, the largest displacement, the region's smallest scaled Jacobian, largest edge ratio and worst elements before and after, the field kept, and the listed faces no mesh is tagged with (`faces_without_mesh`; an error when none is). One undo step"#,
     form: Some(super::forms::NODE_RELAX),
     kind: CommandKind::Model,
     requires: &[Requirement::Mesh],
@@ -522,6 +522,11 @@ fn relax_strong(s: &mut Session, p: &Value) -> Result<Value> {
             .ok_or_else(|| EngineError::param("reach", ProblemKind::NotPositive))
             .map(Some)?,
     };
+    let guards = match super::opt::<String>(p, "guards")?.as_deref() {
+        None | Some("valid") => relax::Guards::Valid,
+        Some("strict") => relax::Guards::Strict,
+        Some(_) => return Err(EngineError::param("guards", ProblemKind::NotAChoice)),
+    };
     let rounds = match p.get("iterations") {
         None => STRONG_ROUNDS,
         Some(v) => v
@@ -543,7 +548,7 @@ fn relax_strong(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Params("no mesh nodes in the region to relax".into()));
     }
     let g = design_geometry(s, &touched(&s.model, &nodes.iter().map(|&n| (n, 1.0)).collect()))?;
-    let r = relax::morph(&s.model, &nodes, relax::MorphOptions { below, reach, rounds }, &g)?;
+    let r = relax::morph(&s.model, &nodes, relax::MorphOptions { below, reach, rounds, guards }, &g)?;
     let field_name = match super::opt::<String>(p, "field")? {
         Some(n) => n,
         None => (1..).map(|i| format!("Relax{i}")).find(|n| s.model.relaxation(n).is_none()).unwrap_or_else(|| "Relax".into()),
@@ -609,8 +614,8 @@ fn relax_nodes(s: &mut Session, p: &Value) -> Result<Value> {
         Some("strong") => return relax_strong(s, p),
         Some(_) => return Err(EngineError::param("mode", ProblemKind::NotAChoice)),
     }
-    if p.get("below").is_some() || p.get("reach").is_some() {
-        return Err(EngineError::Params("`below` and `reach` go with \"mode\": \"strong\"".into()));
+    if ["below", "reach", "guards"].iter().any(|k| p.get(*k).is_some()) {
+        return Err(EngineError::Params("`below`, `reach` and `guards` go with \"mode\": \"strong\"".into()));
     }
     let (w, sphere) = weights(&s.model, p)?;
     if w.is_empty() {

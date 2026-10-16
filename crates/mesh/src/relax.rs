@@ -939,7 +939,7 @@ pub fn apply_field(
 }
 
 mod strong;
-pub use strong::{MAX_ROUNDS, MorphOptions, Morphed, Round, morph};
+pub use strong::{DEFAULT_REACH_LENGTHS, Guards, MAX_ROUNDS, MorphOptions, Morphed, Round, morph};
 
 #[cfg(test)]
 mod tests;

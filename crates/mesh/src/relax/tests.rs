@@ -360,7 +360,7 @@ fn strong_relaxation_of_a_distorted_block_keeps_faces_and_edges() {
     let (original, m) = distorted_annulus(6, 0.06);
     let geo = Geo { model: original.clone() };
     let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
-    let options = MorphOptions { below: 0.9, reach: None, rounds: 40 };
+    let options = MorphOptions { below: 0.9, reach: None, rounds: 40, ..MorphOptions::default() };
     let r = morph(&m, &nodes, options, &geo).unwrap();
     assert!(r.after.min_quality > r.before.min_quality + 0.2, "{:?} → {:?}: {:?}", r.before.min_quality, r.after.min_quality, r.rounds);
     assert!(r.mean_after > r.mean_before, "mean {} → {}", r.mean_before, r.mean_after);
@@ -389,7 +389,7 @@ fn strong_relaxation_moves_only_nodes_within_the_reach() {
     let geo = Geo { model: original };
     let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
     let reach = 0.4;
-    let r = morph(&m, &nodes, MorphOptions { below: 0.8, reach: Some(reach), rounds: 20 }, &geo).unwrap();
+    let r = morph(&m, &nodes, MorphOptions { below: 0.8, reach: Some(reach), rounds: 20, ..MorphOptions::default() }, &geo).unwrap();
     assert!(r.after.min_quality > r.before.min_quality, "{:?}", r.rounds);
     for n in r.positions.keys() {
         assert!(dist(m.node(*n).unwrap().xyz, CENTRE) < 0.2 + 2.0 * reach, "node {n} far from the bad spot moved");
@@ -411,6 +411,22 @@ fn strong_relaxation_untangles_inverted_elements() {
     assert!(r.before.invalid > 0, "{:?}", r.before);
     assert_eq!(r.after.invalid, 0, "{:?}", r.after);
     assert!(r.after.min_quality > 0.5, "{:?}", r.after);
+}
+
+/// Both guards keep the result valid and never below the start; the valid guards (keep a morph
+/// unless it inverts an element) lift the worst element at least as far as the strict ones.
+#[test]
+fn strong_relaxation_guards_valid_and_strict() {
+    let (original, m) = distorted_annulus(6, 0.06);
+    let geo = Geo { model: original };
+    let nodes: BTreeSet<u32> = m.nodes().keys().copied().collect();
+    let run = |guards| morph(&m, &nodes, MorphOptions { below: 0.9, rounds: 40, guards, ..MorphOptions::default() }, &geo).unwrap();
+    let (valid, strict) = (run(Guards::Valid), run(Guards::Strict));
+    for r in [&valid, &strict] {
+        assert_eq!(r.after.invalid, 0, "{:?}", r.after);
+        assert!(r.after.min_quality >= r.before.min_quality, "{:?} → {:?}", r.before.min_quality, r.after.min_quality);
+    }
+    assert!(valid.after.min_quality >= strict.after.min_quality - 1e-9, "valid {:?}, strict {:?}", valid.after, strict.after);
 }
 
 /// A good mesh is left as it is; bad options are errors.

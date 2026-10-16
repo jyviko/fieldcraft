@@ -232,6 +232,16 @@ impl Model {
         self.unshared(3, |kind| kind.faces(), 4, |element, face| crate::ElementFace { element, face })
     }
 
+    /// The mesh's outer skin, in element order: the [`exterior_faces`](Model::exterior_faces)
+    /// of the solids and face 1 (the side its normal points to) of every 2D element. Each face's
+    /// corners run counter-clockwise seen from outside ([`crate::ElementKind::faces`]).
+    pub fn skin_faces(&self) -> Vec<crate::ElementFace> {
+        let shells = self.elements.iter().filter(|(_, e)| e.kind.dimension() == 2).map(|(&element, _)| crate::ElementFace { element, face: 1 });
+        let mut out: Vec<crate::ElementFace> = self.exterior_faces().into_iter().chain(shells).collect();
+        out.sort_unstable();
+        out
+    }
+
     /// The sides (`sides` of each element kind) of the elements of `dimension` that no other
     /// such element shares, each known by its sorted corners (at most `corners`; triangles of
     /// quadratic kinds by their first three), made by `make` from the element and the 1-based
@@ -374,6 +384,38 @@ mod tests {
         assert_eq!(of(2), [2, 3, 4, 5, 6], "all but the shared bottom (its top meets the tet over half its area)");
         assert_eq!(of(3), [1, 2, 3, 4], "a triangle never matches a quad");
         assert!(Model::default().exterior_faces().is_empty());
+    }
+
+    #[test]
+    fn skin_faces_count_solid_and_shell_sides() {
+        let cube = |m: &mut Model, base: u32, z: f64| {
+            for (i, xy) in [[0., 0.], [1., 0.], [1., 1.], [0., 1.]].iter().enumerate() {
+                m.set_node(base + i as u32, [xy[0], xy[1], z]).unwrap();
+            }
+        };
+        let mut m = Model::default();
+        cube(&mut m, 1, 0.0);
+        cube(&mut m, 5, 1.0);
+        m.set_element(1, crate::ElementKind::Hex8, (1..=8).collect()).unwrap();
+        assert_eq!(m.skin_faces().len(), 6, "one hex8");
+        cube(&mut m, 9, 2.0);
+        m.set_element(2, crate::ElementKind::Hex8, (5..=12).collect()).unwrap();
+        assert_eq!(m.skin_faces().len(), 10, "two hex8 sharing a face");
+
+        let mut t = Model::default();
+        for (i, p) in [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.5, 0., 0.], [0.5, 0.5, 0.], [0., 0.5, 0.], [0., 0., 0.5], [0.5, 0., 0.5], [0., 0.5, 0.5]]
+            .iter()
+            .enumerate()
+        {
+            t.set_node(i as u32 + 1, *p).unwrap();
+        }
+        t.set_element(1, crate::ElementKind::Tet10, (1..=10).collect()).unwrap();
+        assert_eq!(t.skin_faces().len(), 4, "a tet10");
+
+        let mut s = Model::default();
+        cube(&mut s, 1, 0.0);
+        s.set_element(7, crate::ElementKind::Quad4, vec![1, 2, 3, 4]).unwrap();
+        assert_eq!(s.skin_faces(), [crate::ElementFace { element: 7, face: 1 }], "a quad4 shell, its top side");
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub mod memory;
 pub mod mesh;
 pub mod recovery;
 pub mod roots;
+pub mod stl;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};

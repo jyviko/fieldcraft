@@ -9,9 +9,11 @@
 //! `fieldcraft_ui_egui::control` and docs/control-protocol.md.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-#![forbid(unsafe_code)]
+// Unsafe code is denied (Cargo.toml): only the Windows exception filter allows it (native_crash.rs).
 
 mod control_server;
+#[cfg(windows)]
+mod native_crash;
 mod terminate;
 mod update;
 mod usage;
@@ -50,8 +52,8 @@ struct App {
     autosaver: Option<Autosaver>,
     /// App time of the last autosave check.
     autosaved_at: f64,
-    /// The first frame was drawn (the crash journal says the app is up).
-    running: bool,
+    /// Frames drawn so far, up to 2 (the second means the first was presented: the app is up).
+    frames: u8,
     /// Sends the anonymous usage events, when this run may (docs/privacy.md).
     usage: Option<usage::Sender>,
 }
@@ -68,9 +70,13 @@ impl App {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if !self.running {
-            self.running = true;
-            crash::activity("running");
+        if self.frames < 2 {
+            self.frames += 1;
+            // A second frame right away, which means the first was presented: the app is up.
+            ctx.request_repaint();
+            if self.frames == 2 {
+                crash::phase(crash::RUNNING);
+            }
         }
         self.app.logic(ctx);
         if self.app.now - self.autosaved_at >= AUTOSAVE_SECONDS {
@@ -163,8 +169,16 @@ fn start_reporting() -> Vec<crash::Summary> {
         b.version_line(),
         crash::default_dir().map(|d| d.display().to_string()).unwrap_or_default()
     );
-    crash::activity("startup");
     crashed
+}
+
+/// egui-wgpu is about to start a step of getting the graphics device and the window's surface
+/// up: the crash journal keeps it, and the adapter once it is picked (#299).
+fn startup_step(step: &'static str, detail: &str) {
+    if step == eframe::egui_wgpu::STEP_ADAPTER_CHOSEN {
+        crash::set_environment(&format!("Renderer: {detail}"));
+    }
+    crash::phase(step);
 }
 
 /// Command-line options.
@@ -224,6 +238,12 @@ fn main() -> eframe::Result {
         fieldcraft_io::recovery::use_automation_dir();
     }
     let crashed = start_reporting();
+    // A crash in native code (a graphics driver) says where it happened: the exception and the
+    // module on Windows, and on every system the startup step the app was in.
+    #[cfg(windows)]
+    native_crash::install();
+    eframe::egui_wgpu::set_startup_hook(startup_step);
+    crash::phase("window");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("FieldCraft")
@@ -246,6 +266,7 @@ fn main() -> eframe::Result {
         "FieldCraft",
         options,
         Box::new(move |cc| {
+            crash::phase("app setup");
             let mut session = Session::default();
             // The window's model: its commands go into the crash journal.
             session.crash_journal = crash::enabled();
@@ -266,7 +287,13 @@ fn main() -> eframe::Result {
             if let Some(rs) = &cc.wgpu_render_state {
                 let info = rs.adapter.get_info();
                 log::info!("graphics {:?} {} ({}), MSAA {}x (requested {MSAA}x)", info.backend, info.name, info.driver, rs.msaa_samples);
+                crash::set_environment(&format!("Renderer: {:?} {} ({}), MSAA {}x", info.backend, info.name, info.driver, rs.msaa_samples));
+                crash::phase("viewport pipelines (shader compile)");
                 app.set_wgpu(rs, DEPTH_BITS, rs.msaa_samples, &cc.egui_ctx);
+                // The graphics driver is loaded now; it may have put its own exception filter
+                // in front of ours.
+                #[cfg(windows)]
+                native_crash::reinstall();
             }
             // `kill` or Ctrl-C closes the window as Close does: autosaved, no crash (#248).
             let ctx = cc.egui_ctx.clone();
@@ -294,7 +321,8 @@ fn main() -> eframe::Result {
                 Autosaver::new(&dir).map_err(|e| log::warn!("autosave unavailable: {e}")).ok()
             });
             app.announce_crashes(&crashed);
-            Ok(Box::new(App { app, autosaver, autosaved_at: 0.0, running: false, usage }))
+            crash::phase("first frame");
+            Ok(Box::new(App { app, autosaver, autosaved_at: 0.0, frames: 0, usage }))
         }),
     )
 }

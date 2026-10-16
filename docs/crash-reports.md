@@ -53,10 +53,31 @@ error stream.
   — an abort, a stack overflow, a crash in a graphics driver, the process being killed outright
   (SIGKILL) — found at the next start), `message`, `location`, `thread`, `backtrace`, `app`, `system`, `command`,
   `recent_commands` (up to 32), `last_activity` (the last control request, such as
-  `control ui.capture`), `base`, `count`, `first_seen`, `last_seen`, `notes`
+  `control ui.capture`), `startup_phase` (`{step, ms}`: the step a run that never drew its first
+  frame died in), `native` (Windows: what the exception filter caught), `base`, `count`,
+  `first_seen`, `last_seen`, `notes`; `system.environment` names the renderer, GPU and driver
 - `model.fieldcraft`: the model the replay starts from
 - `replay.json`: `{"commands": [{command, params}, …]}`
 - `log.txt`: the crashed run's lines of the log
+- `minidump.dmp` (Windows, a crash in native code): open it with WinDbg or Visual Studio
+
+### Startup steps and native crashes
+
+While the app gets up, the journal keeps the step it is in: the app's own (`window`, `app setup`,
+`viewport pipelines (shader compile)`, `first frame`, and `running` once a frame was presented)
+and egui-wgpu's in between (`graphics instance`, `window surface`, `adapter request`, `adapter
+chosen`, when the renderer is recorded, `device creation`, `egui renderer (shader compile)`,
+`surface configure`, `first frame (present)`). A run that dies before `running` is reported "during startup (device creation, 1.2 s
+after launch)", so a graphics driver crash names its step.
+
+On Windows an unhandled-exception filter (`apps/fieldcraft/src/native_crash.rs`) catches a crash
+in native code (an access violation in a graphics driver, a stack overflow): before the process
+goes it writes the exception code, the faulting module and the offset into it, and a minidump,
+next to the journal. The next start puts them into the report: "crashed with
+EXCEPTION_ACCESS_VIOLATION (0xC0000005) in igvk64.dll+0x64EA72 during startup (device
+creation…)", `backtrace` the code, the module and offset, and the thread, `native` the raw fields,
+and `minidump.dmp`. After a stack overflow there is no stack left for a minidump; the rest is
+still written.
 
 The next start after a crash asks "FieldCraft closed unexpectedly": **Report It…** opens Report a
 Bug for that report.

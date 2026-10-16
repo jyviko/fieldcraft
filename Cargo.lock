@@ -1286,6 +1286,7 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

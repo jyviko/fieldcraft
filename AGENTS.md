@@ -24,7 +24,9 @@ FieldCraft everywhere: crates `fieldcraft-*`, binaries `fieldcraft` and `fieldcr
 ## Never crash
 People trust FieldCraft with their models; a crash loses their work. **This outranks feature work.**
 - **No panics in non-test code:** no `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!`,
-  `unimplemented!`; no `unsafe` (`unsafe_code = "forbid"`).
+  `unimplemented!`; no `unsafe` (`unsafe_code = "forbid"`). The one exception, in the app crate
+  (which denies it instead), has no safe API: the Windows-only `apps/fieldcraft/src/native_crash.rs`
+  (the exception filter that records crashes inside native code such as graphics drivers).
 - **Errors are `Result<T, E>`** through the crate's error type and `?`. An unfinished feature
   returns an error ("not supported yet: …"); it never panics.
 - **Input-derived numbers are hostile** (command parameters, model files, solver decks,

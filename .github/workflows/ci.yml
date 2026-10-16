@@ -196,6 +196,23 @@ jobs:
       - name: docs/oracle.md is current
         run: git diff --exit-code docs/oracle.md
 
+  windows:
+    # The desktop app's tests on Windows, nightly and on demand: the Windows-only code
+    # (apps/fieldcraft/src/native_crash.rs, the exception filter) builds and a child process that
+    # faults on purpose leaves its native crash report (#299). Releases build Windows too.
+    name: Windows app tests
+    if: github.event.schedule == '23 3 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - run: cargo test --locked --profile ci -p fieldcraft
+
   advisories:
     name: Dependency licences, advisories and sources
     if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')

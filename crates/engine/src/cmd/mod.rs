@@ -82,6 +82,7 @@ pub static ALL: &[CommandSpec] = &[
     virtual_faces::FACE_SPLIT_DELETE,
     defeature::DEFEATURE,
     defeature::DEFEATURE_DELETE,
+    defeature::DEFEATURE_PROPOSE,
     stitch::STITCH,
     stitch::STITCH_DELETE,
     mesh::NODE_ADD,

@@ -25,7 +25,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Prepare | Merge Faces — Mesh adjacent faces as one (virtual topology): a fillet in pieces, a face split by an imprint; the B-rep is unchanged | ready | `geometry.faces.merge`, (`geometry.faces.merge.delete`) |
 | Prepare | Absorb Faces — Absorb tiny and sliver faces into a neighbour for meshing, one picked or every one Check Geometry found | ready | `geometry.face.absorb` |
 | Prepare | Split Face — Split a face along a datum plane for meshing only: two faces on its surface, the cut an edge between them | ready | `geometry.face.split`, (`geometry.face.split.delete`) |
-| Prepare | Defeature — Take small holes, fillets, chamfers and bosses out for meshing: the design rebuilt without their features | ready | `geometry.defeature`, (`geometry.defeature.delete`) |
+| Prepare | Defeature — Take small holes, fillets, chamfers and bosses out for meshing, from a proposal list with each one on or off | ready | `geometry.defeature`, (`geometry.defeature.propose`), (`geometry.defeature.delete`) |
 | Prepare | Stitch — Close an imported surface's gaps under a tolerance: open points welded, T-junctions split | ready | `geometry.stitch`, (`geometry.stitch.delete`) |
 | Prepare | Midsurface — Extract midsurfaces of thin parts for shell meshes | coming soon (M8) |  |
 

@@ -1783,10 +1783,26 @@ pub const FACES_MERGE_DELETE: &[Field] = existing!("Face merge", C::FaceMerge);
 pub const DEFEATURE: &[Field] = &[
     NAME,
     text("features", "Features")
-        .help("The feature ids to take out for meshing (3 or F3), as the feature graph (geometry.features) lists them; separate them with commas.")
+        .help("The feature ids to take out for meshing (3 or F3), as Propose Defeaturing and the feature graph list them; separate them with commas.")
         .req(),
 ];
 pub const DEFEATURE_DELETE: &[Field] = existing!("Defeature", C::Defeature);
+pub const DEFEATURE_PROPOSE: &[Field] = &[
+    reference("body", "Body", C::Body).help("The body whose holes, fillets, chamfers and bosses to list.").req(),
+    group(
+        "below",
+        "Propose below",
+        &[
+            positive("hole_diameter", "Hole diameter", D::Millimetre).help("Propose holes narrower than this."),
+            positive("fillet_radius", "Fillet radius", D::Millimetre).help("Propose fillets with a smaller radius."),
+            positive("chamfer", "Chamfer", D::Millimetre).help("Propose chamfers smaller than this."),
+            positive("boss_height", "Boss height", D::Millimetre).help("Propose bosses lower than this."),
+        ],
+    )
+    .help("Size thresholds: a feature below its threshold is proposed."),
+    flag("from_check", "From check").help("Also propose the features with a face the last Check Geometry found."),
+    text("name", "Defeature").help("The defeature the list's on/off switches edit.").hint("Defeature"),
+];
 pub const MESH_PLAN: &[Field] = &[
     reference("body", "Body", C::Body).help("The body of the design to plan (as opened, not a partition cell).").req(),
     text("name", "Name").help("The name the plan is saved under.").hint("Plan-<body>"),

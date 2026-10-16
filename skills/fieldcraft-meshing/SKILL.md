@@ -21,7 +21,10 @@ pictures → report.** Never skip a step because the last mesh looked fine.
    `size`): short edges, small and sliver faces,
    near faces (gaps, overlaps, walls thinner than the gap). Each finding names its faces and a
    point `at`, and is marked in pictures. Defeature or resize before meshing; never mesh over a
-   finding you have not explained.
+   finding you have not explained. `geometry.defeature.propose {"body", "below": {"hole_diameter",
+   "fillet_radius", "chamfer", "boss_height"}, "from_check": true}` lists the holes, fillets,
+   chamfers and bosses below a size or under a finding; `geometry.defeature {"name", "features"}`
+   takes them out (the design rebuilt without them), `geometry.defeature.delete` puts them back.
 3. Take pictures. Headless: `fieldcraft-cli snapshot script.json --out a.png` with
    `--view iso|front|top|…` or `--camera '{"yaw":-45,"pitch":30,"target":[x,y,z],"fit":true}'`,
    and `--section x|y|z[=VALUE]`. Over MCP: `screenshot {view | camera: {yaw, pitch, target,

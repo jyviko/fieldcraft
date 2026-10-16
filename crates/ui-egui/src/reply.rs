@@ -28,7 +28,7 @@ pub struct Reply {
 const SOLVES: [&str; 6] = ["solve.static", "solve.nonlinear", "solve.heat", "solve.frequency", "solve.buckle", "solve.explicit"];
 
 /// Replies that only read the model, refreshed when it changes; any other reply closes then.
-pub const LIVE: [&str; 2] = ["model.check", "model.activity"];
+pub const LIVE: [&str; 3] = ["model.check", "model.activity", "geometry.defeature.propose"];
 
 /// The status line's text (after the command's label) is cut to this many characters.
 const MAX_LINE: usize = 120;
@@ -221,6 +221,17 @@ enum Act {
     Elements(Vec<u32>),
     /// Open Relax Nodes round an element (Mesh Quality's worst).
     Relax(u32),
+    /// Switch a feature on (kept in the mesh) or off (defeatured by the named defeature).
+    Defeature {
+        name: String,
+        feature: u64,
+        on: bool,
+    },
+    /// Defeature the proposed features with the named defeature.
+    Propose {
+        name: String,
+        features: Vec<u64>,
+    },
 }
 
 /// The reply's section of the context panel.
@@ -248,6 +259,7 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         "model.activity" => activity(ui, t, &reply.value),
         "geometry.bodies" => bodies(ui, t, &reply.value, &mut acts),
         "mesh.quality" => quality(ui, t, &reply.value, &mut acts),
+        "geometry.defeature.propose" => defeature_list(ui, t, &reply.value, &mut acts),
         _ => value(ui, t, egui::Id::new("fc_reply"), &reply.value, 0),
     }
     for a in acts {
@@ -267,8 +279,92 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
                 app.show_elements(&[element]);
                 app.open_form("mesh.node.relax", serde_json::json!({"around_element": element}));
             }
+            Act::Defeature { name, feature, on } => {
+                let mut features = defeatured(app, &name);
+                features.retain(|f| *f != feature);
+                if !on {
+                    features.push(feature);
+                }
+                let _ = set_defeature(app, &name, features);
+            }
+            Act::Propose { name, features } => {
+                let mut all = defeatured(app, &name);
+                for f in features {
+                    if !all.contains(&f) {
+                        all.push(f);
+                    }
+                }
+                let _ = set_defeature(app, &name, all);
+            }
         }
     }
+}
+
+/// The features the defeature `name` takes out (none when the model has no such defeature).
+fn defeatured(app: &ModelApp, name: &str) -> Vec<u64> {
+    app.session.model.defeatures().iter().find(|d| d.name == name).map(|d| d.features.clone()).unwrap_or_default()
+}
+
+/// Give the defeature `name` these features (none: delete it).
+fn set_defeature(app: &mut ModelApp, name: &str, features: Vec<u64>) -> Result<Value, String> {
+    match features.is_empty() {
+        true if defeatured(app, name).is_empty() => Ok(Value::Null),
+        true => app.run("geometry.defeature.delete", serde_json::json!({"name": name})),
+        false => app.run("geometry.defeature", serde_json::json!({"name": name, "features": features})),
+    }
+}
+
+/// Propose Defeaturing: each candidate with a switch (on: in the mesh; off: defeatured), its
+/// kind, size and the defeature that takes it out, and a button that defeatures the proposal.
+fn defeature_list(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>) {
+    let name = v["name"].as_str().unwrap_or("Defeature").to_string();
+    let body = v["body"].as_str().unwrap_or_default();
+    let candidates = v["candidates"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let proposal: Vec<u64> = v["proposal"].as_array().into_iter().flatten().filter_map(Value::as_u64).collect();
+    let pending: Vec<u64> = candidates.iter().filter(|c| c["proposed"] == true && c["suppressed"] != true).filter_map(|c| c["id"].as_u64()).collect();
+    if !proposal.is_empty() {
+        let button = ui.add_enabled(!pending.is_empty(), egui::Button::new(format!("Defeature the {} proposed", proposal.len())));
+        if button.on_hover_text(format!("Take them out with defeature {name}")).clicked() {
+            acts.push(Act::Propose { name: name.clone(), features: pending });
+        }
+        ui.add_space(4.0);
+    }
+    egui::Grid::new("fc_defeature").num_columns(4).spacing(vec2(10.0, 2.0)).striped(true).show(ui, |ui| {
+        for h in ["In mesh", "Feature", "Kind", "Size"] {
+            ui.label(RichText::new(h).color(t.text_dim));
+        }
+        ui.end_row();
+        for c in candidates.iter().take(MAX_ENTITIES) {
+            let Some(id) = c["id"].as_u64() else { continue };
+            let mut on = c["suppressed"] != true;
+            let by = c["by"].as_str().unwrap_or(&name).to_string();
+            let hover = if on { format!("Switch off: defeature {name} takes it out") } else { format!("Switch on: defeature {by} keeps it") };
+            if ui.checkbox(&mut on, "").on_hover_text(hover).changed() {
+                acts.push(Act::Defeature { name: if on { by } else { name.clone() }, feature: id, on });
+            }
+            let label = format!("F{id} {}", c["name"].as_str().unwrap_or_default());
+            let text = if c["proposed"] == true { RichText::new(label).color(t.warm) } else { RichText::new(label) };
+            match c["faces"].as_array().and_then(|f| f.first()).and_then(Value::as_str).filter(|_| on) {
+                Some(face) => {
+                    if ui.link(text).on_hover_text("Pick its face in the viewport").clicked() {
+                        let entity = fieldcraft_model::Entity::Face(face.to_string());
+                        acts.push(Act::Pick(fieldcraft_model::GeometryRef { body: body.to_string(), entity }));
+                    }
+                }
+                None => {
+                    ui.label(text);
+                }
+            }
+            let method = match c["method"].as_str() {
+                Some("virtual") => " (virtual)",
+                _ => "",
+            };
+            ui.label(format!("{}{method}", c["category"].as_str().unwrap_or_default()));
+            ui.label(format!("{} mm", crate::describe::quantity(sig(c["size"].as_f64().unwrap_or(0.0)))));
+            ui.end_row();
+        }
+    });
+    more_than(ui, t, candidates.len(), MAX_ENTITIES);
 }
 
 /// The definition a diagnostic's subject names (``section `web` ``), when the model has it.
@@ -816,6 +912,30 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Propose Defeaturing stays in the panel and follows the model: switching the plate's hole
+    /// off fills it in the viewport's bodies and the list shows it off; on again brings it back.
+    #[test]
+    fn the_defeature_list_switches_a_hole_off_and_on() {
+        let dir = std::env::temp_dir().join(format!("fieldcraft-ui-defeature-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let design = dir.join("plate.solidcraft");
+        std::fs::write(&design, fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap()).unwrap();
+        let mut app = ModelApp::new(fieldcraft_engine::Session::default());
+        app.run("geometry.open", json!({"path": design.to_string_lossy()})).unwrap();
+        let body = app.session.design.as_ref().unwrap().bodies[0].name.clone();
+        app.run("geometry.defeature.propose", json!({"body": body, "below": {"hole_diameter": 12}})).unwrap();
+        let hole = app.reply.as_ref().unwrap().value["proposal"][0].as_u64().unwrap();
+        let faces = |app: &ModelApp| app.session.design.as_ref().unwrap().bodies[0].faces().len();
+        set_defeature(&mut app, "Defeature", vec![hole]).unwrap();
+        let reply = app.reply.as_ref().expect("the list stays open");
+        assert_eq!((faces(&app), reply.value["candidates"][0]["suppressed"].as_bool()), (6, Some(true)));
+        assert_eq!(defeatured(&app, "Defeature"), [hole]);
+        set_defeature(&mut app, "Defeature", Vec::new()).unwrap();
+        assert_eq!((faces(&app), app.reply.as_ref().unwrap().value["candidates"][0]["suppressed"].as_bool()), (8, Some(false)));
+        assert!(app.session.model.defeatures().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// Mesh Quality's reply draws as counts, histograms and worst elements, and a worst element
     /// is selected and framed (#113).

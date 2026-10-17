@@ -527,7 +527,10 @@ fn partition(s: &mut Session, p: &Value) -> Result<Value> {
     let cells: Vec<String> = design.bodies.iter().map(|b| b.name.clone()).filter(|b| split.iter().any(|x| b.starts_with(&format!("{x}/")))).collect();
     let (faces, bodies): (usize, Vec<String>) = (report.map_or(0, |r| r.faces), design.bodies.iter().map(|b| b.name.clone()).collect());
     let mut warnings: Vec<String> = report.map(|r| r.warnings.clone()).unwrap_or_default();
-    for cell in &cells {
+    fieldcraft_model::progress::stage("Partition: checking the cells", Some(cells.len() as f64), "cells");
+    for (k, cell) in cells.iter().enumerate() {
+        fieldcraft_model::progress::count(k as f64);
+        fieldcraft_model::progress::check()?;
         if let Some(why) = design.body(cell).and_then(|shape| unmeshable(shape, None).err()) {
             warnings.push(format!(
                 "partition `{name}`: cell `{cell}` has a boundary no mesher takes ({why}): the plane passes within the kernel's tolerance of a face, edge or vertex it cut (along a face, through the axis of a hole); move the plane off it (by a fraction of the element size)"

@@ -201,6 +201,8 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
         if members.len() < 2 {
             continue;
         }
+        fieldcraft_model::progress::stage(&format!("Cells: sweeping {source}'s cells together"), None, "");
+        fieldcraft_model::progress::check()?;
         let inputs: Vec<Input> = members
             .iter()
             .filter_map(|&i| shapes.get(i))
@@ -227,6 +229,9 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
         if joint.get(i).copied().flatten().is_some() {
             continue;
         }
+        fieldcraft_model::progress::stage(&format!("Cells: meshing {}", shape.name), Some(shapes.len() as f64), "cells");
+        fieldcraft_model::progress::count(i as f64);
+        fieldcraft_model::progress::check()?;
         let method = method_of(&shape.name);
         let input = || Ok::<_, EngineError>(Input { seeds: seeds.clone(), ..super::hex::shape_input(shape, Some(tolerance))? });
         let hex = |m: HexMethod| -> Result<(Input<'static>, HexMesh)> {
@@ -246,6 +251,8 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
                     let info = json!({"method": mesh.report.method.name()});
                     (Meshed::Hex(Box::new((b, mesh))), info)
                 }
+                // A cancelled job stops; any other failure falls back to tet.
+                Err(e) if e.is_cancelled() => return Err(e),
                 Err(e) => (Meshed::Tet, json!({"method": "tet", "why": e.to_string()})),
             },
         };
@@ -301,6 +308,9 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
     }
     for (i, mut info) in tet_cells {
         let Some(shape) = shapes.get(i) else { continue };
+        fieldcraft_model::progress::stage(&format!("Cells: meshing {} (tet)", shape.name), Some(shapes.len() as f64), "cells");
+        fieldcraft_model::progress::count(i as f64);
+        fieldcraft_model::progress::check()?;
         let input = Input { seeds: seeds.clone(), ..super::hex::shape_input(shape, Some(tolerance))? };
         let pyramids = if transition == Transition::Tie {
             Err("`transition` is \"tie\"".to_string())
@@ -348,6 +358,8 @@ fn cells(s: &mut Session, p: &Value) -> Result<Value> {
         .filter(|r| r.get("kind").and_then(Value::as_str).is_some_and(|k| k.starts_with("tet")))
         .filter_map(|r| r.get("body").and_then(Value::as_str).map(String::from))
         .collect();
+    fieldcraft_model::progress::stage("Cells: joining the cells", None, "");
+    fieldcraft_model::progress::check()?;
     interfaces.extend(join(model, &names, &tet, COINCIDENT * diagonal)?);
     explain_ties(&design, &report, &mut interfaces);
     let (nodes, elements) = (model.nodes().len(), model.elements().len());

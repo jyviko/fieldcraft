@@ -1133,6 +1133,8 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     // The copies: each meshed by a plan of its own at this plan's size, saved beside it.
     let mut copies = Vec::with_capacity(plan.copies.len());
     for copy in &plan.copies {
+        fieldcraft_model::progress::stage(&format!("Plan: meshing the copy {copy}"), None, "");
+        fieldcraft_model::progress::check()?;
         let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
         if design.source_body(copy).is_none() {
             return Err(EngineError::Params(format!("mesh plan `{name}`: no copy `{copy}` in the design")));
@@ -1250,7 +1252,13 @@ fn apply_one(s: &mut Session, name: &str, plan: &MeshPlan) -> Result<Value> {
         let body = cells.first().cloned().unwrap_or_else(|| plan.body.clone());
         (super::hex::HEX_GENERATE.run)(s, &json!({"body": body, "size": plan.size, "method": "swept", "tolerance": tolerance}))
     }
-    .map_err(|e| EngineError::Params(format!("mesh plan `{name}`: the cells {cells:?} (cuts {made:?}) do not mesh all-hex: {e}")))?;
+    .map_err(|e| {
+        if e.is_cancelled() {
+            e
+        } else {
+            EngineError::Params(format!("mesh plan `{name}`: the cells {cells:?} (cuts {made:?}) do not mesh all-hex: {e}"))
+        }
+    })?;
     let summary = summary(&mesh, &cells);
     // What today's meshers cannot express yet: the rings round circles are built by the
     // projection mesher (#399); until then the frame cuts box the circle and the sweep meshes the
@@ -1446,6 +1454,8 @@ fn apply_symmetric(s: &mut Session, name: &str, plan: &MeshPlan, corners: bool) 
     let cells: Vec<String> = design.bodies.iter().filter(|b| design.source_of(&b.name) == Some(plan.body.as_str())).map(|b| b.name.clone()).collect();
     let meshed_first = meshed.clone();
     for (a, c) in &planes {
+        fieldcraft_model::progress::stage("Plan: mirroring the cell", None, "");
+        fieldcraft_model::progress::check()?;
         (super::mirror::MIRROR.run)(s, &json!({"plane": {"point": a.map(|x| x * c), "normal": a}, "bodies": meshed}))?;
         meshed = cells.iter().filter(|n| !s.model.body_elements(n).is_empty()).cloned().collect();
     }
@@ -1632,6 +1642,7 @@ fn copy_corner(
             }
             Ok(Ok(copy))
         }
+        Err(e) if e.is_cancelled() => Err(e),
         // A corner copy that does not mesh leaves the cell to be meshed whole.
         Err(e) => {
             s.restore(before);
@@ -1663,9 +1674,13 @@ fn corner_meshes(
     // planar, the corner taken from that mesh: independent meshes, made side by side. The best
     // corner wins.
     let whole = &whole_body;
-    let runs = fieldcraft_parallel::map(candidates.len() + 1, |k| match k.checked_sub(1).and_then(|i| candidates.get(i)) {
-        None => super::project::project_only(whole, cell, t0, &opts).map(|m| (m.report.min_scaled_jacobian, None)),
-        Some(&x1) => corner_of_whole(whole, cell, t0, a, [x1, 2.0 * c - x1], &opts).map(|r| (r.sj, Some(([x1, 2.0 * c - x1], r)))),
+    // The job's progress on the pool's threads too, so a cancel stops the candidates.
+    let progress = fieldcraft_model::progress::current();
+    let runs = fieldcraft_parallel::map(candidates.len() + 1, |k| {
+        fieldcraft_model::progress::scoped(progress.clone(), || match k.checked_sub(1).and_then(|i| candidates.get(i)) {
+            None => super::project::project_only(whole, cell, t0, &opts).map(|m| (m.report.min_scaled_jacobian, None)),
+            Some(&x1) => corner_of_whole(whole, cell, t0, a, [x1, 2.0 * c - x1], &opts).map(|r| (r.sj, Some(([x1, 2.0 * c - x1], r)))),
+        })
     });
     let mut reference: Option<f64> = None;
     let mut best: Option<(f64, [f64; 2], CornerOfWhole)> = None;
@@ -1677,6 +1692,7 @@ fn corner_meshes(
                     best = Some((sj, at, corner));
                 }
             }
+            Err(e) if e.is_cancelled() => return Err(e),
             Err(_) => {}
         }
     }
@@ -1873,8 +1889,9 @@ fn apply_projection(s: &mut Session, name: &str, plan: &MeshPlan, tolerance: f64
     let (fixed, fixed_faces) = cut_face_patches(s, &body, &plan.body, plan.size)?;
     let field = super::sizes::sizing(s)?.local_field(plan.size)?;
     let opts = fieldcraft_mesh::project::ProjectOptions { size: plan.size, fixed, field, ..Default::default() };
-    let mut mesh = super::project::project_body(s, &plan.body, body, &layout.topology, &opts, merge)
-        .map_err(|e| EngineError::Params(format!("mesh plan `{name}`: the projected layout does not mesh: {e}")))?;
+    let mut mesh = super::project::project_body(s, &plan.body, body, &layout.topology, &opts, merge).map_err(|e| {
+        if e.is_cancelled() { e } else { EngineError::Params(format!("mesh plan `{name}`: the projected layout does not mesh: {e}")) }
+    })?;
     if let Some(m) = mesh.as_object_mut() {
         // The block listing is long; the plan reports the layout instead.
         m.remove("topology");
@@ -1946,6 +1963,8 @@ fn cut(
     let cleared = super::datum::recut(s)?;
     let mut skipped: Vec<(String, String)> = Vec::new();
     for _ in 0..=names.len() {
+        fieldcraft_model::progress::stage("Plan: checking the cells", None, "");
+        fieldcraft_model::progress::check()?;
         let design = s.design.as_deref().ok_or_else(|| EngineError::Params("open a design first".into()))?;
         let live: Vec<&String> = names.iter().filter(|n| !skipped.iter().any(|(k, _)| k == *n)).collect();
         let mut failed: Vec<(String, String)> = live

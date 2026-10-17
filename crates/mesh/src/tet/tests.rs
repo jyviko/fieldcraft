@@ -454,3 +454,46 @@ mod determinism {
         }
     }
 }
+
+/// A cap tetrahedron (two boundary faces of one B-rep face) whose two other neighbours each have
+/// three boundary faces: deleting it would leave them joined to nothing by a face, floating free
+/// (a singular stiffness: the dome-on-a-plate mesh on Linux, #438), so it stays.
+#[test]
+fn deleting_a_cap_never_leaves_a_neighbour_floating() {
+    let p: Vec<[f64; 3]> = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.3, 0.3, -1.0], [1.0, 1.0, 1.0]];
+    let pts: Vec<Point3> = p.iter().map(|c| Point3::try_from(*c).unwrap()).collect();
+    let positive = |t: [u32; 4]| if measure::volume6(&t.map(|v| pts[v as usize].coords())) > 0.0 { t } else { [t[1], t[0], t[2], t[3]] };
+    // The cap, and a tetrahedron on each of its faces 012 and 123.
+    let tets = [positive([0, 1, 2, 3]), positive([0, 1, 2, 4]), positive([1, 2, 3, 5])];
+    let key = |f: [u32; 3]| {
+        let mut f = f;
+        f.sort_unstable();
+        f
+    };
+    let mut boundary = Vec::new();
+    for (t, vs) in tets.iter().enumerate() {
+        for k in 0..4 {
+            let f = key(face_toward(*vs, k));
+            let shared = tets.iter().enumerate().any(|(u, ws)| u != t && (0..4).any(|j| key(face_toward(*ws, j)) == f));
+            if !shared {
+                boundary.push((t as u32, k, 0));
+            }
+        }
+    }
+    let mut cx = TetComplex::new(&p, vec![VertexKind::Corner; 6], &tets, &boundary, &[], 100, 100).unwrap();
+    assert!(!cx.delete_boundary_tet(0).unwrap(), "the cap was deleted, leaving its neighbours floating");
+    assert_eq!(cx.live_tets().count(), 3);
+    cx.validate().unwrap();
+}
+
+/// The validity gate refuses a tetrahedron that shares no face with the rest of the mesh, even
+/// when the volume adds up: it says why instead of leaving the solver to find it singular.
+#[test]
+fn the_gate_refuses_a_detached_tetrahedron() {
+    let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 1.0], [2.0, 1.0, 1.0], [1.0, 2.0, 1.0], [1.0, 1.0, 2.0]];
+    let tets = [[0, 1, 2, 3], [4, 5, 6, 7]];
+    let v = 2.0 / 6.0;
+    let e = super::linear_gate(&p, &tets, v).unwrap_err().to_string();
+    assert!(e.contains("share no face") && e.contains("(1, 2)"), "{e}");
+    assert!(super::linear_gate(&p, &tets[..1], v / 2.0).is_ok());
+}

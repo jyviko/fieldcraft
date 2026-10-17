@@ -559,6 +559,26 @@ pub fn quality_mesh(surface: &BoundarySurface, cdt: &TetMesh, analytic: Vec<Opti
     }
 }
 
+/// The tetrahedra (1-based) that share none of their faces with another one, in a mesh of more
+/// than one: each is a separate piece of boundary, joined to the mesh by vertices or an edge.
+fn detached_tets(tets: &[[u32; 4]]) -> Vec<u32> {
+    if tets.len() < 2 {
+        return Vec::new();
+    }
+    let face = |t: &[u32; 4], k: usize| {
+        let mut f = [t[(k + 1) % 4], t[(k + 2) % 4], t[(k + 3) % 4]];
+        f.sort_unstable();
+        f
+    };
+    let mut count: std::collections::BTreeMap<[u32; 3], u32> = std::collections::BTreeMap::new();
+    for t in tets {
+        for k in 0..4 {
+            *count.entry(face(t, k)).or_default() += 1;
+        }
+    }
+    tets.iter().enumerate().filter(|(_, t)| (0..4).all(|k| count.get(&face(t, k)).copied().unwrap_or(0) < 2)).map(|(i, _)| i as u32 + 1).collect()
+}
+
 /// The constrained Delaunay tetrahedralization itself as a [`QualityMesh`] (no quality stage),
 /// through the same validity gate: every tetrahedron admissible, the volume equal to what its
 /// boundary encloses.
@@ -576,9 +596,18 @@ pub fn raw_mesh(surface: &BoundarySurface, cdt: &TetMesh) -> Result<QualityMesh>
     Ok(QualityMesh { points: cdt.points.clone(), elements: cdt.tets.iter().map(|t| t.to_vec()).collect(), kind: ElementKind::Tet4, boundary, report })
 }
 
-/// The validity gate of a linear mesh: every tetrahedron admissible, and the volume equal to
-/// what its boundary encloses within 1e-9 (no overlap, no gap).
+/// The validity gate of a linear mesh: every tetrahedron admissible, joined to the others by a
+/// face (when there are several), and the volume equal to what its boundary encloses within
+/// 1e-9 (no overlap, no gap).
 pub fn linear_gate(points: &[[f64; 3]], tets: &[[u32; 4]], boundary_volume: f64) -> Result<GateReport> {
+    let detached = detached_tets(tets);
+    if !detached.is_empty() {
+        let list = detached.iter().take(10).map(u32::to_string).collect::<Vec<_>>().join(", ");
+        return Err(Error::Failed(format!(
+            "mesh validity gate: {} tetrahedra share no face with the rest of the mesh ({list}): held by vertices alone, they would make the stiffness singular",
+            detached.len()
+        )));
+    }
     let coords = |t: &[u32; 4]| -> Result<[[f64; 3]; 4]> {
         let p = |v: u32| points.get(v as usize).copied().ok_or_else(|| Error::Failed("gate: vertex id".into()));
         Ok([p(t[0])?, p(t[1])?, p(t[2])?, p(t[3])?])

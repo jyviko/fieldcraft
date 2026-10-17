@@ -1033,6 +1033,17 @@ impl TetComplex {
         if self.curve(vs[k], vs[l]).is_some() {
             return Ok(false);
         }
+        // Each neighbour gains a boundary face (both, when they are one tetrahedron); one left
+        // with every face on the boundary would float free of the mesh, joined to it by its
+        // vertices alone (a singular stiffness).
+        for m in [k, l] {
+            let n = ns[m];
+            let gained = if ns[k] == ns[l] { 2 } else { 1 };
+            let open = self.adj(n)?.iter().filter(|&&x| x == NONE).count();
+            if open + gained >= 4 {
+                return Ok(false);
+            }
+        }
         let raw = self.journal.recording.then(|| Box::new(self.snapshot(&[t, ns[k], ns[l]], &vs)));
         for m in [k, l] {
             let n = ns[m];

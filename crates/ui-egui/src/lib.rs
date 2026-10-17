@@ -40,6 +40,7 @@ pub mod gpu;
 pub mod icons;
 pub mod menu;
 pub mod navigation;
+pub mod node_move;
 pub mod palette;
 pub mod privacy;
 pub mod reply;
@@ -372,6 +373,10 @@ pub struct ModelApp {
     preview: std::cell::RefCell<DatumPreview>,
     merge_preview: std::cell::RefCell<MergePreview>,
     relax_preview: std::cell::RefCell<RelaxPreview>,
+    /// The open Move Nodes form's move, worked out for the view ([`node_move`]).
+    node_move: std::cell::RefCell<node_move::Cache>,
+    /// The Move Nodes drag in progress.
+    pub node_drag: Option<node_move::Drag>,
     /// Forms opened so far (numbers each [`ParamsDialog::opening`]).
     forms_opened: u64,
     pub viewport: Viewport,
@@ -520,6 +525,8 @@ impl ModelApp {
             preview: Default::default(),
             merge_preview: Default::default(),
             relax_preview: Default::default(),
+            node_move: Default::default(),
+            node_drag: None,
             forms_opened: 0,
             viewport: Viewport::default(),
             icons: icons::IconCache::default(),
@@ -1607,7 +1614,8 @@ impl ModelApp {
         let cut = self.partition_preview();
         let merge = self.merge_preview();
         let relax_key = self.dialog.as_ref().filter(|d| d.command == "mesh.node.relax").map(|d| d.text.clone());
-        let selected = hash(&|h| (scene, self.pick.generation, &set, &cut, &*merge, &relax_key).hash(h));
+        let move_key = self.dialog.as_ref().filter(|d| d.command == node_move::COMMAND).map(|d| d.text.clone());
+        let selected = hash(&|h| (scene, self.pick.generation, &set, &cut, &*merge, &relax_key, &move_key).hash(h));
         let key = hash(&|h| (selected, self.pick.hover_generation).hash(h));
         if self.pick.overlay.0 == Some(key) {
             return (key, self.pick.overlay.1.clone());
@@ -1646,6 +1654,10 @@ impl ModelApp {
             // The Relax Nodes sphere and its preview (#398).
             if relax_key.is_some() {
                 self.relax_overlay(&mut s, &t);
+            }
+            // The Move Nodes preview: the ghost, the moved elements and the sphere.
+            if move_key.is_some() {
+                self.node_move_overlay(&mut s, &t);
             }
             self.pick.selected_overlay = (Some(selected), Arc::new(s));
         }
@@ -2090,6 +2102,10 @@ impl ModelApp {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.memory(|m| m.focused().is_some()) {
             return;
+        }
+        // Escape cancels a Move Nodes drag first.
+        if self.node_drag.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.node_move_cancel();
         }
         // Escape clears the viewport's selection first (a second one cancels an open form).
         if !self.pick.selection.is_empty()
@@ -2561,6 +2577,53 @@ mod tests {
         app.dialog = None;
         app.run("mesh.node.relax", serde_json::from_str(&text).unwrap()).unwrap();
         assert_ne!(app.session.model.node(n).unwrap().xyz, [2.7, 2.6, 2.5]);
+    }
+
+    /// Move Nodes: the form previews the move (the region's quality before and now, the ghost and
+    /// the coloured elements drawn), Alt + scroll sizes the radius, a drag's release runs the
+    /// command in one undo step and keeps the form for the next drag, Esc cancels a drag.
+    #[test]
+    fn move_nodes_previews_and_runs_on_release() {
+        let mut app = ModelApp::new(Session::default());
+        let c = [[0., 0., 0.], [4., 0., 0.], [4., 4., 0.], [0., 4., 0.], [0., 0., 4.], [4., 0., 4.], [4., 4., 4.], [0., 4., 4.]];
+        app.run("mesh.block", json!({"body": "A", "kind": "hex8", "corners": c, "divisions": [4, 4, 4]})).unwrap();
+        let n = *app.session.model.nodes().iter().find(|(_, p)| p.xyz == [2.0, 2.0, 2.0]).unwrap().0;
+        assert!(!app.moving_nodes() && app.node_move_preview().is_none());
+        app.start(node_move::COMMAND).unwrap();
+        assert!(app.moving_nodes());
+        if let Some(d) = app.dialog.as_mut() {
+            d.text = json!({"nodes": [n], "by": [0.4, 0.2, 0.0], "on_geometry": true, "guard": "no_inversion"}).to_string();
+        }
+        assert!(app.node_move_scale_radius(1.0), "a radius to start from");
+        assert!(app.node_move_scale_radius(5.0), "Alt + scroll grows it");
+        let note = app.node_move_note().unwrap();
+        assert!(note.starts_with("Preview:") && note.contains("worse"), "{note}");
+        let p = app.node_move_preview().unwrap();
+        let m = p.moved.as_ref().unwrap();
+        assert!(m.positions.contains_key(&n) && m.moved > 1 && p.sphere.is_some());
+        let (_, overlay) = app.overlay();
+        assert!(
+            !overlay.fills.is_empty() && !overlay.lines.is_empty() && !overlay.on_top.is_empty(),
+            "sphere, ghost and moved edges, the grabbed node"
+        );
+        // Esc during a drag: nothing moves, the form stays.
+        let start = app.session.model.clone();
+        app.node_drag = Some(node_move::Drag { start: Vec3::new(2.0, 2.0, 2.0), normal: Vec3::Z });
+        app.node_move_cancel();
+        assert!(app.node_drag.is_none() && app.moving_nodes() && app.session.model == start);
+        assert!(app.dialog.as_ref().unwrap().text.contains("\"by\":[0.0,0.0,0.0]"));
+        // A drag's release runs the move.
+        if let Some(d) = app.dialog.as_mut() {
+            let mut p: Value = serde_json::from_str(&d.text).unwrap();
+            p["by"] = json!([0.4, 0.2, 0.0]);
+            d.text = p.to_string();
+        }
+        app.node_drag = Some(node_move::Drag { start: Vec3::new(2.0, 2.0, 2.0), normal: Vec3::Z });
+        app.node_move_release().unwrap();
+        assert_eq!(app.session.model.node(n).unwrap().xyz, [2.4, 2.2, 2.0]);
+        assert!(app.moving_nodes() && app.node_drag.is_none(), "the form stays open for the next drag");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.model, start);
     }
 
     /// Relax Nodes by face (#471): Use selection puts the picked design faces in the form in

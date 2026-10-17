@@ -40,6 +40,7 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui) {
     app.apply_reframe();
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let boxing = app.pick.box_mode && app.pick.filter.boxes();
+    node_drag(app, ui, &response, boxing);
     navigate(app, ui, &response, rect, boxing);
     if boxing && app.viewport.drag.is_none() {
         box_drag(app, ui, &response);
@@ -169,6 +170,33 @@ fn box_drag(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response) {
         && a.distance(b) > 3.0
     {
         app.select_box(a, b, mode(ui.input(|i| i.modifiers)));
+    }
+}
+
+/// The Move Nodes tool: with its form open, a plain left drag that starts on the mesh moves the
+/// node under the press in the screen plane ([`crate::node_move`]); release runs the move.
+fn node_drag(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response, boxing: bool) {
+    if response.drag_started_by(egui::PointerButton::Primary)
+        && app.moving_nodes()
+        && !boxing
+        && mode(ui.input(|i| i.modifiers)) == Mode::Replace
+        && let Some(at) = ui.input(|i| i.pointer.press_origin()).or(response.interact_pointer_pos())
+    {
+        app.node_move_grab(at);
+    }
+    if app.node_drag.is_none() {
+        return;
+    }
+    // The release is handled on the next frame even when no more input comes.
+    ui.ctx().request_repaint();
+    if response.dragged_by(egui::PointerButton::Primary)
+        && let Some(at) = response.interact_pointer_pos()
+    {
+        app.node_move_drag(at);
+    }
+    if response.drag_stopped_by(egui::PointerButton::Primary) || !response.dragged() {
+        // A failure shows in the status bar.
+        let _ = app.node_move_release();
     }
 }
 
@@ -351,7 +379,8 @@ fn navigate(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response, rect: 
         (egui::PointerButton::Middle, NavButton::Middle),
         (egui::PointerButton::Secondary, NavButton::Right),
     ] {
-        if response.drag_started_by(pressed) {
+        // A Move Nodes drag is no navigation.
+        if response.drag_started_by(pressed) && app.node_drag.is_none() {
             let at = press.or(response.interact_pointer_pos());
             let preset = navigation::preset(&app.ui.nav_preset);
             // The pick is needed only for an orbit's pivot and an unbound Ctrl + left drag.
@@ -389,9 +418,10 @@ fn navigate(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response, rect: 
         let options = ui.ctx().options(|o| o.input_options);
         let (scroll, pinch, at) = ui.input(|i| (wheel_points(i, &options), i.zoom_delta(), i.pointer.hover_pos()));
         let factor = (-f64::from(scroll) * ZOOM_PER_POINT * zoom_sign(app)).exp() / f64::from(pinch).max(1e-3);
-        // Alt + scroll sizes the Relax Nodes sphere instead of zooming.
-        let sized =
-            app.relaxing() && ui.input(|i| i.modifiers.alt) && scroll != 0.0 && app.relax_scale_radius((f64::from(scroll) * ZOOM_PER_POINT).exp());
+        // Alt + scroll sizes the Relax Nodes sphere, or the Move Nodes radius, instead of zooming.
+        let alt = ui.input(|i| i.modifiers.alt) && scroll != 0.0;
+        let step = (f64::from(scroll) * ZOOM_PER_POINT).exp();
+        let sized = alt && ((app.relaxing() && app.relax_scale_radius(step)) || (app.moving_nodes() && app.node_move_scale_radius(step)));
         if !sized && (factor - 1.0).abs() > 1e-9 {
             let anchor = at.and_then(|p| {
                 app.surface_point(p).or_else(|| app.cam.target_plane_point(f64::from(p.x - rect.left()), f64::from(p.y - rect.top()), w, h))

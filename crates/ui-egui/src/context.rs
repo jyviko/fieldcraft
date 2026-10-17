@@ -130,7 +130,7 @@ fn form(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
     let selected = (!app.pick.selection.is_empty()).then(|| app.pick.selection.summary());
     // While a job runs (this form's mesher, a solve) OK waits for it.
     let running = app.busy().map(str::to_string);
-    let relax_note = app.relax_note();
+    let relax_note = app.relax_note().or_else(|| app.node_move_note());
     let units = app.session.model.units();
     let session = &app.session;
     // The set Use selection will make on OK is offered with the others.

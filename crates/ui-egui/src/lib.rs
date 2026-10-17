@@ -240,6 +240,8 @@ pub struct PickState {
     pub selection: selection::Selection,
     /// What a click would pick under the pointer.
     pub hover: Option<selection::Item>,
+    /// The faces of the feature whose row in the Feature Graph is under the pointer.
+    feature_hover: Vec<selection::Item>,
     /// A left drag draws a selection box (nodes, element faces, elements) instead of orbiting.
     pub box_mode: bool,
     /// The box being dragged (window points).
@@ -398,6 +400,8 @@ pub struct ModelApp {
     pub xy: Option<XyPlot>,
     /// The last command reply with more to it than its status line, shown in the context panel.
     pub reply: Option<reply::Reply>,
+    /// The Feature Graph rows opened to their details: (body, feature id).
+    pub features_open: std::collections::BTreeSet<(String, u64)>,
     /// Whether results were shown last frame (the Results tab comes up when they appear).
     results_shown: bool,
     /// The framing the viewport does when it next draws ([`framing::Reframe`]).
@@ -531,6 +535,7 @@ impl ModelApp {
             reactions: None,
             xy: None,
             reply: None,
+            features_open: Default::default(),
             results_shown: false,
             reframe: None,
             framed_document: None,
@@ -1568,6 +1573,15 @@ impl ModelApp {
         }
     }
 
+    /// Highlight `items` as hovered (the faces of a Feature Graph row under the pointer; empty:
+    /// none).
+    pub fn set_feature_hover(&mut self, items: Vec<selection::Item>) {
+        if self.pick.feature_hover != items {
+            self.pick.feature_hover = items;
+            self.pick.hover_generation = self.pick.hover_generation.wrapping_add(1);
+        }
+    }
+
     /// The selection and the hover drawn over the scene in the theme's highlight colours,
     /// rebuilt when either or the scene changes; and its key.
     pub fn overlay(&mut self) -> (u64, Arc<Scene>) {
@@ -1631,6 +1645,12 @@ impl ModelApp {
             s.tris.extend(h.tris);
             s.lines.extend(h.lines);
             s.points.extend(h.points);
+        }
+        if !self.pick.feature_hover.is_empty() {
+            let items = self.pick.feature_hover.clone();
+            let h = self.with_picker(|p| p.items_overlay(&items, theme::rgb(t.pick_hover)));
+            s.tris.extend(h.tris);
+            s.lines.extend(h.lines);
         }
         self.pick.overlay = (Some(key), Arc::new(s));
         (key, self.pick.overlay.1.clone())

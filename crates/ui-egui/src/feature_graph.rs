@@ -279,6 +279,83 @@ pub fn describe(f: &Value) -> Feature {
     }
 }
 
+/// The feature's glyph, drawn in `rect` with lines in `line` and the part it adds or removes in
+/// `accent` (no image assets: every glyph is a few strokes).
+pub fn paint_glyph(painter: &egui::Painter, rect: egui::Rect, kind: Kind, line: egui::Color32, accent: egui::Color32) {
+    use egui::{Shape, Stroke, pos2, vec2};
+    let r = rect.shrink(rect.width() * 0.12);
+    let (w, h) = (r.width(), r.height());
+    let at = |x: f32, y: f32| pos2(r.left() + x * w, r.top() + y * h);
+    let s = Stroke::new(1.3, line);
+    let a = Stroke::new(1.5, accent);
+    let arrow = |from: egui::Pos2, to: egui::Pos2| {
+        painter.line_segment([from, to], a);
+        let d = (to - from).normalized() * (w * 0.2);
+        let n = vec2(-d.y, d.x);
+        painter.add(Shape::convex_polygon(vec![to, to - d + n * 0.8, to - d - n * 0.8], accent, Stroke::NONE));
+    };
+    match kind {
+        Kind::Extrude | Kind::Cut => {
+            painter.rect_stroke(egui::Rect::from_min_max(at(0.0, 0.62), at(1.0, 1.0)), 1.0, s, egui::StrokeKind::Inside);
+            if kind == Kind::Extrude { arrow(at(0.5, 0.62), at(0.5, 0.0)) } else { arrow(at(0.5, 0.0), at(0.5, 0.6)) }
+        }
+        Kind::Revolve => {
+            painter.circle_stroke(r.center(), w * 0.45, s);
+            arrow(at(0.15, 0.25), at(0.45, 0.05));
+        }
+        Kind::Primitive => {
+            painter.rect_stroke(egui::Rect::from_min_max(at(0.0, 0.25), at(0.75, 1.0)), 1.0, s, egui::StrokeKind::Inside);
+            painter.add(Shape::line(vec![at(0.0, 0.25), at(0.25, 0.0), at(1.0, 0.0), at(1.0, 0.75), at(0.75, 1.0)], s));
+            painter.line_segment([at(0.75, 0.25), at(1.0, 0.0)], s);
+        }
+        Kind::Hole => {
+            painter.rect_stroke(r, 1.0, s, egui::StrokeKind::Inside);
+            painter.circle_stroke(r.center(), w * 0.24, a);
+        }
+        Kind::Fillet => {
+            painter.add(Shape::line(vec![at(0.0, 1.0), at(0.0, 0.5)], s));
+            painter.add(Shape::line(vec![at(0.5, 0.0), at(1.0, 0.0)], s));
+            let arc: Vec<egui::Pos2> = (0..=8)
+                .map(|i| {
+                    let t = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+                    at(0.5 - 0.5 * t.cos(), 0.5 - 0.5 * t.sin())
+                })
+                .collect();
+            painter.add(Shape::line(arc, a));
+        }
+        Kind::Chamfer => {
+            painter.add(Shape::line(vec![at(0.0, 1.0), at(0.0, 0.45)], s));
+            painter.add(Shape::line(vec![at(0.55, 0.0), at(1.0, 0.0)], s));
+            painter.line_segment([at(0.0, 0.45), at(0.55, 0.0)], a);
+        }
+        Kind::Shell => {
+            painter.add(Shape::line(vec![at(0.0, 0.0), at(0.0, 1.0), at(1.0, 1.0), at(1.0, 0.0)], s));
+            painter.add(Shape::line(vec![at(0.25, 0.0), at(0.25, 0.75), at(0.75, 0.75), at(0.75, 0.0)], a));
+        }
+        Kind::Pattern => {
+            for (x, y) in [(0.2, 0.2), (0.8, 0.2), (0.2, 0.8), (0.8, 0.8)] {
+                painter.circle_stroke(at(x, y), w * 0.16, if (x, y) == (0.2, 0.2) { s } else { a });
+            }
+        }
+        Kind::Mirror => {
+            let mut y = 0.0;
+            while y < 1.0 {
+                painter.line_segment([at(0.5, y), at(0.5, (y + 0.12).min(1.0))], s);
+                y += 0.22;
+            }
+            painter.add(Shape::convex_polygon(vec![at(0.38, 0.15), at(0.38, 0.85), at(0.0, 0.85)], egui::Color32::TRANSPARENT, s));
+            painter.add(Shape::convex_polygon(vec![at(0.62, 0.15), at(0.62, 0.85), at(1.0, 0.85)], egui::Color32::TRANSPARENT, a));
+        }
+        Kind::Boolean => {
+            painter.circle_stroke(at(0.36, 0.5), w * 0.34, s);
+            painter.circle_stroke(at(0.64, 0.5), w * 0.34, a);
+        }
+        Kind::Other => {
+            painter.circle_filled(r.center(), w * 0.18, accent);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -65,6 +65,15 @@ pub fn summary_in(command: &str, v: &Value, units: UnitSystem) -> String {
             plural(count("boundary_conditions") as u64, "boundary condition"),
             plural(count("loads") as u64, "load")
         ),
+        "geometry.features" => {
+            let bodies = v["bodies"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let n: usize = bodies.iter().map(|b| b["features"].as_array().map_or(0, Vec::len)).sum();
+            format!(
+                "{} building {}",
+                plural(n as u64, "feature"),
+                if bodies.len() == 1 { "1 body".to_string() } else { format!("{} bodies", bodies.len()) }
+            )
+        }
         "geometry.bodies" => match v.as_array().map(Vec::len) {
             Some(0) => "no bodies (open a design first)".to_string(),
             Some(n) => plural(n as u64, "body").replace("bodys", "bodies"),
@@ -217,6 +226,10 @@ enum Act {
     Rerun,
     /// Pick a design entity in the viewport (a body, face or edge from the Bodies list).
     Pick(fieldcraft_model::GeometryRef),
+    /// Open or close a Feature Graph row's details: (body, feature id).
+    Open((String, u64)),
+    /// Select these faces in the viewport (a Feature Graph row's).
+    Faces(Vec<crate::selection::Item>),
     /// Select elements in the viewport and frame them (Mesh Quality's worst and invalid ones).
     Elements(Vec<u32>),
     /// Open Relax Nodes round an element (Mesh Quality's worst).
@@ -260,6 +273,10 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
         "geometry.bodies" => bodies(ui, t, &reply.value, &mut acts),
         "mesh.quality" => quality(ui, t, &reply.value, &mut acts),
         "geometry.defeature.propose" => defeature_list(ui, t, &reply.value, &mut acts),
+        "geometry.features" => {
+            let hovered = feature_graph(ui, t, &reply.value, &app.features_open, &mut acts);
+            app.set_feature_hover(hovered);
+        }
         _ => value(ui, t, egui::Id::new("fc_reply"), &reply.value, 0),
     }
     for a in acts {
@@ -274,6 +291,12 @@ pub fn show(app: &mut ModelApp, ui: &mut egui::Ui, t: &Tokens) {
                 let _ = app.run(&reply.command, reply.params.clone());
             }
             Act::Pick(g) => app.select([crate::selection::Item::Geometry(g)], crate::selection::Mode::Replace),
+            Act::Open(key) => {
+                if !app.features_open.remove(&key) {
+                    app.features_open.insert(key);
+                }
+            }
+            Act::Faces(items) => app.select(items, crate::selection::Mode::Replace),
             Act::Elements(labels) => app.show_elements(&labels),
             Act::Relax(element) => {
                 app.show_elements(&[element]);
@@ -365,6 +388,95 @@ fn defeature_list(ui: &mut egui::Ui, t: &Tokens, v: &Value, acts: &mut Vec<Act>)
         }
     });
     more_than(ui, t, candidates.len(), MAX_ENTITIES);
+}
+
+/// The faces of `body` named `faces`, as selection items.
+fn face_items(body: &str, faces: &[String]) -> Vec<crate::selection::Item> {
+    faces
+        .iter()
+        .take(MAX_ENTITIES)
+        .filter_map(|f| fieldcraft_model::GeometryRef::new(body, fieldcraft_model::Entity::Face(f.clone())).ok())
+        .map(crate::selection::Item::Geometry)
+        .collect()
+}
+
+/// The Feature Graph: per body, its timeline's features in order, each with its glyph, name and
+/// what it does in words; a click selects the faces it made and opens its details. Returns the
+/// faces of the row under the pointer, to highlight.
+fn feature_graph(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    v: &Value,
+    opened: &std::collections::BTreeSet<(String, u64)>,
+    acts: &mut Vec<Act>,
+) -> Vec<crate::selection::Item> {
+    use crate::feature_graph::{describe, paint_glyph};
+    let mut hovered = Vec::new();
+    let bodies = v["bodies"].as_array().map(Vec::as_slice).unwrap_or_default();
+    for (bi, b) in bodies.iter().enumerate() {
+        let body = b["body"].as_str().unwrap_or_default();
+        let nodes = b["features"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let head = RichText::new(format!("{body}  ·  {}", plural(nodes.len() as u64, "feature"))).strong();
+        egui::CollapsingHeader::new(head).id_salt(("fc_features_body", bi)).default_open(true).show(ui, |ui| {
+            for (fi, node) in nodes.iter().take(MAX_ENTITIES).enumerate() {
+                let f = describe(node);
+                let id = ui.id().with(("fc_feature", bi, fi));
+                let key = (body.to_string(), f.id);
+                let open = opened.contains(&key);
+                let bg = ui.painter().add(egui::Shape::Noop);
+                let inner = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 4)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_top(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::hover());
+                        let accent = if f.error.is_some() { t.error } else { t.accent };
+                        paint_glyph(ui.painter(), rect, f.kind, t.icon, accent);
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new(RichText::new(&f.name).strong().color(t.text)).truncate());
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(RichText::new(format!("F{}", f.id)).small().color(t.text_dim));
+                                });
+                            });
+                            ui.add(egui::Label::new(RichText::new(&f.summary).color(t.text)).wrap());
+                            if let Some(e) = &f.error {
+                                ui.add(egui::Label::new(RichText::new(e).color(t.error)).wrap());
+                            }
+                            if open {
+                                ui.add_space(2.0);
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.spacing_mut().interact_size.y = 0.0;
+                                for (k, val) in &f.details {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 6.0;
+                                        ui.label(RichText::new(k).small().color(t.text_dim));
+                                        ui.label(RichText::new(val).small());
+                                    });
+                                }
+                            }
+                        });
+                    });
+                });
+                let rect = inner.response.rect;
+                let resp = ui.interact(rect, id.with("row"), egui::Sense::click());
+                let hover_text = if f.faces.is_empty() { "Show its details" } else { "Select the faces it made; show its details" };
+                let resp = resp.on_hover_text(hover_text);
+                if resp.hovered() {
+                    ui.painter().set(bg, egui::Shape::rect_filled(rect, 3.0, t.hover));
+                    hovered = face_items(body, &f.faces);
+                } else if open {
+                    ui.painter().set(bg, egui::Shape::rect_filled(rect, 3.0, t.subheading_bg));
+                }
+                if resp.clicked() {
+                    acts.push(Act::Open(key));
+                    if !f.faces.is_empty() {
+                        acts.push(Act::Faces(face_items(body, &f.faces)));
+                    }
+                }
+            }
+            more_than(ui, t, nodes.len(), MAX_ENTITIES);
+        });
+    }
+    hovered
 }
 
 /// The definition a diagnostic's subject names (``section `web` ``), when the model has it.

@@ -32,6 +32,10 @@ pub fn panel(app: &mut ModelApp, ui: &mut egui::Ui) {
         app.pick.form_hover = false;
         app.set_hover(None);
     }
+    // A Feature Graph row hovered last frame no longer is once the graph is not shown.
+    if app.reply.as_ref().is_none_or(|r| r.command != "geometry.features") {
+        app.set_feature_hover(Vec::new());
+    }
     if !has_context(app) {
         return;
     }

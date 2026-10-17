@@ -57,7 +57,7 @@ jobs:
   plan:
     name: Plan (affected crates)
     if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name != 'pull_request' && vars.SELF_HOSTED_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -117,7 +117,7 @@ jobs:
   ci:
     name: cargo xtask ci
     needs: plan
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name != 'pull_request' && vars.SELF_HOSTED_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -149,7 +149,7 @@ jobs:
     name: cargo xtask test --heavy
     needs: plan
     if: github.event_name != 'pull_request' && (needs.plan.outputs.solver == 'true' || needs.plan.outputs.everything == 'true')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name != 'pull_request' && vars.SELF_HOSTED_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -168,7 +168,7 @@ jobs:
     name: cargo xtask oracle
     needs: plan
     if: needs.plan.outputs.solver == 'true' || needs.plan.outputs.everything == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name != 'pull_request' && vars.SELF_HOSTED_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,7 +219,7 @@ jobs:
   advisories:
     name: Dependency licences, advisories and sources
     if: github.event.schedule != '41 4 * * 0' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event_name != 'pull_request' && vars.SELF_HOSTED_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

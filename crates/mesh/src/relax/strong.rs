@@ -479,7 +479,7 @@ impl State<'_> {
 
     /// The harmonic extension over `free` of the displacements `fixed` (zero at every other
     /// node): Gauss–Seidel on the graph Laplacian of the element edges.
-    fn harmonic(&self, free: &[u32], fixed: &BTreeMap<u32, P>) -> Result<BTreeMap<u32, P>> {
+    pub(super) fn harmonic(&self, free: &[u32], fixed: &BTreeMap<u32, P>) -> Result<BTreeMap<u32, P>> {
         let mut u: BTreeMap<u32, P> = fixed.clone();
         for &n in free {
             u.insert(n, [0.0; 3]);

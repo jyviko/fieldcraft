@@ -938,7 +938,12 @@ pub fn apply_field(
     Ok(out)
 }
 
+mod moving;
 mod strong;
+pub use moving::{
+    DEFAULT_MIN_QUALITY, ElementChange, GUARD_STEPS, Guard, Influence, MIN_RELATIVE_RADIUS, Moved, Propagate, Unconstrained, centroid, move_nodes,
+    move_weights, nearest_corner,
+};
 pub use strong::{DEFAULT_REACH_LENGTHS, Guards, MAX_ROUNDS, MorphOptions, Morphed, Round, morph};
 
 #[cfg(test)]

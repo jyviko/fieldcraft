@@ -465,3 +465,139 @@ fn guarded_relaxation_keeps_the_largest_edge_ratio() {
         assert!(r.after.invalid <= r.before.invalid);
     }
 }
+
+// ---- Moving nodes by hand (`mesh.node.move`) ----
+
+/// The annulus node `(i, j, k)` of [`hex_annulus`] with `n` divisions.
+fn node_of(n: usize, i: usize, j: usize, k: usize) -> u32 {
+    (1 + i + (n + 1) * (j + (n + 1) * k)) as u32
+}
+
+fn grab(n: u32) -> BTreeSet<u32> {
+    BTreeSet::from([n])
+}
+
+/// Falloff: the grabbed node moves by all of the displacement, the nodes round it by less the
+/// farther they are, none beyond the radius; the three falloffs differ.
+#[test]
+fn a_falloff_move_carries_the_grabbed_node_and_fades_to_the_radius() {
+    let m = hex_annulus(6);
+    let h = node_of(6, 3, 3, 3);
+    let d = [0.02, -0.01, 0.015];
+    let r = 0.6;
+    let mut shares = Vec::new();
+    for falloff in [Falloff::Smooth, Falloff::Linear, Falloff::None] {
+        let inf = Influence { radius: Some(r), falloff, ..Influence::default() };
+        let w = move_weights(&m, &grab(h), &inf, &Unconstrained).unwrap();
+        assert_eq!(w.get(&h), Some(&1.0));
+        let moved = move_nodes(&m, &w, d, Guard::None, &Unconstrained).unwrap();
+        assert!(dist(moved.positions[&h], add(m.node(h).unwrap().xyz, d)) < 1e-12);
+        let p0 = m.node(h).unwrap().xyz;
+        for (n, p) in &moved.positions {
+            let old = m.node(*n).unwrap().xyz;
+            assert!(dist(old, p0) <= r + 1e-12, "node {n} beyond the radius moved");
+            assert!(dist(old, *p) <= dist([0.0; 3], d) + 1e-12);
+        }
+        assert_eq!(moved.scale, 1.0);
+        assert!(moved.elements.len() >= 8 && moved.worse + moved.better > 0);
+        shares.push(w.get(&node_of(6, 4, 3, 3)).copied().unwrap_or(0.0));
+    }
+    // Smooth (1 − t²)², linear 1 − t, none 1, at t = one element over the radius.
+    assert!(shares[0] > 0.0 && shares[0] < 1.0 && shares[1] > 0.0 && shares[1] < 1.0 && shares[2] == 1.0, "{shares:?}");
+    assert_ne!(shares[0], shares[1]);
+    // Strength scales the followers, never the grabbed node.
+    let half = Influence { radius: Some(r), strength: 0.5, falloff: Falloff::None, ..Influence::default() };
+    let w = move_weights(&m, &grab(h), &half, &Unconstrained).unwrap();
+    assert_eq!((w.get(&h), w.get(&node_of(6, 4, 3, 3))), (Some(&1.0), Some(&0.5)));
+    // A sphere without grabbed nodes is a soft selection round its centre.
+    let c = m.node(h).unwrap().xyz;
+    let w = move_weights(&m, &BTreeSet::new(), &Influence { centre: Some(c), radius: Some(r), ..Influence::default() }, &Unconstrained).unwrap();
+    assert!(w.get(&h).is_some_and(|v| (*v - 1.0).abs() < 1e-12) && w.len() > 1);
+}
+
+/// Harmonic: shares between 0 and 1, 1 at the grabbed node, falling with the graph distance,
+/// and zero beyond the radius (no node there moves).
+#[test]
+fn a_harmonic_move_is_zero_beyond_the_radius() {
+    let m = hex_annulus(8);
+    let h = node_of(8, 4, 4, 4);
+    let r = 0.45;
+    let inf = Influence { radius: Some(r), propagate: Propagate::Harmonic, ..Influence::default() };
+    let w = move_weights(&m, &grab(h), &inf, &Unconstrained).unwrap();
+    let p0 = m.node(h).unwrap().xyz;
+    assert_eq!(w.get(&h), Some(&1.0));
+    assert!(w.len() > 10);
+    for (n, s) in &w {
+        assert!(*s > 0.0 && *s <= 1.0);
+        assert!(dist(m.node(*n).unwrap().xyz, p0) <= r + 1e-12, "node {n} beyond the radius has a share");
+    }
+    let (near, far) = (w[&node_of(8, 5, 4, 4)], w.get(&node_of(8, 6, 4, 4)).copied().unwrap_or(0.0));
+    assert!(near < 1.0 && far < near, "{near} {far}");
+    let moved = move_nodes(&m, &w, [0.0, 0.0, 0.03], Guard::default(), &Unconstrained).unwrap();
+    assert!(moved.positions.keys().all(|n| w.contains_key(n)));
+    assert_eq!(moved.after.invalid, 0);
+}
+
+/// On the geometry: a node on the outer cylinder stays on it, a node on an edge of two faces
+/// stays on both, a vertex is held; followers on the faces stay on theirs.
+#[test]
+fn a_move_on_the_geometry_slides_on_faces_and_edges_and_holds_vertices() {
+    let n = 6;
+    let m = hex_annulus(n);
+    let geo = Geo { model: m.clone() };
+    let d = [0.05, 0.05, 0.05];
+    let inf = Influence { radius: Some(0.5), ..Influence::default() };
+    for h in [node_of(n, n, 3, 3), node_of(n, n, 3, 0), node_of(n, n, 0, 0)] {
+        let w = move_weights(&m, &grab(h), &inf, &geo).unwrap();
+        let moved = move_nodes(&m, &w, d, Guard::default(), &geo).unwrap();
+        for (k, p) in &moved.positions {
+            let faces = Annulus::faces(m.node(*k).unwrap().xyz);
+            assert!(faces.len() < 3, "vertex {k} moved");
+            assert!(Annulus::on(*p, &faces), "node {k} left its faces {faces:?}");
+        }
+        let moved_handle = moved.positions.contains_key(&h);
+        assert_eq!(moved_handle, Annulus::faces(m.node(h).unwrap().xyz).len() < 3, "node {h}");
+    }
+}
+
+/// The guard scales a move that would invert elements back to the largest that inverts none.
+#[test]
+fn the_guard_scales_a_move_back_until_nothing_inverts() {
+    let m = hex_annulus(6);
+    let h = node_of(6, 3, 3, 3);
+    let w = move_weights(&m, &grab(h), &Influence::default(), &Unconstrained).unwrap();
+    assert_eq!(w.len(), 1);
+    let d = [0.6, 0.0, 0.0];
+    let wild = move_nodes(&m, &w, d, Guard::None, &Unconstrained).unwrap();
+    assert!(wild.after.invalid > 0 && wild.scale == 1.0);
+    let guarded = move_nodes(&m, &w, d, Guard::default(), &Unconstrained).unwrap();
+    assert_eq!(guarded.after.invalid, 0);
+    assert!(guarded.scale > 0.05 && guarded.scale < 1.0, "{}", guarded.scale);
+    assert!(guarded.worse > 0 && guarded.after.min_quality < guarded.before.min_quality);
+    assert!(guarded.after.min_quality >= DEFAULT_MIN_QUALITY, "the guard stops short of a degenerate element");
+    let p = guarded.positions[&h];
+    assert!((p[0] - m.node(h).unwrap().xyz[0] - 0.6 * guarded.scale).abs() < 1e-12);
+}
+
+#[test]
+fn hostile_move_parameters_are_refused() {
+    let m = hex_annulus(3);
+    let h = grab(node_of(3, 1, 1, 1));
+    let bad = |inf: Influence| move_weights(&m, &h, &inf, &Unconstrained).is_err();
+    assert!(bad(Influence { strength: 0.0, ..Influence::default() }));
+    assert!(bad(Influence { strength: f64::NAN, ..Influence::default() }));
+    assert!(bad(Influence { radius: Some(-1.0), ..Influence::default() }));
+    assert!(bad(Influence { radius: Some(f64::INFINITY), ..Influence::default() }));
+    assert!(bad(Influence { centre: Some([f64::NAN, 0.0, 0.0]), radius: Some(1.0), ..Influence::default() }));
+    assert!(bad(Influence { propagate: Propagate::Harmonic, ..Influence::default() }));
+    let w = move_weights(&m, &h, &Influence::default(), &Unconstrained).unwrap();
+    assert!(move_nodes(&m, &w, [f64::NAN, 0.0, 0.0], Guard::None, &Unconstrained).is_err());
+    assert!(move_nodes(&m, &w, [1e300, 0.0, 0.0], Guard::None, &Unconstrained).is_err());
+    assert!(move_nodes(&m, &BTreeMap::from([(1, 2.0)]), [0.0; 3], Guard::None, &Unconstrained).is_err());
+    assert!(move_nodes(&m, &w, [0.1; 3], Guard::NoInversion { min_quality: 1.5 }, &Unconstrained).is_err());
+    // A radius too small for the mesh is refused, never an overflow of the search grid.
+    assert!(bad(Influence { radius: Some(1e-300), ..Influence::default() }));
+    assert!(bad(Influence { centre: Some([-1e300, -1e300, 0.0]), radius: Some(1e-300), ..Influence::default() }));
+    let near = |r: f64| moving::nearest_within(&[[-1e300, 0.0, 0.0]], &BTreeMap::from([(1, [1e300, 0.0, 0.0])]), r);
+    assert!(near(1e-300).is_empty() && near(1.0).is_empty());
+}

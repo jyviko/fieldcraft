@@ -454,6 +454,8 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
     let edge_c = |e: [u32; 2]| Constraint::of(&as_vec(edge_on.get(&e)));
 
     // 1. Vertices.
+    fieldcraft_model::progress::stage("Projection: block vertices", None, "");
+    fieldcraft_model::progress::check()?;
     let mut vpos: Vec<P> = t.vertices.clone();
     for (v, p) in vpos.iter_mut().enumerate() {
         *p = place(g, &targets, vertex_c(v as u32), *p, tol);
@@ -697,6 +699,8 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
         }
     }
     // 3. Edge nodes: even by arc length along their curve or surface.
+    fieldcraft_model::progress::stage("Projection: edge nodes", None, "");
+    fieldcraft_model::progress::check()?;
     for (b, block) in t.blocks.iter().enumerate() {
         let nd = lat.divisions[b];
         let bn = &lat.block_nodes[b];
@@ -740,6 +744,8 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
         }
     }
     // 4. Faces (projected when outside), then 5. the interior.
+    fieldcraft_model::progress::stage("Projection: faces and interior", None, "");
+    fieldcraft_model::progress::check()?;
     for (b, block) in t.blocks.iter().enumerate() {
         let nd = lat.divisions[b];
         let bn = &lat.block_nodes[b];
@@ -798,6 +804,8 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
     }
     // Nodes on a sheet slide along it among their neighbours on it, as boundary nodes do.
     let boundary_quads: Vec<[u32; 4]> = quads.iter().map(|q| q.0).chain(sheet_quads).collect();
+    fieldcraft_model::progress::stage("Projection: smoothing", None, "");
+    fieldcraft_model::progress::check()?;
     let smoothing = smooth::smooth(
         smooth::Mesh { nodes: &mut nodes, hexes: &lat.hexes, constraint: &constraint, held: &held, boundary: &boundary_quads },
         g,
@@ -807,6 +815,7 @@ pub fn project_mesh(t: &Topology, surface: &BoundarySurface, g: &dyn Geometry, o
         1e-4 * opts.size,
     );
 
+    fieldcraft_model::progress::check()?;
     // Certified quality, the gap to the geometry and the tags.
     let (mut min_sj, mut sum_sj, mut volume) = (f64::INFINITY, 0.0, 0.0);
     let mut invalid: Vec<usize> = Vec::new();

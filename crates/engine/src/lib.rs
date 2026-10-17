@@ -86,6 +86,7 @@ impl EngineError {
         matches!(
             self,
             EngineError::Model(Cancelled)
+                | EngineError::Geometry(fieldcraft_geometry::Error::Model(Cancelled))
                 | EngineError::Mesh(fieldcraft_mesh::Error::Model(Cancelled))
                 | EngineError::Solver(fieldcraft_solver::Error::Model(Cancelled))
                 | EngineError::Explicit(fieldcraft_explicit::Error::Model(Cancelled))

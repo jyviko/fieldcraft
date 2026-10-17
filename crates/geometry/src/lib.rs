@@ -46,6 +46,9 @@ pub enum Error {
     Invalid(String),
     #[error("the geometry operation failed: {0}")]
     Failed(String),
+    /// From the model layer: a cancelled job ([`fieldcraft_model::progress::check`]).
+    #[error(transparent)]
+    Model(#[from] fieldcraft_model::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

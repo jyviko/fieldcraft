@@ -103,7 +103,12 @@ impl Design {
         let mut bodies: Vec<Shape> = self.source.as_ref().clone();
         let mut errors: Vec<FeatureError> = self.errors.iter().filter(|e| !crate::virtual_faces::derived(&e.feature)).cloned().collect();
         let mut reports = Vec::with_capacity(cuts.len());
-        for (cut, (plane, n)) in cuts.iter().zip(&planes) {
+        // Each cut is a kernel boolean per body it reaches, seconds each on a large part: the
+        // job's progress counts them, and a cancelled job stops between them.
+        fieldcraft_model::progress::stage("Partition cuts", Some(cuts.len() as f64), "cuts");
+        for (k, (cut, (plane, n))) in cuts.iter().zip(&planes).enumerate() {
+            fieldcraft_model::progress::count(k as f64);
+            fieldcraft_model::progress::check()?;
             let feature = format!("partition {}", cut.name);
             // A listed name is the body of that name, or the cells earlier partitions cut it into.
             let names = |name: &str, b: &str| name == b || name.strip_prefix(b).is_some_and(|rest| rest.starts_with('/'));
@@ -122,6 +127,7 @@ impl Design {
                     next.push(body);
                     continue;
                 }
+                fieldcraft_model::progress::check()?;
                 match split(&body, plane, *n, cut)? {
                     Split::Cells(cells, faces, warnings) => {
                         for &i in &listed {

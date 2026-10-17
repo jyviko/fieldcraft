@@ -3,7 +3,7 @@
  "kind": "benchmark",
  "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20, Fig. 6 (p. 8), Table 3 (p. 10)",
  "status": "pending",
- "requires": "shell elements (M8) or mapped blocks with helical edges",
+ "requires": "a helical shell mesh: mesh.block's 2D form is planar and takes z = 0, so the twisted strip must be written node by node (as scordelis-lo-roof-shell and pinched-cylinder are), or mapped blocks must gain helical edges",
  "quantities": [
   {
    "id": "in_plane",

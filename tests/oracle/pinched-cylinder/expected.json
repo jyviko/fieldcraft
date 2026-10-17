@@ -2,13 +2,29 @@
  "title": "Pinched cylinder with rigid diaphragms",
  "kind": "benchmark",
  "source": "Belytschko, Stolarski, Liu, Carpenter and Ong, 'Stress projection for membrane and shear locking in shell finite elements', Computer Methods in Applied Mechanics and Engineering 51 (1985) 221–258 (the shell obstacle course); reference 1.8248 × 10⁻⁵ under the load",
- "status": "pending",
- "requires": "shell elements (M8)",
  "quantities": [
   {
    "id": "u",
-   "quantity": "radial displacement under the load",
-   "value": -1.8248e-05
+   "quantity": "radial displacement under the load, mid-surface",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       0,
+       0,
+       300
+       ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": -1.8248e-05,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "a fixed-mesh comparison at the conventional 32 × 32 eighth mesh, the mesh the solver's own in-code benchmark uses: the reference is the thin-shell value Belytschko et al. quote to four figures (1.8248 × 10⁻⁵), while the deflection under a point load has no mesh-converged limit in a Reissner–Mindlin (MITC4) shell, whose transverse shear force is unbounded at the load, so the value keeps rising with refinement (8 × 8, 16 × 16, 24 × 24, 32 × 32, 48 × 48 and 64 × 64 give 1.3559, 1.6942, 1.7735, 1.8038, 1.8275 and 1.8369 × 10⁻⁵, crossing the reference between 32 × 32 and 48 × 48 and staying above it); 2% is the margin the in-code benchmark gates 32 × 32 with, applied here to the same mesh (crates/solver/tests/benchmarks.rs, README)"
   }
  ]
 }

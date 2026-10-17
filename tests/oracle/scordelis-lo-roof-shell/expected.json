@@ -2,13 +2,29 @@
  "title": "Scordelis–Lo roof with shell elements",
  "kind": "benchmark",
  "source": "MacNeal and Harder, 'A proposed standard set of problems to test finite element accuracy', Finite Elements in Analysis and Design 1 (1985) 3–20, Fig. 8 (p. 8), Table 5(a) (p. 11); Belytschko, Stolarski, Liu, Carpenter and Ong, 'Stress projection for membrane and shear locking in shell finite elements', Computer Methods in Applied Mechanics and Engineering 51 (1985) 221–258 (the shell obstacle course)",
- "status": "pending",
- "requires": "shell elements (MITC4, M8)",
  "quantities": [
   {
    "id": "uz",
-   "quantity": "vertical displacement at the midpoint of the free edge",
-   "value": -0.3024
+   "quantity": "vertical displacement at the midpoint of the free edge, mid-surface",
+   "measure": {
+    "command": "solve.probe",
+    "params": {
+     "step": "Load",
+     "at": [
+      [
+       0,
+       16.069690242163,
+       19.151111077974
+      ]
+     ]
+    },
+    "pointer": "/nodes/0/displacement/2"
+   },
+   "value": -0.3024,
+   "tolerance": {
+    "relative": 0.02
+   },
+   "reason": "MacNeal and Harder grade a thin-shell element within 2% of the theoretical value on a prescribed coarse mesh, the grading the sibling case scordelis-lo-roof-solid records (p. 14); this case uses 16 × 16, the mesh the solver's in-code gate test uses, and the flat MITC4 shell converges from below to the reference: 4 × 4, 8 × 8, 16 × 16, 32 × 32, 64 × 64 and 128 × 128 give 0.28459, 0.29401, 0.29901, 0.30060, 0.30118 and 0.30143, so 16 × 16 is 1.12% low and the mesh error shrinks monotonically inside the tolerance (README)"
   }
  ]
 }

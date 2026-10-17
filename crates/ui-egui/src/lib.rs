@@ -30,6 +30,7 @@ pub mod context;
 pub mod control;
 pub mod describe;
 pub mod elide;
+pub mod feature_graph;
 pub mod fields;
 pub mod files;
 pub mod form;

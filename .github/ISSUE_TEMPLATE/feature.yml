@@ -22,6 +22,11 @@ body:
       label: Expected behaviour
       description: What FieldCraft should do, as precisely as you can.
   - type: textarea
+    id: pictures
+    attributes:
+      label: Pictures
+      description: A screenshot of where it would go, a sketch, or a picture of the result you are after. Drag images in here.
+  - type: textarea
     id: reference
     attributes:
       label: References

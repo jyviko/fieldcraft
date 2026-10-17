@@ -24,7 +24,8 @@ body:
     id: evidence
     attributes:
       label: Evidence
-      description: Screenshots, log output, numbers. For a crash, attach the crash report (`fieldcraft-cli crashes`, then `crashes show <id>`).
+      description: |
+        Pictures first: for anything you can see (the view, a mesh, a panel, a plot), drag a screenshot or a short screen recording in here, and mark the problem on it. For a mesh, a section through it (`fieldcraft-cli snapshot … --section`) shows what the outside hides. Then log output and numbers. For a crash, attach the crash report (`fieldcraft-cli crashes`, then `crashes show <id>`).
   - type: textarea
     id: expected
     attributes:

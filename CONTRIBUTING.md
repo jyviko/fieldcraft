@@ -68,6 +68,13 @@ Every change starts from an issue, and only the maintainer merges.
 
 Issues labelled **in progress** are being worked on by the core team; please don't start on them.
 
+## Reporting a problem or an idea
+
+Use the templates under **New issue**. Show it: for anything you can see — the view, a mesh, a
+panel, a plot — add a screenshot or a short screen recording (drag it into the issue) and mark
+the problem on it. For a mesh, a section (`fieldcraft-cli snapshot … --section`) shows what the
+outside hides. A picture is often the fastest way for someone else to see what you see.
+
 ## Making the change
 
 1. Branch from `develop` (the trunk; `main` holds released code only) and open the pull request
@@ -78,7 +85,9 @@ Issues labelled **in progress** are being worked on by the core team; please don
 3. User-visible behaviour is a command (`crates/engine/src/cmd/`) with tests, including hostile
    parameters.
 4. Meshing and solver algorithms cite the paper they come from in the module docs.
-5. Never contribute code, text or data from GPL-family projects or commercial CAE products
+5. A change you can see (the view, meshes, panels, results, icons) shows a picture before and after
+   in the pull request.
+6. Never contribute code, text or data from GPL-family projects or commercial CAE products
    (see [docs/adr/0001-libraries.md](docs/adr/0001-libraries.md)).
 
 By contributing you agree your work is licensed under MIT OR Apache-2.0.

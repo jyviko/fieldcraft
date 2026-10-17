@@ -1614,7 +1614,7 @@ impl ModelApp {
         let cut = self.partition_preview();
         let merge = self.merge_preview();
         let relax_key = self.dialog.as_ref().filter(|d| d.command == "mesh.node.relax").map(|d| d.text.clone());
-        let move_key = self.dialog.as_ref().filter(|d| d.command == node_move::COMMAND).map(|d| d.text.clone());
+        let move_key = self.dialog.as_ref().filter(|d| d.command == node_move::COMMAND).map(|d| (d.text.clone(), self.node_move_pending()));
         let selected = hash(&|h| (scene, self.pick.generation, &set, &cut, &*merge, &relax_key, &move_key).hash(h));
         let key = hash(&|h| (selected, self.pick.hover_generation).hash(h));
         if self.pick.overlay.0 == Some(key) {
@@ -2606,6 +2606,12 @@ mod tests {
             !overlay.fills.is_empty() && !overlay.lines.is_empty() && !overlay.on_top.is_empty(),
             "sphere, ghost and moved edges, the grabbed node"
         );
+        // A changed radius waits out the debounce (the sphere drawn meanwhile), then prepares.
+        assert!(app.node_move_scale_radius(1.5));
+        let waiting = app.node_move_preview().unwrap();
+        assert!(app.node_move_pending() && waiting.moved.is_none() && waiting.sphere.is_some());
+        app.now += node_move::DEBOUNCE * 2.0;
+        assert!(app.node_move_preview().unwrap().moved.is_some() && !app.node_move_pending());
         // Esc during a drag: nothing moves, the form stays.
         let start = app.session.model.clone();
         app.node_drag = Some(node_move::Drag { start: Vec3::new(2.0, 2.0, 2.0), normal: Vec3::Z });

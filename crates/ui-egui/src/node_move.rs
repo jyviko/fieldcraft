@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use fieldcraft_engine::cmd::{NodeMovePrepared, NodeMoved};
+use fieldcraft_engine::cmd::{NodeMoveCapped, NodeMovePrepared, NodeMoved};
 use fieldcraft_render::{Scene, SceneLine, Vec3};
 use serde_json::{Value, json};
 
@@ -25,8 +25,25 @@ use crate::{ModelApp, scene};
 /// The command the tool runs.
 pub const COMMAND: &str = "mesh.node.move";
 
-/// Most nodes a live preview moves: a larger region is moved on release only.
-pub const PREVIEW_NODES: usize = 20_000;
+/// Most nodes a live preview moves: a larger region is moved on release only. On the crank arm's
+/// hex20 mesh (8264 elements) a region of 492 nodes prepares in 20 ms (falloff) to 27 ms
+/// (harmonic) and draws a frame in 12 to 52 ms; one of 4051 nodes takes 0.8 s to prepare
+/// harmonically and 0.3 s a frame, too slow to follow the pointer.
+pub const PREVIEW_NODES: usize = 1_000;
+
+/// How long the form must stay the same (seconds) before a changed move is prepared again: Alt +
+/// scroll changes the radius every frame, and preparing (the design's faces, the harmonic
+/// solve) takes longer than a frame on a big region.
+pub const DEBOUNCE: f64 = 0.15;
+
+/// The prepared part of the move.
+#[derive(Clone)]
+enum Prep {
+    Ready(Arc<NodeMovePrepared>),
+    /// More than [`PREVIEW_NODES`] would follow: not prepared, applied on release only.
+    TooLarge(usize),
+    Failed(String),
+}
 
 /// A drag of the Move Nodes tool in progress.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,7 +58,10 @@ pub struct Drag {
 #[derive(Default)]
 pub struct Cache {
     /// The move up to its displacement, by model revision and form text without `by` and `to`.
-    prepared: Option<((u64, String), Result<Arc<NodeMovePrepared>, String>)>,
+    prepared: Option<((u64, String), Prep)>,
+    /// The form (without the displacement) last seen and when (app time): a change waits
+    /// [`DEBOUNCE`] before it is prepared again.
+    seen: Option<((u64, String), f64)>,
     /// The move itself, by model revision and form text.
     preview: Option<((u64, String), Option<Arc<Preview>>)>,
 }
@@ -98,18 +118,70 @@ impl ModelApp {
         }
     }
 
-    /// The open form's move up to its displacement (cached by form and revision).
-    fn move_prepared(&self, params: &Value) -> Result<Arc<NodeMovePrepared>, String> {
+    /// The open form's move up to its displacement, cached by form and revision; `None` while a
+    /// changed form waits out [`DEBOUNCE`] (the last one is kept meanwhile, never prepared on
+    /// every frame of an Alt + scroll).
+    fn move_prepared(&self, params: &Value) -> Option<Prep> {
         let key = (self.revision, without_displacement(params));
         let mut cache = self.node_move.borrow_mut();
         if let Some((k, p)) = &cache.prepared
             && *k == key
         {
-            return p.clone();
+            return Some(p.clone());
         }
-        let p = fieldcraft_engine::cmd::node_move_prepare(&self.session, params).map(Arc::new).map_err(|e| e.to_string());
+        if cache.prepared.is_some() {
+            match &cache.seen {
+                Some((k, at)) if *k == key => {
+                    if self.now - at < DEBOUNCE {
+                        return None;
+                    }
+                }
+                _ => {
+                    cache.seen = Some((key, self.now));
+                    return None;
+                }
+            }
+        }
+        let p = match fieldcraft_engine::cmd::node_move_prepare_capped(&self.session, params, Some(PREVIEW_NODES)) {
+            Ok(NodeMoveCapped::Ready(p)) => Prep::Ready(Arc::from(p)),
+            Ok(NodeMoveCapped::TooLarge(n)) => Prep::TooLarge(n),
+            Err(e) => Prep::Failed(e.to_string()),
+        };
         cache.prepared = Some((key, p.clone()));
-        p
+        cache.seen = None;
+        Some(p)
+    }
+
+    /// Whether a changed Move Nodes form waits to be prepared (the view draws again after
+    /// [`DEBOUNCE`]).
+    pub fn node_move_pending(&self) -> bool {
+        self.node_move.borrow().seen.is_some()
+    }
+
+    /// The sphere the form describes, without preparing the move: its centre, or the listed
+    /// nodes' centroid, and its radius.
+    fn quick_sphere(&self, params: &Value) -> Option<([f64; 3], f64)> {
+        let r = params.get("radius").and_then(Value::as_f64).filter(|r| *r > 0.0 && r.is_finite())?;
+        let xyz = |v: &Value| -> Option<[f64; 3]> {
+            let a = v.as_array()?;
+            Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?])
+        };
+        if let Some(c) = params.get("center").and_then(xyz) {
+            return Some((c, r));
+        }
+        let pts: Vec<[f64; 3]> = params
+            .get("nodes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n.as_u64().and_then(|n| u32::try_from(n).ok()))
+            .filter_map(|n| self.session.model.node(n).map(|p| p.xyz))
+            .collect();
+        if pts.is_empty() {
+            return None;
+        }
+        let k = 1.0 / pts.len() as f64;
+        Some((pts.iter().fold([0.0; 3], |a, p| [a[0] + p[0] * k, a[1] + p[1] * k, a[2] + p[2] * k]), r))
     }
 
     /// What the open Move Nodes form would do, worked out once per form text and model revision.
@@ -121,20 +193,29 @@ impl ModelApp {
         {
             return p.clone();
         }
-        let params = serde_json::from_str::<Value>(&d.text).ok();
-        let preview = params.and_then(|params| {
-            let prep = self.move_prepared(&params).ok()?;
-            let mut out = Preview { sphere: prep.sphere, nodes: prep.nodes(), moved: None, note: None };
-            if prep.nodes() > PREVIEW_NODES {
-                out.note = Some(format!("{} nodes follow: too many for a live preview; the move applies on release", prep.nodes()));
-            } else {
-                match prep.displacement(&params).and_then(|d| prep.preview(&self.session, d)) {
+        let params = serde_json::from_str::<Value>(&d.text).ok()?;
+        let Some(prep) = self.move_prepared(&params) else {
+            // Waiting out the debounce: the sphere as the form has it, nothing cached.
+            return Some(Arc::new(Preview { sphere: self.quick_sphere(&params), nodes: 0, moved: None, note: Some("Preview: updating…".into()) }));
+        };
+        let preview = match prep {
+            Prep::Failed(e) => Some(Preview { sphere: self.quick_sphere(&params), nodes: 0, moved: None, note: Some(e) }),
+            Prep::TooLarge(n) => Some(Preview {
+                sphere: self.quick_sphere(&params),
+                nodes: n,
+                moved: None,
+                note: Some(format!("{n} nodes follow: too many for a live preview (over {PREVIEW_NODES}); the move applies on release")),
+            }),
+            Prep::Ready(prep) => {
+                let mut out = Preview { sphere: prep.sphere, nodes: prep.nodes(), moved: None, note: None };
+                match prep.displacement(&params).and_then(|d| prep.preview_live(&self.session, d)) {
                     Ok(m) => out.moved = Some(m),
                     Err(e) => out.note = Some(e.to_string()),
                 }
+                Some(out)
             }
-            Some(Arc::new(out))
-        });
+        }
+        .map(Arc::new);
         self.node_move.borrow_mut().preview = Some((key, preview.clone()));
         preview
     }

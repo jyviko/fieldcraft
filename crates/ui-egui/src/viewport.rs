@@ -184,6 +184,14 @@ fn node_drag(app: &mut ModelApp, ui: &egui::Ui, response: &egui::Response, boxin
     {
         app.node_move_grab(at);
     }
+    // A changed form is prepared once it settles (here, before the overlay is drawn): draw
+    // again then.
+    if app.moving_nodes() {
+        app.node_move_preview();
+    }
+    if app.node_move_pending() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::node_move::DEBOUNCE));
+    }
     if app.node_drag.is_none() {
         return;
     }

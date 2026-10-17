@@ -140,6 +140,10 @@ pub struct TetQuality {
     pub max_dihedral: f64,
     pub min_radius_ratio: f64,
     pub mean_radius_ratio: f64,
+    /// The smallest scaled Jacobian at the worst corner (as `mesh.quality` reports it). The
+    /// dihedral range does not bound it: a needle has every dihedral angle near 60° or 90° and a
+    /// nearly flat corner (#547).
+    pub min_scaled_jacobian: f64,
     /// Tetrahedra with a dihedral angle below 10° or above 170°.
     pub slivers: usize,
     /// Tetrahedra not admissible by FieldCraft's validity criterion.
@@ -149,7 +153,7 @@ pub struct TetQuality {
 /// The quality of tetrahedra given by corner coordinates, with the metrics `mesh.quality`
 /// reports ([`crate::quality::element_quality`]).
 pub fn tet_quality_stats(points: &[[f64; 3]], tets: &[[u32; 4]]) -> Result<TetQuality> {
-    let mut s = TetQuality { min_dihedral: 180.0, min_radius_ratio: 1.0, ..TetQuality::default() };
+    let mut s = TetQuality { min_dihedral: 180.0, min_radius_ratio: 1.0, min_scaled_jacobian: 1.0, ..TetQuality::default() };
     let mut sum = 0.0;
     for t in tets {
         let p = |v: u32| points.get(v as usize).copied().ok_or_else(|| Error::Failed("quality: vertex id".into()));
@@ -159,6 +163,7 @@ pub fn tet_quality_stats(points: &[[f64; 3]], tets: &[[u32; 4]]) -> Result<TetQu
         s.min_dihedral = s.min_dihedral.min(lo);
         s.max_dihedral = s.max_dihedral.max(hi);
         s.min_radius_ratio = s.min_radius_ratio.min(rr);
+        s.min_scaled_jacobian = s.min_scaled_jacobian.min(m(Metric::ScaledJacobian));
         sum += rr;
         s.slivers += usize::from(!(lo >= 10.0 && hi <= 170.0));
         s.inadmissible += usize::from(q.validity() != Some(Validity::Valid));
@@ -167,6 +172,7 @@ pub fn tet_quality_stats(points: &[[f64; 3]], tets: &[[u32; 4]]) -> Result<TetQu
     if tets.is_empty() {
         s.min_dihedral = 0.0;
         s.min_radius_ratio = 0.0;
+        s.min_scaled_jacobian = 0.0;
     } else {
         s.mean_radius_ratio = sum / tets.len() as f64;
     }

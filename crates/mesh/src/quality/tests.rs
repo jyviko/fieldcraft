@@ -44,6 +44,43 @@ fn regular_tetrahedron_scores_one() {
     }
 }
 
+/// The dihedral angles and the scaled Jacobian measure different things on the same corners
+/// (#547): a flat tetrahedron is low on both; a needle has every dihedral angle between 60° and
+/// 90° but a nearly flat apex corner, so only the scaled Jacobian sees it. A tet10 with straight
+/// edges scores what its corners score, and the tet mesher's report reads the same numbers.
+#[test]
+fn dihedral_angles_and_scaled_jacobian_on_the_same_tetrahedra() {
+    let both = |p: &[[f64; 3]]| {
+        let q = element_quality(ElementKind::Tet4, p).unwrap();
+        (metric(&q, Metric::MinDihedral), metric(&q, Metric::MaxDihedral), metric(&q, Metric::ScaledJacobian))
+    };
+    let (lo, hi, sj) = both(&regular_tet());
+    assert!((lo - 70.528_779).abs() < 1e-5 && (hi - lo).abs() < 1e-9 && close(sj, 1.0), "{lo} {hi} {sj}");
+
+    let flat = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [1., 1., 0.01]];
+    let (lo, hi, sj) = both(&flat);
+    assert!(lo < 2.0 && hi > 178.0 && sj > 0.0 && sj < 0.02, "{lo} {hi} {sj}");
+
+    // Equilateral base of side 1, apex 12 above its centre.
+    let h = 3.0_f64.sqrt() / 2.0;
+    let needle = [[0., 0., 0.], [1., 0., 0.], [0.5, h, 0.], [0.5, h / 3.0, 12.0]];
+    let (lo, hi, sj) = both(&needle);
+    assert!(lo > 59.0 && hi < 91.0, "{lo} {hi}");
+    // Apex corner: 6V = (√3/2)·12, edges √(1/3 + 144) each.
+    let edge = (1.0 / 3.0 + 144.0_f64).sqrt();
+    assert!(close(sj, 2.0_f64.sqrt() * h * 12.0 / edge.powi(3)), "{sj}");
+    assert!(sj < 0.01);
+
+    for p in [regular_tet(), flat, needle] {
+        let tet10 = element_quality(ElementKind::Tet10, &midpoints(&p, &jacobian::TET_EDGES)).unwrap();
+        let (lo, hi, sj) = both(&p);
+        assert!(close(metric(&tet10, Metric::MinDihedral), lo) && close(metric(&tet10, Metric::MaxDihedral), hi));
+        assert!(close(metric(&tet10, Metric::ScaledJacobian), sj));
+        let r = crate::tet::tet_quality_stats(&p, &[[0, 1, 2, 3]]).unwrap();
+        assert!(close(r.min_dihedral, lo) && close(r.max_dihedral, hi) && close(r.min_scaled_jacobian, sj), "{r:?}");
+    }
+}
+
 #[test]
 fn right_corner_tetrahedron() {
     let q = element_quality(ElementKind::Tet4, &RIGHT_TET).unwrap();

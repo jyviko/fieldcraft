@@ -250,6 +250,7 @@ pub(super) fn quality_json(q: &TetQuality) -> Value {
         "max_dihedral": q.max_dihedral,
         "min_radius_ratio": q.min_radius_ratio,
         "mean_radius_ratio": q.mean_radius_ratio,
+        "min_scaled_jacobian": q.min_scaled_jacobian,
         "slivers": q.slivers,
         "inadmissible": q.inadmissible,
     })

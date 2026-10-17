@@ -437,6 +437,13 @@ pub static CATALOGUE: &[Capability] = &[
         "Relax the nodes inside a sphere to fix spikes and slivers; surface nodes slide on the geometry; kept as a field to apply again after a remesh",
         &["mesh.node.relax.apply"],
     ),
+    ready(
+        "mesh.node.move",
+        "Move Nodes",
+        Mesh,
+        "Improve",
+        "Drag nodes of the mesh, the nodes round them following by a falloff or harmonically, on the geometry; the original drawn as a ghost and the elements coloured by how their quality changes",
+    ),
     ready_more("mesh.node.add", "Node", Mesh, "Edit", "Add a node", &["mesh.node.remove"]),
     ready_more("mesh.element.add", "Element", Mesh, "Edit", "Add an element on existing nodes", &["mesh.element.remove", "mesh.clear"]),
     ready("mesh.mirror", "Mirror Mesh", Mesh, "Edit", "Mirror a body's mesh across a plane, joined on the plane (mesh half a symmetric part)"),

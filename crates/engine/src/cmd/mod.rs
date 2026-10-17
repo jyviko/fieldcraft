@@ -18,12 +18,15 @@ pub(crate) mod mesh;
 
 pub use datum::edit_params as datum_edit_params;
 pub use datum::preview as datum_preview;
+pub use fieldcraft_mesh::relax::{ElementChange, Moved as NodeMoved};
 pub use mesh::analytic_surfaces;
+pub use node_move::{Prepared as NodeMovePrepared, nearest_node as node_move_nearest, prepare as node_move_prepare};
 pub use nodes::merge_preview as node_merge_preview;
 pub use plan::untagged_faces;
 pub use relax::{Preview as RelaxPreview, preview as relax_preview, sphere as relax_sphere};
 mod mirror;
 mod model;
+pub(crate) mod node_move;
 pub(crate) mod nodes;
 pub(crate) mod octree;
 pub(crate) mod plan;
@@ -121,6 +124,7 @@ pub static ALL: &[CommandSpec] = &[
     nodes::RENUMBER,
     relax::RELAX,
     relax::APPLY,
+    node_move::MOVE,
     tags::TAG,
     tags::TAG_CLEAR,
     model::UNITS,

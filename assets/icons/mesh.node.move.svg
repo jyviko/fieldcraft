@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <title>mesh.node.move</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M4 4 L20 4 L20 20 L4 20 Z" fill="none" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 4 L12 20 M4 12 L20 12" fill="none" stroke="#dde2ea" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1.5 1.5"/>
+    <path d="M12 4 L16 8.5 M20 12 L16 8.5 M4 12 L16 8.5 M12 20 L16 8.5" fill="none" stroke="#dde2ea" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M10.7 12 C10.7 11.282 11.282 10.7 12 10.7 C12.718 10.7 13.3 11.282 13.3 12 C13.3 12.718 12.718 13.3 12 13.3 C11.282 13.3 10.7 12.718 10.7 12 Z" fill="none" stroke="#dde2ea" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M13.6 8.5 C13.6 7.175 14.675 6.1 16 6.1 C17.325 6.1 18.4 7.175 18.4 8.5 C18.4 9.825 17.325 10.9 16 10.9 C14.675 10.9 13.6 9.825 13.6 8.5 Z" fill="#4f9ce8" stroke="#4f9ce8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

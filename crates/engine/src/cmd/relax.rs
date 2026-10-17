@@ -61,7 +61,7 @@ const REMESH: &[&str] = &[
 const DEFAULT_ITERATIONS: usize = 5;
 
 /// The region's quality as JSON.
-fn quality_json(q: &RegionQuality) -> Value {
+pub(crate) fn quality_json(q: &RegionQuality) -> Value {
     json!({
         "elements": q.elements,
         "min_scaled_jacobian": q.min_quality,
@@ -155,7 +155,7 @@ fn same_surface(a: &AnalyticSurface, b: &AnalyticSurface, tol: f64) -> bool {
 }
 
 /// The design's geometry as relaxation constraints.
-struct DesignGeometry {
+pub(crate) struct DesignGeometry {
     /// Per body: its tessellation with exact surfaces.
     bodies: Vec<Tessellation>,
     /// Face ids: (body, B-rep face).
@@ -180,7 +180,7 @@ impl Constraints for DesignGeometry {
 }
 
 /// The constraints of `nodes` from the mesh's tags and the open design.
-fn design_geometry(s: &Session, nodes: &BTreeSet<u32>) -> Result<DesignGeometry> {
+pub(crate) fn design_geometry(s: &Session, nodes: &BTreeSet<u32>) -> Result<DesignGeometry> {
     let tags = node_tags(&s.model, nodes);
     let mut g = DesignGeometry { bodies: Vec::new(), faces: Vec::new(), curves: Vec::new(), freedom: BTreeMap::new() };
     // Body name → (index into `g.bodies`, its exact surfaces), built when first needed.
@@ -298,7 +298,7 @@ fn body_nodes(model: &Model, p: &Value) -> Result<Option<(Vec<String>, BTreeSet<
     Ok(Some((bodies, nodes)))
 }
 
-fn point(p: &Value, key: &str) -> Result<Option<[f64; 3]>> {
+pub(crate) fn point(p: &Value, key: &str) -> Result<Option<[f64; 3]>> {
     match super::opt::<[f64; 3]>(p, key)? {
         Some(c) if c.iter().all(|x| x.is_finite()) => Ok(Some(c)),
         Some(_) => Err(EngineError::param(key, ProblemKind::NotANumber)),
@@ -310,7 +310,7 @@ fn point(p: &Value, key: &str) -> Result<Option<[f64; 3]>> {
 const MAX_FACES: usize = 10_000;
 
 /// The `faces` parameter: a list of `{body, face}` B-rep face references.
-fn face_refs(p: &Value) -> Result<Vec<GeometryRef>> {
+pub(crate) fn face_refs(p: &Value) -> Result<Vec<GeometryRef>> {
     let refs: Vec<GeometryRef> = super::req(p, "faces")?;
     if refs.is_empty() || refs.len() > MAX_FACES {
         return Err(EngineError::invalid("faces", format!("1 to {MAX_FACES} faces")));
@@ -337,7 +337,7 @@ fn face_tags<'a>(model: &Model, refs: &'a [GeometryRef]) -> (BTreeSet<u32>, Vec<
 }
 
 /// The listed faces with no tagged mesh, as `{body, face}` (the reply names them).
-fn unmeshed_faces(model: &Model, p: &Value) -> Vec<Value> {
+pub(crate) fn unmeshed_faces(model: &Model, p: &Value) -> Vec<Value> {
     match p.get("faces").map(|_| face_refs(p)) {
         Some(Ok(refs)) => face_tags(model, &refs).1.into_iter().map(|r| json!(r)).collect(),
         _ => Vec::new(),
@@ -345,9 +345,9 @@ fn unmeshed_faces(model: &Model, p: &Value) -> Vec<Value> {
 }
 
 /// The nodes on the B-rep faces `refs` (from the mesh's geometry tags: element faces on them and
-/// shell elements meshing them) and the nodes of every element touching those. Faces with no
-/// tagged mesh are left out (the reply names them); none with one is an error.
-fn face_nodes(model: &Model, refs: &[GeometryRef]) -> Result<BTreeSet<u32>> {
+/// shell elements meshing them). Faces with no tagged mesh are left out (the reply names them);
+/// none with one is an error.
+pub(crate) fn nodes_on_faces(model: &Model, refs: &[GeometryRef]) -> Result<BTreeSet<u32>> {
     let c = model.classification();
     let (tags, missing) = face_tags(model, refs);
     if tags.is_empty() {
@@ -369,6 +369,13 @@ fn face_nodes(model: &Model, refs: &[GeometryRef]) -> Result<BTreeSet<u32>> {
             on.extend(local.iter().filter_map(|&i| e.nodes.get(i).copied()));
         }
     }
+    Ok(on)
+}
+
+/// The nodes on the B-rep faces `refs` ([`nodes_on_faces`]) and the nodes of every element
+/// touching those.
+fn face_nodes(model: &Model, refs: &[GeometryRef]) -> Result<BTreeSet<u32>> {
+    let on = nodes_on_faces(model, refs)?;
     let mut out = on.clone();
     for e in model.elements().values() {
         if e.nodes.iter().any(|n| on.contains(n)) {

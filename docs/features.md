@@ -6,7 +6,7 @@ Every entry is a toolbar button. **Ready** entries run their command; **coming s
 shown greyed with the roadmap milestone that brings them (ROADMAP.md). Scripts, the command line,
 the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 
-85 ready, 36 coming soon.
+86 ready, 36 coming soon.
 
 ## Geometry
 
@@ -55,6 +55,7 @@ the control channel and AI agents over MCP (docs/mcp.md) run the same commands.
 | Improve | Untangle — Repair inverted elements | coming soon (M6) |  |
 | Improve | Layers — Boundary padding and layers through thin walls | coming soon (M6) |  |
 | Improve | Relax Nodes — Relax the nodes inside a sphere to fix spikes and slivers; surface nodes slide on the geometry; kept as a field to apply again after a remesh | ready | `mesh.node.relax`, `mesh.node.relax.apply` |
+| Improve | Move Nodes — Drag nodes of the mesh, the nodes round them following by a falloff or harmonically, on the geometry; the original drawn as a ghost and the elements coloured by how their quality changes | ready | `mesh.node.move` |
 | Edit | Node — Add a node | ready | `mesh.node.add`, `mesh.node.remove` |
 | Edit | Element — Add an element on existing nodes | ready | `mesh.element.add`, `mesh.element.remove`, `mesh.clear` |
 | Edit | Mirror Mesh — Mirror a body's mesh across a plane, joined on the plane (mesh half a symmetric part) | ready | `mesh.mirror` |

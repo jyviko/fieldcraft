@@ -1499,6 +1499,33 @@ pub const NODE_RELAX: &[Field] = &[
     flag("reapply", "Reapply after remesh").help("Apply the field again by itself after each remesh.").def("false"),
 ];
 
+pub const NODE_MOVE: &[Field] = &[
+    labels("nodes", "Nodes", LabelOf::Node).help("The nodes to grab: drag a node in the view, or box-select nodes and Use selection.").hint("drag a node"),
+    face_rows("faces", "Faces").help("Instead of nodes: every node on these CAD faces.").hint("none"),
+    xyz("center", "Centre", D::Length).help("Instead of nodes: a sphere's centre; every node inside follows by the falloff.").hint("none"),
+    xyz("by", "Move by", D::Length).help("The displacement of the grabbed nodes; dragging in the view sets it."),
+    xyz("to", "Move to", D::Length).help("Instead of Move by: where the grabbed nodes' centroid (or the centre) goes.").hint("none"),
+    positive("radius", "Radius", D::Length)
+        .help("Nodes this close to a grabbed node follow it, blended to zero at the radius; Alt + scroll over the view changes it.")
+        .hint("only the grabbed nodes"),
+    choice("propagate", "Followers", &[("falloff", "Falloff (by distance)"), ("harmonic", "Harmonic (through the mesh)")])
+        .help("Falloff: a node follows by the falloff of its distance. Harmonic: the move spreads through the element edges as a membrane carries it, zero at the radius.")
+        .def("\"falloff\""),
+    choice("falloff", "Falloff", &[("smooth", "Smooth"), ("linear", "Linear"), ("none", "None")])
+        .help("Falloff followers: how the share falls from the grabbed nodes to the radius.")
+        .hint("smooth"),
+    range("strength", "Strength", D::None, 0.0, 1.0).help("Falloff followers: the largest share of the move a follower takes, 0 to 1.").hint("1"),
+    flag("on_geometry", "Stay on the geometry")
+        .help("Nodes on CAD faces slide on them, on CAD edges along them; nodes on CAD vertices stay.")
+        .def("true"),
+    choice("guard", "Guard", &[("no_inversion", "Scale back to no inverted element"), ("none", "None")])
+        .help("No inversion: the move is scaled back until no element inverts or falls below the smallest quality.")
+        .def("\"no_inversion\""),
+    range("min_quality", "Smallest quality", D::None, 0.0, 1.0)
+        .help("No inversion: the smallest scaled Jacobian the move may leave an element with (one already below keeps its own).")
+        .def("0.05"),
+];
+
 pub const NODE_RELAX_APPLY: &[Field] = &[
     text("field", "Field").req().help("The relaxation field kept by Relax Nodes."),
     references("bodies", "Bodies", C::Body).help("Only the nodes of these bodies.").hint("the field's bodies"),

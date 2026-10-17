@@ -55,7 +55,13 @@ pub struct Prepared {
     pub sphere: Option<([f64; 3], f64)>,
     guard: Guard,
     geometry: Geometry,
+    /// The region's elements' quality before the move, measured by the first live preview.
+    baseline: std::sync::OnceLock<Vec<(f64, bool)>>,
 }
+
+/// Halvings of the guard's bisection in a live preview (the scale to within 2⁻⁶; the command
+/// itself finds it to 2⁻²⁰).
+const PREVIEW_GUARD_STEPS: usize = 6;
 
 impl Prepared {
     /// Nodes that take a share of the displacement.
@@ -85,6 +91,17 @@ impl Prepared {
     pub fn preview(&self, s: &Session, d: [f64; 3]) -> Result<Moved> {
         Ok(relax::move_nodes(&s.model, &self.weights, d, self.guard, self.geometry.constraints())?)
     }
+
+    /// [`Prepared::preview`] for a drag frame: the region's quality before the move is measured
+    /// once and reused, and the guard's scale is found more coarsely.
+    pub fn preview_live(&self, s: &Session, d: [f64; 3]) -> Result<Moved> {
+        let run = relax::MoveRun { baseline: self.baseline.get().cloned(), guard_steps: PREVIEW_GUARD_STEPS };
+        let m = relax::move_nodes_with(&s.model, &self.weights, d, self.guard, self.geometry.constraints(), &run)?;
+        if self.baseline.get().is_none() {
+            let _ = self.baseline.set(m.elements.iter().map(|c| (c.before, c.valid_before)).collect());
+        }
+        Ok(m)
+    }
 }
 
 /// The corner node nearest `p`: the node a drag in the view grabs.
@@ -105,6 +122,21 @@ fn positive(p: &Value, key: &str) -> Result<Option<f64>> {
 
 /// Everything of `mesh.node.move` but its displacement.
 pub fn prepare(s: &Session, p: &Value) -> Result<Prepared> {
+    match prepare_capped(s, p, None)? {
+        Capped::Ready(prep) => Ok(*prep),
+        Capped::TooLarge(n) => Err(EngineError::Params(format!("{n} nodes to move"))),
+    }
+}
+
+/// [`prepare`], or the count of the nodes that would follow when it is more than `cap`: the
+/// costly part (the design's faces, the harmonic solve) is then not done.
+pub enum Capped {
+    Ready(Box<Prepared>),
+    TooLarge(usize),
+}
+
+/// [`prepare`] that stops before the costly part when more than `cap` nodes would follow.
+pub fn prepare_capped(s: &Session, p: &Value, cap: Option<usize>) -> Result<Capped> {
     let model = &s.model;
     let propagate = match super::opt::<String>(p, "propagate")? {
         None => Propagate::Falloff,
@@ -166,9 +198,14 @@ pub fn prepare(s: &Session, p: &Value) -> Result<Prepared> {
     let influence = Influence { centre: if propagate == Propagate::Falloff { centre } else { None }, radius, propagate, strength, falloff };
     // The constraints of every node that might take a share: the grabbed ones and those within
     // the radius (all of the mesh's corner nodes when the region is not known yet).
+    let candidates =
+        relax::move_weights(model, &handles, &Influence { propagate: Propagate::Falloff, falloff: Falloff::None, ..influence }, &Unconstrained)?;
+    if let Some(cap) = cap
+        && candidates.len() > cap
+    {
+        return Ok(Capped::TooLarge(candidates.len()));
+    }
     let geometry = if on_geometry {
-        let candidates =
-            relax::move_weights(model, &handles, &Influence { propagate: Propagate::Falloff, falloff: Falloff::None, ..influence }, &Unconstrained)?;
         let mut nodes: BTreeSet<u32> = candidates.keys().copied().collect();
         // Their elements' nodes too: the mid-side nodes that follow.
         for e in model.elements().values() {
@@ -185,7 +222,7 @@ pub fn prepare(s: &Session, p: &Value) -> Result<Prepared> {
         return Err(EngineError::Params("no mesh nodes to move: the nodes given are no element's corners, or none lies in the sphere".into()));
     }
     let sphere = radius.and_then(|r| centre.or(origin).map(|c| (c, r)));
-    Ok(Prepared { weights, handles, origin, sphere, guard, geometry })
+    Ok(Capped::Ready(Box::new(Prepared { weights, handles, origin, sphere, guard, geometry, baseline: std::sync::OnceLock::new() })))
 }
 
 /// The quality of the region as JSON, with its mean scaled Jacobian.

@@ -20,7 +20,10 @@ pub use datum::edit_params as datum_edit_params;
 pub use datum::preview as datum_preview;
 pub use fieldcraft_mesh::relax::{ElementChange, Moved as NodeMoved};
 pub use mesh::analytic_surfaces;
-pub use node_move::{Prepared as NodeMovePrepared, nearest_node as node_move_nearest, prepare as node_move_prepare};
+pub use node_move::{
+    Capped as NodeMoveCapped, Prepared as NodeMovePrepared, nearest_node as node_move_nearest, prepare as node_move_prepare,
+    prepare_capped as node_move_prepare_capped,
+};
 pub use nodes::merge_preview as node_merge_preview;
 pub use plan::untagged_faces;
 pub use relax::{Preview as RelaxPreview, preview as relax_preview, sphere as relax_sphere};

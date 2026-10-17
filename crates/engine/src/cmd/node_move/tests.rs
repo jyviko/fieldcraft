@@ -254,3 +254,21 @@ fn a_move_of_nothing_records_no_undo_step_and_min_quality_is_adjustable() {
     let (loose, strict) = (scale(&mut s, 0.0), scale(&mut s, 0.5));
     assert!(strict.0 < loose.0 && strict.1 >= 0.5 - 1e-9, "{loose:?} {strict:?}");
 }
+
+/// The live preview's cap: more followers than it allows are counted, not prepared; the live
+/// preview is the command's move.
+#[test]
+fn a_capped_prepare_counts_a_large_region_and_the_live_preview_matches() {
+    let s = plate();
+    let n = interior(&s.model);
+    let p = json!({"nodes": [n], "by": [0.2, 0.1, 0.0], "radius": 4.0, "propagate": "harmonic"});
+    assert!(matches!(prepare_capped(&s, &p, Some(3)).unwrap(), Capped::TooLarge(k) if k > 3));
+    let Capped::Ready(prep) = prepare_capped(&s, &p, None).unwrap() else { panic!("not prepared") };
+    let (exact, first, again) = (
+        prep.preview(&s, [0.2, 0.1, 0.0]).unwrap(),
+        prep.preview_live(&s, [0.2, 0.1, 0.0]).unwrap(),
+        prep.preview_live(&s, [0.2, 0.1, 0.0]).unwrap(),
+    );
+    assert_eq!(exact.positions, first.positions);
+    assert_eq!(first, again, "the reused baseline gives the same move");
+}

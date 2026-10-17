@@ -136,6 +136,9 @@ pub const BACKGROUND: &[&str] = &[
     "mesh.hex.octree",
     "mesh.hex.project",
     "mesh.node.relax",
+    "mesh.plan.apply",
+    "mesh.cells",
+    "geometry.partition",
 ];
 
 /// Most entries the recent-files list keeps, and the longest path it keeps.
@@ -800,7 +803,7 @@ impl ModelApp {
             self.recent.add(p);
         }
         if self.dialog.as_ref().is_some_and(|d| o.form == Some(d.command)) {
-            self.dialog = None;
+            self.form_done();
         }
         let warnings: Vec<&str> = o.reply.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
         if warnings.is_empty() {
@@ -1729,6 +1732,56 @@ mod tests {
         assert!(error.contains("not a logical cube"), "{error}");
         assert!(app.status.as_ref().is_some_and(|s| s.error));
         assert_eq!(app.session.model.element_counts(), counts, "a failed mesher changes nothing");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The partition, the cells mesher and the plan's apply run as jobs (#545): the window
+    /// stays free while they run, the model they leave is the one the command makes run
+    /// directly, bit for bit, in one undo step, and a cancelled one leaves the model as it was.
+    #[test]
+    fn partition_cells_and_plan_apply_run_as_jobs_like_the_command() {
+        let dir = temp("jobs-545");
+        let design = dir.join("plate.solidcraft").to_string_lossy().to_string();
+        std::fs::write(&design, fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap()).unwrap();
+        let mut app = ModelApp::new(Session::default());
+        app.open_path(&design);
+        app.wait_loaded();
+        app.run("geometry.datum", json!({"name": "X30", "by": {"type": "offset", "plane": "yz", "offset": 30}})).unwrap();
+        let plan = app.run("mesh.plan", json!({"body": "Body1"})).unwrap();
+        let steps = [
+            ("mesh.plan.apply", json!({"plan": plan["name"]})),
+            ("geometry.partition", json!({"name": "Half", "datum": "X30"})),
+            ("mesh.cells", json!({"bodies": ["Body1/a", "Body1/b"], "size": 2.5})),
+        ];
+        for (command, params) in steps {
+            assert!(is_long(command), "{command}");
+            let before = app.session.clone();
+            let mut direct = app.session.clone();
+            let expected = direct.execute(command, &params).unwrap_or_else(|e| panic!("{command}: {e}"));
+
+            // Cancelled: nothing changes.
+            app.start_job(command, params.clone()).unwrap();
+            app.cancel_loading();
+            assert!(app.busy().is_none());
+            assert!(app.session.model == before.model && app.session.journal.len() == before.journal.len(), "{command}: cancelled");
+
+            app.start_job(command, params.clone()).unwrap();
+            assert_eq!(app.busy(), Some(crate::command_label(command)), "{command} runs off the window thread");
+            app.wait_loaded();
+            assert!(app.status.as_ref().is_some_and(|s| !s.error), "{command}: {:?}", app.status);
+            assert!(app.session.model == direct.model, "{command}: the job's model is the command's");
+            let bodies = |s: &Session| s.design.as_ref().map(|d| d.bodies.iter().map(|b| b.name.clone()).collect::<Vec<_>>());
+            assert_eq!(bodies(&app.session), bodies(&direct), "{command}");
+            assert_eq!(app.session.journal.len(), before.journal.len() + 1, "{command}: one undo step");
+            let elements = expected["elements"].as_u64().map(|n| n as usize);
+            assert!(elements.is_none_or(|n| n == app.session.model.elements().len()), "{command}: {expected}");
+
+            // Undo takes the whole command back; redo brings it again.
+            app.run("edit.undo", json!({})).unwrap();
+            assert!(app.session.model == before.model, "{command}: undo");
+            app.run("edit.redo", json!({})).unwrap();
+            assert!(app.session.model == direct.model, "{command}: redo");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

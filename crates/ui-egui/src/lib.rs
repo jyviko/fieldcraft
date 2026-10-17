@@ -904,6 +904,21 @@ impl ModelApp {
         self.dialog = Some(dialog);
     }
 
+    /// The open form's command succeeded (here or as a job): a definition it made is the
+    /// selection, its properties in the panel, and the form closes (back to the form it was
+    /// opened from, if any).
+    pub(crate) fn form_done(&mut self) {
+        if let Some(d) = &self.dialog
+            && let Some(kind) = browser::Def::ALL.into_iter().find(|k| k.command("create") == d.command)
+            && let Ok(params) = serde_json::from_str::<Value>(&d.text)
+            && let Some(name) = params.get("name").and_then(Value::as_str)
+            && kind.exists(&self.session.model, name)
+        {
+            self.selected = Some((kind, name.to_string()));
+        }
+        self.dialog_done();
+    }
+
     /// Run the open parameter form; it closes when the command succeeds.
     pub fn run_dialog(&mut self) -> Result<Value, String> {
         let (command, params) = self.dialog_params()?;
@@ -922,16 +937,9 @@ impl ModelApp {
             }
             return Err(message);
         }
-        let made = params.get("name").and_then(Value::as_str).map(str::to_string);
         match self.run_form(command, params, true) {
             Ok(v) => {
-                // A definition made in its form is the selection, its properties in the panel.
-                if let (Some(kind), Some(name)) = (browser::Def::ALL.into_iter().find(|k| k.command("create") == command), made)
-                    && kind.exists(&self.session.model, &name)
-                {
-                    self.selected = Some((kind, name));
-                }
-                self.dialog_done();
+                self.form_done();
                 Ok(v)
             }
             Err(Failure { message, refused }) => {

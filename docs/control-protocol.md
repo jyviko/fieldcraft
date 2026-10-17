@@ -129,7 +129,7 @@ files named on the command line go through native file pickers and open in the b
 
 `engine.execute` of a solve (`solve.run`, `solve.static`, `solve.nonlinear`, `solve.heat`,
 `solve.frequency`, `solve.buckle`, `solve.explicit`, `solve.fluid`) or a mesher (`mesh.tet.generate`,
-`mesh.hex.*`) runs it off the window thread, as the Solve button and a mesher form's OK do: the
+`mesh.hex.*`, `mesh.node.relax`, `mesh.plan.apply`, `mesh.cells`) or a partition (`geometry.partition`) runs it off the window thread, as the Solve button and a mesher form's OK do: the
 window keeps drawing its progress (step, stage and count, elapsed time) with Cancel. The reply is
 the command's result when it ends, however long that takes; with `"wait": false` it is
 `{"job": n}` at once, and `job.status`, `job.wait` and `job.cancel` follow it. Cancel (the button

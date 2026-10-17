@@ -53,10 +53,6 @@ const PLAIN_CUP: &str = r#"[
 /// Shown only while the part fails.
 const CAUSES: &[(&str, &str)] = &[
     (
-        "filleted-bracket",
-        "no structured method takes the whole body (the plan has no cuts for the fillet beside the holes), and tet10 at the plan's size leaves slivers (min SJ 0.04, 1709 marked). The same part partitioned into mapped cells (`filleted-bracket-blocks`) passes: partition (§3.4).",
-    ),
-    (
         "loft-transition",
         "the lofted sides are swept one to one, and the elements where the section changes shape are skewed (min SJ 0.19). Relaxing the four marked elements did not raise it: the blocks are wrong, not the nodes (§6.3). A loft has no template yet (`unmapped`).",
     ),
@@ -64,7 +60,6 @@ const CAUSES: &[(&str, &str)] = &[
         "sharp-wedge",
         "the wedge's sharp edge is swept as hex, so every element tapers to it (min SJ 0.01, edge ratio 150). A column of wedge6 at the edge (§4) raises the SJ but not the ratio: any element with a corner on a 2.9° edge has sides at least 1/tan 2.9° ≈ 20 times its width there, twice the limit. The edge has to be blunted (defeatured) or the limit waived along it.",
     ),
-    ("sphere-on-plate", "no structured method takes the plate with the sunk sphere, and tet10 leaves slivers (min SJ 0.12, 662 marked)."),
     (
         "analytic-sphere",
         "no structured method takes a sphere (it has no face to sweep from or axis to revolve about), so the plan does not apply and the fallback's sphere template meshes it at the plan's size (2.45 mm, which keeps a sphere's chords to 0.75 % on paper), 1.1 % short of the volume: the template's elements at the cube's eight corners span more of the sphere than the size. A sphere template in the plan (§3) would size its caps; hex20 (`order: 2`) closes it too.",

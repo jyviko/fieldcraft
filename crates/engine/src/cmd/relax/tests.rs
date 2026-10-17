@@ -275,7 +275,8 @@ fn on_box_edge(p: [f64; 3]) -> bool {
 fn strong_relaxation_of_a_filleted_box_keeps_faces_and_edges() {
     let (_d, mut s, _) = filleted_box();
     let before = s.model.clone();
-    let r = s.execute("mesh.node.relax", &json!({"mode": "strong", "bodies": ["B"], "below": 0.3})).unwrap();
+    // The tet mesher leaves no element below the skill's 0.3, so relax those below 0.45.
+    let r = s.execute("mesh.node.relax", &json!({"mode": "strong", "bodies": ["B"], "below": 0.45})).unwrap();
     let (b, a) = (&r["before"], &r["after"]);
     // The worst tets may not improve: their corners can all be held on the box's edges.
     assert!(a["min_scaled_jacobian"].as_f64().unwrap() >= b["min_scaled_jacobian"].as_f64().unwrap(), "{r}");

@@ -74,11 +74,14 @@ pub fn dihedral_cosines(x: &[P; 4]) -> [f64; 6] {
     })
 }
 
-/// The quality objective: the smallest signed dihedral sine (1 is impossible; the regular
-/// tetrahedron scores √(8/9) ≈ 0.943). Positive for a valid tetrahedron, 0 for a flat one,
-/// negative for an inverted one (then the sine of largest magnitude, so worse inversions score
-/// lower). With `sin θ_ij = 6V ℓ_ij / (2A_k · 2A_l)`, the extreme sine is found on squared
-/// lengths and areas, with one square root.
+/// The quality objective of a valid tetrahedron: the smaller of its smallest dihedral sine and
+/// its weighted scaled Jacobian ([`JACOBIAN_WEIGHT`]; the regular tetrahedron scores
+/// √(8/9) ≈ 0.943). The dihedral sine catches slivers and caps; it does not see needles, whose
+/// dihedral angles can all be fine while a corner is nearly flat (Shewchuk 2002), and the scaled
+/// Jacobian `√2 · 6V / (ℓ₁ℓ₂ℓ₃)` at the worst corner, the measure analysts check (the skill's
+/// limit, [`crate::quality`]), does. 0 for a flat tetrahedron; for an inverted one the negative
+/// sine of largest magnitude, so worse inversions score lower. Extremes are found on squared
+/// lengths and areas, with one square root each.
 pub fn quality(x: &[P; 4]) -> f64 {
     let v6 = volume6(x);
     if v6 == 0.0 || !v6.is_finite() {
@@ -95,7 +98,34 @@ pub fn quality(x: &[P; 4]) -> f64 {
         pick = if v6 > 0.0 { pick.min(r) } else { pick.max(r) };
     }
     let q = v6 * pick.sqrt();
+    let q = if v6 > 0.0 { q.min(JACOBIAN_WEIGHT * scaled_jacobian(x, v6)) } else { q };
     if q.is_finite() { q } else { 0.0 }
+}
+
+/// The weight of the scaled Jacobian in [`quality`]: the meshing skill's limit, a scaled
+/// Jacobian of 0.3, counts as much as a 30° dihedral angle (sin 30°, the improvement's target,
+/// [`super::improve::ImproveOptions::target`]), so the Jacobian decides only for tetrahedra near
+/// that limit (needles) and the dihedral sine everywhere else.
+pub const JACOBIAN_WEIGHT: f64 = 0.5 / 0.3;
+
+/// The corners of a tetrahedron and the other three corners of each.
+const CORNERS: [(usize, [usize; 3]); 4] = [(0, [1, 2, 3]), (1, [0, 2, 3]), (2, [0, 1, 3]), (3, [0, 1, 2])];
+
+/// The squared product of the three edge lengths at each corner.
+fn corner_products(x: &[P; 4]) -> [f64; 4] {
+    CORNERS.map(|(c, o)| {
+        o.iter().fold(1.0, |m, &j| {
+            let e = sub(x[j], x[c]);
+            m * dot(e, e)
+        })
+    })
+}
+
+/// The scaled Jacobian at the worst corner of a tetrahedron with six times the volume `v6`
+/// (as [`crate::quality`] reports it).
+fn scaled_jacobian(x: &[P; 4], v6: f64) -> f64 {
+    let worst = corner_products(x).iter().fold(0.0_f64, |m, &p| m.max(p));
+    std::f64::consts::SQRT_2 * v6 / worst.sqrt()
 }
 
 /// The smallest and largest dihedral angle in degrees (reports only).
@@ -219,6 +249,16 @@ mod tests {
         let flat = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]];
         assert_eq!(quality(&flat), 0.0);
         assert!(circumcenter(&flat).is_none());
+    }
+
+    /// A needle: every dihedral angle above 20°, yet one corner nearly flat; the objective sees
+    /// it through the scaled Jacobian.
+    #[test]
+    fn a_needle_scores_low() {
+        let x = positive([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 0.866, 0.0], [0.5, 0.29, 12.0]]);
+        let (lo, hi) = dihedral_range(&x);
+        assert!(lo > 20.0 && hi < 120.0, "{lo} {hi}");
+        assert!(quality(&x) < 0.15 * JACOBIAN_WEIGHT, "{}", quality(&x));
     }
 
     #[test]

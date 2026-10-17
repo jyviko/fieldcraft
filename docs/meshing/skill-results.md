@@ -31,7 +31,7 @@ Times are wall clock on the machine that ran it.
 | bolted-assembly | plan (sweep), mesh.hex.generate (auto) | – | 6272 (6272 hex8) | 0.583 | 0.939 | 3.6 | 2.0e-4 | 0 | 0 (not relaxed) | 8 coincident, 0 cracks | – | 3.7 | pass | [x=50.000](skill/bolted-assembly.png) |
 | cantilever-i-beam | plan (sweep) | – | 61600 (61600 hex8) | 1.000 | 1.000 | 1.0 | 0.0e0 | 0 | 0 (not relaxed) | none | – | 8.5 | pass | [x=100.000](skill/cantilever-i-beam.png) |
 | cross-cylinders | none | – | – | – | – | – | – | – | – | – | – | 27.2 | no mesh | – |
-| filleted-bracket | tet10 | – | 21525 (21525 tet10) | 0.021 | 0.535 | 13.5 | -7.0e-6 | 0 | 1492 (not relaxed) | none | – | 15.9 | fail (SJ, ratio) | [x=30.000](skill/filleted-bracket.png) |
+| filleted-bracket | tet10 | – | 19991 (19991 tet10) | 0.318 | 0.564 | 4.1 | -6.8e-6 | 0 | 0 (not relaxed) | none | – | 15.1 | pass (fallback) | [x=30.000](skill/filleted-bracket.png) |
 | filleted-bracket-blocks | plan (sweep) | – | 75410 (75410 hex8) | 0.704 | 0.954 | 3.5 | 3.7e-5 | 0 | 0 (not relaxed) | none (after merging 2348 nodes) | – | 6.9 | pass | [x=30.000](skill/filleted-bracket-blocks.png) |
 | i-beam | plan (sweep) | – | 61600 (61600 hex8) | 1.000 | 1.000 | 1.0 | 0.0e0 | 0 | 0 (not relaxed) | none | – | 4.5 | pass | [z=100.000](skill/i-beam.png) |
 | loft-transition | plan (sweep) | – | 2873 (2873 hex8) | 0.189 | 0.959 | 1.7 | -2.1e-3 | 0 | 4 → 4 (4 relaxed, 0 undone; min SJ 0.189 → 0.189, max ratio 1.7 → 1.7) | none | – | 0.9 | fail (SJ) | [z=25.000](skill/loft-transition.png) |
@@ -40,7 +40,7 @@ Times are wall clock on the machine that ran it.
 | rounded-box | plan (project) | 2 plane(s) | 11520 (11520 hex8) | 0.717 | 0.973 | 4.0 | -4.1e-3 | 0 | 0 (not relaxed) | none | – | 8.7 | pass | [x=20.000](skill/rounded-box.png) |
 | shallow-groove | plan (sweep) | – | 1960 (1960 hex8) | 0.991 | 0.999 | 1.1 | 2.7e-4 | 0 | 0 (not relaxed) | none | – | 0.2 | pass | [x=30.000](skill/shallow-groove.png) |
 | sharp-wedge | plan (sweep) | – | 1674 (1674 hex8) | 0.014 | 0.301 | 149.6 | 2.7e-15 | 0 | 1524 (not relaxed) | none | – | 0.2 | fail (SJ, ratio) | [x=40.000](skill/sharp-wedge.png) |
-| sphere-on-plate | tet10 | – | 23799 (23799 tet10) | 0.092 | 0.587 | 5.9 | -8.7e-5 | 0 | 679 (not relaxed) | none | – | 13.7 | fail (SJ) | [y=0.000](skill/sphere-on-plate.png) |
+| sphere-on-plate | tet10 | – | 25613 (25613 tet10) | 0.335 | 0.607 | 4.4 | -8.8e-5 | 0 | 0 (not relaxed) | none | – | 7.7 | pass (fallback) | [y=0.000](skill/sphere-on-plate.png) |
 | spline-vase | plan (sweep) | – | 4536 (4536 hex8) | 0.665 | 0.945 | 9.9 | -6.6e-3 | 0 | 0 (not relaxed) | none | – | 2.3 | pass | [z=-35.000](skill/spline-vase.png) |
 | stepped-block | plan (cells) | – | 1416 (1416 hex8) | 1.000 | 1.000 | 1.3 | -4.8e-15 | 0 | 0 (not relaxed) | none | – | 1.6 | pass | [x=30.000](skill/stepped-block.png) |
 | thin-ribs | plan (sweep) | – | 301308 (301308 hex8) | 0.999 | 1.000 | 1.3 | -3.4e-12 | 0 | 0 (not relaxed) | none | – | 34.7 | pass | [x=50.000](skill/thin-ribs.png) |
@@ -75,7 +75,6 @@ limits the cause read from its numbers and section picture.
   - Bracket: mesh.plan.apply: mesh plan `Plan-Bracket`: the cells ["Bracket"] (cuts []) do not mesh all-hex: body `Bracket`: not supported yet: no structured hex method fits this body (extrude: cylindrical face 8 is not parallel to the direction; sweep: from face 1: lin…
   - Bracket: mesh.hex.generate: body `Bracket`: not supported yet: no structured hex method fits this body (extrude: cylindrical face 8 is not parallel to the direction; sweep: from face 1: linking face 6 has 2 boundary loops (periodic or holed linking faces are not swept…
   - Bracket: mesh.hex.project (sphere): body `Bracket`: meshing failed: 91 of 5104 elements are inverted, twisted or degenerate after projection (certified Jacobian; smallest corner scaled Jacobian -0.760): block 1 cell [3, 3, 0] near (12.519, 11.405, 1.604); block 1 cell [3, 4, …
-  - **fail (SJ, ratio)**: no structured method takes the whole body (the plan has no cuts for the fillet beside the holes), and tet10 at the plan's size leaves slivers (min SJ 0.04, 1709 marked). The same part partitioned into mapped cells (`filleted-bracket-blocks`) passes: partition (§3.4).
 - `loft-transition` (corpus: A 40 mm square lofted to an R15 circle 50 mm above: a ruled free-form surface between unlike sections.):
   - **fail (SJ)**: the lofted sides are swept one to one, and the elements where the section changes shape are skewed (min SJ 0.19). Relaxing the four marked elements did not raise it: the blocks are wrong, not the nodes (§6.3). A loft has no template yet (`unmapped`).
 - `sharp-wedge` (corpus: A wedge whose faces meet at under 3 degrees: a sharp edge with a needle-thin cross-section.):
@@ -84,7 +83,6 @@ limits the cause read from its numbers and section picture.
   - Plate: mesh.plan.apply: mesh plan `Plan-Plate`: the cells ["Plate"] (cuts []) do not mesh all-hex: body `Plate`: not supported yet: no structured hex method fits this body (extrude: face 6 is curved across the direction; sweep: from face 0: 6 faces are not on the …
   - Plate: mesh.hex.generate: body `Plate`: not supported yet: no structured hex method fits this body (extrude: face 6 is curved across the direction; sweep: from face 0: 6 faces are not on the sweep path; from face 5: linking face 11 has 2 boundary loops (periodic or …
   - Plate: mesh.hex.project (sphere): body `Plate`: meshing failed: the mesh volume 32917.42909007507 is far from the body's 69353.30815403847: the blocks do not cover the part (every outer block face must stand for part of its surface)
-  - **fail (SJ)**: no structured method takes the plate with the sunk sphere, and tet10 leaves slivers (min SJ 0.12, 662 marked).
 - `analytic-sphere` (corpus: Sphere r 20: curvature everywhere, no edges.):
   - Sphere: mesh.plan.apply: mesh plan `Plan-Sphere`: the cells ["Sphere"] (cuts []) do not mesh all-hex: body `Sphere`: not supported yet: no structured hex method fits this body (extrude: no direction to try; sweep: no planar face to sweep from; revolve: no axis to t…
   - Sphere: mesh.hex.generate: body `Sphere`: not supported yet: no structured hex method fits this body (extrude: no direction to try; sweep: no planar face to sweep from; revolve: no axis to try; mapped: meshing failed: meshing failed: mesh validity gate: 8 inverted or…

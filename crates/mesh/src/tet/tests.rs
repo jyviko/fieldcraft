@@ -433,7 +433,17 @@ mod determinism {
         let (p, t, f) = washer();
         let m = mesh(&p, &t, &f);
         assert!(m.elements.len() > 100, "{:?}", m.report);
-        assert_eq!(fingerprint(&m), 6_285_915_972_108_509_003, "{} tets, {} nodes", m.elements.len(), m.points.len());
+        // No needles either: the scaled Jacobian analysts check is above the skill's limit.
+        let sj = m
+            .elements
+            .iter()
+            .map(|e| {
+                let xyz: Vec<[f64; 3]> = e.iter().map(|&v| m.points[v as usize]).collect();
+                crate::quality::element_quality(m.kind, &xyz).unwrap().get(crate::quality::Metric::ScaledJacobian).unwrap()
+            })
+            .fold(f64::INFINITY, f64::min);
+        assert!(sj >= 0.3, "min scaled Jacobian {sj}");
+        assert_eq!(fingerprint(&m), 11_252_377_805_886_396_373, "{} tets, {} nodes", m.elements.len(), m.points.len());
     }
 
     /// Listing the triangles, their corners and the vertices in another order, and numbering

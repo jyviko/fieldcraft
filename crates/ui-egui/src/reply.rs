@@ -1028,6 +1028,31 @@ mod tests {
     /// Propose Defeaturing stays in the panel and follows the model: switching the plate's hole
     /// off fills it in the viewport's bodies and the list shows it off; on again brings it back.
     #[test]
+    fn the_feature_graph_reads_a_plate_in_words_and_selects_a_features_faces() {
+        let dir = std::env::temp_dir().join(format!("fieldcraft-ui-features-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let design = dir.join("plate.solidcraft");
+        std::fs::write(&design, fieldcraft_geometry::sample::plate_design(&fieldcraft_geometry::sample::Plate::default()).unwrap()).unwrap();
+        let mut app = ModelApp::new(fieldcraft_engine::Session::default());
+        app.run("geometry.open", json!({"path": design.to_string_lossy()})).unwrap();
+        app.run("geometry.features", json!({})).unwrap();
+        let reply = app.reply.clone().expect("the graph is shown");
+        assert!(summary("geometry.features", &reply.value).contains("building 1 body"));
+        let body = reply.value["bodies"][0]["body"].as_str().unwrap().to_string();
+        let features: Vec<_> = reply.value["bodies"][0]["features"].as_array().unwrap().iter().map(crate::feature_graph::describe).collect();
+        assert!(!features.is_empty());
+        for f in &features {
+            assert!(!f.summary.contains('{') && !f.summary.is_empty(), "{f:?}");
+        }
+        let last = features.iter().rev().find(|f| !f.faces.is_empty()).expect("a feature made faces");
+        let items = face_items(&body, &last.faces);
+        assert!(!items.is_empty());
+        app.select(items.clone(), crate::selection::Mode::Replace);
+        assert_eq!(app.pick.selection.len(), items.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_defeature_list_switches_a_hole_off_and_on() {
         let dir = std::env::temp_dir().join(format!("fieldcraft-ui-defeature-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

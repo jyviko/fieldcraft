@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fieldcraft_model::Model;
 
-use super::{Constraints, Falloff, Freedom, P, RegionQuality, State, add, corner_nodes, dist, dot, measure, region_quality, scale, sub};
+use super::{Constraints, Falloff, Freedom, P, RegionQuality, State, add, corner_nodes, dist, dot, measure, scale, sub};
 use crate::{Error, Result};
 
 /// How the displacement reaches the nodes round the grabbed ones.
@@ -273,6 +273,51 @@ const SAME: f64 = 1e-9;
 /// Move each node of `weights` by its share of `d`, as `geometry` lets it, the displacement
 /// scaled back under `guard`. The model is not changed: the result has the new positions.
 pub fn move_nodes(model: &Model, weights: &BTreeMap<u32, f64>, d: P, guard: Guard, geometry: &dyn Constraints) -> Result<Moved> {
+    move_nodes_with(model, weights, d, guard, geometry, &MoveRun::default())
+}
+
+/// How [`move_nodes_with`] runs: what a live preview reuses and how finely it guards.
+#[derive(Debug, Clone, Default)]
+pub struct MoveRun {
+    /// The region's elements' quality and validity before any move, in label order (from an
+    /// earlier run's [`Moved::elements`] with the same weights); measured again when absent or
+    /// of another length.
+    pub baseline: Option<Vec<(f64, bool)>>,
+    /// Halvings of the guard's bisection; 0 is [`GUARD_STEPS`].
+    pub guard_steps: usize,
+}
+
+/// Each element's quality and validity at the state's positions, measured in parallel (fixed
+/// blocks: the same result on any thread count).
+fn measure_all(elems: &[super::Elem], pos: &BTreeMap<u32, P>) -> Vec<(f64, bool)> {
+    fieldcraft_parallel::map(elems.len(), |i| {
+        let Some(e) = elems.get(i) else { return (-1.0, false) };
+        let x: Vec<P> = e.nodes.iter().map(|n| pos.get(n).copied().unwrap_or([0.0; 3])).collect();
+        measure(e, &x)
+    })
+}
+
+/// The region's quality from its elements' measures.
+fn summary(state: &State<'_>, values: &[(f64, bool)]) -> RegionQuality {
+    let mut r = RegionQuality { elements: state.elems.len(), min_quality: f64::INFINITY, max_edge_ratio: 0.0, invalid: 0, worst: Vec::new() };
+    let mut all = Vec::with_capacity(values.len());
+    for (e, &(q, valid)) in state.elems.iter().zip(values) {
+        r.min_quality = r.min_quality.min(q);
+        r.max_edge_ratio = r.max_edge_ratio.max(super::edge_ratio(e.kind, &state.coords(e)));
+        r.invalid += usize::from(!valid);
+        all.push((e.label, q));
+    }
+    all.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    all.truncate(super::WORST_LISTED);
+    r.worst = all;
+    if r.elements == 0 {
+        r.min_quality = 0.0;
+    }
+    r
+}
+
+/// [`move_nodes`], reusing what `run` carries.
+pub fn move_nodes_with(model: &Model, weights: &BTreeMap<u32, f64>, d: P, guard: Guard, geometry: &dyn Constraints, run: &MoveRun) -> Result<Moved> {
     if !d.iter().all(|x| x.is_finite()) || dot(d, d).sqrt() > fieldcraft_model::MAX_COORD {
         return Err(Error::Invalid("the displacement must be finite".into()));
     }
@@ -287,11 +332,15 @@ pub fn move_nodes(model: &Model, weights: &BTreeMap<u32, f64>, d: P, guard: Guar
     if let Some((n, w)) = weights.iter().find(|(_, w)| !(**w > 0.0 && **w <= 1.0)) {
         return Err(Error::Invalid(format!("node {n} has share {w}; shares are in (0, 1]")));
     }
+    let steps = if run.guard_steps == 0 { GUARD_STEPS } else { run.guard_steps.min(GUARD_STEPS) };
     let movers: BTreeSet<u32> = weights.keys().copied().collect();
     let mut state = State::new(model, &movers, geometry, false)?;
     let original = state.pos.clone();
-    let start: Vec<(f64, bool)> = state.elems.iter().map(|e| measure(e, &state.coords(e))).collect();
-    let before = region_quality(&state);
+    let start = match &run.baseline {
+        Some(b) if b.len() == state.elems.len() => b.clone(),
+        _ => measure_all(&state.elems, &state.pos),
+    };
+    let before = summary(&state, &start);
     let freedom: BTreeMap<u32, Freedom> = movers.iter().map(|&n| (n, state.freedom(n))).collect();
     // The state with the displacement applied at scale `t`.
     let apply = |state: &mut State<'_>, t: f64| {
@@ -308,34 +357,33 @@ pub fn move_nodes(model: &Model, weights: &BTreeMap<u32, f64>, d: P, guard: Guar
     };
     // Whether every element valid before is still valid, and no worse than the guard's floor
     // (or its own quality, when that was lower).
-    let sound = |state: &State<'_>| {
-        state.elems.iter().zip(&start).all(|(e, &(q0, was))| {
-            let (q, valid) = measure(e, &state.coords(e));
-            !was || (valid && q >= floor.min(q0))
-        })
-    };
+    let sound = |now: &[(f64, bool)]| now.iter().zip(&start).all(|(&(q, valid), &(q0, was))| !was || (valid && q >= floor.min(q0)));
     apply(&mut state, 1.0);
+    let mut now = measure_all(&state.elems, &state.pos);
     let mut t = 1.0;
-    if guard != Guard::None && !sound(&state) {
+    if guard != Guard::None && !sound(&now) {
         let (mut lo, mut hi) = (0.0, 1.0);
-        for _ in 0..GUARD_STEPS {
+        let mut at_lo = None;
+        for _ in 0..steps {
             fieldcraft_model::progress::check()?;
             let mid = 0.5 * (lo + hi);
             apply(&mut state, mid);
-            if sound(&state) {
+            let m = measure_all(&state.elems, &state.pos);
+            if sound(&m) {
                 lo = mid;
+                at_lo = Some(m);
             } else {
                 hi = mid;
             }
         }
         t = lo;
         apply(&mut state, t);
+        now = at_lo.unwrap_or_else(|| start.clone());
     }
-    let after = region_quality(&state);
+    let after = summary(&state, &now);
     let mut out = Moved { before, after, scale: t, ..Moved::default() };
     let (mut sum_before, mut sum_after) = (0.0, 0.0);
-    for (e, &(q0, v0)) in state.elems.iter().zip(&start) {
-        let (q1, v1) = measure(e, &state.coords(e));
+    for (e, (&(q0, v0), &(q1, v1))) in state.elems.iter().zip(start.iter().zip(&now)) {
         sum_before += q0;
         sum_after += q1;
         let change = ElementChange { label: e.label, before: q0, after: q1, valid_before: v0, valid_after: v1 };
@@ -347,7 +395,6 @@ pub fn move_nodes(model: &Model, weights: &BTreeMap<u32, f64>, d: P, guard: Guar
         out.mean_before = sum_before / state.elems.len() as f64;
         out.mean_after = sum_after / state.elems.len() as f64;
     }
-    out.elements.sort_by_key(|c| c.label);
     for (n, p) in &state.pos {
         let Some(o) = original.get(n) else { continue };
         let moved = dist(*o, *p);

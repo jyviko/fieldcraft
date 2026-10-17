@@ -1433,6 +1433,7 @@ name = "fieldcraft-mesh"
 version = "0.6.0"
 dependencies = [
  "fieldcraft-model",
+ "fieldcraft-parallel",
  "libm",
  "num-bigint",
  "num-rational",

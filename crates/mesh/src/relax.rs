@@ -275,7 +275,8 @@ struct Elem {
     nodes: Vec<u32>,
     /// A shell's normal as it was: its side, which a move must keep.
     normal: Option<P>,
-    /// Its size as it was ([`strong::size`]): the strong mode keeps sizes near it.
+    /// Its size as it was ([`strong::size`]): the strong mode keeps sizes near it (only the strong
+    /// mode measures it, a certified check per element; 0 otherwise).
     size0: f64,
 }
 
@@ -570,7 +571,13 @@ impl<'a> State<'a> {
                     }
                 }
             }
-            state.elems.push(Elem { label, kind: e.kind, normal: shell_normal(e.kind, &x), size0: strong::size(e.kind, &x), nodes: e.nodes.clone() });
+            state.elems.push(Elem {
+                label,
+                kind: e.kind,
+                normal: shell_normal(e.kind, &x),
+                size0: if pin_curves { strong::size(e.kind, &x) } else { 0.0 },
+                nodes: e.nodes.clone(),
+            });
         }
         Ok(state)
     }
@@ -941,8 +948,8 @@ pub fn apply_field(
 mod moving;
 mod strong;
 pub use moving::{
-    DEFAULT_MIN_QUALITY, ElementChange, GUARD_STEPS, Guard, Influence, MIN_RELATIVE_RADIUS, Moved, Propagate, Unconstrained, centroid, move_nodes,
-    move_weights, nearest_corner,
+    DEFAULT_MIN_QUALITY, ElementChange, GUARD_STEPS, Guard, Influence, MIN_RELATIVE_RADIUS, MoveRun, Moved, Propagate, Unconstrained, centroid,
+    move_nodes, move_nodes_with, move_weights, nearest_corner,
 };
 pub use strong::{DEFAULT_REACH_LENGTHS, Guards, MAX_ROUNDS, MorphOptions, Morphed, Round, morph};
 

@@ -355,6 +355,20 @@ pub fn plot_with_surfaces(
     bodies: &[&str],
 ) -> Result<FlowPlot> {
     let mut out = plot(view, result, traced)?;
+    if view.contour == Some(Field::Temperature)
+        && let Kind::Fluid(r) = result.kind()
+    {
+        // An obstacle face held at a temperature is drawn at it: sampling the fluid beside it
+        // would mix in the cooler cells further out.
+        let held = held_temperatures(session, r, base, bodies);
+        if held.iter().any(Option::is_some) {
+            if let Some(c) = &mut out.contour {
+                let (lo, hi) = held.iter().flatten().fold((c.min.1, c.max.1), |(lo, hi), t| (lo.min(*t), hi.max(*t)));
+                c.bands = view.bands(lo, hi);
+            }
+            out.wall_values = base.surface_tris.iter().zip(held).map(|(t, v)| (t.p, v)).collect();
+        }
+    }
     if view.contour == Some(Field::WallHeatFlux) {
         let Kind::Fluid(r) = result.kind() else { return Ok(out) };
         let faces = wall::faces(session, r, view.pick())?;
@@ -370,6 +384,37 @@ pub fn plot_with_surfaces(
         out.wall_values = base.surface_tris.iter().zip(wall::triangle_values(&faces, base, bodies)).map(|(t, v)| (t.p, v)).collect();
     }
     Ok(out)
+}
+
+/// Per displayed surface triangle, the temperature its obstacle face is held at, when the step's
+/// domain holds that face at one and the result is of the current model.
+fn held_temperatures(session: &crate::Session, r: &FluidResult, base: &fieldcraft_render::DisplayMesh, bodies: &[&str]) -> Vec<Option<f64>> {
+    let none = || vec![None; base.surface_tris.len()];
+    if session.latest_result(&r.step).is_some_and(|(_, current)| !current) {
+        return none();
+    }
+    let Some(thermal) = session
+        .model
+        .step(&r.step)
+        .and_then(|st| st.procedure.fluid_domain())
+        .and_then(|d| session.model.fluid_domain(d))
+        .and_then(|d| d.thermal.as_ref())
+    else {
+        return none();
+    };
+    let design = session.design.as_deref();
+    let mut held = std::collections::BTreeMap::new();
+    for sb in &thermal.surfaces {
+        let (fieldcraft_model::ThermalCondition::Temperature { value }, fieldcraft_model::Entity::Face(face)) = (&sb.condition, &sb.face.entity)
+        else {
+            continue;
+        };
+        let index = design.and_then(|d| d.bodies.iter().find(|b| b.name == sb.face.body)).and_then(|b| b.face_index(face));
+        if let Some(index) = index {
+            held.insert((sb.face.body.as_str(), index), *value);
+        }
+    }
+    base.surface_tris.iter().map(|t| bodies.get(t.body as usize).and_then(|name| held.get(&(*name, t.face)).copied())).collect()
 }
 
 /// The colours a flow plot is drawn in.
@@ -401,7 +446,15 @@ pub fn draw(plot: &FlowPlot, scene: &mut Scene, colors: &FlowColors) {
             }
         } else if plot.surface {
             let model = std::mem::take(&mut scene.tris);
-            for t in model {
+            // Faces held at a temperature (`wall_values`, matched by position as for wall heat).
+            let held = (c.field == Field::Temperature && model.len() == plot.wall_values.len()).then_some(&plot.wall_values);
+            for (k, t) in model.into_iter().enumerate() {
+                if let Some((points, Some(v))) = held.and_then(|h| h.get(k))
+                    && t.p == *points
+                {
+                    banded(t.p, [*v; 3], t.normal, &c.bands, &color, &mut scene.tris);
+                    continue;
+                }
                 let v = t.p.map(|p| flow::sample(&plot.grid, &c.values, p));
                 let (sum, known) = v.iter().filter(|x| !x.is_nan()).fold((0.0, 0u32), |(s, n), x| (s + x, n + 1));
                 if known == 0 {
@@ -540,6 +593,50 @@ pub(crate) mod tests {
         s.run_script(&script).unwrap();
         s.execute("solve.fluid", &json!({})).unwrap();
         s
+    }
+
+    /// A face held at a temperature is drawn at that temperature, and the legend reaches it,
+    /// rather than at the mean of the fluid cells around it (which mixes in the cooler ones
+    /// further out: an 80 °C bracket looked 50 °C).
+    #[test]
+    fn a_face_held_at_a_temperature_is_drawn_at_it() {
+        let mut s = plate_in_a_tank();
+        let face = s.design.as_ref().unwrap().bodies[0].faces()[0].name.clone();
+        s.execute(
+            "model.material.edit",
+            &json!({"name": "Water", "density": 1e-9, "fluid": {"type": "newtonian", "viscosity": 1e-7}, "thermal": {"conductivity": 400, "specific_heat": 4e9}}),
+        )
+        .unwrap();
+        s.execute(
+            "model.fluid_domain.edit",
+            &json!({"name": "Tank", "material": "Water", "min": [-20, -20, -20], "max": [60, 50, 30], "spacing": 5, "obstacles": ["Body1"],
+                "faces": {"x_min": {"type": "velocity", "velocity": [10, 0, 0]}, "x_max": {"type": "pressure", "pressure": 0}},
+                "thermal": {"initial_temperature": 20}}),
+        )
+        .unwrap();
+        s.execute(
+            "model.fluid_domain.thermal_boundary",
+            &json!({"domain": "Tank", "at": {"body": "Body1", "face": face}, "condition": {"type": "temperature", "value": 80}}),
+        )
+        .unwrap();
+        s.execute("solve.fluid", &json!({})).unwrap();
+        s.execute("results.surface", &json!({"field": "temperature", "show": true})).unwrap();
+        let (result, current) = s.latest_result("Flow").unwrap();
+        assert!(current);
+        let view = s.results_view.clone().unwrap();
+        let base = crate::view::display(&s).0;
+        let names: Vec<&str> = s.design.as_ref().unwrap().bodies.iter().map(|b| b.name.as_str()).collect();
+        let fp = plot_with_surfaces(&view, result, &s.traced, &s, &base, &names).unwrap();
+        let c = fp.contour.as_ref().unwrap();
+        // The fluid never quite reaches the wall's 80 °C; the legend does.
+        assert!(c.max.1 < 80.0 && c.bands.max == 80.0, "{} {:?}", c.max.1, c.bands);
+        let held: Vec<f64> = fp.wall_values.iter().filter_map(|(_, v)| *v).collect();
+        assert!(!held.is_empty() && held.iter().all(|t| *t == 80.0), "{held:?}");
+        // The headless picture draws the held face in the top band's colour.
+        let p = crate::view::Palette::LIGHT;
+        let top = bands_color(&p.contour, p.contour_over, &c.bands, c.bands.band(80.0).unwrap());
+        let (scene, ..) = crate::view::scene(&s, &p);
+        assert!(scene.tris.iter().any(|t| t.color == top));
     }
 
     #[test]
